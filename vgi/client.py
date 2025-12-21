@@ -13,7 +13,7 @@ Usage (CLI):
 
 Usage (API):
     with Client("./my_worker.py") as client:
-        for batch in client.call("echo", [], input_table):
+        for batch in client.table_in_out_function("echo", [], input_batches):
             print(batch)
 """
 
@@ -85,7 +85,7 @@ class Client:
 
     Example:
         with Client("./my_worker.py") as client:
-            for batch in client.call("echo", [], input_table):
+            for batch in client.table_in_out_function("echo", [], input_batches):
                 process(batch)
     """
 
@@ -464,9 +464,9 @@ def main() -> None:
     @click.option(
         "--server",
         "server_path",
-        default="vgi-example-server",
+        default="vgi-example-worker",
         type=str,
-        help="Path to the vgi server",
+        help="Path to the VGI worker",
     )
     def cli(
         input_file: str,

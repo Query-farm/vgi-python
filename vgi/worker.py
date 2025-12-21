@@ -27,12 +27,17 @@ Usage:
 
 import os
 import sys
+from typing import Any
 
 import pyarrow as pa
 import structlog
 from pyarrow import ipc
 
-from vgi.table_in_out_function import FunctionInput, TableInOutFunctionCallable
+from vgi.table_in_out_function import (
+    FunctionInput,
+    TableInOutFunctionBindResult,
+    TableInOutFunctionCallable,
+)
 
 # Type for decorated table functions
 FunctionRegistry = dict[str, TableInOutFunctionCallable]
@@ -69,12 +74,12 @@ class Worker:
         )
         self.log = structlog.get_logger().bind(component="worker")
 
-    def run(self) -> None:
-        """Run the worker, reading from stdin and writing to stdout."""
-        self.log.info("worker_starting")
-        sys.stdin = os.fdopen(0, "rb")
-        sys.stdout = os.fdopen(1, "wb", buffering=0)
+    def _read_init_batch(self) -> tuple[str, list[Any], pa.Schema]:
+        """Read and parse the initialization batch from stdin.
 
+        Returns:
+            Tuple of (function_name, arguments, input_schema)
+        """
         self.log.debug("init_stream_reading")
 
         # Read init messages manually (not via ipc.open_stream) to avoid PyArrow
@@ -94,10 +99,8 @@ class Worker:
                 raise ValueError(f"Init batch missing required field: {field}")
 
         # Extract function_name and arguments
-        function_name = init_batch.column("function_name")[0].as_py()
-        arguments = init_batch.column("arguments")[0].as_py()
-        fn_log = self.log.bind(function=function_name)
-        fn_log.info("init_received", arguments=arguments)
+        function_name: str = init_batch.column("function_name")[0].as_py()
+        arguments: list[Any] = init_batch.column("arguments")[0].as_py()
 
         # Extract the input schema from in_type struct field
         in_type_field = init_schema.field("in_type")
@@ -107,51 +110,52 @@ class Worker:
         in_schema = pa.schema(
             [pa.field(f.name, f.type, f.nullable) for f in in_type_field.type]
         )
-        fn_log.debug("input_schema_parsed", schema=str(in_schema))
 
-        if function_name not in self.registry:
-            raise ValueError(f"Unknown function: {function_name}")
+        return function_name, arguments, in_schema
 
-        function_cls = self.registry[function_name]
-        bind_result = function_cls(arguments, in_schema)
+    def _send_bind_result(self, bind_result: TableInOutFunctionBindResult) -> None:
+        """Send the bind result back to the client.
 
-        next(bind_result.generator)
+        For the result of the BIND phase we need to be able to send back information
+        before any batch is sent to the in/out function.
 
-        # For the result of the BIND phase we need to be able to send back information
-        # before any batch is sent to the in/out function.
-        #
-        # The information that is needed is:
-        #
-        # 1. The output schema
-        # 2. Cardinality estimates or real counts.
-        # 3. Column level statistics if available.
-        #
-        # The nice way to do this would be sending it all back in a record batch,
-        # that way additional information can be added later without changing
-        # the protocol.
+        The information that is needed is:
+        1. The output schema
+        2. Cardinality estimates or real counts.
+        3. Column level statistics if available.
 
-        bind_result_data = pa.schema(
+        The nice way to do this would be sending it all back in a record batch,
+        that way additional information can be added later without changing
+        the protocol.
+        """
+        bind_result_schema = pa.schema(
             [
                 pa.field("output_schema", pa.binary(), nullable=False),
+                pa.field("max_processes", pa.int64(), nullable=True),
                 pa.field("cardinality_estimated", pa.int64(), nullable=True),
                 pa.field("cardinality_max", pa.int64(), nullable=True),
             ]
         )
 
-        # TODO: add suppport for column level statistics
-        bind_result_batch = pa.RecordBatch.from_arrays(
+        # TODO: add support for column level statistics
+        bind_result_batch = pa.RecordBatch.from_pylist(
             [
-                pa.array(
-                    [bind_result.output_schema.serialize().to_pybytes()],
-                    type=pa.binary(),
-                ),
-                pa.array([bind_result.cardinality_estimate], type=pa.int64()),
-                pa.array([bind_result.cardinality_max], type=pa.int64()),
+                {
+                    "output_schema": bind_result.output_schema.serialize().to_pybytes(),
+                    "max_processes": bind_result.max_processes,
+                    "cardinality_estimated": (
+                        bind_result.cardinality.estimate
+                        if bind_result.cardinality
+                        else None
+                    ),
+                    "cardinality_max": (
+                        bind_result.cardinality.max if bind_result.cardinality else None
+                    ),
+                }
             ],
-            schema=bind_result_data,
+            schema=bind_result_schema,
         )
 
-        # So lets serialize all of this and send it.
         bind_result_bytes = (
             bind_result_batch.schema.serialize().to_pybytes()
             + bind_result_batch.serialize().to_pybytes()
@@ -160,6 +164,17 @@ class Worker:
         if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):
             raise OSError("Failed to write bind result record batch")
 
+    def _process_batches(
+        self,
+        bind_result: TableInOutFunctionBindResult,
+        in_schema: pa.Schema,
+        fn_log: structlog.stdlib.BoundLogger,
+    ) -> tuple[int, int, int]:
+        """Process data batches through the function.
+
+        Returns:
+            Tuple of (batch_count, total_input_rows, total_output_rows)
+        """
         with (
             ipc.new_stream(sys.stdout, bind_result.output_schema) as writer,
             ipc.open_stream(sys.stdin) as data_reader,
@@ -210,6 +225,33 @@ class Worker:
                     output_rows=output_rows,
                     status=output.status.value if output.status else None,
                 )
+
+        return batch_count, total_input_rows, total_output_rows
+
+    def run(self) -> None:
+        """Run the worker, reading from stdin and writing to stdout."""
+        self.log.info("worker_starting")
+        sys.stdin = os.fdopen(0, "rb")
+        sys.stdout = os.fdopen(1, "wb", buffering=0)
+
+        function_name, arguments, in_schema = self._read_init_batch()
+
+        fn_log = self.log.bind(function=function_name)
+        fn_log.info("init_received", arguments=arguments)
+        fn_log.debug("input_schema_parsed", schema=str(in_schema))
+
+        if function_name not in self.registry:
+            raise ValueError(f"Unknown function: {function_name}")
+
+        function_cls = self.registry[function_name]
+        bind_result = function_cls(arguments, in_schema)
+        next(bind_result.generator)
+
+        self._send_bind_result(bind_result)
+
+        batch_count, total_input_rows, total_output_rows = self._process_batches(
+            bind_result, in_schema, fn_log
+        )
 
         fn_log.info(
             "worker_complete",

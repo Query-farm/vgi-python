@@ -26,6 +26,19 @@ __all__ = [
 
 
 @dataclass(frozen=True, slots=True)
+class CardinalityInfo:
+    """Holds cardinality estimate and max values for a table function output.
+
+    Attributes:
+        estimate: Estimated number of output rows, or None if unknown.
+        max: Maximum number of output rows, or None if unbounded.
+    """
+
+    estimate: int | None
+    max: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class TableInOutFunctionBindResult:
     """Result returned by the bind() method of TableInOutFunction.
 
@@ -34,8 +47,8 @@ class TableInOutFunctionBindResult:
     """
 
     output_schema: pa.Schema
-    cardinality_estimate: int | None
-    cardinality_max: int | None
+    max_processes: int
+    cardinality: CardinalityInfo | None
     generator: Generator["FunctionOutput", "FunctionInput", None]
 
 
@@ -128,8 +141,8 @@ class TableInOutFunction:
 
     LIFECYCLE
     ---------
-    1. BIND: The decorator calls bind() and returns the output schema along with
-       the generator. The caller receives (schema, generator) from the decorator.
+    1. BIND: The decorator calls bind() and returns a TableInOutFunctionBindResult
+       containing the output schema, cardinality info, and generator.
 
     2. DATA: Your process_batch(batch, is_finalize=False) is called for each input
        batch. Return ProcessResult(batch, has_more). If has_more=True, you'll be
@@ -180,20 +193,20 @@ class TableInOutFunction:
     ---------------
     To use a decorated TableInOutFunction, the caller must:
 
-    1. Create the schema and generator:
-       schema, gen = MyFunction(arguments, input_schema)
+    1. Create the bind result:
+       bind_result = MyFunction(arguments, input_schema)
 
     2. Prime the generator:
-       next(gen)  # Returns FunctionOutput(batch=None, status=None)
+       next(bind_result.generator)  # Returns FunctionOutput(batch=None, status=None)
 
     3. Send inputs and receive outputs in a loop:
-       output = gen.send(FunctionInput(batch=input_batch))
+       output = bind_result.generator.send(FunctionInput(batch=input_batch))
        # Check output.status:
        #   - OutputStatus.NEED_MORE_INPUT: Send next input batch
        #   - OutputStatus.HAVE_MORE_OUTPUT: Call send() again (input is ignored)
 
     4. Signal finalization:
-       output = gen.send(FunctionInput.create_finalize(empty_batch))
+       output = bind_result.generator.send(FunctionInput.create_finalize(empty_batch))
        # Check output.status:
        #   - OutputStatus.HAVE_MORE_OUTPUT: Call send() again to get more output
        #   - OutputStatus.FINISHED: Stop iteration
@@ -317,6 +330,14 @@ class TableInOutFunction:
     def output_schema(self) -> pa.Schema:
         """Output schema, computed lazily by calling bind() on first access."""
         return self.bind()
+
+    def cardinality(self) -> CardinalityInfo | None:
+        """Optional cardinality estimate for the output."""
+        return None
+
+    def max_processes(self) -> int:
+        """Optional maximum number of threads the function can utilize."""
+        return 1
 
     @cached_property
     def empty_output_batch(self) -> pa.RecordBatch:
@@ -472,8 +493,8 @@ def table_in_out_function(cls: type[TableInOutFunction]) -> TableInOutFunctionCa
         fn = cls(arguments, input_schema)
         return TableInOutFunctionBindResult(
             output_schema=fn.output_schema,
-            cardinality_estimate=None,
-            cardinality_max=None,
+            max_processes=fn.max_processes(),
+            cardinality=fn.cardinality(),
             generator=fn.run(),
         )
 

@@ -42,7 +42,7 @@ VGI (Vector Gateway Interface) provides an Apache Arrow-based protocol for conne
 
 ```
 vgi/
-  worker.py                  # VGIWorker base class
+  worker.py                  # Worker base class
   client.py                  # CLI client
   table_in_out_function.py   # TableInOutFunction base class
   examples/
@@ -63,7 +63,7 @@ vgi-client --input data.parquet --function echo --server ./my_worker.py
 ### Creating a Custom Worker
 
 ```python
-from vgi.worker import VGIWorker
+from vgi.worker import Worker
 from vgi.table_in_out_function import TableInOutFunction, table_in_out_function, ProcessResult
 
 @table_in_out_function
@@ -73,7 +73,7 @@ class MyFunction(TableInOutFunction):
             return ProcessResult(None)
         return ProcessResult(batch)
 
-class MyWorker(VGIWorker):
+class MyWorker(Worker):
     registry = {
         "my_function": MyFunction,
     }
