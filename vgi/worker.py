@@ -34,8 +34,8 @@ import structlog
 from pyarrow import ipc
 
 from vgi.table_in_out_function import (
+    BindResult,
     FunctionInput,
-    TableInOutFunctionBindResult,
     TableInOutFunctionCallable,
 )
 
@@ -113,60 +113,9 @@ class Worker:
 
         return function_name, arguments, in_schema
 
-    def _send_bind_result(self, bind_result: TableInOutFunctionBindResult) -> None:
-        """Send the bind result back to the client.
-
-        For the result of the BIND phase we need to be able to send back information
-        before any batch is sent to the in/out function.
-
-        The information that is needed is:
-        1. The output schema
-        2. Cardinality estimates or real counts.
-        3. Column level statistics if available.
-
-        The nice way to do this would be sending it all back in a record batch,
-        that way additional information can be added later without changing
-        the protocol.
-        """
-        bind_result_schema = pa.schema(
-            [
-                pa.field("output_schema", pa.binary(), nullable=False),
-                pa.field("max_processes", pa.int64(), nullable=True),
-                pa.field("cardinality_estimated", pa.int64(), nullable=True),
-                pa.field("cardinality_max", pa.int64(), nullable=True),
-            ]
-        )
-
-        # TODO: add support for column level statistics
-        bind_result_batch = pa.RecordBatch.from_pylist(
-            [
-                {
-                    "output_schema": bind_result.output_schema.serialize().to_pybytes(),
-                    "max_processes": bind_result.max_processes,
-                    "cardinality_estimated": (
-                        bind_result.cardinality.estimate
-                        if bind_result.cardinality
-                        else None
-                    ),
-                    "cardinality_max": (
-                        bind_result.cardinality.max if bind_result.cardinality else None
-                    ),
-                }
-            ],
-            schema=bind_result_schema,
-        )
-
-        bind_result_bytes = (
-            bind_result_batch.schema.serialize().to_pybytes()
-            + bind_result_batch.serialize().to_pybytes()
-        )
-
-        if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):
-            raise OSError("Failed to write bind result record batch")
-
     def _process_batches(
         self,
-        bind_result: TableInOutFunctionBindResult,
+        bind_result: BindResult,
         in_schema: pa.Schema,
         fn_log: structlog.stdlib.BoundLogger,
     ) -> tuple[int, int, int]:
@@ -247,7 +196,9 @@ class Worker:
         bind_result = function_cls(arguments, in_schema)
         next(bind_result.generator)
 
-        self._send_bind_result(bind_result)
+        bind_result_bytes = bind_result.serialize()
+        if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):
+            raise OSError("Failed to write bind result record batch")
 
         batch_count, total_input_rows, total_output_rows = self._process_batches(
             bind_result, in_schema, fn_log

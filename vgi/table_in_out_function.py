@@ -1,16 +1,43 @@
-"""Base function framework for implementing streaming table functions.
+"""Framework for implementing streaming table-in-table-out functions.
 
-This module provides the scaffolding for creating table functions that follow
-the standard protocol: DATA* -> FINALIZE (BIND happens via the decorator)
+This module provides the base class and decorator for creating functions that
+transform Arrow RecordBatch streams. Functions receive batches via a generator
+protocol and can buffer, filter, transform, or aggregate data.
+
+Protocol Overview:
+    1. BIND: Function is instantiated and returns output schema + generator
+    2. DATA: Input batches are sent via generator.send(), outputs are yielded
+    3. FINALIZE: Signal sent to flush any buffered data
+
+Key Components:
+    TableInOutFunction: Base class to subclass for custom functions.
+    @table_in_out_function: Decorator that wraps the class into a callable.
+    ProcessResult: Return type for process_batch() with batch and has_more flag.
+    FunctionInput/FunctionOutput: Protocol messages for the generator.
+    OutputStatus: Enum indicating generator state after each yield.
+
+Quick Start:
+    @table_in_out_function
+    class MyFunction(TableInOutFunction):
+        def process_batch(self, batch, is_finalize):
+            if is_finalize:
+                return ProcessResult(None)
+            # Transform batch here
+            return ProcessResult(transformed_batch)
+
+See TableInOutFunction docstring for comprehensive documentation and examples.
 """
 
+import uuid
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from enum import Enum
 from functools import cached_property
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, cast, final
 
 import pyarrow as pa
+
+import vgi.table_function
 
 __all__ = [
     "SchemaValidationError",
@@ -20,40 +47,9 @@ __all__ = [
     "ProcessResult",
     "TableInOutFunction",
     "TableInOutFunctionCallable",
-    "TableInOutFunctionBindResult",
+    "BindResult",
     "table_in_out_function",
 ]
-
-
-@dataclass(frozen=True, slots=True)
-class CardinalityInfo:
-    """Holds cardinality estimate and max values for a table function output.
-
-    Attributes:
-        estimate: Estimated number of output rows, or None if unknown.
-        max: Maximum number of output rows, or None if unbounded.
-    """
-
-    estimate: int | None
-    max: int | None
-
-
-@dataclass(frozen=True, slots=True)
-class TableInOutFunctionBindResult:
-    """Result returned by the bind() method of TableInOutFunction.
-
-    Attributes:
-        output_schema: The schema of output RecordBatches.
-    """
-
-    output_schema: pa.Schema
-    max_processes: int
-    cardinality: CardinalityInfo | None
-    generator: Generator["FunctionOutput", "FunctionInput", None]
-
-
-class SchemaValidationError(Exception):
-    """Raised when a batch schema doesn't match the expected schema."""
 
 
 class OutputStatus(Enum):
@@ -118,12 +114,60 @@ class FunctionOutput:
 
 
 @dataclass(frozen=True, slots=True)
+class BindResult(vgi.table_function.TableFunctionBindResult):
+    """Complete bind result for TableInOutFunction, including the processing generator.
+
+    Extends TableFunctionBindResult with the generator that implements the
+    streaming DATA -> FINALIZE protocol. The caller interacts with the function
+    by sending FunctionInput objects and receiving FunctionOutput objects.
+
+    Attributes:
+        output_schema: Arrow schema for output batches (inherited).
+        max_processes: Parallelization hint (inherited).
+        call_identifier: Unique call ID (inherited).
+        cardinality: Optional row count estimates (inherited).
+        generator: The generator implementing the streaming protocol.
+            - Must be primed with next() before use
+            - Accepts FunctionInput via send()
+            - Yields FunctionOutput with batch and status
+
+    Usage:
+        bind_result = MyFunction(arguments, input_schema)
+        next(bind_result.generator)  # Prime
+        output = bind_result.generator.send(FunctionInput(batch=data))
+    """
+
+    generator: Generator[FunctionOutput, FunctionInput, None]
+
+
+class SchemaValidationError(Exception):
+    """Raised when a batch schema doesn't match the expected schema.
+
+    This error is raised by the framework during input/output validation.
+    It indicates a programming error where a batch doesn't conform to the
+    declared schema.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class ProcessResult:
     """Result returned by process_batch().
 
     Attributes:
         batch: The output RecordBatch, or None to emit an empty batch.
         has_more: If True, process_batch will be called again with the same input.
+            Use this to produce multiple output batches from a single input.
+
+    Examples:
+        # Normal processing - emit one batch per input
+        ProcessResult(transformed_batch)
+
+        # Skip output for this input (e.g., filtering)
+        ProcessResult(None)
+
+        # Emit multiple batches from one input
+        ProcessResult(first_batch, has_more=True)  # Will be called again
+        ProcessResult(second_batch, has_more=False)  # Done with this input
     """
 
     batch: pa.RecordBatch | None
@@ -326,12 +370,13 @@ class TableInOutFunction:
         self.arguments = arguments
         self.input_schema = input_schema
 
+    @final
     @cached_property
     def output_schema(self) -> pa.Schema:
         """Output schema, computed lazily by calling bind() on first access."""
         return self.bind()
 
-    def cardinality(self) -> CardinalityInfo | None:
+    def cardinality(self) -> vgi.table_function.CardinalityInfo | None:
         """Optional cardinality estimate for the output."""
         return None
 
@@ -339,6 +384,15 @@ class TableInOutFunction:
         """Optional maximum number of threads the function can utilize."""
         return 1
 
+    def call_identifier(self) -> bytes:
+        """Unique identifier for the call of this function, if max_processes > 1,
+        to correlate multiple interances to the same higher-level function call.
+
+        Default: a UUID string.
+        """
+        return uuid.uuid4().bytes
+
+    @final
     @cached_property
     def empty_output_batch(self) -> pa.RecordBatch:
         """Return an empty batch conforming to output_schema. Cached."""
@@ -347,6 +401,7 @@ class TableInOutFunction:
             schema=self.output_schema,
         )
 
+    @final
     def empty_input_batch(self) -> pa.RecordBatch:
         """Return an empty batch conforming to input_schema.
 
@@ -366,6 +421,7 @@ class TableInOutFunction:
         """
         return self.input_schema
 
+    @final
     def _validate_input_schema(self, batch: pa.RecordBatch) -> None:
         """Validate that a batch conforms to the expected input schema."""
         if batch.schema != self.input_schema:
@@ -374,6 +430,7 @@ class TableInOutFunction:
                 f"Expected: {self.input_schema}, got: {batch.schema}"
             )
 
+    @final
     def _validate_output_schema(self, batch: pa.RecordBatch) -> None:
         """Validate that a batch conforms to the expected output schema."""
         if batch.schema != self.output_schema:
@@ -382,6 +439,7 @@ class TableInOutFunction:
                 f"Expected: {self.output_schema}, got: {batch.schema}"
             )
 
+    @final
     def _process_and_validate(
         self, batch: pa.RecordBatch, is_finalize: bool
     ) -> tuple[pa.RecordBatch, bool]:
@@ -419,6 +477,7 @@ class TableInOutFunction:
             return ProcessResult(None)
         return ProcessResult(batch)
 
+    @final
     def run(self) -> Generator[FunctionOutput, FunctionInput, None]:
         """Run the function protocol. Do not override.
 
@@ -459,7 +518,8 @@ class TableInOutFunction:
             )
             if has_more:
                 function_input = yield FunctionOutput(
-                    batch=output_batch, status=OutputStatus.HAVE_MORE_OUTPUT
+                    batch=output_batch,
+                    status=OutputStatus.HAVE_MORE_OUTPUT,
                 )
             else:
                 yield FunctionOutput(batch=output_batch, status=OutputStatus.FINISHED)
@@ -467,9 +527,7 @@ class TableInOutFunction:
 
 
 # Type alias for decorated table function callables
-type TableInOutFunctionCallable = Callable[
-    [list[Any], Any], TableInOutFunctionBindResult
-]
+type TableInOutFunctionCallable = Callable[[list[Any], Any], BindResult]
 
 
 def table_in_out_function(cls: type[TableInOutFunction]) -> TableInOutFunctionCallable:
@@ -487,14 +545,13 @@ def table_in_out_function(cls: type[TableInOutFunction]) -> TableInOutFunctionCa
         output = bind_result.generator.send(FunctionInput(batch=data))  # Process data
     """
 
-    def wrapper(
-        arguments: list[Any], input_schema: Any
-    ) -> TableInOutFunctionBindResult:
+    def wrapper(arguments: list[Any], input_schema: Any) -> BindResult:
         fn = cls(arguments, input_schema)
-        return TableInOutFunctionBindResult(
+        return BindResult(
             output_schema=fn.output_schema,
             max_processes=fn.max_processes(),
             cardinality=fn.cardinality(),
+            call_identifier=fn.call_identifier(),
             generator=fn.run(),
         )
 
