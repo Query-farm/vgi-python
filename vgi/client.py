@@ -1,45 +1,51 @@
 #!/usr/bin/env python3
 """
-VGI client that sends parquet data through a function.
+VGI client for sending data through VGI functions.
 
-Usage:
+This module provides:
+- Client: A class for programmatic interaction with VGI workers
+- CLI: Command-line interface for processing parquet files
+
+Usage (CLI):
     vgi-client --input data.parquet --function echo
     vgi-client --input data.parquet --function sum_all_columns
     vgi-client --input data.parquet --function repeat_inputs --args '[3]'
+
+Usage (API):
+    with Client("./my_worker.py") as client:
+        for batch in client.call("echo", [], input_table):
+            print(batch)
 """
 
 import io
 import json
 import subprocess
 import sys
-import traceback
+from collections.abc import Callable, Generator, Iterator
 from typing import Any
 
-import click
 import pyarrow as pa
-import pyarrow.parquet as pq
 import structlog
 from pyarrow import ipc
 
-# Configure structlog to match server output format
+# Configure structlog to write to stderr
 structlog.configure(
     processors=[
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.dev.ConsoleRenderer(),
     ],
-    wrapper_class=structlog.make_filtering_bound_logger(0),  # Show all levels
+    wrapper_class=structlog.make_filtering_bound_logger(0),
     logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
 )
 
 log = structlog.get_logger().bind(component="client")
 
 
-def create_init_batch(
+def _create_call_parameters_recordbatch(
     function_name: str, arguments: list[Any], input_schema: pa.Schema
 ) -> pa.RecordBatch:
     """Create the initialization batch for the server."""
-    # Create a struct field representing the input schema
     in_type_struct = pa.struct(
         [pa.field(f.name, f.type, f.nullable) for f in input_schema]
     )
@@ -52,7 +58,6 @@ def create_init_batch(
         ]
     )
 
-    # Create empty struct value for in_type (actual schema is in the field definition)
     in_type_value = {f.name: None for f in input_schema}
 
     init_batch = pa.RecordBatch.from_pydict(
@@ -67,139 +72,255 @@ def create_init_batch(
     return init_batch
 
 
-@click.command()
-@click.option(
-    "--input",
-    "input_file",
-    required=True,
-    type=click.Path(exists=True),
-    help="Path to input parquet file",
-)
-@click.option(
-    "--function",
-    "function_name",
-    required=True,
-    type=str,
-    help="Name of the function to run (e.g., echo, sum_all_columns, repeat_inputs)",
-)
-@click.option(
-    "--args",
-    "arguments",
-    default="[]",
-    type=str,
-    help="JSON array of arguments to pass to the function (default: [])",
-)
-@click.option(
-    "--server",
-    "server_path",
-    default="vgi-example-server",
-    type=str,
-    help="Path to the vgi server",
-)
-def main(input_file: str, function_name: str, arguments: str, server_path: str) -> None:
-    """Send parquet data through a VGI function and display results."""
-    # Parse arguments
-    try:
-        args_list = json.loads(arguments)
-        if not isinstance(args_list, list):
-            raise click.ClickException("--args must be a JSON array")
-    except json.JSONDecodeError as e:
-        log.error("invalid_json_arguments", error=str(e))
-        raise click.ClickException(f"Invalid JSON in --args: {e}") from e
+class ClientError(Exception):
+    """Error raised by Client operations."""
 
-    # Read input parquet file
-    log.info("reading_input", file=input_file)
-    table = pq.read_table(input_file)
-    input_schema = table.schema
 
-    log.info(
-        "input_loaded",
-        schema=str(input_schema),
-        num_rows=table.num_rows,
-        num_columns=len(input_schema),
-    )
+class Client:
+    """
+    Client for communicating with VGI workers.
 
-    # Start the server subprocess (stderr goes to screen)
-    log.info("starting_server", function=function_name, server_path=server_path)
-    proc = subprocess.Popen(
-        [sys.executable, server_path],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=None,
-        text=False,
-        bufsize=0,
-    )
-    log.debug("server_started", pid=proc.pid)
+    This class manages the subprocess lifecycle and Arrow IPC communication
+    with a VGI worker process.
 
-    assert proc.stdout is not None, "stdout pipe not created"
-    stdout_buffered = io.BufferedReader(proc.stdout)  # type: ignore[type-var]
+    Example:
+        with Client("./my_worker.py") as client:
+            for batch in client.call("echo", [], input_table):
+                process(batch)
+    """
 
-    try:
-        # Send initialization batch
-        proc_stdin_sink = pa.PythonFile(proc.stdin)
-        log.debug("sending_init_batch", function=function_name, arguments=args_list)
-        init_batch = create_init_batch(function_name, args_list, input_schema)
-        init_writer = ipc.new_stream(proc_stdin_sink, init_batch.schema)
-        init_writer.write_batch(init_batch)
-        # If the init_writer is closed here, it closes the pipe to the server
-        # which isn't desired, so we leave it open.
+    def __init__(self, server_path: str):
+        """
+        Initialize the VGI client.
 
-        log.debug("reading_output_schema")
-        msg = ipc.read_message(stdout_buffered)
-        assert msg.type == "schema", f"Expected schema message, got {msg.type}"
-        output_schema = ipc.read_schema(msg)
-        log.info("output_schema_received", schema=str(output_schema))
+        Args:
+            server_path: Path to the VGI worker script to execute.
+        """
+        self.server_path = server_path
+        self._proc: subprocess.Popen[bytes] | None = None
+        self._stdout_buffered: io.BufferedReader | None = None
+        self._stdin_sink: pa.PythonFile | None = None
 
-        # Send data batches
-        data_writer = ipc.new_stream(proc_stdin_sink, input_schema)
-        batches = table.to_batches()
-        log.info("sending_data_batches", num_batches=len(batches))
+    def start(self) -> None:
+        """Start the worker subprocess."""
+        if self._proc is not None:
+            raise ClientError("Client already started")
+
+        log.debug("starting_server", server_path=self.server_path)
+        self._proc = subprocess.Popen(
+            self.server_path,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=sys.stderr,
+            text=False,
+            bufsize=0,
+            shell=True,
+        )
+        log.debug("server_started", pid=self._proc.pid)
+
+        if self._proc.stdout is None:
+            raise ClientError("Failed to create stdout pipe for worker subprocess")
+        self._stdout_buffered = io.BufferedReader(self._proc.stdout)  # type: ignore[arg-type]
+        self._stdin_sink = pa.PythonFile(self._proc.stdin)
+
+    def stop(self) -> int:
+        """
+        Stop the worker subprocess.
+
+        Returns:
+            The subprocess return code.
+        """
+        if self._proc is None:
+            raise ClientError("Client not started")
+
+        if self._proc.stdin:
+            self._proc.stdin.close()
+        self._proc.wait()
+        returncode = self._proc.returncode
+        if returncode != 0:
+            log.error("server_exited_with_error", returncode=returncode)
+        else:
+            log.debug("server_exited", returncode=returncode)
+
+        self._proc = None
+        self._stdout_buffered = None
+        self._stdin_sink = None
+        return returncode
+
+    def __enter__(self) -> "Client":
+        self.start()
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
+        self.stop()
+
+    def table_in_out_function(
+        self,
+        function_name: str,
+        arguments: list[Any],
+        input: Iterator[pa.RecordBatch],
+        bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
+    ) -> Generator[pa.RecordBatch, None, None]:
+        """
+        Call a function on the worker with the given input data.
+
+        Args:
+            function_name: Name of the function to invoke.
+            arguments: List of arguments to pass to the function.
+            input: An iterator yielding input RecordBatches.
+
+        Yields:
+            Output RecordBatches from the function.
+
+        Raises:
+            ClientError: If communication with the worker fails.
+        """
+        if (
+            self._proc is None
+            or self._stdin_sink is None
+            or self._stdout_buffered is None
+        ):
+            raise ClientError(
+                "Client not started. Call start() or use context manager."
+            )
+
         output_reader = None
-        for i, input_batch in enumerate(batches):
-            while True:
-                log.debug("sending_batch", batch_index=i, num_rows=input_batch.num_rows)
-                data_writer.write_batch(input_batch)
-                log.debug("batch_sent", batch_index=i)
+        input_schema = None
+        data_writer = None
 
-                if output_reader is None:
-                    output_reader = ipc.open_stream(stdout_buffered)
+        for batch_index, input_batch in enumerate(input):
+            if not isinstance(input_batch, pa.RecordBatch):
+                raise ClientError("Input iterator must yield RecordBatches")
 
-                log.debug("attempting_read_output", batch_index=i)
-                output_batch, output_metadata = (
-                    output_reader.read_next_batch_with_custom_metadata()
-                )
-                status = output_metadata.get("status") if output_metadata else None
-
+            if batch_index == 0:
+                input_schema = input_batch.schema
+                # Send initialization batch
                 log.debug(
-                    "received_output_batch",
-                    num_rows=output_batch.num_rows,
-                    status=status,
-                    batch=output_batch,
+                    "sending_init_batch", function=function_name, arguments=arguments
                 )
 
-                if status == b"HAVE_MORE_OUTPUT":
-                    # If there are more batches to read for this input,
-                    # loop here sending the same input batch again, until the
-                    # server indicates it is done with this input.
-                    continue
-                elif status == b"NEED_MORE_INPUT":
-                    break
-                else:
-                    log.error("unexpected_status", status=status)
-                    raise click.ClickException(
-                        f"Unexpected status from server: {status}"
+                call_parameters_batch = _create_call_parameters_recordbatch(
+                    function_name, arguments, input_schema
+                )
+                init_writer = ipc.new_stream(
+                    self._stdin_sink, call_parameters_batch.schema
+                )
+                init_writer.write_batch(call_parameters_batch)
+                # If we close init_writer here, the underlying pipe gets closed
+                # and we can't send data batches, so we just leave it open.
+                # It will be closed be closed when this function exists
+                # which is fine.
+
+                # Read the bind data.
+                log.debug("reading_bind_schema")
+                msg = ipc.read_message(self._stdout_buffered)
+                if msg.type != "schema":
+                    raise ClientError(f"Expected schema message, got {msg.type}")
+
+                bind_result_schema = ipc.read_schema(msg)
+                log.debug("bind_schema_received", schema=str(bind_result_schema))
+
+                msg = ipc.read_message(self._stdout_buffered)
+                if msg.type != "record batch":
+                    raise ClientError(
+                        f"Expected bind result record batch, got {msg.type}"
+                    )
+                bind_result_batch = ipc.read_record_batch(msg, bind_result_schema)
+
+                if bind_result_callback is not None:
+                    bind_result_callback(bind_result_batch)
+
+                log.debug("bind_result_received")
+
+                log.debug("bind_result", batch=bind_result_batch)
+
+                log.debug("output_schema_received")
+
+                # Send data batches
+                data_writer = ipc.new_stream(self._stdin_sink, input_schema)
+                log.debug("starting_data_batches")
+
+            if data_writer is None:
+                raise ClientError("Data writer was not initialized")
+            while True:
+                # Since a single batch may produce multiple output batches,
+                # we need to collect them, because a generator can only yield
+                # a single batch.
+                #
+                # Other implementations of vgi may yield multiple times per
+                # input batch, but this is just a restriction of the python
+                # generator interface.
+                output_batches = []
+                while True:
+                    log.debug(
+                        "sending_batch",
+                        batch_index=batch_index,
+                        num_rows=input_batch.num_rows,
+                    )
+                    # In DuckDB the same input batch is supplied if the
+                    # funciton indicates it HAVE_MORE_OUTPUT so do the
+                    # same thing here.
+                    data_writer.write_batch(input_batch)
+                    log.debug("batch_sent", batch_index=batch_index)
+
+                    if output_reader is None:
+                        output_reader = ipc.open_stream(self._stdout_buffered)
+
+                    log.debug("attempting_read_output", batch_index=batch_index)
+                    output_batch, output_metadata = (
+                        output_reader.read_next_batch_with_custom_metadata()
+                    )
+                    status = output_metadata.get("status") if output_metadata else None
+
+                    log.debug(
+                        "received_output_batch",
+                        num_rows=output_batch.num_rows,
+                        status=status,
                     )
 
+                    output_batches.append(output_batch)
+
+                    if status == b"HAVE_MORE_OUTPUT":
+                        continue
+                    elif status == b"NEED_MORE_INPUT":
+                        break
+                    else:
+                        raise ClientError(f"Unexpected status from server: {status}")
+
+                combined_batches = list(
+                    pa.Table.from_batches(output_batches).combine_chunks().to_batches()
+                )
+                # When PyArrow combines batches, if none of them have any rows,
+                # you'll get an empty list of resulting batches. In that case,
+                # just yield one of the original empty batches.
+                if len(combined_batches) == 0:
+                    large_batch = output_batches[0]
+                else:
+                    large_batch = combined_batches[0]
+
+                input_batch = yield large_batch
+
+                # If the input batch is None, we are done sending data
+                # and should move to the finalize loop.
+                if input_batch is None:
+                    break
+
+        if output_reader is None:
+            raise ClientError("No data batches were processed before finalize")
+
+        if input_schema is None:
+            raise ClientError("No input batches were sent")
+        # Send finalize signal
         empty_input_batch = pa.RecordBatch.from_arrays(
             [pa.array([], type=field.type) for field in input_schema],
             schema=input_schema,
         )
 
-        assert output_reader is not None, "output_reader not initialized"
-        while True:
-            # Send finalize signal
-            log.debug("sending_finalize")
+        if data_writer is None:
+            raise ClientError("Data writer was not initialized")
 
+        while True:
+            log.debug("sending_finalize")
             data_writer.write_batch(
                 empty_input_batch, custom_metadata={"type": "FINALIZE"}
             )
@@ -212,34 +333,186 @@ def main(input_file: str, function_name: str, arguments: str, server_path: str) 
                 "received_finalize_batch",
                 num_rows=output_batch.num_rows,
                 status=status,
-                batch=output_batch,
             )
+
+            yield output_batch
 
             if status == b"HAVE_MORE_OUTPUT":
                 continue
             elif status == b"FINISHED":
                 break
             else:
-                log.error("unexpected_finalize_status", status=status)
-                raise click.ClickException(
-                    f"Unexpected finalize status from server: {status}"
-                )
+                raise ClientError(f"Unexpected finalize status from server: {status}")
 
         data_writer.close()
-        proc_stdin_sink.close()
+        log.debug("processing_complete", function=function_name)
 
-        log.info("processing_complete", function=function_name)
 
-    except Exception as e:
-        log.error("processing_error", error=str(e), traceback=traceback.format_exc())
-        raise click.ClickException(f"Error: {e}") from e
+class OutputWriter:
+    """Handles writing output batches in various formats."""
 
-    finally:
-        proc.wait()
-        if proc.returncode != 0:
-            log.error("server_exited_with_error", returncode=proc.returncode)
-        else:
-            log.debug("server_exited", returncode=proc.returncode)
+    def __init__(
+        self, output_file: str | None, format: str, schema: pa.Schema | None = None
+    ):
+        self.output_file = output_file
+        self.format = format
+        self.schema = schema
+        self._writer: Any = None
+        self._is_stdout = output_file == "-"
+        self._first_write = True
+
+    def _get_output_stream(self) -> Any:
+        if self._is_stdout:
+            return sys.stdout.buffer if self.format == "parquet" else sys.stdout
+        return self.output_file
+
+    def write_batch(self, batch: pa.RecordBatch) -> None:
+        import pyarrow.csv as csv
+        import pyarrow.parquet as pq
+
+        if self.output_file is None:
+            log.info("output_batch", num_rows=batch.num_rows, batch=batch)
+            return
+
+        if self.format == "parquet":
+            if self._writer is None:
+                if self._is_stdout:
+                    self._writer = pq.ParquetWriter(
+                        pa.PythonFile(sys.stdout.buffer, mode="w"), batch.schema
+                    )
+                else:
+                    self._writer = pq.ParquetWriter(self.output_file, batch.schema)
+            self._writer.write_batch(batch)
+
+        elif self.format == "csv":
+            output = self._get_output_stream()
+            write_options = csv.WriteOptions(include_header=self._first_write)
+            if self._is_stdout:
+                csv.write_csv(
+                    pa.Table.from_batches([batch]), sys.stdout.buffer, write_options
+                )
+            else:
+                if self._first_write:
+                    csv.write_csv(pa.Table.from_batches([batch]), output, write_options)
+                else:
+                    with open(output, "ab") as f:
+                        csv.write_csv(
+                            pa.Table.from_batches([batch]),
+                            f,
+                            csv.WriteOptions(include_header=False),
+                        )
+            self._first_write = False
+
+        elif self.format == "json":
+            table = pa.Table.from_batches([batch])
+            rows = table.to_pylist()
+            if self._is_stdout:
+                for row in rows:
+                    print(json.dumps(row))
+            else:
+                mode = "w" if self._first_write else "a"
+                with open(self.output_file, mode) as f:
+                    for row in rows:
+                        f.write(json.dumps(row) + "\n")
+            self._first_write = False
+
+    def close(self) -> None:
+        if self._writer is not None:
+            self._writer.close()
+
+
+def main() -> None:
+    """CLI entry point for vgi-client."""
+    import click
+    import pyarrow.parquet as pq
+
+    @click.command()
+    @click.option(
+        "--input",
+        "input_file",
+        required=True,
+        type=click.Path(exists=True),
+        help="Path to input parquet file",
+    )
+    @click.option(
+        "--output",
+        "output_file",
+        type=str,
+        help="Path to output file (use - for stdout)",
+    )
+    @click.option(
+        "--format",
+        "output_format",
+        type=click.Choice(["json", "csv", "parquet"]),
+        default="json",
+        help="Output format (default: json)",
+    )
+    @click.option(
+        "--function",
+        "function_name",
+        required=True,
+        type=str,
+        help="Name of the function to run (e.g., echo, sum_all_columns, repeat_inputs)",
+    )
+    @click.option(
+        "--args",
+        "arguments",
+        default="[]",
+        type=str,
+        help="JSON array of arguments to pass to the function (default: [])",
+    )
+    @click.option(
+        "--server",
+        "server_path",
+        default="vgi-example-server",
+        type=str,
+        help="Path to the vgi server",
+    )
+    def cli(
+        input_file: str,
+        output_file: str | None,
+        output_format: str,
+        function_name: str,
+        arguments: str,
+        server_path: str,
+    ) -> None:
+        """Send parquet data through a VGI function and display results."""
+        try:
+            args_list = json.loads(arguments)
+            if not isinstance(args_list, list):
+                raise click.ClickException("--args must be a JSON array")
+        except json.JSONDecodeError as e:
+            log.error("invalid_json_arguments", error=str(e))
+            raise click.ClickException(f"Invalid JSON in --args: {e}") from e
+
+        log.info("reading_input", file=input_file)
+        pf = pq.ParquetFile(input_file)
+
+        log.info("starting_server", function=function_name, server_path=server_path)
+
+        output_writer: OutputWriter | None = None
+        try:
+            with Client(server_path) as client:
+                for output_batch in client.table_in_out_function(
+                    function_name,
+                    args_list,
+                    pf.iter_batches(),
+                ):
+                    if output_writer is None:
+                        output_writer = OutputWriter(
+                            output_file, output_format, output_batch.schema
+                        )
+
+                    output_writer.write_batch(output_batch)
+            log.info("processing_complete", function=function_name)
+        except ClientError as e:
+            log.error("processing_error", error=str(e))
+            raise click.ClickException(str(e)) from e
+        finally:
+            if output_writer is not None:
+                output_writer.close()
+
+    cli()
 
 
 if __name__ == "__main__":

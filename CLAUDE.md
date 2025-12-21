@@ -26,6 +26,8 @@ uv run ruff format .
 uv run mypy vgi/
 ```
 
+Before you can use ruff or mypy you need to run `uv sync --all-extras`
+
 ## Project Overview
 
 VGI (Vector Gateway Interface) provides an Apache Arrow-based protocol for connecting DuckDB to external programs.

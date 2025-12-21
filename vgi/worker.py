@@ -9,14 +9,14 @@ Protocol:
 3. Read data batches, process them through the function, write results back
 
 Usage:
-    from vgi.worker import VGIWorker
+    from vgi.worker import Worker
     from vgi.table_in_out_function import TableInOutFunction, table_in_out_function
 
     @table_in_out_function
     class MyFunction(TableInOutFunction):
         ...
 
-    class MyWorker(VGIWorker):
+    class MyWorker(Worker):
         registry = {
             "my_function": MyFunction,
         }
@@ -32,20 +32,20 @@ import pyarrow as pa
 import structlog
 from pyarrow import ipc
 
-from vgi.table_in_out_function import FunctionInput, TableFunction
+from vgi.table_in_out_function import FunctionInput, TableInOutFunctionCallable
 
 # Type for decorated table functions
-FunctionRegistry = dict[str, TableFunction]
+FunctionRegistry = dict[str, TableInOutFunctionCallable]
 
 
-class VGIWorker:
-    """Base class for VGI workers.
+class Worker:
+    """Base class for workers.
 
     Subclass this and define a `registry` class attribute mapping function names
     to decorated TableInOutFunction classes.
 
     Example:
-        class MyWorker(VGIWorker):
+        class MyWorker(Worker):
             registry = {
                 "echo": EchoFunction,
                 "transform": TransformFunction,
@@ -80,11 +80,13 @@ class VGIWorker:
         # Read init messages manually (not via ipc.open_stream) to avoid PyArrow
         # closing the underlying pipe when the stream context exits.
         msg = ipc.read_message(sys.stdin)
-        assert msg.type == "schema", f"Expected schema message, got {msg.type}"
+        if msg.type != "schema":
+            raise ValueError(f"Expected schema message, got {msg.type}")
         init_schema = ipc.read_schema(msg)
 
         msg = ipc.read_message(sys.stdin)
-        assert msg.type == "record batch", f"Expected record batch, got {msg.type}"
+        if msg.type != "record batch":
+            raise ValueError(f"Expected record batch, got {msg.type}")
         init_batch = ipc.read_record_batch(msg, init_schema)
 
         for field in ("function_name", "arguments", "in_type"):
@@ -111,17 +113,55 @@ class VGIWorker:
             raise ValueError(f"Unknown function: {function_name}")
 
         function_cls = self.registry[function_name]
-        output_schema, fn_gen = function_cls(arguments, in_schema)
-        next(fn_gen)
+        bind_result = function_cls(arguments, in_schema)
 
-        # Send output schema to client (as raw bytes, not wrapped in an IPC stream)
-        serialized_schema = output_schema.serialize().to_pybytes()
+        next(bind_result.generator)
 
-        if sys.stdout.write(serialized_schema) != len(serialized_schema):
-            raise OSError("Failed to write complete output schema")
+        # For the result of the BIND phase we need to be able to send back information
+        # before any batch is sent to the in/out function.
+        #
+        # The information that is needed is:
+        #
+        # 1. The output schema
+        # 2. Cardinality estimates or real counts.
+        # 3. Column level statistics if available.
+        #
+        # The nice way to do this would be sending it all back in a record batch,
+        # that way additional information can be added later without changing
+        # the protocol.
+
+        bind_result_data = pa.schema(
+            [
+                pa.field("output_schema", pa.binary(), nullable=False),
+                pa.field("cardinality_estimated", pa.int64(), nullable=True),
+                pa.field("cardinality_max", pa.int64(), nullable=True),
+            ]
+        )
+
+        # TODO: add suppport for column level statistics
+        bind_result_batch = pa.RecordBatch.from_arrays(
+            [
+                pa.array(
+                    [bind_result.output_schema.serialize().to_pybytes()],
+                    type=pa.binary(),
+                ),
+                pa.array([bind_result.cardinality_estimate], type=pa.int64()),
+                pa.array([bind_result.cardinality_max], type=pa.int64()),
+            ],
+            schema=bind_result_data,
+        )
+
+        # So lets serialize all of this and send it.
+        bind_result_bytes = (
+            bind_result_batch.schema.serialize().to_pybytes()
+            + bind_result_batch.serialize().to_pybytes()
+        )
+
+        if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):
+            raise OSError("Failed to write bind result record batch")
 
         with (
-            ipc.new_stream(sys.stdout, output_schema) as writer,
+            ipc.new_stream(sys.stdout, bind_result.output_schema) as writer,
             ipc.open_stream(sys.stdin) as data_reader,
         ):
             # Validate data stream schema matches expected input schema
@@ -153,7 +193,9 @@ class VGIWorker:
                     input_rows=batch.num_rows,
                 )
 
-                output = fn_gen.send(FunctionInput(batch=batch, metadata=metadata))
+                output = bind_result.generator.send(
+                    FunctionInput(batch=batch, metadata=metadata)
+                )
                 output_rows = output.batch.num_rows if output.batch else 0
                 total_output_rows += output_rows
                 writer.write_batch(

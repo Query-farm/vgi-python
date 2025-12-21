@@ -1,6 +1,6 @@
-"""Example VGI worker with built-in functions for testing.
+"""Example worker with built-in functions for testing.
 
-This demonstrates how to create a VGI worker by subclassing VGIWorker
+This demonstrates how to create a worker by subclassing Worker
 and registering functions.
 
 Usage:
@@ -13,10 +13,10 @@ from vgi.examples.table_in_out import (
     RepeatInputsFunction,
     SumAllColumnsFunction,
 )
-from vgi.worker import FunctionRegistry, VGIWorker
+from vgi.worker import FunctionRegistry, Worker
 
 
-class ExampleWorker(VGIWorker):
+class ExampleWorker(Worker):
     """Example worker with built-in test functions."""
 
     # mypy doesn't recognize decorator type transformation

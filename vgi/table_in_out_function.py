@@ -19,15 +19,24 @@ __all__ = [
     "FunctionOutput",
     "ProcessResult",
     "TableInOutFunction",
-    "TableFunction",
-    "TableFunctionResult",
+    "TableInOutFunctionCallable",
+    "TableInOutFunctionBindResult",
     "table_in_out_function",
 ]
 
-# Type alias for the return type of decorated table functions
-type TableFunctionResult = tuple[
-    pa.Schema, Generator["FunctionOutput", "FunctionInput", None]
-]
+
+@dataclass(frozen=True, slots=True)
+class TableInOutFunctionBindResult:
+    """Result returned by the bind() method of TableInOutFunction.
+
+    Attributes:
+        output_schema: The schema of output RecordBatches.
+    """
+
+    output_schema: pa.Schema
+    cardinality_estimate: int | None
+    cardinality_max: int | None
+    generator: Generator["FunctionOutput", "FunctionInput", None]
 
 
 class SchemaValidationError(Exception):
@@ -437,10 +446,12 @@ class TableInOutFunction:
 
 
 # Type alias for decorated table function callables
-type TableFunction = Callable[[list[Any], Any], TableFunctionResult]
+type TableInOutFunctionCallable = Callable[
+    [list[Any], Any], TableInOutFunctionBindResult
+]
 
 
-def table_in_out_function(cls: type[TableInOutFunction]) -> TableFunction:
+def table_in_out_function(cls: type[TableInOutFunction]) -> TableInOutFunctionCallable:
     """Decorator to convert a TableInOutFunction class into a callable.
 
     Usage:
@@ -449,14 +460,21 @@ def table_in_out_function(cls: type[TableInOutFunction]) -> TableFunction:
             def process_batch(self, batch, is_finalize):
                 ...
 
-        # Returns (schema, generator) tuple when called:
-        schema, gen = MyFunction(arguments, input_schema)
-        next(gen)  # Prime the generator
-        output = gen.send(FunctionInput(batch=data))  # Process data
+        # Returns a TableInOutFunctionBindResult when called:
+        bind_result = MyFunction(arguments, input_schema)
+        next(bind_result.generator)  # Prime the generator
+        output = bind_result.generator.send(FunctionInput(batch=data))  # Process data
     """
 
-    def wrapper(arguments: list[Any], input_schema: Any) -> TableFunctionResult:
+    def wrapper(
+        arguments: list[Any], input_schema: Any
+    ) -> TableInOutFunctionBindResult:
         fn = cls(arguments, input_schema)
-        return (fn.output_schema, fn.run())
+        return TableInOutFunctionBindResult(
+            output_schema=fn.output_schema,
+            cardinality_estimate=None,
+            cardinality_max=None,
+            generator=fn.run(),
+        )
 
-    return cast(TableFunction, wrapper)
+    return cast(TableInOutFunctionCallable, wrapper)
