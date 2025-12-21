@@ -1,0 +1,50 @@
+[project]
+name = "vgi"
+version = "0.1.0"
+description = "Vector Gateway Interface - Connect DuckDB to external programs via Apache Arrow"
+readme = "README.md"
+requires-python = ">=3.12.4"
+dependencies = [
+    "click",
+    "pyarrow",
+    "structlog",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy",
+    "pytest",
+    "ruff",
+]
+
+[project.scripts]
+vgi-client = "vgi.client:main"
+vgi-example-worker = "vgi.examples.worker:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "pyarrow.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "structlog.*"
+ignore_missing_imports = true
