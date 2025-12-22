@@ -178,19 +178,30 @@ class Client:
         input: Iterator[pa.RecordBatch],
         bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
     ) -> Generator[pa.RecordBatch, None, None]:
-        """
-        Call a function on the worker with the given input data.
+        """Call a table-in-out function on the worker with the given input data.
+
+        This method implements the VGI streaming protocol: it sends input batches
+        to the worker, handles HAVE_MORE_OUTPUT responses, and sends the FINALIZE
+        signal when input is exhausted.
 
         Args:
-            function_name: Name of the function to invoke.
-            arguments: List of arguments to pass to the function.
-            input: An iterator yielding input RecordBatches.
+            function_name: Name of the function to invoke (must be in worker registry).
+            arguments: Arguments container with positional and named arguments.
+            call_identifier: Unique bytes to correlate parallel workers, or None.
+            input: Iterator yielding input RecordBatches. The first batch's schema
+                is used for the CallData.in_schema.
+            bind_result_callback: Optional callback invoked with the bind result
+                RecordBatch after the worker responds. Useful for inspecting
+                output schema or cardinality hints before processing begins.
 
         Yields:
-            Output RecordBatches from the function.
+            Output RecordBatches from the function. Multiple input batches may be
+            combined into a single output batch when the function returns
+            HAVE_MORE_OUTPUT.
 
         Raises:
-            ClientError: If communication with the worker fails.
+            ClientError: If communication with the worker fails or the worker
+                returns an unexpected status.
         """
         if (
             self._proc is None

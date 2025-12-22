@@ -1,3 +1,14 @@
+"""Extended bind results for table functions with cardinality hints.
+
+This module provides:
+- CardinalityInfo: Row count estimates for query optimization
+- TableFunctionBindResult: BindResult subclass with cardinality support
+- TableFunction: Base class for table functions with cardinality
+
+These classes are used by TableInOutFunction and can be used directly
+for custom table function implementations.
+"""
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -5,7 +16,7 @@ import pyarrow as pa
 
 import vgi.function
 
-__all__ = ["TableFunctionBindResult", "CardinalityInfo"]
+__all__ = ["TableFunctionBindResult", "CardinalityInfo", "TableFunction"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,9 +91,32 @@ class TableFunctionBindResult(vgi.function.BindResult):
 
 
 class TableFunction(vgi.function.Function):
+    """Base class for table functions with cardinality estimation.
+
+    Extends Function with optional cardinality hints that help query planners
+    optimize execution. Override cardinality() to provide row count estimates.
+
+    See Also:
+        vgi.table_in_out_function.TableInOutFunction: Full streaming implementation
+            that extends this class with the complete DATA/FINALIZE protocol.
+    """
+
     def __init__(self, call_data: vgi.function.CallData):
+        """Initialize the table function with call data.
+
+        Args:
+            call_data: Complete invocation request including function name,
+                arguments, and input schema.
+        """
         super().__init__(call_data)
 
     def cardinality(self) -> CardinalityInfo | None:
-        """Optional cardinality estimate for the output."""
+        """Return optional cardinality estimate for the output.
+
+        Override to provide row count estimates that help query planners
+        make better decisions about join ordering and memory allocation.
+
+        Returns:
+            CardinalityInfo with estimate and/or max, or None if unknown.
+        """
         return None

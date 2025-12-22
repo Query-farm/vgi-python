@@ -404,17 +404,47 @@ class BindResult:
 
 
 class Function:
+    """Base class for all VGI functions.
+
+    Functions are instantiated with CallData describing the invocation,
+    then queried for execution hints (max_processes, call_identifier).
+
+    Subclasses should override methods to customize behavior:
+    - max_processes(): Parallelization hint for the query planner
+    - call_identifier(): Unique ID to correlate parallel workers
+
+    See Also:
+        vgi.table_function.TableFunction: Adds cardinality hints.
+        vgi.table_in_out_function.TableInOutFunction: Full streaming implementation.
+    """
+
     def __init__(self, call_data: CallData):
+        """Initialize the function with call data.
+
+        Args:
+            call_data: Complete invocation request including function name,
+                arguments, and input schema.
+        """
         pass
 
     def max_processes(self) -> int:
-        """Optional maximum number of threads the function can utilize."""
+        """Return maximum number of parallel processes this function can utilize.
+
+        Override to enable parallel execution. Return 1 (default) for functions
+        that must process sequentially (e.g., aggregations with shared state).
+
+        Returns:
+            Maximum parallel processes. Default is 1.
+        """
         return 1
 
     def call_identifier(self) -> bytes:
-        """Unique identifier for the call of this function, if max_processes > 1,
-        to correlate multiple interances to the same higher-level function call.
+        """Return unique identifier for this function invocation.
 
-        Default: a UUID string.
+        When max_processes > 1, this ID correlates multiple parallel workers
+        processing the same logical function call.
+
+        Returns:
+            Unique bytes identifier. Default is a random UUID.
         """
         return uuid.uuid4().bytes

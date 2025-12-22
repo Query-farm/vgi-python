@@ -62,7 +62,7 @@ class BufferInputFunction(TableInOutFunction):
 
     BEHAVIOR
     --------
-    - bind(): Returns input schema unchanged
+    - _output_schema(): Returns input schema unchanged
     - process_batch(batch, is_finalize=False): Stores batch in buffer, returns empty
     - process_batch(batch, is_finalize=True): Returns buffered batches one at a time
 
@@ -123,7 +123,7 @@ class RepeatInputsFunction(TableInOutFunction):
 
     BEHAVIOR
     --------
-    - bind(): Returns input schema unchanged
+    - _output_schema(): Returns input schema unchanged
     - process_batch(batch, is_finalize=False): Returns batch N times using has_more
     - process_batch(batch, is_finalize=True): Returns ProcessResult(None)
 
@@ -202,7 +202,7 @@ class SumAllColumnsFunction(TableInOutFunction):
 
     BEHAVIOR
     --------
-    - bind(): Builds output schema from numeric input columns, initializes sums
+    - _output_schema(): Builds output schema from numeric columns, inits sums
     - process_batch(batch, is_finalize=False): Accumulates sums, returns empty
     - process_batch(batch, is_finalize=True): Returns single row with final sums
 
@@ -222,12 +222,12 @@ class SumAllColumnsFunction(TableInOutFunction):
         Running sum for each numeric column. Keys are column names,
         values are PyArrow scalars with the output type.
 
-    KEY PATTERN: SCHEMA TRANSFORMATION IN BIND
-    ------------------------------------------
+    KEY PATTERN: SCHEMA TRANSFORMATION IN _output_schema
+    ----------------------------------------------------
     This function demonstrates inspecting input_schema to build a different
     output schema:
 
-        def bind(self):
+        def _output_schema(self):
             self.sums = {}
             output_fields = []
             for field in self.input_schema:
