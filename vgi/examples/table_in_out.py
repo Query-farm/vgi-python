@@ -11,11 +11,10 @@ RepeatInputsFunction      - Duplicates each input batch N times
 SumAllColumnsFunction     - Aggregates numeric columns into sums
 """
 
-from typing import Any
-
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from vgi.function import CallData
 from vgi.table_in_out_function import (
     ProcessResult,
     TableInOutFunction,
@@ -89,8 +88,8 @@ class BufferInputFunction(TableInOutFunction):
     On finalize: batch1, batch2, batch3
     """
 
-    def __init__(self, arguments: list[Any], input_schema: pa.Schema) -> None:
-        super().__init__(arguments, input_schema)
+    def __init__(self, call_data: CallData) -> None:
+        super().__init__(call_data)
         self.buffered_batches: list[pa.RecordBatch] = []
         self.finalize_index = 0
 
@@ -158,11 +157,27 @@ class RepeatInputsFunction(TableInOutFunction):
     Output: [{"a": 1}], [{"a": 1}], [{"a": 1}]
     """
 
-    def __init__(self, arguments: list[Any], input_schema: pa.Schema) -> None:
-        super().__init__(arguments, input_schema)
-        self.repeat_count = (
-            arguments[0] if arguments and isinstance(arguments[0], int) else 2
-        )
+    def __init__(self, call_data: CallData) -> None:
+        super().__init__(call_data)
+        args = call_data.arguments
+        if len(args.positional) != 1:
+            raise ValueError(
+                "RepeatInputsFunction requires exactly one positional argument"
+            )
+        repeat_count = args.positional[0]
+        if repeat_count is None:
+            raise ValueError(
+                "RepeatInputsFunction requires a non-null repeat count argument"
+            )
+        repeat_count = repeat_count.as_py()
+        if not isinstance(repeat_count, int):
+            raise ValueError(
+                "RepeatInputsFunction requires an integer repeat count argument"
+            )
+        if repeat_count < 1:
+            raise ValueError("Repeat count must be at least 1")
+
+        self.repeat_count = repeat_count
         self.current_repeat = 0
 
     def process_batch(self, batch: pa.RecordBatch, is_finalize: bool) -> ProcessResult:

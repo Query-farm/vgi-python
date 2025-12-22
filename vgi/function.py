@@ -1,17 +1,21 @@
-"""Core data structures for VGI function bind results.
+"""Core data structures for VGI function calls and bind results.
 
-This module defines the foundational classes used to describe function outputs
-during the bind phase of the VGI protocol. When a function is bound, it returns
-a BindResult that describes the output schema, parallelization hints, and
-optional cardinality estimates.
+This module defines the foundational classes used during function binding
+in the VGI protocol. When a client invokes a function, it sends CallData
+describing the function name, arguments, and input schema. The worker
+returns a BindResult describing the output schema and execution hints.
 
 Classes:
-    CardinalityInfo: Cardinality hints for query optimization.
-    BindResult: Base result from binding a function.
-    TableFunctionBindResult: Extended result with cardinality info for table functions.
+    Arguments: Container for positional and named function arguments.
+    CallData: Complete function invocation request (name, args, input schema).
+    BindResult: Base result from binding a function (output schema, parallelization).
 
-The bind result is serialized to Arrow IPC format for transmission between
-the client and worker processes.
+The CallData and BindResult are serialized to Arrow IPC format for transmission
+between client and worker processes.
+
+See Also:
+    vgi.table_function: Extended bind results with cardinality hints.
+    vgi.table_in_out_function: Streaming table functions built on these primitives.
 """
 
 from dataclasses import dataclass
@@ -19,7 +23,195 @@ from typing import Any
 
 import pyarrow as pa
 
-__all__ = ["BindResult"]
+__all__ = ["Arguments", "CallData", "BindResult"]
+
+
+@dataclass(frozen=True, slots=True)
+class Arguments:
+    """Container for function call positional and named arguments.
+
+    Arguments are passed to functions during invocation. They support both
+    positional arguments (accessed by index) and named/keyword arguments.
+
+    Serialization encodes arguments to a flat dictionary format suitable for
+    Arrow IPC: positional args become "positional_0", "positional_1", etc.,
+    and named args become "named_<name>".
+
+    Attributes:
+        positional: List of positional argument values in order.
+        named: Dictionary mapping argument names to values.
+
+    Example:
+        # Function call: my_func("hello", 42, separator=",")
+        args = Arguments(
+            positional=["hello", 42],
+            named={"separator": ","}
+        )
+    """
+
+    positional: list[pa.Scalar]
+    named: dict[str, pa.Scalar]
+
+    def encoded_dict(self) -> dict[str, pa.Scalar]:
+        """Convert arguments to a dictionary suitable for serialization.
+
+        Positional arguments are stored with keys "positional_0", "positional_1", etc.
+        Named arguments are stored with their actual names prefixed by "named_".
+
+        The reason why a dictionary is used is to facilitate serialization with Arrow,
+        which can easily handle flat structures, but doesn't handle variable typed
+        arrays of arbitrary objects.
+
+        Returns:
+            Dictionary mapping argument names to their values.
+        """
+        return {
+            f"positional_{index}": value for index, value in enumerate(self.positional)
+        } | {f"named_{name}": value for name, value in self.named.items()}
+
+    def schema(self) -> pa.Schema:
+        """Return Arrow schema used when serializing Arguments.
+
+        The schema defines a single binary field for the serialized positional
+        arguments. Named arguments are not currently supported.
+
+        Returns:
+            Arrow schema with fields for each serialized attribute.
+        """
+
+        return pa.RecordBatch.from_pylist([self.encoded_dict()]).schema
+
+    @staticmethod
+    def decode(data: pa.StructScalar) -> "Arguments":
+        """Decode Arguments from a serialized dictionary.
+
+        Args:
+            data: Dictionary containing serialized argument fields.
+        Returns:
+            Deserialized Arguments instance.
+        """
+        positional: list[Any] = []
+        named: dict[str, Any] = {}
+        for key, value in data.items():
+            if key.startswith("positional_"):
+                index = int(key[len("positional_") :])
+                while len(positional) <= index:
+                    positional.append(None)
+                positional[index] = value
+            elif key.startswith("named_"):
+                name = key[len("named_") :]
+                named[name] = value
+        return Arguments(positional=positional, named=named)
+
+
+@dataclass(frozen=True, slots=True)
+class CallData:
+    """Complete function invocation request sent from client to worker.
+
+    CallData encapsulates all information needed to bind and execute a function:
+    the function name, its arguments, the expected input schema (for table
+    functions), and a unique identifier for correlating parallel workers.
+
+    This is serialized to Arrow IPC format and sent as the first message when
+    the client connects to a worker subprocess.
+
+    Attributes:
+        function_name: Name of the function to invoke, must exist in worker registry.
+        arguments: Positional and named arguments passed to the function.
+        in_schema: Arrow schema of input data (required for TableInOutFunction,
+            None for scalar functions or functions that don't process input tables).
+        call_identifier: Unique bytes identifying this invocation. Used to correlate
+            multiple parallel workers processing the same logical function call.
+
+    Example:
+        call_data = CallData(
+            function_name="sum_columns",
+            arguments=Arguments(positional=["col1", "col2"], named={}),
+            in_schema=pa.schema([pa.field("col1", pa.int64())]),
+            call_identifier=uuid.uuid4().bytes,
+        )
+    """
+
+    function_name: str
+    arguments: Arguments
+    in_schema: pa.Schema | None
+    call_identifier: bytes
+
+    def serialize(self) -> pa.RecordBatch:
+        """Serialize CallData to an Arrow RecordBatch.
+
+        Returns:
+            RecordBatch containing serialized CallData fields.
+        """
+
+        args_dict = self.arguments.encoded_dict()
+        encoded_batch = pa.RecordBatch.from_pylist([args_dict]).schema
+        args_struct_type = pa.struct(
+            [
+                pa.field(name, encoded_batch.field(name).type)
+                for name in encoded_batch.names
+            ]
+        )
+
+        return pa.RecordBatch.from_pylist(
+            [
+                {
+                    "function_name": self.function_name,
+                    "arguments": args_dict,
+                    "in_schema": self.in_schema.serialize().to_pybytes()
+                    if self.in_schema
+                    else None,
+                    "call_identifier": self.call_identifier,
+                }
+            ],
+            schema=pa.schema(
+                [
+                    pa.field("function_name", pa.string(), nullable=False),
+                    pa.field("arguments", args_struct_type, nullable=True),
+                    pa.field("in_schema", pa.binary(), nullable=True),
+                    pa.field("call_identifier", pa.binary(), nullable=True),
+                ]
+            ),
+        )
+
+    @staticmethod
+    def deserialize(data: pa.RecordBatch) -> "CallData":
+        """Deserialize CallData from an Arrow RecordBatch.
+
+        Args:
+          data: RecordBatch containing serialized CallData fields.
+
+        Returns:
+          Deserialized CallData instance.
+
+        Raises:
+          ValueError: If RecordBatch is empty, has multiple rows, or missing
+              required fields.
+        """
+        if data.num_rows == 0:
+            raise ValueError("Cannot deserialize CallData from empty RecordBatch")
+        if data.num_rows > 1:
+            raise ValueError(
+                "Expected single-row RecordBatch for CallData deserialization"
+            )
+
+        first_row = data.to_pylist()[0]
+        required_fields = ["function_name", "arguments", "in_schema", "call_identifier"]
+
+        for field in required_fields:
+            if field not in first_row:
+                raise ValueError(f"Missing '{field}' field in CallData RecordBatch")
+
+        in_schema = None
+        if first_row["in_schema"] is not None:
+            in_schema = pa.ipc.read_schema(pa.py_buffer(first_row["in_schema"]))
+
+        return CallData(
+            function_name=first_row["function_name"],
+            arguments=Arguments.decode(data.column("arguments")[0]),
+            in_schema=in_schema,
+            call_identifier=first_row["call_identifier"],
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +290,7 @@ class BindResult:
             schema=bind_result_schema,
         )
 
-        bind_result_bytes = (
+        bind_result_bytes: bytes = (
             bind_result_batch.schema.serialize().to_pybytes()
             + bind_result_batch.serialize().to_pybytes()
         )

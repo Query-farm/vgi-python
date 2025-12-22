@@ -46,7 +46,7 @@ class TableFunctionBindResult(vgi.function.BindResult):
         max_processes: Maximum parallel processes this function can utilize.
         call_identifier: Unique bytes identifying this function invocation.
         cardinality: Optional row count estimates for query optimization.
-            None indicates no cardinality information is avai lable.
+            None indicates no cardinality information is available.
 
     Example:
         import uuid

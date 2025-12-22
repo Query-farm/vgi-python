@@ -28,6 +28,8 @@ import pyarrow as pa
 import structlog
 from pyarrow import ipc
 
+from vgi.function import Arguments, CallData
+
 # Configure structlog to write to stderr
 structlog.configure(
     processors=[
@@ -40,36 +42,6 @@ structlog.configure(
 )
 
 log = structlog.get_logger().bind(component="client")
-
-
-def _create_call_parameters_recordbatch(
-    function_name: str, arguments: list[Any], input_schema: pa.Schema
-) -> pa.RecordBatch:
-    """Create the initialization batch for the server."""
-    in_type_struct = pa.struct(
-        [pa.field(f.name, f.type, f.nullable) for f in input_schema]
-    )
-
-    init_schema = pa.schema(
-        [
-            pa.field("function_name", pa.string()),
-            pa.field("arguments", pa.string()),
-            pa.field("in_type", in_type_struct),
-        ]
-    )
-
-    in_type_value = {f.name: None for f in input_schema}
-
-    init_batch = pa.RecordBatch.from_pydict(
-        {
-            "function_name": [function_name],
-            "arguments": [json.dumps(arguments)],
-            "in_type": [in_type_value],
-        },
-        schema=init_schema,
-    )
-
-    return init_batch
 
 
 class ClientError(Exception):
@@ -156,8 +128,10 @@ class Client:
 
     def table_in_out_function(
         self,
+        *,
         function_name: str,
-        arguments: list[Any],
+        arguments: Arguments,
+        call_identifier: bytes | None,
         input: Iterator[pa.RecordBatch],
         bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
     ) -> Generator[pa.RecordBatch, None, None]:
@@ -199,9 +173,12 @@ class Client:
                     "sending_init_batch", function=function_name, arguments=arguments
                 )
 
-                call_parameters_batch = _create_call_parameters_recordbatch(
-                    function_name, arguments, input_schema
-                )
+                call_parameters_batch = CallData(
+                    function_name=function_name,
+                    arguments=arguments,
+                    in_schema=input_schema,
+                    call_identifier=call_identifier if call_identifier else b"",
+                ).serialize()
                 init_writer = ipc.new_stream(
                     self._stdin_sink, call_parameters_batch.schema
                 )
@@ -431,6 +408,7 @@ def main() -> None:
         "--input",
         "input_file",
         required=True,
+        # This validates the that file exists.
         type=click.Path(exists=True),
         help="Path to input parquet file",
     )
@@ -494,9 +472,10 @@ def main() -> None:
         try:
             with Client(server_path) as client:
                 for output_batch in client.table_in_out_function(
-                    function_name,
-                    args_list,
-                    pf.iter_batches(),
+                    function_name=function_name,
+                    arguments=Arguments(positional=args_list, named={}),
+                    call_identifier=None,
+                    input=pf.iter_batches(),
                 ):
                     if output_writer is None:
                         output_writer = OutputWriter(

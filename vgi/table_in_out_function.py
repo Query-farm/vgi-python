@@ -33,10 +33,11 @@ from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from enum import Enum
 from functools import cached_property
-from typing import Any, ClassVar, cast, final
+from typing import ClassVar, cast, final
 
 import pyarrow as pa
 
+import vgi.function
 import vgi.table_function
 
 __all__ = [
@@ -331,9 +332,9 @@ class TableInOutFunction:
     --------------------------------------------------------
     @table_in_out_function
     class RepeatFunction(TableInOutFunction):
-        def __init__(self, arguments, input_schema):
-            super().__init__(arguments, input_schema)
-            self.repeat_count = arguments[0] if arguments else 2
+        def __init__(self, call_data: vgi.function.CallData):
+            super().__init__(call_data)
+            self.repeat_count = self.arguments[0] if self.arguments else 2
             self.current_repeat = 0
 
         def process_batch(self, batch, is_finalize):
@@ -349,8 +350,8 @@ class TableInOutFunction:
     ----------------------------------------------------------------
     @table_in_out_function
     class BufferFunction(TableInOutFunction):
-        def __init__(self, arguments, input_schema):
-            super().__init__(arguments, input_schema)
+        def __init__(self, call_data: vgi.function.CallData):
+            super().__init__(call_data)
             self.buffered: list[pa.RecordBatch] = []
             self.finalize_index = 0
 
@@ -366,9 +367,11 @@ class TableInOutFunction:
             return ProcessResult(None)
     """
 
-    def __init__(self, arguments: list[Any], input_schema: pa.Schema):
-        self.arguments = arguments
-        self.input_schema = input_schema
+    def __init__(self, call_data: vgi.function.CallData):
+        self.arguments = call_data.arguments
+        if call_data.in_schema is None:
+            raise ValueError("TableInOutFunction requires a non-null input schema")
+        self.input_schema = call_data.in_schema
 
     @final
     @cached_property
@@ -527,7 +530,7 @@ class TableInOutFunction:
 
 
 # Type alias for decorated table function callables
-type TableInOutFunctionCallable = Callable[[list[Any], Any], BindResult]
+type TableInOutFunctionCallable = Callable[[vgi.function.CallData], BindResult]
 
 
 def table_in_out_function(cls: type[TableInOutFunction]) -> TableInOutFunctionCallable:
@@ -545,8 +548,8 @@ def table_in_out_function(cls: type[TableInOutFunction]) -> TableInOutFunctionCa
         output = bind_result.generator.send(FunctionInput(batch=data))  # Process data
     """
 
-    def wrapper(arguments: list[Any], input_schema: Any) -> BindResult:
-        fn = cls(arguments, input_schema)
+    def wrapper(call_data: vgi.function.CallData) -> BindResult:
+        fn = cls(call_data)
         return BindResult(
             output_schema=fn.output_schema,
             max_processes=fn.max_processes(),
