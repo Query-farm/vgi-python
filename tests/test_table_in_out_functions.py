@@ -271,3 +271,61 @@ class TestClientLifecycle:
             assert client._proc is not None
         # After context exit, process should be cleaned up
         assert client._proc is None
+
+
+class TestWorkerStderrCapture:
+    """Tests for capturing worker stderr output."""
+
+    def test_captures_worker_stderr(
+        self, example_worker: str, simple_batches: list[pa.RecordBatch]
+    ) -> None:
+        """Should capture stderr output from the worker process."""
+        with Client(example_worker) as client:
+            # The example worker uses structlog which writes to stderr
+            list(
+                client.table_in_out_function(
+                    function_name="echo",
+                    arguments=Arguments(positional=[], named={}),
+                    call_identifier=None,
+                    input=iter(simple_batches),
+                )
+            )
+            stderr_output = client.get_worker_stderr()
+
+        # Worker should have written some log output to stderr
+        assert isinstance(stderr_output, str)
+        # The example worker logs startup info
+        assert len(stderr_output) > 0
+
+    def test_stderr_available_on_error(
+        self, simple_batches: list[pa.RecordBatch]
+    ) -> None:
+        """Should be able to access stderr after an error occurs."""
+        # Use a worker script that writes to stderr then fails
+        worker_script = (
+            "python -c \""
+            "import sys; "
+            "sys.stderr.write('Debug: worker starting\\n'); "
+            "sys.stderr.write('Error: something went wrong\\n'); "
+            "sys.stderr.flush(); "
+            "sys.exit(1)\""
+        )
+
+        client = Client(worker_script)
+        client.start()
+
+        # Give the process a moment to write stderr and exit
+        import time
+        time.sleep(0.1)
+
+        stderr_output = client.get_worker_stderr()
+        assert "Debug: worker starting" in stderr_output
+        assert "Error: something went wrong" in stderr_output
+
+        client.stop()
+
+    def test_stderr_empty_initially(self, example_worker: str) -> None:
+        """Stderr buffer should be empty before worker writes anything."""
+        client = Client(example_worker)
+        # Before start, buffer should be empty
+        assert client.get_worker_stderr() == ""

@@ -28,7 +28,6 @@ Quick Start:
 See TableInOutFunction docstring for comprehensive documentation and examples.
 """
 
-import uuid
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from enum import Enum
@@ -58,6 +57,8 @@ class OutputStatus(Enum):
 
     NEED_MORE_INPUT: Ready for the next input batch (DATA phase).
     HAVE_MORE_OUTPUT: Call send() again to get more output from the current input.
+    LOG_MESSAGE: Informational log message (not used in current implementation).
+    ERROR: An error occurred; processing should stop.
     FINISHED: Processing complete, no more output will be produced.
     """
 
@@ -108,10 +109,58 @@ class FunctionOutput:
         batch: The output RecordBatch. None only for the initial priming yield;
             during normal operation, None batches are replaced with empty batches.
         status: The generator's state after this yield.
+        message: Optional log or error message associated with this output.
     """
 
     batch: pa.RecordBatch | None
     status: OutputStatus | None
+    log_message: vgi.function.LogMessage | None = None
+
+    def metadata(self) -> pa.KeyValueMetadata | None:
+        """Create metadata for this output based on the status.
+
+        Returns:
+            KeyValueMetadata containing status and message, or None if status is None.
+        """
+        if self.status is None:
+            return None
+
+        metadata_dict = {"status": self.status.value}
+
+        if self.log_message is not None:
+            metadata_dict = self.log_message.add_to_metadata(metadata_dict)
+
+        return pa.KeyValueMetadata(metadata_dict)
+
+    @classmethod
+    def from_process_result(
+        cls, process_result: "ProcessResultComplete", in_finalize_loop: bool
+    ) -> "FunctionOutput":
+        """Create a FunctionOutput from a ProcessResult and status.
+
+        Args:
+            process_result: The result from process_batch().
+            status: The OutputStatus to associate with this output.
+        """
+        status: OutputStatus
+
+        if not in_finalize_loop:
+            status = (
+                OutputStatus.HAVE_MORE_OUTPUT
+                if process_result.has_more or process_result.log_message is not None
+                else OutputStatus.NEED_MORE_INPUT
+            )
+        else:
+            status = (
+                OutputStatus.HAVE_MORE_OUTPUT
+                if process_result.has_more or process_result.log_message is not None
+                else OutputStatus.FINISHED
+            )
+        return cls(
+            batch=process_result.batch,
+            status=status,
+            log_message=process_result.log_message,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,9 +212,6 @@ class ProcessResult:
         # Normal processing - emit one batch per input
         ProcessResult(transformed_batch)
 
-        # Skip output for this input (e.g., filtering)
-        ProcessResult(None)
-
         # Emit multiple batches from one input
         ProcessResult(first_batch, has_more=True)  # Will be called again
         ProcessResult(second_batch, has_more=False)  # Done with this input
@@ -173,9 +219,36 @@ class ProcessResult:
 
     batch: pa.RecordBatch | None
     has_more: bool = False
+    log_message: vgi.function.LogMessage | None = None
 
 
-class TableInOutFunction:
+@dataclass(frozen=True, slots=True)
+class ProcessResultComplete(ProcessResult):
+    """
+    This is a ProcessResult that has a guaranteed RecordBatch
+    """
+
+    batch: pa.RecordBatch
+
+    @classmethod
+    def from_process_result(
+        cls, source: ProcessResult, empty_batch: pa.RecordBatch
+    ) -> "ProcessResultComplete":
+        # The special thing is that we guarantee that batch is not None
+        #
+        # If there is a log message, use the empty batch
+        # Otherwise, use the source batch or default it to empty batch
+        return cls(
+            batch=empty_batch
+            if source.batch is None or source.log_message is not None
+            else source.batch,
+            # If there is a log message
+            has_more=True if source.log_message is not None else source.has_more,
+            log_message=source.log_message,
+        )
+
+
+class TableInOutFunction(vgi.table_function.TableFunction):
     """Base class for streaming table functions that transform Arrow RecordBatches.
 
     OVERVIEW
@@ -368,6 +441,7 @@ class TableInOutFunction:
     """
 
     def __init__(self, call_data: vgi.function.CallData):
+        super().__init__(call_data)
         self.arguments = call_data.arguments
         if call_data.in_schema is None:
             raise ValueError("TableInOutFunction requires a non-null input schema")
@@ -377,23 +451,7 @@ class TableInOutFunction:
     @cached_property
     def output_schema(self) -> pa.Schema:
         """Output schema, computed lazily by calling bind() on first access."""
-        return self.bind()
-
-    def cardinality(self) -> vgi.table_function.CardinalityInfo | None:
-        """Optional cardinality estimate for the output."""
-        return None
-
-    def max_processes(self) -> int:
-        """Optional maximum number of threads the function can utilize."""
-        return 1
-
-    def call_identifier(self) -> bytes:
-        """Unique identifier for the call of this function, if max_processes > 1,
-        to correlate multiple interances to the same higher-level function call.
-
-        Default: a UUID string.
-        """
-        return uuid.uuid4().bytes
+        return self._output_schema()
 
     @final
     @cached_property
@@ -403,6 +461,14 @@ class TableInOutFunction:
             [pa.array([], type=field.type) for field in self.output_schema],
             schema=self.output_schema,
         )
+
+    def _output_schema(self) -> pa.Schema:
+        """Called during initialization. Return the output schema.
+
+        Override to transform the schema or initialize state.
+        Default: passthrough input schema.
+        """
+        return self.input_schema
 
     @final
     def empty_input_batch(self) -> pa.RecordBatch:
@@ -415,14 +481,6 @@ class TableInOutFunction:
             [pa.array([], type=field.type) for field in self.input_schema],
             schema=self.input_schema,
         )
-
-    def bind(self) -> pa.Schema:
-        """Called during initialization. Return the output schema.
-
-        Override to transform the schema or initialize state.
-        Default: passthrough input schema.
-        """
-        return self.input_schema
 
     @final
     def _validate_input_schema(self, batch: pa.RecordBatch) -> None:
@@ -445,20 +503,18 @@ class TableInOutFunction:
     @final
     def _process_and_validate(
         self, batch: pa.RecordBatch, is_finalize: bool
-    ) -> tuple[pa.RecordBatch, bool]:
+    ) -> ProcessResultComplete:
         """Process a batch and validate the output schema.
 
         Returns:
-            A tuple of (output_batch, has_more). The output_batch is guaranteed
-            to be non-None and conform to output_schema.
+            ProcessResult
         """
         self._validate_input_schema(batch)
-        result = self.process_batch(batch, is_finalize)
-        output_batch = (
-            result.batch if result.batch is not None else self.empty_output_batch
+        result = ProcessResultComplete.from_process_result(
+            self.process_batch(batch, is_finalize), self.empty_output_batch
         )
-        self._validate_output_schema(output_batch)
-        return output_batch, result.has_more
+        self._validate_output_schema(result.batch)
+        return result
 
     def process_batch(self, batch: pa.RecordBatch, is_finalize: bool) -> ProcessResult:
         """Process an input batch or handle finalization.
@@ -504,28 +560,60 @@ class TableInOutFunction:
             if function_input.batch is None:
                 raise ValueError("DATA input must have a batch")
 
-            output_batch, has_more = self._process_and_validate(
-                function_input.batch, is_finalize=False
+            try:
+                process_result = self._process_and_validate(
+                    function_input.batch, is_finalize=False
+                )
+            except Exception as e:
+                # An exception handled by the framework - emit an empty batch with
+                # a log message, then terminate the generator.
+                process_result = ProcessResultComplete(
+                    batch=self.empty_output_batch,
+                    log_message=vgi.function.LogMessage.from_exception(e),
+                )
+
+            function_input = yield FunctionOutput.from_process_result(
+                process_result, False
             )
-            function_input = yield FunctionOutput(
-                batch=output_batch,
-                status=OutputStatus.HAVE_MORE_OUTPUT
-                if has_more
-                else OutputStatus.NEED_MORE_INPUT,
-            )
+
+            if (
+                process_result.log_message is not None
+                and process_result.log_message.level == vgi.function.LogLevel.EXCEPTION
+            ):
+                # There was an exception, so terminate the generator,
+                # since nothing else should be produced after an exception.
+                return
 
         # FINALIZE: keep yielding until no more output
         while True:
-            output_batch, has_more = self._process_and_validate(
-                function_input.batch, is_finalize=True
-            )
-            if has_more:
-                function_input = yield FunctionOutput(
-                    batch=output_batch,
-                    status=OutputStatus.HAVE_MORE_OUTPUT,
+            try:
+                process_result = self._process_and_validate(
+                    function_input.batch, is_finalize=True
                 )
+            except Exception as e:
+                # An exception handled by the framework - emit an empty batch with
+                # a log message, then terminate the generator.
+                process_result = ProcessResultComplete(
+                    batch=self.empty_output_batch,
+                    log_message=vgi.function.LogMessage.from_exception(e),
+                )
+
+            if process_result.has_more:
+                function_input = yield FunctionOutput.from_process_result(
+                    process_result, True
+                )
+
+                if (
+                    process_result.log_message is not None
+                    and process_result.log_message.level
+                    == vgi.function.LogLevel.EXCEPTION
+                ):
+                    # There was an exception, so terminate the generator,
+                    # since nothing else should be produced after an exception.
+                    return
+
             else:
-                yield FunctionOutput(batch=output_batch, status=OutputStatus.FINISHED)
+                yield FunctionOutput.from_process_result(process_result, True)
                 return
 
 

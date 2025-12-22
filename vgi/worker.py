@@ -148,12 +148,7 @@ class Worker:
                 )
                 output_rows = output.batch.num_rows if output.batch else 0
                 total_output_rows += output_rows
-                writer.write_batch(
-                    output.batch,
-                    custom_metadata={
-                        "status": output.status.value if output.status else None
-                    },
-                )
+                writer.write_batch(output.batch, custom_metadata=output.metadata())
                 fn_log.debug(
                     "batch_written",
                     batch_index=batch_count,

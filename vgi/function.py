@@ -18,12 +18,118 @@ See Also:
     vgi.table_in_out_function: Streaming table functions built on these primitives.
 """
 
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
 
-__all__ = ["Arguments", "CallData", "BindResult"]
+__all__ = ["Arguments", "CallData", "BindResult", "LogLevel", "LogMessage"]
+
+import traceback
+from enum import Enum
+
+
+class LogLevel(Enum):
+    """Severity levels for log messages emitted during function processing.
+
+    Levels are ordered from most to least severe. Use the appropriate level
+    to indicate the nature of the message:
+
+    Attributes:
+        EXCEPTION: Unrecoverable error that terminated processing.
+        ERROR: Significant error that may affect results but didn't terminate.
+        WARN: Potential issue that should be reviewed but isn't necessarily wrong.
+        INFO: General informational message about processing status.
+        DEBUG: Detailed information useful for debugging.
+        TRACE: Fine-grained tracing information for detailed diagnostics.
+    """
+
+    EXCEPTION = "EXCEPTION"
+    ERROR = "ERROR"
+    WARN = "WARN"
+    INFO = "INFO"
+    DEBUG = "DEBUG"
+    TRACE = "TRACE"
+
+
+@dataclass(frozen=True, slots=True)
+class LogMessage:
+    """Log message that can be returned from process_batch() via ProcessResult.
+
+    LogMessage allows functions to emit diagnostic information during batch
+    processing. Messages are attached to the output metadata and transmitted
+    to the client alongside the output batch.
+
+    Attributes:
+        level: Severity level indicating the nature of the message.
+        message: Human-readable log message text.
+
+    Example:
+        def process_batch(self, batch, is_finalize):
+            if batch.num_rows == 0:
+                return ProcessResult(
+                    batch,
+                    log_message=LogMessage.info("Received empty batch")
+                )
+            return ProcessResult(batch)
+    """
+
+    level: LogLevel
+    message: str
+
+    @classmethod
+    def exception(cls, message: str) -> "LogMessage":
+        """Create an EXCEPTION level log message.
+
+        Use for unrecoverable errors that terminated processing.
+        """
+        return cls(LogLevel.EXCEPTION, message)
+
+    @classmethod
+    def error(cls, message: str) -> "LogMessage":
+        """Create an ERROR level log message.
+
+        Use for significant errors that may affect results.
+        """
+        return cls(LogLevel.ERROR, message)
+
+    @classmethod
+    def info(cls, message: str) -> "LogMessage":
+        """Create an INFO level log message.
+
+        Use for general informational messages about processing status.
+        """
+        return cls(LogLevel.INFO, message)
+
+    def add_to_metadata(self, metadata: dict[str, str] | None = None) -> dict[str, str]:
+        """Add log message fields to an existing metadata dictionary.
+
+        Creates a new dictionary with 'log_level' and 'log_message' keys added.
+        Does not mutate the input dictionary.
+
+        Args:
+            metadata: Existing metadata dict to augment, or None to create new.
+
+        Returns:
+            New dict containing original entries plus log_level and log_message.
+        """
+        result = dict(metadata) if metadata else {}
+        result["log_level"] = self.level.value
+        result["log_message"] = self.message
+        return result
+
+    @classmethod
+    def from_exception(cls, exc: Exception) -> "LogMessage":
+        """Create an EXCEPTION level log message from an Exception instance.
+
+        Args:
+            exc: Exception instance to create log message from.
+        Returns:
+            LogMessage with level EXCEPTION and message from the exception.
+        """
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        return cls(LogLevel.EXCEPTION, f"{type(exc).__name__}: {exc}\n\n{tb}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,10 +155,10 @@ class Arguments:
         )
     """
 
-    positional: list[pa.Scalar]
+    positional: list[pa.Scalar | None]
     named: dict[str, pa.Scalar]
 
-    def encoded_dict(self) -> dict[str, pa.Scalar]:
+    def encoded_dict(self) -> dict[str, pa.Scalar | None]:
         """Convert arguments to a dictionary suitable for serialization.
 
         Positional arguments are stored with keys "positional_0", "positional_1", etc.
@@ -90,7 +196,7 @@ class Arguments:
         Returns:
             Deserialized Arguments instance.
         """
-        positional: list[Any] = []
+        positional: list[pa.Scalar | None] = []
         named: dict[str, Any] = {}
         for key, value in data.items():
             if key.startswith("positional_"):
@@ -295,3 +401,20 @@ class BindResult:
             + bind_result_batch.serialize().to_pybytes()
         )
         return bind_result_bytes
+
+
+class Function:
+    def __init__(self, call_data: CallData):
+        pass
+
+    def max_processes(self) -> int:
+        """Optional maximum number of threads the function can utilize."""
+        return 1
+
+    def call_identifier(self) -> bytes:
+        """Unique identifier for the call of this function, if max_processes > 1,
+        to correlate multiple interances to the same higher-level function call.
+
+        Default: a UUID string.
+        """
+        return uuid.uuid4().bytes

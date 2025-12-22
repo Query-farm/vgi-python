@@ -21,8 +21,9 @@ import io
 import json
 import subprocess
 import sys
+import threading
 from collections.abc import Callable, Generator, Iterator
-from typing import Any
+from typing import IO, Any
 
 import pyarrow as pa
 import structlog
@@ -61,29 +62,52 @@ class Client:
                 process(batch)
     """
 
-    def __init__(self, server_path: str):
+    def __init__(self, server_path: str, passthrough_stderr: bool = False):
         """
         Initialize the VGI client.
 
         Args:
             server_path: Path to the VGI worker script to execute.
+            passthrough_stderr: If True, worker stderr is passed through to
+                the parent process's stderr. If False (default), stderr is
+                captured and available via get_worker_stderr().
         """
         self.server_path = server_path
+        self.passthrough_stderr = passthrough_stderr
         self._proc: subprocess.Popen[bytes] | None = None
         self._stdout_buffered: io.BufferedReader | None = None
         self._stdin_sink: pa.PythonFile | None = None
+        self._stderr_buffer: list[bytes] = []
+        self._stderr_lock = threading.Lock()
+        self._stderr_thread: threading.Thread | None = None
+
+    def _drain_stderr(self, stderr: IO[bytes]) -> None:
+        """Background thread that continuously reads stderr."""
+        while True:
+            line = stderr.readline()
+            if not line:
+                break
+            with self._stderr_lock:
+                self._stderr_buffer.append(line)
+
+    def get_worker_stderr(self) -> str:
+        """Return all captured stderr from the worker process."""
+        with self._stderr_lock:
+            return b"".join(self._stderr_buffer).decode("utf-8", errors="replace")
 
     def start(self) -> None:
         """Start the worker subprocess."""
         if self._proc is not None:
             raise ClientError("Client already started")
 
+        self._stderr_buffer = []
+
         log.debug("starting_server", server_path=self.server_path)
         self._proc = subprocess.Popen(
             self.server_path,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=sys.stderr,
+            stderr=None if self.passthrough_stderr else subprocess.PIPE,
             text=False,
             bufsize=0,
             shell=True,
@@ -92,6 +116,16 @@ class Client:
 
         if self._proc.stdout is None:
             raise ClientError("Failed to create stdout pipe for worker subprocess")
+
+        if not self.passthrough_stderr:
+            if self._proc.stderr is None:
+                raise ClientError("Failed to create stderr pipe for worker subprocess")
+
+            self._stderr_thread = threading.Thread(
+                target=self._drain_stderr, args=(self._proc.stderr,), daemon=True
+            )
+            self._stderr_thread.start()
+
         self._stdout_buffered = io.BufferedReader(self._proc.stdout)  # type: ignore[arg-type]
         self._stdin_sink = pa.PythonFile(self._proc.stdin)
 
@@ -114,9 +148,18 @@ class Client:
         else:
             log.debug("server_exited", returncode=returncode)
 
+        # Wait for stderr thread to finish draining before returning.
+        # The thread will exit naturally when stderr reaches EOF after
+        # the process terminates.
+        if self._stderr_thread is not None:
+            self._stderr_thread.join(timeout=5.0)
+            if self._stderr_thread.is_alive():
+                log.warning("stderr_thread_did_not_terminate")
+
         self._proc = None
         self._stdout_buffered = None
         self._stdin_sink = None
+        self._stderr_thread = None
         return returncode
 
     def __enter__(self) -> "Client":
@@ -446,6 +489,13 @@ def main() -> None:
         type=str,
         help="Path to the VGI worker",
     )
+    @click.option(
+        "--worker-stderr",
+        "worker_stderr",
+        is_flag=True,
+        default=False,
+        help="Pass worker stderr through to CLI stderr",
+    )
     def cli(
         input_file: str,
         output_file: str | None,
@@ -453,6 +503,7 @@ def main() -> None:
         function_name: str,
         arguments: str,
         server_path: str,
+        worker_stderr: bool,
     ) -> None:
         """Send parquet data through a VGI function and display results."""
         try:
@@ -470,7 +521,7 @@ def main() -> None:
 
         output_writer: OutputWriter | None = None
         try:
-            with Client(server_path) as client:
+            with Client(server_path, passthrough_stderr=worker_stderr) as client:
                 for output_batch in client.table_in_out_function(
                     function_name=function_name,
                     arguments=Arguments(positional=args_list, named={}),

@@ -15,6 +15,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from vgi.function import CallData
+from vgi.table_function import CardinalityInfo
 from vgi.table_in_out_function import (
     ProcessResult,
     TableInOutFunction,
@@ -268,7 +269,10 @@ class SumAllColumnsFunction(TableInOutFunction):
       [{"a": 6, "b": 7.0}]
     """
 
-    def bind(self) -> pa.Schema:
+    def cardinality(self) -> CardinalityInfo | None:
+        return CardinalityInfo(estimate=1, max=1)
+
+    def _output_schema(self) -> pa.Schema:
         self.sums: dict[str, pa.Scalar] = {}
         output_fields = []
         for field in self.input_schema:

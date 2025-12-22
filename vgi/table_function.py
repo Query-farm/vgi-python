@@ -77,3 +77,12 @@ class TableFunctionBindResult(vgi.function.BindResult):
             ),
             "cardinality_max": (self.cardinality.max if self.cardinality else None),
         }
+
+
+class TableFunction(vgi.function.Function):
+    def __init__(self, call_data: vgi.function.CallData):
+        super().__init__(call_data)
+
+    def cardinality(self) -> CardinalityInfo | None:
+        """Optional cardinality estimate for the output."""
+        return None

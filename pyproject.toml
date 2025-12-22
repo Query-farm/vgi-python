@@ -7,7 +7,7 @@ requires-python = ">=3.12.4"
 dependencies = ["click", "pyarrow", "structlog"]
 
 [project.optional-dependencies]
-dev = ["mypy", "pytest", "ruff"]
+dev = ["mypy", "pytest", "pytest-mypy", "pytest-ruff", "ruff"]
 
 [project.scripts]
 vgi-client = "vgi.client:main"
@@ -40,3 +40,6 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "structlog.*"
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+addopts = "--mypy --ruff"
