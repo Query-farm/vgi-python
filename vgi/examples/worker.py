@@ -19,12 +19,11 @@ from vgi.worker import FunctionRegistry, Worker
 class ExampleWorker(Worker):
     """Example worker with built-in test functions."""
 
-    # mypy doesn't recognize decorator type transformation
     registry: FunctionRegistry = {
-        "echo": EchoFunction,  # type: ignore[dict-item]
-        "buffer_input": BufferInputFunction,  # type: ignore[dict-item]
-        "repeat_inputs": RepeatInputsFunction,  # type: ignore[dict-item]
-        "sum_all_columns": SumAllColumnsFunction,  # type: ignore[dict-item]
+        "echo": EchoFunction,
+        "buffer_input": BufferInputFunction,
+        "repeat_inputs": RepeatInputsFunction,
+        "sum_all_columns": SumAllColumnsFunction,
     }
 
 

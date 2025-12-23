@@ -32,6 +32,8 @@ __all__ = ["Arguments", "CallData", "BindResult", "LogLevel", "LogMessage"]
 import traceback
 from enum import Enum
 
+import vgi.util
+
 
 class LogLevel(Enum):
     """Severity levels for log messages emitted during function processing.
@@ -227,6 +229,89 @@ class Arguments:
 
 
 @dataclass(frozen=True, slots=True)
+class GlobalInitResult:
+    """
+    The result from running global init of any function.
+    """
+
+    global_init_identifier: bytes | None = None
+
+    IDENTIFIER_FIELD_NAME = "global_init_identifier"
+
+    @classmethod
+    def has_identifier(cls, data: pa.RecordBatch) -> bool:
+        """Check if the RecordBatch contains a global_init_identifier field.
+
+        Args:
+            data: RecordBatch to check for the field.
+        Returns:
+            True if the field exists, False otherwise.
+        """
+        return cls.IDENTIFIER_FIELD_NAME in data.schema.names
+
+    def schema(self) -> pa.Schema:
+        """Return Arrow schema used when serializing GlobalInitResult.
+
+        Returns:
+            Arrow schema with fields for each serialized attribute.
+        """
+
+        return pa.schema(
+            [
+                pa.field(self.IDENTIFIER_FIELD_NAME, pa.binary(), nullable=True),
+            ]
+        )
+
+    def serialize(self) -> bytes:
+        """Serialize GlobalInitResult to an Arrow RecordBatch.
+
+        Returns:
+            RecordBatch containing serialized GlobalInitResult fields.
+        """
+
+        batch = pa.RecordBatch.from_pylist(
+            [
+                {
+                    self.IDENTIFIER_FIELD_NAME: self.global_init_identifier,
+                }
+            ],
+            schema=self.schema(),
+        )
+        return vgi.util.recordbatch_to_bytes(batch)
+
+    @classmethod
+    def deserialize(cls, data: pa.RecordBatch) -> "GlobalInitResult":
+        """Deserialize GlobalInitResult from an Arrow RecordBatch.
+
+        Args:
+          data: RecordBatch containing serialized GlobalInitResult fields.
+        Returns:
+          Deserialized GlobalInitResult instance.
+        """
+        if data.num_rows == 0:
+            raise ValueError(
+                "Cannot deserialize GlobalInitResult from empty RecordBatch"
+            )
+        if data.num_rows > 1:
+            raise ValueError(
+                "Expected single-row RecordBatch for GlobalInitResult deserialization"
+            )
+
+        first_row = data.to_pylist()[0]
+        required_fields = [cls.IDENTIFIER_FIELD_NAME]
+
+        for field in required_fields:
+            if field not in first_row:
+                raise ValueError(
+                    f"Missing '{field}' field in GlobalInitResult RecordBatch"
+                )
+
+        return GlobalInitResult(
+            global_init_identifier=first_row[cls.IDENTIFIER_FIELD_NAME],
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class CallData:
     """Complete function invocation request sent from client to worker.
 
@@ -259,7 +344,26 @@ class CallData:
     in_schema: pa.Schema | None
     call_identifier: bytes
 
-    def serialize(self) -> pa.RecordBatch:
+    global_init_identifier: GlobalInitResult | None = None
+
+    def with_global_init_identifier(
+        self, global_init_identifier: GlobalInitResult
+    ) -> "CallData":
+        """Return a new CallData with the given global_init_identifier.
+        Args:
+            global_init_identifier: The GlobalInitResult to set.
+        Returns:
+            New CallData instance with updated global_init_identifier.
+        """
+        return CallData(
+            function_name=self.function_name,
+            arguments=self.arguments,
+            in_schema=self.in_schema,
+            call_identifier=self.call_identifier,
+            global_init_identifier=global_init_identifier,
+        )
+
+    def serialize(self) -> bytes:
         """Serialize CallData to an Arrow RecordBatch.
 
         Returns:
@@ -275,7 +379,7 @@ class CallData:
             ]
         )
 
-        return pa.RecordBatch.from_pylist(
+        batch = pa.RecordBatch.from_pylist(
             [
                 {
                     "function_name": self.function_name,
@@ -295,6 +399,7 @@ class CallData:
                 ]
             ),
         )
+        return vgi.util.recordbatch_to_bytes(batch)
 
     @staticmethod
     def deserialize(data: pa.RecordBatch) -> "CallData":
@@ -333,6 +438,11 @@ class CallData:
             arguments=Arguments.decode(data.column("arguments")[0]),
             in_schema=in_schema,
             call_identifier=first_row["call_identifier"],
+            global_init_identifier=GlobalInitResult(
+                first_row[GlobalInitResult.IDENTIFIER_FIELD_NAME]
+            )
+            if GlobalInitResult.IDENTIFIER_FIELD_NAME in data.schema.names
+            else None,
         )
 
     @cached_property
@@ -429,12 +539,7 @@ class BindResult:
             [self.serialize_dict()],
             schema=bind_result_schema,
         )
-
-        bind_result_bytes: bytes = (
-            bind_result_batch.schema.serialize().to_pybytes()
-            + bind_result_batch.serialize().to_pybytes()
-        )
-        return bind_result_bytes
+        return vgi.util.recordbatch_to_bytes(bind_result_batch)
 
 
 class Function:
@@ -451,6 +556,8 @@ class Function:
         vgi.table_function.TableFunction: Adds cardinality hints.
         vgi.table_in_out_function.TableInOutFunction: Full streaming implementation.
     """
+
+    init_data: GlobalInitResult = GlobalInitResult()
 
     def __init__(self, call_data: CallData):
         """Initialize the function with call data.
@@ -482,3 +589,21 @@ class Function:
             Unique bytes identifier. Default is a random UUID.
         """
         return uuid.uuid4().bytes
+
+    def process_init(self, input: pa.RecordBatch) -> GlobalInitResult:
+        """Perform any global initialization required before processing.
+
+        This method is called once per worker process before any data
+        batches are processed. Override to set up shared resources, load
+        models, or perform expensive setup tasks.
+
+        Args:
+            input: An initial RecordBatch that may contain configuration
+                or context information for initialization.
+        """
+
+        # If there is an id supplied, detect it so it will be passed on.
+        if GlobalInitResult.has_identifier(input):
+            return GlobalInitResult.deserialize(input)
+
+        return GlobalInitResult()

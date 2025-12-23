@@ -32,31 +32,28 @@ import os
 import sys
 from dataclasses import dataclass
 
+import pyarrow as pa
 import structlog
 from pyarrow import ipc
 
-from vgi.function import CallData
+from vgi.function import BindResult, CallData
 from vgi.table_in_out_function import (
-    BindResult,
     FunctionInput,
-    TableInOutFunctionCallable,
+    TableInOutFunction,
+    #    TableInOutFunctionCallable,
 )
 
 # Type for decorated table functions
-FunctionRegistry = dict[str, TableInOutFunctionCallable]
+FunctionRegistry = dict[str, type[TableInOutFunction]]
 
 
 @dataclass(frozen=True, slots=True)
 class WorkerStats:
     """Statistics about a worker's processing run.
-
-    Returned by _process_batches() to summarize the work done during
-    a single function invocation.
-
     Attributes:
         batch_count: Number of data batches processed.
-        total_input_rows: Total number of input rows received from client.
-        total_output_rows: Total number of output rows sent to client.
+        total_input_rows: Total number of input rows processed.
+        total_output_rows: Total number of output rows produced.
     """
 
     batch_count: int
@@ -117,29 +114,46 @@ class Worker:
 
         return CallData.deserialize(init_batch)
 
+    def _read_init_data(self) -> pa.RecordBatch:
+        """Read and parse the init data from stdin.
+
+        Returns:
+            pa.RecordBatch
+        """
+        self.log.debug("init_data_reading")
+
+        # Read init messages manually (not via ipc.open_stream) to avoid PyArrow
+        # closing the underlying pipe when the stream context exits.
+        msg = ipc.read_message(sys.stdin)
+        if msg.type != "schema":
+            raise ValueError(f"Expected schema message, got {msg.type}")
+        init_schema = ipc.read_schema(msg)
+
+        msg = ipc.read_message(sys.stdin)
+        if msg.type != "record batch":
+            raise ValueError(f"Expected record batch, got {msg.type}")
+        init_batch = ipc.read_record_batch(msg, init_schema)
+
+        return init_batch
+
     def _process_batches(
         self,
-        bind_result: BindResult,
+        instance: TableInOutFunction,
         call_data: CallData,
         fn_log: structlog.stdlib.BoundLogger,
     ) -> WorkerStats:
-        """Process data batches through the function generator.
-
-        Reads batches from stdin, sends them through the function's generator,
-        and writes output batches to stdout. Continues until the input stream
-        ends.
-
-        Args:
-            bind_result: The BindResult containing the generator to process batches.
-            call_data: The CallData for this invocation, used for schema validation
-                and passed to output metadata for correlation.
-            fn_log: Logger bound to this function invocation for debug output.
+        """Process data batches through the function.
 
         Returns:
-            WorkerStats with counts of batches and rows processed.
+            Tuple of (batch_count, total_input_rows, total_output_rows)
         """
+
+        assert call_data.global_init_identifier is not None
+        generator = instance.run(call_data.global_init_identifier)
+        next(generator)
+
         with (
-            ipc.new_stream(sys.stdout, bind_result.output_schema) as writer,
+            ipc.new_stream(sys.stdout, instance.output_schema) as writer,
             ipc.open_stream(sys.stdin) as data_reader,
         ):
             # Validate data stream schema matches expected input schema
@@ -171,9 +185,7 @@ class Worker:
                     input_rows=batch.num_rows,
                 )
 
-                output = bind_result.generator.send(
-                    FunctionInput(batch=batch, metadata=metadata)
-                )
+                output = generator.send(FunctionInput(batch=batch, metadata=metadata))
                 output_rows = output.batch.num_rows if output.batch else 0
                 total_output_rows += output_rows
                 writer.write_batch(
@@ -206,18 +218,29 @@ class Worker:
         if call_data.function_name not in self.registry:
             raise ValueError(f"Unknown function: {call_data.function_name}")
 
-        bind_result = self.registry[call_data.function_name](call_data)
-        next(bind_result.generator)
+        instance = self.registry[call_data.function_name](call_data)
 
-        bind_result_bytes = bind_result.serialize()
+        bind_result_bytes = BindResult(
+            output_schema=instance.output_schema,
+            max_processes=instance.max_processes(),
+            call_identifier=instance.call_identifier(),
+        ).serialize()
+
         if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):
             raise OSError("Failed to write bind result record batch")
 
-        stats = self._process_batches(bind_result, call_data, fn_log)
+        if call_data.global_init_identifier is None:
+            fn_log.info("processing_init")
+            init_result = instance.process_init(self._read_init_data())
+            init_result_bytes = init_result.serialize()
+            if sys.stdout.write(init_result_bytes) != len(init_result_bytes):
+                raise OSError("Failed to write init result record batch")
+            fn_log.info("processing_init_complete", init_result=init_result)
+            call_data = call_data.with_global_init_identifier(init_result)
+
+        stats = self._process_batches(instance, call_data, fn_log)
 
         fn_log.info(
             "worker_complete",
-            batches_processed=stats.batch_count,
-            total_input_rows=stats.total_input_rows,
-            total_output_rows=stats.total_output_rows,
+            stats=stats,
         )

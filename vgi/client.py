@@ -30,6 +30,7 @@ import structlog
 from pyarrow import ipc
 
 from vgi.function import Arguments, CallData
+from vgi.table_function import GlobalStateInitInput
 
 # Configure structlog to write to stderr
 structlog.configure(
@@ -227,16 +228,18 @@ class Client:
                     "sending_init_batch", function=function_name, arguments=arguments
                 )
 
-                call_parameters_batch = CallData(
+                call_parameters_batch_bytes = CallData(
                     function_name=function_name,
                     arguments=arguments,
                     in_schema=input_schema,
                     call_identifier=call_identifier if call_identifier else b"",
                 ).serialize()
-                init_writer = ipc.new_stream(
-                    self._stdin_sink, call_parameters_batch.schema
-                )
-                init_writer.write_batch(call_parameters_batch)
+
+                if self._stdin_sink.write(call_parameters_batch_bytes) != len(
+                    call_parameters_batch_bytes
+                ):
+                    raise OSError("Failed to write call parameters record batch")
+
                 # If we close init_writer here, the underlying pipe gets closed
                 # and we can't send data batches, so we just leave it open.
                 # It will be closed be closed when this function exists
@@ -265,7 +268,39 @@ class Client:
 
                 log.debug("bind_result", batch=bind_result_batch)
 
-                log.debug("output_schema_received")
+                global_state_info_serialized_bytes = GlobalStateInitInput().serialize()
+
+                if self._stdin_sink.write(global_state_info_serialized_bytes) != len(
+                    global_state_info_serialized_bytes
+                ):
+                    raise OSError(
+                        "Failed to write global state init input record batch"
+                    )
+
+                # Now read the init result.
+
+                log.debug("reading_init_schema")
+
+                msg = ipc.read_message(self._stdout_buffered)
+                if msg.type != "schema":
+                    raise ClientError(
+                        f"Expected schema message for init result, got {msg.type}"
+                    )
+
+                init_result_schema = ipc.read_schema(msg)
+                log.debug("init_result_schema_received", schema=str(init_result_schema))
+
+                msg = ipc.read_message(self._stdout_buffered)
+                if msg.type != "record batch":
+                    raise ClientError(
+                        f"Expected init result record batch, got {msg.type}"
+                    )
+
+                # Right now we don't have to do anything with the init result
+                # but we will need it if we were to support opening more than one
+                # connection to a new worker process as part of this call.
+                _init_result_batch = ipc.read_record_batch(msg, init_result_schema)
+                log.debug("init_result_received")
 
                 # Send data batches
                 data_writer = ipc.new_stream(self._stdin_sink, input_schema)

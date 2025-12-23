@@ -46,6 +46,25 @@ class CardinalityInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class GlobalStateInitInput:
+    """Input used to create the generator for TableInOutFunction.
+
+    Attributes:
+        call_data: The CallData for this function invocation.
+    """
+
+    projection_ids: list[int] | None = None
+
+    def serialize(self) -> bytes:
+        """Serialize GlobalStateInitInput to an bytes."""
+        batch = pa.RecordBatch.from_arrays(
+            [pa.array([self.projection_ids], type=pa.list_(pa.int32()))],
+            schema=pa.schema([pa.field("projection_ids", pa.list_(pa.int32()))]),
+        )
+        return vgi.util.recordbatch_to_bytes(batch)
+
+
+@dataclass(frozen=True, slots=True)
 class TableFunctionBindResult(vgi.function.BindResult):
     """Extended bind result for table functions with cardinality information.
 

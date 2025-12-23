@@ -14,13 +14,9 @@ SumAllColumnsFunction     - Aggregates numeric columns into sums
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from vgi.function import CallData
+from vgi.function import CallData, GlobalInitResult
 from vgi.table_function import CardinalityInfo
-from vgi.table_in_out_function import (
-    ProcessResult,
-    TableInOutFunction,
-    table_in_out_function,
-)
+from vgi.table_in_out_function import ProcessResult, TableInOutFunction
 
 __all__ = [
     "EchoFunction",
@@ -30,7 +26,6 @@ __all__ = [
 ]
 
 
-@table_in_out_function
 class EchoFunction(TableInOutFunction):
     """Passthrough function that emits each input batch unchanged.
 
@@ -50,7 +45,6 @@ class EchoFunction(TableInOutFunction):
     """
 
 
-@table_in_out_function
 class BufferInputFunction(TableInOutFunction):
     """Buffering function that collects all input and emits during finalization.
 
@@ -94,7 +88,9 @@ class BufferInputFunction(TableInOutFunction):
         self.buffered_batches: list[pa.RecordBatch] = []
         self.finalize_index = 0
 
-    def process_batch(self, batch: pa.RecordBatch, is_finalize: bool) -> ProcessResult:
+    def process_batch(
+        self, init_data: GlobalInitResult, batch: pa.RecordBatch, is_finalize: bool
+    ) -> ProcessResult:
         if is_finalize:
             if self.finalize_index < len(self.buffered_batches):
                 out = self.buffered_batches[self.finalize_index]
@@ -107,7 +103,6 @@ class BufferInputFunction(TableInOutFunction):
         return ProcessResult(None)
 
 
-@table_in_out_function
 class RepeatInputsFunction(TableInOutFunction):
     """Explosion function that duplicates each input batch N times.
 
@@ -181,7 +176,9 @@ class RepeatInputsFunction(TableInOutFunction):
         self.repeat_count = repeat_count
         self.current_repeat = 0
 
-    def process_batch(self, batch: pa.RecordBatch, is_finalize: bool) -> ProcessResult:
+    def process_batch(
+        self, init_data: GlobalInitResult, batch: pa.RecordBatch, is_finalize: bool
+    ) -> ProcessResult:
         if is_finalize:
             return ProcessResult(None)
         self.current_repeat += 1
@@ -191,7 +188,6 @@ class RepeatInputsFunction(TableInOutFunction):
         return ProcessResult(batch, has_more)
 
 
-@table_in_out_function
 class SumAllColumnsFunction(TableInOutFunction):
     """Aggregation function that computes column-wise sums across all batches.
 
@@ -286,7 +282,9 @@ class SumAllColumnsFunction(TableInOutFunction):
             self.sums[field.name] = pa.scalar(0, type=out_type)
         return pa.schema(output_fields)
 
-    def process_batch(self, batch: pa.RecordBatch, is_finalize: bool) -> ProcessResult:
+    def process_batch(
+        self, init_data: GlobalInitResult, batch: pa.RecordBatch, is_finalize: bool
+    ) -> ProcessResult:
         if is_finalize:
             return ProcessResult(
                 pa.RecordBatch.from_pydict(

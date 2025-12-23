@@ -28,11 +28,11 @@ Quick Start:
 See TableInOutFunction docstring for comprehensive documentation and examples.
 """
 
-from collections.abc import Callable, Generator
+from collections.abc import Generator
 from dataclasses import dataclass
 from enum import Enum
 from functools import cached_property
-from typing import ClassVar, cast, final
+from typing import ClassVar, final
 
 import pyarrow as pa
 
@@ -46,9 +46,6 @@ __all__ = [
     "FunctionOutput",
     "ProcessResult",
     "TableInOutFunction",
-    "TableInOutFunctionCallable",
-    "BindResult",
-    "table_in_out_function",
 ]
 
 
@@ -162,38 +159,6 @@ class FunctionOutput:
             status=status,
             log_message=process_result.log_message,
         )
-
-
-@dataclass(frozen=True, slots=True)
-class BindResult(vgi.table_function.TableFunctionBindResult):
-    """Complete bind result for TableInOutFunction, including the processing generator.
-
-    Extends TableFunctionBindResult with the generator that implements the
-    streaming DATA -> FINALIZE protocol. The caller interacts with the function
-    by sending FunctionInput objects and receiving FunctionOutput objects.
-
-    Attributes:
-        output_schema: Arrow schema for output batches (inherited).
-        max_processes: Parallelization hint (inherited).
-        call_identifier: Unique call ID (inherited).
-        cardinality: Optional row count estimates (inherited).
-        generator: The generator implementing the streaming protocol.
-            - Must be primed with next() before use
-            - Accepts FunctionInput via send()
-            - Yields FunctionOutput with batch and status
-
-    Usage:
-        call_data = vgi.function.CallData(
-            function_name="my_function",
-            arguments=[],
-            in_schema=input_schema,
-        )
-        bind_result = MyFunction(call_data)
-        next(bind_result.generator)  # Prime
-        output = bind_result.generator.send(FunctionInput(batch=data))
-    """
-
-    generator: Generator[FunctionOutput, FunctionInput, None]
 
 
 class SchemaValidationError(Exception):
@@ -532,7 +497,10 @@ class TableInOutFunction(vgi.table_function.TableFunction):
 
     @final
     def _process_and_validate(
-        self, batch: pa.RecordBatch, is_finalize: bool
+        self,
+        init_data: vgi.function.GlobalInitResult,
+        batch: pa.RecordBatch,
+        is_finalize: bool,
     ) -> ProcessResultComplete:
         """Process a batch and validate both input and output schemas.
 
@@ -540,6 +508,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         the result to ProcessResultComplete, and validates the output schema.
 
         Args:
+            init_data: The global initialization data.
             batch: The input RecordBatch to process.
             is_finalize: Whether this is a finalization call.
 
@@ -551,14 +520,17 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         """
         self._validate_input_schema(batch)
         result = ProcessResultComplete.from_process_result(
-            self.process_batch(batch, is_finalize), self.empty_output_batch
+            self.process_batch(init_data, batch, is_finalize), self.empty_output_batch
         )
         self._validate_output_schema(result.batch)
         return result
 
     @final
     def _process_with_exception_handling(
-        self, batch: pa.RecordBatch, is_finalize: bool
+        self,
+        init_data: vgi.function.GlobalInitResult,
+        batch: pa.RecordBatch,
+        is_finalize: bool,
     ) -> ProcessResultComplete:
         """Process a batch with exception handling.
 
@@ -566,7 +538,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         to ProcessResultComplete with an error log message.
         """
         try:
-            return self._process_and_validate(batch, is_finalize=is_finalize)
+            return self._process_and_validate(init_data, batch, is_finalize=is_finalize)
         except Exception as e:
             return ProcessResultComplete(
                 batch=self.empty_output_batch,
@@ -581,10 +553,16 @@ class TableInOutFunction(vgi.table_function.TableFunction):
             and result.log_message.level == vgi.function.LogLevel.EXCEPTION
         )
 
-    def process_batch(self, batch: pa.RecordBatch, is_finalize: bool) -> ProcessResult:
+    def process_batch(
+        self,
+        init_data: vgi.function.GlobalInitResult,
+        batch: pa.RecordBatch,
+        is_finalize: bool,
+    ) -> ProcessResult:
         """Process an input batch or handle finalization.
 
         Args:
+            init_data: The global initialization data.
             batch: The input RecordBatch to process. During finalize, this will
                    be an empty batch conforming to the input schema.
             is_finalize: True when called during FINALIZE phase.
@@ -602,7 +580,9 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         return ProcessResult(batch)
 
     @final
-    def run(self) -> Generator[FunctionOutput, FunctionInput, None]:
+    def run(
+        self, init_data: vgi.function.GlobalInitResult
+    ) -> Generator[FunctionOutput, FunctionInput, None]:
         """Run the function protocol. Do not override.
 
         This generator implements the DATA* -> FINALIZE lifecycle:
@@ -620,7 +600,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         # DATA phase
         while not function_input.is_finalize:
             result = self._process_with_exception_handling(
-                function_input.batch, is_finalize=False
+                init_data, function_input.batch, is_finalize=False
             )
             function_input = yield FunctionOutput.from_process_result(
                 result, in_finalize_phase=False
@@ -631,7 +611,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         # FINALIZE phase
         while True:
             result = self._process_with_exception_handling(
-                function_input.batch, is_finalize=True
+                init_data, function_input.batch, is_finalize=True
             )
             if result.has_more:
                 function_input = yield FunctionOutput.from_process_result(
@@ -642,43 +622,3 @@ class TableInOutFunction(vgi.table_function.TableFunction):
             else:
                 yield FunctionOutput.from_process_result(result, in_finalize_phase=True)
                 return
-
-
-# Type alias for decorated table function callables
-type TableInOutFunctionCallable = Callable[[vgi.function.CallData], BindResult]
-
-
-def table_in_out_function(cls: type[TableInOutFunction]) -> TableInOutFunctionCallable:
-    """Decorator to convert a TableInOutFunction class into a callable.
-
-    The decorated class becomes a callable that accepts a CallData object
-    and returns a BindResult containing the output schema and generator.
-
-    Usage:
-        @table_in_out_function
-        class MyFunction(TableInOutFunction):
-            def process_batch(self, batch, is_finalize):
-                ...
-
-        # Create CallData and call the decorated function:
-        call_data = vgi.function.CallData(
-            function_name="my_function",
-            arguments=[],
-            in_schema=input_schema,
-        )
-        bind_result = MyFunction(call_data)  # Returns BindResult
-        next(bind_result.generator)  # Prime the generator
-        output = bind_result.generator.send(FunctionInput(batch=data))
-    """
-
-    def wrapper(call_data: vgi.function.CallData) -> BindResult:
-        fn = cls(call_data)
-        return BindResult(
-            output_schema=fn.output_schema,
-            max_processes=fn.max_processes(),
-            cardinality=fn.cardinality(),
-            call_identifier=fn.call_identifier(),
-            generator=fn.run(),
-        )
-
-    return cast(TableInOutFunctionCallable, wrapper)
