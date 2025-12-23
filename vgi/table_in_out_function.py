@@ -17,7 +17,7 @@ Key Components:
 
 Quick Start:
     class MyFunction(TableInOutFunction):
-        def process_batch(self, init_data, batch, is_finalize):
+        def process_batch(self, batch, is_finalize):
             if is_finalize:
                 return ProcessResult(None)
             # Transform batch here
@@ -249,11 +249,11 @@ class TableInOutFunction(vgi.table_function.TableFunction):
     1. BIND: The class is instantiated and _output_schema() is called to get the
        output schema, cardinality info, and generator.
 
-    2. DATA: Your process_batch(init_data, batch, is_finalize=False) is called for
+    2. DATA: Your process_batch(batch, is_finalize=False) is called for
        each input batch. Return ProcessResult(batch, has_more). If has_more=True,
        you'll be called again with the same input to produce more output.
 
-    3. FINALIZE: Your process_batch(init_data, batch, is_finalize=True) is called
+    3. FINALIZE: Your process_batch(batch, is_finalize=True) is called
        repeatedly after all input until has_more=False. The batch will be an empty
        batch. Return buffered/aggregated results. Set has_more=True to emit multiple
        batches.
@@ -268,7 +268,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         - Return the output schema
         Default: returns self.input_schema unchanged (passthrough)
 
-    process_batch(init_data, batch, is_finalize) -> ProcessResult
+    process_batch(batch, is_finalize) -> ProcessResult
         Called for each input batch during DATA phase (is_finalize=False), and
         called repeatedly during FINALIZE phase (is_finalize=True) until has_more
         is False. Returns a ProcessResult with:
@@ -335,7 +335,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
     Example 2: Filter rows (1:1 mapping, possibly fewer rows)
     ---------------------------------------------------------
     class FilterPositiveFunction(TableInOutFunction):
-        def process_batch(self, init_data, batch, is_finalize):
+        def process_batch(self, batch, is_finalize):
             if is_finalize:
                 return ProcessResult(None)
             mask = pc.greater(batch.column("value"), 0)
@@ -350,7 +350,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
                 pa.field("doubled", pa.int64())
             ])
 
-        def process_batch(self, init_data, batch, is_finalize):
+        def process_batch(self, batch, is_finalize):
             if is_finalize:
                 return ProcessResult(None)
             doubled = pc.multiply(batch.column("value"), 2)
@@ -377,7 +377,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
                 self.sums[field.name] = pa.scalar(0, type=out_type)
             return pa.schema(output_fields)
 
-        def process_batch(self, init_data, batch, is_finalize):
+        def process_batch(self, batch, is_finalize):
             if is_finalize:
                 # Emit final sums as a single row
                 return ProcessResult(pa.RecordBatch.from_pydict(
@@ -399,7 +399,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
             self.repeat_count = self.arguments[0] if self.arguments else 2
             self.current_repeat = 0
 
-        def process_batch(self, init_data, batch, is_finalize):
+        def process_batch(self, batch, is_finalize):
             if is_finalize:
                 return ProcessResult(None)
             self.current_repeat += 1
@@ -416,7 +416,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
             self.buffered: list[pa.RecordBatch] = []
             self.finalize_index = 0
 
-        def process_batch(self, init_data, batch, is_finalize):
+        def process_batch(self, batch, is_finalize):
             if is_finalize:
                 if self.finalize_index < len(self.buffered):
                     out = self.buffered[self.finalize_index]
@@ -491,7 +491,6 @@ class TableInOutFunction(vgi.table_function.TableFunction):
     @final
     def _process_and_validate(
         self,
-        init_data: vgi.function.GlobalInitResult,
         batch: pa.RecordBatch,
         is_finalize: bool,
     ) -> ProcessResultComplete:
@@ -513,7 +512,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         """
         self._validate_input_schema(batch)
         result = ProcessResultComplete.from_process_result(
-            self.process_batch(init_data, batch, is_finalize), self.empty_output_batch
+            self.process_batch(batch, is_finalize), self.empty_output_batch
         )
         self._validate_output_schema(result.batch)
         return result
@@ -521,7 +520,6 @@ class TableInOutFunction(vgi.table_function.TableFunction):
     @final
     def _process_with_exception_handling(
         self,
-        init_data: vgi.function.GlobalInitResult,
         batch: pa.RecordBatch,
         is_finalize: bool,
     ) -> ProcessResultComplete:
@@ -531,7 +529,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         to ProcessResultComplete with an error log message.
         """
         try:
-            return self._process_and_validate(init_data, batch, is_finalize=is_finalize)
+            return self._process_and_validate(batch, is_finalize=is_finalize)
         except Exception as e:
             return ProcessResultComplete(
                 batch=self.empty_output_batch,
@@ -548,7 +546,6 @@ class TableInOutFunction(vgi.table_function.TableFunction):
 
     def process_batch(
         self,
-        init_data: vgi.function.GlobalInitResult,
         batch: pa.RecordBatch,
         is_finalize: bool,
     ) -> ProcessResult:
@@ -593,7 +590,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         # DATA phase
         while not function_input.is_finalize:
             result = self._process_with_exception_handling(
-                init_data, function_input.batch, is_finalize=False
+                function_input.batch, is_finalize=False
             )
             function_input = yield FunctionOutput.from_process_result(
                 result, in_finalize_phase=False
@@ -604,7 +601,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         # FINALIZE phase
         while True:
             result = self._process_with_exception_handling(
-                init_data, function_input.batch, is_finalize=True
+                function_input.batch, is_finalize=True
             )
             if result.has_more:
                 function_input = yield FunctionOutput.from_process_result(
