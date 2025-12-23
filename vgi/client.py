@@ -29,6 +29,7 @@ import json
 import subprocess
 import sys
 import threading
+import uuid
 from collections.abc import Callable, Generator, Iterator
 from typing import IO, Any
 
@@ -186,9 +187,9 @@ class Client:
         *,
         function_name: str,
         arguments: Arguments,
-        call_identifier: bytes | None,
         input: Iterator[pa.RecordBatch],
         bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
+        call_identifier: bytes = uuid.uuid4().bytes,
     ) -> Generator[pa.RecordBatch, None, None]:
         """Call a table-in-out function on the worker with the given input data.
 
@@ -582,7 +583,6 @@ def main() -> None:
                 for output_batch in client.table_in_out_function(
                     function_name=function_name,
                     arguments=Arguments(positional=args_list, named={}),
-                    call_identifier=None,
                     input=pf.iter_batches(),
                 ):
                     if output_writer is None:

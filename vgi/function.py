@@ -352,6 +352,8 @@ class CallData:
     function_name: str
     arguments: Arguments
     in_schema: pa.Schema | None
+
+    # The unique identifier for the call, typically this may be a uuid.
     call_identifier: bytes
 
     global_init_identifier: GlobalInitResult | None = None

@@ -66,7 +66,6 @@ class TestEchoFunction:
                 client.table_in_out_function(
                     function_name="echo",
                     arguments=Arguments(positional=[], named={}),
-                    call_identifier=None,
                     input=iter(simple_batches),
                 )
             )
@@ -94,7 +93,6 @@ class TestEchoFunction:
                 client.table_in_out_function(
                     function_name="echo",
                     arguments=Arguments(positional=[], named={}),
-                    call_identifier=None,
                     input=iter(simple_batches),
                 )
             )
@@ -114,7 +112,6 @@ class TestBufferInputFunction:
                 client.table_in_out_function(
                     function_name="buffer_input",
                     arguments=Arguments(positional=[], named={}),
-                    call_identifier=None,
                     input=iter(simple_batches),
                 )
             )
@@ -135,7 +132,6 @@ class TestBufferInputFunction:
                 client.table_in_out_function(
                     function_name="buffer_input",
                     arguments=Arguments(positional=[], named={}),
-                    call_identifier=None,
                     input=iter(simple_batches),
                 )
             )
@@ -161,7 +157,6 @@ class TestRepeatInputsFunction:
                 client.table_in_out_function(
                     function_name="repeat_inputs",
                     arguments=Arguments(positional=[repeat_count], named={}),
-                    call_identifier=None,
                     input=iter(simple_batches),
                 )
             )
@@ -179,7 +174,6 @@ class TestRepeatInputsFunction:
                 client.table_in_out_function(
                     function_name="repeat_inputs",
                     arguments=Arguments(positional=[1], named={}),
-                    call_identifier=None,
                     input=iter(simple_batches),
                 )
             )
@@ -201,7 +195,6 @@ class TestSumAllColumnsFunction:
                 client.table_in_out_function(
                     function_name="sum_all_columns",
                     arguments=Arguments(positional=[], named={}),
-                    call_identifier=None,
                     input=iter(numeric_batches),
                 )
             )
@@ -225,7 +218,6 @@ class TestSumAllColumnsFunction:
                 client.table_in_out_function(
                     function_name="sum_all_columns",
                     arguments=Arguments(positional=[], named={}),
-                    call_identifier=None,
                     input=iter(simple_batches),
                 )
             )
@@ -248,7 +240,6 @@ class TestSumAllColumnsFunction:
                 client.table_in_out_function(
                     function_name="sum_all_columns",
                     arguments=Arguments(positional=[], named={}),
-                    call_identifier=None,
                     input=iter(numeric_batches),
                 )
             )
@@ -286,7 +277,6 @@ class TestWorkerStderrCapture:
                 client.table_in_out_function(
                     function_name="echo",
                     arguments=Arguments(positional=[], named={}),
-                    call_identifier=None,
                     input=iter(simple_batches),
                 )
             )
@@ -303,12 +293,12 @@ class TestWorkerStderrCapture:
         """Should be able to access stderr after an error occurs."""
         # Use a worker script that writes to stderr then fails
         worker_script = (
-            "python -c \""
+            'python -c "'
             "import sys; "
             "sys.stderr.write('Debug: worker starting\\n'); "
             "sys.stderr.write('Error: something went wrong\\n'); "
             "sys.stderr.flush(); "
-            "sys.exit(1)\""
+            'sys.exit(1)"'
         )
 
         client = Client(worker_script)
@@ -316,6 +306,7 @@ class TestWorkerStderrCapture:
 
         # Give the process a moment to write stderr and exit
         import time
+
         time.sleep(0.1)
 
         stderr_output = client.get_worker_stderr()
