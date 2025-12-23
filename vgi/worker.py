@@ -30,8 +30,8 @@ Usage:
 
 import os
 import sys
+from dataclasses import dataclass
 
-import pyarrow as pa
 import structlog
 from pyarrow import ipc
 
@@ -44,6 +44,24 @@ from vgi.table_in_out_function import (
 
 # Type for decorated table functions
 FunctionRegistry = dict[str, TableInOutFunctionCallable]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerStats:
+    """Statistics about a worker's processing run.
+
+    Returned by _process_batches() to summarize the work done during
+    a single function invocation.
+
+    Attributes:
+        batch_count: Number of data batches processed.
+        total_input_rows: Total number of input rows received from client.
+        total_output_rows: Total number of output rows sent to client.
+    """
+
+    batch_count: int
+    total_input_rows: int
+    total_output_rows: int
 
 
 class Worker:
@@ -102,22 +120,32 @@ class Worker:
     def _process_batches(
         self,
         bind_result: BindResult,
-        in_schema: pa.Schema,
+        call_data: CallData,
         fn_log: structlog.stdlib.BoundLogger,
-    ) -> tuple[int, int, int]:
-        """Process data batches through the function.
+    ) -> WorkerStats:
+        """Process data batches through the function generator.
+
+        Reads batches from stdin, sends them through the function's generator,
+        and writes output batches to stdout. Continues until the input stream
+        ends.
+
+        Args:
+            bind_result: The BindResult containing the generator to process batches.
+            call_data: The CallData for this invocation, used for schema validation
+                and passed to output metadata for correlation.
+            fn_log: Logger bound to this function invocation for debug output.
 
         Returns:
-            Tuple of (batch_count, total_input_rows, total_output_rows)
+            WorkerStats with counts of batches and rows processed.
         """
         with (
             ipc.new_stream(sys.stdout, bind_result.output_schema) as writer,
             ipc.open_stream(sys.stdin) as data_reader,
         ):
             # Validate data stream schema matches expected input schema
-            if data_reader.schema != in_schema:
+            if data_reader.schema != call_data.in_schema:
                 raise ValueError(
-                    f"Data stream schema mismatch. Expected: {in_schema}, "
+                    f"Data stream schema mismatch. Expected: {call_data.in_schema}, "
                     f"got: {data_reader.schema}"
                 )
 
@@ -148,15 +176,20 @@ class Worker:
                 )
                 output_rows = output.batch.num_rows if output.batch else 0
                 total_output_rows += output_rows
-                writer.write_batch(output.batch, custom_metadata=output.metadata())
+                writer.write_batch(
+                    output.batch, custom_metadata=output.metadata(call_data)
+                )
                 fn_log.debug(
                     "batch_written",
                     batch_index=batch_count,
                     output_rows=output_rows,
                     status=output.status.value if output.status else None,
                 )
-
-        return batch_count, total_input_rows, total_output_rows
+        return WorkerStats(
+            batch_count=batch_count,
+            total_input_rows=total_input_rows,
+            total_output_rows=total_output_rows,
+        )
 
     def run(self) -> None:
         """Run the worker, reading from stdin and writing to stdout."""
@@ -180,13 +213,11 @@ class Worker:
         if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):
             raise OSError("Failed to write bind result record batch")
 
-        batch_count, total_input_rows, total_output_rows = self._process_batches(
-            bind_result, call_data.in_schema, fn_log
-        )
+        stats = self._process_batches(bind_result, call_data, fn_log)
 
         fn_log.info(
             "worker_complete",
-            batches_processed=batch_count,
-            total_input_rows=total_input_rows,
-            total_output_rows=total_output_rows,
+            batches_processed=stats.batch_count,
+            total_input_rows=stats.total_input_rows,
+            total_output_rows=stats.total_output_rows,
         )

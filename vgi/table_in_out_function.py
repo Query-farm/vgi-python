@@ -116,11 +116,16 @@ class FunctionOutput:
     status: OutputStatus | None
     log_message: vgi.function.LogMessage | None = None
 
-    def metadata(self) -> pa.KeyValueMetadata | None:
+    def metadata(self, call_data: vgi.function.CallData) -> pa.KeyValueMetadata | None:
         """Create metadata for this output based on the status.
 
+        Args:
+            call_data: The CallData for this function invocation, passed through
+                to LogMessage.add_to_metadata() for correlation information.
+
         Returns:
-            KeyValueMetadata containing status and message, or None if status is None.
+            KeyValueMetadata containing status and optional log message fields,
+            or None if status is None (only for the initial priming yield).
         """
         if self.status is None:
             return None
@@ -128,7 +133,7 @@ class FunctionOutput:
         metadata_dict = {"status": self.status.value}
 
         if self.log_message is not None:
-            metadata_dict = self.log_message.add_to_metadata(metadata_dict)
+            metadata_dict = self.log_message.add_to_metadata(call_data, metadata_dict)
 
         return pa.KeyValueMetadata(metadata_dict)
 

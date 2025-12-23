@@ -18,8 +18,11 @@ See Also:
     vgi.table_in_out_function: Streaming table functions built on these primitives.
 """
 
+import json
+import os
 import uuid
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Any
 
 import pyarrow as pa
@@ -102,21 +105,34 @@ class LogMessage:
         """
         return cls(LogLevel.INFO, message)
 
-    def add_to_metadata(self, metadata: dict[str, str] | None = None) -> dict[str, str]:
+    def add_to_metadata(
+        self, call_data: "CallData", metadata: dict[str, str] | None = None
+    ) -> dict[str, str]:
         """Add log message fields to an existing metadata dictionary.
 
         Creates a new dictionary with 'log_level' and 'log_message' keys added.
-        Does not mutate the input dictionary.
+        The log_message value is JSON containing the message text, call identifier,
+        and process ID for correlation. Does not mutate the input dictionary.
 
         Args:
+            call_data: The CallData for this function invocation, used to include
+                the call_identifier in the log message for correlation.
             metadata: Existing metadata dict to augment, or None to create new.
 
         Returns:
-            New dict containing original entries plus log_level and log_message.
+            New dict containing original entries plus:
+            - log_level: The LogLevel value (e.g., "INFO", "EXCEPTION")
+            - log_message: JSON string with {message, call_id, pid}
         """
         result = dict(metadata) if metadata else {}
         result["log_level"] = self.level.value
-        result["log_message"] = self.message
+        result["log_message"] = json.dumps(
+            {
+                "message": self.message,
+                "call_id": call_data.call_identifier_hex,
+                "pid": call_data.pid,
+            }
+        )
         return result
 
     @classmethod
@@ -318,6 +334,24 @@ class CallData:
             in_schema=in_schema,
             call_identifier=first_row["call_identifier"],
         )
+
+    @cached_property
+    def pid(self) -> int:
+        """Process ID of the worker handling this CallData.
+
+        Returns:
+            Process ID as an integer.
+        """
+        return os.getpid()
+
+    @cached_property
+    def call_identifier_hex(self) -> str:
+        """Hexadecimal string representation of the call identifier.
+
+        Returns:
+            Hex string of the call_identifier bytes.
+        """
+        return self.call_identifier.hex()
 
 
 @dataclass(frozen=True, slots=True)
