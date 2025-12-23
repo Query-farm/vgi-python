@@ -15,6 +15,7 @@ from typing import Any
 import pyarrow as pa
 
 import vgi.function
+import vgi.util
 
 __all__ = ["TableFunctionBindResult", "CardinalityInfo", "TableFunction"]
 
@@ -47,16 +48,16 @@ class CardinalityInfo:
 
 @dataclass(frozen=True, slots=True)
 class GlobalStateInitInput:
-    """Input used to create the generator for TableInOutFunction.
+    """Input sent to initialize global state for a TableInOutFunction.
 
     Attributes:
-        call_data: The CallData for this function invocation.
+        projection_ids: Optional list of column indices to project, or None for all.
     """
 
     projection_ids: list[int] | None = None
 
     def serialize(self) -> bytes:
-        """Serialize GlobalStateInitInput to an bytes."""
+        """Serialize GlobalStateInitInput to bytes."""
         batch = pa.RecordBatch.from_arrays(
             [pa.array([self.projection_ids], type=pa.list_(pa.int32()))],
             schema=pa.schema([pa.field("projection_ids", pa.list_(pa.int32()))]),

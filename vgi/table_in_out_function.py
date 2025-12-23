@@ -1,8 +1,8 @@
 """Framework for implementing streaming table-in-table-out functions.
 
-This module provides the base class and decorator for creating functions that
-transform Arrow RecordBatch streams. Functions receive batches via a generator
-protocol and can buffer, filter, transform, or aggregate data.
+This module provides the base class for creating functions that transform
+Arrow RecordBatch streams. Functions receive batches via a generator protocol
+and can buffer, filter, transform, or aggregate data.
 
 Protocol Overview:
     1. BIND: Function is instantiated and returns output schema + generator
@@ -11,15 +11,13 @@ Protocol Overview:
 
 Key Components:
     TableInOutFunction: Base class to subclass for custom functions.
-    @table_in_out_function: Decorator that wraps the class into a callable.
     ProcessResult: Return type for process_batch() with batch and has_more flag.
     FunctionInput/FunctionOutput: Protocol messages for the generator.
     OutputStatus: Enum indicating generator state after each yield.
 
 Quick Start:
-    @table_in_out_function
     class MyFunction(TableInOutFunction):
-        def process_batch(self, batch, is_finalize):
+        def process_batch(self, init_data, batch, is_finalize):
             if is_finalize:
                 return ProcessResult(None)
             # Transform batch here
@@ -248,16 +246,17 @@ class TableInOutFunction(vgi.table_function.TableFunction):
 
     LIFECYCLE
     ---------
-    1. BIND: The decorator calls _output_schema() and returns a BindResult
-       containing the output schema, cardinality info, and generator.
+    1. BIND: The class is instantiated and _output_schema() is called to get the
+       output schema, cardinality info, and generator.
 
-    2. DATA: Your process_batch(batch, is_finalize=False) is called for each input
-       batch. Return ProcessResult(batch, has_more). If has_more=True, you'll be
-       called again with the same input to produce more output.
+    2. DATA: Your process_batch(init_data, batch, is_finalize=False) is called for
+       each input batch. Return ProcessResult(batch, has_more). If has_more=True,
+       you'll be called again with the same input to produce more output.
 
-    3. FINALIZE: Your process_batch(batch, is_finalize=True) is called repeatedly
-       after all input until has_more=False. The batch will be an empty batch.
-       Return buffered/aggregated results. Set has_more=True to emit multiple batches.
+    3. FINALIZE: Your process_batch(init_data, batch, is_finalize=True) is called
+       repeatedly after all input until has_more=False. The batch will be an empty
+       batch. Return buffered/aggregated results. Set has_more=True to emit multiple
+       batches.
 
     METHODS TO OVERRIDE
     -------------------
@@ -269,7 +268,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         - Return the output schema
         Default: returns self.input_schema unchanged (passthrough)
 
-    process_batch(batch, is_finalize) -> ProcessResult
+    process_batch(init_data, batch, is_finalize) -> ProcessResult
         Called for each input batch during DATA phase (is_finalize=False), and
         called repeatedly during FINALIZE phase (is_finalize=True) until has_more
         is False. Returns a ProcessResult with:
@@ -299,7 +298,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
 
     CALLER PROTOCOL
     ---------------
-    To use a decorated TableInOutFunction, the caller must:
+    To use a TableInOutFunction, the caller must:
 
     1. Create the bind result:
        call_data = vgi.function.CallData(
@@ -330,15 +329,13 @@ class TableInOutFunction(vgi.table_function.TableFunction):
 
     Example 1: Passthrough (no transformation)
     ------------------------------------------
-    @table_in_out_function
     class PassthroughFunction(TableInOutFunction):
         pass  # Default behavior passes everything through
 
     Example 2: Filter rows (1:1 mapping, possibly fewer rows)
     ---------------------------------------------------------
-    @table_in_out_function
     class FilterPositiveFunction(TableInOutFunction):
-        def process_batch(self, batch, is_finalize):
+        def process_batch(self, init_data, batch, is_finalize):
             if is_finalize:
                 return ProcessResult(None)
             mask = pc.greater(batch.column("value"), 0)
@@ -346,7 +343,6 @@ class TableInOutFunction(vgi.table_function.TableFunction):
 
     Example 3: Transform schema (different output columns)
     ------------------------------------------------------
-    @table_in_out_function
     class AddComputedColumnFunction(TableInOutFunction):
         def _output_schema(self) -> pa.Schema:
             # Add a new column to the output schema
@@ -354,7 +350,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
                 pa.field("doubled", pa.int64())
             ])
 
-        def process_batch(self, batch, is_finalize):
+        def process_batch(self, init_data, batch, is_finalize):
             if is_finalize:
                 return ProcessResult(None)
             doubled = pc.multiply(batch.column("value"), 2)
@@ -365,7 +361,6 @@ class TableInOutFunction(vgi.table_function.TableFunction):
 
     Example 4: Aggregation (buffer inputs, emit on finalize)
     --------------------------------------------------------
-    @table_in_out_function
     class SumAllColumnsFunction(TableInOutFunction):
         def _output_schema(self) -> pa.Schema:
             # Build output schema from numeric input columns
@@ -382,7 +377,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
                 self.sums[field.name] = pa.scalar(0, type=out_type)
             return pa.schema(output_fields)
 
-        def process_batch(self, batch, is_finalize):
+        def process_batch(self, init_data, batch, is_finalize):
             if is_finalize:
                 # Emit final sums as a single row
                 return ProcessResult(pa.RecordBatch.from_pydict(
@@ -398,14 +393,13 @@ class TableInOutFunction(vgi.table_function.TableFunction):
 
     Example 5: Explode (one input produces multiple outputs)
     --------------------------------------------------------
-    @table_in_out_function
     class RepeatFunction(TableInOutFunction):
         def __init__(self, call_data: vgi.function.CallData):
             super().__init__(call_data)
             self.repeat_count = self.arguments[0] if self.arguments else 2
             self.current_repeat = 0
 
-        def process_batch(self, batch, is_finalize):
+        def process_batch(self, init_data, batch, is_finalize):
             if is_finalize:
                 return ProcessResult(None)
             self.current_repeat += 1
@@ -416,14 +410,13 @@ class TableInOutFunction(vgi.table_function.TableFunction):
 
     Example 6: Buffer and emit on finalize (multiple output batches)
     ----------------------------------------------------------------
-    @table_in_out_function
     class BufferFunction(TableInOutFunction):
         def __init__(self, call_data: vgi.function.CallData):
             super().__init__(call_data)
             self.buffered: list[pa.RecordBatch] = []
             self.finalize_index = 0
 
-        def process_batch(self, batch, is_finalize):
+        def process_batch(self, init_data, batch, is_finalize):
             if is_finalize:
                 if self.finalize_index < len(self.buffered):
                     out = self.buffered[self.finalize_index]

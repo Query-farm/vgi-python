@@ -71,7 +71,7 @@ class LogMessage:
         message: Human-readable log message text.
 
     Example:
-        def process_batch(self, batch, is_finalize):
+        def process_batch(self, init_data, batch, is_finalize):
             if batch.num_rows == 0:
                 return ProcessResult(
                     batch,
@@ -194,13 +194,14 @@ class Arguments:
         } | {f"named_{name}": value for name, value in self.named.items()}
 
     def schema(self) -> pa.Schema:
-        """Return Arrow schema used when serializing Arguments.
+        """Return Arrow schema for serializing these Arguments.
 
-        The schema defines a single binary field for the serialized positional
-        arguments. Named arguments are not currently supported.
+        Creates a schema with one field per argument: "positional_0", "positional_1",
+        etc. for positional args, and "named_<name>" for named args. Field types
+        are inferred from the argument values.
 
         Returns:
-            Arrow schema with fields for each serialized attribute.
+            Arrow schema matching the structure returned by encoded_dict().
         """
 
         return pa.RecordBatch.from_pylist([self.encoded_dict()]).schema
@@ -230,8 +231,17 @@ class Arguments:
 
 @dataclass(frozen=True, slots=True)
 class GlobalInitResult:
-    """
-    The result from running global init of any function.
+    """Result from the global initialization phase of a function.
+
+    When a function supports parallel execution (max_processes > 1), the first
+    worker runs process_init() which returns a GlobalInitResult. This result
+    contains an identifier that is passed to all subsequent parallel workers,
+    allowing them to share state or coordinate their processing.
+
+    Attributes:
+        global_init_identifier: Opaque bytes that identify the initialized state.
+            Passed to process_batch() as init_data for all workers. None if no
+            global initialization was performed.
     """
 
     global_init_identifier: bytes | None = None
@@ -556,8 +566,6 @@ class Function:
         vgi.table_function.TableFunction: Adds cardinality hints.
         vgi.table_in_out_function.TableInOutFunction: Full streaming implementation.
     """
-
-    init_data: GlobalInitResult = GlobalInitResult()
 
     def __init__(self, call_data: CallData):
         """Initialize the function with call data.

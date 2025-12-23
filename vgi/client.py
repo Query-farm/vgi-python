@@ -12,9 +12,16 @@ Usage (CLI):
     vgi-client --input data.parquet --function repeat_inputs --args '[3]'
 
 Usage (API):
+    from vgi.function import Arguments
+
     with Client("./my_worker.py") as client:
-        for batch in client.table_in_out_function("echo", [], input_batches):
-            print(batch)
+        for batch in client.table_in_out_function(
+            function_name="echo",
+            arguments=Arguments(positional=[], named={}),
+            call_identifier=None,
+            input=input_batches,
+        ):
+            process(batch)
 """
 
 import io
@@ -51,15 +58,19 @@ class ClientError(Exception):
 
 
 class Client:
-    """
-    Client for communicating with VGI workers.
+    """Client for communicating with VGI workers.
 
-    This class manages the subprocess lifecycle and Arrow IPC communication
-    with a VGI worker process.
+    Manages the subprocess lifecycle and Arrow IPC communication with a VGI
+    worker process. Use as a context manager to ensure proper cleanup.
 
     Example:
         with Client("./my_worker.py") as client:
-            for batch in client.table_in_out_function("echo", [], input_batches):
+            for batch in client.table_in_out_function(
+                function_name="echo",
+                arguments=Arguments(positional=[], named={}),
+                call_identifier=None,
+                input=input_batches,
+            ):
                 process(batch)
     """
 

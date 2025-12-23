@@ -13,9 +13,8 @@ Protocol:
 
 Usage:
     from vgi.worker import Worker
-    from vgi.table_in_out_function import TableInOutFunction, table_in_out_function
+    from vgi.table_in_out_function import TableInOutFunction
 
-    @table_in_out_function
     class MyFunction(TableInOutFunction):
         ...
 
@@ -40,10 +39,9 @@ from vgi.function import BindResult, CallData
 from vgi.table_in_out_function import (
     FunctionInput,
     TableInOutFunction,
-    #    TableInOutFunctionCallable,
 )
 
-# Type for decorated table functions
+# Type alias for the function registry mapping names to TableInOutFunction classes
 FunctionRegistry = dict[str, type[TableInOutFunction]]
 
 
@@ -62,10 +60,11 @@ class WorkerStats:
 
 
 class Worker:
-    """Base class for workers.
+    """Base class for VGI workers that host user-defined functions.
 
     Subclass this and define a `registry` class attribute mapping function names
-    to decorated TableInOutFunction classes.
+    to TableInOutFunction subclasses. The worker handles the VGI protocol:
+    reading CallData, instantiating functions, and streaming batches.
 
     Example:
         class MyWorker(Worker):
@@ -144,8 +143,12 @@ class Worker:
     ) -> WorkerStats:
         """Process data batches through the function.
 
+        Reads input batches from stdin, sends them through the function's
+        generator, and writes output batches to stdout. Handles the
+        HAVE_MORE_OUTPUT and FINALIZE protocol states.
+
         Returns:
-            Tuple of (batch_count, total_input_rows, total_output_rows)
+            WorkerStats with batch_count, total_input_rows, total_output_rows.
         """
 
         assert call_data.global_init_identifier is not None
