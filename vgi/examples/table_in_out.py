@@ -11,12 +11,15 @@ RepeatInputsFunction      - Duplicates each input batch N times
 SumAllColumnsFunction     - Aggregates numeric columns into sums
 """
 
+from collections.abc import Generator
+
 import pyarrow as pa
 import pyarrow.compute as pc
+import structlog
 
 from vgi.function import CallData
 from vgi.table_function import CardinalityInfo
-from vgi.table_in_out_function import ProcessResult, TableInOutFunction
+from vgi.table_in_out_function import ProcessInput, ProcessResult, TableInOutFunction
 
 __all__ = [
     "EchoFunction",
@@ -56,9 +59,9 @@ class BufferInputFunction(TableInOutFunction):
 
     BEHAVIOR
     --------
-    - _output_schema(): Returns input schema unchanged
-    - process_batch(batch, is_finalize=False): Stores batch in buffer, returns empty
-    - process_batch(batch, is_finalize=True): Returns buffered batches one at a time
+    - output_schema: Returns input schema unchanged (default)
+    - process_batches(): During DATA phase, stores batches in buffer and yields
+      empty results. During FINALIZE phase, yields buffered batches one at a time.
 
     SCHEMA TRANSFORMATION
     ---------------------
@@ -67,10 +70,8 @@ class BufferInputFunction(TableInOutFunction):
 
     STATE
     -----
-    self.buffered_batches: list[pa.RecordBatch]
-        Accumulates all input batches in memory.
-    self.finalize_index: int
-        Tracks position when emitting buffered batches during finalize.
+    buffered_batches: list[pa.RecordBatch]
+        Accumulates all input batches in memory (local to generator).
 
     WARNING
     -------
@@ -83,22 +84,26 @@ class BufferInputFunction(TableInOutFunction):
     On finalize: batch1, batch2, batch3
     """
 
-    def __init__(self, call_data: CallData) -> None:
-        super().__init__(call_data)
+    def process_batches(self) -> Generator[ProcessResult, ProcessInput | None, None]:
         self.buffered_batches: list[pa.RecordBatch] = []
-        self.finalize_index = 0
 
-    def process_batch(self, batch: pa.RecordBatch, is_finalize: bool) -> ProcessResult:
-        if is_finalize:
-            if self.finalize_index < len(self.buffered_batches):
-                out = self.buffered_batches[self.finalize_index]
-                self.finalize_index += 1
-                has_more = self.finalize_index < len(self.buffered_batches)
-                return ProcessResult(out, has_more)
-            return ProcessResult(None)
-        # Store batch for later, emit nothing now
-        self.buffered_batches.append(batch)
-        return ProcessResult(None)
+        _ = yield ProcessResult(None)
+
+        result = ProcessResult(None)
+        while True:
+            input = yield result
+            if input is None:
+                raise ValueError("Expected ProcessInput, got None")
+
+            if input.is_finalize:
+                break
+            self.buffered_batches.append(input.batch)
+
+        # Emit buffered batches one at a time during finalize
+        for index, batch in enumerate(self.buffered_batches):
+            has_more = index < len(self.buffered_batches) - 1
+            result = ProcessResult(batch, has_more)
+            yield result
 
 
 class RepeatInputsFunction(TableInOutFunction):
@@ -111,14 +116,14 @@ class RepeatInputsFunction(TableInOutFunction):
 
     ARGUMENTS
     ---------
-    arguments[0]: int (optional, default=2)
+    arguments.positional[0]: int (required)
         Number of times to repeat each input batch.
 
     BEHAVIOR
     --------
-    - _output_schema(): Returns input schema unchanged
-    - process_batch(batch, is_finalize=False): Returns batch N times using has_more
-    - process_batch(batch, is_finalize=True): Returns ProcessResult(None)
+    - output_schema: Returns input schema unchanged (default)
+    - process_batches(): For each input batch, yields it N times using has_more
+      flag. During FINALIZE phase, yields empty result.
 
     SCHEMA TRANSFORMATION
     ---------------------
@@ -128,21 +133,16 @@ class RepeatInputsFunction(TableInOutFunction):
     STATE
     -----
     self.repeat_count: int
-        Number of times to emit each input batch.
-    self.current_repeat: int
-        Tracks current repetition count for the current batch.
+        Number of times to emit each input batch (set in __init__).
 
     KEY PATTERN: MULTIPLE OUTPUTS FROM ONE INPUT
     ---------------------------------------------
     This function demonstrates how to produce multiple output batches from
-    a single input batch using the has_more flag. The function tracks state
-    to know how many more times to emit the current batch:
+    a single input batch using the has_more flag in a loop:
 
-        self.current_repeat += 1
-        has_more = self.current_repeat < self.repeat_count
-        if not has_more:
-            self.current_repeat = 0  # Reset for next batch
-        return ProcessResult(batch, has_more)
+        for i in range(self.repeat_count):
+            has_more = i < self.repeat_count - 1
+            yield ProcessResult(input.batch, has_more)
 
     EXAMPLE
     -------
@@ -151,8 +151,10 @@ class RepeatInputsFunction(TableInOutFunction):
     Output: [{"a": 1}], [{"a": 1}], [{"a": 1}]
     """
 
-    def __init__(self, call_data: CallData) -> None:
-        super().__init__(call_data)
+    def __init__(
+        self, call_data: CallData, logger: structlog.stdlib.BoundLogger
+    ) -> None:
+        super().__init__(call_data=call_data, logger=logger)
         args = call_data.arguments
         if len(args.positional) != 1:
             raise ValueError(
@@ -172,16 +174,28 @@ class RepeatInputsFunction(TableInOutFunction):
             raise ValueError("Repeat count must be at least 1")
 
         self.repeat_count = repeat_count
-        self.current_repeat = 0
 
-    def process_batch(self, batch: pa.RecordBatch, is_finalize: bool) -> ProcessResult:
-        if is_finalize:
-            return ProcessResult(None)
-        self.current_repeat += 1
-        has_more = self.current_repeat < self.repeat_count
-        if not has_more:
-            self.current_repeat = 0  # Reset for next input batch
-        return ProcessResult(batch, has_more)
+    def process_batches(self) -> Generator[ProcessResult, ProcessInput | None, None]:
+        _ = yield ProcessResult(None)
+
+        result = ProcessResult(None)
+
+        while True:
+            input = yield result
+            if input is None:
+                raise ValueError("Expected ProcessInput, got None")
+
+            if input.is_finalize:
+                break
+
+            for i in range(self.repeat_count):
+                input = yield ProcessResult(
+                    input.batch, has_more=(i < self.repeat_count)
+                )
+                if input is None:
+                    raise ValueError("Expected ProcessInput, got None")
+
+        yield ProcessResult(None)
 
 
 class SumAllColumnsFunction(TableInOutFunction):
@@ -194,9 +208,9 @@ class SumAllColumnsFunction(TableInOutFunction):
 
     BEHAVIOR
     --------
-    - _output_schema(): Builds output schema from numeric columns, inits sums
-    - process_batch(batch, is_finalize=False): Accumulates sums, returns empty
-    - process_batch(batch, is_finalize=True): Returns single row with final sums
+    - output_schema: Builds output schema from numeric columns only
+    - process_batches(): During DATA phase, accumulates sums and yields empty.
+      During FINALIZE phase, yields single row with final sums.
 
     SCHEMA TRANSFORMATION
     ---------------------
@@ -214,39 +228,36 @@ class SumAllColumnsFunction(TableInOutFunction):
         Running sum for each numeric column. Keys are column names,
         values are PyArrow scalars with the output type.
 
-    KEY PATTERN: SCHEMA TRANSFORMATION IN _output_schema
-    ----------------------------------------------------
+    KEY PATTERN: SCHEMA TRANSFORMATION IN output_schema
+    ---------------------------------------------------
     This function demonstrates inspecting input_schema to build a different
-    output schema:
+    output schema as a property:
 
-        def _output_schema(self):
-            self.sums = {}
+        @property
+        def output_schema(self) -> pa.Schema:
             output_fields = []
             for field in self.input_schema:
                 if pa.types.is_integer(field.type):
-                    out_type = pa.int64()
+                    output_fields.append(pa.field(field.name, pa.int64()))
                 elif pa.types.is_floating(field.type):
-                    out_type = pa.float64()
-                else:
-                    continue  # Skip non-numeric
-                output_fields.append(pa.field(field.name, out_type))
-                self.sums[field.name] = pa.scalar(0, type=out_type)
+                    output_fields.append(pa.field(field.name, pa.float64()))
             return pa.schema(output_fields)
 
     KEY PATTERN: ACCUMULATE THEN EMIT ON FINALIZE
     ---------------------------------------------
-    During process_batch with is_finalize=False, accumulate state but emit None.
-    During process_batch with is_finalize=True, emit the final aggregated result:
+    During DATA phase (is_finalize=False), accumulate state but yield None.
+    During FINALIZE phase (is_finalize=True), yield the final aggregated result:
 
-        def process_batch(self, batch, is_finalize):
-            if is_finalize:
-                return ProcessResult(pa.RecordBatch.from_pydict(...))
+        while True:
+            if input.is_finalize:
+                yield ProcessResult(pa.RecordBatch.from_pydict(...))
+                break
             # Update accumulators
-            for name in self.sums:
-                col_sum = pc.sum(batch.column(name))
+            for name in sums:
+                col_sum = pc.sum(input.batch.column(name))
                 if col_sum.is_valid:
-                    self.sums[name] = pc.add(self.sums[name], col_sum)
-            return ProcessResult(None)
+                    sums[name] = pc.add(sums[name], col_sum)
+            input = yield ProcessResult(None)
 
     EXAMPLE
     -------
@@ -281,22 +292,35 @@ class SumAllColumnsFunction(TableInOutFunction):
 
         return self.apply_projection(pa.schema(output_fields))
 
-    def local_init(self) -> None:
+    def process_batches(self) -> Generator[ProcessResult, ProcessInput | None, None]:
+        # The priming of the generator
+        _ = yield ProcessResult(None)
+
         # Initialize sums to zero for each numeric column
         for field in self.output_schema:
             self.sums[field.name] = pa.scalar(0, type=field.type)
 
-    def process_batch(self, batch: pa.RecordBatch, is_finalize: bool) -> ProcessResult:
-        if is_finalize:
-            return ProcessResult(
-                pa.RecordBatch.from_pydict(
-                    {name: [val] for name, val in self.sums.items()},
-                    schema=self.output_schema,
-                )
-            )
-        for name in self.sums:
-            col_sum = pc.sum(batch.column(name))
-            if col_sum.is_valid:
-                self.sums[name] = pc.add(self.sums[name], col_sum)
+        # Need an input to start, so just yield once, but the output
+        # will be ignored.
+        input = yield ProcessResult(None)
+        if input is None:
+            raise ValueError("Expected ProcessInput, got None")
 
-        return ProcessResult(None)
+        while True:
+            if input.is_finalize:
+                yield ProcessResult(
+                    pa.RecordBatch.from_pydict(
+                        {name: [val] for name, val in self.sums.items()},
+                        schema=self.output_schema,
+                    )
+                )
+                break
+
+            for name in self.sums:
+                col_sum = pc.sum(input.batch.column(name))
+                if col_sum.is_valid:
+                    self.sums[name] = pc.add(self.sums[name], col_sum)
+
+            input = yield ProcessResult(None)
+            if input is None:
+                raise ValueError("Expected ProcessInput, got None")

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
+import structlog
 
 import vgi.function
 import vgi.util
@@ -130,14 +131,17 @@ class TableFunction(vgi.function.Function):
     # This is the init data that may be been read.
     init_data: GlobalStateInitInput | None = None
 
-    def __init__(self, call_data: vgi.function.CallData):
+    def __init__(
+        self, *, call_data: vgi.function.CallData, logger: structlog.stdlib.BoundLogger
+    ):
         """Initialize the table function with call data.
 
         Args:
             call_data: Complete invocation request including function name,
                 arguments, and input schema.
+            logger: Logger instance for structured logging.
         """
-        super().__init__(call_data)
+        super().__init__(call_data=call_data, logger=logger)
 
     def cardinality(self) -> CardinalityInfo | None:
         """Return optional cardinality estimate for the output.

@@ -11,17 +11,27 @@ Protocol Overview:
 
 Key Components:
     TableInOutFunction: Base class to subclass for custom functions.
-    ProcessResult: Return type for process_batch() with batch and has_more flag.
+    ProcessResult: Return type for process_batches() with batch and has_more flag.
+    ProcessInput: Input type sent to process_batches() with batch and is_finalize flag.
     FunctionInput/FunctionOutput: Protocol messages for the generator.
     OutputStatus: Enum indicating generator state after each yield.
 
 Quick Start:
+    from collections.abc import Generator
+
     class MyFunction(TableInOutFunction):
-        def process_batch(self, batch, is_finalize):
-            if is_finalize:
-                return ProcessResult(None)
-            # Transform batch here
-            return ProcessResult(transformed_batch)
+        def process_batches(
+            self,
+        ) -> Generator[ProcessResult, ProcessInput | None, None]:
+            _ = yield ProcessResult(None)  # Priming yield
+            while True:
+                input = yield ProcessResult(None)
+                if input is None:
+                    raise ValueError("Expected ProcessInput, got None")
+                if input.is_finalize:
+                    break
+                # Transform input.batch here
+                yield ProcessResult(transformed_batch)
 
 See TableInOutFunction docstring for comprehensive documentation and examples.
 """
@@ -33,6 +43,7 @@ from functools import cached_property
 from typing import ClassVar, final
 
 import pyarrow as pa
+import structlog
 
 import vgi.function
 import vgi.table_function
@@ -139,7 +150,7 @@ class FunctionOutput:
         """Create a FunctionOutput from a ProcessResult and status.
 
         Args:
-            process_result: The result from process_batch().
+            process_result: The result from process_batches().
             in_finalize_phase: Whether we are in the FINALIZE phase.
         """
         has_more_output = (
@@ -170,11 +181,11 @@ class SchemaValidationError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class ProcessResult:
-    """Result returned by process_batch().
+    """Result yielded by process_batches() generator.
 
     Attributes:
         batch: The output RecordBatch, or None to emit an empty batch.
-        has_more: If True, process_batch will be called again with the same input.
+        has_more: If True, the generator will receive another send() call.
             Use this to produce multiple output batches from a single input.
         log_message: Optional log message to send with this output. When present,
             the framework emits an empty batch with the log message before
@@ -182,16 +193,22 @@ class ProcessResult:
 
     Examples:
         # Normal processing - emit one batch per input
-        ProcessResult(transformed_batch)
+        yield ProcessResult(transformed_batch)
 
         # Emit multiple batches from one input
-        ProcessResult(first_batch, has_more=True)  # Will be called again
-        ProcessResult(second_batch, has_more=False)  # Done with this input
+        yield ProcessResult(first_batch, has_more=True)  # Will receive send()
+        yield ProcessResult(second_batch, has_more=False)  # Done with this input
     """
 
     batch: pa.RecordBatch | None
     has_more: bool = False
     log_message: vgi.function.LogMessage | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessInput:
+    batch: pa.RecordBatch
+    is_finalize: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,7 +235,7 @@ class ProcessResultComplete(ProcessResult):
         """Create a ProcessResultComplete from a ProcessResult.
 
         Args:
-            source: The original ProcessResult from process_batch().
+            source: The original ProcessResult from process_batches().
             empty_batch: An empty batch to use when source.batch is None
                 or when a log message is present.
 
@@ -242,48 +259,51 @@ class TableInOutFunction(vgi.table_function.TableFunction):
     Subclass this to create table functions that receive a stream of input batches
     and produce a stream of output batches. The framework handles all protocol state
     management, including exception handling - you only implement the data
-    transformation logic.
+    transformation logic via the process_batches() generator.
 
     LIFECYCLE
     ---------
-    1. BIND: The class is instantiated and _output_schema() is called to get the
-       output schema, cardinality info, and generator.
+    1. BIND: The class is instantiated and output_schema property is accessed to
+       get the output schema.
 
-    2. DATA: Your process_batch(batch, is_finalize=False) is called for
-       each input batch. Return ProcessResult(batch, has_more). If has_more=True,
-       you'll be called again with the same input to produce more output.
+    2. DATA: Your process_batches() generator receives ProcessInput objects with
+       is_finalize=False. Yield ProcessResult(batch, has_more) for each input.
+       If has_more=True, you'll receive another send() with the same logical input.
 
-    3. FINALIZE: Your process_batch(batch, is_finalize=True) is called
-       repeatedly after all input until has_more=False. The batch will be an empty
-       batch. Return buffered/aggregated results. Set has_more=True to emit multiple
-       batches.
+    3. FINALIZE: Your generator receives ProcessInput with is_finalize=True.
+       Yield buffered/aggregated results. Set has_more=True to emit multiple batches.
 
     METHODS TO OVERRIDE
     -------------------
-    _output_schema() -> pa.Schema
-        Called lazily when output_schema property is first accessed. Use this to:
+    output_schema -> pa.Schema (property)
+        Override to define the output schema. Use this to:
         - Inspect self.input_schema to see what columns are available
         - Decide what columns your output will have
-        - Initialize any processing state (accumulators, buffers, etc.)
-        - Return the output schema
         Default: returns self.input_schema unchanged (passthrough)
 
-    process_batch(batch, is_finalize) -> ProcessResult
-        Called for each input batch during DATA phase (is_finalize=False), and
-        called repeatedly during FINALIZE phase (is_finalize=True) until has_more
-        is False. Returns a ProcessResult with:
+    process_batches() -> Generator[ProcessResult, ProcessInput | None, None]
+        Generator that processes input batches. Must:
+        1. Yield an initial ProcessResult(None) for priming
+        2. Loop receiving ProcessInput via yield, yielding ProcessResult
+        3. Check input.is_finalize to detect finalization phase
+        4. Exit the generator when done processing
+
+        The ProcessInput contains:
+        - batch: The input RecordBatch to process
+        - is_finalize: True when no more input batches are coming
+
+        The ProcessResult contains:
         - batch: A RecordBatch conforming to output_schema, or None for empty
-        - has_more: If True, you will be called again with the SAME input batch to
-          produce more output. Set False when done with this input/finalization.
+        - has_more: If True, you will receive another send() call
         - log_message: Optional LogMessage for logging or error reporting
-        Default: returns ProcessResult(batch) during DATA (only valid when input/output
-        schemas match), returns ProcessResult(None) during FINALIZE
+
+        Default: passes input batches through unchanged (passthrough)
 
     AVAILABLE ATTRIBUTES
     --------------------
-    self.arguments: list[Any]     - Arguments passed to the function
+    self.arguments: Arguments     - Arguments passed to the function
     self.input_schema: pa.Schema  - Schema of incoming batches
-    self.output_schema: pa.Schema - Cached property calling _output_schema()
+    self.output_schema: pa.Schema - Property returning the output schema
 
     HELPER PROPERTIES/METHODS
     -------------------------
@@ -325,111 +345,143 @@ class TableInOutFunction(vgi.table_function.TableFunction):
 
     EXAMPLES
     --------
-    Note: Examples below assume `import pyarrow.compute as pc`
+    Note: Examples below assume:
+        from collections.abc import Generator
+        import pyarrow.compute as pc
 
     Example 1: Passthrough (no transformation)
     ------------------------------------------
     class PassthroughFunction(TableInOutFunction):
-        pass  # Default behavior passes everything through
+        pass  # Default process_batches passes everything through
 
     Example 2: Filter rows (1:1 mapping, possibly fewer rows)
     ---------------------------------------------------------
     class FilterPositiveFunction(TableInOutFunction):
-        def process_batch(self, batch, is_finalize):
-            if is_finalize:
-                return ProcessResult(None)
-            mask = pc.greater(batch.column("value"), 0)
-            return ProcessResult(pc.filter(batch, mask))
+        def process_batches(
+            self,
+        ) -> Generator[ProcessResult, ProcessInput | None, None]:
+            _ = yield ProcessResult(None)  # Priming yield
+            while True:
+                input = yield ProcessResult(None)
+                if input is None:
+                    raise ValueError("Expected ProcessInput")
+                if input.is_finalize:
+                    break
+                mask = pc.greater(input.batch.column("value"), 0)
+                yield ProcessResult(pc.filter(input.batch, mask))
 
     Example 3: Transform schema (different output columns)
     ------------------------------------------------------
     class AddComputedColumnFunction(TableInOutFunction):
-        def _output_schema(self) -> pa.Schema:
-            # Add a new column to the output schema
+        @property
+        def output_schema(self) -> pa.Schema:
             return pa.schema(list(self.input_schema) + [
                 pa.field("doubled", pa.int64())
             ])
 
-        def process_batch(self, batch, is_finalize):
-            if is_finalize:
-                return ProcessResult(None)
-            doubled = pc.multiply(batch.column("value"), 2)
-            return ProcessResult(pa.RecordBatch.from_arrays(
-                list(batch.columns) + [doubled],
-                schema=self.output_schema
-            ))
+        def process_batches(
+            self,
+        ) -> Generator[ProcessResult, ProcessInput | None, None]:
+            _ = yield ProcessResult(None)
+            while True:
+                input = yield ProcessResult(None)
+                if input is None:
+                    raise ValueError("Expected ProcessInput")
+                if input.is_finalize:
+                    break
+                doubled = pc.multiply(input.batch.column("value"), 2)
+                yield ProcessResult(pa.RecordBatch.from_arrays(
+                    list(input.batch.columns) + [doubled],
+                    schema=self.output_schema
+                ))
 
     Example 4: Aggregation (buffer inputs, emit on finalize)
     --------------------------------------------------------
     class SumAllColumnsFunction(TableInOutFunction):
-        def _output_schema(self) -> pa.Schema:
-            # Build output schema from numeric input columns
-            self.sums: dict[str, pa.Scalar] = {}
+        @property
+        def output_schema(self) -> pa.Schema:
             output_fields = []
             for field in self.input_schema:
                 if pa.types.is_integer(field.type):
-                    out_type = pa.int64()
+                    output_fields.append(pa.field(field.name, pa.int64()))
                 elif pa.types.is_floating(field.type):
-                    out_type = pa.float64()
-                else:
-                    continue  # Skip non-numeric columns
-                output_fields.append(pa.field(field.name, out_type))
-                self.sums[field.name] = pa.scalar(0, type=out_type)
+                    output_fields.append(pa.field(field.name, pa.float64()))
             return pa.schema(output_fields)
 
-        def process_batch(self, batch, is_finalize):
-            if is_finalize:
-                # Emit final sums as a single row
-                return ProcessResult(pa.RecordBatch.from_pydict(
-                    {name: [val] for name, val in self.sums.items()},
-                    schema=self.output_schema,
-                ))
-            # Accumulate sums, emit nothing yet
-            for name in self.sums:
-                col_sum = pc.sum(batch.column(name))
-                if col_sum.is_valid:
-                    self.sums[name] = pc.add(self.sums[name], col_sum)
-            return ProcessResult(None)
+        def process_batches(
+            self,
+        ) -> Generator[ProcessResult, ProcessInput | None, None]:
+            sums: dict[str, pa.Scalar] = {
+                f.name: pa.scalar(0, type=f.type) for f in self.output_schema
+            }
+            _ = yield ProcessResult(None)
+
+            while True:
+                input = yield ProcessResult(None)
+                if input is None:
+                    raise ValueError("Expected ProcessInput")
+                if input.is_finalize:
+                    # Emit final sums as a single row
+                    yield ProcessResult(pa.RecordBatch.from_pydict(
+                        {name: [val] for name, val in sums.items()},
+                        schema=self.output_schema,
+                    ))
+                    break
+                # Accumulate sums
+                for name in sums:
+                    col_sum = pc.sum(input.batch.column(name))
+                    if col_sum.is_valid:
+                        sums[name] = pc.add(sums[name], col_sum)
 
     Example 5: Explode (one input produces multiple outputs)
     --------------------------------------------------------
     class RepeatFunction(TableInOutFunction):
-        def __init__(self, call_data: vgi.function.CallData):
-            super().__init__(call_data)
-            self.repeat_count = self.arguments[0] if self.arguments else 2
-            self.current_repeat = 0
+        def __init__(self, call_data, logger):
+            super().__init__(call_data, logger)
+            self.repeat_count = self.arguments.positional[0].as_py()
 
-        def process_batch(self, batch, is_finalize):
-            if is_finalize:
-                return ProcessResult(None)
-            self.current_repeat += 1
-            has_more = self.current_repeat < self.repeat_count
-            if not has_more:
-                self.current_repeat = 0  # Reset for next input batch
-            return ProcessResult(batch, has_more)
+        def process_batches(
+            self,
+        ) -> Generator[ProcessResult, ProcessInput | None, None]:
+            _ = yield ProcessResult(None)
+            while True:
+                input = yield ProcessResult(None)
+                if input is None:
+                    raise ValueError("Expected ProcessInput")
+                if input.is_finalize:
+                    break
+                # Emit the same batch repeat_count times
+                for i in range(self.repeat_count):
+                    has_more = i < self.repeat_count - 1
+                    yield ProcessResult(input.batch, has_more)
 
     Example 6: Buffer and emit on finalize (multiple output batches)
     ----------------------------------------------------------------
     class BufferFunction(TableInOutFunction):
-        def __init__(self, call_data: vgi.function.CallData):
-            super().__init__(call_data)
-            self.buffered: list[pa.RecordBatch] = []
-            self.finalize_index = 0
+        def process_batches(
+            self,
+        ) -> Generator[ProcessResult, ProcessInput | None, None]:
+            buffered: list[pa.RecordBatch] = []
+            _ = yield ProcessResult(None)
 
-        def process_batch(self, batch, is_finalize):
-            if is_finalize:
-                if self.finalize_index < len(self.buffered):
-                    out = self.buffered[self.finalize_index]
-                    self.finalize_index += 1
-                    has_more = self.finalize_index < len(self.buffered)
-                    return ProcessResult(out, has_more)
-                return ProcessResult(None)
-            self.buffered.append(batch)
-            return ProcessResult(None)
+            while True:
+                input = yield ProcessResult(None)
+                if input is None:
+                    raise ValueError("Expected ProcessInput")
+                if input.is_finalize:
+                    break
+                buffered.append(input.batch)
+
+            # Emit all buffered batches during finalize
+            for i, batch in enumerate(buffered):
+                has_more = i < len(buffered) - 1
+                yield ProcessResult(batch, has_more)
     """
 
-    def __init__(self, call_data: vgi.function.CallData):
-        super().__init__(call_data)
+    def __init__(
+        self, call_data: vgi.function.CallData, logger: structlog.stdlib.BoundLogger
+    ):
+        super().__init__(call_data=call_data, logger=logger)
         self.arguments = call_data.arguments
         if call_data.in_schema is None:
             raise ValueError("TableInOutFunction requires a non-null input schema")
@@ -487,6 +539,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
     @final
     def _process_and_validate(
         self,
+        generator: Generator[ProcessResult, ProcessInput, None],
         batch: pa.RecordBatch,
         is_finalize: bool,
     ) -> ProcessResultComplete:
@@ -508,7 +561,8 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         """
         self._validate_input_schema(batch)
         result = ProcessResultComplete.from_process_result(
-            self.process_batch(batch, is_finalize), self.empty_output_batch
+            generator.send(ProcessInput(batch=batch, is_finalize=is_finalize)),
+            self.empty_output_batch,
         )
         self._validate_output_schema(result.batch)
         return result
@@ -516,6 +570,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
     @final
     def _process_with_exception_handling(
         self,
+        generator: Generator[ProcessResult, ProcessInput, None],
         batch: pa.RecordBatch,
         is_finalize: bool,
     ) -> ProcessResultComplete:
@@ -525,7 +580,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         to ProcessResultComplete with an error log message.
         """
         try:
-            return self._process_and_validate(batch, is_finalize=is_finalize)
+            return self._process_and_validate(generator, batch, is_finalize=is_finalize)
         except Exception as e:
             return ProcessResultComplete(
                 batch=self.empty_output_batch,
@@ -540,33 +595,31 @@ class TableInOutFunction(vgi.table_function.TableFunction):
             and result.log_message.level == vgi.function.LogLevel.EXCEPTION
         )
 
-    def process_batch(
+    def process_batches(
         self,
-        batch: pa.RecordBatch,
-        is_finalize: bool,
-    ) -> ProcessResult:
-        """Process an input batch or handle finalization.
+    ) -> Generator[ProcessResult, ProcessInput | None, None]:
+        """Generator that processes input batches through the function.
 
-        Args:
-            init_data: The global initialization data.
-            batch: The input RecordBatch to process. During finalize, this will
-                   be an empty batch conforming to the input schema.
-            is_finalize: True when called during FINALIZE phase.
+        Yields ProcessResult for each input batch during DATA phase
+        and during FINALIZE phase until has_more is False.
 
         Returns:
-            A ProcessResult with:
-            - batch: A RecordBatch conforming to output_schema, or None
-            - has_more: If True, will be called again with the same input
-
-        Default: returns ProcessResult(batch) during DATA (only valid when input/output
-        schemas match), returns ProcessResult(None) during FINALIZE.
+            Generator yielding ProcessResult objects.
         """
-        if is_finalize:
-            return ProcessResult(None)
-        return ProcessResult(batch)
+        # Initial priming value
+        _ = yield ProcessResult(None)
+
+        result = ProcessResult(None)
+        while True:
+            input = yield result
+            if input is None:
+                raise ValueError("Expected ProcessInput, got None")
+            result = ProcessResult(input.batch, has_more=False)
 
     @final
-    def run(self) -> Generator[FunctionOutput, FunctionInput, None]:
+    def run(
+        self, fn_log: structlog.stdlib.BoundLogger
+    ) -> Generator[FunctionOutput, FunctionInput | None, None]:
         """Run the function protocol. Do not override.
 
         This generator implements the DATA* -> FINALIZE lifecycle:
@@ -578,29 +631,43 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         2. FINALIZE: Calls process_batch() with is_finalize=True repeatedly
            until has_more=False, then yields FINISHED status.
         """
-        # Prime the generator - caller must call next() first
-        function_input: FunctionInput = yield FunctionOutput(batch=None, status=None)
+        generator = self.process_batches()
+        generator.send(None)
 
+        # Prime the generator - caller must call next() first
+        _ = yield FunctionOutput(batch=None, status=None)
+
+        input: FunctionInput | None = yield FunctionOutput(batch=None, status=None)
+        if input is None:
+            raise ValueError("Expected FunctionInput, got None")
+
+        generator.send(ProcessInput(self.empty_input_batch(), is_finalize=False))
+
+        assert input is not None
         # DATA phase
-        while not function_input.is_finalize:
+        while not input.is_finalize:
             result = self._process_with_exception_handling(
-                function_input.batch, is_finalize=False
+                generator, input.batch, is_finalize=False
             )
-            function_input = yield FunctionOutput.from_process_result(
+            input = yield FunctionOutput.from_process_result(
                 result, in_finalize_phase=False
             )
+            if input is None:
+                raise ValueError("Expected FunctionInput, got None")
             if self._should_terminate(result):
                 return
 
         # FINALIZE phase
         while True:
             result = self._process_with_exception_handling(
-                function_input.batch, is_finalize=True
+                generator, input.batch, is_finalize=True
             )
             if result.has_more:
-                function_input = yield FunctionOutput.from_process_result(
+                input = yield FunctionOutput.from_process_result(
                     result, in_finalize_phase=True
                 )
+                if input is None:
+                    raise ValueError("Expected FunctionInput, got None")
                 if self._should_terminate(result):
                     return
             else:

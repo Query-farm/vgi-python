@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
+import structlog
 
 __all__ = ["Arguments", "CallData", "BindResult", "LogLevel", "LogMessage"]
 
@@ -59,7 +60,7 @@ class LogLevel(Enum):
 
 @dataclass(frozen=True, slots=True)
 class LogMessage:
-    """Log message that can be returned from process_batch() via ProcessResult.
+    """Log message that can be yielded from process_batches() via ProcessResult.
 
     LogMessage allows functions to emit diagnostic information during batch
     processing. Messages are attached to the output metadata and transmitted
@@ -70,13 +71,17 @@ class LogMessage:
         message: Human-readable log message text.
 
     Example:
-        def process_batch(self, init_data, batch, is_finalize):
-            if batch.num_rows == 0:
-                return ProcessResult(
-                    batch,
-                    log_message=LogMessage.info("Received empty batch")
-                )
-            return ProcessResult(batch)
+        def process_batches(self) -> Generator[ProcessResult, ProcessInput, None]:
+            _ = yield ProcessResult(None)
+            while True:
+                input = yield ProcessResult(None)
+                if input.batch.num_rows == 0:
+                    yield ProcessResult(
+                        input.batch,
+                        log_message=LogMessage.info("Received empty batch")
+                    )
+                else:
+                    yield ProcessResult(input.batch)
     """
 
     level: LogLevel
@@ -600,13 +605,14 @@ class Function:
 
     init_storage: InitStorage = InitStorage()
 
-    def __init__(self, call_data: CallData):
+    def __init__(self, *, call_data: CallData, logger: structlog.stdlib.BoundLogger):
         """Initialize the function with call data.
 
         Args:
             call_data: Complete invocation request including function name,
                 arguments, and input schema.
         """
+        self.logger = logger
         pass
 
     def max_processes(self) -> int:
@@ -652,15 +658,6 @@ class Function:
     def retrieve_init(self, input: GlobalInitResult) -> None:
         """The function would normally retrieve the init data from storage,
         but the default implementation does nothing."""
-
-    def local_init(self) -> None:
-        """Perform any local initialization required before processing.
-
-        This method is called once per worker process after global init
-        (if any) and before any data batches are processed. Override to
-        set up local resources or state specific to this worker.
-        """
-        pass
 
     @property
     def output_schema(self) -> pa.Schema:

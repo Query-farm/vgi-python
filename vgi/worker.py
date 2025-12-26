@@ -151,10 +151,9 @@ class Worker:
             WorkerStats with batch_count, total_input_rows, total_output_rows.
         """
 
-        instance.local_init()
-
         assert call_data.global_init_identifier is not None
-        generator = instance.run()
+        generator = instance.run(fn_log)
+        generator.send(None)
         next(generator)
 
         with (
@@ -223,7 +222,7 @@ class Worker:
         if call_data.function_name not in self.registry:
             raise ValueError(f"Unknown function: {call_data.function_name}")
 
-        instance = self.registry[call_data.function_name](call_data)
+        instance = self.registry[call_data.function_name](call_data, fn_log)
 
         bind_result_bytes = BindResult(
             output_schema=instance.output_schema,
