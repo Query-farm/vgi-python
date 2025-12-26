@@ -22,7 +22,6 @@ import json
 import os
 import uuid
 from dataclasses import dataclass
-from functools import cached_property
 from typing import Any
 
 import pyarrow as pa
@@ -131,8 +130,11 @@ class LogMessage:
         result["log_message"] = json.dumps(
             {
                 "message": self.message,
-                "call_id": call_data.call_identifier_hex,
-                "pid": call_data.pid,
+                "logging_identifier": call_data.logging_identifier,
+                "bind_identifier": call_data.bind_identifier.hex()
+                if call_data.bind_identifier
+                else None,
+                "pid": call_data.pid(),
             }
         )
         return result
@@ -353,8 +355,9 @@ class CallData:
     arguments: Arguments
     in_schema: pa.Schema | None
 
+    logging_identifier: str
     # The unique identifier for the call, typically this may be a uuid.
-    call_identifier: bytes
+    bind_identifier: bytes | None
 
     global_init_identifier: GlobalInitResult | None = None
 
@@ -371,7 +374,8 @@ class CallData:
             function_name=self.function_name,
             arguments=self.arguments,
             in_schema=self.in_schema,
-            call_identifier=self.call_identifier,
+            logging_identifier=self.logging_identifier,
+            bind_identifier=self.bind_identifier,
             global_init_identifier=global_init_identifier,
         )
 
@@ -399,7 +403,8 @@ class CallData:
                     "in_schema": self.in_schema.serialize().to_pybytes()
                     if self.in_schema
                     else None,
-                    "call_identifier": self.call_identifier,
+                    "bind_identifier": self.bind_identifier,
+                    "logging_identifier": self.logging_identifier,
                 }
             ],
             schema=pa.schema(
@@ -407,7 +412,8 @@ class CallData:
                     pa.field("function_name", pa.string(), nullable=False),
                     pa.field("arguments", args_struct_type, nullable=True),
                     pa.field("in_schema", pa.binary(), nullable=True),
-                    pa.field("call_identifier", pa.binary(), nullable=True),
+                    pa.field("bind_identifier", pa.binary(), nullable=True),
+                    pa.field("logging_identifier", pa.string(), nullable=False),
                 ]
             ),
         )
@@ -435,7 +441,13 @@ class CallData:
             )
 
         first_row = data.to_pylist()[0]
-        required_fields = ["function_name", "arguments", "in_schema", "call_identifier"]
+        required_fields = [
+            "function_name",
+            "arguments",
+            "in_schema",
+            "bind_identifier",
+            "logging_identifier",
+        ]
 
         for field in required_fields:
             if field not in first_row:
@@ -449,7 +461,8 @@ class CallData:
             function_name=first_row["function_name"],
             arguments=Arguments.decode(data.column("arguments")[0]),
             in_schema=in_schema,
-            call_identifier=first_row["call_identifier"],
+            bind_identifier=first_row["bind_identifier"],
+            logging_identifier=first_row["logging_identifier"],
             global_init_identifier=GlobalInitResult(
                 first_row[GlobalInitResult.IDENTIFIER_FIELD_NAME]
             )
@@ -457,7 +470,6 @@ class CallData:
             else None,
         )
 
-    @cached_property
     def pid(self) -> int:
         """Process ID of the worker handling this CallData.
 
@@ -465,15 +477,6 @@ class CallData:
             Process ID as an integer.
         """
         return os.getpid()
-
-    @cached_property
-    def call_identifier_hex(self) -> str:
-        """Hexadecimal string representation of the call identifier.
-
-        Returns:
-            Hex string of the call_identifier bytes.
-        """
-        return self.call_identifier.hex()
 
 
 @dataclass(frozen=True, slots=True)
@@ -489,7 +492,7 @@ class BindResult:
         max_processes: Maximum parallel processes this function can utilize.
             Set to 1 for functions that must process sequentially (e.g.,
             aggregations). Higher values enable parallel execution.
-        call_identifier: Unique bytes identifying this function invocation.
+        bind_identifier: Unique bytes identifying this function invocation.
             Used to correlate multiple parallel workers processing the same
             logical function call.
 
@@ -499,7 +502,7 @@ class BindResult:
 
     output_schema: pa.Schema
     max_processes: int
-    call_identifier: bytes
+    bind_identifier: bytes
 
     def serialize_schema(self) -> pa.Schema:
         """Return the Arrow schema used when serializing this bind result.
@@ -515,7 +518,7 @@ class BindResult:
             [
                 pa.field("output_schema", pa.binary(), nullable=False),
                 pa.field("max_processes", pa.int64(), nullable=True),
-                pa.field("call_identifier", pa.binary(), nullable=True),
+                pa.field("bind_identifier", pa.binary(), nullable=True),
             ]
         )
 
@@ -532,7 +535,7 @@ class BindResult:
         return {
             "output_schema": self.output_schema.serialize().to_pybytes(),
             "max_processes": self.max_processes,
-            "call_identifier": self.call_identifier,
+            "bind_identifier": self.bind_identifier,
         }
 
     def serialize(self) -> bytes:
@@ -554,6 +557,32 @@ class BindResult:
         return vgi.util.recordbatch_to_bytes(bind_result_batch)
 
 
+class InitStorage:
+    """
+    An in-process implementation for storing init values that can be retrieved later on
+    by id.
+    """
+
+    contents: dict[bytes, Any] = {}
+
+    def create(self, value: Any) -> bytes:
+        key = uuid.uuid4().bytes
+        self.contents[key] = value
+        return key
+
+    def get(self, key: bytes) -> Any:
+        if key not in self.contents:
+            raise KeyError(f"Key {key.hex()} not found in InitStorage")
+        return self.contents[key]
+
+    def delete(self, key: bytes) -> None:
+        if key in self.contents:
+            del self.contents[key]
+
+    def has(self, key: bytes) -> bool:
+        return key in self.contents
+
+
 class Function:
     """Base class for all VGI functions.
 
@@ -568,6 +597,8 @@ class Function:
         vgi.table_function.TableFunction: Adds cardinality hints.
         vgi.table_in_out_function.TableInOutFunction: Full streaming implementation.
     """
+
+    init_storage: InitStorage = InitStorage()
 
     def __init__(self, call_data: CallData):
         """Initialize the function with call data.
@@ -589,7 +620,7 @@ class Function:
         """
         return 1
 
-    def call_identifier(self) -> bytes:
+    def bind_identifier(self) -> bytes:
         """Return unique identifier for this function invocation.
 
         When max_processes > 1, this ID correlates multiple parallel workers
@@ -600,7 +631,7 @@ class Function:
         """
         return uuid.uuid4().bytes
 
-    def process_init(self, input: pa.RecordBatch) -> GlobalInitResult:
+    def perform_init(self, input: pa.RecordBatch) -> GlobalInitResult:
         """Perform any global initialization required before processing.
 
         This method is called once per worker process before any data
@@ -617,3 +648,27 @@ class Function:
             return GlobalInitResult.deserialize(input)
 
         return GlobalInitResult()
+
+    def retrieve_init(self, input: GlobalInitResult) -> None:
+        """The function would normally retrieve the init data from storage,
+        but the default implementation does nothing."""
+
+    def local_init(self) -> None:
+        """Perform any local initialization required before processing.
+
+        This method is called once per worker process after global init
+        (if any) and before any data batches are processed. Override to
+        set up local resources or state specific to this worker.
+        """
+        pass
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        """Return the output schema. Is not cached, may change based if
+        init_data is available, when called in the BIND phase init data
+        is not yet available, afterwards it is.
+
+        Override to transform the schema or initialize processing state.
+        Default: returns input_schema unchanged (passthrough).
+        """
+        raise NotImplementedError("Must be implemented by subclass.")

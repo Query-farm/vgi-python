@@ -64,6 +64,12 @@ class GlobalStateInitInput:
         )
         return vgi.util.recordbatch_to_bytes(batch)
 
+    @staticmethod
+    def deserialize(batch: pa.RecordBatch) -> "GlobalStateInitInput":
+        """Deserialize GlobalStateInitInput from a RecordBatch"""
+        values = batch.to_pylist()[0]
+        return GlobalStateInitInput(**values)
+
 
 @dataclass(frozen=True, slots=True)
 class TableFunctionBindResult(vgi.function.BindResult):
@@ -121,6 +127,9 @@ class TableFunction(vgi.function.Function):
             that extends this class with the complete DATA/FINALIZE protocol.
     """
 
+    # This is the init data that may be been read.
+    init_data: GlobalStateInitInput | None = None
+
     def __init__(self, call_data: vgi.function.CallData):
         """Initialize the table function with call data.
 
@@ -140,3 +149,29 @@ class TableFunction(vgi.function.Function):
             CardinalityInfo with estimate and/or max, or None if unknown.
         """
         return None
+
+    def perform_init(self, input: pa.RecordBatch) -> vgi.function.GlobalInitResult:
+        """Perform a new init call and store it in the storage."""
+        self.init_data = GlobalStateInitInput.deserialize(input)
+        return vgi.function.GlobalInitResult(self.init_storage.create(self.init_data))
+
+    def retrieve_init(self, input: vgi.function.GlobalInitResult) -> None:
+        """Retrieve and store init data from the storage."""
+        assert input.global_init_identifier is not None
+        self.init_data = self.init_storage.get(input.global_init_identifier)
+
+    def apply_projection(self, schema: pa.Schema) -> pa.Schema:
+        """Apply any projection specified in the init data to the schema.
+
+        Args:
+            schema: Original output schema before projection.
+        Returns:
+            Projected schema according to init data, or original if no projection.
+        """
+        if self.init_data and self.init_data.projection_ids is not None:
+            projected_fields = []
+            for proj_id in self.init_data.projection_ids:
+                field = schema.field(proj_id)
+                projected_fields.append(field)
+            return pa.schema(projected_fields)
+        return schema

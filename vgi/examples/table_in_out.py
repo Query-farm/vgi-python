@@ -264,9 +264,12 @@ class SumAllColumnsFunction(TableInOutFunction):
     def cardinality(self) -> CardinalityInfo | None:
         return CardinalityInfo(estimate=1, max=1)
 
-    def _output_schema(self) -> pa.Schema:
-        self.sums: dict[str, pa.Scalar] = {}
+    sums: dict[str, pa.Scalar] = {}
+
+    @property
+    def output_schema(self) -> pa.Schema:
         output_fields = []
+        assert self.input_schema is not None
         for field in self.input_schema:
             if pa.types.is_integer(field.type):
                 out_type = pa.int64()
@@ -275,8 +278,13 @@ class SumAllColumnsFunction(TableInOutFunction):
             else:
                 continue
             output_fields.append(pa.field(field.name, out_type))
-            self.sums[field.name] = pa.scalar(0, type=out_type)
-        return pa.schema(output_fields)
+
+        return self.apply_projection(pa.schema(output_fields))
+
+    def local_init(self) -> None:
+        # Initialize sums to zero for each numeric column
+        for field in self.output_schema:
+            self.sums[field.name] = pa.scalar(0, type=field.type)
 
     def process_batch(self, batch: pa.RecordBatch, is_finalize: bool) -> ProcessResult:
         if is_finalize:
@@ -290,4 +298,5 @@ class SumAllColumnsFunction(TableInOutFunction):
             col_sum = pc.sum(batch.column(name))
             if col_sum.is_valid:
                 self.sums[name] = pc.add(self.sums[name], col_sum)
+
         return ProcessResult(None)

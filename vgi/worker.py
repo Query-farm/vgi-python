@@ -151,8 +151,10 @@ class Worker:
             WorkerStats with batch_count, total_input_rows, total_output_rows.
         """
 
+        instance.local_init()
+
         assert call_data.global_init_identifier is not None
-        generator = instance.run(call_data.global_init_identifier)
+        generator = instance.run()
         next(generator)
 
         with (
@@ -226,7 +228,7 @@ class Worker:
         bind_result_bytes = BindResult(
             output_schema=instance.output_schema,
             max_processes=instance.max_processes(),
-            call_identifier=instance.call_identifier(),
+            bind_identifier=instance.bind_identifier(),
         ).serialize()
 
         if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):
@@ -234,12 +236,15 @@ class Worker:
 
         if call_data.global_init_identifier is None:
             fn_log.info("processing_init")
-            init_result = instance.process_init(self._read_init_data())
+            init_result = instance.perform_init(self._read_init_data())
             init_result_bytes = init_result.serialize()
             if sys.stdout.write(init_result_bytes) != len(init_result_bytes):
                 raise OSError("Failed to write init result record batch")
             fn_log.info("processing_init_complete", init_result=init_result)
             call_data = call_data.with_global_init_identifier(init_result)
+        else:
+            fn_log.info("retrieving_init")
+            instance.retrieve_init(call_data.global_init_identifier)
 
         stats = self._process_batches(instance, call_data, fn_log)
 

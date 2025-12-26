@@ -437,12 +437,6 @@ class TableInOutFunction(vgi.table_function.TableFunction):
 
     @final
     @cached_property
-    def output_schema(self) -> pa.Schema:
-        """Output schema, computed lazily via _output_schema() on first access."""
-        return self._output_schema()
-
-    @final
-    @cached_property
     def empty_output_batch(self) -> pa.RecordBatch:
         """Return an empty batch conforming to output_schema. Cached."""
         return pa.RecordBatch.from_arrays(
@@ -450,8 +444,10 @@ class TableInOutFunction(vgi.table_function.TableFunction):
             schema=self.output_schema,
         )
 
-    def _output_schema(self) -> pa.Schema:
-        """Return the output schema. Called lazily via the output_schema property.
+    @property
+    def output_schema(self) -> pa.Schema:
+        """Return the output schema. Not cached since it can change
+        if the init data is available or not.
 
         Override to transform the schema or initialize processing state.
         Default: returns input_schema unchanged (passthrough).
@@ -570,9 +566,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
         return ProcessResult(batch)
 
     @final
-    def run(
-        self, init_data: vgi.function.GlobalInitResult
-    ) -> Generator[FunctionOutput, FunctionInput, None]:
+    def run(self) -> Generator[FunctionOutput, FunctionInput, None]:
         """Run the function protocol. Do not override.
 
         This generator implements the DATA* -> FINALIZE lifecycle:

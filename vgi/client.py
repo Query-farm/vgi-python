@@ -18,7 +18,6 @@ Usage (API):
         for batch in client.table_in_out_function(
             function_name="echo",
             arguments=Arguments(positional=[], named={}),
-            call_identifier=None,
             input=input_batches,
         ):
             process(batch)
@@ -29,7 +28,6 @@ import json
 import subprocess
 import sys
 import threading
-import uuid
 from collections.abc import Callable, Generator, Iterator
 from typing import IO, Any
 
@@ -69,13 +67,17 @@ class Client:
             for batch in client.table_in_out_function(
                 function_name="echo",
                 arguments=Arguments(positional=[], named={}),
-                call_identifier=None,
                 input=input_batches,
             ):
                 process(batch)
     """
 
-    def __init__(self, server_path: str, passthrough_stderr: bool = False):
+    def __init__(
+        self,
+        server_path: str,
+        logging_identifier: str = "",
+        passthrough_stderr: bool = False,
+    ):
         """
         Initialize the VGI client.
 
@@ -86,6 +88,7 @@ class Client:
                 captured and available via get_worker_stderr().
         """
         self.server_path = server_path
+        self.logging_identifier = logging_identifier
         self.passthrough_stderr = passthrough_stderr
         self._proc: subprocess.Popen[bytes] | None = None
         self._stdout_buffered: io.BufferedReader | None = None
@@ -189,7 +192,7 @@ class Client:
         arguments: Arguments,
         input: Iterator[pa.RecordBatch],
         bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
-        call_identifier: bytes = uuid.uuid4().bytes,
+        projection_ids: list[int] | None = None,
     ) -> Generator[pa.RecordBatch, None, None]:
         """Call a table-in-out function on the worker with the given input data.
 
@@ -200,12 +203,13 @@ class Client:
         Args:
             function_name: Name of the function to invoke (must be in worker registry).
             arguments: Arguments container with positional and named arguments.
-            call_identifier: Unique bytes to correlate parallel workers, or None.
             input: Iterator yielding input RecordBatches. The first batch's schema
                 is used for the CallData.in_schema.
             bind_result_callback: Optional callback invoked with the bind result
                 RecordBatch after the worker responds. Useful for inspecting
                 output schema or cardinality hints before processing begins.
+            logging_identifier: String identifier for logging/correlation purposes.
+            projection_ids: Optional list of column indices to project.
 
         Yields:
             Output RecordBatches from the function. Multiple input batches may be
@@ -244,7 +248,8 @@ class Client:
                     function_name=function_name,
                     arguments=arguments,
                     in_schema=input_schema,
-                    call_identifier=call_identifier if call_identifier else b"",
+                    logging_identifier=self.logging_identifier,
+                    bind_identifier=None,
                 ).serialize()
 
                 if self._stdin_sink.write(call_parameters_batch_bytes) != len(
@@ -280,7 +285,17 @@ class Client:
 
                 log.debug("bind_result", batch=bind_result_batch)
 
-                global_state_info_serialized_bytes = GlobalStateInitInput().serialize()
+                # FIXME: we should validate that the projection_ids if specified
+                # don't specify columns outside of the original output schema
+                # as returned in bind_result_batch, but would require deserializing
+                # bind result batch.
+                #
+                # Which we will need to do anyway if we want to support
+                # multiple connections to the same worker process for parallelism.
+
+                global_state_info_serialized_bytes = GlobalStateInitInput(
+                    projection_ids=projection_ids
+                ).serialize()
 
                 if self._stdin_sink.write(global_state_info_serialized_bytes) != len(
                     global_state_info_serialized_bytes
@@ -554,6 +569,13 @@ def main() -> None:
         default=False,
         help="Pass worker stderr through to CLI stderr",
     )
+    @click.option(
+        "--projection-id",
+        "projection_ids",
+        multiple=True,
+        type=int,
+        help="Projection column ID (can be specified multiple times)",
+    )
     def cli(
         input_file: str,
         output_file: str | None,
@@ -562,6 +584,7 @@ def main() -> None:
         arguments: str,
         server_path: str,
         worker_stderr: bool,
+        projection_ids: tuple[int, ...],
     ) -> None:
         """Send parquet data through a VGI function and display results."""
         try:
@@ -584,6 +607,7 @@ def main() -> None:
                     function_name=function_name,
                     arguments=Arguments(positional=args_list, named={}),
                     input=pf.iter_batches(),
+                    projection_ids=list(projection_ids) if projection_ids else None,
                 ):
                     if output_writer is None:
                         output_writer = OutputWriter(
