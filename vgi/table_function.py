@@ -158,7 +158,8 @@ class Function(vgi.function.Function):
 
     def retrieve_init(self, input: vgi.function.GlobalInitResult) -> None:
         """Retrieve and store init data from the storage."""
-        assert input.global_init_identifier is not None
+        if input.global_init_identifier is None:
+            raise ValueError("global_init_identifier is required but was None")
         self.init_data = self.init_storage.get(input.global_init_identifier)
 
     def apply_projection(self, schema: pa.Schema) -> pa.Schema:

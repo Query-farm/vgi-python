@@ -430,7 +430,7 @@ class FunctionRequest:
     Example:
         invocation = FunctionRequest(
             function_name="sum_columns",
-            arguments=Arguments(positional=["col1", "col2"], named={}),
+            arguments=Arguments(positional=("col1", "col2")),
             in_out_function_input_schema=pa.schema([pa.field("col1", pa.int64())]),
             correlation_id="request-123",
             invocation_id=None,  # Set by worker after binding
@@ -708,7 +708,7 @@ class Function:
         """
         return uuid.uuid4().bytes
 
-    def perform_init(self, input: pa.RecordBatch) -> GlobalInitResult:
+    def perform_init(self, init_input: pa.RecordBatch) -> GlobalInitResult:
         """Perform any global initialization required before processing.
 
         This method is called once per worker process before any data
@@ -716,17 +716,17 @@ class Function:
         models, or perform expensive setup tasks.
 
         Args:
-            input: An initial RecordBatch that may contain configuration
+            init_input: An initial RecordBatch that may contain configuration
                 or context information for initialization.
 
         """
         # If there is an id supplied, detect it so it will be passed on.
-        if GlobalInitResult.has_identifier(input):
-            return GlobalInitResult.deserialize(input)
+        if GlobalInitResult.has_identifier(init_input):
+            return GlobalInitResult.deserialize(init_input)
 
         return GlobalInitResult()
 
-    def retrieve_init(self, input: GlobalInitResult) -> None:  # noqa: ARG002
+    def retrieve_init(self, init_input: GlobalInitResult) -> None:
         """Retrieve init data from storage (default does nothing)."""
 
     @property

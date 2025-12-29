@@ -35,6 +35,7 @@ import structlog
 from pyarrow import ipc
 
 from vgi.function import FunctionOutputSpec, FunctionRequest
+from vgi.ipc_utils import read_ipc_batch
 from vgi.table_in_out_function import (
     Function,
     ProtocolInput,
@@ -97,9 +98,6 @@ class Worker:
     def _read_ipc_batch(self, context: str) -> pa.RecordBatch:
         """Read a schema + record batch pair from stdin.
 
-        Reads IPC messages manually (not via ipc.open_stream) to avoid PyArrow
-        closing the underlying pipe when the stream context exits.
-
         Args:
             context: Description for debug logging (e.g., "invocation", "init_data").
 
@@ -107,20 +105,11 @@ class Worker:
             The deserialized RecordBatch.
 
         Raises:
-            ValueError: If unexpected message types are received.
+            IPCError: If unexpected message types are received.
 
         """
         self.log.debug(f"{context}_reading")
-
-        msg = ipc.read_message(sys.stdin)
-        if msg.type != "schema":
-            raise ValueError(f"Expected schema message, got {msg.type}")
-        schema = ipc.read_schema(msg)
-
-        msg = ipc.read_message(sys.stdin)
-        if msg.type != "record batch":
-            raise ValueError(f"Expected record batch, got {msg.type}")
-        return ipc.read_record_batch(msg, schema)
+        return read_ipc_batch(sys.stdin, context)
 
     def _read_invocation(self) -> FunctionRequest:
         """Read and parse the call data from stdin."""
@@ -146,7 +135,8 @@ class Worker:
             WorkerStats with batch_count, total_input_rows, total_output_rows.
 
         """
-        assert invocation.global_init_identifier is not None
+        if invocation.global_init_identifier is None:
+            raise ValueError("global_init_identifier is required but was None")
         generator = instance.run()
         next(generator)  # Prime the run() generator
 

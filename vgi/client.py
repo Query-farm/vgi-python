@@ -35,6 +35,7 @@ import structlog
 from pyarrow import ipc
 
 from vgi.function import Arguments, FunctionRequest
+from vgi.ipc_utils import IPCError, read_ipc_batch
 from vgi.table_function import GlobalStateInitInput
 
 # Configure structlog to write to stderr
@@ -156,8 +157,8 @@ class Client:
             OSError: If writing to the worker fails.
 
         """
-        assert self._stdin_sink is not None
-        assert self._stdout_buffered is not None
+        if self._stdin_sink is None or self._stdout_buffered is None:
+            raise ClientError("Worker process not started. Call start() first.")
 
         # Send initialization batch
         log.debug("sending_init_batch", function=function_name, arguments=arguments)
@@ -176,24 +177,16 @@ class Client:
             raise OSError("Failed to write call parameters record batch")
 
         # Read the bind result
-        log.debug("reading_bind_schema")
-        msg = ipc.read_message(self._stdout_buffered)
-        if msg.type != "schema":
-            raise ClientError(f"Expected schema message, got {msg.type}")
-
-        bind_result_schema = ipc.read_schema(msg)
-        log.debug("bind_schema_received", schema=str(bind_result_schema))
-
-        msg = ipc.read_message(self._stdout_buffered)
-        if msg.type != "record batch":
-            raise ClientError(f"Expected bind result record batch, got {msg.type}")
-        bind_result_batch = ipc.read_record_batch(msg, bind_result_schema)
+        log.debug("reading_bind_result")
+        try:
+            bind_result_batch = read_ipc_batch(self._stdout_buffered, "bind_result")
+        except IPCError as e:
+            raise ClientError(str(e)) from e
 
         if bind_result_callback is not None:
             bind_result_callback(bind_result_batch)
 
-        log.debug("bind_result_received")
-        log.debug("bind_result", batch=bind_result_batch)
+        log.debug("bind_result_received", batch=bind_result_batch)
 
         # Send global state init input
         global_state_info_serialized_bytes = GlobalStateInitInput(
@@ -206,22 +199,11 @@ class Client:
             raise OSError("Failed to write global state init input record batch")
 
         # Read the init result
-        log.debug("reading_init_schema")
-
-        msg = ipc.read_message(self._stdout_buffered)
-        if msg.type != "schema":
-            raise ClientError(
-                f"Expected schema message for init result, got {msg.type}"
-            )
-
-        init_result_schema = ipc.read_schema(msg)
-        log.debug("init_result_schema_received", schema=str(init_result_schema))
-
-        msg = ipc.read_message(self._stdout_buffered)
-        if msg.type != "record batch":
-            raise ClientError(f"Expected init result record batch, got {msg.type}")
-
-        _init_result_batch = ipc.read_record_batch(msg, init_result_schema)
+        log.debug("reading_init_result")
+        try:
+            _init_result_batch = read_ipc_batch(self._stdout_buffered, "init_result")
+        except IPCError as e:
+            raise ClientError(str(e)) from e
         log.debug("init_result_received")
 
         # Create and return the data stream writer
@@ -411,7 +393,8 @@ class Client:
                     projection_ids=projection_ids,
                 )
 
-            assert data_writer is not None
+            if data_writer is None:
+                raise ClientError("Protocol error: data_writer not initialized")
 
             while True:
                 # Since a single batch may produce multiple output batches,
@@ -489,7 +472,8 @@ class Client:
             schema=input_schema,
         )
 
-        assert data_writer is not None
+        if data_writer is None:
+            raise ClientError("Protocol error: data_writer not initialized")
 
         while True:
             log.debug("sending_finalize")

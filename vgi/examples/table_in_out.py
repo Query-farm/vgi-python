@@ -97,7 +97,10 @@ class BufferInputFunction(Function):
 
         _ = yield None
 
-        while batch := (yield None):
+        while True:
+            batch = yield None
+            if batch is None:
+                break
             self.buffered_batches.append(batch)
 
     def finalize(self) -> OutputGenerator:
@@ -292,8 +295,9 @@ class SumAllColumnsFunction(Function):
     @property
     def output_schema(self) -> pa.Schema:
         """Build schema with only numeric columns promoted to int64/float64."""
+        if self.input_schema is None:
+            raise ValueError("input_schema is required but was None")
         output_fields = []
-        assert self.input_schema is not None
         for field in self.input_schema:
             if pa.types.is_integer(field.type):
                 out_type = pa.int64()
@@ -338,124 +342,25 @@ class SumAllColumnsFunction(Function):
         )
 
 
-class SumAllColumnsFunctionWithLogging(Function):
+class SumAllColumnsFunctionWithLogging(SumAllColumnsFunction):
     """Aggregation function with logging that computes column-wise sums.
 
-    Identical to SumAllColumnsFunction but demonstrates logging capabilities.
+    Extends SumAllColumnsFunction to demonstrate logging capabilities.
+    Emits log messages during process() and finalize() phases.
 
-    USE CASE
-    --------
-    Computing totals, aggregating metrics, or any full-stream reduction
-    that produces a single summary row.
-
-    BEHAVIOR
-    --------
-    - output_schema: Builds output schema from numeric columns only
-    - process(): Accumulates sums and yields empty results
-    - finalize(): Yields single row with final sums
-
-    SCHEMA TRANSFORMATION
-    ---------------------
-    Input:  any schema with numeric columns
-    Output: only numeric columns, promoted to int64/float64
-
-    For each input column:
-    - Integer types -> int64
-    - Floating types -> float64
-    - Non-numeric types -> excluded from output
-
-    STATE
-    -----
-    self.sums: dict[str, pa.Scalar]
-        Running sum for each numeric column. Keys are column names,
-        values are PyArrow scalars with the output type.
-
-    KEY PATTERN: SCHEMA TRANSFORMATION IN output_schema
-    ---------------------------------------------------
-    This function demonstrates inspecting input_schema to build a different
-    output schema as a property:
-
-        @property
-        def output_schema(self) -> pa.Schema:
-            output_fields = []
-            for field in self.input_schema:
-                if pa.types.is_integer(field.type):
-                    output_fields.append(pa.field(field.name, pa.int64()))
-                elif pa.types.is_floating(field.type):
-                    output_fields.append(pa.field(field.name, pa.float64()))
-            return pa.schema(output_fields)
-
-    KEY PATTERN: ACCUMULATE IN process(), EMIT IN finalize()
-    --------------------------------------------------------
-    In process(), accumulate state but yield empty results.
-    In finalize(), yield the final aggregated result:
-
-        def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-            _ = yield None
-            while True:
-                for name in self.sums:
-                    col_sum = pc.sum(batch.column(name))
-                    if col_sum.is_valid:
-                        self.sums[name] = pc.add(self.sums[name], col_sum)
-                batch = yield None
-                if batch is None:
-                    break
-
-        def finalize(self) -> OutputGenerator:
-            _ = yield None
-            yield Output(pa.RecordBatch.from_pydict(...))
-
-    Example:
-    -------
-    Input schema: {"a": int32, "b": float32, "name": string}
-    Output schema: {"a": int64, "b": float64}  (string column excluded)
-
-    Input batches:
-      [{"a": 1, "b": 1.5, "name": "x"}, {"a": 2, "b": 2.5, "name": "y"}]
-      [{"a": 3, "b": 3.0, "name": "z"}]
-
-    Output (single row):
-      [{"a": 6, "b": 7.0}]
+    See SumAllColumnsFunction for full documentation of the aggregation pattern.
 
     """
 
-    def cardinality(self) -> CardinalityInfo | None:
-        """Return cardinality estimate of exactly 1 row."""
-        return CardinalityInfo(estimate=1, max=1)
-
-    def __init__(
-        self, invocation: FunctionRequest, logger: structlog.stdlib.BoundLogger
-    ) -> None:
-        """Initialize the sum accumulator."""
-        super().__init__(invocation=invocation, logger=logger)
-        self.sums: dict[str, pa.Scalar] = {}
-
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Build schema with only numeric columns promoted to int64/float64."""
-        output_fields = []
-        assert self.input_schema is not None
-        for field in self.input_schema:
-            if pa.types.is_integer(field.type):
-                out_type = pa.int64()
-            elif pa.types.is_floating(field.type):
-                out_type = pa.float64()
-            else:
-                continue
-            output_fields.append(pa.field(field.name, out_type))
-
-        return self.apply_projection(pa.schema(output_fields))
-
     def process(self, batch: pa.RecordBatch) -> OutputGenerator:
         """Accumulate column sums across all batches with logging."""
-        # The priming of the generator
         _ = yield None
 
         # Initialize sums to zero for each numeric column
         for field in self.output_schema:
             self.sums[field.name] = pa.scalar(0, type=field.type)
 
-        # Process all batches
+        # Process all batches with logging
         while True:
             yield LogMessage(
                 level=LogLevel.INFO,
@@ -480,7 +385,6 @@ class SumAllColumnsFunctionWithLogging(Function):
             message="Finalizing and emitting sums",
         )
 
-        # Finalize: emit single row with sums
         yield Output(
             pa.RecordBatch.from_pydict(
                 {name: [val] for name, val in self.sums.items()},
