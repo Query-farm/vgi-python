@@ -47,16 +47,16 @@ Quick Start (Recommended Pattern):
     clarity and to avoid common mistakes.
 
 Logging:
-    Functions can emit log messages by yielding LogMessage directly or via
-    Output.log_message. When a LogMessage is yielded, an empty batch
+    Functions can emit log messages by yielding Message directly or via
+    Output.log_message. When a Message is yielded, an empty batch
     is sent with the message in metadata, and the current input is re-sent:
 
-        from vgi.function import LogLevel, LogMessage
+        from vgi.log import Level, Message
 
         def process(self, batch: pa.RecordBatch) -> OutputGenerator:
             _ = yield None
             while True:
-                yield LogMessage(LogLevel.INFO, f"Processing {batch.num_rows} rows")
+                yield Message(Level.INFO, f"Processing {batch.num_rows} rows")
                 yield Output(transformed_batch)
                 batch = yield None
                 if batch is None:
@@ -75,6 +75,7 @@ import pyarrow as pa
 import structlog
 
 import vgi.function
+import vgi.log
 import vgi.table_function
 
 __all__ = [
@@ -151,16 +152,16 @@ class ProtocolOutput:
 
     batch: pa.RecordBatch | None
     status: _OutputStatus
-    log_message: vgi.function.LogMessage | None = None
+    log_message: vgi.log.Message | None = None
 
     def metadata(
-        self, invocation: vgi.function.FunctionRequest
+        self, invocation: vgi.function.Request
     ) -> pa.KeyValueMetadata | None:
         """Create metadata for this output based on the status.
 
         Args:
-            invocation: The FunctionRequest for this function invocation, passed through
-                to LogMessage.add_to_metadata() for correlation information.
+            invocation: The Request for this function invocation, passed through
+                to Message.add_to_metadata() for correlation information.
 
         Returns:
             KeyValueMetadata containing status and optional log message fields.
@@ -235,13 +236,13 @@ class Output:
         yield Output(second_batch, continue_from_current_input=False)  # done
 
         # Emit a log message with processing
-        yield Output(batch, log_message=LogMessage(LogLevel.INFO, "Done"))
+        yield Output(batch, log_message=Message(Level.INFO, "Done"))
 
     """
 
     batch: pa.RecordBatch | None
     continue_from_current_input: bool = False
-    log_message: vgi.function.LogMessage | None = None
+    log_message: vgi.log.Message | None = None
 
 
 # Type alias for process() and finalize() return type.
@@ -249,9 +250,9 @@ class Output:
 # Yields:
 #   - None: No output for this input (ready for next batch)
 #   - Output: Output batch with optional continue_from_current_input flag
-#   - LogMessage: Emit a log message; input will be re-sent after logging
+#   - Message: Emit a log message; input will be re-sent after logging
 OutputGenerator = Generator[
-    vgi.function.LogMessage | Output | None, pa.RecordBatch | None, None
+    vgi.log.Message | Output | None, pa.RecordBatch | None, None
 ]
 
 
@@ -276,7 +277,7 @@ class _OutputComplete(Output):
     @classmethod
     def from_process_result(
         cls,
-        source: vgi.function.LogMessage | Output | None,
+        source: vgi.log.Message | Output | None,
         empty_batch: pa.RecordBatch,
     ) -> "_OutputComplete":
         """Create an OutputComplete from an Output.
@@ -294,7 +295,7 @@ class _OutputComplete(Output):
             return cls(
                 batch=empty_batch, continue_from_current_input=False, log_message=None
             )
-        if isinstance(source, vgi.function.LogMessage):
+        if isinstance(source, vgi.log.Message):
             return cls(
                 batch=empty_batch, continue_from_current_input=True, log_message=source
             )
@@ -349,7 +350,7 @@ class Function(vgi.table_function.Function):
         The first batch is passed as a parameter. Subsequent batches are
         received via yield. Must:
         1. Yield None for priming (value is discarded)
-        2. Loop processing batches, yielding Output or LogMessage
+        2. Loop processing batches, yielding Output or Message
         3. Receive subsequent batches via yield (returns None when done)
 
         Input:
@@ -358,13 +359,13 @@ class Function(vgi.table_function.Function):
 
         Yield options:
         - Output: Batch with optional continue_from_current_input and log_message
-        - LogMessage: Emit a log message directly (input will be re-sent)
+        - Message: Emit a log message directly (input will be re-sent)
         - None: No output, ready for next batch
 
         The Output contains:
         - batch: A RecordBatch conforming to output_schema, or None for empty
         - continue_from_current_input: If True, you will receive another send() call
-        - log_message: Optional LogMessage for logging or error reporting
+        - log_message: Optional Message for logging or error reporting
 
         Default: passes input batches through unchanged (passthrough)
 
@@ -396,7 +397,7 @@ class Function(vgi.table_function.Function):
     To use a Function, the caller must:
 
     1. Create the bind result:
-       invocation = vgi.function.FunctionRequest(
+       invocation = vgi.function.Request(
            function_name="my_function",
            arguments=vgi.function.Arguments(positional=[], named={}),
            in_out_function_input_schema=input_schema,
@@ -424,7 +425,7 @@ class Function(vgi.table_function.Function):
 
     def __init__(
         self,
-        invocation: vgi.function.FunctionRequest,
+        invocation: vgi.function.Request,
         logger: structlog.stdlib.BoundLogger,
     ):
         """Initialize the function with invocation data and logger."""
@@ -513,7 +514,7 @@ class Function(vgi.table_function.Function):
         except Exception as e:
             return _OutputComplete(
                 batch=self.empty_output_batch,
-                log_message=vgi.function.LogMessage.from_exception(e),
+                log_message=vgi.log.Message.from_exception(e),
             )
 
     @final
@@ -521,27 +522,27 @@ class Function(vgi.table_function.Function):
         """Check if processing should terminate due to an exception."""
         return (
             result.log_message is not None
-            and result.log_message.level == vgi.function.LogLevel.EXCEPTION
+            and result.log_message.level == vgi.log.Level.EXCEPTION
         )
 
     def process(self, batch: pa.RecordBatch) -> OutputGenerator:
         """Process input batches during the DATA phase.
 
         Receives pa.RecordBatch objects via yield. Yield None, Output,
-        or LogMessage to control output and logging behavior.
+        or Message to control output and logging behavior.
 
         Yield options:
             None: No output for this input, ready for next batch.
             Output: Batch with optional continue_from_current_input and log_message.
-            LogMessage: Emit log message directly; current input will be re-sent.
+            Message: Emit log message directly; current input will be re-sent.
 
-        When yielding LogMessage directly, the framework sends an empty batch
+        When yielding Message directly, the framework sends an empty batch
         with the log in metadata and re-sends the current input batch. The
         re-sent value is returned by the yield expression but is typically
         discarded since the original batch is still in scope.
 
         Returns:
-            Generator yielding None, Output, or LogMessage objects.
+            Generator yielding None, Output, or Message objects.
 
         """
         _ = yield None  # Priming yield
@@ -559,7 +560,7 @@ class Function(vgi.table_function.Function):
         finalization is needed.
 
         Returns:
-            Generator yielding Output or LogMessage objects during
+            Generator yielding Output or Message objects during
             finalization, or None if no finalization output is needed.
 
         """

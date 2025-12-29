@@ -15,7 +15,8 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import structlog
 
-from vgi.function import FunctionRequest, LogLevel, LogMessage
+from vgi.function import Request
+from vgi.log import Level, Message
 from vgi.table_function import CardinalityInfo
 from vgi.table_in_out_function import (
     Function,
@@ -165,7 +166,7 @@ class RepeatInputsFunction(Function):
     """
 
     def __init__(
-        self, invocation: FunctionRequest, logger: structlog.stdlib.BoundLogger
+        self, invocation: Request, logger: structlog.stdlib.BoundLogger
     ) -> None:
         """Initialize with repeat count from positional argument."""
         super().__init__(invocation=invocation, logger=logger)
@@ -286,7 +287,7 @@ class SumAllColumnsFunction(Function):
         return CardinalityInfo(estimate=1, max=1)
 
     def __init__(
-        self, invocation: FunctionRequest, logger: structlog.stdlib.BoundLogger
+        self, invocation: Request, logger: structlog.stdlib.BoundLogger
     ) -> None:
         """Initialize the sum accumulator."""
         super().__init__(invocation=invocation, logger=logger)
@@ -362,8 +363,8 @@ class SumAllColumnsFunctionWithLogging(SumAllColumnsFunction):
 
         # Process all batches with logging
         while True:
-            yield LogMessage(
-                level=LogLevel.INFO,
+            yield Message(
+                level=Level.INFO,
                 message=f"Processing batch with {batch.num_rows} rows",
             )
 
@@ -380,8 +381,8 @@ class SumAllColumnsFunctionWithLogging(SumAllColumnsFunction):
         """Emit single row containing the column sums with logging."""
         _ = yield None
 
-        yield LogMessage(
-            level=LogLevel.INFO,
+        yield Message(
+            level=Level.INFO,
             message="Finalizing and emitting sums",
         )
 

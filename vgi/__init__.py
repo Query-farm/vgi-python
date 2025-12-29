@@ -13,7 +13,7 @@ Key Modules:
     vgi.worker: Base Worker class for hosting functions
     vgi.client: Client for invoking worker functions
     vgi.table_in_out_function: Function base class for streaming functions
-    vgi.function: Core data structures (FunctionRequest, FunctionOutputSpec, Arguments)
+    vgi.function: Core data structures (Request, OutputSpec, Arguments)
     vgi.table_function: Extended bind results with cardinality hints
 
 Quick Start:
@@ -21,19 +21,19 @@ Quick Start:
 """
 
 # Re-export commonly used classes for convenient imports
-from vgi.function import Arguments, FunctionRequest
-from vgi.logging import LogLevel, LogMessage
+from vgi.function import Arguments, Request
+from vgi.log import Level, Message
 from vgi.table_in_out_function import Function, Output, OutputGenerator
 from vgi.worker import Worker
 
 __all__ = [
     "Arguments",
     "Function",
-    "FunctionRequest",
-    "LogLevel",
-    "LogMessage",
+    "Level",
+    "Message",
     "Output",
     "OutputGenerator",
+    "Request",
     "Worker",
     "hello",
 ]

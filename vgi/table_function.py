@@ -2,7 +2,7 @@
 
 This module provides:
 - CardinalityInfo: Row count estimates for query optimization
-- FunctionOutputSpec: FunctionOutputSpec subclass with cardinality support
+- OutputSpec: OutputSpec subclass with cardinality support
 - Function: Base class for table functions with cardinality
 
 These classes are used by Function and can be used directly
@@ -18,7 +18,7 @@ import structlog
 import vgi.function
 import vgi.util
 
-__all__ = ["FunctionOutputSpec", "CardinalityInfo", "Function"]
+__all__ = ["OutputSpec", "CardinalityInfo", "Function", "GlobalStateInitInput"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,10 +75,10 @@ class GlobalStateInitInput:
 
 
 @dataclass(frozen=True, slots=True)
-class FunctionOutputSpec(vgi.function.FunctionOutputSpec):
+class OutputSpec(vgi.function.OutputSpec):
     """Extended bind result for table functions with cardinality information.
 
-    Extends FunctionOutputSpec with optional cardinality estimates that help query
+    Extends OutputSpec with optional cardinality estimates that help query
     planners optimize execution strategies.
 
     Attributes:
@@ -92,7 +92,7 @@ class FunctionOutputSpec(vgi.function.FunctionOutputSpec):
     def serialize_schema(self) -> pa.Schema:
         """Extend parent schema with cardinality fields."""
         return (
-            super(FunctionOutputSpec, self)
+            super(OutputSpec, self)
             .serialize_schema()
             .append(pa.field("cardinality_estimated", pa.int64(), nullable=True))
             .append(pa.field("cardinality_max", pa.int64(), nullable=True))
@@ -100,7 +100,7 @@ class FunctionOutputSpec(vgi.function.FunctionOutputSpec):
 
     def serialize_dict(self) -> dict[str, Any]:
         """Extend parent dict with cardinality values."""
-        return super(FunctionOutputSpec, self).serialize_dict() | {
+        return super(OutputSpec, self).serialize_dict() | {
             "cardinality_estimated": (
                 self.cardinality.estimate if self.cardinality else None
             ),
@@ -126,7 +126,7 @@ class Function(vgi.function.Function):
     def __init__(
         self,
         *,
-        invocation: vgi.function.FunctionRequest,
+        invocation: vgi.function.Request,
         logger: structlog.stdlib.BoundLogger,
     ):
         """Initialize the table function with call data.
@@ -151,16 +151,16 @@ class Function(vgi.function.Function):
         """
         return None
 
-    def perform_init(self, input: pa.RecordBatch) -> vgi.function.GlobalInitResult:
+    def perform_init(self, init_input: pa.RecordBatch) -> vgi.function.GlobalInitResult:
         """Perform a new init call and store it in the storage."""
-        self.init_data = GlobalStateInitInput.deserialize(input)
+        self.init_data = GlobalStateInitInput.deserialize(init_input)
         return vgi.function.GlobalInitResult(self.init_storage.create(self.init_data))
 
-    def retrieve_init(self, input: vgi.function.GlobalInitResult) -> None:
+    def retrieve_init(self, init_input: vgi.function.GlobalInitResult) -> None:
         """Retrieve and store init data from the storage."""
-        if input.global_init_identifier is None:
+        if init_input.global_init_identifier is None:
             raise ValueError("global_init_identifier is required but was None")
-        self.init_data = self.init_storage.get(input.global_init_identifier)
+        self.init_data = self.init_storage.get(init_input.global_init_identifier)
 
     def apply_projection(self, schema: pa.Schema) -> pa.Schema:
         """Apply any projection specified in the init data to the schema.

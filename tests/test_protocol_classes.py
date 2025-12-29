@@ -1,6 +1,6 @@
 """Unit tests for VGI protocol classes.
 
-Tests cover FunctionRequest, Arguments, GlobalInitResult, and table_function classes.
+Tests cover Request, Arguments, GlobalInitResult, and table_function classes.
 """
 
 import pyarrow as pa
@@ -8,15 +8,14 @@ import pytest
 
 from vgi.function import (
     Arguments,
-    FunctionRequest,
     GlobalInitResult,
-    LogLevel,
-    LogMessage,
+    Request,
 )
+from vgi.log import Level, Message
 from vgi.table_function import (
     CardinalityInfo,
-    FunctionOutputSpec,
     GlobalStateInitInput,
+    OutputSpec,
 )
 
 
@@ -144,12 +143,12 @@ class TestArguments:
         assert schema.field("named_flag").type == pa.bool_()
 
 
-class TestFunctionRequest:
-    """Tests for FunctionRequest serialization and deserialization."""
+class TestRequest:
+    """Tests for Request serialization and deserialization."""
 
     def test_basic_round_trip(self) -> None:
-        """Basic FunctionRequest should serialize and deserialize correctly."""
-        original = FunctionRequest(
+        """Basic Request should serialize and deserialize correctly."""
+        original = Request(
             function_name="test_function",
             arguments=Arguments(positional=(pa.scalar(42),), named={}),
             in_out_function_input_schema=pa.schema([pa.field("col1", pa.int64())]),
@@ -166,7 +165,7 @@ class TestFunctionRequest:
 
         reader = ipc.open_stream(serialized)
         batch = reader.read_next_batch()
-        deserialized = FunctionRequest.deserialize(batch)
+        deserialized = Request.deserialize(batch)
 
         assert deserialized.function_name == original.function_name
         assert deserialized.correlation_id == original.correlation_id
@@ -180,8 +179,8 @@ class TestFunctionRequest:
         assert deserialized.arguments.positional[0].as_py() == 42
 
     def test_null_schema(self) -> None:
-        """FunctionRequest with null input schema should round-trip correctly."""
-        original = FunctionRequest(
+        """Request with null input schema should round-trip correctly."""
+        original = Request(
             function_name="scalar_function",
             in_out_function_input_schema=None,
             correlation_id="",
@@ -193,14 +192,14 @@ class TestFunctionRequest:
 
         reader = ipc.open_stream(serialized)
         batch = reader.read_next_batch()
-        deserialized = FunctionRequest.deserialize(batch)
+        deserialized = Request.deserialize(batch)
 
         assert deserialized.function_name == "scalar_function"
         assert deserialized.in_out_function_input_schema is None
         assert deserialized.invocation_id is None
 
     def test_complex_schema(self) -> None:
-        """FunctionRequest with complex schema should round-trip correctly."""
+        """Request with complex schema should round-trip correctly."""
         complex_schema = pa.schema(
             [
                 pa.field("int_col", pa.int32()),
@@ -211,7 +210,7 @@ class TestFunctionRequest:
             ]
         )
 
-        original = FunctionRequest(
+        original = Request(
             function_name="complex_function",
             in_out_function_input_schema=complex_schema,
             correlation_id="complex-test",
@@ -223,7 +222,7 @@ class TestFunctionRequest:
 
         reader = ipc.open_stream(serialized)
         batch = reader.read_next_batch()
-        deserialized = FunctionRequest.deserialize(batch)
+        deserialized = Request.deserialize(batch)
 
         assert deserialized.in_out_function_input_schema == complex_schema
 
@@ -243,7 +242,7 @@ class TestFunctionRequest:
         )
 
         with pytest.raises(ValueError, match="empty RecordBatch"):
-            FunctionRequest.deserialize(empty_batch)
+            Request.deserialize(empty_batch)
 
     def test_deserialize_multi_row_batch_raises(self) -> None:
         """Deserializing multi-row batch should raise ValueError."""
@@ -267,11 +266,11 @@ class TestFunctionRequest:
         )
 
         with pytest.raises(ValueError, match="single-row"):
-            FunctionRequest.deserialize(multi_row_batch)
+            Request.deserialize(multi_row_batch)
 
     def test_with_global_init_identifier(self) -> None:
-        """Test that with_global_init_identifier creates a new FunctionRequest."""
-        original = FunctionRequest(
+        """Test that with_global_init_identifier creates a new Request."""
+        original = Request(
             function_name="test",
             in_out_function_input_schema=None,
             correlation_id="test",
@@ -373,75 +372,75 @@ class TestGlobalInitResult:
         assert schema.field("global_init_identifier").nullable is True
 
 
-class TestLogMessage:
-    """Tests for LogMessage convenience methods."""
+class TestMessage:
+    """Tests for Message convenience methods."""
 
     def test_exception_method(self) -> None:
-        """LogMessage.exception() should create EXCEPTION level message."""
-        msg = LogMessage.exception("Something failed", code=500)
-        assert msg.level == LogLevel.EXCEPTION
+        """Message.exception() should create EXCEPTION level message."""
+        msg = Message.exception("Something failed", code=500)
+        assert msg.level == Level.EXCEPTION
         assert msg.message == "Something failed"
         assert msg.extra == {"code": 500}
 
     def test_error_method(self) -> None:
-        """LogMessage.error() should create ERROR level message."""
-        msg = LogMessage.error("An error occurred")
-        assert msg.level == LogLevel.ERROR
+        """Message.error() should create ERROR level message."""
+        msg = Message.error("An error occurred")
+        assert msg.level == Level.ERROR
         assert msg.message == "An error occurred"
         assert msg.extra is None
 
     def test_warn_method(self) -> None:
-        """LogMessage.warn() should create WARN level message."""
-        msg = LogMessage.warn("Warning message", count=5)
-        assert msg.level == LogLevel.WARN
+        """Message.warn() should create WARN level message."""
+        msg = Message.warn("Warning message", count=5)
+        assert msg.level == Level.WARN
         assert msg.message == "Warning message"
         assert msg.extra == {"count": 5}
 
     def test_info_method(self) -> None:
-        """LogMessage.info() should create INFO level message."""
-        msg = LogMessage.info("Info message")
-        assert msg.level == LogLevel.INFO
+        """Message.info() should create INFO level message."""
+        msg = Message.info("Info message")
+        assert msg.level == Level.INFO
         assert msg.message == "Info message"
 
     def test_debug_method(self) -> None:
-        """LogMessage.debug() should create DEBUG level message."""
-        msg = LogMessage.debug("Debug details", var="value")
-        assert msg.level == LogLevel.DEBUG
+        """Message.debug() should create DEBUG level message."""
+        msg = Message.debug("Debug details", var="value")
+        assert msg.level == Level.DEBUG
         assert msg.message == "Debug details"
         assert msg.extra == {"var": "value"}
 
     def test_trace_method(self) -> None:
-        """LogMessage.trace() should create TRACE level message."""
-        msg = LogMessage.trace("Trace info")
-        assert msg.level == LogLevel.TRACE
+        """Message.trace() should create TRACE level message."""
+        msg = Message.trace("Trace info")
+        assert msg.level == Level.TRACE
         assert msg.message == "Trace info"
 
     def test_from_exception(self) -> None:
-        """LogMessage.from_exception() should capture exception details."""
+        """Message.from_exception() should capture exception details."""
         try:
             raise ValueError("Test error message")
         except ValueError as e:
-            msg = LogMessage.from_exception(e)
+            msg = Message.from_exception(e)
 
-        assert msg.level == LogLevel.EXCEPTION
+        assert msg.level == Level.EXCEPTION
         assert "ValueError" in msg.message
         assert "Test error message" in msg.message
 
     def test_equality(self) -> None:
-        """LogMessage equality should compare all fields."""
-        msg1 = LogMessage(LogLevel.INFO, "test", key="value")
-        msg2 = LogMessage(LogLevel.INFO, "test", key="value")
-        msg3 = LogMessage(LogLevel.INFO, "test", key="other")
+        """Message equality should compare all fields."""
+        msg1 = Message(Level.INFO, "test", key="value")
+        msg2 = Message(Level.INFO, "test", key="value")
+        msg3 = Message(Level.INFO, "test", key="other")
 
         assert msg1 == msg2
         assert msg1 != msg3
 
     def test_repr(self) -> None:
-        """LogMessage repr should be informative."""
-        msg = LogMessage(LogLevel.INFO, "test message", extra_key="extra_value")
+        """Message repr should be informative."""
+        msg = Message(Level.INFO, "test message", extra_key="extra_value")
         repr_str = repr(msg)
 
-        assert "LogMessage" in repr_str
+        assert "Message" in repr_str
         assert "INFO" in repr_str
         assert "test message" in repr_str
 
@@ -533,12 +532,12 @@ class TestGlobalStateInitInput:
         assert default.projection_ids is None
 
 
-class TestTableFunctionOutputSpec:
-    """Tests for table_function.FunctionOutputSpec with cardinality."""
+class TestTableOutputSpec:
+    """Tests for table_function.OutputSpec with cardinality."""
 
     def test_serialization_with_cardinality(self) -> None:
-        """FunctionOutputSpec with cardinality should serialize correctly."""
-        spec = FunctionOutputSpec(
+        """OutputSpec with cardinality should serialize correctly."""
+        spec = OutputSpec(
             output_schema=pa.schema([pa.field("col1", pa.int64())]),
             max_processes=4,
             invocation_id=b"test-id",
@@ -550,8 +549,8 @@ class TestTableFunctionOutputSpec:
         assert len(serialized) > 0
 
     def test_serialization_without_cardinality(self) -> None:
-        """FunctionOutputSpec without cardinality should serialize correctly."""
-        spec = FunctionOutputSpec(
+        """OutputSpec without cardinality should serialize correctly."""
+        spec = OutputSpec(
             output_schema=pa.schema([pa.field("col1", pa.int64())]),
             max_processes=1,
             invocation_id=b"test-id",
@@ -563,7 +562,7 @@ class TestTableFunctionOutputSpec:
 
     def test_serialize_schema_includes_cardinality_fields(self) -> None:
         """Serialize schema should include cardinality fields."""
-        spec = FunctionOutputSpec(
+        spec = OutputSpec(
             output_schema=pa.schema([pa.field("col1", pa.int64())]),
             max_processes=1,
             invocation_id=b"test-id",
@@ -576,7 +575,7 @@ class TestTableFunctionOutputSpec:
 
     def test_serialize_dict_includes_cardinality_values(self) -> None:
         """Serialize dict should include cardinality values."""
-        spec = FunctionOutputSpec(
+        spec = OutputSpec(
             output_schema=pa.schema([pa.field("col1", pa.int64())]),
             max_processes=1,
             invocation_id=b"test-id",
@@ -589,7 +588,7 @@ class TestTableFunctionOutputSpec:
 
     def test_serialize_dict_null_cardinality(self) -> None:
         """Serialize dict should handle null cardinality."""
-        spec = FunctionOutputSpec(
+        spec = OutputSpec(
             output_schema=pa.schema([pa.field("col1", pa.int64())]),
             max_processes=1,
             invocation_id=b"test-id",

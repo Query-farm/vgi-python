@@ -34,7 +34,7 @@ import pyarrow as pa
 import structlog
 from pyarrow import ipc
 
-from vgi.function import FunctionOutputSpec, FunctionRequest
+from vgi.function import OutputSpec, Request
 from vgi.ipc_utils import read_ipc_batch
 from vgi.table_in_out_function import (
     Function,
@@ -66,7 +66,7 @@ class Worker:
 
     Subclass this and define a `registry` class attribute mapping function names
     to Function subclasses. The worker handles the VGI protocol:
-    reading FunctionRequest, instantiating functions, and streaming batches.
+    reading Request, instantiating functions, and streaming batches.
 
     Example:
         class MyWorker(Worker):
@@ -111,9 +111,9 @@ class Worker:
         self.log.debug(f"{context}_reading")
         return read_ipc_batch(sys.stdin, context)
 
-    def _read_invocation(self) -> FunctionRequest:
+    def _read_invocation(self) -> Request:
         """Read and parse the call data from stdin."""
-        return FunctionRequest.deserialize(self._read_ipc_batch("invocation"))
+        return Request.deserialize(self._read_ipc_batch("invocation"))
 
     def _read_init_data(self) -> pa.RecordBatch:
         """Read and parse the init data from stdin."""
@@ -122,7 +122,7 @@ class Worker:
     def _process_batches(
         self,
         instance: Function,
-        invocation: FunctionRequest,
+        invocation: Request,
         fn_log: structlog.stdlib.BoundLogger,
     ) -> WorkerStats:
         """Process data batches through the function.
@@ -212,7 +212,7 @@ class Worker:
 
         instance = self.registry[invocation.function_name](invocation, fn_log)
 
-        bind_result_bytes = FunctionOutputSpec(
+        bind_result_bytes = OutputSpec(
             output_schema=instance.output_schema,
             max_processes=instance.max_processes(),
             invocation_id=instance.invocation_id(),

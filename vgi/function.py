@@ -1,20 +1,20 @@
 """Core data structures for VGI function calls and bind results.
 
 This module defines the foundational classes used during function binding
-in the VGI protocol. When a client invokes a function, it sends FunctionRequest
+in the VGI protocol. When a client invokes a function, it sends Request
 describing the function name, arguments, and input schema. The worker
-returns a FunctionOutputSpec describing the output schema and execution hints.
+returns an OutputSpec describing the output schema and execution hints.
 
 Classes:
     Arguments: Container for positional and named function arguments.
-    FunctionRequest: Complete function invocation request (name, args, schema).
-    FunctionOutputSpec: Result from binding a function (output schema, etc).
+    Request: Complete function invocation request (name, args, schema).
+    OutputSpec: Result from binding a function (output schema, etc).
 
-The FunctionRequest and FunctionOutputSpec are serialized to Arrow IPC format
+The Request and OutputSpec are serialized to Arrow IPC format
 for transmission between client and worker processes.
 
 See Also:
-    vgi.logging: LogLevel and LogMessage for function diagnostics.
+    vgi.log: LogLevel and LogMessage for function diagnostics.
     vgi.table_function: Extended bind results with cardinality hints.
     vgi.table_in_out_function: Streaming table functions built on these primitives.
 
@@ -29,17 +29,17 @@ import pyarrow as pa
 import structlog
 
 import vgi.util
-from vgi.logging import LogLevel, LogMessage
+from vgi.log import Level, Message
 
 __all__ = [
     "Arguments",
     "Function",
-    "FunctionOutputSpec",
-    "FunctionRequest",
     "GlobalInitResult",
     "InitStorage",
-    "LogLevel",
-    "LogMessage",
+    "Level",
+    "Message",
+    "OutputSpec",
+    "Request",
 ]
 
 
@@ -212,10 +212,10 @@ class GlobalInitResult:
 
 
 @dataclass(frozen=True, slots=True)
-class FunctionRequest:
+class Request:
     """Complete function invocation request sent from client to worker.
 
-    FunctionRequest encapsulates all information needed to bind and execute a function:
+    Request encapsulates all information needed to bind and execute a function:
     the function name, its arguments, the expected input schema (for table
     functions), and identifiers for logging and correlation.
 
@@ -234,7 +234,7 @@ class FunctionRequest:
         global_init_identifier: Optional result from global initialization phase.
 
     Example:
-        invocation = FunctionRequest(
+        invocation = Request(
             function_name="sum_columns",
             arguments=Arguments(positional=("col1", "col2")),
             in_out_function_input_schema=pa.schema([pa.field("col1", pa.int64())]),
@@ -256,15 +256,15 @@ class FunctionRequest:
 
     def with_global_init_identifier(
         self, global_init_identifier: GlobalInitResult
-    ) -> "FunctionRequest":
-        """Return a new FunctionRequest with the given global_init_identifier."""
+    ) -> "Request":
+        """Return a new Request with the given global_init_identifier."""
         return replace(self, global_init_identifier=global_init_identifier)
 
     def serialize(self) -> bytes:
-        """Serialize FunctionRequest to an Arrow RecordBatch.
+        """Serialize Request to an Arrow RecordBatch.
 
         Returns:
-            RecordBatch containing serialized FunctionRequest fields.
+            RecordBatch containing serialized Request fields.
 
         """
         args_dict = self.arguments.encoded_dict()
@@ -305,14 +305,14 @@ class FunctionRequest:
         return vgi.util.recordbatch_to_bytes(batch)
 
     @staticmethod
-    def deserialize(data: pa.RecordBatch) -> "FunctionRequest":
-        """Deserialize FunctionRequest from an Arrow RecordBatch.
+    def deserialize(data: pa.RecordBatch) -> "Request":
+        """Deserialize Request from an Arrow RecordBatch.
 
         Args:
-          data: RecordBatch containing serialized FunctionRequest fields.
+          data: RecordBatch containing serialized Request fields.
 
         Returns:
-          Deserialized FunctionRequest instance.
+          Deserialized Request instance.
 
         Raises:
           ValueError: If RecordBatch is empty, has multiple rows, or missing
@@ -327,7 +327,7 @@ class FunctionRequest:
             "correlation_id",
         ]
         first_row = vgi.util.validate_single_row_batch(
-            data, "FunctionRequest", required_fields=required_fields
+            data, "Request", required_fields=required_fields
         )
 
         in_out_function_input_schema = None
@@ -336,7 +336,7 @@ class FunctionRequest:
                 pa.py_buffer(first_row["in_out_function_input_schema"])
             )
 
-        return FunctionRequest(
+        return Request(
             function_name=first_row["function_name"],
             arguments=Arguments.decode(data.column("arguments")[0]),
             in_out_function_input_schema=in_out_function_input_schema,
@@ -356,7 +356,7 @@ class FunctionRequest:
 
 
 @dataclass(frozen=True, slots=True)
-class FunctionOutputSpec:
+class OutputSpec:
     """Base result from binding a function.
 
     The bind result is created during function initialization and describes
@@ -466,7 +466,7 @@ class InitStorage:
 class Function:
     """Base class for all VGI functions.
 
-    Functions are instantiated with FunctionRequest describing the invocation,
+    Functions are instantiated with Request describing the invocation,
     then queried for execution hints (max_processes, invocation_id).
 
     Subclasses should override methods to customize behavior:

@@ -29,7 +29,7 @@ import pyarrow as pa
 import structlog
 from pyarrow import ipc
 
-from vgi.function import Arguments, FunctionRequest
+from vgi.function import Arguments, Request
 from vgi.ipc_utils import IPCError, read_ipc_batch
 from vgi.table_function import GlobalStateInitInput
 
@@ -134,7 +134,7 @@ class Client:
     ) -> ipc.RecordBatchStreamWriter:
         """Initialize the VGI protocol stream for a table-in-out function.
 
-        Sends the FunctionRequest, reads the bind result, sends GlobalStateInitInput,
+        Sends the Request, reads the bind result, sends GlobalStateInitInput,
         reads the init result, and returns a stream writer for data batches.
 
         Args:
@@ -158,7 +158,7 @@ class Client:
         # Send initialization batch
         log.debug("sending_init_batch", function=function_name, arguments=arguments)
 
-        call_parameters_batch_bytes = FunctionRequest(
+        call_parameters_batch_bytes = Request(
             function_name=function_name,
             arguments=arguments,
             in_out_function_input_schema=input_schema,
@@ -342,7 +342,7 @@ class Client:
             function_name: Name of the function to invoke (must be in worker registry).
             arguments: Arguments container with positional and named arguments.
             input: Iterator yielding input RecordBatches. The first batch's schema
-                is used for the FunctionRequest.in_out_function_input_schema.
+                is used for the Request.in_out_function_input_schema.
             bind_result_callback: Optional callback invoked with the bind result
                 RecordBatch after the worker responds. Useful for inspecting
                 output schema or cardinality hints before processing begins.
