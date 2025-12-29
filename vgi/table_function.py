@@ -2,10 +2,10 @@
 
 This module provides:
 - CardinalityInfo: Row count estimates for query optimization
-- TableFunctionBindResult: BindResult subclass with cardinality support
-- TableFunction: Base class for table functions with cardinality
+- FunctionOutputSpec: FunctionOutputSpec subclass with cardinality support
+- Function: Base class for table functions with cardinality
 
-These classes are used by TableInOutFunction and can be used directly
+These classes are used by Function and can be used directly
 for custom table function implementations.
 """
 
@@ -18,7 +18,7 @@ import structlog
 import vgi.function
 import vgi.util
 
-__all__ = ["TableFunctionBindResult", "CardinalityInfo", "TableFunction"]
+__all__ = ["FunctionOutputSpec", "CardinalityInfo", "Function"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +41,7 @@ class CardinalityInfo:
 
         # Unknown output size
         CardinalityInfo(estimate=None, max=None)
+
     """
 
     estimate: int | None
@@ -49,10 +50,11 @@ class CardinalityInfo:
 
 @dataclass(frozen=True, slots=True)
 class GlobalStateInitInput:
-    """Input sent to initialize global state for a TableInOutFunction.
+    """Input sent to initialize global state for a Function.
 
     Attributes:
         projection_ids: Optional list of column indices to project, or None for all.
+
     """
 
     projection_ids: list[int] | None = None
@@ -67,33 +69,22 @@ class GlobalStateInitInput:
 
     @staticmethod
     def deserialize(batch: pa.RecordBatch) -> "GlobalStateInitInput":
-        """Deserialize GlobalStateInitInput from a RecordBatch"""
+        """Deserialize GlobalStateInitInput from a RecordBatch."""
         values = batch.to_pylist()[0]
         return GlobalStateInitInput(**values)
 
 
 @dataclass(frozen=True, slots=True)
-class TableFunctionBindResult(vgi.function.BindResult):
+class FunctionOutputSpec(vgi.function.FunctionOutputSpec):
     """Extended bind result for table functions with cardinality information.
 
-    Extends BindResult with optional cardinality estimates that help query
+    Extends FunctionOutputSpec with optional cardinality estimates that help query
     planners optimize execution strategies.
 
     Attributes:
-        output_schema: Arrow schema describing the structure of output batches.
-        max_processes: Maximum parallel processes this function can utilize.
-        call_identifier: Unique bytes identifying this function invocation.
         cardinality: Optional row count estimates for query optimization.
             None indicates no cardinality information is available.
 
-    Example:
-        import uuid
-        TableFunctionBindResult(
-            output_schema=pa.schema([pa.field("id", pa.int64())]),
-            max_processes=4,
-            call_identifier=uuid.uuid4().bytes,
-            cardinality=CardinalityInfo(estimate=1000, max=10000),
-        )
     """
 
     cardinality: CardinalityInfo | None
@@ -101,7 +92,7 @@ class TableFunctionBindResult(vgi.function.BindResult):
     def serialize_schema(self) -> pa.Schema:
         """Extend parent schema with cardinality fields."""
         return (
-            super(TableFunctionBindResult, self)
+            super(FunctionOutputSpec, self)
             .serialize_schema()
             .append(pa.field("cardinality_estimated", pa.int64(), nullable=True))
             .append(pa.field("cardinality_max", pa.int64(), nullable=True))
@@ -109,7 +100,7 @@ class TableFunctionBindResult(vgi.function.BindResult):
 
     def serialize_dict(self) -> dict[str, Any]:
         """Extend parent dict with cardinality values."""
-        return super(TableFunctionBindResult, self).serialize_dict() | {
+        return super(FunctionOutputSpec, self).serialize_dict() | {
             "cardinality_estimated": (
                 self.cardinality.estimate if self.cardinality else None
             ),
@@ -117,31 +108,36 @@ class TableFunctionBindResult(vgi.function.BindResult):
         }
 
 
-class TableFunction(vgi.function.Function):
+class Function(vgi.function.Function):
     """Base class for table functions with cardinality estimation.
 
     Extends Function with optional cardinality hints that help query planners
     optimize execution. Override cardinality() to provide row count estimates.
 
     See Also:
-        vgi.table_in_out_function.TableInOutFunction: Full streaming implementation
+        vgi.table_in_out_function.Function: Full streaming implementation
             that extends this class with the complete DATA/FINALIZE protocol.
+
     """
 
     # This is the init data that may be been read.
     init_data: GlobalStateInitInput | None = None
 
     def __init__(
-        self, *, call_data: vgi.function.CallData, logger: structlog.stdlib.BoundLogger
+        self,
+        *,
+        invocation: vgi.function.FunctionRequest,
+        logger: structlog.stdlib.BoundLogger,
     ):
         """Initialize the table function with call data.
 
         Args:
-            call_data: Complete invocation request including function name,
+            invocation: Complete invocation request including function name,
                 arguments, and input schema.
             logger: Logger instance for structured logging.
+
         """
-        super().__init__(call_data=call_data, logger=logger)
+        super().__init__(logger=logger)
 
     def cardinality(self) -> CardinalityInfo | None:
         """Return optional cardinality estimate for the output.
@@ -151,6 +147,7 @@ class TableFunction(vgi.function.Function):
 
         Returns:
             CardinalityInfo with estimate and/or max, or None if unknown.
+
         """
         return None
 
@@ -169,8 +166,10 @@ class TableFunction(vgi.function.Function):
 
         Args:
             schema: Original output schema before projection.
+
         Returns:
             Projected schema according to init data, or original if no projection.
+
         """
         if self.init_data and self.init_data.projection_ids is not None:
             projected_fields = []

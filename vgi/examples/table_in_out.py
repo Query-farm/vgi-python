@@ -11,25 +11,28 @@ RepeatInputsFunction      - Duplicates each input batch N times
 SumAllColumnsFunction     - Aggregates numeric columns into sums
 """
 
-from collections.abc import Generator
-
 import pyarrow as pa
 import pyarrow.compute as pc
 import structlog
 
-from vgi.function import CallData
+from vgi.function import FunctionRequest, LogLevel, LogMessage
 from vgi.table_function import CardinalityInfo
-from vgi.table_in_out_function import ProcessInput, ProcessResult, TableInOutFunction
+from vgi.table_in_out_function import (
+    Function,
+    Output,
+    OutputGenerator,
+)
 
 __all__ = [
     "EchoFunction",
     "BufferInputFunction",
     "RepeatInputsFunction",
     "SumAllColumnsFunction",
+    "SumAllColumnsFunctionWithLogging",
 ]
 
 
-class EchoFunction(TableInOutFunction):
+class EchoFunction(Function):
     """Passthrough function that emits each input batch unchanged.
 
     USE CASE
@@ -41,14 +44,15 @@ class EchoFunction(TableInOutFunction):
     Input:  any schema
     Output: same schema (passthrough)
 
-    EXAMPLE
+    Example:
     -------
     Input:  [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
     Output: [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
+
     """
 
 
-class BufferInputFunction(TableInOutFunction):
+class BufferInputFunction(Function):
     """Buffering function that collects all input and emits during finalization.
 
     USE CASE
@@ -60,8 +64,8 @@ class BufferInputFunction(TableInOutFunction):
     BEHAVIOR
     --------
     - output_schema: Returns input schema unchanged (default)
-    - process_batches(): During DATA phase, stores batches in buffer and yields
-      empty results. During FINALIZE phase, yields buffered batches one at a time.
+    - process(): Stores batches in buffer and yields empty results
+    - finalize(): Yields buffered batches one at a time
 
     SCHEMA TRANSFORMATION
     ---------------------
@@ -71,42 +75,40 @@ class BufferInputFunction(TableInOutFunction):
     STATE
     -----
     buffered_batches: list[pa.RecordBatch]
-        Accumulates all input batches in memory (local to generator).
+        Accumulates all input batches in memory (instance attribute).
 
-    WARNING
+    Warning:
     -------
     Memory usage grows with input size. Not suitable for very large datasets.
 
-    EXAMPLE
+    Example:
     -------
     Input stream:  batch1, batch2, batch3
     During processing: (empty), (empty), (empty)
     On finalize: batch1, batch2, batch3
+
     """
 
-    def process_batches(self) -> Generator[ProcessResult, ProcessInput | None, None]:
-        self.buffered_batches: list[pa.RecordBatch] = []
+    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+        """Buffer all input batches without producing output."""
+        self.buffered_batches: list[pa.RecordBatch] = [batch]
 
-        _ = yield ProcessResult(None)
+        _ = yield None
 
-        result = ProcessResult(None)
-        while True:
-            input = yield result
-            if input is None:
-                raise ValueError("Expected ProcessInput, got None")
+        while batch := (yield None):
+            self.buffered_batches.append(batch)
 
-            if input.is_finalize:
-                break
-            self.buffered_batches.append(input.batch)
-
+    def finalize(self) -> OutputGenerator:
+        """Emit all buffered batches sequentially."""
         # Emit buffered batches one at a time during finalize
-        for index, batch in enumerate(self.buffered_batches):
-            has_more = index < len(self.buffered_batches) - 1
-            result = ProcessResult(batch, has_more)
-            yield result
+        _ = yield None
+
+        for index, b in enumerate(self.buffered_batches):
+            continue_from_current_input = index < len(self.buffered_batches) - 1
+            yield Output(b, continue_from_current_input)
 
 
-class RepeatInputsFunction(TableInOutFunction):
+class RepeatInputsFunction(Function):
     """Explosion function that duplicates each input batch N times.
 
     USE CASE
@@ -114,7 +116,7 @@ class RepeatInputsFunction(TableInOutFunction):
     Data augmentation, testing with larger datasets, or any scenario where
     you need multiple copies of each input record.
 
-    ARGUMENTS
+    Arguments:
     ---------
     arguments.positional[0]: int (required)
         Number of times to repeat each input batch.
@@ -122,8 +124,7 @@ class RepeatInputsFunction(TableInOutFunction):
     BEHAVIOR
     --------
     - output_schema: Returns input schema unchanged (default)
-    - process_batches(): For each input batch, yields it N times using has_more
-      flag. During FINALIZE phase, yields empty result.
+    - process(): For each input, yields it N times using continue_from_current_input
 
     SCHEMA TRANSFORMATION
     ---------------------
@@ -138,24 +139,32 @@ class RepeatInputsFunction(TableInOutFunction):
     KEY PATTERN: MULTIPLE OUTPUTS FROM ONE INPUT
     ---------------------------------------------
     This function demonstrates how to produce multiple output batches from
-    a single input batch using the has_more flag in a loop:
+    a single input batch using the continue_from_current_input flag. All
+    iterations yield continue_from_current_input=True; the loop's `yield None`
+    receives the next batch:
 
-        for i in range(self.repeat_count):
-            has_more = i < self.repeat_count - 1
-            yield ProcessResult(input.batch, has_more)
+        while True:
+            for i in range(self.repeat_count):
+                # continue_from_current_input=True for all iterations
+                yield Output(batch, continue_from_current_input=True)
+            batch = yield None
+            if batch is None:
+                break
 
-    EXAMPLE
+    Example:
     -------
     With repeat_count=3:
     Input:  [{"a": 1}]
     Output: [{"a": 1}], [{"a": 1}], [{"a": 1}]
+
     """
 
     def __init__(
-        self, call_data: CallData, logger: structlog.stdlib.BoundLogger
+        self, invocation: FunctionRequest, logger: structlog.stdlib.BoundLogger
     ) -> None:
-        super().__init__(call_data=call_data, logger=logger)
-        args = call_data.arguments
+        """Initialize with repeat count from positional argument."""
+        super().__init__(invocation=invocation, logger=logger)
+        args = invocation.arguments
         if len(args.positional) != 1:
             raise ValueError(
                 "RepeatInputsFunction requires exactly one positional argument"
@@ -175,30 +184,20 @@ class RepeatInputsFunction(TableInOutFunction):
 
         self.repeat_count = repeat_count
 
-    def process_batches(self) -> Generator[ProcessResult, ProcessInput | None, None]:
-        _ = yield ProcessResult(None)
-
-        result = ProcessResult(None)
+    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+        """Emit each input batch repeat_count times."""
+        _ = yield None
 
         while True:
-            input = yield result
-            if input is None:
-                raise ValueError("Expected ProcessInput, got None")
+            for _ in range(self.repeat_count):
+                yield Output(batch, continue_from_current_input=True)
 
-            if input.is_finalize:
+            batch = yield None
+            if batch is None:
                 break
 
-            for i in range(self.repeat_count):
-                input = yield ProcessResult(
-                    input.batch, has_more=(i < self.repeat_count)
-                )
-                if input is None:
-                    raise ValueError("Expected ProcessInput, got None")
 
-        yield ProcessResult(None)
-
-
-class SumAllColumnsFunction(TableInOutFunction):
+class SumAllColumnsFunction(Function):
     """Aggregation function that computes column-wise sums across all batches.
 
     USE CASE
@@ -209,8 +208,8 @@ class SumAllColumnsFunction(TableInOutFunction):
     BEHAVIOR
     --------
     - output_schema: Builds output schema from numeric columns only
-    - process_batches(): During DATA phase, accumulates sums and yields empty.
-      During FINALIZE phase, yields single row with final sums.
+    - process(): Accumulates sums and yields empty results
+    - finalize(): Yields single row with final sums
 
     SCHEMA TRANSFORMATION
     ---------------------
@@ -243,23 +242,27 @@ class SumAllColumnsFunction(TableInOutFunction):
                     output_fields.append(pa.field(field.name, pa.float64()))
             return pa.schema(output_fields)
 
-    KEY PATTERN: ACCUMULATE THEN EMIT ON FINALIZE
-    ---------------------------------------------
-    During DATA phase (is_finalize=False), accumulate state but yield None.
-    During FINALIZE phase (is_finalize=True), yield the final aggregated result:
+    KEY PATTERN: ACCUMULATE IN process(), EMIT IN finalize()
+    --------------------------------------------------------
+    In process(), accumulate state but yield empty results.
+    In finalize(), yield the final aggregated result:
 
-        while True:
-            if input.is_finalize:
-                yield ProcessResult(pa.RecordBatch.from_pydict(...))
-                break
-            # Update accumulators
-            for name in sums:
-                col_sum = pc.sum(input.batch.column(name))
-                if col_sum.is_valid:
-                    sums[name] = pc.add(sums[name], col_sum)
-            input = yield ProcessResult(None)
+        def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+            _ = yield None
+            while True:
+                for name in self.sums:
+                    col_sum = pc.sum(batch.column(name))
+                    if col_sum.is_valid:
+                        self.sums[name] = pc.add(self.sums[name], col_sum)
+                batch = yield None
+                if batch is None:
+                    break
 
-    EXAMPLE
+        def finalize(self) -> OutputGenerator:
+            _ = yield None
+            yield Output(pa.RecordBatch.from_pydict(...))
+
+    Example:
     -------
     Input schema: {"a": int32, "b": float32, "name": string}
     Output schema: {"a": int64, "b": float64}  (string column excluded)
@@ -270,15 +273,23 @@ class SumAllColumnsFunction(TableInOutFunction):
 
     Output (single row):
       [{"a": 6, "b": 7.0}]
+
     """
 
     def cardinality(self) -> CardinalityInfo | None:
+        """Return cardinality estimate of exactly 1 row."""
         return CardinalityInfo(estimate=1, max=1)
 
-    sums: dict[str, pa.Scalar] = {}
+    def __init__(
+        self, invocation: FunctionRequest, logger: structlog.stdlib.BoundLogger
+    ) -> None:
+        """Initialize the sum accumulator."""
+        super().__init__(invocation=invocation, logger=logger)
+        self.sums: dict[str, pa.Scalar] = {}
 
     @property
     def output_schema(self) -> pa.Schema:
+        """Build schema with only numeric columns promoted to int64/float64."""
         output_fields = []
         assert self.input_schema is not None
         for field in self.input_schema:
@@ -292,35 +303,185 @@ class SumAllColumnsFunction(TableInOutFunction):
 
         return self.apply_projection(pa.schema(output_fields))
 
-    def process_batches(self) -> Generator[ProcessResult, ProcessInput | None, None]:
+    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+        """Accumulate column sums across all batches."""
         # The priming of the generator
-        _ = yield ProcessResult(None)
+        _ = yield None
 
         # Initialize sums to zero for each numeric column
         for field in self.output_schema:
             self.sums[field.name] = pa.scalar(0, type=field.type)
 
-        # Need an input to start, so just yield once, but the output
-        # will be ignored.
-        input = yield ProcessResult(None)
-        if input is None:
-            raise ValueError("Expected ProcessInput, got None")
-
+        # Process all batches
         while True:
-            if input.is_finalize:
-                yield ProcessResult(
-                    pa.RecordBatch.from_pydict(
-                        {name: [val] for name, val in self.sums.items()},
-                        schema=self.output_schema,
-                    )
-                )
-                break
-
             for name in self.sums:
-                col_sum = pc.sum(input.batch.column(name))
+                col_sum = pc.sum(batch.column(name))
                 if col_sum.is_valid:
                     self.sums[name] = pc.add(self.sums[name], col_sum)
 
-            input = yield ProcessResult(None)
-            if input is None:
-                raise ValueError("Expected ProcessInput, got None")
+            batch = yield None
+            if batch is None:
+                break
+
+    def finalize(self) -> OutputGenerator:
+        """Emit single row containing the column sums."""
+        _ = yield None
+
+        # Finalize: emit single row with sums
+        yield Output(
+            pa.RecordBatch.from_pydict(
+                {name: [val] for name, val in self.sums.items()},
+                schema=self.output_schema,
+            )
+        )
+
+
+class SumAllColumnsFunctionWithLogging(Function):
+    """Aggregation function with logging that computes column-wise sums.
+
+    Identical to SumAllColumnsFunction but demonstrates logging capabilities.
+
+    USE CASE
+    --------
+    Computing totals, aggregating metrics, or any full-stream reduction
+    that produces a single summary row.
+
+    BEHAVIOR
+    --------
+    - output_schema: Builds output schema from numeric columns only
+    - process(): Accumulates sums and yields empty results
+    - finalize(): Yields single row with final sums
+
+    SCHEMA TRANSFORMATION
+    ---------------------
+    Input:  any schema with numeric columns
+    Output: only numeric columns, promoted to int64/float64
+
+    For each input column:
+    - Integer types -> int64
+    - Floating types -> float64
+    - Non-numeric types -> excluded from output
+
+    STATE
+    -----
+    self.sums: dict[str, pa.Scalar]
+        Running sum for each numeric column. Keys are column names,
+        values are PyArrow scalars with the output type.
+
+    KEY PATTERN: SCHEMA TRANSFORMATION IN output_schema
+    ---------------------------------------------------
+    This function demonstrates inspecting input_schema to build a different
+    output schema as a property:
+
+        @property
+        def output_schema(self) -> pa.Schema:
+            output_fields = []
+            for field in self.input_schema:
+                if pa.types.is_integer(field.type):
+                    output_fields.append(pa.field(field.name, pa.int64()))
+                elif pa.types.is_floating(field.type):
+                    output_fields.append(pa.field(field.name, pa.float64()))
+            return pa.schema(output_fields)
+
+    KEY PATTERN: ACCUMULATE IN process(), EMIT IN finalize()
+    --------------------------------------------------------
+    In process(), accumulate state but yield empty results.
+    In finalize(), yield the final aggregated result:
+
+        def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+            _ = yield None
+            while True:
+                for name in self.sums:
+                    col_sum = pc.sum(batch.column(name))
+                    if col_sum.is_valid:
+                        self.sums[name] = pc.add(self.sums[name], col_sum)
+                batch = yield None
+                if batch is None:
+                    break
+
+        def finalize(self) -> OutputGenerator:
+            _ = yield None
+            yield Output(pa.RecordBatch.from_pydict(...))
+
+    Example:
+    -------
+    Input schema: {"a": int32, "b": float32, "name": string}
+    Output schema: {"a": int64, "b": float64}  (string column excluded)
+
+    Input batches:
+      [{"a": 1, "b": 1.5, "name": "x"}, {"a": 2, "b": 2.5, "name": "y"}]
+      [{"a": 3, "b": 3.0, "name": "z"}]
+
+    Output (single row):
+      [{"a": 6, "b": 7.0}]
+
+    """
+
+    def cardinality(self) -> CardinalityInfo | None:
+        """Return cardinality estimate of exactly 1 row."""
+        return CardinalityInfo(estimate=1, max=1)
+
+    def __init__(
+        self, invocation: FunctionRequest, logger: structlog.stdlib.BoundLogger
+    ) -> None:
+        """Initialize the sum accumulator."""
+        super().__init__(invocation=invocation, logger=logger)
+        self.sums: dict[str, pa.Scalar] = {}
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        """Build schema with only numeric columns promoted to int64/float64."""
+        output_fields = []
+        assert self.input_schema is not None
+        for field in self.input_schema:
+            if pa.types.is_integer(field.type):
+                out_type = pa.int64()
+            elif pa.types.is_floating(field.type):
+                out_type = pa.float64()
+            else:
+                continue
+            output_fields.append(pa.field(field.name, out_type))
+
+        return self.apply_projection(pa.schema(output_fields))
+
+    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+        """Accumulate column sums across all batches with logging."""
+        # The priming of the generator
+        _ = yield None
+
+        # Initialize sums to zero for each numeric column
+        for field in self.output_schema:
+            self.sums[field.name] = pa.scalar(0, type=field.type)
+
+        # Process all batches
+        while True:
+            yield LogMessage(
+                level=LogLevel.INFO,
+                message=f"Processing batch with {batch.num_rows} rows",
+            )
+
+            for name in self.sums:
+                col_sum = pc.sum(batch.column(name))
+                if col_sum.is_valid:
+                    self.sums[name] = pc.add(self.sums[name], col_sum)
+
+            batch = yield None
+            if batch is None:
+                break
+
+    def finalize(self) -> OutputGenerator:
+        """Emit single row containing the column sums with logging."""
+        _ = yield None
+
+        yield LogMessage(
+            level=LogLevel.INFO,
+            message="Finalizing and emitting sums",
+        )
+
+        # Finalize: emit single row with sums
+        yield Output(
+            pa.RecordBatch.from_pydict(
+                {name: [val] for name, val in self.sums.items()},
+                schema=self.output_schema,
+            )
+        )

@@ -1,21 +1,22 @@
 """Core data structures for VGI function calls and bind results.
 
 This module defines the foundational classes used during function binding
-in the VGI protocol. When a client invokes a function, it sends CallData
+in the VGI protocol. When a client invokes a function, it sends FunctionRequest
 describing the function name, arguments, and input schema. The worker
-returns a BindResult describing the output schema and execution hints.
+returns a FunctionOutputSpec describing the output schema and execution hints.
 
 Classes:
     Arguments: Container for positional and named function arguments.
-    CallData: Complete function invocation request (name, args, input schema).
-    BindResult: Base result from binding a function (output schema, parallelization).
+    FunctionRequest: Complete function invocation request (name, args, schema).
+    FunctionOutputSpec: Result from binding a function (output schema, etc).
 
-The CallData and BindResult are serialized to Arrow IPC format for transmission
-between client and worker processes.
+The FunctionRequest and FunctionOutputSpec are serialized to Arrow IPC format
+for transmission between client and worker processes.
 
 See Also:
     vgi.table_function: Extended bind results with cardinality hints.
     vgi.table_in_out_function: Streaming table functions built on these primitives.
+
 """
 
 import json
@@ -27,7 +28,13 @@ from typing import Any
 import pyarrow as pa
 import structlog
 
-__all__ = ["Arguments", "CallData", "BindResult", "LogLevel", "LogMessage"]
+__all__ = [
+    "Arguments",
+    "FunctionRequest",
+    "FunctionOutputSpec",
+    "LogLevel",
+    "LogMessage",
+]
 
 import traceback
 from enum import Enum
@@ -48,6 +55,7 @@ class LogLevel(Enum):
         INFO: General informational message about processing status.
         DEBUG: Detailed information useful for debugging.
         TRACE: Fine-grained tracing information for detailed diagnostics.
+
     """
 
     EXCEPTION = "EXCEPTION"
@@ -58,9 +66,8 @@ class LogLevel(Enum):
     TRACE = "TRACE"
 
 
-@dataclass(frozen=True, slots=True)
 class LogMessage:
-    """Log message that can be yielded from process_batches() via ProcessResult.
+    """Log message that can be yielded from process() directly or via Result.
 
     LogMessage allows functions to emit diagnostic information during batch
     processing. Messages are attached to the output metadata and transmitted
@@ -69,79 +76,162 @@ class LogMessage:
     Attributes:
         level: Severity level indicating the nature of the message.
         message: Human-readable log message text.
+        extra: Additional arbitrary key-value pairs to include in the JSON output.
 
-    Example:
-        def process_batches(self) -> Generator[ProcessResult, ProcessInput, None]:
-            _ = yield ProcessResult(None)
-            while True:
-                input = yield ProcessResult(None)
-                if input.batch.num_rows == 0:
-                    yield ProcessResult(
-                        input.batch,
-                        log_message=LogMessage.info("Received empty batch")
-                    )
-                else:
-                    yield ProcessResult(input.batch)
+    Example (via Result):
+        def process(self) -> ResultGenerator:
+            _ = yield None
+            while batch := (yield None):
+                yield Result(
+                    batch,
+                    log_message=LogMessage(LogLevel.INFO, "Processed batch")
+                )
+
+    Example (yielded directly):
+        def process(self) -> ResultGenerator:
+            _ = yield None
+            while batch := (yield None):
+                yield LogMessage(LogLevel.INFO, f"Processing {batch.num_rows} rows")
+                yield Result(batch)
+
     """
 
-    level: LogLevel
-    message: str
+    __slots__ = ("level", "message", "extra")
+
+    def __init__(self, level: LogLevel, message: str, **kwargs: Any) -> None:
+        """Create a log message with level, message text, and optional extras."""
+        self.level = level
+        self.message = message
+        self.extra: dict[str, Any] | None = kwargs if kwargs else None
+
+    def __eq__(self, other: object) -> bool:
+        """Compare log messages by level, message, and extra fields."""
+        if not isinstance(other, LogMessage):
+            return NotImplemented
+        return (
+            self.level == other.level
+            and self.message == other.message
+            and self.extra == other.extra
+        )
+
+    def __repr__(self) -> str:
+        """Return a string representation suitable for debugging."""
+        if self.extra:
+            return f"LogMessage({self.level!r}, {self.message!r}, **{self.extra!r})"
+        return f"LogMessage({self.level!r}, {self.message!r})"
 
     @classmethod
-    def exception(cls, message: str) -> "LogMessage":
+    def exception(cls, message: str, **kwargs: Any) -> "LogMessage":
         """Create an EXCEPTION level log message.
 
         Use for unrecoverable errors that terminated processing.
+
+        Args:
+            message: The log message text.
+            **kwargs: Additional key-value pairs to include in the JSON output.
+
         """
-        return cls(LogLevel.EXCEPTION, message)
+        return cls(LogLevel.EXCEPTION, message, **kwargs)
 
     @classmethod
-    def error(cls, message: str) -> "LogMessage":
+    def error(cls, message: str, **kwargs: Any) -> "LogMessage":
         """Create an ERROR level log message.
 
         Use for significant errors that may affect results.
+
+        Args:
+            message: The log message text.
+            **kwargs: Additional key-value pairs to include in the JSON output.
+
         """
-        return cls(LogLevel.ERROR, message)
+        return cls(LogLevel.ERROR, message, **kwargs)
 
     @classmethod
-    def info(cls, message: str) -> "LogMessage":
+    def info(cls, message: str, **kwargs: Any) -> "LogMessage":
         """Create an INFO level log message.
 
         Use for general informational messages about processing status.
+
+        Args:
+            message: The log message text.
+            **kwargs: Additional key-value pairs to include in the JSON output.
+
         """
-        return cls(LogLevel.INFO, message)
+        return cls(LogLevel.INFO, message, **kwargs)
+
+    @classmethod
+    def warn(cls, message: str, **kwargs: Any) -> "LogMessage":
+        """Create a WARN level log message.
+
+        Use for potential issues that should be reviewed but aren't necessarily wrong.
+
+        Args:
+            message: The log message text.
+            **kwargs: Additional key-value pairs to include in the JSON output.
+
+        """
+        return cls(LogLevel.WARN, message, **kwargs)
+
+    @classmethod
+    def debug(cls, message: str, **kwargs: Any) -> "LogMessage":
+        """Create a DEBUG level log message.
+
+        Use for detailed information useful for debugging.
+
+        Args:
+            message: The log message text.
+            **kwargs: Additional key-value pairs to include in the JSON output.
+
+        """
+        return cls(LogLevel.DEBUG, message, **kwargs)
+
+    @classmethod
+    def trace(cls, message: str, **kwargs: Any) -> "LogMessage":
+        """Create a TRACE level log message.
+
+        Use for fine-grained tracing information for detailed diagnostics.
+
+        Args:
+            message: The log message text.
+            **kwargs: Additional key-value pairs to include in the JSON output.
+
+        """
+        return cls(LogLevel.TRACE, message, **kwargs)
 
     def add_to_metadata(
-        self, call_data: "CallData", metadata: dict[str, str] | None = None
+        self, invocation: "FunctionRequest", metadata: dict[str, str] | None = None
     ) -> dict[str, str]:
         """Add log message fields to an existing metadata dictionary.
 
-        Creates a new dictionary with 'log_level' and 'log_message' keys added.
-        The log_message value is JSON containing the message text, call identifier,
-        and process ID for correlation. Does not mutate the input dictionary.
+        Creates a new dictionary with log-related keys added. Does not mutate
+        the input dictionary.
 
         Args:
-            call_data: The CallData for this function invocation, used to include
-                the call_identifier in the log message for correlation.
+            invocation: The FunctionRequest for this function invocation, used
+                to include the correlation_id and invocation_id for correlation.
             metadata: Existing metadata dict to augment, or None to create new.
 
         Returns:
             New dict containing original entries plus:
             - log_level: The LogLevel value (e.g., "INFO", "EXCEPTION")
-            - log_message: JSON string with {message, call_id, pid}
+            - log_message: The human-readable message text
+            - log_extra: JSON string with {correlation_id, invocation_id,
+                pid, ...extra kwargs}
+
         """
         result = dict(metadata) if metadata else {}
         result["log_level"] = self.level.value
-        result["log_message"] = json.dumps(
-            {
-                "message": self.message,
-                "logging_identifier": call_data.logging_identifier,
-                "bind_identifier": call_data.bind_identifier.hex()
-                if call_data.bind_identifier
-                else None,
-                "pid": call_data.pid(),
-            }
-        )
+        log_data: dict[str, Any] = {
+            "correlation_id": invocation.correlation_id,
+            "invocation_id": invocation.invocation_id.hex()
+            if invocation.invocation_id
+            else None,
+            "pid": invocation.pid(),
+        }
+        if self.extra:
+            log_data.update(self.extra)
+        result["log_message"] = self.message
+        result["log_extra"] = json.dumps(log_data)
         return result
 
     @classmethod
@@ -150,8 +240,10 @@ class LogMessage:
 
         Args:
             exc: Exception instance to create log message from.
+
         Returns:
             LogMessage with level EXCEPTION and message from the exception.
+
         """
         tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
         return cls(LogLevel.EXCEPTION, f"{type(exc).__name__}: {exc}\n\n{tb}")
@@ -178,6 +270,7 @@ class Arguments:
             positional=["hello", 42],
             named={"separator": ","}
         )
+
     """
 
     positional: list[pa.Scalar | None]
@@ -195,6 +288,7 @@ class Arguments:
 
         Returns:
             Dictionary mapping argument names to their values.
+
         """
         return {
             f"positional_{index}": value for index, value in enumerate(self.positional)
@@ -209,8 +303,8 @@ class Arguments:
 
         Returns:
             Arrow schema matching the structure returned by encoded_dict().
-        """
 
+        """
         return pa.RecordBatch.from_pylist([self.encoded_dict()]).schema
 
     @staticmethod
@@ -219,8 +313,10 @@ class Arguments:
 
         Args:
             data: Dictionary containing serialized argument fields.
+
         Returns:
             Deserialized Arguments instance.
+
         """
         positional: list[pa.Scalar | None] = []
         named: dict[str, Any] = {}
@@ -241,14 +337,14 @@ class GlobalInitResult:
     """Result from the global initialization phase of a function.
 
     When a function supports parallel execution (max_processes > 1), the first
-    worker runs process_init() which returns a GlobalInitResult. This result
-    contains an identifier that is passed to all subsequent parallel workers,
-    allowing them to share state or coordinate their processing.
+    worker runs perform_init() which returns a GlobalInitResult. This result
+    contains an identifier that is passed to all subsequent parallel workers
+    via retrieve_init(), allowing them to share state or coordinate processing.
 
     Attributes:
         global_init_identifier: Opaque bytes that identify the initialized state.
-            Passed to process_batch() as init_data for all workers. None if no
-            global initialization was performed.
+            None if no global initialization was performed.
+
     """
 
     global_init_identifier: bytes | None = None
@@ -261,8 +357,10 @@ class GlobalInitResult:
 
         Args:
             data: RecordBatch to check for the field.
+
         Returns:
             True if the field exists, False otherwise.
+
         """
         return cls.IDENTIFIER_FIELD_NAME in data.schema.names
 
@@ -271,8 +369,8 @@ class GlobalInitResult:
 
         Returns:
             Arrow schema with fields for each serialized attribute.
-        """
 
+        """
         return pa.schema(
             [
                 pa.field(self.IDENTIFIER_FIELD_NAME, pa.binary(), nullable=True),
@@ -284,8 +382,8 @@ class GlobalInitResult:
 
         Returns:
             RecordBatch containing serialized GlobalInitResult fields.
-        """
 
+        """
         batch = pa.RecordBatch.from_pylist(
             [
                 {
@@ -302,8 +400,10 @@ class GlobalInitResult:
 
         Args:
           data: RecordBatch containing serialized GlobalInitResult fields.
+
         Returns:
           Deserialized GlobalInitResult instance.
+
         """
         if data.num_rows == 0:
             raise ValueError(
@@ -329,12 +429,12 @@ class GlobalInitResult:
 
 
 @dataclass(frozen=True, slots=True)
-class CallData:
+class FunctionRequest:
     """Complete function invocation request sent from client to worker.
 
-    CallData encapsulates all information needed to bind and execute a function:
+    FunctionRequest encapsulates all information needed to bind and execute a function:
     the function name, its arguments, the expected input schema (for table
-    functions), and a unique identifier for correlating parallel workers.
+    functions), and identifiers for logging and correlation.
 
     This is serialized to Arrow IPC format and sent as the first message when
     the client connects to a worker subprocess.
@@ -342,55 +442,63 @@ class CallData:
     Attributes:
         function_name: Name of the function to invoke, must exist in worker registry.
         arguments: Positional and named arguments passed to the function.
-        in_schema: Arrow schema of input data (required for TableInOutFunction,
-            None for scalar functions or functions that don't process input tables).
-        call_identifier: Unique bytes identifying this invocation. Used to correlate
-            multiple parallel workers processing the same logical function call.
+        in_out_function_input_schema: Arrow schema of input data (required for
+            Function, None for scalar functions or functions that don't
+            process input tables).
+        correlation_id: String identifier for logging and correlation purposes.
+        invocation_id: Unique bytes identifying this function binding. Used to
+            correlate multiple parallel workers processing the same logical call.
+        global_init_identifier: Optional result from global initialization phase.
 
     Example:
-        call_data = CallData(
+        invocation = FunctionRequest(
             function_name="sum_columns",
             arguments=Arguments(positional=["col1", "col2"], named={}),
-            in_schema=pa.schema([pa.field("col1", pa.int64())]),
-            call_identifier=uuid.uuid4().bytes,
+            in_out_function_input_schema=pa.schema([pa.field("col1", pa.int64())]),
+            correlation_id="request-123",
+            invocation_id=None,  # Set by worker after binding
         )
+
     """
 
     function_name: str
     arguments: Arguments
-    in_schema: pa.Schema | None
+    in_out_function_input_schema: pa.Schema | None
 
-    logging_identifier: str
+    correlation_id: str
     # The unique identifier for the call, typically this may be a uuid.
-    bind_identifier: bytes | None
+    invocation_id: bytes | None
 
     global_init_identifier: GlobalInitResult | None = None
 
     def with_global_init_identifier(
         self, global_init_identifier: GlobalInitResult
-    ) -> "CallData":
-        """Return a new CallData with the given global_init_identifier.
+    ) -> "FunctionRequest":
+        """Return a new FunctionRequest with the given global_init_identifier.
+
         Args:
             global_init_identifier: The GlobalInitResult to set.
+
         Returns:
-            New CallData instance with updated global_init_identifier.
+            New FunctionRequest instance with updated global_init_identifier.
+
         """
-        return CallData(
+        return FunctionRequest(
             function_name=self.function_name,
             arguments=self.arguments,
-            in_schema=self.in_schema,
-            logging_identifier=self.logging_identifier,
-            bind_identifier=self.bind_identifier,
+            in_out_function_input_schema=self.in_out_function_input_schema,
+            correlation_id=self.correlation_id,
+            invocation_id=self.invocation_id,
             global_init_identifier=global_init_identifier,
         )
 
     def serialize(self) -> bytes:
-        """Serialize CallData to an Arrow RecordBatch.
+        """Serialize FunctionRequest to an Arrow RecordBatch.
 
         Returns:
-            RecordBatch containing serialized CallData fields.
-        """
+            RecordBatch containing serialized FunctionRequest fields.
 
+        """
         args_dict = self.arguments.encoded_dict()
         encoded_batch = pa.RecordBatch.from_pylist([args_dict]).schema
         args_struct_type = pa.struct(
@@ -405,69 +513,80 @@ class CallData:
                 {
                     "function_name": self.function_name,
                     "arguments": args_dict,
-                    "in_schema": self.in_schema.serialize().to_pybytes()
-                    if self.in_schema
-                    else None,
-                    "bind_identifier": self.bind_identifier,
-                    "logging_identifier": self.logging_identifier,
+                    "in_out_function_input_schema": (
+                        self.in_out_function_input_schema.serialize().to_pybytes()
+                        if self.in_out_function_input_schema
+                        else None
+                    ),
+                    "invocation_id": self.invocation_id,
+                    "correlation_id": self.correlation_id,
                 }
             ],
             schema=pa.schema(
                 [
                     pa.field("function_name", pa.string(), nullable=False),
                     pa.field("arguments", args_struct_type, nullable=True),
-                    pa.field("in_schema", pa.binary(), nullable=True),
-                    pa.field("bind_identifier", pa.binary(), nullable=True),
-                    pa.field("logging_identifier", pa.string(), nullable=False),
+                    pa.field(
+                        "in_out_function_input_schema", pa.binary(), nullable=True
+                    ),
+                    pa.field("invocation_id", pa.binary(), nullable=True),
+                    pa.field("correlation_id", pa.string(), nullable=False),
                 ]
             ),
         )
         return vgi.util.recordbatch_to_bytes(batch)
 
     @staticmethod
-    def deserialize(data: pa.RecordBatch) -> "CallData":
-        """Deserialize CallData from an Arrow RecordBatch.
+    def deserialize(data: pa.RecordBatch) -> "FunctionRequest":
+        """Deserialize FunctionRequest from an Arrow RecordBatch.
 
         Args:
-          data: RecordBatch containing serialized CallData fields.
+          data: RecordBatch containing serialized FunctionRequest fields.
 
         Returns:
-          Deserialized CallData instance.
+          Deserialized FunctionRequest instance.
 
         Raises:
           ValueError: If RecordBatch is empty, has multiple rows, or missing
               required fields.
+
         """
         if data.num_rows == 0:
-            raise ValueError("Cannot deserialize CallData from empty RecordBatch")
+            raise ValueError(
+                "Cannot deserialize FunctionRequest from empty RecordBatch"
+            )
         if data.num_rows > 1:
             raise ValueError(
-                "Expected single-row RecordBatch for CallData deserialization"
+                "Expected single-row RecordBatch for FunctionRequest deserialization"
             )
 
         first_row = data.to_pylist()[0]
         required_fields = [
             "function_name",
             "arguments",
-            "in_schema",
-            "bind_identifier",
-            "logging_identifier",
+            "in_out_function_input_schema",
+            "invocation_id",
+            "correlation_id",
         ]
 
         for field in required_fields:
             if field not in first_row:
-                raise ValueError(f"Missing '{field}' field in CallData RecordBatch")
+                raise ValueError(
+                    f"Missing '{field}' field in FunctionRequest RecordBatch"
+                )
 
-        in_schema = None
-        if first_row["in_schema"] is not None:
-            in_schema = pa.ipc.read_schema(pa.py_buffer(first_row["in_schema"]))
+        in_out_function_input_schema = None
+        if first_row["in_out_function_input_schema"] is not None:
+            in_out_function_input_schema = pa.ipc.read_schema(
+                pa.py_buffer(first_row["in_out_function_input_schema"])
+            )
 
-        return CallData(
+        return FunctionRequest(
             function_name=first_row["function_name"],
             arguments=Arguments.decode(data.column("arguments")[0]),
-            in_schema=in_schema,
-            bind_identifier=first_row["bind_identifier"],
-            logging_identifier=first_row["logging_identifier"],
+            in_out_function_input_schema=in_out_function_input_schema,
+            invocation_id=first_row["invocation_id"],
+            correlation_id=first_row["correlation_id"],
             global_init_identifier=GlobalInitResult(
                 first_row[GlobalInitResult.IDENTIFIER_FIELD_NAME]
             )
@@ -476,16 +595,17 @@ class CallData:
         )
 
     def pid(self) -> int:
-        """Process ID of the worker handling this CallData.
+        """Process ID of the worker handling this FunctionRequest.
 
         Returns:
             Process ID as an integer.
+
         """
         return os.getpid()
 
 
 @dataclass(frozen=True, slots=True)
-class BindResult:
+class FunctionOutputSpec:
     """Base result from binding a function.
 
     The bind result is created during function initialization and describes
@@ -497,17 +617,18 @@ class BindResult:
         max_processes: Maximum parallel processes this function can utilize.
             Set to 1 for functions that must process sequentially (e.g.,
             aggregations). Higher values enable parallel execution.
-        bind_identifier: Unique bytes identifying this function invocation.
+        invocation_id: Unique bytes identifying this function invocation.
             Used to correlate multiple parallel workers processing the same
             logical function call.
 
     See Also:
-        TableFunctionBindResult: Extended version with cardinality hints.
+        FunctionOutputSpec: Extended version with cardinality hints.
+
     """
 
     output_schema: pa.Schema
     max_processes: int
-    bind_identifier: bytes
+    invocation_id: bytes
 
     def serialize_schema(self) -> pa.Schema:
         """Return the Arrow schema used when serializing this bind result.
@@ -518,12 +639,13 @@ class BindResult:
 
         Returns:
             Arrow schema with fields for each serialized attribute.
+
         """
         return pa.schema(
             [
                 pa.field("output_schema", pa.binary(), nullable=False),
                 pa.field("max_processes", pa.int64(), nullable=True),
-                pa.field("bind_identifier", pa.binary(), nullable=True),
+                pa.field("invocation_id", pa.binary(), nullable=True),
             ]
         )
 
@@ -536,11 +658,12 @@ class BindResult:
 
         Returns:
             Dictionary mapping field names to serializable values.
+
         """
         return {
             "output_schema": self.output_schema.serialize().to_pybytes(),
             "max_processes": self.max_processes,
-            "bind_identifier": self.bind_identifier,
+            "invocation_id": self.invocation_id,
         }
 
     def serialize(self) -> bytes:
@@ -551,6 +674,7 @@ class BindResult:
 
         Returns:
             Concatenated schema and batch bytes ready for IPC transmission.
+
         """
         bind_result_schema = self.serialize_schema()
 
@@ -563,10 +687,7 @@ class BindResult:
 
 
 class InitStorage:
-    """
-    An in-process implementation for storing init values that can be retrieved later on
-    by id.
-    """
+    """In-process storage for init values retrievable by ID."""
 
     contents: dict[bytes, Any] = {}
 
@@ -591,29 +712,29 @@ class InitStorage:
 class Function:
     """Base class for all VGI functions.
 
-    Functions are instantiated with CallData describing the invocation,
-    then queried for execution hints (max_processes, call_identifier).
+    Functions are instantiated with FunctionRequest describing the invocation,
+    then queried for execution hints (max_processes, invocation_id).
 
     Subclasses should override methods to customize behavior:
     - max_processes(): Parallelization hint for the query planner
-    - call_identifier(): Unique ID to correlate parallel workers
+    - invocation_id(): Unique ID to correlate parallel workers
 
     See Also:
-        vgi.table_function.TableFunction: Adds cardinality hints.
-        vgi.table_in_out_function.TableInOutFunction: Full streaming implementation.
+        vgi.table_function.Function: Adds cardinality hints.
+        vgi.table_in_out_function.Function: Full streaming implementation.
+
     """
 
     init_storage: InitStorage = InitStorage()
 
-    def __init__(self, *, call_data: CallData, logger: structlog.stdlib.BoundLogger):
-        """Initialize the function with call data.
+    def __init__(self, *, logger: structlog.stdlib.BoundLogger):
+        """Initialize the function with a logger.
 
         Args:
-            call_data: Complete invocation request including function name,
-                arguments, and input schema.
+            logger: Structured logger for function diagnostics.
+
         """
         self.logger = logger
-        pass
 
     def max_processes(self) -> int:
         """Return maximum number of parallel processes this function can utilize.
@@ -623,10 +744,11 @@ class Function:
 
         Returns:
             Maximum parallel processes. Default is 1.
+
         """
         return 1
 
-    def bind_identifier(self) -> bytes:
+    def invocation_id(self) -> bytes:
         """Return unique identifier for this function invocation.
 
         When max_processes > 1, this ID correlates multiple parallel workers
@@ -634,6 +756,7 @@ class Function:
 
         Returns:
             Unique bytes identifier. Default is a random UUID.
+
         """
         return uuid.uuid4().bytes
 
@@ -647,25 +770,18 @@ class Function:
         Args:
             input: An initial RecordBatch that may contain configuration
                 or context information for initialization.
-        """
 
+        """
         # If there is an id supplied, detect it so it will be passed on.
         if GlobalInitResult.has_identifier(input):
             return GlobalInitResult.deserialize(input)
 
         return GlobalInitResult()
 
-    def retrieve_init(self, input: GlobalInitResult) -> None:
-        """The function would normally retrieve the init data from storage,
-        but the default implementation does nothing."""
+    def retrieve_init(self, input: GlobalInitResult) -> None:  # noqa: ARG002
+        """Retrieve init data from storage (default does nothing)."""
 
     @property
     def output_schema(self) -> pa.Schema:
-        """Return the output schema. Is not cached, may change based if
-        init_data is available, when called in the BIND phase init data
-        is not yet available, afterwards it is.
-
-        Override to transform the schema or initialize processing state.
-        Default: returns input_schema unchanged (passthrough).
-        """
+        """Return the output schema (must be implemented by subclass)."""
         raise NotImplementedError("Must be implemented by subclass.")

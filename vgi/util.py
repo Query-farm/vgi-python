@@ -1,3 +1,5 @@
+"""Utility functions for Arrow IPC serialization."""
+
 import pyarrow as pa
 
 
@@ -9,6 +11,7 @@ def recordbatch_to_bytes(batch: pa.RecordBatch) -> bytes:
 
     Returns:
         Concatenated schema and batch bytes for IPC transmission.
+
     """
     result: bytes = (
         batch.schema.serialize().to_pybytes() + batch.serialize().to_pybytes()

@@ -253,6 +253,77 @@ class TestSumAllColumnsFunction:
         assert result_schema.field("b").type == pa.float64()
 
 
+class TestSumAllColumnsFunctionWithLogging:
+    """Tests for sum_all_columns_with_logging function (aggregation with logging)."""
+
+    def test_sum_with_logging_produces_correct_results(
+        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
+    ) -> None:
+        """Should produce the same sums as the non-logging version."""
+        with Client(example_worker) as client:
+            output_batches = list(
+                client.table_in_out_function(
+                    function_name="sum_all_columns_with_logging",
+                    arguments=Arguments(positional=[], named={}),
+                    input=iter(numeric_batches),
+                )
+            )
+
+        non_empty = [b for b in output_batches if b.num_rows > 0]
+        assert len(non_empty) == 1
+
+        result = non_empty[0].to_pydict()
+        # a: 1+2+3+4+5 = 15
+        assert result["a"] == [15]
+        # b: 1.5+2.5+3.0+4.0+5.0 = 16.0
+        assert result["b"] == [16.0]
+
+    def test_sum_with_logging_emits_log_messages(
+        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
+    ) -> None:
+        """Should emit log messages for each batch processed."""
+        with Client(example_worker) as client:
+            output_batches = list(
+                client.table_in_out_function(
+                    function_name="sum_all_columns_with_logging",
+                    arguments=Arguments(positional=[], named={}),
+                    input=iter(numeric_batches),
+                )
+            )
+            stderr = client.get_worker_stderr()
+
+        # Should still produce valid output
+        non_empty = [b for b in output_batches if b.num_rows > 0]
+        assert len(non_empty) == 1
+
+        # Log messages should appear in worker stderr (via client logging)
+        # The function logs "Processing batch with N rows" for each batch
+        assert "Processing batch" in stderr or "rows" in stderr
+
+    def test_sum_with_logging_handles_single_batch(
+        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
+    ) -> None:
+        """Should work correctly with a single input batch."""
+        single_batch = [numeric_batches[0]]
+        with Client(example_worker) as client:
+            output_batches = list(
+                client.table_in_out_function(
+                    function_name="sum_all_columns_with_logging",
+                    arguments=Arguments(positional=[], named={}),
+                    input=iter(single_batch),
+                )
+            )
+
+        non_empty = [b for b in output_batches if b.num_rows > 0]
+        assert len(non_empty) == 1
+
+        result = non_empty[0].to_pydict()
+        # a: 1+2+3 = 6
+        assert result["a"] == [6]
+        # b: 1.5+2.5+3.0 = 7.0
+        assert result["b"] == [7.0]
+
+
 class TestClientLifecycle:
     """Tests for Client start/stop behavior."""
 

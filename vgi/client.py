@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-VGI client for sending data through VGI functions.
+"""VGI client for sending data through VGI functions.
 
 This module provides:
 - Client: A class for programmatic interaction with VGI workers
@@ -35,7 +34,7 @@ import pyarrow as pa
 import structlog
 from pyarrow import ipc
 
-from vgi.function import Arguments, CallData
+from vgi.function import Arguments, FunctionRequest
 from vgi.table_function import GlobalStateInitInput
 
 # Configure structlog to write to stderr
@@ -50,6 +49,8 @@ structlog.configure(
 )
 
 log = structlog.get_logger().bind(component="client")
+
+worker_log = structlog.get_logger().bind(component="worker")
 
 
 class ClientError(Exception):
@@ -70,25 +71,27 @@ class Client:
                 input=input_batches,
             ):
                 process(batch)
+
     """
 
     def __init__(
         self,
         server_path: str,
-        logging_identifier: str = "",
+        correlation_id: str = "",
         passthrough_stderr: bool = False,
     ):
-        """
-        Initialize the VGI client.
+        """Initialize the VGI client.
 
         Args:
             server_path: Path to the VGI worker script to execute.
+            correlation_id: Optional identifier for request correlation in logs.
             passthrough_stderr: If True, worker stderr is passed through to
                 the parent process's stderr. If False (default), stderr is
                 captured and available via get_worker_stderr().
+
         """
         self.server_path = server_path
-        self.logging_identifier = logging_identifier
+        self.correlation_id = correlation_id
         self.passthrough_stderr = passthrough_stderr
         self._proc: subprocess.Popen[bytes] | None = None
         self._stdout_buffered: io.BufferedReader | None = None
@@ -146,11 +149,11 @@ class Client:
         self._stdin_sink = pa.PythonFile(self._proc.stdin)
 
     def stop(self) -> int:
-        """
-        Stop the worker subprocess.
+        """Stop the worker subprocess.
 
         Returns:
             The subprocess return code.
+
         """
         if self._proc is None:
             raise ClientError("Client not started")
@@ -179,10 +182,12 @@ class Client:
         return returncode
 
     def __enter__(self) -> "Client":
+        """Start the worker and return the client for context manager usage."""
         self.start()
         return self
 
     def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
+        """Stop the worker when exiting context."""
         self.stop()
 
     def table_in_out_function(
@@ -204,11 +209,11 @@ class Client:
             function_name: Name of the function to invoke (must be in worker registry).
             arguments: Arguments container with positional and named arguments.
             input: Iterator yielding input RecordBatches. The first batch's schema
-                is used for the CallData.in_schema.
+                is used for the FunctionRequest.in_out_function_input_schema.
             bind_result_callback: Optional callback invoked with the bind result
                 RecordBatch after the worker responds. Useful for inspecting
                 output schema or cardinality hints before processing begins.
-            logging_identifier: String identifier for logging/correlation purposes.
+            correlation_id: String identifier for logging/correlation purposes.
             projection_ids: Optional list of column indices to project.
 
         Yields:
@@ -219,6 +224,7 @@ class Client:
         Raises:
             ClientError: If communication with the worker fails or the worker
                 returns an unexpected status.
+
         """
         if (
             self._proc is None
@@ -244,12 +250,12 @@ class Client:
                     "sending_init_batch", function=function_name, arguments=arguments
                 )
 
-                call_parameters_batch_bytes = CallData(
+                call_parameters_batch_bytes = FunctionRequest(
                     function_name=function_name,
                     arguments=arguments,
-                    in_schema=input_schema,
-                    logging_identifier=self.logging_identifier,
-                    bind_identifier=None,
+                    in_out_function_input_schema=input_schema,
+                    correlation_id=self.correlation_id,
+                    invocation_id=None,
                 ).serialize()
 
                 if self._stdin_sink.write(call_parameters_batch_bytes) != len(
@@ -335,6 +341,7 @@ class Client:
 
             if data_writer is None:
                 raise ClientError("Data writer was not initialized")
+
             while True:
                 # Since a single batch may produce multiple output batches,
                 # we need to collect them, because a generator can only yield
@@ -354,12 +361,10 @@ class Client:
                     # funciton indicates it HAVE_MORE_OUTPUT so do the
                     # same thing here.
                     data_writer.write_batch(input_batch)
-                    log.debug("batch_sent", batch_index=batch_index)
 
                     if output_reader is None:
                         output_reader = ipc.open_stream(self._stdout_buffered)
 
-                    log.debug("attempting_read_output", batch_index=batch_index)
                     output_batch, output_metadata = (
                         output_reader.read_next_batch_with_custom_metadata()
                     )
@@ -370,6 +375,32 @@ class Client:
                         num_rows=output_batch.num_rows,
                         status=status,
                     )
+
+                    # This could be a logging batch.
+                    if (
+                        output_batch.num_rows == 0
+                        and output_metadata.get("log_level") is not None
+                        and output_metadata.get("log_message") is not None
+                    ):
+                        extra: dict[str, Any] = {}
+                        if output_metadata.get("log_extra") is not None:
+                            try:
+                                extra = json.loads(
+                                    output_metadata["log_extra"].decode()
+                                )
+                            except json.JSONDecodeError as e:
+                                log.error(
+                                    "failed_to_decode_log_extra",
+                                    error=str(e),
+                                    raw=output_metadata["log_extra"],
+                                )
+                        level_name = output_metadata["log_level"].decode().lower()
+                        worker_log._proxy_to_logger(
+                            level_name,
+                            output_metadata.get("log_message").decode(),
+                            **extra,
+                        )
+                        continue
 
                     output_batches.append(output_batch)
 
@@ -403,6 +434,7 @@ class Client:
 
         if input_schema is None:
             raise ClientError("No input batches were sent")
+
         # Send finalize signal
         empty_input_batch = pa.RecordBatch.from_arrays(
             [pa.array([], type=field.type) for field in input_schema],
@@ -447,6 +479,14 @@ class OutputWriter:
     def __init__(
         self, output_file: str | None, format: str, schema: pa.Schema | None = None
     ):
+        """Initialize the output writer.
+
+        Args:
+            output_file: Path to output file, "-" for stdout, or None for logging.
+            format: Output format ("parquet", "csv", or "json").
+            schema: Optional schema for the output data.
+
+        """
         self.output_file = output_file
         self.format = format
         self.schema = schema
@@ -460,6 +500,7 @@ class OutputWriter:
         return self.output_file
 
     def write_batch(self, batch: pa.RecordBatch) -> None:
+        """Write a batch to the output destination in the configured format."""
         import pyarrow.csv as csv
         import pyarrow.parquet as pq
 
@@ -510,6 +551,7 @@ class OutputWriter:
             self._first_write = False
 
     def close(self) -> None:
+        """Close the underlying writer if one exists."""
         if self._writer is not None:
             self._writer.close()
 
@@ -609,6 +651,7 @@ def main() -> None:
                     input=pf.iter_batches(),
                     projection_ids=list(projection_ids) if projection_ids else None,
                 ):
+                    # FIXME: need to log log batches and exceptions.
                     if output_writer is None:
                         output_writer = OutputWriter(
                             output_file, output_format, output_batch.schema

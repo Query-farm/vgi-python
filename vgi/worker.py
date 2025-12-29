@@ -1,5 +1,4 @@
-"""
-VGI Worker base class for hosting user-defined functions.
+"""VGI Worker base class for hosting user-defined functions.
 
 A worker is a subprocess that communicates via stdin/stdout using Arrow IPC.
 
@@ -13,9 +12,9 @@ Protocol:
 
 Usage:
     from vgi.worker import Worker
-    from vgi.table_in_out_function import TableInOutFunction
+    from vgi.table_in_out_function import Function
 
-    class MyFunction(TableInOutFunction):
+    class MyFunction(Function):
         ...
 
     class MyWorker(Worker):
@@ -35,23 +34,25 @@ import pyarrow as pa
 import structlog
 from pyarrow import ipc
 
-from vgi.function import BindResult, CallData
+from vgi.function import FunctionOutputSpec, FunctionRequest
 from vgi.table_in_out_function import (
-    FunctionInput,
-    TableInOutFunction,
+    Function,
+    ProtocolInput,
 )
 
-# Type alias for the function registry mapping names to TableInOutFunction classes
-FunctionRegistry = dict[str, type[TableInOutFunction]]
+# Type alias for the function registry mapping names to Function classes
+FunctionRegistry = dict[str, type[Function]]
 
 
 @dataclass(frozen=True, slots=True)
 class WorkerStats:
     """Statistics about a worker's processing run.
+
     Attributes:
         batch_count: Number of data batches processed.
         total_input_rows: Total number of input rows processed.
         total_output_rows: Total number of output rows produced.
+
     """
 
     batch_count: int
@@ -63,8 +64,8 @@ class Worker:
     """Base class for VGI workers that host user-defined functions.
 
     Subclass this and define a `registry` class attribute mapping function names
-    to TableInOutFunction subclasses. The worker handles the VGI protocol:
-    reading CallData, instantiating functions, and streaming batches.
+    to Function subclasses. The worker handles the VGI protocol:
+    reading FunctionRequest, instantiating functions, and streaming batches.
 
     Example:
         class MyWorker(Worker):
@@ -75,11 +76,13 @@ class Worker:
 
         if __name__ == "__main__":
             MyWorker().run()
+
     """
 
     registry: FunctionRegistry = {}
 
     def __init__(self) -> None:
+        """Initialize the worker with structured logging."""
         structlog.configure(
             processors=[
                 structlog.processors.add_log_level,
@@ -91,13 +94,14 @@ class Worker:
         )
         self.log = structlog.get_logger().bind(component="worker")
 
-    def _read_call_data(self) -> CallData:
+    def _read_invocation(self) -> FunctionRequest:
         """Read and parse the call data from stdin.
 
         Returns:
-            CallData
+            FunctionRequest
+
         """
-        self.log.debug("call_data_reading")
+        self.log.debug("invocation_reading")
 
         # Read init messages manually (not via ipc.open_stream) to avoid PyArrow
         # closing the underlying pipe when the stream context exits.
@@ -111,13 +115,14 @@ class Worker:
             raise ValueError(f"Expected record batch, got {msg.type}")
         init_batch = ipc.read_record_batch(msg, init_schema)
 
-        return CallData.deserialize(init_batch)
+        return FunctionRequest.deserialize(init_batch)
 
     def _read_init_data(self) -> pa.RecordBatch:
         """Read and parse the init data from stdin.
 
         Returns:
             pa.RecordBatch
+
         """
         self.log.debug("init_data_reading")
 
@@ -137,8 +142,8 @@ class Worker:
 
     def _process_batches(
         self,
-        instance: TableInOutFunction,
-        call_data: CallData,
+        instance: Function,
+        invocation: FunctionRequest,
         fn_log: structlog.stdlib.BoundLogger,
     ) -> WorkerStats:
         """Process data batches through the function.
@@ -149,21 +154,21 @@ class Worker:
 
         Returns:
             WorkerStats with batch_count, total_input_rows, total_output_rows.
-        """
 
-        assert call_data.global_init_identifier is not None
-        generator = instance.run(fn_log)
-        generator.send(None)
-        next(generator)
+        """
+        assert invocation.global_init_identifier is not None
+        generator = instance.run()
+        next(generator)  # Prime the run() generator
 
         with (
             ipc.new_stream(sys.stdout, instance.output_schema) as writer,
             ipc.open_stream(sys.stdin) as data_reader,
         ):
             # Validate data stream schema matches expected input schema
-            if data_reader.schema != call_data.in_schema:
+            if data_reader.schema != invocation.in_out_function_input_schema:
+                expected = invocation.in_out_function_input_schema
                 raise ValueError(
-                    f"Data stream schema mismatch. Expected: {call_data.in_schema}, "
+                    f"Data stream schema mismatch. Expected: {expected}, "
                     f"got: {data_reader.schema}"
                 )
 
@@ -189,11 +194,12 @@ class Worker:
                     input_rows=batch.num_rows,
                 )
 
-                output = generator.send(FunctionInput(batch=batch, metadata=metadata))
+                output = generator.send(ProtocolInput(batch=batch, metadata=metadata))
+                fn_log.debug("batch_processed", output=output)
                 output_rows = output.batch.num_rows if output.batch else 0
                 total_output_rows += output_rows
                 writer.write_batch(
-                    output.batch, custom_metadata=output.metadata(call_data)
+                    output.batch, custom_metadata=output.metadata(invocation)
                 )
                 fn_log.debug(
                     "batch_written",
@@ -213,39 +219,41 @@ class Worker:
         sys.stdin = os.fdopen(0, "rb")
         sys.stdout = os.fdopen(1, "wb", buffering=0)
 
-        call_data = self._read_call_data()
+        invocation = self._read_invocation()
 
-        fn_log = self.log.bind(function=call_data.function_name)
-        fn_log.info("init_received", arguments=call_data.arguments)
-        fn_log.debug("input_schema_parsed", schema=str(call_data.in_schema))
+        fn_log = self.log.bind(function=invocation.function_name)
+        fn_log.info("init_received", arguments=invocation.arguments)
+        fn_log.debug(
+            "input_schema_parsed", schema=str(invocation.in_out_function_input_schema)
+        )
 
-        if call_data.function_name not in self.registry:
-            raise ValueError(f"Unknown function: {call_data.function_name}")
+        if invocation.function_name not in self.registry:
+            raise ValueError(f"Unknown function: {invocation.function_name}")
 
-        instance = self.registry[call_data.function_name](call_data, fn_log)
+        instance = self.registry[invocation.function_name](invocation, fn_log)
 
-        bind_result_bytes = BindResult(
+        bind_result_bytes = FunctionOutputSpec(
             output_schema=instance.output_schema,
             max_processes=instance.max_processes(),
-            bind_identifier=instance.bind_identifier(),
+            invocation_id=instance.invocation_id(),
         ).serialize()
 
         if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):
             raise OSError("Failed to write bind result record batch")
 
-        if call_data.global_init_identifier is None:
+        if invocation.global_init_identifier is None:
             fn_log.info("processing_init")
             init_result = instance.perform_init(self._read_init_data())
             init_result_bytes = init_result.serialize()
             if sys.stdout.write(init_result_bytes) != len(init_result_bytes):
                 raise OSError("Failed to write init result record batch")
             fn_log.info("processing_init_complete", init_result=init_result)
-            call_data = call_data.with_global_init_identifier(init_result)
+            invocation = invocation.with_global_init_identifier(init_result)
         else:
             fn_log.info("retrieving_init")
-            instance.retrieve_init(call_data.global_init_identifier)
+            instance.retrieve_init(invocation.global_init_identifier)
 
-        stats = self._process_batches(instance, call_data, fn_log)
+        stats = self._process_batches(instance, invocation, fn_log)
 
         fn_log.info(
             "worker_complete",
