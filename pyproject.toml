@@ -10,7 +10,7 @@ dependencies = ["click", "pyarrow", "structlog"]
 dev = ["mypy", "pytest", "pytest-mypy", "pytest-ruff", "ruff"]
 
 [project.scripts]
-vgi-client = "vgi.client:main"
+vgi-client = "vgi.client.cli:main"
 vgi-example-worker = "vgi.examples.worker:main"
 
 [build-system]

@@ -21,7 +21,8 @@ Quick Start:
 """
 
 # Re-export commonly used classes for convenient imports
-from vgi.function import Arguments, FunctionRequest, LogLevel, LogMessage
+from vgi.function import Arguments, FunctionRequest
+from vgi.logging import LogLevel, LogMessage
 from vgi.table_in_out_function import Function, Output, OutputGenerator
 from vgi.worker import Worker
 

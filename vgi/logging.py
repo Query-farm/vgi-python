@@ -1,0 +1,226 @@
+"""Logging utilities for VGI functions.
+
+This module provides LogLevel and LogMessage for emitting diagnostic information
+during function processing. Log messages are attached to output metadata and
+transmitted to the client alongside output batches.
+
+Classes:
+    LogLevel: Severity levels for log messages.
+    LogMessage: Log message that can be yielded from process() or finalize().
+
+Example:
+    from vgi.logging import LogLevel, LogMessage
+
+    # Yield directly during processing
+    yield LogMessage(LogLevel.INFO, f"Processing {batch.num_rows} rows")
+
+    # Or attach to Output
+    yield Output(batch, log_message=LogMessage.info("Processed batch"))
+
+"""
+
+import json
+import traceback
+from enum import Enum
+from typing import TYPE_CHECKING, Any, ClassVar
+
+if TYPE_CHECKING:
+    from vgi.function import FunctionRequest
+
+__all__ = [
+    "LogLevel",
+    "LogMessage",
+]
+
+
+class LogLevel(Enum):
+    """Severity levels for log messages emitted during function processing.
+
+    Levels are ordered from most to least severe. Use the appropriate level
+    to indicate the nature of the message:
+
+    Attributes:
+        EXCEPTION: Unrecoverable error that terminated processing.
+        ERROR: Significant error that may affect results but didn't terminate.
+        WARN: Potential issue that should be reviewed but isn't necessarily wrong.
+        INFO: General informational message about processing status.
+        DEBUG: Detailed information useful for debugging.
+        TRACE: Fine-grained tracing information for detailed diagnostics.
+
+    """
+
+    EXCEPTION = "EXCEPTION"
+    ERROR = "ERROR"
+    WARN = "WARN"
+    INFO = "INFO"
+    DEBUG = "DEBUG"
+    TRACE = "TRACE"
+
+
+class LogMessage:
+    """Log message that can be yielded from process() directly or via Result.
+
+    LogMessage allows functions to emit diagnostic information during batch
+    processing. Messages are attached to the output metadata and transmitted
+    to the client alongside the output batch.
+
+    Attributes:
+        level: Severity level indicating the nature of the message.
+        message: Human-readable log message text.
+        extra: Additional arbitrary key-value pairs to include in the JSON output.
+
+    Example (via Result):
+        def process(self) -> ResultGenerator:
+            _ = yield None
+            while batch := (yield None):
+                yield Result(
+                    batch,
+                    log_message=LogMessage(LogLevel.INFO, "Processed batch")
+                )
+
+    Example (yielded directly):
+        def process(self) -> ResultGenerator:
+            _ = yield None
+            while batch := (yield None):
+                yield LogMessage(LogLevel.INFO, f"Processing {batch.num_rows} rows")
+                yield Result(batch)
+
+    """
+
+    __slots__ = ("level", "message", "extra")
+    __hash__ = None  # type: ignore[assignment]  # Unhashable since we define __eq__
+
+    _MAX_TRACEBACK_CHARS: ClassVar[int] = 16_000
+
+    def __init__(self, level: LogLevel, message: str, **kwargs: Any) -> None:
+        """Create a log message with level, message text, and optional extras."""
+        self.level = level
+        self.message = message
+        self.extra: dict[str, Any] | None = kwargs if kwargs else None
+
+    def __eq__(self, other: object) -> bool:
+        """Compare log messages by level, message, and extra fields."""
+        if not isinstance(other, LogMessage):
+            return NotImplemented
+        return (
+            self.level == other.level
+            and self.message == other.message
+            and self.extra == other.extra
+        )
+
+    def __repr__(self) -> str:
+        """Return a string representation suitable for debugging."""
+        if self.extra:
+            return f"LogMessage({self.level!r}, {self.message!r}, **{self.extra!r})"
+        return f"LogMessage({self.level!r}, {self.message!r})"
+
+    @classmethod
+    def exception(cls, message: str, **kwargs: Any) -> "LogMessage":
+        """Create an EXCEPTION level log message."""
+        return cls(LogLevel.EXCEPTION, message, **kwargs)
+
+    @classmethod
+    def error(cls, message: str, **kwargs: Any) -> "LogMessage":
+        """Create an ERROR level log message."""
+        return cls(LogLevel.ERROR, message, **kwargs)
+
+    @classmethod
+    def info(cls, message: str, **kwargs: Any) -> "LogMessage":
+        """Create an INFO level log message."""
+        return cls(LogLevel.INFO, message, **kwargs)
+
+    @classmethod
+    def warn(cls, message: str, **kwargs: Any) -> "LogMessage":
+        """Create a WARN level log message."""
+        return cls(LogLevel.WARN, message, **kwargs)
+
+    @classmethod
+    def debug(cls, message: str, **kwargs: Any) -> "LogMessage":
+        """Create a DEBUG level log message."""
+        return cls(LogLevel.DEBUG, message, **kwargs)
+
+    @classmethod
+    def trace(cls, message: str, **kwargs: Any) -> "LogMessage":
+        """Create a TRACE level log message."""
+        return cls(LogLevel.TRACE, message, **kwargs)
+
+    def add_to_metadata(
+        self, invocation: "FunctionRequest", metadata: dict[str, str] | None = None
+    ) -> dict[str, str]:
+        """Add log message fields to an existing metadata dictionary.
+
+        Creates a new dictionary with log-related keys added. Does not mutate
+        the input dictionary.
+
+        Args:
+            invocation: The FunctionRequest for this function invocation, used
+                to include the correlation_id and invocation_id for correlation.
+            metadata: Existing metadata dict to augment, or None to create new.
+
+        Returns:
+            New dict containing original entries plus:
+            - log_level: The LogLevel value (e.g., "INFO", "EXCEPTION")
+            - log_message: The human-readable message text
+            - log_extra: JSON string with {correlation_id, invocation_id,
+                pid, ...extra kwargs}
+
+        """
+        result = dict(metadata) if metadata else {}
+        result["log_level"] = self.level.value
+        log_data: dict[str, Any] = {
+            "correlation_id": invocation.correlation_id,
+            "invocation_id": invocation.invocation_id.hex()
+            if invocation.invocation_id
+            else None,
+            "pid": invocation.pid(),
+        }
+        if self.extra:
+            log_data.update(self.extra)
+        result["log_message"] = self.message
+        result["log_extra"] = json.dumps(log_data)
+        return result
+
+    @classmethod
+    def from_exception(cls, exc: BaseException) -> "LogMessage":
+        """Produce a LogMessage from an exception."""
+        tb_exc = traceback.TracebackException.from_exception(
+            exc,
+            capture_locals=False,
+        )
+
+        formatted_tb = "".join(tb_exc.format())
+        if len(formatted_tb) > cls._MAX_TRACEBACK_CHARS:
+            formatted_tb = (
+                formatted_tb[: cls._MAX_TRACEBACK_CHARS] + "\n… <traceback truncated>"
+            )
+
+        # Short, semantic summary (LLM anchor)
+        summary = f"{type(exc).__name__}: {exc}"
+
+        extra: dict[str, Any] = {
+            "exception_type": type(exc).__name__,
+            "exception_message": str(exc),
+            "traceback": formatted_tb,
+        }
+
+        if tb_exc.__cause__:
+            extra["cause"] = "".join(tb_exc.__cause__.format())
+
+        if tb_exc.__context__ and not tb_exc.__suppress_context__:
+            extra["context"] = "".join(tb_exc.__context__.format())
+
+        extra["frames"] = [
+            {
+                "file": f.filename,
+                "line": f.lineno,
+                "function": f.name,
+                "code": f.line,
+            }
+            for f in tb_exc.stack[-5:]  # last N frames only
+        ]
+
+        return cls(
+            LogLevel.EXCEPTION,
+            summary,
+            **extra,
+        )
