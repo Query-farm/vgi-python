@@ -21,25 +21,27 @@ See Also:
 
 import json
 import os
+import traceback
 import uuid
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, replace
+from enum import Enum
+from typing import Any, ClassVar
 
 import pyarrow as pa
 import structlog
 
+import vgi.util
+
 __all__ = [
     "Arguments",
-    "FunctionRequest",
+    "Function",
     "FunctionOutputSpec",
+    "FunctionRequest",
+    "GlobalInitResult",
+    "InitStorage",
     "LogLevel",
     "LogMessage",
 ]
-
-import traceback
-from enum import Enum
-
-import vgi.util
 
 
 class LogLevel(Enum):
@@ -97,6 +99,9 @@ class LogMessage:
     """
 
     __slots__ = ("level", "message", "extra")
+    __hash__ = None  # type: ignore[assignment]  # Unhashable since we define __eq__
+
+    _MAX_TRACEBACK_CHARS: ClassVar[int] = 16_000
 
     def __init__(self, level: LogLevel, message: str, **kwargs: Any) -> None:
         """Create a log message with level, message text, and optional extras."""
@@ -122,80 +127,32 @@ class LogMessage:
 
     @classmethod
     def exception(cls, message: str, **kwargs: Any) -> "LogMessage":
-        """Create an EXCEPTION level log message.
-
-        Use for unrecoverable errors that terminated processing.
-
-        Args:
-            message: The log message text.
-            **kwargs: Additional key-value pairs to include in the JSON output.
-
-        """
+        """Create an EXCEPTION level log message."""
         return cls(LogLevel.EXCEPTION, message, **kwargs)
 
     @classmethod
     def error(cls, message: str, **kwargs: Any) -> "LogMessage":
-        """Create an ERROR level log message.
-
-        Use for significant errors that may affect results.
-
-        Args:
-            message: The log message text.
-            **kwargs: Additional key-value pairs to include in the JSON output.
-
-        """
+        """Create an ERROR level log message."""
         return cls(LogLevel.ERROR, message, **kwargs)
 
     @classmethod
     def info(cls, message: str, **kwargs: Any) -> "LogMessage":
-        """Create an INFO level log message.
-
-        Use for general informational messages about processing status.
-
-        Args:
-            message: The log message text.
-            **kwargs: Additional key-value pairs to include in the JSON output.
-
-        """
+        """Create an INFO level log message."""
         return cls(LogLevel.INFO, message, **kwargs)
 
     @classmethod
     def warn(cls, message: str, **kwargs: Any) -> "LogMessage":
-        """Create a WARN level log message.
-
-        Use for potential issues that should be reviewed but aren't necessarily wrong.
-
-        Args:
-            message: The log message text.
-            **kwargs: Additional key-value pairs to include in the JSON output.
-
-        """
+        """Create a WARN level log message."""
         return cls(LogLevel.WARN, message, **kwargs)
 
     @classmethod
     def debug(cls, message: str, **kwargs: Any) -> "LogMessage":
-        """Create a DEBUG level log message.
-
-        Use for detailed information useful for debugging.
-
-        Args:
-            message: The log message text.
-            **kwargs: Additional key-value pairs to include in the JSON output.
-
-        """
+        """Create a DEBUG level log message."""
         return cls(LogLevel.DEBUG, message, **kwargs)
 
     @classmethod
     def trace(cls, message: str, **kwargs: Any) -> "LogMessage":
-        """Create a TRACE level log message.
-
-        Use for fine-grained tracing information for detailed diagnostics.
-
-        Args:
-            message: The log message text.
-            **kwargs: Additional key-value pairs to include in the JSON output.
-
-        """
+        """Create a TRACE level log message."""
         return cls(LogLevel.TRACE, message, **kwargs)
 
     def add_to_metadata(
@@ -235,18 +192,49 @@ class LogMessage:
         return result
 
     @classmethod
-    def from_exception(cls, exc: Exception) -> "LogMessage":
-        """Create an EXCEPTION level log message from an Exception instance.
+    def from_exception(cls, exc: BaseException) -> "LogMessage":
+        """Produce a LogMessage from an exception."""
+        tb_exc = traceback.TracebackException.from_exception(
+            exc,
+            capture_locals=False,
+        )
 
-        Args:
-            exc: Exception instance to create log message from.
+        formatted_tb = "".join(tb_exc.format())
+        if len(formatted_tb) > cls._MAX_TRACEBACK_CHARS:
+            formatted_tb = (
+                formatted_tb[: cls._MAX_TRACEBACK_CHARS] + "\n… <traceback truncated>"
+            )
 
-        Returns:
-            LogMessage with level EXCEPTION and message from the exception.
+        # Short, semantic summary (LLM anchor)
+        summary = f"{type(exc).__name__}: {exc}"
 
-        """
-        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        return cls(LogLevel.EXCEPTION, f"{type(exc).__name__}: {exc}\n\n{tb}")
+        extra: dict[str, Any] = {
+            "exception_type": type(exc).__name__,
+            "exception_message": str(exc),
+            "traceback": formatted_tb,
+        }
+
+        if tb_exc.__cause__:
+            extra["cause"] = "".join(tb_exc.__cause__.format())
+
+        if tb_exc.__context__ and not tb_exc.__suppress_context__:
+            extra["context"] = "".join(tb_exc.__context__.format())
+
+        extra["frames"] = [
+            {
+                "file": f.filename,
+                "line": f.lineno,
+                "function": f.name,
+                "code": f.line,
+            }
+            for f in tb_exc.stack[-5:]  # last N frames only
+        ]
+
+        return cls(
+            LogLevel.EXCEPTION,
+            summary,
+            **extra,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,20 +249,20 @@ class Arguments:
     and named args become "named_<name>".
 
     Attributes:
-        positional: List of positional argument values in order.
-        named: Dictionary mapping argument names to values.
+        positional: Tuple of positional argument values in order.
+        named: Dictionary mapping argument names to values, or None if no named args.
 
     Example:
         # Function call: my_func("hello", 42, separator=",")
         args = Arguments(
-            positional=["hello", 42],
+            positional=("hello", 42),
             named={"separator": ","}
         )
 
     """
 
-    positional: list[pa.Scalar | None]
-    named: dict[str, pa.Scalar]
+    positional: tuple[pa.Scalar | None, ...] = ()
+    named: dict[str, pa.Scalar] | None = None
 
     def encoded_dict(self) -> dict[str, pa.Scalar | None]:
         """Convert arguments to a dictionary suitable for serialization.
@@ -292,7 +280,11 @@ class Arguments:
         """
         return {
             f"positional_{index}": value for index, value in enumerate(self.positional)
-        } | {f"named_{name}": value for name, value in self.named.items()}
+        } | (
+            {f"named_{name}": value for name, value in self.named.items()}
+            if self.named
+            else {}
+        )
 
     def schema(self) -> pa.Schema:
         """Return Arrow schema for serializing these Arguments.
@@ -319,7 +311,7 @@ class Arguments:
 
         """
         positional: list[pa.Scalar | None] = []
-        named: dict[str, Any] = {}
+        named: dict[str, pa.Scalar] = {}
         for key, value in data.items():
             if key.startswith("positional_"):
                 index = int(key[len("positional_") :])
@@ -329,7 +321,7 @@ class Arguments:
             elif key.startswith("named_"):
                 name = key[len("named_") :]
                 named[name] = value
-        return Arguments(positional=positional, named=named)
+        return Arguments(positional=tuple(positional), named=named or None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,7 +341,7 @@ class GlobalInitResult:
 
     global_init_identifier: bytes | None = None
 
-    IDENTIFIER_FIELD_NAME = "global_init_identifier"
+    _IDENTIFIER_FIELD_NAME: ClassVar[str] = "global_init_identifier"
 
     @classmethod
     def has_identifier(cls, data: pa.RecordBatch) -> bool:
@@ -362,7 +354,7 @@ class GlobalInitResult:
             True if the field exists, False otherwise.
 
         """
-        return cls.IDENTIFIER_FIELD_NAME in data.schema.names
+        return cls._IDENTIFIER_FIELD_NAME in data.schema.names
 
     def schema(self) -> pa.Schema:
         """Return Arrow schema used when serializing GlobalInitResult.
@@ -373,7 +365,7 @@ class GlobalInitResult:
         """
         return pa.schema(
             [
-                pa.field(self.IDENTIFIER_FIELD_NAME, pa.binary(), nullable=True),
+                pa.field(self._IDENTIFIER_FIELD_NAME, pa.binary(), nullable=True),
             ]
         )
 
@@ -387,7 +379,7 @@ class GlobalInitResult:
         batch = pa.RecordBatch.from_pylist(
             [
                 {
-                    self.IDENTIFIER_FIELD_NAME: self.global_init_identifier,
+                    self._IDENTIFIER_FIELD_NAME: self.global_init_identifier,
                 }
             ],
             schema=self.schema(),
@@ -405,26 +397,11 @@ class GlobalInitResult:
           Deserialized GlobalInitResult instance.
 
         """
-        if data.num_rows == 0:
-            raise ValueError(
-                "Cannot deserialize GlobalInitResult from empty RecordBatch"
-            )
-        if data.num_rows > 1:
-            raise ValueError(
-                "Expected single-row RecordBatch for GlobalInitResult deserialization"
-            )
-
-        first_row = data.to_pylist()[0]
-        required_fields = [cls.IDENTIFIER_FIELD_NAME]
-
-        for field in required_fields:
-            if field not in first_row:
-                raise ValueError(
-                    f"Missing '{field}' field in GlobalInitResult RecordBatch"
-                )
-
+        first_row = vgi.util.validate_single_row_batch(
+            data, "GlobalInitResult", required_fields=[cls._IDENTIFIER_FIELD_NAME]
+        )
         return GlobalInitResult(
-            global_init_identifier=first_row[cls.IDENTIFIER_FIELD_NAME],
+            global_init_identifier=first_row[cls._IDENTIFIER_FIELD_NAME],
         )
 
 
@@ -462,7 +439,6 @@ class FunctionRequest:
     """
 
     function_name: str
-    arguments: Arguments
     in_out_function_input_schema: pa.Schema | None
 
     correlation_id: str
@@ -470,27 +446,13 @@ class FunctionRequest:
     invocation_id: bytes | None
 
     global_init_identifier: GlobalInitResult | None = None
+    arguments: Arguments = Arguments()
 
     def with_global_init_identifier(
         self, global_init_identifier: GlobalInitResult
     ) -> "FunctionRequest":
-        """Return a new FunctionRequest with the given global_init_identifier.
-
-        Args:
-            global_init_identifier: The GlobalInitResult to set.
-
-        Returns:
-            New FunctionRequest instance with updated global_init_identifier.
-
-        """
-        return FunctionRequest(
-            function_name=self.function_name,
-            arguments=self.arguments,
-            in_out_function_input_schema=self.in_out_function_input_schema,
-            correlation_id=self.correlation_id,
-            invocation_id=self.invocation_id,
-            global_init_identifier=global_init_identifier,
-        )
+        """Return a new FunctionRequest with the given global_init_identifier."""
+        return replace(self, global_init_identifier=global_init_identifier)
 
     def serialize(self) -> bytes:
         """Serialize FunctionRequest to an Arrow RecordBatch.
@@ -551,16 +513,6 @@ class FunctionRequest:
               required fields.
 
         """
-        if data.num_rows == 0:
-            raise ValueError(
-                "Cannot deserialize FunctionRequest from empty RecordBatch"
-            )
-        if data.num_rows > 1:
-            raise ValueError(
-                "Expected single-row RecordBatch for FunctionRequest deserialization"
-            )
-
-        first_row = data.to_pylist()[0]
         required_fields = [
             "function_name",
             "arguments",
@@ -568,12 +520,9 @@ class FunctionRequest:
             "invocation_id",
             "correlation_id",
         ]
-
-        for field in required_fields:
-            if field not in first_row:
-                raise ValueError(
-                    f"Missing '{field}' field in FunctionRequest RecordBatch"
-                )
+        first_row = vgi.util.validate_single_row_batch(
+            data, "FunctionRequest", required_fields=required_fields
+        )
 
         in_out_function_input_schema = None
         if first_row["in_out_function_input_schema"] is not None:
@@ -588,19 +537,15 @@ class FunctionRequest:
             invocation_id=first_row["invocation_id"],
             correlation_id=first_row["correlation_id"],
             global_init_identifier=GlobalInitResult(
-                first_row[GlobalInitResult.IDENTIFIER_FIELD_NAME]
+                first_row[GlobalInitResult._IDENTIFIER_FIELD_NAME]
             )
-            if GlobalInitResult.IDENTIFIER_FIELD_NAME in data.schema.names
+            if GlobalInitResult._IDENTIFIER_FIELD_NAME in data.schema.names
             else None,
         )
 
-    def pid(self) -> int:
-        """Process ID of the worker handling this FunctionRequest.
-
-        Returns:
-            Process ID as an integer.
-
-        """
+    @staticmethod
+    def pid() -> int:
+        """Return the current process ID."""
         return os.getpid()
 
 
@@ -620,9 +565,6 @@ class FunctionOutputSpec:
         invocation_id: Unique bytes identifying this function invocation.
             Used to correlate multiple parallel workers processing the same
             logical function call.
-
-    See Also:
-        FunctionOutputSpec: Extended version with cardinality hints.
 
     """
 
@@ -689,23 +631,29 @@ class FunctionOutputSpec:
 class InitStorage:
     """In-process storage for init values retrievable by ID."""
 
-    contents: dict[bytes, Any] = {}
+    def __init__(self) -> None:
+        """Initialize empty storage."""
+        self.contents: dict[bytes, Any] = {}
 
     def create(self, value: Any) -> bytes:
+        """Store a value and return its unique key."""
         key = uuid.uuid4().bytes
         self.contents[key] = value
         return key
 
     def get(self, key: bytes) -> Any:
+        """Retrieve a value by key, raising KeyError if not found."""
         if key not in self.contents:
             raise KeyError(f"Key {key.hex()} not found in InitStorage")
         return self.contents[key]
 
     def delete(self, key: bytes) -> None:
+        """Delete a value by key if it exists."""
         if key in self.contents:
             del self.contents[key]
 
     def has(self, key: bytes) -> bool:
+        """Check if a key exists in storage."""
         return key in self.contents
 
 
@@ -725,7 +673,7 @@ class Function:
 
     """
 
-    init_storage: InitStorage = InitStorage()
+    init_storage: ClassVar[InitStorage] = InitStorage()
 
     def __init__(self, *, logger: structlog.stdlib.BoundLogger):
         """Initialize the function with a logger.

@@ -3,7 +3,7 @@
 import pyarrow as pa
 import pytest
 
-from vgi.client import Client
+from vgi.client import Client, ClientError
 from vgi.function import Arguments
 
 
@@ -65,7 +65,6 @@ class TestEchoFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
-                    arguments=Arguments(positional=[], named={}),
                     input=iter(simple_batches),
                 )
             )
@@ -92,7 +91,6 @@ class TestEchoFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
-                    arguments=Arguments(positional=[], named={}),
                     input=iter(simple_batches),
                 )
             )
@@ -111,7 +109,6 @@ class TestBufferInputFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="buffer_input",
-                    arguments=Arguments(positional=[], named={}),
                     input=iter(simple_batches),
                 )
             )
@@ -131,7 +128,6 @@ class TestBufferInputFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="buffer_input",
-                    arguments=Arguments(positional=[], named={}),
                     input=iter(simple_batches),
                 )
             )
@@ -156,7 +152,7 @@ class TestRepeatInputsFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="repeat_inputs",
-                    arguments=Arguments(positional=[repeat_count], named={}),
+                    arguments=Arguments(positional=tuple([repeat_count]), named={}),
                     input=iter(simple_batches),
                 )
             )
@@ -173,7 +169,7 @@ class TestRepeatInputsFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="repeat_inputs",
-                    arguments=Arguments(positional=[1], named={}),
+                    arguments=Arguments(positional=tuple([1]), named={}),
                     input=iter(simple_batches),
                 )
             )
@@ -194,7 +190,6 @@ class TestSumAllColumnsFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="sum_all_columns",
-                    arguments=Arguments(positional=[], named={}),
                     input=iter(numeric_batches),
                 )
             )
@@ -217,7 +212,6 @@ class TestSumAllColumnsFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="sum_all_columns",
-                    arguments=Arguments(positional=[], named={}),
                     input=iter(simple_batches),
                 )
             )
@@ -239,7 +233,6 @@ class TestSumAllColumnsFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="sum_all_columns",
-                    arguments=Arguments(positional=[], named={}),
                     input=iter(numeric_batches),
                 )
             )
@@ -264,7 +257,6 @@ class TestSumAllColumnsFunctionWithLogging:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="sum_all_columns_with_logging",
-                    arguments=Arguments(positional=[], named={}),
                     input=iter(numeric_batches),
                 )
             )
@@ -286,7 +278,6 @@ class TestSumAllColumnsFunctionWithLogging:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="sum_all_columns_with_logging",
-                    arguments=Arguments(positional=[], named={}),
                     input=iter(numeric_batches),
                 )
             )
@@ -309,7 +300,6 @@ class TestSumAllColumnsFunctionWithLogging:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="sum_all_columns_with_logging",
-                    arguments=Arguments(positional=[], named={}),
                     input=iter(single_batch),
                 )
             )
@@ -335,6 +325,114 @@ class TestClientLifecycle:
         assert client._proc is None
 
 
+class TestExceptionProcessFunction:
+    """Tests for exception_process function (raises during process)."""
+
+    def test_exception_process_raises_client_error(
+        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
+    ) -> None:
+        """Should raise ClientError when exception occurs during process()."""
+        # Need at least 2 batches to trigger the exception
+        # (raises on batch_index % 2 == 0)
+        with (
+            Client(example_worker) as client,
+            pytest.raises(ClientError) as exc_info,
+        ):
+            list(
+                client.table_in_out_function(
+                    function_name="exception_process",
+                    input=iter(numeric_batches),
+                )
+            )
+
+        # Verify the error message contains the expected text
+        assert "Intentional exception on batch" in str(exc_info.value)
+        assert "ValueError" in str(exc_info.value)
+
+    def test_exception_process_includes_traceback(
+        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
+    ) -> None:
+        """Exception should include traceback in the error message."""
+        with (
+            Client(example_worker) as client,
+            pytest.raises(ClientError) as exc_info,
+        ):
+            list(
+                client.table_in_out_function(
+                    function_name="exception_process",
+                    input=iter(numeric_batches),
+                )
+            )
+
+        # Traceback should be included in the error
+        error_message = str(exc_info.value)
+        assert "Traceback" in error_message
+
+
+class TestExceptionFinalizeFunction:
+    """Tests for exception_finalize function (raises during finalize)."""
+
+    def test_exception_finalize_raises_client_error(
+        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
+    ) -> None:
+        """Should raise ClientError when exception occurs during finalize()."""
+        with (
+            Client(example_worker) as client,
+            pytest.raises(ClientError) as exc_info,
+        ):
+            list(
+                client.table_in_out_function(
+                    function_name="exception_finalize",
+                    input=iter(numeric_batches),
+                )
+            )
+
+        # Verify the error message contains the expected text
+        assert "Intentional exception during finalize()" in str(exc_info.value)
+        assert "ValueError" in str(exc_info.value)
+
+    def test_exception_finalize_includes_traceback(
+        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
+    ) -> None:
+        """Exception should include traceback in the error message."""
+        with (
+            Client(example_worker) as client,
+            pytest.raises(ClientError) as exc_info,
+        ):
+            list(
+                client.table_in_out_function(
+                    function_name="exception_finalize",
+                    input=iter(numeric_batches),
+                )
+            )
+
+        # Traceback should be included in the error
+        error_message = str(exc_info.value)
+        assert "Traceback" in error_message
+
+    def test_exception_finalize_after_successful_processing(
+        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
+    ) -> None:
+        """Process phase should complete successfully before finalize fails."""
+        # The function inherits from SumAllColumnsFunction, so process() should work
+        # but finalize() should raise. We can't easily verify process completed
+        # since the generator fails before returning, but the exception message
+        # confirms it's during finalize.
+        with (
+            Client(example_worker) as client,
+            pytest.raises(ClientError) as exc_info,
+        ):
+            list(
+                client.table_in_out_function(
+                    function_name="exception_finalize",
+                    input=iter(numeric_batches),
+                )
+            )
+
+        # The error should specifically mention finalize
+        assert "finalize()" in str(exc_info.value)
+
+
 class TestWorkerStderrCapture:
     """Tests for capturing worker stderr output."""
 
@@ -347,7 +445,6 @@ class TestWorkerStderrCapture:
             list(
                 client.table_in_out_function(
                     function_name="echo",
-                    arguments=Arguments(positional=[], named={}),
                     input=iter(simple_batches),
                 )
             )
@@ -358,9 +455,7 @@ class TestWorkerStderrCapture:
         # The example worker logs startup info
         assert len(stderr_output) > 0
 
-    def test_stderr_available_on_error(
-        self, simple_batches: list[pa.RecordBatch]
-    ) -> None:
+    def test_stderr_available_on_error(self) -> None:
         """Should be able to access stderr after an error occurs."""
         # Use a worker script that writes to stderr then fails
         worker_script = (

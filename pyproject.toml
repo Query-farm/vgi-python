@@ -23,6 +23,10 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "D"]
+ignore = [
+    "D203",  # incompatible with D211 (no-blank-line-before-class)
+    "D213",  # incompatible with D212 (multi-line-summary-first-line)
+]
 
 [tool.ruff.format]
 quote-style = "double"

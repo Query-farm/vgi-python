@@ -29,6 +29,8 @@ __all__ = [
     "RepeatInputsFunction",
     "SumAllColumnsFunction",
     "SumAllColumnsFunctionWithLogging",
+    "ExceptionProcessFunction",
+    "ExceptionFinalizeFunction",
 ]
 
 
@@ -485,3 +487,30 @@ class SumAllColumnsFunctionWithLogging(Function):
                 schema=self.output_schema,
             )
         )
+
+
+class ExceptionProcessFunction(SumAllColumnsFunction):
+    """A function that raises an exception on the second batch."""
+
+    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+        """Raise an exception on the second batch."""
+        _ = yield None  # priming
+
+        batch_index = 1  # First batch is from parameter
+        while True:
+            if batch_index % 2 == 0:
+                raise ValueError(f"Intentional exception on batch {batch_index}")
+            batch = yield None
+            if batch is None:
+                break
+            batch_index += 1
+
+
+class ExceptionFinalizeFunction(SumAllColumnsFunction):
+    """A class that demonstrates an exception raised during finalize()."""
+
+    def finalize(self) -> OutputGenerator:
+        """Emit single row containing the column sums with logging."""
+        _ = yield None
+
+        raise ValueError("Intentional exception during finalize()")

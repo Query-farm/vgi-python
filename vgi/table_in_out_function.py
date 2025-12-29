@@ -150,7 +150,7 @@ class ProtocolOutput:
     """
 
     batch: pa.RecordBatch | None
-    status: _OutputStatus | None
+    status: _OutputStatus
     log_message: vgi.function.LogMessage | None = None
 
     def metadata(
@@ -163,13 +163,9 @@ class ProtocolOutput:
                 to LogMessage.add_to_metadata() for correlation information.
 
         Returns:
-            KeyValueMetadata containing status and optional log message fields,
-            or None if status is None (only for the initial priming yield).
+            KeyValueMetadata containing status and optional log message fields.
 
         """
-        if self.status is None:
-            return None
-
         metadata_dict = {"status": self.status.value}
 
         if self.log_message is not None:
@@ -548,11 +544,12 @@ class Function(vgi.table_function.Function):
             Generator yielding None, Output, or LogMessage objects.
 
         """
-        # Initial priming yield
-        _ = yield None
+        _ = yield None  # Priming yield
 
-        while batch := (yield Output(batch)):
-            pass
+        while True:
+            batch = yield Output(batch)
+            if batch is None:
+                break
 
     def finalize(self) -> OutputGenerator | None:
         """Finalize processing and produce any remaining output.
@@ -586,12 +583,14 @@ class Function(vgi.table_function.Function):
             - Caller sends ProtocolInput with is_finalize=True to end
         """
         # Priming yield - caller calls next() or send(None)
-        input: ProtocolInput | None = yield ProtocolOutput(batch=None, status=None)
+        input: ProtocolInput | None = yield ProtocolOutput(
+            batch=None, status=_OutputStatus.NEED_MORE_INPUT
+        )
         if input is None:
             raise ValueError("Expected ProtocolInput, got None")
 
         generator = self.process(input.batch)
-        # Prime process() generator past both yields (priming + first data yield)
+        # Prime the process() generator past the initial yield
         generator.send(None)
 
         # DATA phase

@@ -94,51 +94,41 @@ class Worker:
         )
         self.log = structlog.get_logger().bind(component="worker")
 
-    def _read_invocation(self) -> FunctionRequest:
-        """Read and parse the call data from stdin.
+    def _read_ipc_batch(self, context: str) -> pa.RecordBatch:
+        """Read a schema + record batch pair from stdin.
+
+        Reads IPC messages manually (not via ipc.open_stream) to avoid PyArrow
+        closing the underlying pipe when the stream context exits.
+
+        Args:
+            context: Description for debug logging (e.g., "invocation", "init_data").
 
         Returns:
-            FunctionRequest
+            The deserialized RecordBatch.
+
+        Raises:
+            ValueError: If unexpected message types are received.
 
         """
-        self.log.debug("invocation_reading")
+        self.log.debug(f"{context}_reading")
 
-        # Read init messages manually (not via ipc.open_stream) to avoid PyArrow
-        # closing the underlying pipe when the stream context exits.
         msg = ipc.read_message(sys.stdin)
         if msg.type != "schema":
             raise ValueError(f"Expected schema message, got {msg.type}")
-        init_schema = ipc.read_schema(msg)
+        schema = ipc.read_schema(msg)
 
         msg = ipc.read_message(sys.stdin)
         if msg.type != "record batch":
             raise ValueError(f"Expected record batch, got {msg.type}")
-        init_batch = ipc.read_record_batch(msg, init_schema)
+        return ipc.read_record_batch(msg, schema)
 
-        return FunctionRequest.deserialize(init_batch)
+    def _read_invocation(self) -> FunctionRequest:
+        """Read and parse the call data from stdin."""
+        return FunctionRequest.deserialize(self._read_ipc_batch("invocation"))
 
     def _read_init_data(self) -> pa.RecordBatch:
-        """Read and parse the init data from stdin.
-
-        Returns:
-            pa.RecordBatch
-
-        """
-        self.log.debug("init_data_reading")
-
-        # Read init messages manually (not via ipc.open_stream) to avoid PyArrow
-        # closing the underlying pipe when the stream context exits.
-        msg = ipc.read_message(sys.stdin)
-        if msg.type != "schema":
-            raise ValueError(f"Expected schema message, got {msg.type}")
-        init_schema = ipc.read_schema(msg)
-
-        msg = ipc.read_message(sys.stdin)
-        if msg.type != "record batch":
-            raise ValueError(f"Expected record batch, got {msg.type}")
-        init_batch = ipc.read_record_batch(msg, init_schema)
-
-        return init_batch
+        """Read and parse the init data from stdin."""
+        return self._read_ipc_batch("init_data")
 
     def _process_batches(
         self,

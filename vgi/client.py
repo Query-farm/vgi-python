@@ -74,6 +74,162 @@ class Client:
 
     """
 
+    def _handle_log_message(
+        self, output_batch: pa.RecordBatch, output_metadata: dict[bytes, bytes] | None
+    ) -> bool:
+        """Handle a log message from the worker if present.
+
+        Args:
+            output_batch: The output batch from the worker.
+            output_metadata: Custom metadata from the batch.
+
+        Returns:
+            True if this was a log message (caller should continue to next batch),
+            False if this was a regular data batch.
+
+        Raises:
+            ClientError: If the log message indicates a worker exception.
+
+        """
+        if output_metadata is None:
+            return False
+
+        if not (
+            output_batch.num_rows == 0
+            and output_metadata.get(b"log_level") is not None
+            and output_metadata.get(b"log_message") is not None
+        ):
+            return False
+
+        extra: dict[str, Any] = {}
+        if output_metadata.get(b"log_extra") is not None:
+            try:
+                extra = json.loads(output_metadata[b"log_extra"].decode())
+            except json.JSONDecodeError as e:
+                log.error(
+                    "failed_to_decode_log_extra",
+                    error=str(e),
+                    raw=output_metadata[b"log_extra"],
+                )
+
+        level_name = output_metadata[b"log_level"].decode().lower()
+        worker_log._proxy_to_logger(
+            level_name,
+            output_metadata[b"log_message"].decode(),
+            **extra,
+        )
+
+        if level_name == "exception":
+            message = output_metadata[b"log_message"].decode()
+            traceback = extra.get("traceback", "")
+            full_message = f"Worker Exception: {message}\n{traceback}"
+            raise ClientError(full_message)
+
+        return True
+
+    def _table_in_out_function_initialize_stream(
+        self,
+        *,
+        function_name: str,
+        arguments: Arguments,
+        input_schema: pa.Schema,
+        bind_result_callback: Callable[[pa.RecordBatch], None] | None,
+        projection_ids: list[int] | None,
+    ) -> ipc.RecordBatchStreamWriter:
+        """Initialize the VGI protocol stream for a table-in-out function.
+
+        Sends the FunctionRequest, reads the bind result, sends GlobalStateInitInput,
+        reads the init result, and returns a stream writer for data batches.
+
+        Args:
+            function_name: Name of the function to invoke.
+            arguments: Arguments container with positional and named arguments.
+            input_schema: Schema of the input batches.
+            bind_result_callback: Optional callback for the bind result.
+            projection_ids: Optional list of column indices to project.
+
+        Returns:
+            An IPC RecordBatchStreamWriter for sending data batches.
+
+        Raises:
+            ClientError: If protocol communication fails.
+            OSError: If writing to the worker fails.
+
+        """
+        assert self._stdin_sink is not None
+        assert self._stdout_buffered is not None
+
+        # Send initialization batch
+        log.debug("sending_init_batch", function=function_name, arguments=arguments)
+
+        call_parameters_batch_bytes = FunctionRequest(
+            function_name=function_name,
+            arguments=arguments,
+            in_out_function_input_schema=input_schema,
+            correlation_id=self.correlation_id,
+            invocation_id=None,
+        ).serialize()
+
+        if self._stdin_sink.write(call_parameters_batch_bytes) != len(
+            call_parameters_batch_bytes
+        ):
+            raise OSError("Failed to write call parameters record batch")
+
+        # Read the bind result
+        log.debug("reading_bind_schema")
+        msg = ipc.read_message(self._stdout_buffered)
+        if msg.type != "schema":
+            raise ClientError(f"Expected schema message, got {msg.type}")
+
+        bind_result_schema = ipc.read_schema(msg)
+        log.debug("bind_schema_received", schema=str(bind_result_schema))
+
+        msg = ipc.read_message(self._stdout_buffered)
+        if msg.type != "record batch":
+            raise ClientError(f"Expected bind result record batch, got {msg.type}")
+        bind_result_batch = ipc.read_record_batch(msg, bind_result_schema)
+
+        if bind_result_callback is not None:
+            bind_result_callback(bind_result_batch)
+
+        log.debug("bind_result_received")
+        log.debug("bind_result", batch=bind_result_batch)
+
+        # Send global state init input
+        global_state_info_serialized_bytes = GlobalStateInitInput(
+            projection_ids=projection_ids
+        ).serialize()
+
+        if self._stdin_sink.write(global_state_info_serialized_bytes) != len(
+            global_state_info_serialized_bytes
+        ):
+            raise OSError("Failed to write global state init input record batch")
+
+        # Read the init result
+        log.debug("reading_init_schema")
+
+        msg = ipc.read_message(self._stdout_buffered)
+        if msg.type != "schema":
+            raise ClientError(
+                f"Expected schema message for init result, got {msg.type}"
+            )
+
+        init_result_schema = ipc.read_schema(msg)
+        log.debug("init_result_schema_received", schema=str(init_result_schema))
+
+        msg = ipc.read_message(self._stdout_buffered)
+        if msg.type != "record batch":
+            raise ClientError(f"Expected init result record batch, got {msg.type}")
+
+        _init_result_batch = ipc.read_record_batch(msg, init_result_schema)
+        log.debug("init_result_received")
+
+        # Create and return the data stream writer
+        data_writer = ipc.new_stream(self._stdin_sink, input_schema)
+        log.debug("starting_data_batches")
+
+        return data_writer
+
     def __init__(
         self,
         server_path: str,
@@ -194,8 +350,8 @@ class Client:
         self,
         *,
         function_name: str,
-        arguments: Arguments,
         input: Iterator[pa.RecordBatch],
+        arguments: Arguments | None = None,
         bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
         projection_ids: list[int] | None = None,
     ) -> Generator[pa.RecordBatch, None, None]:
@@ -213,7 +369,6 @@ class Client:
             bind_result_callback: Optional callback invoked with the bind result
                 RecordBatch after the worker responds. Useful for inspecting
                 output schema or cardinality hints before processing begins.
-            correlation_id: String identifier for logging/correlation purposes.
             projection_ids: Optional list of column indices to project.
 
         Yields:
@@ -226,6 +381,9 @@ class Client:
                 returns an unexpected status.
 
         """
+        if arguments is None:
+            arguments = Arguments()
+
         if (
             self._proc is None
             or self._stdin_sink is None
@@ -236,8 +394,8 @@ class Client:
             )
 
         output_reader = None
-        input_schema = None
-        data_writer = None
+        input_schema: pa.Schema | None = None
+        data_writer: ipc.RecordBatchStreamWriter | None = None
 
         for batch_index, input_batch in enumerate(input):
             if not isinstance(input_batch, pa.RecordBatch):
@@ -245,102 +403,15 @@ class Client:
 
             if batch_index == 0:
                 input_schema = input_batch.schema
-                # Send initialization batch
-                log.debug(
-                    "sending_init_batch", function=function_name, arguments=arguments
-                )
-
-                call_parameters_batch_bytes = FunctionRequest(
+                data_writer = self._table_in_out_function_initialize_stream(
                     function_name=function_name,
                     arguments=arguments,
-                    in_out_function_input_schema=input_schema,
-                    correlation_id=self.correlation_id,
-                    invocation_id=None,
-                ).serialize()
+                    input_schema=input_schema,
+                    bind_result_callback=bind_result_callback,
+                    projection_ids=projection_ids,
+                )
 
-                if self._stdin_sink.write(call_parameters_batch_bytes) != len(
-                    call_parameters_batch_bytes
-                ):
-                    raise OSError("Failed to write call parameters record batch")
-
-                # If we close init_writer here, the underlying pipe gets closed
-                # and we can't send data batches, so we just leave it open.
-                # It will be closed be closed when this function exists
-                # which is fine.
-
-                # Read the bind data.
-                log.debug("reading_bind_schema")
-                msg = ipc.read_message(self._stdout_buffered)
-                if msg.type != "schema":
-                    raise ClientError(f"Expected schema message, got {msg.type}")
-
-                bind_result_schema = ipc.read_schema(msg)
-                log.debug("bind_schema_received", schema=str(bind_result_schema))
-
-                msg = ipc.read_message(self._stdout_buffered)
-                if msg.type != "record batch":
-                    raise ClientError(
-                        f"Expected bind result record batch, got {msg.type}"
-                    )
-                bind_result_batch = ipc.read_record_batch(msg, bind_result_schema)
-
-                if bind_result_callback is not None:
-                    bind_result_callback(bind_result_batch)
-
-                log.debug("bind_result_received")
-
-                log.debug("bind_result", batch=bind_result_batch)
-
-                # FIXME: we should validate that the projection_ids if specified
-                # don't specify columns outside of the original output schema
-                # as returned in bind_result_batch, but would require deserializing
-                # bind result batch.
-                #
-                # Which we will need to do anyway if we want to support
-                # multiple connections to the same worker process for parallelism.
-
-                global_state_info_serialized_bytes = GlobalStateInitInput(
-                    projection_ids=projection_ids
-                ).serialize()
-
-                if self._stdin_sink.write(global_state_info_serialized_bytes) != len(
-                    global_state_info_serialized_bytes
-                ):
-                    raise OSError(
-                        "Failed to write global state init input record batch"
-                    )
-
-                # Now read the init result.
-
-                log.debug("reading_init_schema")
-
-                msg = ipc.read_message(self._stdout_buffered)
-                if msg.type != "schema":
-                    raise ClientError(
-                        f"Expected schema message for init result, got {msg.type}"
-                    )
-
-                init_result_schema = ipc.read_schema(msg)
-                log.debug("init_result_schema_received", schema=str(init_result_schema))
-
-                msg = ipc.read_message(self._stdout_buffered)
-                if msg.type != "record batch":
-                    raise ClientError(
-                        f"Expected init result record batch, got {msg.type}"
-                    )
-
-                # Right now we don't have to do anything with the init result
-                # but we will need it if we were to support opening more than one
-                # connection to a new worker process as part of this call.
-                _init_result_batch = ipc.read_record_batch(msg, init_result_schema)
-                log.debug("init_result_received")
-
-                # Send data batches
-                data_writer = ipc.new_stream(self._stdin_sink, input_schema)
-                log.debug("starting_data_batches")
-
-            if data_writer is None:
-                raise ClientError("Data writer was not initialized")
+            assert data_writer is not None
 
             while True:
                 # Since a single batch may produce multiple output batches,
@@ -358,7 +429,7 @@ class Client:
                         num_rows=input_batch.num_rows,
                     )
                     # In DuckDB the same input batch is supplied if the
-                    # funciton indicates it HAVE_MORE_OUTPUT so do the
+                    # function indicates HAVE_MORE_OUTPUT so do the
                     # same thing here.
                     data_writer.write_batch(input_batch)
 
@@ -376,30 +447,7 @@ class Client:
                         status=status,
                     )
 
-                    # This could be a logging batch.
-                    if (
-                        output_batch.num_rows == 0
-                        and output_metadata.get("log_level") is not None
-                        and output_metadata.get("log_message") is not None
-                    ):
-                        extra: dict[str, Any] = {}
-                        if output_metadata.get("log_extra") is not None:
-                            try:
-                                extra = json.loads(
-                                    output_metadata["log_extra"].decode()
-                                )
-                            except json.JSONDecodeError as e:
-                                log.error(
-                                    "failed_to_decode_log_extra",
-                                    error=str(e),
-                                    raw=output_metadata["log_extra"],
-                                )
-                        level_name = output_metadata["log_level"].decode().lower()
-                        worker_log._proxy_to_logger(
-                            level_name,
-                            output_metadata.get("log_message").decode(),
-                            **extra,
-                        )
+                    if self._handle_log_message(output_batch, output_metadata):
                         continue
 
                     output_batches.append(output_batch)
@@ -441,8 +489,7 @@ class Client:
             schema=input_schema,
         )
 
-        if data_writer is None:
-            raise ClientError("Data writer was not initialized")
+        assert data_writer is not None
 
         while True:
             log.debug("sending_finalize")
@@ -459,6 +506,9 @@ class Client:
                 num_rows=output_batch.num_rows,
                 status=status,
             )
+
+            if self._handle_log_message(output_batch, output_metadata):
+                continue
 
             yield output_batch
 
@@ -647,7 +697,7 @@ def main() -> None:
             with Client(server_path, passthrough_stderr=worker_stderr) as client:
                 for output_batch in client.table_in_out_function(
                     function_name=function_name,
-                    arguments=Arguments(positional=args_list, named={}),
+                    arguments=Arguments(positional=tuple(args_list), named={}),
                     input=pf.iter_batches(),
                     projection_ids=list(projection_ids) if projection_ids else None,
                 ):
@@ -660,7 +710,6 @@ def main() -> None:
                     output_writer.write_batch(output_batch)
             log.info("processing_complete", function=function_name)
         except ClientError as e:
-            log.error("processing_error", error=str(e))
             raise click.ClickException(str(e)) from e
         finally:
             if output_writer is not None:
