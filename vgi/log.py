@@ -4,18 +4,62 @@ This module provides Level and Message for emitting diagnostic information
 during function processing. Log messages are attached to output metadata and
 transmitted to the client alongside output batches.
 
-Classes:
-    Level: Severity levels for log messages.
-    Message: Log message that can be yielded from process() or finalize().
+QUICK START
+-----------
+Yield log messages directly or attach them to Output:
 
-Example:
     from vgi.log import Level, Message
+    from vgi.table_in_out_function import Output
 
-    # Yield directly during processing
-    yield Message(Level.INFO, f"Processing {batch.num_rows} rows")
+    # Option 1: Yield directly (input will be re-sent after logging)
+    def process(self, batch):
+        _ = yield None
+        while True:
+            yield Message(Level.INFO, f"Processing {batch.num_rows} rows")
+            yield Output(batch)
+            batch = yield None
+            if batch is None:
+                break
 
-    # Or attach to Output
-    yield Output(batch, log_message=Message.info("Processed batch"))
+    # Option 2: Attach to Output
+    def process(self, batch):
+        _ = yield None
+        while True:
+            yield Output(batch, log_message=Message.info("Processed"))
+            batch = yield None
+            if batch is None:
+                break
+
+CONVENIENCE CONSTRUCTORS
+------------------------
+Message provides factory methods for each level:
+
+    Message.exception("Error occurred", traceback="...")
+    Message.error("Something went wrong")
+    Message.warn("Deprecated usage")
+    Message.info("Processing started")
+    Message.debug("Variable value", x=42)
+    Message.trace("Detailed trace")
+
+EXCEPTION HANDLING
+------------------
+When an exception occurs, use Message.from_exception() to capture
+the full traceback:
+
+    try:
+        risky_operation()
+    except Exception as e:
+        yield Message.from_exception(e)  # Includes traceback
+
+KEY CLASSES
+-----------
+Level : Enum with EXCEPTION, ERROR, WARN, INFO, DEBUG, TRACE
+Message : Log message with level, message text, and optional extras
+
+See Also
+--------
+vgi.table_in_out_function.Output : Accepts log_message parameter
+vgi.table_in_out_function.Function : Base class where logging is used
 
 """
 
@@ -25,7 +69,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
-    from vgi.function import Request
+    from vgi.function import Invocation
 
 __all__ = [
     "Level",
@@ -145,7 +189,7 @@ class Message:
         return cls(Level.TRACE, message, **kwargs)
 
     def add_to_metadata(
-        self, invocation: "Request", metadata: dict[str, str] | None = None
+        self, invocation: "Invocation", metadata: dict[str, str] | None = None
     ) -> dict[str, str]:
         """Add log message fields to an existing metadata dictionary.
 
@@ -153,7 +197,7 @@ class Message:
         the input dictionary.
 
         Args:
-            invocation: The Request for this function invocation, used
+            invocation: The Invocation for this function invocation, used
                 to include the correlation_id and invocation_id for correlation.
             metadata: Existing metadata dict to augment, or None to create new.
 

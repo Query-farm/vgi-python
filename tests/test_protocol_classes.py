@@ -1,6 +1,6 @@
 """Unit tests for VGI protocol classes.
 
-Tests cover Request, Arguments, GlobalInitResult, and table_function classes.
+Tests cover Invocation, Arguments, GlobalInitResult, and table_function classes.
 """
 
 import pyarrow as pa
@@ -9,7 +9,7 @@ import pytest
 from vgi.function import (
     Arguments,
     GlobalInitResult,
-    Request,
+    Invocation,
 )
 from vgi.log import Level, Message
 from vgi.table_function import (
@@ -143,12 +143,12 @@ class TestArguments:
         assert schema.field("named_flag").type == pa.bool_()
 
 
-class TestRequest:
-    """Tests for Request serialization and deserialization."""
+class TestInvocation:
+    """Tests for Invocation serialization and deserialization."""
 
     def test_basic_round_trip(self) -> None:
-        """Basic Request should serialize and deserialize correctly."""
-        original = Request(
+        """Basic Invocation should serialize and deserialize correctly."""
+        original = Invocation(
             function_name="test_function",
             arguments=Arguments(positional=(pa.scalar(42),), named={}),
             in_out_function_input_schema=pa.schema([pa.field("col1", pa.int64())]),
@@ -165,7 +165,7 @@ class TestRequest:
 
         reader = ipc.open_stream(serialized)
         batch = reader.read_next_batch()
-        deserialized = Request.deserialize(batch)
+        deserialized = Invocation.deserialize(batch)
 
         assert deserialized.function_name == original.function_name
         assert deserialized.correlation_id == original.correlation_id
@@ -179,8 +179,8 @@ class TestRequest:
         assert deserialized.arguments.positional[0].as_py() == 42
 
     def test_null_schema(self) -> None:
-        """Request with null input schema should round-trip correctly."""
-        original = Request(
+        """Invocation with null input schema should round-trip correctly."""
+        original = Invocation(
             function_name="scalar_function",
             in_out_function_input_schema=None,
             correlation_id="",
@@ -192,14 +192,14 @@ class TestRequest:
 
         reader = ipc.open_stream(serialized)
         batch = reader.read_next_batch()
-        deserialized = Request.deserialize(batch)
+        deserialized = Invocation.deserialize(batch)
 
         assert deserialized.function_name == "scalar_function"
         assert deserialized.in_out_function_input_schema is None
         assert deserialized.invocation_id is None
 
     def test_complex_schema(self) -> None:
-        """Request with complex schema should round-trip correctly."""
+        """Invocation with complex schema should round-trip correctly."""
         complex_schema = pa.schema(
             [
                 pa.field("int_col", pa.int32()),
@@ -210,7 +210,7 @@ class TestRequest:
             ]
         )
 
-        original = Request(
+        original = Invocation(
             function_name="complex_function",
             in_out_function_input_schema=complex_schema,
             correlation_id="complex-test",
@@ -222,7 +222,7 @@ class TestRequest:
 
         reader = ipc.open_stream(serialized)
         batch = reader.read_next_batch()
-        deserialized = Request.deserialize(batch)
+        deserialized = Invocation.deserialize(batch)
 
         assert deserialized.in_out_function_input_schema == complex_schema
 
@@ -242,7 +242,7 @@ class TestRequest:
         )
 
         with pytest.raises(ValueError, match="empty RecordBatch"):
-            Request.deserialize(empty_batch)
+            Invocation.deserialize(empty_batch)
 
     def test_deserialize_multi_row_batch_raises(self) -> None:
         """Deserializing multi-row batch should raise ValueError."""
@@ -266,11 +266,11 @@ class TestRequest:
         )
 
         with pytest.raises(ValueError, match="single-row"):
-            Request.deserialize(multi_row_batch)
+            Invocation.deserialize(multi_row_batch)
 
     def test_with_global_init_identifier(self) -> None:
-        """Test that with_global_init_identifier creates a new Request."""
-        original = Request(
+        """Test that with_global_init_identifier creates a new Invocation."""
+        original = Invocation(
             function_name="test",
             in_out_function_input_schema=None,
             correlation_id="test",

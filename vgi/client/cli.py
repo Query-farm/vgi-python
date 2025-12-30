@@ -165,6 +165,13 @@ def main() -> None:
         type=int,
         help="Projection column ID (can be specified multiple times)",
     )
+    @click.option(
+        "--max-workers",
+        "max_workers",
+        type=int,
+        default=None,
+        help="Maximum number of worker processes (clamps function's max_processes)",
+    )
     def cli(
         input_file: str,
         output_file: str | None,
@@ -174,6 +181,7 @@ def main() -> None:
         server_path: str,
         worker_stderr: bool,
         projection_ids: tuple[int, ...],
+        max_workers: int | None,
     ) -> None:
         """Send parquet data through a VGI function and display results."""
         try:
@@ -191,7 +199,9 @@ def main() -> None:
 
         output_writer: OutputWriter | None = None
         try:
-            with Client(server_path, passthrough_stderr=worker_stderr) as client:
+            with Client(
+                server_path, passthrough_stderr=worker_stderr, max_workers=max_workers
+            ) as client:
                 for output_batch in client.table_in_out_function(
                     function_name=function_name,
                     arguments=Arguments(positional=tuple(args_list), named={}),

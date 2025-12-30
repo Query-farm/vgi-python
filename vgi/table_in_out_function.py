@@ -10,7 +10,7 @@ Protocol Overview:
     3. FINALIZE: The finalize() generator is called to flush buffered data
 
 Key Components:
-    Function: Base class to subclass for custom functions.
+    TableInOutFunction: Base class to subclass for custom functions.
     Output: Return type for process()/finalize() with batch and has_more flag.
     OutputGenerator: Type alias for the process()/finalize() return type.
     ProtocolInput/ProtocolOutput: Protocol messages for the run() generator.
@@ -19,7 +19,7 @@ Quick Start (Recommended Pattern):
     The process() method uses a generator pattern. Always use this explicit
     loop structure for clarity:
 
-    class MyFunction(Function):
+    class MyFunction(TableInOutFunction):
         def process(self, batch: pa.RecordBatch) -> OutputGenerator:
             # 1. REQUIRED: Priming yield (framework advances past this)
             _ = yield None
@@ -47,9 +47,9 @@ Quick Start (Recommended Pattern):
     clarity and to avoid common mistakes.
 
 Logging:
-    Functions can emit log messages by yielding Message directly or via
-    Output.log_message. When a Message is yielded, an empty batch
-    is sent with the message in metadata, and the current input is re-sent:
+    Functions can emit log messages by yielding Message directly. When a
+    Message is yielded, an empty batch is sent with the message in metadata,
+    and the current input is re-sent:
 
         from vgi.log import Level, Message
 
@@ -62,7 +62,7 @@ Logging:
                 if batch is None:
                     break
 
-See Function docstring for comprehensive documentation and examples.
+See TableInOutFunction docstring for comprehensive documentation and examples.
 """
 
 from collections.abc import Generator
@@ -75,6 +75,7 @@ import pyarrow as pa
 import structlog
 
 import vgi.function
+import vgi.ipc_utils
 import vgi.log
 import vgi.table_function
 
@@ -84,7 +85,8 @@ __all__ = [
     "ProtocolOutput",
     "Output",
     "OutputGenerator",
-    "Function",
+    "TableInOutFunction",
+    "TableInOutSimpleFunction",
 ]
 
 
@@ -154,11 +156,13 @@ class ProtocolOutput:
     status: _OutputStatus
     log_message: vgi.log.Message | None = None
 
-    def metadata(self, invocation: vgi.function.Request) -> pa.KeyValueMetadata | None:
+    def metadata(
+        self, invocation: vgi.function.Invocation
+    ) -> pa.KeyValueMetadata | None:
         """Create metadata for this output based on the status.
 
         Args:
-            invocation: The Request for this function invocation, passed through
+            invocation: The Invocation for this function invocation, passed through
                 to Message.add_to_metadata() for correlation information.
 
         Returns:
@@ -183,12 +187,11 @@ class ProtocolOutput:
             in_finalize_phase: Whether we are in the FINALIZE phase.
 
         """
-        continue_from_current_input_output = (
-            process_result.continue_from_current_input
-            or process_result.log_message is not None
+        has_more_output = (
+            process_result.has_more or process_result.log_message is not None
         )
 
-        if continue_from_current_input_output:
+        if has_more_output:
             status = _OutputStatus.HAVE_MORE_OUTPUT
         elif in_finalize_phase:
             status = _OutputStatus.FINISHED
@@ -216,61 +219,56 @@ class Output:
 
     Attributes:
         batch: The output RecordBatch, or None to emit an empty batch.
-        continue_from_current_input: If True, the generator will receive another
-            send() call. Use this to produce multiple output batches from a
-            single input.
-        log_message: Optional log message to send with this output. When present,
-            the framework substitutes an empty batch for this yield, attaches
-            the log message to the metadata, and sets continue_from_current_input
-            to True so the generator receives another send() to continue.
-            If the log level is EXCEPTION, processing terminates instead.
+        has_more: If True, the generator will receive another send() call.
+            Use this to produce multiple output batches from a single input.
 
     Examples:
         # Normal processing - emit one batch per input
         yield Output(transformed_batch)
 
         # Emit multiple batches from one input
-        yield Output(first_batch, continue_from_current_input=True)  # more coming
-        yield Output(second_batch, continue_from_current_input=False)  # done
+        yield Output(first_batch, has_more=True)  # more coming
+        yield Output(second_batch)  # done (has_more=False is default)
 
-        # Emit a log message with processing
-        yield Output(batch, log_message=Message(Level.INFO, "Done"))
+        # For logging, yield Message directly (not via Output):
+        yield Message(Level.INFO, "Processing started")
+        yield Output(transformed_batch)
 
     """
 
     batch: pa.RecordBatch | None
-    continue_from_current_input: bool = False
-    log_message: vgi.log.Message | None = None
+    has_more: bool = False
 
 
 # Type alias for process() and finalize() return type.
 # Receives: pa.RecordBatch in process(), None in finalize().
 # Yields:
+#   - Output: Batch with optional has_more flag
+#   - Message: Log message; input will be re-sent after logging
 #   - None: No output for this input (ready for next batch)
-#   - Output: Output batch with optional continue_from_current_input flag
-#   - Message: Emit a log message; input will be re-sent after logging
 OutputGenerator = Generator[
     vgi.log.Message | Output | None, pa.RecordBatch | None, None
 ]
 
 
 @dataclass(frozen=True, slots=True)
-class _OutputComplete(Output):
-    """An Output with a guaranteed non-None batch.
+class _OutputComplete:
+    """Internal: Output with guaranteed non-None batch.
 
-    Used internally by the framework to ensure the generator always yields
-    a valid RecordBatch. When an Output has a None batch or contains
-    a log message, an empty batch is substituted.
+    Used by the framework to normalize generator yields. When the user yields
+    None, Output with None batch, or Message, this class ensures we always
+    have a valid RecordBatch for the protocol.
 
     Attributes:
         batch: Always a valid RecordBatch (never None).
-        continue_from_current_input: Inherited from Output; set to True when a
-            log message is present to ensure the message is delivered.
-        log_message: Inherited from Output.
+        has_more: If True, generator expects another send() call.
+        log_message: Present when user yielded Message directly.
 
     """
 
     batch: pa.RecordBatch
+    has_more: bool = False
+    log_message: vgi.log.Message | None = None
 
     @classmethod
     def from_process_result(
@@ -278,38 +276,28 @@ class _OutputComplete(Output):
         source: vgi.log.Message | Output | None,
         empty_batch: pa.RecordBatch,
     ) -> "_OutputComplete":
-        """Create an OutputComplete from an Output.
+        """Create from user's yield value.
 
         Args:
-            source: The original Output from process() or finalize().
-            empty_batch: An empty batch to use when source.batch is None
-                or when a log message is present.
+            source: What the user yielded (Output, Message, or None).
+            empty_batch: Empty batch to substitute when needed.
 
         Returns:
-            An OutputComplete with a guaranteed non-None batch.
+            Normalized output with guaranteed non-None batch.
 
         """
         if source is None:
-            return cls(
-                batch=empty_batch, continue_from_current_input=False, log_message=None
-            )
+            return cls(batch=empty_batch)
         if isinstance(source, vgi.log.Message):
-            return cls(
-                batch=empty_batch, continue_from_current_input=True, log_message=source
-            )
-
+            return cls(batch=empty_batch, has_more=True, log_message=source)
+        # source is Output
         return cls(
-            batch=empty_batch
-            if source.batch is None or source.log_message is not None
-            else source.batch,
-            continue_from_current_input=True
-            if source.log_message is not None
-            else source.continue_from_current_input,
-            log_message=source.log_message,
+            batch=source.batch if source.batch is not None else empty_batch,
+            has_more=source.has_more,
         )
 
 
-class Function(vgi.table_function.Function):
+class TableInOutFunction(vgi.table_function.TableFunction):
     """Base class for streaming table functions that transform Arrow RecordBatches.
 
     This class handles functions that receive arguments and a streaming table input,
@@ -328,11 +316,13 @@ class Function(vgi.table_function.Function):
        get the output schema.
 
     2. DATA: Your process() generator receives RecordBatch objects via yield.
-       Yield Output(batch, continue_from_current_input) for each input.
-       If continue_from_current_input=True, you'll receive another send().
+       Yield Output(batch, has_more) for each input.
+       If has_more=True, you'll receive another send().
 
     3. FINALIZE: Your finalize() generator is called to emit buffered/aggregated
-       results. Set continue_from_current_input=True to emit multiple batches.
+       results. Set has_more=True to emit multiple batches.
+
+    4. TEARDOWN: The teardown() method is called for resource cleanup.
 
     METHODS TO OVERRIDE
     -------------------
@@ -356,14 +346,13 @@ class Function(vgi.table_function.Function):
         - yield return value: Subsequent batches, or None when finalize begins
 
         Yield options:
-        - Output: Batch with optional continue_from_current_input and log_message
+        - Output: Batch with optional has_more flag
         - Message: Emit a log message directly (input will be re-sent)
         - None: No output, ready for next batch
 
         The Output contains:
         - batch: A RecordBatch conforming to output_schema, or None for empty
-        - continue_from_current_input: If True, you will receive another send() call
-        - log_message: Optional Message for logging or error reporting
+        - has_more: If True, you will receive another send() call
 
         Default: passes input batches through unchanged (passthrough)
 
@@ -373,9 +362,20 @@ class Function(vgi.table_function.Function):
         If returning a generator, it must:
         1. Yield None for priming (value is discarded)
         2. Yield Output for each output batch
-        3. Set continue_from_current_input=True to emit multiple batches
+        3. Set has_more=True to emit multiple batches
 
         Default: returns None (no finalization output)
+
+    setup() -> None
+        Called before processing starts, after init_data is available.
+        Override to acquire resources like database connections, file handles,
+        or external service clients. Default: no-op.
+
+    teardown() -> None
+        Called after processing completes on every worker. Override to release
+        resources acquired in setup(). Called on primary worker after finalize(),
+        on secondary workers after process() (no finalize). Always called, even
+        if an error occurred. Default: no-op.
 
     AVAILABLE ATTRIBUTES
     --------------------
@@ -390,12 +390,33 @@ class Function(vgi.table_function.Function):
         need to signal "no output for this input" - return Output(None) is
         equivalent.
 
+    RESOURCE MANAGEMENT
+    -------------------
+    Functions can use setup/teardown for resource cleanup:
+
+        class MyDbFunction(TableInOutFunction):
+            def setup(self) -> None:
+                self.conn = sqlite3.connect("my.db")
+
+            def teardown(self) -> None:
+                self.conn.close()
+
+            def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+                _ = yield None
+                while True:
+                    # Use self.conn safely - guaranteed to be cleaned up
+                    self.conn.execute(...)
+                    yield Output(batch)
+                    batch = yield None
+                    if batch is None:
+                        break
+
     CALLER PROTOCOL
     ---------------
-    To use a Function, the caller must:
+    To use a TableInOutFunction, the caller must:
 
     1. Create the bind result:
-       invocation = vgi.function.Request(
+       invocation = vgi.function.Invocation(
            function_name="my_function",
            arguments=vgi.function.Arguments(positional=[], named={}),
            in_out_function_input_schema=input_schema,
@@ -423,7 +444,7 @@ class Function(vgi.table_function.Function):
 
     def __init__(
         self,
-        invocation: vgi.function.Request,
+        invocation: vgi.function.Invocation,
         logger: structlog.stdlib.BoundLogger,
     ):
         """Initialize the function with invocation data and logger."""
@@ -432,6 +453,33 @@ class Function(vgi.table_function.Function):
         if invocation.in_out_function_input_schema is None:
             raise ValueError("Function requires a non-null input schema")
         self.input_schema = invocation.in_out_function_input_schema
+
+    def setup(self) -> None:
+        """Acquire resources before processing starts.
+
+        Override to acquire resources like database connections, file handles,
+        or external service clients. Called after init_data is available.
+
+        Available at this point:
+            - self.init_data: The GlobalStateInitInput with projection info
+            - self.init_identifier: Storage key for distributed state
+            - self.input_schema: The input schema
+            - self.arguments: Function arguments
+
+        """
+        pass
+
+    def teardown(self) -> None:
+        """Release resources after processing completes.
+
+        Override to release resources acquired in setup(). This is called:
+        - On the primary worker: after finalize() completes
+        - On secondary workers: after process() completes (no finalize)
+
+        Always called, even if an error occurred during processing.
+
+        """
+        pass
 
     @final
     @cached_property
@@ -531,7 +579,7 @@ class Function(vgi.table_function.Function):
 
         Yield options:
             None: No output for this input, ready for next batch.
-            Output: Batch with optional continue_from_current_input and log_message.
+            Output: Batch with optional has_more flag.
             Message: Emit log message directly; current input will be re-sent.
 
         When yielding Message directly, the framework sends an empty batch
@@ -568,13 +616,17 @@ class Function(vgi.table_function.Function):
     def run(self) -> Generator[ProtocolOutput, ProtocolInput | None, None]:
         """Run the function protocol. Do not override.
 
-        This generator implements the DATA* -> FINALIZE lifecycle:
+        This generator implements the SETUP -> DATA -> FINALIZE -> TEARDOWN lifecycle:
 
-        1. DATA: Receives input batches via send(), yields outputs. Continues
+        1. SETUP: Calls setup() for resource acquisition.
+
+        2. DATA: Receives input batches via send(), yields outputs. Continues
            until caller sends metadata with type="FINALIZE".
 
-        2. FINALIZE: Calls finalize() generator, yields outputs until
-           continue_from_current_input=False, then yields FINISHED status.
+        3. FINALIZE: Calls finalize() generator, yields outputs until
+           has_more=False, then yields FINISHED status.
+
+        4. TEARDOWN: Calls teardown() for resource cleanup (always, even on error).
 
         Protocol:
             - Caller primes with next() or send(None)
@@ -587,6 +639,9 @@ class Function(vgi.table_function.Function):
         )
         if input is None:
             raise ValueError("Expected ProtocolInput, got None")
+
+        # Acquire resources before processing
+        self.setup()
 
         generator = self.process(input.batch)
         # Prime the process() generator past the initial yield
@@ -623,7 +678,7 @@ class Function(vgi.table_function.Function):
             # FINALIZE phase - send None to signal finalize
             while True:
                 result = self._process_with_exception_handling(finalize_generator, None)
-                if result.continue_from_current_input:
+                if result.has_more:
                     input = yield ProtocolOutput.from_process_result(
                         result, in_finalize_phase=True
                     )
@@ -641,3 +696,338 @@ class Function(vgi.table_function.Function):
             # This allows functions to catch GeneratorExit for cleanup (e.g.,
             # saving state in distributed functions).
             generator.close()
+            # Release resources after processing completes
+            self.teardown()
+
+
+class TableInOutSimpleFunction(TableInOutFunction):
+    """Simplified base class using callbacks instead of generators.
+
+    This class provides a simpler API for common use cases where you don't need
+    the full power of generators. Instead of implementing process() and finalize()
+    as generators, you override transform() and optionally finish() as regular methods.
+
+    METHODS TO OVERRIDE
+    -------------------
+    transform(batch) -> pa.RecordBatch | list[pa.RecordBatch]
+        Called for each input batch. Return a single transformed batch,
+        or a list of batches if you need multiple outputs per input.
+        Default: returns input batch unchanged (passthrough).
+
+    finish() -> list[pa.RecordBatch]
+        Called after all input is processed. Return a list of final batches,
+        or an empty list if no finalization is needed.
+        Default: returns empty list.
+
+    output_schema -> pa.Schema (property)
+        Override to define the output schema if different from input.
+        Default: returns input schema (passthrough).
+
+    LOGGING
+    -------
+    Call self.log(level, message) from transform() to emit log messages:
+
+        def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
+            self.log(Level.INFO, f"Processing {batch.num_rows} rows")
+            return batch
+
+    DISTRIBUTED PROCESSING
+    ----------------------
+    For parallel aggregations, override save_state() and load_states():
+
+    save_state() -> RecordBatchState | None
+        Called on each worker before finalize. Return partial state to save.
+        Default: returns None (no state).
+
+    load_states(states: list[RecordBatchState]) -> None
+        Called on primary worker with all worker states before finish().
+        Default: no-op.
+
+    Examples
+    --------
+    Passthrough (no-op):
+
+        class Echo(TableInOutSimpleFunction):
+            pass  # Default transform() returns batch unchanged
+
+    Transform each batch:
+
+        class DoubleValues(TableInOutSimpleFunction):
+            def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
+                doubled = pc.multiply(batch.column(0), 2)
+                return batch.set_column(0, batch.schema[0].name, doubled)
+
+    Multiple outputs per input:
+
+        class TripleOutput(TableInOutSimpleFunction):
+            def transform(self, batch: pa.RecordBatch) -> list[pa.RecordBatch]:
+                return [batch, batch, batch]  # Emit 3 copies
+
+    Aggregation with logging:
+
+        class SumColumn(TableInOutSimpleFunction):
+            def __init__(self, invocation, logger):
+                super().__init__(invocation, logger)
+                self.total = 0
+
+            @property
+            def output_schema(self) -> pa.Schema:
+                return pa.schema([("sum", pa.int64())])
+
+            def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
+                self.log(Level.INFO, f"Processing {batch.num_rows} rows")
+                self.total += pc.sum(batch.column(0)).as_py()
+                return self.empty_output_batch
+
+            def finish(self) -> list[pa.RecordBatch]:
+                self.log(Level.INFO, f"Final sum: {self.total}")
+                return [pa.RecordBatch.from_pydict(
+                    {"sum": [self.total]},
+                    schema=self.output_schema
+                )]
+
+            def max_processes(self) -> int:
+                return 1  # Single-process aggregation
+
+    Distributed aggregation (parallel workers):
+
+        class DistributedSum(TableInOutSimpleFunction):
+            def __init__(self, invocation, logger):
+                super().__init__(invocation, logger)
+                self.total = 0
+
+            @property
+            def output_schema(self) -> pa.Schema:
+                return pa.schema([("sum", pa.int64())])
+
+            def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
+                self.total += pc.sum(batch.column(0)).as_py()
+                return self.empty_output_batch
+
+            def save_state(self) -> RecordBatchState:
+                return RecordBatchState(batch=pa.RecordBatch.from_pydict(
+                    {"partial_sum": [self.total]},
+                    schema=self.output_schema
+                ))
+
+            def load_states(self, states: list[RecordBatchState]) -> None:
+                table = pa.Table.from_batches([s.batch for s in states])
+                self.total = pc.sum(table.column(0)).as_py()
+
+            def finish(self) -> list[pa.RecordBatch]:
+                return [pa.RecordBatch.from_pydict(
+                    {"sum": [self.total]},
+                    schema=self.output_schema
+                )]
+
+    """
+
+    def __init__(
+        self,
+        invocation: vgi.function.Invocation,
+        logger: structlog.stdlib.BoundLogger,
+    ) -> None:
+        """Initialize the function."""
+        super().__init__(invocation=invocation, logger=logger)
+        self._pending_messages: list[vgi.log.Message] = []
+
+    def log(self, level: vgi.log.Level, message: str) -> None:
+        """Queue a log message to be emitted.
+
+        Call this from transform() or finish() to emit log messages. Messages
+        are queued and emitted after each batch is processed.
+
+        Args:
+            level: Log severity (Level.INFO, Level.WARN, Level.ERROR, etc.)
+            message: The log message text.
+
+        Examples:
+            def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
+                self.log(Level.INFO, f"Processing {batch.num_rows} rows")
+                return batch
+
+        """
+        self._pending_messages.append(vgi.log.Message(level=level, message=message))
+
+    def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch | list[pa.RecordBatch]:
+        """Transform a single input batch.
+
+        Override this method to implement your transformation logic. This is called
+        once for each input batch.
+
+        Args:
+            batch: Input RecordBatch to transform.
+
+        Returns:
+            Either:
+            - A single pa.RecordBatch: The transformed output
+            - A list of pa.RecordBatch: Multiple outputs from this input
+            - self.empty_output_batch: To emit nothing for this input
+
+        Examples:
+            # Simple transformation
+            def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
+                return batch  # Passthrough
+
+            # Multiple outputs
+            def transform(self, batch: pa.RecordBatch) -> list[pa.RecordBatch]:
+                return [batch, batch]  # Emit twice
+
+            # Accumulate without output (for aggregations)
+            def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
+                self.buffer.append(batch)
+                return self.empty_output_batch
+
+        """
+        return batch
+
+    def finish(self) -> list[pa.RecordBatch]:
+        """Return final batches after all input is processed.
+
+        Override this method to emit results after all input batches have been
+        processed. This is useful for aggregations, sorting, or any operation
+        that needs to see all data before producing output.
+
+        Returns:
+            List of pa.RecordBatch to emit as final output.
+            Return an empty list if no finalization output is needed.
+
+        Examples:
+            # No finalization needed
+            def finish(self) -> list[pa.RecordBatch]:
+                return []
+
+            # Emit aggregation result
+            def finish(self) -> list[pa.RecordBatch]:
+                return [pa.RecordBatch.from_pydict(
+                    {"total": [self.total]},
+                    schema=self.output_schema
+                )]
+
+            # Emit buffered batches
+            def finish(self) -> list[pa.RecordBatch]:
+                return self.buffered_batches
+
+        """
+        return []
+
+    def save_state(self) -> vgi.ipc_utils.RecordBatchState | None:
+        """Save partial state before finalize (for distributed processing).
+
+        Override this method to return partial state that will be collected
+        from all workers and passed to load_states() on the primary worker.
+
+        Returns:
+            RecordBatchState containing partial results, or None if no state.
+
+        Examples:
+            def save_state(self) -> RecordBatchState:
+                return RecordBatchState(batch=pa.RecordBatch.from_pydict(
+                    {"partial_sum": [self.total]},
+                    schema=self.output_schema
+                ))
+
+        """
+        return None
+
+    def load_states(
+        self, states: list[vgi.ipc_utils.RecordBatchState]
+    ) -> None:
+        """Load and merge states from all workers (for distributed processing).
+
+        Override this method to combine partial states from all workers.
+        Called on the primary worker before finish().
+
+        Args:
+            states: List of RecordBatchState from all workers (including self).
+
+        Examples:
+            def load_states(self, states: list[RecordBatchState]) -> None:
+                table = pa.Table.from_batches([s.batch for s in states])
+                self.total = pc.sum(table.column("partial_sum")).as_py()
+
+        """
+        pass
+
+    @final
+    def _yield_pending_messages(self) -> OutputGenerator:
+        """Yield all pending log messages. Helper for process/finalize."""
+        while self._pending_messages:
+            msg = self._pending_messages.pop(0)
+            _ = yield msg
+
+    @final
+    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+        """Process input batches by calling transform(). Do not override.
+
+        This method implements the generator protocol by calling your transform()
+        method for each input batch. The generator boilerplate is handled for you.
+
+        """
+        _ = yield None  # Priming yield
+
+        try:
+            while True:
+                result = self.transform(batch)
+
+                # Yield any pending log messages first
+                yield from self._yield_pending_messages()
+
+                # Handle single batch or list of batches
+                if isinstance(result, list):
+                    for i, output_batch in enumerate(result):
+                        is_last = i == len(result) - 1
+                        if is_last:
+                            # Last batch: receive next input
+                            batch = yield Output(output_batch, has_more=False)
+                        else:
+                            # More batches: caller re-sends same input, we ignore it
+                            _ = yield Output(output_batch, has_more=True)
+                else:
+                    # Single batch: yield output and receive next input
+                    batch = yield Output(result)
+
+                if batch is None:
+                    break
+        except GeneratorExit:
+            # Save state for distributed processing before generator closes
+            state = self.save_state()
+            if state is not None:
+                self.store_state(state)
+            raise
+
+    @final
+    def finalize(self) -> OutputGenerator | None:
+        """Emit final batches by calling finish(). Do not override.
+
+        This method implements the generator protocol by calling your finish()
+        method and yielding the returned batches.
+
+        """
+        # Collect states from all workers for distributed processing
+        # Only attempt if init_identifier is set (indicates distributed mode)
+        if self.init_identifier is not None:
+            states = self.collect_states(vgi.ipc_utils.RecordBatchState)
+            if states:
+                self.load_states(states)
+
+        # Call finish() and collect any log messages
+        batches = self.finish()
+
+        # Check if we have anything to yield
+        has_messages = len(self._pending_messages) > 0
+        if not batches and not has_messages:
+            return None
+
+        def _finalize_generator() -> OutputGenerator:
+            _ = yield None  # Priming yield
+
+            # Yield any pending log messages first
+            yield from self._yield_pending_messages()
+
+            # Yield output batches
+            for i, batch in enumerate(batches):
+                is_last = i == len(batches) - 1
+                yield Output(batch, has_more=not is_last)
+
+        return _finalize_generator()

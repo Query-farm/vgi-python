@@ -3,9 +3,55 @@
 This module provides helper functions for common IPC patterns used in the
 VGI protocol, reducing code duplication between client and worker.
 
+KEY FUNCTIONS
+-------------
+serialize_record_batch(batch) : Serialize RecordBatch to bytes
+deserialize_record_batch(data) : Deserialize bytes to RecordBatch
+read_ipc_batch(stream, context) : Read schema + batch from stream
+
+KEY CLASSES
+-----------
+RecordBatchState : Wrapper for RecordBatch implementing Serializable protocol.
+    Use this in distributed functions for storing/collecting state across workers.
+
+IPCError : Exception raised on IPC communication errors
+
+DISTRIBUTED STATE EXAMPLE
+-------------------------
+Store partial state when process() generator is closed:
+
+    from vgi.ipc_utils import RecordBatchState
+
+    def process(self, batch):
+        _ = yield None
+        partial_result = ...
+        try:
+            while True:
+                # accumulate partial_result
+                batch = yield None
+                if batch is None:
+                    break
+        except GeneratorExit:
+            state_batch = pa.RecordBatch.from_pydict({"sum": [total]})
+            self.store_state(RecordBatchState(batch=state_batch))
+            raise
+
+    def finalize(self):
+        _ = yield None
+        states = self.collect_states(RecordBatchState)
+        combined = pa.Table.from_batches([s.batch for s in states])
+        yield Output(aggregate(combined))
+
+See Also
+--------
+vgi.function.Serializable : Protocol that RecordBatchState implements
+vgi.function.Function.store_state : Store state for distributed processing
+vgi.function.Function.collect_states : Collect states from all workers
+
 """
 
-from typing import Any, cast
+from dataclasses import dataclass
+from typing import Any, Self, cast
 
 import pyarrow as pa
 from pyarrow import ipc
@@ -76,3 +122,43 @@ def read_ipc_batch(
     if msg.type != "record batch":
         raise IPCError(f"Expected record batch for {context}, got {msg.type}")
     return ipc.read_record_batch(msg, schema)
+
+
+@dataclass
+class RecordBatchState:
+    """A RecordBatch wrapper implementing the Serializable protocol.
+
+    This is a generic state container for distributed functions that need to
+    store and collect RecordBatch data across workers.
+
+    Example:
+        def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+            _ = yield None
+            try:
+                while True:
+                    # process batches...
+                    batch = yield None
+                    if batch is None:
+                        break
+            except GeneratorExit:
+                self.store_state(RecordBatchState(batch=my_state_batch))
+                raise
+
+        def finalize(self) -> OutputGenerator:
+            _ = yield None
+            states = self.collect_states(RecordBatchState)
+            table = pa.Table.from_batches([s.batch for s in states])
+            # aggregate table...
+
+    """
+
+    batch: pa.RecordBatch
+
+    def serialize(self) -> bytes:
+        """Serialize the RecordBatch to bytes."""
+        return serialize_record_batch(self.batch)
+
+    @classmethod
+    def deserialize(cls, data: bytes) -> Self:
+        """Deserialize a RecordBatch from bytes."""
+        return cls(batch=deserialize_record_batch(data))

@@ -1,4 +1,21 @@
-"""Utility functions for Arrow IPC serialization."""
+"""Utility functions for Arrow IPC serialization.
+
+This module provides low-level utilities for serializing and deserializing
+Arrow RecordBatches. Most users should use the higher-level functions in
+vgi.ipc_utils instead.
+
+KEY FUNCTIONS
+-------------
+recordbatch_to_bytes(batch) : Serialize RecordBatch to schema + data bytes
+bytes_to_recordbatch(data) : Deserialize bytes back to RecordBatch
+validate_single_row_batch(data, class_name, required_fields)
+    : Validate batch has exactly one row and return as dict
+
+See Also
+--------
+vgi.ipc_utils : Higher-level IPC utilities for client/worker communication
+
+"""
 
 from typing import Any
 
@@ -61,3 +78,17 @@ def recordbatch_to_bytes(batch: pa.RecordBatch) -> bytes:
         batch.schema.serialize().to_pybytes() + batch.serialize().to_pybytes()
     )
     return result
+
+
+def bytes_to_recordbatch(data: bytes) -> pa.RecordBatch:
+    """Deserialize a RecordBatch from bytes (schema + data).
+
+    Args:
+        data: Bytes produced by recordbatch_to_bytes().
+
+    Returns:
+        The deserialized RecordBatch.
+
+    """
+    reader = pa.ipc.open_stream(data)
+    return reader.read_next_batch()

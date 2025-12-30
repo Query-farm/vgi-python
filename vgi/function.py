@@ -1,16 +1,16 @@
 """Core data structures for VGI function calls and bind results.
 
 This module defines the foundational classes used during function binding
-in the VGI protocol. When a client invokes a function, it sends Request
+in the VGI protocol. When a client invokes a function, it sends Invocation
 describing the function name, arguments, and input schema. The worker
 returns an OutputSpec describing the output schema and execution hints.
 
 Classes:
     Arguments: Container for positional and named function arguments.
-    Request: Complete function invocation request (name, args, schema).
+    Invocation: Complete function invocation request (name, args, schema).
     OutputSpec: Result from binding a function (output schema, etc).
 
-The Request and OutputSpec are serialized to Arrow IPC format
+The Invocation and OutputSpec are serialized to Arrow IPC format
 for transmission between client and worker processes.
 
 See Also:
@@ -21,9 +21,10 @@ See Also:
 """
 
 import os
+import sqlite3
 import uuid
 from dataclasses import dataclass, replace
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol, Self, TypeVar
 
 import pyarrow as pa
 import structlog
@@ -31,45 +32,216 @@ import structlog
 import vgi.util
 from vgi.log import Level, Message
 
+# Sentinel for missing default value
+_MISSING: Any = object()
+
+# Protocol version as (major, minor) tuple.
+# Major version changes indicate breaking changes requiring code updates.
+# Minor version changes are backward-compatible additions.
+PROTOCOL_VERSION = (1, 0)
+
 __all__ = [
     "Arguments",
     "Function",
     "GlobalInitResult",
-    "InitStorage",
     "Level",
     "Message",
     "OutputSpec",
-    "Request",
+    "PROTOCOL_VERSION",
+    "ProtocolVersionError",
+    "Invocation",
+    "Serializable",
     "SqliteInitStorage",
+    "SqliteWorkerStateStorage",
+    "negotiate_protocol_version",
 ]
+
+
+class ProtocolVersionError(Exception):
+    """Raised when protocol version negotiation fails."""
+
+
+def negotiate_protocol_version(
+    client_version: tuple[int, int],
+    worker_version: tuple[int, int] = PROTOCOL_VERSION,
+) -> tuple[int, int]:
+    """Negotiate the protocol version between client and worker.
+
+    The negotiated version is the highest version both sides support.
+    Major versions must match; minor version is the minimum of both.
+
+    Args:
+        client_version: Protocol version tuple (major, minor) from client.
+        worker_version: Protocol version tuple (major, minor) the worker supports.
+
+    Returns:
+        The negotiated protocol version tuple (major, minor).
+
+    Raises:
+        ProtocolVersionError: If major versions are incompatible.
+
+    """
+    client_major, client_minor = client_version
+    worker_major, worker_minor = worker_version
+
+    if client_major != worker_major:
+        raise ProtocolVersionError(
+            f"Protocol version mismatch: client uses major version {client_major}, "
+            f"worker uses major version {worker_major}. "
+            f"Major versions must match."
+        )
+
+    # Use the minimum minor version both sides support
+    negotiated_minor = min(client_minor, worker_minor)
+    return (client_major, negotiated_minor)
+
+
+class Serializable(Protocol):
+    """Protocol for objects that can be serialized to/from bytes.
+
+    User-defined state classes should implement this protocol to be usable
+    with the distributed function state storage framework.
+
+    Example:
+        @dataclass
+        class MySumState:
+            sums: dict[str, int]
+
+            def serialize(self) -> bytes:
+                import pickle
+                return pickle.dumps(self.sums)
+
+            @classmethod
+            def deserialize(cls, data: bytes) -> Self:
+                import pickle
+                return cls(sums=pickle.loads(data))
+
+    """
+
+    def serialize(self) -> bytes:
+        """Serialize this object to bytes."""
+        ...
+
+    @classmethod
+    def deserialize(cls, data: bytes) -> Self:
+        """Deserialize an object from bytes."""
+        ...
+
+
+# TypeVar for generic state types with Serializable bound
+StateT = TypeVar("StateT", bound=Serializable)
 
 
 @dataclass(frozen=True, slots=True)
 class Arguments:
-    """Container for function call positional and named arguments.
+    """Container for function arguments.
 
-    Arguments are passed to functions during invocation. They support both
-    positional arguments (accessed by index) and named/keyword arguments.
+    Access arguments using get() for Python values:
 
-    Serialization encodes arguments to a flat dictionary format suitable for
-    Arrow IPC: positional args become "positional_0", "positional_1", etc.,
-    and named args become "named_<name>".
+        # Positional arguments (by index)
+        count = args.get(0)                      # First argument
+        name = args.get(1, default="unnamed")    # With default
+
+        # Named arguments (by string)
+        separator = args.get("sep", default=",")
+        threshold = args.get("threshold")
+
+        # With type validation (optional, for strict checking)
+        count = args.get(0, type=pa.int64())
+
+    For direct Arrow Scalar access, use positional/named attributes:
+
+        scalar = args.positional[0]              # pa.Scalar | None
+        scalar = args.named["sep"]               # pa.Scalar
 
     Attributes:
-        positional: Tuple of positional argument values in order.
-        named: Dictionary mapping argument names to values, or None if no named args.
-
-    Example:
-        # Function call: my_func("hello", 42, separator=",")
-        args = Arguments(
-            positional=("hello", 42),
-            named={"separator": ","}
-        )
+        positional: Tuple of positional argument values as pa.Scalar.
+        named: Dictionary mapping argument names to pa.Scalar values.
 
     """
 
     positional: tuple[pa.Scalar | None, ...] = ()
     named: dict[str, pa.Scalar] | None = None
+
+    def get(
+        self,
+        key: int | str,
+        *,
+        type: pa.DataType | None = None,
+        default: Any = _MISSING,
+    ) -> Any:
+        """Get argument as Python value.
+
+        Args:
+            key: Positional index (int) or argument name (str).
+            type: Expected Arrow type. Raises TypeError if mismatch.
+            default: Value to return if argument is missing or null.
+                If not provided, raises an exception for missing/null args.
+
+        Returns:
+            The argument value as a Python object.
+
+        Raises:
+            IndexError: Positional argument not found (no default provided).
+            KeyError: Named argument not found (no default provided).
+            ValueError: Argument is null (no default provided).
+            TypeError: Argument type doesn't match `type` parameter.
+
+        Examples:
+            # Get required positional argument
+            count = args.get(0)
+
+            # Get optional argument with default
+            separator = args.get("sep", default=",")
+            page_size = args.get(1, default=100)
+
+            # Get with type validation
+            ratio = args.get(0, type=pa.float64())
+
+            # Get optional with type validation
+            limit = args.get("limit", type=pa.int64(), default=1000)
+
+        """
+        # Get the scalar based on key type
+        if isinstance(key, int):
+            # Positional argument
+            if key < 0 or key >= len(self.positional):
+                if default is not _MISSING:
+                    return default
+                raise IndexError(
+                    f"Argument {key}: index out of range "
+                    f"(have {len(self.positional)} positional arguments)"
+                )
+            scalar = self.positional[key]
+        else:
+            # Named argument
+            if self.named is None or key not in self.named:
+                if default is not _MISSING:
+                    return default
+                raise KeyError(f"Argument '{key}': not found")
+            scalar = self.named[key]
+
+        # Handle null values
+        if scalar is None or not scalar.is_valid:
+            if default is not _MISSING:
+                return default
+            if isinstance(key, int):
+                raise ValueError(f"Argument {key}: value is null")
+            else:
+                raise ValueError(f"Argument '{key}': value is null")
+
+        # Type validation (if requested)
+        if type is not None and scalar.type != type:
+            if isinstance(key, int):
+                raise TypeError(
+                    f"Argument {key}: expected {type}, got {scalar.type}"
+                )
+            else:
+                raise TypeError(
+                    f"Argument '{key}': expected {type}, got {scalar.type}"
+                )
+
+        return scalar.as_py()
 
     def encoded_dict(self) -> dict[str, pa.Scalar | None]:
         """Convert arguments to a dictionary suitable for serialization.
@@ -213,10 +385,10 @@ class GlobalInitResult:
 
 
 @dataclass(frozen=True, slots=True)
-class Request:
+class Invocation:
     """Complete function invocation request sent from client to worker.
 
-    Request encapsulates all information needed to bind and execute a function:
+    Invocation encapsulates all information needed to bind and execute a function:
     the function name, its arguments, the expected input schema (for table
     functions), and identifiers for logging and correlation.
 
@@ -233,9 +405,11 @@ class Request:
         invocation_id: Unique bytes identifying this function binding. Used to
             correlate multiple parallel workers processing the same logical call.
         global_init_identifier: Optional result from global initialization phase.
+        protocol_version: Protocol version tuple (major, minor) that the client
+            supports. The worker will respond with its version in OutputSpec.
 
     Example:
-        invocation = Request(
+        invocation = Invocation(
             function_name="sum_columns",
             arguments=Arguments(positional=("col1", "col2")),
             in_out_function_input_schema=pa.schema([pa.field("col1", pa.int64())]),
@@ -254,18 +428,19 @@ class Request:
 
     global_init_identifier: GlobalInitResult | None = None
     arguments: Arguments = Arguments()
+    protocol_version: tuple[int, int] = PROTOCOL_VERSION
 
     def with_global_init_identifier(
         self, global_init_identifier: GlobalInitResult
-    ) -> "Request":
-        """Return a new Request with the given global_init_identifier."""
+    ) -> "Invocation":
+        """Return a new Invocation with the given global_init_identifier."""
         return replace(self, global_init_identifier=global_init_identifier)
 
     def serialize(self) -> bytes:
-        """Serialize Request to an Arrow RecordBatch.
+        """Serialize Invocation to an Arrow RecordBatch.
 
         Returns:
-            RecordBatch containing serialized Request fields.
+            RecordBatch containing serialized Invocation fields.
 
         """
         args_dict = self.arguments.encoded_dict()
@@ -294,6 +469,8 @@ class Request:
                         if self.global_init_identifier
                         else None
                     ),
+                    "protocol_version_major": self.protocol_version[0],
+                    "protocol_version_minor": self.protocol_version[1],
                 }
             ],
             schema=pa.schema(
@@ -310,20 +487,22 @@ class Request:
                         pa.binary(),
                         nullable=True,
                     ),
+                    pa.field("protocol_version_major", pa.int32(), nullable=False),
+                    pa.field("protocol_version_minor", pa.int32(), nullable=False),
                 ]
             ),
         )
         return vgi.util.recordbatch_to_bytes(batch)
 
     @staticmethod
-    def deserialize(data: pa.RecordBatch) -> "Request":
-        """Deserialize Request from an Arrow RecordBatch.
+    def deserialize(data: pa.RecordBatch) -> "Invocation":
+        """Deserialize Invocation from an Arrow RecordBatch.
 
         Args:
-          data: RecordBatch containing serialized Request fields.
+          data: RecordBatch containing serialized Invocation fields.
 
         Returns:
-          Deserialized Request instance.
+          Deserialized Invocation instance.
 
         Raises:
           ValueError: If RecordBatch is empty, has multiple rows, or missing
@@ -338,7 +517,7 @@ class Request:
             "correlation_id",
         ]
         first_row = vgi.util.validate_single_row_batch(
-            data, "Request", required_fields=required_fields
+            data, "Invocation", required_fields=required_fields
         )
 
         in_out_function_input_schema = None
@@ -355,13 +534,21 @@ class Request:
             if identifier_value is not None:
                 global_init_identifier = GlobalInitResult(identifier_value)
 
-        return Request(
+        # Parse protocol version - default to (1, 0) for backward compatibility
+        protocol_version = PROTOCOL_VERSION
+        if "protocol_version_major" in data.schema.names:
+            major = first_row["protocol_version_major"]
+            minor = first_row.get("protocol_version_minor", 0)
+            protocol_version = (major, minor)
+
+        return Invocation(
             function_name=first_row["function_name"],
             arguments=Arguments.decode(data.column("arguments")[0]),
             in_out_function_input_schema=in_out_function_input_schema,
             invocation_id=first_row["invocation_id"],
             correlation_id=first_row["correlation_id"],
             global_init_identifier=global_init_identifier,
+            protocol_version=protocol_version,
         )
 
     @staticmethod
@@ -386,12 +573,15 @@ class OutputSpec:
         invocation_id: Unique bytes identifying this function invocation.
             Used to correlate multiple parallel workers processing the same
             logical function call.
+        protocol_version: Protocol version tuple (major, minor) that the worker
+            will use. Must be <= the client's requested version.
 
     """
 
     output_schema: pa.Schema
     max_processes: int
     invocation_id: bytes
+    protocol_version: tuple[int, int] = PROTOCOL_VERSION
 
     def serialize_schema(self) -> pa.Schema:
         """Return the Arrow schema used when serializing this bind result.
@@ -409,6 +599,8 @@ class OutputSpec:
                 pa.field("output_schema", pa.binary(), nullable=False),
                 pa.field("max_processes", pa.int64(), nullable=True),
                 pa.field("invocation_id", pa.binary(), nullable=True),
+                pa.field("protocol_version_major", pa.int32(), nullable=False),
+                pa.field("protocol_version_minor", pa.int32(), nullable=False),
             ]
         )
 
@@ -427,6 +619,8 @@ class OutputSpec:
             "output_schema": self.output_schema.serialize().to_pybytes(),
             "max_processes": self.max_processes,
             "invocation_id": self.invocation_id,
+            "protocol_version_major": self.protocol_version[0],
+            "protocol_version_minor": self.protocol_version[1],
         }
 
     def serialize(self) -> bytes:
@@ -449,33 +643,15 @@ class OutputSpec:
         return vgi.util.recordbatch_to_bytes(bind_result_batch)
 
 
-class InitStorage:
-    """In-process storage for init values retrievable by ID."""
+def _get_default_db_path() -> str:
+    """Return the default SQLite database path for VGI storage."""
+    from pathlib import Path
 
-    def __init__(self) -> None:
-        """Initialize empty storage."""
-        self.contents: dict[bytes, Any] = {}
+    from platformdirs import user_state_dir
 
-    def create(self, value: Any) -> bytes:
-        """Store a value and return its unique key."""
-        key = uuid.uuid4().bytes
-        self.contents[key] = value
-        return key
-
-    def get(self, key: bytes) -> Any:
-        """Retrieve a value by key, raising KeyError if not found."""
-        if key not in self.contents:
-            raise KeyError(f"Key {key.hex()} not found in InitStorage")
-        return self.contents[key]
-
-    def delete(self, key: bytes) -> None:
-        """Delete a value by key if it exists."""
-        if key in self.contents:
-            del self.contents[key]
-
-    def has(self, key: bytes) -> bool:
-        """Check if a key exists in storage."""
-        return key in self.contents
+    state_dir = Path(user_state_dir("vgi"))
+    state_dir.mkdir(parents=True, exist_ok=True)
+    return str((state_dir / "vgi_storage.db").resolve())
 
 
 class SqliteInitStorage:
@@ -486,8 +662,7 @@ class SqliteInitStorage:
     is necessary for distributed/parallel execution where workers run in
     separate subprocesses.
 
-    The storage serializes values using pickle for flexibility in storing
-    arbitrary Python objects.
+    The storage uses bytes-in-bytes-out, delegating serialization to callers.
 
     """
 
@@ -499,24 +674,12 @@ class SqliteInitStorage:
                 location in the user's state directory.
 
         """
-        import sqlite3
-        from pathlib import Path
-
-        from platformdirs import user_state_dir
-
-        if db_path is None:
-            state_dir = Path(user_state_dir("vgi"))
-            state_dir.mkdir(parents=True, exist_ok=True)
-            self.db_path = str((state_dir / "init_storage.db").resolve())
-        else:
-            self.db_path = db_path
-
-        self._sqlite3 = sqlite3
+        self.db_path = db_path if db_path is not None else _get_default_db_path()
         self._ensure_table()
 
-    def _connect(self) -> Any:
+    def _connect(self) -> sqlite3.Connection:
         """Create a new database connection."""
-        conn = self._sqlite3.connect(self.db_path, timeout=30.0)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
 
@@ -535,18 +698,23 @@ class SqliteInitStorage:
         finally:
             conn.close()
 
-    def create(self, value: Any) -> bytes:
-        """Store a value and return its unique key."""
-        import pickle
+    def create(self, value: bytes) -> bytes:
+        """Store a value and return its unique key.
 
+        Args:
+            value: Serialized value bytes.
+
+        Returns:
+            Unique key for retrieving the value.
+
+        """
         key = uuid.uuid4().bytes
-        value_bytes = pickle.dumps(value)
 
         conn = self._connect()
         try:
             conn.execute(
                 "INSERT INTO init_storage (key, value) VALUES (?, ?)",
-                (key, value_bytes),
+                (key, value),
             )
             conn.commit()
         finally:
@@ -554,10 +722,19 @@ class SqliteInitStorage:
 
         return key
 
-    def get(self, key: bytes) -> Any:
-        """Retrieve a value by key, raising KeyError if not found."""
-        import pickle
+    def get(self, key: bytes) -> bytes:
+        """Retrieve a value by key, raising KeyError if not found.
 
+        Args:
+            key: Key returned from create().
+
+        Returns:
+            The stored value bytes.
+
+        Raises:
+            KeyError: If no value exists for this key.
+
+        """
         conn = self._connect()
         try:
             cursor = conn.execute(
@@ -571,7 +748,8 @@ class SqliteInitStorage:
         if row is None:
             raise KeyError(f"Key {key.hex()} not found in SqliteInitStorage")
 
-        return pickle.loads(row[0])
+        value: bytes = row[0]
+        return value
 
     def delete(self, key: bytes) -> None:
         """Delete a value by key if it exists."""
@@ -619,15 +797,122 @@ class SqliteInitStorage:
             conn.close()
 
 
+class SqliteWorkerStateStorage:
+    """SQLite storage for worker state in distributed functions.
+
+    This storage allows distributed workers to persist their intermediate state
+    (e.g., partial aggregations) which can later be collected by the primary
+    worker during finalization.
+
+    Each worker stores its state keyed by (invocation_id, process_id). The
+    primary worker can then collect all states for a given invocation and
+    delete them atomically.
+
+    """
+
+    def __init__(self, db_path: str | None = None) -> None:
+        """Initialize SQLite worker state storage.
+
+        Args:
+            db_path: Path to the SQLite database file. If None, uses a default
+                location in the user's state directory.
+
+        """
+        self.db_path = db_path if db_path is not None else _get_default_db_path()
+        self._ensure_table()
+
+    def _connect(self) -> sqlite3.Connection:
+        """Create a new database connection."""
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
+    def _ensure_table(self) -> None:
+        """Create the worker_state table if it doesn't exist."""
+        conn = self._connect()
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS worker_state (
+                    invocation_id BLOB NOT NULL,
+                    process_id INTEGER NOT NULL,
+                    state_data BLOB NOT NULL,
+                    created_at REAL DEFAULT (julianday('now')),
+                    PRIMARY KEY (invocation_id, process_id)
+                )
+            """)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def store(self, invocation_id: bytes, process_id: int, state_data: bytes) -> None:
+        """Store or update state for a worker.
+
+        If state already exists for this (invocation_id, process_id) pair,
+        it will be replaced.
+
+        Args:
+            invocation_id: Unique identifier for the function invocation.
+            process_id: Process ID of the worker storing the state.
+            state_data: Serialized state bytes.
+
+        """
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO worker_state
+                (invocation_id, process_id, state_data, created_at)
+                VALUES (?, ?, ?, julianday('now'))
+                """,
+                (invocation_id, process_id, state_data),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def collect_and_delete(self, invocation_id: bytes) -> list[bytes]:
+        """Atomically fetch all states for an invocation and delete them.
+
+        This is typically called by the primary worker during finalization
+        to collect all worker states for aggregation.
+
+        Args:
+            invocation_id: Unique identifier for the function invocation.
+
+        Returns:
+            List of serialized state bytes from all workers.
+
+        """
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                """
+                DELETE FROM worker_state
+                WHERE invocation_id = ?
+                RETURNING state_data
+                """,
+                (invocation_id,),
+            )
+            states = [row[0] for row in cursor.fetchall()]
+            conn.commit()
+            return states
+        finally:
+            conn.close()
+
+
 class Function:
     """Base class for all VGI functions.
 
-    Functions are instantiated with Request describing the invocation,
+    Functions are instantiated with Invocation describing the invocation,
     then queried for execution hints (max_processes, invocation_id).
 
     Subclasses should override methods to customize behavior:
     - max_processes(): Parallelization hint for the query planner
     - invocation_id(): Unique ID to correlate parallel workers
+
+    For distributed functions that need to share state across workers:
+    - Use store_state() to persist worker state during GeneratorExit
+    - Use collect_states() in finalize() to gather all worker states
 
     See Also:
         vgi.table_function.Function: Adds cardinality hints.
@@ -635,7 +920,12 @@ class Function:
 
     """
 
-    init_storage: ClassVar[InitStorage | SqliteInitStorage] = SqliteInitStorage()
+    init_storage: ClassVar[SqliteInitStorage] = SqliteInitStorage()
+    state_storage: ClassVar[SqliteWorkerStateStorage] = SqliteWorkerStateStorage()
+
+    # The unique identifier for init data in storage. Set by perform_init()
+    # or retrieve_init(). Used to correlate parallel workers and for state storage.
+    init_identifier: bytes | None = None
 
     def __init__(self, *, logger: structlog.stdlib.BoundLogger):
         """Initialize the function with a logger.
@@ -653,10 +943,10 @@ class Function:
         that must process sequentially (e.g., aggregations with shared state).
 
         Returns:
-            Maximum parallel processes. Default is 1.
+            Maximum parallel processes. Default is 99999.
 
         """
-        return 1
+        return 99999
 
     def create_invocation_id(self) -> bytes:
         """Return unique identifier for this function invocation.
@@ -695,3 +985,71 @@ class Function:
     def output_schema(self) -> pa.Schema:
         """Return the output schema (must be implemented by subclass)."""
         raise NotImplementedError("Must be implemented by subclass.")
+
+    def store_state(self, state: Serializable) -> None:
+        """Store this worker's state for later collection.
+
+        Call this method during GeneratorExit handling in process() to persist
+        intermediate state (e.g., partial aggregations) that will be collected
+        by the primary worker during finalization.
+
+        The state is keyed by (init_identifier, process_id), so calling this
+        multiple times from the same process will overwrite the previous state.
+
+        Args:
+            state: A Serializable object to store.
+
+        Raises:
+            ValueError: If init_identifier has not been set.
+
+        Example:
+            def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+                _ = yield None
+                try:
+                    while True:
+                        # accumulate state...
+                        batch = yield None
+                        if batch is None:
+                            break
+                except GeneratorExit:
+                    self.store_state(MyState(accumulated_data))
+                    raise
+
+        """
+        if self.init_identifier is None:
+            raise ValueError("init_identifier must be set before storing state")
+        self.state_storage.store(
+            self.init_identifier,
+            os.getpid(),
+            state.serialize(),
+        )
+
+    def collect_states(self, state_class: type[StateT]) -> list[StateT]:
+        """Collect and delete all worker states for this invocation.
+
+        Call this method in finalize() to gather states from all workers
+        that participated in processing. The states are atomically fetched
+        and deleted from storage.
+
+        Args:
+            state_class: The class to use for deserializing states. Must have
+                a deserialize(bytes) classmethod.
+
+        Returns:
+            List of deserialized state objects from all workers.
+
+        Raises:
+            ValueError: If init_identifier has not been set.
+
+        Example:
+            def finalize(self) -> OutputGenerator:
+                _ = yield None
+                states = self.collect_states(MyState)
+                combined = combine_states(states)
+                yield Output(combined.to_batch())
+
+        """
+        if self.init_identifier is None:
+            raise ValueError("init_identifier must be set before collecting states")
+        state_bytes_list = self.state_storage.collect_and_delete(self.init_identifier)
+        return [state_class.deserialize(data) for data in state_bytes_list]

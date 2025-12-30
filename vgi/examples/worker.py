@@ -16,6 +16,7 @@ from vgi.examples.table_in_out import (
     SumAllColumnsFunction,
     SumAllColumnsFunctionDistributed,
     SumAllColumnsFunctionWithLogging,
+    SumAllColumnsSimpleDistributed,
 )
 from vgi.worker import FunctionRegistry, Worker
 
@@ -29,6 +30,7 @@ class ExampleWorker(Worker):
         "repeat_inputs": RepeatInputsFunction,
         "sum_all_columns": SumAllColumnsFunction,
         "sum_all_columns_distributed": SumAllColumnsFunctionDistributed,
+        "sum_all_columns_simple_distributed": SumAllColumnsSimpleDistributed,
         "sum_all_columns_with_logging": SumAllColumnsFunctionWithLogging,
         "exception_finalize": ExceptionFinalizeFunction,
         "exception_process": ExceptionProcessFunction,

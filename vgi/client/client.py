@@ -3,17 +3,49 @@
 This module provides the Client class for programmatic interaction with VGI workers.
 The client manages subprocess lifecycle and Arrow IPC communication.
 
-Example:
+QUICK START
+-----------
+Use Client as a context manager to ensure proper cleanup:
+
     from vgi.client import Client
     from vgi.function import Arguments
+    import pyarrow as pa
 
-    with Client("./my_worker.py") as client:
-        for batch in client.table_in_out_function(
+    # Create input batches
+    batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
+
+    with Client("vgi-example-worker") as client:
+        for output_batch in client.table_in_out_function(
             function_name="echo",
-            arguments=Arguments(positional=[], named={}),
-            input=input_batches,
+            arguments=Arguments(),
+            input=iter([batch]),
         ):
-            process(batch)
+            print(output_batch.to_pydict())
+
+PARALLEL PROCESSING
+-------------------
+When a function returns max_processes > 1, the client automatically spawns
+additional workers and distributes batches across them. Output order may
+not match input order in parallel mode.
+
+KEY CLASSES
+-----------
+    Client          - Main class for invoking functions on workers
+    ClientError     - Exception raised on communication errors
+    WorkerConnection - Internal: holds state for a worker subprocess
+
+Methods
+-------
+client.start() : Start the worker subprocess
+client.stop() : Stop the worker subprocess
+client.table_in_out_function() : Invoke a function and stream results
+client.get_worker_stderr() : Get captured stderr from worker
+
+See Also
+--------
+vgi.worker.Worker : Base class for workers that Client spawns
+vgi.function.Invocation : Invocation structure sent to workers
+vgi.function.Arguments : Container for function arguments
 
 """
 
@@ -32,7 +64,13 @@ import pyarrow as pa
 import structlog
 from pyarrow import ipc
 
-from vgi.function import Arguments, GlobalInitResult, Request
+from vgi.function import (
+    PROTOCOL_VERSION,
+    Arguments,
+    GlobalInitResult,
+    Invocation,
+    ProtocolVersionError,
+)
 from vgi.ipc_utils import IPCError, read_ipc_batch
 from vgi.table_function import GlobalStateInitInput
 
@@ -153,7 +191,7 @@ class Client:
     ) -> ipc.RecordBatchStreamWriter:
         """Initialize the VGI protocol stream for a table-in-out function.
 
-        Sends the Request, reads the bind result, sends GlobalStateInitInput,
+        Sends the Invocation, reads the bind result, sends GlobalStateInitInput,
         reads the init result, spawns additional workers if needed, and returns
         a stream writer for data batches.
 
@@ -179,7 +217,7 @@ class Client:
         # Send initialization batch
         log.debug("sending_init_batch", function=function_name, arguments=arguments)
 
-        initial_request = Request(
+        initial_request = Invocation(
             function_name=function_name,
             arguments=arguments,
             in_out_function_input_schema=input_schema,
@@ -214,15 +252,48 @@ class Client:
             bind_result_batch.schema.get_field_index("invocation_id")
         )
         invocation_id = invocation_id_array.to_pylist()[0]
+
+        # Validate protocol version from worker
+        if "protocol_version_major" in bind_result_batch.schema.names:
+            worker_major = bind_result_batch.column(
+                bind_result_batch.schema.get_field_index("protocol_version_major")
+            ).to_pylist()[0]
+            worker_minor = bind_result_batch.column(
+                bind_result_batch.schema.get_field_index("protocol_version_minor")
+            ).to_pylist()[0]
+            worker_version = (worker_major, worker_minor)
+
+            # Verify the worker's version is compatible
+            if worker_major != PROTOCOL_VERSION[0]:
+                raise ProtocolVersionError(
+                    f"Protocol version mismatch: client uses major version "
+                    f"{PROTOCOL_VERSION[0]}, worker responded with major version "
+                    f"{worker_major}. Major versions must match."
+                )
+
+            log.debug(
+                "protocol_version_validated",
+                client_version=PROTOCOL_VERSION,
+                worker_version=worker_version,
+            )
         # Limit max_processes to the number of CPUs available
         cpu_count = os.cpu_count() or 1
         if max_processes > cpu_count:
             log.debug(
-                "limiting_max_processes",
+                "limiting_max_processes_to_cpu_count",
                 requested=max_processes,
                 cpu_count=cpu_count,
             )
             max_processes = cpu_count
+
+        # Limit max_processes to the user-specified max_workers if set
+        if self._max_workers is not None and max_processes > self._max_workers:
+            log.debug(
+                "limiting_max_processes_to_max_workers",
+                requested=max_processes,
+                max_workers=self._max_workers,
+            )
+            max_processes = self._max_workers
 
         log.debug(
             "max_processes_determined",
@@ -257,7 +328,7 @@ class Client:
         # Spawn additional workers if max_processes > 1
         if max_processes > 1:
             # Create request with global_init_identifier for additional workers
-            request_with_init = Request(
+            request_with_init = Invocation(
                 function_name=function_name,
                 arguments=arguments,
                 in_out_function_input_schema=input_schema,
@@ -266,12 +337,35 @@ class Client:
                 global_init_identifier=global_init_result,
             )
 
+            # Spawn all worker subprocesses first (fast)
             for worker_index in range(1, max_processes):
                 worker = self._spawn_worker(worker_index)
                 self._additional_workers.append(worker)
-                self._initialize_additional_worker(
-                    worker, request_with_init, input_schema
-                )
+
+            # Initialize all workers in parallel (overlaps Python startup time)
+            init_errors: list[Exception] = []
+
+            def init_worker(worker: WorkerConnection) -> None:
+                try:
+                    self._initialize_additional_worker(
+                        worker, request_with_init, input_schema
+                    )
+                except Exception as e:
+                    init_errors.append(e)
+
+            init_threads: list[threading.Thread] = []
+            for worker in self._additional_workers:
+                t = threading.Thread(target=init_worker, args=(worker,))
+                t.start()
+                init_threads.append(t)
+
+            for t in init_threads:
+                t.join()
+
+            if init_errors:
+                raise ClientError(
+                    f"Failed to initialize workers: {init_errors[0]}"
+                ) from init_errors[0]
 
             log.debug(
                 "additional_workers_spawned",
@@ -289,6 +383,7 @@ class Client:
         server_path: str,
         correlation_id: str = "",
         passthrough_stderr: bool = False,
+        max_workers: int | None = None,
     ):
         """Initialize the VGI client.
 
@@ -298,11 +393,14 @@ class Client:
             passthrough_stderr: If True, worker stderr is passed through to
                 the parent process's stderr. If False (default), stderr is
                 captured and available via get_worker_stderr().
+            max_workers: Optional maximum number of worker processes. If set,
+                clamps the function's max_processes to this value.
 
         """
         self.server_path = server_path
         self.correlation_id = correlation_id
         self.passthrough_stderr = passthrough_stderr
+        self._max_workers = max_workers
         self._proc: subprocess.Popen[bytes] | None = None
         self._stdout_buffered: io.BufferedReader | None = None
         self._stdin_sink: pa.PythonFile | None = None
@@ -374,14 +472,14 @@ class Client:
     def _initialize_additional_worker(
         self,
         worker: WorkerConnection,
-        request_with_init: Request,
+        request_with_init: Invocation,
         input_schema: pa.Schema,
     ) -> None:
         """Initialize an additional worker with the global init result.
 
         Args:
             worker: The worker connection to initialize.
-            request_with_init: Request containing the global_init_identifier.
+            request_with_init: Invocation containing the global_init_identifier.
             input_schema: Schema for the input data stream.
 
         """
@@ -393,9 +491,7 @@ class Client:
         # Send the request with global_init_identifier
         request_bytes = request_with_init.serialize()
         if worker.stdin_sink.write(request_bytes) != len(request_bytes):
-            raise OSError(
-                f"Failed to write request to worker {worker.worker_index}"
-            )
+            raise OSError(f"Failed to write request to worker {worker.worker_index}")
 
         # Read the bind result (we already have output schema from first worker)
         try:
@@ -511,9 +607,7 @@ class Client:
 
         """
         if worker.data_writer is None or worker.output_reader is None:
-            raise ClientError(
-                f"Worker {worker.worker_index} not properly initialized"
-            )
+            raise ClientError(f"Worker {worker.worker_index} not properly initialized")
 
         output_batches: list[pa.RecordBatch] = []
         while True:
@@ -704,7 +798,7 @@ class Client:
             function_name: Name of the function to invoke (must be in worker registry).
             arguments: Arguments container with positional and named arguments.
             input: Iterator yielding input RecordBatches. The first batch's schema
-                is used for the Request.in_out_function_input_schema.
+                is used for the Invocation.in_out_function_input_schema.
             bind_result_callback: Optional callback invoked with the bind result
                 RecordBatch after the worker responds. Useful for inspecting
                 output schema or cardinality hints before processing begins.

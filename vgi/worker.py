@@ -1,21 +1,23 @@
 """VGI Worker base class for hosting user-defined functions.
 
 A worker is a subprocess that communicates via stdin/stdout using Arrow IPC.
+Workers are spawned by Client for each function invocation.
 
-The worker does not support running multiple function calls in the same process,
-it is intended to be launched per-function-call by the Client.
+QUICK START
+-----------
+Create a worker by subclassing Worker and defining a registry:
 
-Protocol:
-1. Read init batch: {function_name, arguments, in_type struct}
-2. Write output schema (serialized Arrow schema bytes)
-3. Read data batches, process them through the function, write results back
-
-Usage:
     from vgi.worker import Worker
-    from vgi.table_in_out_function import Function
+    from vgi.table_in_out_function import TableInOutFunction
 
-    class MyFunction(Function):
-        ...
+    class MyFunction(TableInOutFunction):
+        def process(self, batch):
+            _ = yield None
+            while True:
+                yield Output(batch)
+                batch = yield None
+                if batch is None:
+                    break
 
     class MyWorker(Worker):
         registry = {
@@ -24,6 +26,27 @@ Usage:
 
     if __name__ == "__main__":
         MyWorker().run()
+
+PROTOCOL FLOW
+-------------
+1. Read Invocation: function name, arguments, input schema
+2. Write OutputSpec: output schema, max_processes, invocation_id
+3. Read/write GlobalStateInitInput/GlobalInitResult for initialization
+4. Stream: read input batches -> process -> write output batches
+5. Finalize: receive FINALIZE signal -> emit final results
+
+KEY CLASSES
+-----------
+    Worker          - Base class to subclass (set registry attribute)
+    FunctionRegistry - Type alias: dict[str, type[TableInOutFunction]]
+    WorkerStats     - Statistics about processing (batch_count, rows)
+
+See Also
+--------
+vgi.client.Client : Spawns workers and sends data to them
+TableInOutFunction : Base class for functions hosted by workers
+vgi.examples.worker : Example worker with built-in functions
+
 """
 
 import os
@@ -34,15 +57,19 @@ import pyarrow as pa
 import structlog
 from pyarrow import ipc
 
-from vgi.function import OutputSpec, Request
+from vgi.function import (
+    Invocation,
+    OutputSpec,
+    negotiate_protocol_version,
+)
 from vgi.ipc_utils import read_ipc_batch
 from vgi.table_in_out_function import (
-    Function,
     ProtocolInput,
+    TableInOutFunction,
 )
 
 # Type alias for the function registry mapping names to Function classes
-FunctionRegistry = dict[str, type[Function]]
+FunctionRegistry = dict[str, type[TableInOutFunction]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,8 +92,8 @@ class Worker:
     """Base class for VGI workers that host user-defined functions.
 
     Subclass this and define a `registry` class attribute mapping function names
-    to Function subclasses. The worker handles the VGI protocol:
-    reading Request, instantiating functions, and streaming batches.
+    to TableInOutFunction subclasses. The worker handles the VGI protocol:
+    reading Invocation, instantiating functions, and streaming batches.
 
     Example:
         class MyWorker(Worker):
@@ -111,9 +138,9 @@ class Worker:
         self.log.debug(f"{context}_reading")
         return read_ipc_batch(sys.stdin, context)
 
-    def _read_invocation(self) -> Request:
+    def _read_invocation(self) -> Invocation:
         """Read and parse the call data from stdin."""
-        return Request.deserialize(self._read_ipc_batch("invocation"))
+        return Invocation.deserialize(self._read_ipc_batch("invocation"))
 
     def _read_init_data(self) -> pa.RecordBatch:
         """Read and parse the init data from stdin."""
@@ -121,8 +148,8 @@ class Worker:
 
     def _process_batches(
         self,
-        instance: Function,
-        invocation: Request,
+        instance: TableInOutFunction,
+        invocation: Invocation,
         fn_log: structlog.stdlib.BoundLogger,
     ) -> WorkerStats:
         """Process data batches through the function.
@@ -216,10 +243,19 @@ class Worker:
 
         instance = self.registry[invocation.function_name](invocation, fn_log)
 
+        # Negotiate protocol version with client
+        negotiated_version = negotiate_protocol_version(invocation.protocol_version)
+        fn_log.debug(
+            "protocol_version_negotiated",
+            client_version=invocation.protocol_version,
+            negotiated_version=negotiated_version,
+        )
+
         bind_result_bytes = OutputSpec(
             output_schema=instance.output_schema,
             max_processes=instance.max_processes(),
             invocation_id=instance.create_invocation_id(),
+            protocol_version=negotiated_version,
         ).serialize()
 
         if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):

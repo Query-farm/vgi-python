@@ -3,9 +3,9 @@
 This module provides:
 - CardinalityInfo: Row count estimates for query optimization
 - OutputSpec: OutputSpec subclass with cardinality support
-- Function: Base class for table functions with cardinality
+- TableFunction: Base class for table functions with cardinality
 
-These classes are used by Function and can be used directly
+These classes are used by TableInOutFunction and can be used directly
 for custom table function implementations.
 """
 
@@ -18,7 +18,7 @@ import structlog
 import vgi.function
 import vgi.util
 
-__all__ = ["OutputSpec", "CardinalityInfo", "Function", "GlobalStateInitInput"]
+__all__ = ["OutputSpec", "CardinalityInfo", "TableFunction", "GlobalStateInitInput"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +50,7 @@ class CardinalityInfo:
 
 @dataclass(frozen=True, slots=True)
 class GlobalStateInitInput:
-    """Input sent to initialize global state for a Function.
+    """Input sent to initialize global state for a TableFunction.
 
     Attributes:
         projection_ids: Optional list of column indices to project, or None for all.
@@ -73,6 +73,12 @@ class GlobalStateInitInput:
         values = batch.to_pylist()[0]
         return GlobalStateInitInput(**values)
 
+    @staticmethod
+    def deserialize_bytes(data: bytes) -> "GlobalStateInitInput":
+        """Deserialize GlobalStateInitInput from bytes."""
+        batch = vgi.util.bytes_to_recordbatch(data)
+        return GlobalStateInitInput.deserialize(batch)
+
 
 @dataclass(frozen=True, slots=True)
 class OutputSpec(vgi.function.OutputSpec):
@@ -87,7 +93,7 @@ class OutputSpec(vgi.function.OutputSpec):
 
     """
 
-    cardinality: CardinalityInfo | None
+    cardinality: CardinalityInfo | None = None
 
     def serialize_schema(self) -> pa.Schema:
         """Extend parent schema with cardinality fields."""
@@ -108,14 +114,14 @@ class OutputSpec(vgi.function.OutputSpec):
         }
 
 
-class Function(vgi.function.Function):
+class TableFunction(vgi.function.Function):
     """Base class for table functions with cardinality estimation.
 
     Extends Function with optional cardinality hints that help query planners
     optimize execution. Override cardinality() to provide row count estimates.
 
     See Also:
-        vgi.table_in_out_function.Function: Full streaming implementation
+        vgi.table_in_out_function.TableInOutFunction: Full streaming implementation
             that extends this class with the complete DATA/FINALIZE protocol.
 
     """
@@ -123,13 +129,10 @@ class Function(vgi.function.Function):
     # This is the init data that may be been read.
     init_data: GlobalStateInitInput | None = None
 
-    # The unique identifier for the init data in storage.
-    init_identifier: bytes | None = None
-
     def __init__(
         self,
         *,
-        invocation: vgi.function.Request,
+        invocation: vgi.function.Invocation,
         logger: structlog.stdlib.BoundLogger,
     ):
         """Initialize the table function with call data.
@@ -157,7 +160,7 @@ class Function(vgi.function.Function):
     def perform_init(self, init_input: pa.RecordBatch) -> vgi.function.GlobalInitResult:
         """Perform a new init call and store it in the storage."""
         self.init_data = GlobalStateInitInput.deserialize(init_input)
-        self.init_identifier = self.init_storage.create(self.init_data)
+        self.init_identifier = self.init_storage.create(self.init_data.serialize())
         return vgi.function.GlobalInitResult(self.init_identifier)
 
     def retrieve_init(self, init_input: vgi.function.GlobalInitResult) -> None:
@@ -165,7 +168,9 @@ class Function(vgi.function.Function):
         if init_input.global_init_identifier is None:
             raise ValueError("global_init_identifier is required but was None")
         self.init_identifier = init_input.global_init_identifier
-        self.init_data = self.init_storage.get(self.init_identifier)
+        self.init_data = GlobalStateInitInput.deserialize_bytes(
+            self.init_storage.get(self.init_identifier)
+        )
 
     def apply_projection(self, schema: pa.Schema) -> pa.Schema:
         """Apply any projection specified in the init data to the schema.

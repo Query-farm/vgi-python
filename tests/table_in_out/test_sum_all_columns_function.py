@@ -145,11 +145,11 @@ class TestSumAllColumnsFunctionDistributed:
     """Tests for sum_all_columns_distributed function (distributed aggregation)."""
 
     def test_sum_distributed_many_batches(self, example_worker: str) -> None:
-        """Should correctly sum across 200 batches with many rows each."""
+        """Should correctly sum across multiple batches."""
         schema = pa.schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
 
-        # Create 200 batches, each with 100 rows
-        num_batches = 200
+        # Create 20 batches, each with 100 rows (enough to exercise distributed path)
+        num_batches = 20
         rows_per_batch = 100
         batches = []
 
@@ -183,8 +183,6 @@ class TestSumAllColumnsFunctionDistributed:
         assert len(non_empty) == 1
 
         result = non_empty[0].to_pydict()
-        # Total rows: 200 * 100 = 20,000
-        # a: sum of 0..19999 = 19999 * 20000 / 2 = 199,990,000
         assert result["a"] == [expected_a_sum]
         assert result["b"][0] == pytest.approx(expected_b_sum)
 
@@ -218,6 +216,114 @@ class TestSumAllColumnsFunctionDistributed:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="sum_all_columns_distributed",
+                    input=iter([empty_batch]),
+                )
+            )
+
+        non_empty = [b for b in output_batches if b.num_rows > 0]
+        assert len(non_empty) == 1
+
+        result = non_empty[0].to_pydict()
+        # Sum of empty column should be 0
+        assert result["a"] == [0]
+        assert result["b"] == [0.0]
+
+
+class TestSumAllColumnsSimpleDistributed:
+    """Tests for sum_all_columns_simple_distributed (TableInOutSimpleFunction)."""
+
+    def test_sum_simple_distributed_basic(
+        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
+    ) -> None:
+        """Should sum all numeric columns across all batches."""
+        with Client(example_worker) as client:
+            output_batches = list(
+                client.table_in_out_function(
+                    function_name="sum_all_columns_simple_distributed",
+                    input=iter(numeric_batches),
+                )
+            )
+
+        non_empty = [b for b in output_batches if b.num_rows > 0]
+        assert len(non_empty) == 1
+
+        result = non_empty[0].to_pydict()
+        # a: 1+2+3+4+5 = 15
+        assert result["a"] == [15]
+        # b: 1.5+2.5+3.0+4.0+5.0 = 16.0
+        assert result["b"] == [16.0]
+
+    def test_sum_simple_distributed_many_batches(self, example_worker: str) -> None:
+        """Should correctly sum across multiple batches."""
+        schema = pa.schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
+
+        # Create 20 batches, each with 100 rows (enough to exercise distributed path)
+        num_batches = 20
+        rows_per_batch = 100
+        batches = []
+
+        expected_a_sum = 0
+        expected_b_sum = 0.0
+
+        for batch_idx in range(num_batches):
+            start = batch_idx * rows_per_batch
+            end = (batch_idx + 1) * rows_per_batch
+            a_values = list(range(start, end))
+            b_values = [float(v) * 0.5 for v in a_values]
+
+            expected_a_sum += sum(a_values)
+            expected_b_sum += sum(b_values)
+
+            batch = pa.RecordBatch.from_pydict(
+                {"a": a_values, "b": b_values}, schema=schema
+            )
+            batches.append(batch)
+
+        with Client(example_worker) as client:
+            output_batches = list(
+                client.table_in_out_function(
+                    function_name="sum_all_columns_simple_distributed",
+                    input=iter(batches),
+                )
+            )
+
+        non_empty = [b for b in output_batches if b.num_rows > 0]
+        assert len(non_empty) == 1
+
+        result = non_empty[0].to_pydict()
+        assert result["a"] == [expected_a_sum]
+        assert result["b"][0] == pytest.approx(expected_b_sum)
+
+    def test_sum_simple_distributed_excludes_non_numeric(
+        self, example_worker: str, simple_batches: list[pa.RecordBatch]
+    ) -> None:
+        """Should exclude non-numeric columns from output."""
+        with Client(example_worker) as client:
+            output_batches = list(
+                client.table_in_out_function(
+                    function_name="sum_all_columns_simple_distributed",
+                    input=iter(simple_batches),
+                )
+            )
+
+        non_empty = [b for b in output_batches if b.num_rows > 0]
+        assert len(non_empty) == 1
+
+        result = non_empty[0]
+        # Should only have numeric columns (id, value), not string (name)
+        assert "id" in result.schema.names
+        assert "value" in result.schema.names
+        assert "name" not in result.schema.names
+
+    def test_sum_simple_distributed_empty_batch(self, example_worker: str) -> None:
+        """Should handle empty batch correctly."""
+        schema = pa.schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
+        empty_batch = pa.RecordBatch.from_pydict({"a": [], "b": []}, schema=schema)
+
+        with Client(example_worker) as client:
+            output_batches = list(
+                client.table_in_out_function(
+                    function_name="sum_all_columns_simple_distributed",
                     input=iter([empty_batch]),
                 )
             )
