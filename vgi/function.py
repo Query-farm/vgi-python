@@ -24,7 +24,7 @@ import os
 import sqlite3
 import uuid
 from dataclasses import dataclass, replace
-from typing import Any, ClassVar, Protocol, Self, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self, TypeVar
 
 import pyarrow as pa
 import structlog
@@ -32,6 +32,10 @@ import structlog
 import vgi.util
 from vgi.arguments import Arg, Arguments, ArgumentValidationError
 from vgi.log import Level, Message
+from vgi.metadata import MetadataMixin, ResolvedMetadata
+
+if TYPE_CHECKING:
+    pass
 
 # Protocol version as (major, minor) tuple.
 # Major version changes indicate breaking changes requiring code updates.
@@ -729,15 +733,30 @@ class SqliteWorkerStateStorage:
             conn.close()
 
 
-class Function:
+class Function(MetadataMixin):
     """Base class for all VGI functions.
 
     Functions are instantiated with Invocation describing the invocation,
     then queried for execution hints (max_processes, invocation_id).
 
-    Subclasses should override methods to customize behavior:
-    - max_processes(): Parallelization hint for the query planner
-    - invocation_id(): Unique ID to correlate parallel workers
+    Subclasses can define a nested Meta class to provide metadata:
+
+        class MyFunction(TableInOutFunction):
+            class Meta:
+                name = "my_function"
+                description = "Does something useful"
+                max_workers = 4
+                categories = ["transform"]
+
+            count = Arg[int](0, doc="Number of iterations")
+
+    Available Meta attributes:
+        name: Function name for registration (default: class name to snake_case)
+        description: Human-readable description (default: docstring first line)
+        max_workers: Maximum parallel workers (default: unlimited)
+        categories: Classification tags
+        examples: List of SQL examples
+        See vgi.metadata for all available attributes.
 
     For distributed functions that need to share state across workers:
     - Use store_state() to persist worker state during GeneratorExit
@@ -746,6 +765,7 @@ class Function:
     See Also:
         vgi.table_function.Function: Adds cardinality hints.
         vgi.table_in_out_function.Function: Full streaming implementation.
+        vgi.metadata: Complete metadata documentation.
 
     """
 
@@ -755,6 +775,9 @@ class Function:
     # The unique identifier for init data in storage. Set by perform_init()
     # or retrieve_init(). Used to correlate parallel workers and for state storage.
     init_identifier: bytes | None = None
+
+    # Cache for resolved metadata
+    _metadata_cache: ClassVar[ResolvedMetadata | None] = None
 
     def __init__(self, *, logger: structlog.stdlib.BoundLogger):
         """Initialize the function with a logger.
@@ -768,13 +791,22 @@ class Function:
     def max_processes(self) -> int:
         """Return maximum number of parallel processes this function can utilize.
 
-        Override to enable parallel execution. Return 1 (default) for functions
-        that must process sequentially (e.g., aggregations with shared state).
+        This method checks Meta.max_workers first. If not defined, returns
+        the default of 99999 (effectively unlimited).
+
+        To limit parallelism, define max_workers in your Meta class:
+
+            class MyFunction(TableInOutFunction):
+                class Meta:
+                    max_workers = 1  # Single-threaded aggregation
 
         Returns:
-            Maximum parallel processes. Default is 99999.
+            Maximum parallel processes.
 
         """
+        meta = self.get_metadata()
+        if meta.max_workers is not None:
+            return meta.max_workers
         return 99999
 
     def create_invocation_id(self) -> bytes:

@@ -47,3 +47,4 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "--mypy --ruff"
+testpaths = ["tests"]

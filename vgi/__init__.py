@@ -73,6 +73,25 @@ Classes and functions exported from this module:
     schema                   - Build schemas from keyword arguments
     schema_like              - Derive schemas with modifications
 
+FUNCTION METADATA
+-----------------
+Functions can define a nested Meta class for introspection and registration:
+
+    class MyFunction(TableInOutFunction):
+        class Meta:
+            name = "my_func"
+            description = "Transform data"
+            max_workers = 4
+            categories = ["transform"]
+
+        count = Arg[int](0, doc="Iteration count")
+
+    # Access metadata
+    meta = MyFunction.get_metadata()
+    print(meta.name, meta.parameters)
+
+See vgi.metadata for complete documentation on available Meta attributes.
+
 SPECIALIZED PATTERNS
 --------------------
 For common use cases, use these specialized base classes:
@@ -110,9 +129,20 @@ See vgi.examples.table_in_out for example functions:
 """
 
 # Re-export commonly used classes for convenient imports
-from vgi.arguments import Arg, Arguments, ArgumentValidationError
+from vgi.arguments import Arg, Arguments, ArgumentValidationError, TableInput
 from vgi.function import Invocation
 from vgi.log import Level, Message
+from vgi.metadata import (
+    FunctionExample,
+    FunctionStability,
+    FunctionType,
+    OrderPreservation,
+    ParameterInfo,
+    ResolvedMetadata,
+    TableInputValidationError,
+    functions_to_arrow,
+)
+from vgi.schema_utils import schema, schema_like
 from vgi.table_in_out_function import (
     Output,
     OutputGenerator,
@@ -121,7 +151,6 @@ from vgi.table_in_out_function import (
     TableInOutGeneratorFunction,
     streaming,
 )
-from vgi.schema_utils import schema, schema_like
 from vgi.table_in_out_function_patterns import (
     AggregationFunction,
     FilterFunction,
@@ -136,17 +165,26 @@ __all__ = [
     "ArgumentValidationError",
     "Arguments",
     "FilterFunction",
+    "FunctionExample",
+    "FunctionStability",
     "FunctionTestClient",
+    "FunctionType",
     "Invocation",
     "Level",
     "MapFunction",
     "Message",
+    "OrderPreservation",
     "Output",
     "OutputGenerator",
+    "ParameterInfo",
+    "ResolvedMetadata",
     "StreamingGenerator",
     "TableInOutFunction",
     "TableInOutGeneratorFunction",
+    "TableInput",
+    "TableInputValidationError",
     "Worker",
+    "functions_to_arrow",
     "hello",
     "schema",
     "schema_like",

@@ -15,9 +15,11 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import structlog
 
-from vgi.function import Arg, Invocation
+from vgi.arguments import Arg, TableInput
+from vgi.function import Invocation
 from vgi.ipc_utils import RecordBatchState
 from vgi.log import Level, Message
+from vgi.metadata import FunctionExample
 from vgi.table_function import CardinalityInfo
 from vgi.table_in_out_function import (
     Output,
@@ -58,6 +60,21 @@ class EchoFunction(TableInOutGeneratorFunction):
 
     """
 
+    class Meta:
+        """Metadata for EchoFunction."""
+
+        name = "echo"
+        description = "Passthrough function that emits each input batch unchanged"
+        categories = ["utility", "debug"]
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM echo((SELECT * FROM input_table))",
+                description="Pass through all rows unchanged",
+            )
+        ]
+
+    data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
+
 
 class BufferInputFunction(TableInOutGeneratorFunction):
     """Buffering function that collects all input and emits during finalization.
@@ -96,9 +113,21 @@ class BufferInputFunction(TableInOutGeneratorFunction):
 
     """
 
-    def max_processes(self) -> int:
-        """Single process only - accumulates all batches in memory."""
-        return 1
+    class Meta:
+        """Metadata for BufferInputFunction."""
+
+        name = "buffer_input"
+        description = "Collects all input batches and emits during finalization"
+        categories = ["utility", "buffer"]
+        max_workers = 1
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM buffer_input((SELECT * FROM input_table))",
+                description="Buffer all input and emit on finalize",
+            )
+        ]
+
+    data: TableInput = Arg[TableInput](0, doc="Input table to buffer")  # type: ignore[assignment]
 
     def process(self, batch: pa.RecordBatch) -> OutputGenerator:
         """Buffer all input batches without producing output."""
@@ -178,7 +207,21 @@ class RepeatInputsFunction(TableInOutGeneratorFunction):
 
     """
 
-    repeat_count = Arg[int](0)
+    class Meta:
+        """Metadata for RepeatInputsFunction."""
+
+        name = "repeat_inputs"
+        description = "Duplicates each input batch N times"
+        categories = ["transform", "augmentation"]
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM repeat_inputs(3, (SELECT * FROM input_table))",
+                description="Repeat each row 3 times",
+            )
+        ]
+
+    repeat_count = Arg[int](0, doc="Number of times to repeat each input batch")
+    data: TableInput = Arg[TableInput](1, doc="Input table to repeat")  # type: ignore[assignment]
 
     def __init__(
         self, invocation: Invocation, logger: structlog.stdlib.BoundLogger
@@ -282,9 +325,21 @@ class SumAllColumnsFunction(TableInOutGeneratorFunction):
 
     """
 
-    def max_processes(self) -> int:
-        """Single process only - accumulates state across batches."""
-        return 1
+    class Meta:
+        """Metadata for SumAllColumnsFunction."""
+
+        name = "sum_all_columns"
+        description = "Computes column-wise sums across all batches"
+        categories = ["aggregation", "numeric"]
+        max_workers = 1
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM sum_all_columns((SELECT * FROM input_table))",
+                description="Sum all numeric columns",
+            )
+        ]
+
+    data: TableInput = Arg[TableInput](0, doc="Input table with numeric columns")  # type: ignore[assignment]
 
     def cardinality(self) -> CardinalityInfo | None:
         """Return cardinality estimate of exactly 1 row."""
@@ -358,6 +413,22 @@ class SumAllColumnsFunctionDistributed(SumAllColumnsFunction):
     Uses the default max_processes() from the base class to enable parallelism.
 
     """
+
+    class Meta:
+        """Metadata for SumAllColumnsFunctionDistributed."""
+
+        name = "sum_all_columns_distributed"
+        description = "Distributed column-wise sum aggregation"
+        categories = ["aggregation", "numeric", "distributed"]
+        examples = [
+            FunctionExample(
+                sql=(
+                    "SELECT * FROM sum_all_columns_distributed"
+                    "((SELECT * FROM input_table))"
+                ),
+                description="Sum columns using distributed workers",
+            )
+        ]
 
     def process(self, batch: pa.RecordBatch) -> OutputGenerator:
         """Accumulate column sums across all batches."""
@@ -433,6 +504,13 @@ class SumAllColumnsFunctionWithLogging(SumAllColumnsFunction):
 
     """
 
+    class Meta:
+        """Metadata for SumAllColumnsWithLoggingFunction."""
+
+        name = "sum_all_columns_with_logging"
+        description = "Column-wise sum with logging output"
+        categories = ["aggregation", "numeric", "debug"]
+
     def process(self, batch: pa.RecordBatch) -> OutputGenerator:
         """Accumulate column sums across all batches with logging."""
         _ = yield None
@@ -477,6 +555,13 @@ class SumAllColumnsFunctionWithLogging(SumAllColumnsFunction):
 class ExceptionProcessFunction(SumAllColumnsFunction):
     """A function that raises an exception on the second batch."""
 
+    class Meta:
+        """Metadata for ExceptionProcessFunction."""
+
+        name = "exception_process"
+        description = "Test function that raises exception during process"
+        categories = ["test", "error"]
+
     def process(self, batch: pa.RecordBatch) -> OutputGenerator:
         """Raise an exception on the second batch."""
         _ = yield None  # priming
@@ -493,6 +578,13 @@ class ExceptionProcessFunction(SumAllColumnsFunction):
 
 class ExceptionFinalizeFunction(SumAllColumnsFunction):
     """A class that demonstrates an exception raised during finalize()."""
+
+    class Meta:
+        """Metadata for ExceptionFinalizeFunction."""
+
+        name = "exception_finalize"
+        description = "Test function that raises exception during finalize"
+        categories = ["test", "error"]
 
     def finalize(self) -> OutputGenerator:
         """Emit single row containing the column sums with logging."""
@@ -537,6 +629,24 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction):
       [{a: 6, b: 6.0}]
 
     """
+
+    class Meta:
+        """Metadata for SumAllColumnsSimpleDistributed."""
+
+        name = "sum_all_columns_simple_distributed"
+        description = "Distributed sum using simple callback API"
+        categories = ["aggregation", "numeric", "distributed"]
+        examples = [
+            FunctionExample(
+                sql=(
+                    "SELECT * FROM sum_all_columns_simple_distributed"
+                    "((SELECT * FROM input_table))"
+                ),
+                description="Sum columns using distributed workers with callback API",
+            )
+        ]
+
+    data: TableInput = Arg[TableInput](0, doc="Input table with numeric columns")  # type: ignore[assignment]
 
     def __init__(
         self, invocation: Invocation, logger: structlog.stdlib.BoundLogger

@@ -33,7 +33,33 @@ __all__ = [
     "Arg",
     "ArgumentValidationError",
     "Arguments",
+    "TableInput",
 ]
+
+
+class TableInput:
+    """Sentinel type for table input parameters in table-in-out functions.
+
+    Use this as the type parameter for Arg to declare which argument receives
+    the streaming table input. Every TableInOutFunction must have exactly one
+    TableInput argument, and it must be positional (not named).
+
+    The TableInput argument determines which table expression feeds the function
+    when called from SQL. It doesn't correspond to an actual Arrow value - the
+    table data arrives as streaming RecordBatches via process().
+
+    Example:
+        class MyFunction(TableInOutFunction):
+            # Other args come first, table input last (by convention)
+            repeat_count = Arg[int](0, doc="Number of repetitions")
+            data = Arg[TableInput](1, doc="Input table to process")
+
+        # SQL: SELECT * FROM my_function(3, input_table)
+        #      repeat_count=3, data receives rows from input_table
+
+    """
+
+    pass
 
 
 @dataclass(frozen=True, slots=True)
