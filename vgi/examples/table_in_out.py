@@ -359,7 +359,7 @@ class SumAllColumnsFunctionDistributed(SumAllColumnsFunction):
 
     def max_processes(self) -> int:
         """Return the number of processes to use for this function."""
-        return 8
+        return 99999
 
     def _database(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -422,25 +422,26 @@ class SumAllColumnsFunctionDistributed(SumAllColumnsFunction):
         # The priming of the generator
         _ = yield None
 
+        sums: dict[str, pa.Scalar] = {}
         # Initialize sums to zero for each numeric column
         for field in self.output_schema:
-            self.sums[field.name] = pa.scalar(0, type=field.type)
+            sums[field.name] = pa.scalar(0, type=field.type)
 
         # Process all batches
-        while True:
-            for name in self.sums:
-                col_sum = pc.sum(batch.column(name))
-                if col_sum.is_valid:
-                    self.sums[name] = pc.add(self.sums[name], col_sum)
+        try:
+            while True:
+                for name in sums:
+                    col_sum = pc.sum(batch.column(name))
+                    if col_sum.is_valid:
+                        sums[name] = pc.add(sums[name], col_sum)
 
-            # Write this to the shared storage, because we don't know
-            # if we'll be notified at the end of the batches, our
-            # process may just close.
-            self._store_partial_state(self.sums)
-
-            batch = yield None
-            if batch is None:
-                break
+                batch = yield None
+                if batch is None:
+                    break
+        except GeneratorExit:
+            # Generator is being closed - save state before exiting
+            self._store_partial_state(sums)
+            raise
 
     def finalize(self) -> OutputGenerator:
         """Emit single row containing the column sums.

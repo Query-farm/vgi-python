@@ -40,6 +40,7 @@ __all__ = [
     "Message",
     "OutputSpec",
     "Request",
+    "SqliteInitStorage",
 ]
 
 
@@ -288,6 +289,11 @@ class Request:
                     ),
                     "invocation_id": self.invocation_id,
                     "correlation_id": self.correlation_id,
+                    GlobalInitResult._IDENTIFIER_FIELD_NAME: (
+                        self.global_init_identifier.global_init_identifier
+                        if self.global_init_identifier
+                        else None
+                    ),
                 }
             ],
             schema=pa.schema(
@@ -299,6 +305,11 @@ class Request:
                     ),
                     pa.field("invocation_id", pa.binary(), nullable=True),
                     pa.field("correlation_id", pa.string(), nullable=False),
+                    pa.field(
+                        GlobalInitResult._IDENTIFIER_FIELD_NAME,
+                        pa.binary(),
+                        nullable=True,
+                    ),
                 ]
             ),
         )
@@ -336,17 +347,21 @@ class Request:
                 pa.py_buffer(first_row["in_out_function_input_schema"])
             )
 
+        # Parse global_init_identifier - only create GlobalInitResult if field exists
+        # and has a non-None value
+        global_init_identifier = None
+        if GlobalInitResult._IDENTIFIER_FIELD_NAME in data.schema.names:
+            identifier_value = first_row[GlobalInitResult._IDENTIFIER_FIELD_NAME]
+            if identifier_value is not None:
+                global_init_identifier = GlobalInitResult(identifier_value)
+
         return Request(
             function_name=first_row["function_name"],
             arguments=Arguments.decode(data.column("arguments")[0]),
             in_out_function_input_schema=in_out_function_input_schema,
             invocation_id=first_row["invocation_id"],
             correlation_id=first_row["correlation_id"],
-            global_init_identifier=GlobalInitResult(
-                first_row[GlobalInitResult._IDENTIFIER_FIELD_NAME]
-            )
-            if GlobalInitResult._IDENTIFIER_FIELD_NAME in data.schema.names
-            else None,
+            global_init_identifier=global_init_identifier,
         )
 
     @staticmethod
@@ -463,6 +478,147 @@ class InitStorage:
         return key in self.contents
 
 
+class SqliteInitStorage:
+    """SQLite-backed storage for init values shared across processes.
+
+    This storage implementation uses SQLite with a well-known file location
+    to allow multiple worker processes to share initialization state. This
+    is necessary for distributed/parallel execution where workers run in
+    separate subprocesses.
+
+    The storage serializes values using pickle for flexibility in storing
+    arbitrary Python objects.
+
+    """
+
+    def __init__(self, db_path: str | None = None) -> None:
+        """Initialize SQLite storage.
+
+        Args:
+            db_path: Path to the SQLite database file. If None, uses a default
+                location in the user's state directory.
+
+        """
+        import sqlite3
+        from pathlib import Path
+
+        from platformdirs import user_state_dir
+
+        if db_path is None:
+            state_dir = Path(user_state_dir("vgi"))
+            state_dir.mkdir(parents=True, exist_ok=True)
+            self.db_path = str((state_dir / "init_storage.db").resolve())
+        else:
+            self.db_path = db_path
+
+        self._sqlite3 = sqlite3
+        self._ensure_table()
+
+    def _connect(self) -> Any:
+        """Create a new database connection."""
+        conn = self._sqlite3.connect(self.db_path, timeout=30.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
+    def _ensure_table(self) -> None:
+        """Create the storage table if it doesn't exist."""
+        conn = self._connect()
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS init_storage (
+                    key BLOB PRIMARY KEY,
+                    value BLOB NOT NULL,
+                    created_at REAL DEFAULT (julianday('now'))
+                )
+            """)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def create(self, value: Any) -> bytes:
+        """Store a value and return its unique key."""
+        import pickle
+
+        key = uuid.uuid4().bytes
+        value_bytes = pickle.dumps(value)
+
+        conn = self._connect()
+        try:
+            conn.execute(
+                "INSERT INTO init_storage (key, value) VALUES (?, ?)",
+                (key, value_bytes),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return key
+
+    def get(self, key: bytes) -> Any:
+        """Retrieve a value by key, raising KeyError if not found."""
+        import pickle
+
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "SELECT value FROM init_storage WHERE key = ?",
+                (key,),
+            )
+            row = cursor.fetchone()
+        finally:
+            conn.close()
+
+        if row is None:
+            raise KeyError(f"Key {key.hex()} not found in SqliteInitStorage")
+
+        return pickle.loads(row[0])
+
+    def delete(self, key: bytes) -> None:
+        """Delete a value by key if it exists."""
+        conn = self._connect()
+        try:
+            conn.execute("DELETE FROM init_storage WHERE key = ?", (key,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def has(self, key: bytes) -> bool:
+        """Check if a key exists in storage."""
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "SELECT 1 FROM init_storage WHERE key = ?",
+                (key,),
+            )
+            return cursor.fetchone() is not None
+        finally:
+            conn.close()
+
+    def cleanup_old_entries(self, max_age_days: float = 1.0) -> int:
+        """Remove entries older than the specified age.
+
+        Args:
+            max_age_days: Maximum age in days for entries to keep.
+
+        Returns:
+            Number of entries deleted.
+
+        """
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                """
+                DELETE FROM init_storage
+                WHERE julianday('now') - created_at > ?
+                """,
+                (max_age_days,),
+            )
+            conn.commit()
+            return int(cursor.rowcount)
+        finally:
+            conn.close()
+
+
 class Function:
     """Base class for all VGI functions.
 
@@ -479,7 +635,7 @@ class Function:
 
     """
 
-    init_storage: ClassVar[InitStorage] = InitStorage()
+    init_storage: ClassVar[InitStorage | SqliteInitStorage] = SqliteInitStorage()
 
     def __init__(self, *, logger: structlog.stdlib.BoundLogger):
         """Initialize the function with a logger.

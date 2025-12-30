@@ -113,7 +113,7 @@ class ProtocolInput:
 
     """
 
-    # pa.KeyValueMetadata uses bytes so we define the finalize signal as bytes
+    # pa.KeyValueMetadata uses bytes so we define signals as bytes
     _FINALIZE_SIGNAL: ClassVar[bytes] = b"FINALIZE"
 
     batch: pa.RecordBatch
@@ -592,39 +592,52 @@ class Function(vgi.table_function.Function):
         # Prime the process() generator past the initial yield
         generator.send(None)
 
-        # DATA phase
-        while not input.is_finalize:
-            result = self._process_with_exception_handling(generator, input.batch)
-            input = yield ProtocolOutput.from_process_result(
-                result, in_finalize_phase=False
-            )
-            if input is None:
-                raise ValueError("Expected ProtocolInput, got None")
-            if self._should_terminate(result):
-                return
-
-        finalize_generator = self.finalize()
-
-        # If no finalize generator, just emit FINISHED
-        if finalize_generator is None:
-            yield ProtocolOutput(
-                batch=self.empty_output_batch, status=_OutputStatus.FINISHED
-            )
-            return
-
-        finalize_generator.send(None)
-
-        # FINALIZE phase - send None to signal finalize
-        while True:
-            result = self._process_with_exception_handling(finalize_generator, None)
-            if result.continue_from_current_input:
+        try:
+            # DATA phase
+            while not input.is_finalize:
+                result = self._process_with_exception_handling(generator, input.batch)
                 input = yield ProtocolOutput.from_process_result(
-                    result, in_finalize_phase=True
+                    result, in_finalize_phase=False
                 )
                 if input is None:
                     raise ValueError("Expected ProtocolInput, got None")
                 if self._should_terminate(result):
                     return
-            else:
-                yield ProtocolOutput.from_process_result(result, in_finalize_phase=True)
+
+            # Close the process generator before finalize. This allows functions
+            # to catch GeneratorExit for cleanup (e.g., saving state in
+            # distributed functions) before finalize() aggregates results.
+            generator.close()
+
+            finalize_generator = self.finalize()
+
+            # If no finalize generator, just emit FINISHED
+            if finalize_generator is None:
+                yield ProtocolOutput(
+                    batch=self.empty_output_batch, status=_OutputStatus.FINISHED
+                )
                 return
+
+            finalize_generator.send(None)
+
+            # FINALIZE phase - send None to signal finalize
+            while True:
+                result = self._process_with_exception_handling(finalize_generator, None)
+                if result.continue_from_current_input:
+                    input = yield ProtocolOutput.from_process_result(
+                        result, in_finalize_phase=True
+                    )
+                    if input is None:
+                        raise ValueError("Expected ProtocolInput, got None")
+                    if self._should_terminate(result):
+                        return
+                else:
+                    yield ProtocolOutput.from_process_result(
+                        result, in_finalize_phase=True
+                    )
+                    return
+        finally:
+            # Ensure the process generator is closed when run() is closed.
+            # This allows functions to catch GeneratorExit for cleanup (e.g.,
+            # saving state in distributed functions).
+            generator.close()

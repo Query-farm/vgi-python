@@ -164,6 +164,10 @@ class Worker:
                     batch, metadata = data_reader.read_next_batch_with_custom_metadata()
                 except StopIteration:
                     fn_log.debug("input_stream_ended")
+                    # Close the generator to signal that no more input will arrive.
+                    # This allows functions to perform cleanup (e.g., saving state)
+                    # by catching GeneratorExit.
+                    generator.close()
                     break
 
                 batch_count += 1

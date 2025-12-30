@@ -158,7 +158,9 @@ class TestSumAllColumnsFunctionDistributed:
 
         for batch_idx in range(num_batches):
             # Each batch has values based on batch index to make sums predictable
-            a_values = list(range(batch_idx * rows_per_batch, (batch_idx + 1) * rows_per_batch))
+            start = batch_idx * rows_per_batch
+            end = (batch_idx + 1) * rows_per_batch
+            a_values = list(range(start, end))
             b_values = [float(v) * 0.5 for v in a_values]
 
             expected_a_sum += sum(a_values)
