@@ -30,10 +30,8 @@ import pyarrow as pa
 import structlog
 
 import vgi.util
+from vgi.arguments import Arg, Arguments, ArgumentValidationError
 from vgi.log import Level, Message
-
-# Sentinel for missing default value
-_MISSING: Any = object()
 
 # Protocol version as (major, minor) tuple.
 # Major version changes indicate breaking changes requiring code updates.
@@ -41,6 +39,8 @@ _MISSING: Any = object()
 PROTOCOL_VERSION = (1, 0)
 
 __all__ = [
+    "Arg",
+    "ArgumentValidationError",
     "Arguments",
     "Function",
     "GlobalInitResult",
@@ -130,177 +130,6 @@ class Serializable(Protocol):
 
 # TypeVar for generic state types with Serializable bound
 StateT = TypeVar("StateT", bound=Serializable)
-
-
-@dataclass(frozen=True, slots=True)
-class Arguments:
-    """Container for function arguments.
-
-    Access arguments using get() for Python values:
-
-        # Positional arguments (by index)
-        count = args.get(0)                      # First argument
-        name = args.get(1, default="unnamed")    # With default
-
-        # Named arguments (by string)
-        separator = args.get("sep", default=",")
-        threshold = args.get("threshold")
-
-        # With type validation (optional, for strict checking)
-        count = args.get(0, type=pa.int64())
-
-    For direct Arrow Scalar access, use positional/named attributes:
-
-        scalar = args.positional[0]              # pa.Scalar | None
-        scalar = args.named["sep"]               # pa.Scalar
-
-    Attributes:
-        positional: Tuple of positional argument values as pa.Scalar.
-        named: Dictionary mapping argument names to pa.Scalar values.
-
-    """
-
-    positional: tuple[pa.Scalar | None, ...] = ()
-    named: dict[str, pa.Scalar] | None = None
-
-    def get(
-        self,
-        key: int | str,
-        *,
-        type: pa.DataType | None = None,
-        default: Any = _MISSING,
-    ) -> Any:
-        """Get argument as Python value.
-
-        Args:
-            key: Positional index (int) or argument name (str).
-            type: Expected Arrow type. Raises TypeError if mismatch.
-            default: Value to return if argument is missing or null.
-                If not provided, raises an exception for missing/null args.
-
-        Returns:
-            The argument value as a Python object.
-
-        Raises:
-            IndexError: Positional argument not found (no default provided).
-            KeyError: Named argument not found (no default provided).
-            ValueError: Argument is null (no default provided).
-            TypeError: Argument type doesn't match `type` parameter.
-
-        Examples:
-            # Get required positional argument
-            count = args.get(0)
-
-            # Get optional argument with default
-            separator = args.get("sep", default=",")
-            page_size = args.get(1, default=100)
-
-            # Get with type validation
-            ratio = args.get(0, type=pa.float64())
-
-            # Get optional with type validation
-            limit = args.get("limit", type=pa.int64(), default=1000)
-
-        """
-        # Get the scalar based on key type
-        if isinstance(key, int):
-            # Positional argument
-            if key < 0 or key >= len(self.positional):
-                if default is not _MISSING:
-                    return default
-                raise IndexError(
-                    f"Argument {key}: index out of range "
-                    f"(have {len(self.positional)} positional arguments)"
-                )
-            scalar = self.positional[key]
-        else:
-            # Named argument
-            if self.named is None or key not in self.named:
-                if default is not _MISSING:
-                    return default
-                raise KeyError(f"Argument '{key}': not found")
-            scalar = self.named[key]
-
-        # Handle null values
-        if scalar is None or not scalar.is_valid:
-            if default is not _MISSING:
-                return default
-            if isinstance(key, int):
-                raise ValueError(f"Argument {key}: value is null")
-            else:
-                raise ValueError(f"Argument '{key}': value is null")
-
-        # Type validation (if requested)
-        if type is not None and scalar.type != type:
-            if isinstance(key, int):
-                raise TypeError(
-                    f"Argument {key}: expected {type}, got {scalar.type}"
-                )
-            else:
-                raise TypeError(
-                    f"Argument '{key}': expected {type}, got {scalar.type}"
-                )
-
-        return scalar.as_py()
-
-    def encoded_dict(self) -> dict[str, pa.Scalar | None]:
-        """Convert arguments to a dictionary suitable for serialization.
-
-        Positional arguments are stored with keys "positional_0", "positional_1", etc.
-        Named arguments are stored with their actual names prefixed by "named_".
-
-        The reason why a dictionary is used is to facilitate serialization with Arrow,
-        which can easily handle flat structures, but doesn't handle variable typed
-        arrays of arbitrary objects.
-
-        Returns:
-            Dictionary mapping argument names to their values.
-
-        """
-        return {
-            f"positional_{index}": value for index, value in enumerate(self.positional)
-        } | (
-            {f"named_{name}": value for name, value in self.named.items()}
-            if self.named
-            else {}
-        )
-
-    def schema(self) -> pa.Schema:
-        """Return Arrow schema for serializing these Arguments.
-
-        Creates a schema with one field per argument: "positional_0", "positional_1",
-        etc. for positional args, and "named_<name>" for named args. Field types
-        are inferred from the argument values.
-
-        Returns:
-            Arrow schema matching the structure returned by encoded_dict().
-
-        """
-        return pa.RecordBatch.from_pylist([self.encoded_dict()]).schema
-
-    @staticmethod
-    def decode(data: pa.StructScalar) -> "Arguments":
-        """Decode Arguments from a serialized dictionary.
-
-        Args:
-            data: Dictionary containing serialized argument fields.
-
-        Returns:
-            Deserialized Arguments instance.
-
-        """
-        positional: list[pa.Scalar | None] = []
-        named: dict[str, pa.Scalar] = {}
-        for key, value in data.items():
-            if key.startswith("positional_"):
-                index = int(key[len("positional_") :])
-                while len(positional) <= index:
-                    positional.append(None)
-                positional[index] = value
-            elif key.startswith("named_"):
-                name = key[len("named_") :]
-                named[name] = value
-        return Arguments(positional=tuple(positional), named=named or None)
 
 
 @dataclass(frozen=True, slots=True)

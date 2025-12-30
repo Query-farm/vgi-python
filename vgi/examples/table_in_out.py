@@ -15,7 +15,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import structlog
 
-from vgi.function import Invocation
+from vgi.function import Arg, Invocation
 from vgi.ipc_utils import RecordBatchState
 from vgi.log import Level, Message
 from vgi.table_function import CardinalityInfo
@@ -132,7 +132,7 @@ class RepeatInputsFunction(TableInOutGeneratorFunction):
 
     Arguments:
     ---------
-    args.get(0): int (required)
+    repeat_count = Arg[int](0): (required)
         Number of times to repeat each input batch.
 
     BEHAVIOR
@@ -149,7 +149,7 @@ class RepeatInputsFunction(TableInOutGeneratorFunction):
     STATE
     -----
     self.repeat_count: int
-        Number of times to emit each input batch (set in __init__).
+        Number of times to emit each input batch (declared via Arg descriptor).
 
     KEY PATTERN: MULTIPLE OUTPUTS FROM ONE INPUT
     ---------------------------------------------
@@ -178,14 +178,15 @@ class RepeatInputsFunction(TableInOutGeneratorFunction):
 
     """
 
+    repeat_count = Arg[int](0)
+
     def __init__(
         self, invocation: Invocation, logger: structlog.stdlib.BoundLogger
     ) -> None:
-        """Initialize with repeat count from positional argument."""
+        """Initialize and validate repeat count argument."""
         super().__init__(invocation=invocation, logger=logger)
 
-        # Use arguments.get() for clean argument access
-        self.repeat_count = self.arguments.get(0)
+        # Access to trigger validation early
         if self.repeat_count < 1:
             raise ValueError("Repeat count must be at least 1")
 

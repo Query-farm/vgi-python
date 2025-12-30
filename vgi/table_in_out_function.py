@@ -65,10 +65,10 @@ Logging:
 See TableInOutGeneratorFunction docstring for comprehensive documentation and examples.
 """
 
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from enum import Enum
-from functools import cached_property
+from functools import cached_property, wraps
 from typing import ClassVar, final
 
 import pyarrow as pa
@@ -85,6 +85,8 @@ __all__ = [
     "ProtocolOutput",
     "Output",
     "OutputGenerator",
+    "StreamingGenerator",
+    "streaming",
     "TableInOutGeneratorFunction",
     "TableInOutFunction",
 ]
@@ -249,6 +251,114 @@ class Output:
 OutputGenerator = Generator[
     vgi.log.Message | Output | None, pa.RecordBatch | None, None
 ]
+
+# Type alias for the simplified streaming function signature.
+# Used by the @streaming decorator.
+StreamingGenerator = Generator[Output | vgi.log.Message, pa.RecordBatch | None, None]
+
+def streaming[T](
+    method: Callable[[T, pa.RecordBatch], StreamingGenerator],
+) -> Callable[[T, pa.RecordBatch], OutputGenerator]:
+    """Simplify generator-based process() methods by eliminating priming yield.
+
+    Eliminates the required priming yield while keeping the same send/yield pattern.
+    The decorated method receives the first batch as a parameter and subsequent
+    batches via yield expressions.
+
+    The decorated method:
+    - Receives the first batch as a parameter
+    - Gets subsequent batches via: batch = yield Output(...)
+    - Gets None when input is exhausted
+    - Does NOT need the priming yield
+
+    Args:
+        method: A method that takes (self, first_batch) and yields Output objects,
+            receiving subsequent batches via yield.
+
+    Returns:
+        A wrapped method compatible with the VGI generator protocol.
+
+    Examples:
+        Using the @streaming decorator (recommended for new code):
+
+        ```python
+        class MyFunction(TableInOutGeneratorFunction):
+            @streaming
+            def process(self, batch: pa.RecordBatch) -> StreamingGenerator:
+                # No priming yield needed!
+                while batch is not None:
+                    batch = yield Output(batch)
+        ```
+
+        Equivalent without decorator (more verbose):
+
+        ```python
+        class MyFunction(TableInOutGeneratorFunction):
+            def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+                _ = yield None  # Required priming yield
+
+                while True:
+                    yield Output(batch)
+                    batch = yield None
+                    if batch is None:
+                        break
+        ```
+
+        With logging:
+
+        ```python
+        class LoggingFunction(TableInOutGeneratorFunction):
+            @streaming
+            def process(self, batch: pa.RecordBatch) -> StreamingGenerator:
+                while batch is not None:
+                    yield Message(Level.INFO, f"Processing {batch.num_rows} rows")
+                    batch = yield Output(batch)
+        ```
+
+        Aggregation pattern:
+
+        ```python
+        class SumFunction(TableInOutGeneratorFunction):
+            @streaming
+            def process(self, batch: pa.RecordBatch) -> StreamingGenerator:
+                while batch is not None:
+                    self.total += pc.sum(batch.column(0)).as_py()
+                    batch = yield Output(self.empty_output_batch)
+                # Note: for aggregations, also implement finalize()
+        ```
+
+    """
+
+    @wraps(method)
+    def wrapper(self: T, first_batch: pa.RecordBatch) -> OutputGenerator:
+        # Priming yield (required by VGI protocol, handled by decorator)
+        _ = yield None
+
+        # Create and run user's generator
+        user_gen = method(self, first_batch)
+
+        try:
+            # Get first output from user
+            output = next(user_gen)
+        except StopIteration:
+            return
+
+        while True:
+            # Yield output and receive next batch from VGI
+            next_batch = yield output
+
+            if next_batch is None:
+                # Signal end of input - close user's generator cleanly
+                user_gen.close()
+                return
+
+            try:
+                # Send next batch to user and get their next output
+                output = user_gen.send(next_batch)
+            except StopIteration:
+                return
+
+    return wrapper
 
 
 @dataclass(frozen=True, slots=True)

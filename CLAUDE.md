@@ -480,10 +480,13 @@ def finalize(self) -> OutputGenerator | None:
 
 ```python
 # Simple API (recommended for most uses)
-from vgi import TableInOutFunction, Invocation, Arguments, Worker
+from vgi import TableInOutFunction, Invocation, Arg, Worker
+
+# Schema helpers (for output_schema definitions)
+from vgi import schema, schema_like
 
 # Generator API (advanced)
-from vgi import TableInOutGeneratorFunction, Output, OutputGenerator, Invocation, Arguments, Worker
+from vgi import TableInOutGeneratorFunction, Output, OutputGenerator, Invocation, Arg, Worker
 
 # Logging
 from vgi.log import Level, Message
@@ -498,6 +501,81 @@ from vgi.ipc_utils import RecordBatchState
 from vgi.client import Client
 ```
 
+### Schema Helpers
+
+Use `schema()` and `schema_like()` to define output schemas with minimal boilerplate.
+
+**schema() - Build from scratch:**
+
+```python
+from vgi import schema, TableInOutFunction
+import pyarrow as pa
+
+class MyFunction(TableInOutFunction):
+    @property
+    def output_schema(self) -> pa.Schema:
+        # Concise: keyword arguments map names to types
+        return schema(sum=pa.int64(), count=pa.int64(), avg=pa.float64())
+
+        # Equivalent verbose form:
+        # return pa.schema([
+        #     pa.field("sum", pa.int64()),
+        #     pa.field("count", pa.int64()),
+        #     pa.field("avg", pa.float64()),
+        # ])
+```
+
+**schema_like() - Derive from input:**
+
+```python
+from vgi import schema_like, TableInOutFunction
+import pyarrow as pa
+
+class MyFunction(TableInOutFunction):
+    @property
+    def output_schema(self) -> pa.Schema:
+        # Add a column to input schema
+        return schema_like(self.input_schema, add={"total": pa.int64()})
+
+        # Remove columns
+        return schema_like(self.input_schema, remove=["temp", "debug"])
+
+        # Rename columns
+        return schema_like(self.input_schema, rename={"old_name": "new_name"})
+
+        # Change column type (keeps position)
+        return schema_like(self.input_schema, replace={"count": pa.float64()})
+
+        # Combine operations (order: remove → rename → replace → add)
+        return schema_like(
+            self.input_schema,
+            remove=["temp"],
+            rename={"val": "value"},
+            replace={"count": pa.float64()},
+            add={"computed": pa.int64()},
+        )
+```
+
+**Common Schema Patterns:**
+
+```python
+# Aggregation output (different from input)
+output_schema = schema(sum=pa.int64(), count=pa.int64())
+
+# Passthrough with extra column
+output_schema = schema_like(self.input_schema, add={"processed": pa.bool_()})
+
+# From a dict (programmatic)
+fields = {"a": pa.int64(), "b": pa.string()}
+output_schema = schema(fields)
+
+# Type promotion for aggregation
+output_schema = schema_like(
+    self.input_schema,
+    replace={"value": pa.float64()},  # int32 → float64 for avg
+)
+```
+
 ### Type Summary
 
 | Type | Description | Module |
@@ -508,16 +586,47 @@ from vgi.client import Client
 | `OutputGenerator` | Return type for process()/finalize() | `vgi.table_in_out_function` |
 | `Invocation` | Function invocation request | `vgi.function` |
 | `Arguments` | Positional and named arguments | `vgi.function` |
+| `Arg` | Descriptor for declarative argument parsing | `vgi.function` |
 | `Worker` | Base class for worker processes | `vgi.worker` |
 | `Client` | Invokes functions on workers | `vgi.client` |
 | `Level` | Log severity enum | `vgi.log` |
 | `Message` | Log message object | `vgi.log` |
 | `CardinalityInfo` | Row count estimates | `vgi.table_function` |
 | `RecordBatchState` | State wrapper for distributed functions | `vgi.ipc_utils` |
+| `schema` | Build schemas from keyword arguments | `vgi.schema_utils` |
+| `schema_like` | Derive schemas with modifications | `vgi.schema_utils` |
 
 ### Accessing Arguments
 
-Use `self.arguments.get()` to access function arguments:
+**Option 1: Declarative with `Arg` descriptor (recommended)**
+
+Declare arguments as class attributes - no `__init__` override needed:
+
+```python
+from vgi import TableInOutFunction, Arg
+
+class MyFunction(TableInOutFunction):
+    # Required positional argument (index 0)
+    count = Arg[int](0)
+
+    # Optional positional with default
+    multiplier = Arg[int](1, default=1)
+
+    # Required named argument
+    column = Arg[str]("column")
+
+    # Optional named with default
+    format = Arg[str]("format", default="json")
+
+    def transform(self, batch):
+        # self.count, self.multiplier, etc. are available
+        # IDE knows: self.count is int, self.format is str
+        return batch
+```
+
+**Option 2: Manual with `self.arguments.get()`**
+
+Parse arguments in `__init__`:
 
 ```python
 # Positional arguments (by index)
@@ -536,8 +645,7 @@ count = self.arguments.get(0, type=pa.int64())     # Raises TypeError if wrong t
 
 ```python
 import pyarrow as pa
-import structlog
-from vgi import TableInOutFunction, Invocation
+from vgi import TableInOutFunction, Arg
 
 class MyFunction(TableInOutFunction):
     """One-line description.
@@ -545,11 +653,9 @@ class MyFunction(TableInOutFunction):
     Detailed description of what this function does.
     """
 
-    def __init__(self, invocation: Invocation, logger: structlog.stdlib.BoundLogger):
-        super().__init__(invocation=invocation, logger=logger)
-        # Access arguments with self.arguments.get()
-        # self.count = self.arguments.get(0)
-        # self.separator = self.arguments.get("sep", default=",")
+    # Declare arguments as class attributes (no __init__ needed)
+    # count = Arg[int](0)                        # Required positional
+    # separator = Arg[str]("sep", default=",")   # Optional named
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -570,8 +676,7 @@ class MyFunction(TableInOutFunction):
 
 ```python
 import pyarrow as pa
-import structlog
-from vgi import TableInOutGeneratorFunction, Output, OutputGenerator, Invocation
+from vgi import TableInOutGeneratorFunction, Output, OutputGenerator, Arg
 
 class MyFunction(TableInOutGeneratorFunction):
     """One-line description.
@@ -579,11 +684,9 @@ class MyFunction(TableInOutGeneratorFunction):
     Detailed description of what this function does.
     """
 
-    def __init__(self, invocation: Invocation, logger: structlog.stdlib.BoundLogger):
-        super().__init__(invocation=invocation, logger=logger)
-        # Access arguments with self.arguments.get()
-        # self.count = self.arguments.get(0)
-        # self.separator = self.arguments.get("sep", default=",")
+    # Declare arguments as class attributes (no __init__ needed)
+    # count = Arg[int](0)                        # Required positional
+    # separator = Arg[str]("sep", default=",")   # Optional named
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -657,4 +760,149 @@ Need to implement a VGI function?
 | `cardinality()` | Provide row estimates | Returns None |
 | `setup()` | Acquire resources | No-op |
 | `teardown()` | Release resources | No-op |
+
+### Function Lifecycle
+
+Understanding when lifecycle methods are called is critical for resource management
+and distributed processing.
+
+#### Single-Process Lifecycle (max_processes=1)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  __init__(invocation, logger)                                   │
+│    ↓                                                            │
+│  output_schema (property accessed)                              │
+│    ↓                                                            │
+│  perform_init(init_batch) → GlobalInitResult                    │
+│    ↓                                                            │
+│  setup()  ← Acquire resources here (DB connections, files)      │
+│    ↓                                                            │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │  process(batch1) → OutputGenerator                      │    │
+│  │    ↓                                                    │    │
+│  │  [yield outputs for batch1]                             │    │
+│  │    ↓                                                    │    │
+│  │  process receives batch2 via yield                      │    │
+│  │    ↓                                                    │    │
+│  │  [yield outputs for batch2]                             │    │
+│  │    ↓                                                    │    │
+│  │  ... (repeat for all batches)                           │    │
+│  │    ↓                                                    │    │
+│  │  process receives None (end of input)                   │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│    ↓                                                            │
+│  finalize() → OutputGenerator                                   │
+│    ↓                                                            │
+│  [yield final outputs]                                          │
+│    ↓                                                            │
+│  teardown()  ← Release resources here (always called)           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Multi-Process Lifecycle (max_processes > 1)
+
+When `max_processes() > 1`, the client spawns multiple worker processes.
+One becomes the **primary worker** (runs finalize), others are **secondary workers**.
+
+**Primary Worker:**
+```
+__init__ → output_schema → perform_init → setup → process → finalize → teardown
+```
+
+**Secondary Workers:**
+```
+__init__ → output_schema → retrieve_init → setup → process → teardown
+                                                      ↓
+                                              (NO finalize!)
+```
+
+**Key Differences:**
+
+| Aspect | Primary Worker | Secondary Workers |
+|--------|---------------|-------------------|
+| `perform_init()` called? | Yes | No |
+| `retrieve_init()` called? | No | Yes |
+| `finalize()` called? | Yes | No |
+| `teardown()` called? | Yes (after finalize) | Yes (after process ends) |
+| Receives all batches? | Subset (round-robin) | Subset (round-robin) |
+
+#### Lifecycle with save_state/load_states (Distributed Aggregation)
+
+For distributed aggregations, state flows from secondary workers to primary:
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                         SECONDARY WORKERS                                 │
+│  ┌────────────────────┐  ┌────────────────────┐  ┌────────────────────┐  │
+│  │ Worker 1           │  │ Worker 2           │  │ Worker N           │  │
+│  │ setup()            │  │ setup()            │  │ setup()            │  │
+│  │ process(batches)   │  │ process(batches)   │  │ process(batches)   │  │
+│  │ save_state() ──────┼──┼─────────┬──────────┼──┼→ SQLite Storage    │  │
+│  │ teardown()         │  │ teardown()         │  │ teardown()         │  │
+│  └────────────────────┘  └─────────│──────────┘  └────────────────────┘  │
+│                                    ↓                                      │
+│                         ┌──────────────────────┐                          │
+│                         │   PRIMARY WORKER     │                          │
+│                         │ setup()              │                          │
+│                         │ process(batches)     │                          │
+│                         │ save_state() ────────┼→ SQLite Storage          │
+│                         │ load_states() ←──────┼─ (collects ALL states)   │
+│                         │ finalize()           │                          │
+│                         │ teardown()           │                          │
+│                         └──────────────────────┘                          │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+**Timing Guarantees:**
+
+1. `save_state()` is called automatically when the process generator closes
+2. Secondary workers' `teardown()` completes BEFORE primary's `load_states()`
+3. Primary's `load_states()` receives states from ALL workers (including itself)
+4. `teardown()` is ALWAYS called, even if an exception occurs
+
+#### Resource Management Best Practices
+
+```python
+class MyFunction(TableInOutFunction):
+    def setup(self) -> None:
+        """Acquire resources. Called once per worker."""
+        self.db_conn = sqlite3.connect("my.db")
+        self.temp_file = tempfile.NamedTemporaryFile()
+
+    def teardown(self) -> None:
+        """Release resources. ALWAYS called, even on error."""
+        if hasattr(self, 'db_conn'):
+            self.db_conn.close()
+        if hasattr(self, 'temp_file'):
+            self.temp_file.close()
+
+    def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
+        # Safe to use self.db_conn here
+        return batch
+```
+
+**Anti-Pattern: Don't acquire resources in __init__:**
+```python
+# ❌ WRONG - resources acquired before setup()
+def __init__(self, invocation, logger):
+    super().__init__(invocation, logger)
+    self.db_conn = sqlite3.connect("my.db")  # Too early!
+
+# ✅ CORRECT - acquire in setup()
+def setup(self) -> None:
+    self.db_conn = sqlite3.connect("my.db")
+```
+
+#### When to Use Each Lifecycle Hook
+
+| Hook | Use For | Example |
+|------|---------|---------|
+| `__init__` | Parse arguments, initialize simple state | `self.total = 0` |
+| `setup()` | Acquire external resources | DB connections, file handles |
+| `process()` | Transform/accumulate data | Main processing logic |
+| `save_state()` | Persist partial results (distributed) | Serialize aggregation state |
+| `load_states()` | Merge worker states (primary only) | Combine partial aggregations |
+| `finalize()` | Emit final results | Output aggregation results |
+| `teardown()` | Release external resources | Close connections, delete temp files |
 

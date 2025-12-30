@@ -4,7 +4,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import structlog
 
-from vgi.function import Arguments, Invocation
+from vgi.function import Arg, Arguments, Invocation
 from vgi.ipc_utils import RecordBatchState
 from vgi.log import Level
 from vgi.table_in_out_function import (
@@ -162,11 +162,7 @@ class TestTransform:
         """transform() can use function arguments."""
 
         class RepeatFunction(TableInOutFunction):
-            def __init__(
-                self, invocation: Invocation, logger: structlog.stdlib.BoundLogger
-            ) -> None:
-                super().__init__(invocation, logger)
-                self.count = self.arguments.get(0)
+            count = Arg[int](0)
 
             def transform(self, batch: pa.RecordBatch) -> list[pa.RecordBatch]:
                 return [batch] * self.count

@@ -16,9 +16,22 @@ For most use cases, use TableInOutFunction with callback methods:
             # Transform each batch here
             return batch
 
-For advanced streaming control, use TableInOutGeneratorFunction with generators:
+For advanced streaming control, use TableInOutGeneratorFunction with the
+@streaming decorator:
 
-    from vgi import TableInOutGeneratorFunction, Output, OutputGenerator, Invocation
+    from vgi import TableInOutGeneratorFunction, Output, StreamingGenerator, streaming
+    import pyarrow as pa
+
+    class MyFunction(TableInOutGeneratorFunction):
+        @streaming
+        def process(self, batch: pa.RecordBatch) -> StreamingGenerator:
+            # No priming yield needed!
+            while batch is not None:
+                batch = yield Output(batch)  # Your transformation here
+
+Or without the decorator (more verbose):
+
+    from vgi import TableInOutGeneratorFunction, Output, OutputGenerator
     import pyarrow as pa
 
     class MyFunction(TableInOutGeneratorFunction):
@@ -42,17 +55,31 @@ To create a worker that hosts functions:
 
 PUBLIC API
 ----------
-Classes exported from this module:
+Classes and functions exported from this module:
 
-    TableInOutFunction - Callback-based API (recommended)
-    TableInOutGeneratorFunction       - Generator-based API (advanced)
+    TableInOutFunction       - Callback-based API (recommended)
+    TableInOutGeneratorFunction - Generator-based API (advanced)
     Output                   - Output batch from process()/finalize()
     OutputGenerator          - Type alias for process()/finalize()
+    StreamingGenerator       - Type alias for @streaming decorated methods
+    streaming                - Decorator to simplify generator methods
     Invocation               - Function invocation request
     Arguments                - Positional and named arguments
+    Arg                      - Descriptor for declarative argument parsing
     Worker                   - Base class for worker processes
     Level                    - Log severity enum
     Message                  - Log message for process()
+    FunctionTestClient       - In-process test client
+    schema                   - Build schemas from keyword arguments
+    schema_like              - Derive schemas with modifications
+
+SPECIALIZED PATTERNS
+--------------------
+For common use cases, use these specialized base classes:
+
+    AggregationFunction - Reduce input to summary (sum, count, mean, etc.)
+    FilterFunction      - Filter rows by boolean predicate
+    MapFunction         - Transform columns row-by-row
 
 ADDITIONAL MODULES
 ------------------
@@ -67,6 +94,9 @@ CLASS HIERARCHY
     └─ vgi.table_function.TableFunction  - Adds cardinality hints, projection
        └─ TableInOutGeneratorFunction             - Full streaming (process/finalize)
           └─ TableInOutFunction    - Callback API (transform/finish)
+             ├─ AggregationFunction - Reduce to summary
+             ├─ FilterFunction      - Row filtering
+             └─ MapFunction         - Column transformation
 
 Examples
 --------
@@ -80,27 +110,47 @@ See vgi.examples.table_in_out for example functions:
 """
 
 # Re-export commonly used classes for convenient imports
-from vgi.function import Arguments, Invocation
+from vgi.arguments import Arg, Arguments, ArgumentValidationError
+from vgi.function import Invocation
 from vgi.log import Level, Message
 from vgi.table_in_out_function import (
     Output,
     OutputGenerator,
+    StreamingGenerator,
     TableInOutFunction,
     TableInOutGeneratorFunction,
+    streaming,
 )
+from vgi.schema_utils import schema, schema_like
+from vgi.table_in_out_function_patterns import (
+    AggregationFunction,
+    FilterFunction,
+    MapFunction,
+)
+from vgi.testing import FunctionTestClient
 from vgi.worker import Worker
 
 __all__ = [
+    "AggregationFunction",
+    "Arg",
+    "ArgumentValidationError",
     "Arguments",
+    "FilterFunction",
+    "FunctionTestClient",
     "Invocation",
     "Level",
+    "MapFunction",
     "Message",
     "Output",
     "OutputGenerator",
-    "TableInOutGeneratorFunction",
+    "StreamingGenerator",
     "TableInOutFunction",
+    "TableInOutGeneratorFunction",
     "Worker",
     "hello",
+    "schema",
+    "schema_like",
+    "streaming",
 ]
 
 

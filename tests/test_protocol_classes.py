@@ -7,7 +7,9 @@ import pyarrow as pa
 import pytest
 
 from vgi.function import (
+    Arg,
     Arguments,
+    ArgumentValidationError,
     GlobalInitResult,
     Invocation,
 )
@@ -598,3 +600,341 @@ class TestTableOutputSpec:
         data = spec.serialize_dict()
         assert data["cardinality_estimated"] is None
         assert data["cardinality_max"] is None
+
+
+class TestArg:
+    """Tests for the Arg descriptor for declarative argument parsing."""
+
+    def test_positional_required(self) -> None:
+        """Arg should parse required positional arguments."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar(42),))
+            value = Arg[int](0)
+
+        obj = MyClass()
+        assert obj.value == 42
+
+    def test_positional_with_default(self) -> None:
+        """Arg should use default when positional argument is missing."""
+
+        class MyClass:
+            arguments = Arguments(positional=())
+            value = Arg[int](0, default=99)
+
+        obj = MyClass()
+        assert obj.value == 99
+
+    def test_named_required(self) -> None:
+        """Arg should parse required named arguments."""
+
+        class MyClass:
+            arguments = Arguments(named={"name": pa.scalar("hello")})
+            name = Arg[str]("name")
+
+        obj = MyClass()
+        assert obj.name == "hello"
+
+    def test_named_with_default(self) -> None:
+        """Arg should use default when named argument is missing."""
+
+        class MyClass:
+            arguments = Arguments(named={})
+            separator = Arg[str]("sep", default=",")
+
+        obj = MyClass()
+        assert obj.separator == ","
+
+    def test_multiple_args(self) -> None:
+        """Arg should work with multiple arguments on same class."""
+
+        class MyClass:
+            arguments = Arguments(
+                positional=(pa.scalar(10), pa.scalar(20)),
+                named={"format": pa.scalar("json")},
+            )
+            first = Arg[int](0)
+            second = Arg[int](1)
+            fmt = Arg[str]("format")
+
+        obj = MyClass()
+        assert obj.first == 10
+        assert obj.second == 20
+        assert obj.fmt == "json"
+
+    def test_class_level_access_returns_descriptor(self) -> None:
+        """Accessing Arg on class should return the descriptor."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar(42),))
+            value = Arg[int](0)
+
+        assert isinstance(MyClass.value, Arg)
+        assert MyClass.value.position == 0
+
+    def test_value_is_cached(self) -> None:
+        """Arg should cache the resolved value."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar(42),))
+            value = Arg[int](0)
+
+        obj = MyClass()
+        # First access
+        _ = obj.value
+        # Verify it's cached in __dict__
+        assert "value" in obj.__dict__
+        assert obj.__dict__["value"] == 42
+        # Second access should return cached value
+        assert obj.value == 42
+
+    def test_missing_required_raises(self) -> None:
+        """Arg should raise when required argument is missing."""
+
+        class MyClass:
+            arguments = Arguments(positional=())
+            value = Arg[int](0)
+
+        obj = MyClass()
+        with pytest.raises(IndexError, match="index out of range"):
+            _ = obj.value
+
+    def test_missing_named_required_raises(self) -> None:
+        """Arg should raise when required named argument is missing."""
+
+        class MyClass:
+            arguments = Arguments(named={})
+            name = Arg[str]("name")
+
+        obj = MyClass()
+        with pytest.raises(KeyError, match="not found"):
+            _ = obj.name
+
+    def test_repr(self) -> None:
+        """Arg should have a useful repr."""
+        arg1 = Arg[int](0)
+        assert repr(arg1) == "Arg(0)"
+
+        arg2 = Arg[int](1, default=10)
+        assert repr(arg2) == "Arg(1, default=10)"
+
+        arg3 = Arg[str]("name", default="test", doc="A name")
+        assert repr(arg3) == "Arg('name', default='test', doc='A name')"
+
+    def test_with_none_arguments(self) -> None:
+        """Arg should handle None named arguments dict."""
+
+        class MyClass:
+            arguments = Arguments(positional=(), named=None)
+            value = Arg[str]("key", default="default")
+
+        obj = MyClass()
+        assert obj.value == "default"
+
+    def test_null_scalar_with_default(self) -> None:
+        """Arg should use default when scalar is null."""
+
+        class MyClass:
+            arguments = Arguments(positional=(None,))
+            value = Arg[int](0, default=99)
+
+        obj = MyClass()
+        assert obj.value == 99
+
+    def test_different_instances_independent(self) -> None:
+        """Different instances should have independent cached values."""
+
+        class MyClass:
+            value = Arg[int](0)
+
+            def __init__(self, args: Arguments):
+                self.arguments = args
+
+        obj1 = MyClass(Arguments(positional=(pa.scalar(1),)))
+        obj2 = MyClass(Arguments(positional=(pa.scalar(2),)))
+
+        assert obj1.value == 1
+        assert obj2.value == 2
+
+
+class TestArgValidation:
+    """Tests for Arg descriptor validation features."""
+
+    def test_ge_validation_pass(self) -> None:
+        """Arg ge validation should pass when value >= threshold."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar(10),))
+            value = Arg[int](0, ge=5)
+
+        obj = MyClass()
+        assert obj.value == 10
+
+    def test_ge_validation_fail(self) -> None:
+        """Arg ge validation should fail when value < threshold."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar(3),))
+            value = Arg[int](0, ge=5)
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError, match="must be >= 5"):
+            _ = obj.value
+
+    def test_le_validation_pass(self) -> None:
+        """Arg le validation should pass when value <= threshold."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar(10),))
+            value = Arg[int](0, le=100)
+
+        obj = MyClass()
+        assert obj.value == 10
+
+    def test_le_validation_fail(self) -> None:
+        """Arg le validation should fail when value > threshold."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar(150),))
+            value = Arg[int](0, le=100)
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError, match="must be <= 100"):
+            _ = obj.value
+
+    def test_gt_validation_pass(self) -> None:
+        """Arg gt validation should pass when value > threshold."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar(0.5),))
+            value = Arg[float](0, gt=0.0)
+
+        obj = MyClass()
+        assert obj.value == 0.5
+
+    def test_gt_validation_fail(self) -> None:
+        """Arg gt validation should fail when value <= threshold."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar(0.0),))
+            value = Arg[float](0, gt=0.0)
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError, match="must be > 0.0"):
+            _ = obj.value
+
+    def test_lt_validation_pass(self) -> None:
+        """Arg lt validation should pass when value < threshold."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar(0.5),))
+            value = Arg[float](0, lt=1.0)
+
+        obj = MyClass()
+        assert obj.value == 0.5
+
+    def test_lt_validation_fail(self) -> None:
+        """Arg lt validation should fail when value >= threshold."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar(1.0),))
+            value = Arg[float](0, lt=1.0)
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError, match="must be < 1.0"):
+            _ = obj.value
+
+    def test_range_validation(self) -> None:
+        """Arg should support combined ge and le for range validation."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar(50),))
+            value = Arg[int](0, ge=1, le=100)
+
+        obj = MyClass()
+        assert obj.value == 50
+
+    def test_choices_validation_pass(self) -> None:
+        """Arg choices validation should pass when value in choices."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar("fast"),))
+            mode = Arg[str](0, choices=["fast", "slow", "auto"])
+
+        obj = MyClass()
+        assert obj.mode == "fast"
+
+    def test_choices_validation_fail(self) -> None:
+        """Arg choices validation should fail when value not in choices."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar("invalid"),))
+            mode = Arg[str](0, choices=["fast", "slow", "auto"])
+
+        obj = MyClass()
+        with pytest.raises(
+            ArgumentValidationError, match="must be one of: 'fast', 'slow', 'auto'"
+        ):
+            _ = obj.mode
+
+    def test_pattern_validation_pass(self) -> None:
+        """Arg pattern validation should pass when value matches pattern."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar("my_variable"),))
+            name = Arg[str](0, pattern=r"^[a-z_][a-z0-9_]*$")
+
+        obj = MyClass()
+        assert obj.name == "my_variable"
+
+    def test_pattern_validation_fail(self) -> None:
+        """Arg pattern validation should fail when value doesn't match."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar("123invalid"),))
+            name = Arg[str](0, pattern=r"^[a-z_][a-z0-9_]*$")
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError, match="does not match pattern"):
+            _ = obj.name
+
+    def test_pattern_validation_requires_string(self) -> None:
+        """Arg pattern validation should fail for non-string types."""
+
+        class MyClass:
+            arguments = Arguments(positional=(pa.scalar(123),))
+            value = Arg[int](0, pattern=r".*")
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError, match="requires string"):
+            _ = obj.value
+
+    def test_conflicting_ge_gt_raises(self) -> None:
+        """Arg should raise when both ge and gt are specified."""
+        with pytest.raises(ValueError, match="Cannot specify both 'ge' and 'gt'"):
+            Arg[int](0, ge=1, gt=0)
+
+    def test_conflicting_le_lt_raises(self) -> None:
+        """Arg should raise when both le and lt are specified."""
+        with pytest.raises(ValueError, match="Cannot specify both 'le' and 'lt'"):
+            Arg[int](0, le=10, lt=5)
+
+    def test_validation_with_default(self) -> None:
+        """Default values should also be validated."""
+
+        class MyClass:
+            arguments = Arguments(positional=())
+            value = Arg[int](0, default=50, ge=1, le=100)
+
+        obj = MyClass()
+        assert obj.value == 50
+
+    def test_repr_with_validation(self) -> None:
+        """Arg repr should include validation parameters."""
+        arg = Arg[int](0, ge=1, le=100, choices=[1, 2, 3], pattern=".*")
+        repr_str = repr(arg)
+
+        assert "ge=1" in repr_str
+        assert "le=100" in repr_str
+        assert "choices=" in repr_str
+        assert "pattern=" in repr_str
