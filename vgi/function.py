@@ -502,7 +502,7 @@ class Function:
         """
         return 1
 
-    def invocation_id(self) -> bytes:
+    def create_invocation_id(self) -> bytes:
         """Return unique identifier for this function invocation.
 
         When max_processes > 1, this ID correlates multiple parallel workers

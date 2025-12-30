@@ -123,6 +123,9 @@ class Function(vgi.function.Function):
     # This is the init data that may be been read.
     init_data: GlobalStateInitInput | None = None
 
+    # The unique identifier for the init data in storage.
+    init_identifier: bytes | None = None
+
     def __init__(
         self,
         *,
@@ -154,13 +157,15 @@ class Function(vgi.function.Function):
     def perform_init(self, init_input: pa.RecordBatch) -> vgi.function.GlobalInitResult:
         """Perform a new init call and store it in the storage."""
         self.init_data = GlobalStateInitInput.deserialize(init_input)
-        return vgi.function.GlobalInitResult(self.init_storage.create(self.init_data))
+        self.init_identifier = self.init_storage.create(self.init_data)
+        return vgi.function.GlobalInitResult(self.init_identifier)
 
     def retrieve_init(self, init_input: vgi.function.GlobalInitResult) -> None:
         """Retrieve and store init data from the storage."""
         if init_input.global_init_identifier is None:
             raise ValueError("global_init_identifier is required but was None")
-        self.init_data = self.init_storage.get(init_input.global_init_identifier)
+        self.init_identifier = init_input.global_init_identifier
+        self.init_data = self.init_storage.get(self.init_identifier)
 
     def apply_projection(self, schema: pa.Schema) -> pa.Schema:
         """Apply any projection specified in the init data to the schema.

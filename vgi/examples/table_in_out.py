@@ -11,11 +11,17 @@ RepeatInputsFunction      - Duplicates each input batch N times
 SumAllColumnsFunction     - Aggregates numeric columns into sums
 """
 
+import os
+import sqlite3
+from pathlib import Path
+
 import pyarrow as pa
 import pyarrow.compute as pc
 import structlog
+from platformdirs import user_state_dir
 
 from vgi.function import Request
+from vgi.ipc_utils import deserialize_record_batch, serialize_record_batch
 from vgi.log import Level, Message
 from vgi.table_function import CardinalityInfo
 from vgi.table_in_out_function import (
@@ -29,6 +35,7 @@ __all__ = [
     "BufferInputFunction",
     "RepeatInputsFunction",
     "SumAllColumnsFunction",
+    "SumAllColumnsFunctionDistributed",
     "SumAllColumnsFunctionWithLogging",
     "ExceptionProcessFunction",
     "ExceptionFinalizeFunction",
@@ -338,6 +345,153 @@ class SumAllColumnsFunction(Function):
         yield Output(
             pa.RecordBatch.from_pydict(
                 {name: [val] for name, val in self.sums.items()},
+                schema=self.output_schema,
+            )
+        )
+
+
+class SumAllColumnsFunctionDistributed(SumAllColumnsFunction):
+    """Distributed aggregation function that computes column-wise sums."""
+
+    def cardinality(self) -> CardinalityInfo | None:
+        """Return cardinality estimate of exactly 1 row."""
+        return CardinalityInfo(estimate=1, max=1)
+
+    def max_processes(self) -> int:
+        """Return the number of processes to use for this function."""
+        return 8
+
+    def _database(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path)
+        return conn
+
+    def __init__(
+        self, invocation: Request, logger: structlog.stdlib.BoundLogger
+    ) -> None:
+        """Initialize the sum accumulator."""
+        super().__init__(invocation=invocation, logger=logger)
+
+        state_dir = Path(user_state_dir("vgi-testing"))
+        state_dir.mkdir(parents=True, exist_ok=True)
+
+        self.db_path = (state_dir / "sum-distributed.db").resolve()
+        self.pid = os.getpid()
+
+        if not Path(self.db_path).exists():
+            conn = self._database()
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sum_state (
+                    invoke_id BLOB,
+                    process_id INTEGER,
+                    state_data BLOB,
+                    PRIMARY KEY (invoke_id, process_id)
+                )
+            """)
+            conn.commit()
+            conn.close()
+
+    def _store_partial_state(self, state: dict[str, pa.Scalar]) -> None:
+        # Convert dict of scalars to a single-row RecordBatch
+        batch = pa.RecordBatch.from_pydict({k: [v.as_py()] for k, v in state.items()})
+        state_bytes = serialize_record_batch(batch)
+
+        if self.init_identifier is None:
+            raise ValueError("init_identifier is not set")
+
+        conn = self._database()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO sum_state (invoke_id, process_id, state_data)
+            VALUES (?, ?, ?)
+            ON CONFLICT(invoke_id, process_id)
+            DO UPDATE SET state_data = excluded.state_data
+            """,
+            (
+                self.init_identifier,
+                self.pid,
+                state_bytes,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+        """Accumulate column sums across all batches."""
+        # The priming of the generator
+        _ = yield None
+
+        # Initialize sums to zero for each numeric column
+        for field in self.output_schema:
+            self.sums[field.name] = pa.scalar(0, type=field.type)
+
+        # Process all batches
+        while True:
+            for name in self.sums:
+                col_sum = pc.sum(batch.column(name))
+                if col_sum.is_valid:
+                    self.sums[name] = pc.add(self.sums[name], col_sum)
+
+            # Write this to the shared storage, because we don't know
+            # if we'll be notified at the end of the batches, our
+            # process may just close.
+            self._store_partial_state(self.sums)
+
+            batch = yield None
+            if batch is None:
+                break
+
+    def finalize(self) -> OutputGenerator:
+        """Emit single row containing the column sums.
+
+        This function can run on any process.
+        """
+        _ = yield None
+
+        conn = self._database()
+        cursor = conn.cursor()
+
+        # Read all state data for this invocation
+        cursor.execute(
+            """
+            SELECT state_data FROM sum_state WHERE invoke_id = ?
+            """,
+            (self.init_identifier,),
+        )
+        rows = cursor.fetchall()
+
+        # Delete the rows since they're no longer needed
+        cursor.execute(
+            """
+            DELETE FROM sum_state WHERE invoke_id = ?
+            """,
+            (self.init_identifier,),
+        )
+        conn.commit()
+        conn.close()
+
+        # Deserialize all state batches and combine into a table
+        batches = [deserialize_record_batch(row[0]) for row in rows]
+        if not batches:
+            # No data was processed, emit zeros
+            yield Output(
+                pa.RecordBatch.from_pydict(
+                    {field.name: [0] for field in self.output_schema},
+                    schema=self.output_schema,
+                )
+            )
+            return
+
+        table = pa.Table.from_batches(batches)
+
+        # Compute sums for all columns
+        sums = {col: pc.sum(table.column(col)).as_py() for col in table.schema.names}
+
+        # Emit single row with sums
+        yield Output(
+            pa.RecordBatch.from_pydict(
+                {name: [val] for name, val in sums.items()},
                 schema=self.output_schema,
             )
         )

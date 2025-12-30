@@ -215,7 +215,7 @@ class Worker:
         bind_result_bytes = OutputSpec(
             output_schema=instance.output_schema,
             max_processes=instance.max_processes(),
-            invocation_id=instance.invocation_id(),
+            invocation_id=instance.create_invocation_id(),
         ).serialize()
 
         if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):

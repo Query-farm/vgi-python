@@ -154,9 +154,7 @@ class ProtocolOutput:
     status: _OutputStatus
     log_message: vgi.log.Message | None = None
 
-    def metadata(
-        self, invocation: vgi.function.Request
-    ) -> pa.KeyValueMetadata | None:
+    def metadata(self, invocation: vgi.function.Request) -> pa.KeyValueMetadata | None:
         """Create metadata for this output based on the status.
 
         Args:
