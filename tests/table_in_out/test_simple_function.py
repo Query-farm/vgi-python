@@ -1,4 +1,4 @@
-"""Tests for TableInOutSimpleFunction (callback-based API)."""
+"""Tests for TableInOutFunction (callback-based API)."""
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -10,7 +10,7 @@ from vgi.log import Level
 from vgi.table_in_out_function import (
     ProtocolInput,
     ProtocolOutput,
-    TableInOutSimpleFunction,
+    TableInOutFunction,
 )
 
 
@@ -39,7 +39,7 @@ def make_invocation_with_args(
 
 
 def run_simple_function(
-    func: TableInOutSimpleFunction,
+    func: TableInOutFunction,
     input_batches: list[pa.RecordBatch],
 ) -> list[pa.RecordBatch]:
     """Run a simple function through the protocol and collect outputs."""
@@ -90,7 +90,7 @@ class TestPassthrough:
     def test_passthrough_returns_same_data(self) -> None:
         """Default transform() returns input unchanged."""
 
-        class PassthroughFunction(TableInOutSimpleFunction):
+        class PassthroughFunction(TableInOutFunction):
             pass
 
         schema = pa.schema([("x", pa.int64())])
@@ -118,7 +118,7 @@ class TestTransform:
     def test_transform_single_batch(self) -> None:
         """transform() can modify each batch."""
 
-        class DoubleFunction(TableInOutSimpleFunction):
+        class DoubleFunction(TableInOutFunction):
             def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
                 doubled = pc.multiply(batch.column("x"), 2)
                 return pa.RecordBatch.from_arrays([doubled], schema=batch.schema)
@@ -139,7 +139,7 @@ class TestTransform:
     def test_transform_returns_list(self) -> None:
         """transform() can return multiple batches."""
 
-        class TripleFunction(TableInOutSimpleFunction):
+        class TripleFunction(TableInOutFunction):
             def transform(self, batch: pa.RecordBatch) -> list[pa.RecordBatch]:
                 return [batch, batch, batch]
 
@@ -161,7 +161,7 @@ class TestTransform:
     def test_transform_with_arguments(self) -> None:
         """transform() can use function arguments."""
 
-        class RepeatFunction(TableInOutSimpleFunction):
+        class RepeatFunction(TableInOutFunction):
             def __init__(
                 self, invocation: Invocation, logger: structlog.stdlib.BoundLogger
             ) -> None:
@@ -190,7 +190,7 @@ class TestFinish:
     def test_finish_emits_aggregation(self) -> None:
         """finish() can emit final aggregated results."""
 
-        class SumFunction(TableInOutSimpleFunction):
+        class SumFunction(TableInOutFunction):
             def __init__(
                 self, invocation: Invocation, logger: structlog.stdlib.BoundLogger
             ) -> None:
@@ -233,7 +233,7 @@ class TestFinish:
     def test_finish_returns_multiple_batches(self) -> None:
         """finish() can return multiple batches."""
 
-        class BufferFunction(TableInOutSimpleFunction):
+        class BufferFunction(TableInOutFunction):
             def __init__(
                 self, invocation: Invocation, logger: structlog.stdlib.BoundLogger
             ) -> None:
@@ -273,16 +273,14 @@ class TestOutputSchema:
     def test_output_schema_different_from_input(self) -> None:
         """output_schema can define different output columns."""
 
-        class LengthFunction(TableInOutSimpleFunction):
+        class LengthFunction(TableInOutFunction):
             @property
             def output_schema(self) -> pa.Schema:
                 return pa.schema([("length", pa.int64())])
 
             def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
                 lengths = pc.utf8_length(batch.column("name"))
-                return pa.RecordBatch.from_arrays(
-                    [lengths], schema=self.output_schema
-                )
+                return pa.RecordBatch.from_arrays([lengths], schema=self.output_schema)
 
         schema = pa.schema([("name", pa.string())])
         invocation = make_invocation(schema)
@@ -305,7 +303,7 @@ class TestEmptyOutput:
     def test_transform_returns_empty_batch(self) -> None:
         """transform() can return empty_output_batch to skip output."""
 
-        class FilterOddFunction(TableInOutSimpleFunction):
+        class FilterOddFunction(TableInOutFunction):
             def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
                 # Filter to only even values
                 mask = pc.equal(pc.bit_wise_and(batch.column("x"), 1), 0)
@@ -332,7 +330,7 @@ class TestEmptyOutput:
     def test_finish_returns_empty_list(self) -> None:
         """finish() returns empty list by default."""
 
-        class PassthroughFunction(TableInOutSimpleFunction):
+        class PassthroughFunction(TableInOutFunction):
             pass
 
         schema = pa.schema([("x", pa.int64())])
@@ -351,7 +349,7 @@ class TestEmptyOutput:
 
 
 def run_simple_function_with_logs(
-    func: TableInOutSimpleFunction,
+    func: TableInOutFunction,
     input_batches: list[pa.RecordBatch],
 ) -> tuple[list[pa.RecordBatch], list[ProtocolOutput]]:
     """Run a simple function and collect both outputs and log messages."""
@@ -407,7 +405,7 @@ class TestLogging:
     def test_log_in_transform(self) -> None:
         """log() can emit messages during transform()."""
 
-        class LoggingFunction(TableInOutSimpleFunction):
+        class LoggingFunction(TableInOutFunction):
             def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
                 self.log(Level.INFO, f"Processing {batch.num_rows} rows")
                 return batch
@@ -436,7 +434,7 @@ class TestLogging:
     def test_log_in_finish(self) -> None:
         """log() can emit messages during finish()."""
 
-        class LoggingAggregateFunction(TableInOutSimpleFunction):
+        class LoggingAggregateFunction(TableInOutFunction):
             def __init__(
                 self, invocation: Invocation, logger: structlog.stdlib.BoundLogger
             ) -> None:
@@ -485,7 +483,7 @@ class TestLogging:
     def test_multiple_log_messages(self) -> None:
         """Multiple log() calls queue multiple messages."""
 
-        class MultiLogFunction(TableInOutSimpleFunction):
+        class MultiLogFunction(TableInOutFunction):
             def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
                 self.log(Level.DEBUG, "Starting transform")
                 self.log(Level.INFO, f"Rows: {batch.num_rows}")
@@ -519,7 +517,7 @@ class TestDistributedState:
     def test_save_state_returns_none_by_default(self) -> None:
         """Default save_state() returns None."""
 
-        class SimpleFunction(TableInOutSimpleFunction):
+        class SimpleFunction(TableInOutFunction):
             pass
 
         schema = pa.schema([("x", pa.int64())])
@@ -531,7 +529,7 @@ class TestDistributedState:
     def test_save_state_can_be_overridden(self) -> None:
         """save_state() can return RecordBatchState."""
 
-        class StatefulFunction(TableInOutSimpleFunction):
+        class StatefulFunction(TableInOutFunction):
             def __init__(
                 self, invocation: Invocation, logger: structlog.stdlib.BoundLogger
             ) -> None:
@@ -564,7 +562,7 @@ class TestDistributedState:
     def test_load_states_receives_states(self) -> None:
         """load_states() receives list of RecordBatchState."""
 
-        class DistributedSumFunction(TableInOutSimpleFunction):
+        class DistributedSumFunction(TableInOutFunction):
             def __init__(
                 self, invocation: Invocation, logger: structlog.stdlib.BoundLogger
             ) -> None:

@@ -5,7 +5,7 @@ This module provides:
 - OutputSpec: OutputSpec subclass with cardinality support
 - TableFunction: Base class for table functions with cardinality
 
-These classes are used by TableInOutFunction and can be used directly
+These classes are used by TableInOutGeneratorFunction and can be used directly
 for custom table function implementations.
 """
 
@@ -121,8 +121,8 @@ class TableFunction(vgi.function.Function):
     optimize execution. Override cardinality() to provide row count estimates.
 
     See Also:
-        vgi.table_in_out_function.TableInOutFunction: Full streaming implementation
-            that extends this class with the complete DATA/FINALIZE protocol.
+        TableInOutGeneratorFunction: Full streaming implementation that extends
+            this class with the complete DATA/FINALIZE protocol.
 
     """
 

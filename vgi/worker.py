@@ -8,9 +8,9 @@ QUICK START
 Create a worker by subclassing Worker and defining a registry:
 
     from vgi.worker import Worker
-    from vgi.table_in_out_function import TableInOutFunction
+    from vgi.table_in_out_function import TableInOutGeneratorFunction
 
-    class MyFunction(TableInOutFunction):
+    class MyFunction(TableInOutGeneratorFunction):
         def process(self, batch):
             _ = yield None
             while True:
@@ -38,13 +38,13 @@ PROTOCOL FLOW
 KEY CLASSES
 -----------
     Worker          - Base class to subclass (set registry attribute)
-    FunctionRegistry - Type alias: dict[str, type[TableInOutFunction]]
+    FunctionRegistry - Type alias: dict[str, type[TableInOutGeneratorFunction]]
     WorkerStats     - Statistics about processing (batch_count, rows)
 
 See Also
 --------
 vgi.client.Client : Spawns workers and sends data to them
-TableInOutFunction : Base class for functions hosted by workers
+TableInOutGeneratorFunction : Base class for functions hosted by workers
 vgi.examples.worker : Example worker with built-in functions
 
 """
@@ -65,11 +65,11 @@ from vgi.function import (
 from vgi.ipc_utils import read_ipc_batch
 from vgi.table_in_out_function import (
     ProtocolInput,
-    TableInOutFunction,
+    TableInOutGeneratorFunction,
 )
 
 # Type alias for the function registry mapping names to Function classes
-FunctionRegistry = dict[str, type[TableInOutFunction]]
+FunctionRegistry = dict[str, type[TableInOutGeneratorFunction]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +92,7 @@ class Worker:
     """Base class for VGI workers that host user-defined functions.
 
     Subclass this and define a `registry` class attribute mapping function names
-    to TableInOutFunction subclasses. The worker handles the VGI protocol:
+    to TableInOutGeneratorFunction subclasses. The worker handles the VGI protocol:
     reading Invocation, instantiating functions, and streaming batches.
 
     Example:
@@ -148,7 +148,7 @@ class Worker:
 
     def _process_batches(
         self,
-        instance: TableInOutFunction,
+        instance: TableInOutGeneratorFunction,
         invocation: Invocation,
         fn_log: structlog.stdlib.BoundLogger,
     ) -> WorkerStats:

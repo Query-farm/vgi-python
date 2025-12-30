@@ -230,7 +230,7 @@ class TestSumAllColumnsFunctionDistributed:
 
 
 class TestSumAllColumnsSimpleDistributed:
-    """Tests for sum_all_columns_simple_distributed (TableInOutSimpleFunction)."""
+    """Tests for sum_all_columns_simple_distributed (TableInOutFunction)."""
 
     def test_sum_simple_distributed_basic(
         self, example_worker: str, numeric_batches: list[pa.RecordBatch]

@@ -23,7 +23,7 @@ from vgi.table_in_out_function import (
     Output,
     OutputGenerator,
     TableInOutFunction,
-    TableInOutSimpleFunction,
+    TableInOutGeneratorFunction,
 )
 
 __all__ = [
@@ -39,7 +39,7 @@ __all__ = [
 ]
 
 
-class EchoFunction(TableInOutFunction):
+class EchoFunction(TableInOutGeneratorFunction):
     """Passthrough function that emits each input batch unchanged.
 
     USE CASE
@@ -59,7 +59,7 @@ class EchoFunction(TableInOutFunction):
     """
 
 
-class BufferInputFunction(TableInOutFunction):
+class BufferInputFunction(TableInOutGeneratorFunction):
     """Buffering function that collects all input and emits during finalization.
 
     USE CASE
@@ -122,7 +122,7 @@ class BufferInputFunction(TableInOutFunction):
             yield Output(b, has_more)
 
 
-class RepeatInputsFunction(TableInOutFunction):
+class RepeatInputsFunction(TableInOutGeneratorFunction):
     """Explosion function that duplicates each input batch N times.
 
     USE CASE
@@ -202,7 +202,7 @@ class RepeatInputsFunction(TableInOutFunction):
                 break
 
 
-class SumAllColumnsFunction(TableInOutFunction):
+class SumAllColumnsFunction(TableInOutGeneratorFunction):
     """Aggregation function that computes column-wise sums across all batches.
 
     USE CASE
@@ -500,10 +500,10 @@ class ExceptionFinalizeFunction(SumAllColumnsFunction):
         raise ValueError("Intentional exception during finalize()")
 
 
-class SumAllColumnsSimpleDistributed(TableInOutSimpleFunction):
+class SumAllColumnsSimpleDistributed(TableInOutFunction):
     """Distributed aggregation using the simple callback API.
 
-    This function demonstrates TableInOutSimpleFunction with distributed
+    This function demonstrates TableInOutFunction with distributed
     state management using save_state() and load_states(). It's equivalent
     to SumAllColumnsFunctionDistributed but uses the simpler callback API.
 

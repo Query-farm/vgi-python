@@ -41,7 +41,7 @@ VGI (Vector Gateway Interface) provides an Apache Arrow-based protocol for conne
 │  ┌───────────────────────────────────────────────────────────────┐  │
 │  │                      Worker Process                           │  │
 │  │  ┌─────────────────────────────────────────────────────────┐  │  │
-│  │  │ TableInOutFunction.process() / finalize()      │  │  │
+│  │  │ TableInOutGeneratorFunction.process() / finalize()      │  │  │
 │  │  │ - process(): Generator receiving RecordBatch via yield  │  │  │
 │  │  │ - finalize(): Generator emitting final results          │  │  │
 │  │  │ - Yields Output with output RecordBatches        │  │  │
@@ -54,7 +54,7 @@ VGI (Vector Gateway Interface) provides an Apache Arrow-based protocol for conne
 
 - **Worker** (`vgi/worker.py`): Subprocess that hosts functions, handles protocol
 - **Client** (`vgi/client.py`): Spawns workers, streams data through functions
-- **TableInOutFunction** (`vgi/table_in_out_function.py`): Base class for table-in-out functions
+- **TableInOutGeneratorFunction** (`vgi/table_in_out_function.py`): Base class for table-in-out functions
 - **FunctionInvocation/FunctionOutputSpec** (`vgi/function.py`): Protocol messages for initialization
 - **GlobalInitResult** (`vgi/function.py`): Shared state for parallel workers
 
@@ -88,7 +88,7 @@ vgi/
   __init__.py              # Package exports and module docstring
   function.py              # FunctionInvocation, FunctionOutputSpec, Arguments, GlobalInitResult
   table_function.py        # CardinalityInfo, TableFunction base class
-  table_in_out_function.py # TableInOutFunction, Output, OutputGenerator
+  table_in_out_function.py # TableInOutGeneratorFunction, Output, OutputGenerator
   worker.py                # Worker base class
   client.py                # Client class and CLI
   util.py                  # Serialization utilities
@@ -111,17 +111,17 @@ vgi-client --input data.parquet --function repeat_inputs --args '[3]' --server v
 
 ## Creating a Custom Function (Simple API - Recommended)
 
-Use `TableInOutSimpleFunction` for most use cases. Override `transform()` for per-batch processing and `finish()` for final output:
+Use `TableInOutFunction` for most use cases. Override `transform()` for per-batch processing and `finish()` for final output:
 
 ```python
 import pyarrow as pa
 import pyarrow.compute as pc
 import structlog
 
-from vgi import TableInOutSimpleFunction, Invocation
+from vgi import TableInOutFunction, Invocation
 
 
-class MyFunction(TableInOutSimpleFunction):
+class MyFunction(TableInOutFunction):
     """Transform each batch by doubling numeric values."""
 
     def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
@@ -130,7 +130,7 @@ class MyFunction(TableInOutSimpleFunction):
         return batch.set_column(0, batch.schema[0].name, doubled)
 
 
-class SumFunction(TableInOutSimpleFunction):
+class SumFunction(TableInOutFunction):
     """Aggregate: sum all values, emit single result."""
 
     def __init__(self, invocation: Invocation, logger: structlog.stdlib.BoundLogger):
@@ -155,7 +155,7 @@ class SumFunction(TableInOutSimpleFunction):
         return 1  # Aggregations must be single-process
 ```
 
-### TableInOutSimpleFunction Methods
+### TableInOutFunction Methods
 
 | Method | When to Override | Default |
 |--------|------------------|---------|
@@ -171,7 +171,7 @@ class SumFunction(TableInOutSimpleFunction):
 ```python
 from vgi.log import Level
 
-class LoggingFunction(TableInOutSimpleFunction):
+class LoggingFunction(TableInOutFunction):
     def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
         self.log(Level.INFO, f"Processing {batch.num_rows} rows")
         return batch
@@ -182,7 +182,7 @@ class LoggingFunction(TableInOutSimpleFunction):
 ```python
 from vgi.ipc_utils import RecordBatchState
 
-class DistributedSum(TableInOutSimpleFunction):
+class DistributedSum(TableInOutFunction):
     def __init__(self, invocation, logger):
         super().__init__(invocation, logger)
         self.total = 0
@@ -214,17 +214,17 @@ class DistributedSum(TableInOutSimpleFunction):
 
 | Use Case | Base Class |
 |----------|------------|
-| Transform each batch independently | `TableInOutSimpleFunction` |
-| Aggregate to single result | `TableInOutSimpleFunction` + `finish()` |
-| Buffer all input, emit on finalize | `TableInOutSimpleFunction` + `finish()` |
-| Multiple outputs per input | `TableInOutSimpleFunction` (return list) |
-| Distributed aggregation | `TableInOutSimpleFunction` + `save_state()/load_states()` |
-| Need GeneratorExit handling | `TableInOutFunction` |
-| Fine-grained streaming control | `TableInOutFunction` |
+| Transform each batch independently | `TableInOutFunction` |
+| Aggregate to single result | `TableInOutFunction` + `finish()` |
+| Buffer all input, emit on finalize | `TableInOutFunction` + `finish()` |
+| Multiple outputs per input | `TableInOutFunction` (return list) |
+| Distributed aggregation | `TableInOutFunction` + `save_state()/load_states()` |
+| Need GeneratorExit handling | `TableInOutGeneratorFunction` |
+| Fine-grained streaming control | `TableInOutGeneratorFunction` |
 
 ## Creating a Custom Function (Generator API - Advanced)
 
-For advanced streaming control, use `TableInOutFunction` with generators:
+For advanced streaming control, use `TableInOutGeneratorFunction` with generators:
 
 ```python
 import pyarrow as pa
@@ -234,11 +234,11 @@ from vgi.function import Invocation
 from vgi.table_in_out_function import (
     OutputGenerator,
     Output,
-    TableInOutFunction,
+    TableInOutGeneratorFunction,
 )
 
 
-class MyFunction(TableInOutFunction):
+class MyFunction(TableInOutGeneratorFunction):
     def __init__(self, invocation: Invocation, logger: structlog.stdlib.BoundLogger):
         super().__init__(invocation, logger)
         # Access arguments using self.arguments.get()
@@ -289,13 +289,13 @@ if __name__ == "__main__":
 
 ### 1. Passthrough (Echo)
 ```python
-class EchoFunction(TableInOutFunction):
+class EchoFunction(TableInOutGeneratorFunction):
     pass  # Default process() passes input unchanged
 ```
 
 ### 2. Aggregation (emit on finalize)
 ```python
-class SumFunction(TableInOutFunction):
+class SumFunction(TableInOutGeneratorFunction):
     @property
     def output_schema(self):
         return pa.schema([pa.field("sum", pa.int64())])
@@ -480,10 +480,10 @@ def finalize(self) -> OutputGenerator | None:
 
 ```python
 # Simple API (recommended for most uses)
-from vgi import TableInOutSimpleFunction, Invocation, Arguments, Worker
+from vgi import TableInOutFunction, Invocation, Arguments, Worker
 
 # Generator API (advanced)
-from vgi import TableInOutFunction, Output, OutputGenerator, Invocation, Arguments, Worker
+from vgi import TableInOutGeneratorFunction, Output, OutputGenerator, Invocation, Arguments, Worker
 
 # Logging
 from vgi.log import Level, Message
@@ -502,8 +502,8 @@ from vgi.client import Client
 
 | Type | Description | Module |
 |------|-------------|--------|
-| `TableInOutSimpleFunction` | Callback-based API (recommended) | `vgi.table_in_out_function` |
-| `TableInOutFunction` | Generator-based API (advanced) | `vgi.table_in_out_function` |
+| `TableInOutFunction` | Callback-based API (recommended) | `vgi.table_in_out_function` |
+| `TableInOutGeneratorFunction` | Generator-based API (advanced) | `vgi.table_in_out_function` |
 | `Output` | Yielded from process()/finalize() | `vgi.table_in_out_function` |
 | `OutputGenerator` | Return type for process()/finalize() | `vgi.table_in_out_function` |
 | `Invocation` | Function invocation request | `vgi.function` |
@@ -537,9 +537,9 @@ count = self.arguments.get(0, type=pa.int64())     # Raises TypeError if wrong t
 ```python
 import pyarrow as pa
 import structlog
-from vgi import TableInOutSimpleFunction, Invocation
+from vgi import TableInOutFunction, Invocation
 
-class MyFunction(TableInOutSimpleFunction):
+class MyFunction(TableInOutFunction):
     """One-line description.
 
     Detailed description of what this function does.
@@ -571,9 +571,9 @@ class MyFunction(TableInOutSimpleFunction):
 ```python
 import pyarrow as pa
 import structlog
-from vgi import TableInOutFunction, Output, OutputGenerator, Invocation
+from vgi import TableInOutGeneratorFunction, Output, OutputGenerator, Invocation
 
-class MyFunction(TableInOutFunction):
+class MyFunction(TableInOutGeneratorFunction):
     """One-line description.
 
     Detailed description of what this function does.
@@ -614,7 +614,7 @@ class MyFunction(TableInOutFunction):
 Need to implement a VGI function?
 │
 ├─ No transformation needed?
-│  └─ class Echo(TableInOutSimpleFunction): pass
+│  └─ class Echo(TableInOutFunction): pass
 │
 ├─ Transform each batch independently?
 │  └─ Override transform() → returns pa.RecordBatch
@@ -631,10 +631,10 @@ Need to implement a VGI function?
 │      └─ Set max_processes() -> 1
 │
 ├─ Need GeneratorExit handling or distributed state?
-│  └─ Use TableInOutFunction (generator API)
+│  └─ Use TableInOutGeneratorFunction (generator API)
 │
 └─ Need fine-grained streaming control?
-   └─ Use TableInOutFunction (generator API)
+   └─ Use TableInOutGeneratorFunction (generator API)
 ```
 
 ### Status Values (in IPC metadata)

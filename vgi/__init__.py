@@ -6,22 +6,22 @@ and communicate with the database through stdin/stdout.
 
 QUICK START (Simple API - Recommended)
 --------------------------------------
-For most use cases, use TableInOutSimpleFunction with callback methods:
+For most use cases, use TableInOutFunction with callback methods:
 
-    from vgi import TableInOutSimpleFunction, Invocation
+    from vgi import TableInOutFunction, Invocation
     import pyarrow as pa
 
-    class MyFunction(TableInOutSimpleFunction):
+    class MyFunction(TableInOutFunction):
         def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
             # Transform each batch here
             return batch
 
-For advanced streaming control, use TableInOutFunction with generators:
+For advanced streaming control, use TableInOutGeneratorFunction with generators:
 
-    from vgi import TableInOutFunction, Output, OutputGenerator, Invocation
+    from vgi import TableInOutGeneratorFunction, Output, OutputGenerator, Invocation
     import pyarrow as pa
 
-    class MyFunction(TableInOutFunction):
+    class MyFunction(TableInOutGeneratorFunction):
         def process(self, batch: pa.RecordBatch) -> OutputGenerator:
             _ = yield None  # Required priming yield
             while True:
@@ -44,8 +44,8 @@ PUBLIC API
 ----------
 Classes exported from this module:
 
-    TableInOutSimpleFunction - Callback-based API (recommended)
-    TableInOutFunction       - Generator-based API (advanced)
+    TableInOutFunction - Callback-based API (recommended)
+    TableInOutGeneratorFunction       - Generator-based API (advanced)
     Output                   - Output batch from process()/finalize()
     OutputGenerator          - Type alias for process()/finalize()
     Invocation               - Function invocation request
@@ -65,8 +65,8 @@ CLASS HIERARCHY
 ---------------
     vgi.function.Function                - Base (max_processes, invocation_id)
     └─ vgi.table_function.TableFunction  - Adds cardinality hints, projection
-       └─ TableInOutFunction             - Full streaming (process/finalize)
-          └─ TableInOutSimpleFunction    - Callback API (transform/finish)
+       └─ TableInOutGeneratorFunction             - Full streaming (process/finalize)
+          └─ TableInOutFunction    - Callback API (transform/finish)
 
 Examples
 --------
@@ -86,7 +86,7 @@ from vgi.table_in_out_function import (
     Output,
     OutputGenerator,
     TableInOutFunction,
-    TableInOutSimpleFunction,
+    TableInOutGeneratorFunction,
 )
 from vgi.worker import Worker
 
@@ -97,8 +97,8 @@ __all__ = [
     "Message",
     "Output",
     "OutputGenerator",
+    "TableInOutGeneratorFunction",
     "TableInOutFunction",
-    "TableInOutSimpleFunction",
     "Worker",
     "hello",
 ]

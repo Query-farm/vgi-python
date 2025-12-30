@@ -10,7 +10,7 @@ Protocol Overview:
     3. FINALIZE: The finalize() generator is called to flush buffered data
 
 Key Components:
-    TableInOutFunction: Base class to subclass for custom functions.
+    TableInOutGeneratorFunction: Base class to subclass for custom functions.
     Output: Return type for process()/finalize() with batch and has_more flag.
     OutputGenerator: Type alias for the process()/finalize() return type.
     ProtocolInput/ProtocolOutput: Protocol messages for the run() generator.
@@ -19,7 +19,7 @@ Quick Start (Recommended Pattern):
     The process() method uses a generator pattern. Always use this explicit
     loop structure for clarity:
 
-    class MyFunction(TableInOutFunction):
+    class MyFunction(TableInOutGeneratorFunction):
         def process(self, batch: pa.RecordBatch) -> OutputGenerator:
             # 1. REQUIRED: Priming yield (framework advances past this)
             _ = yield None
@@ -62,7 +62,7 @@ Logging:
                 if batch is None:
                     break
 
-See TableInOutFunction docstring for comprehensive documentation and examples.
+See TableInOutGeneratorFunction docstring for comprehensive documentation and examples.
 """
 
 from collections.abc import Generator
@@ -85,8 +85,8 @@ __all__ = [
     "ProtocolOutput",
     "Output",
     "OutputGenerator",
+    "TableInOutGeneratorFunction",
     "TableInOutFunction",
-    "TableInOutSimpleFunction",
 ]
 
 
@@ -297,7 +297,7 @@ class _OutputComplete:
         )
 
 
-class TableInOutFunction(vgi.table_function.TableFunction):
+class TableInOutGeneratorFunction(vgi.table_function.TableFunction):
     """Base class for streaming table functions that transform Arrow RecordBatches.
 
     This class handles functions that receive arguments and a streaming table input,
@@ -394,7 +394,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
     -------------------
     Functions can use setup/teardown for resource cleanup:
 
-        class MyDbFunction(TableInOutFunction):
+        class MyDbFunction(TableInOutGeneratorFunction):
             def setup(self) -> None:
                 self.conn = sqlite3.connect("my.db")
 
@@ -413,7 +413,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
 
     CALLER PROTOCOL
     ---------------
-    To use a TableInOutFunction, the caller must:
+    To use a TableInOutGeneratorFunction, the caller must:
 
     1. Create the bind result:
        invocation = vgi.function.Invocation(
@@ -700,7 +700,7 @@ class TableInOutFunction(vgi.table_function.TableFunction):
             self.teardown()
 
 
-class TableInOutSimpleFunction(TableInOutFunction):
+class TableInOutFunction(TableInOutGeneratorFunction):
     """Simplified base class using callbacks instead of generators.
 
     This class provides a simpler API for common use cases where you don't need
@@ -747,25 +747,25 @@ class TableInOutSimpleFunction(TableInOutFunction):
     --------
     Passthrough (no-op):
 
-        class Echo(TableInOutSimpleFunction):
+        class Echo(TableInOutFunction):
             pass  # Default transform() returns batch unchanged
 
     Transform each batch:
 
-        class DoubleValues(TableInOutSimpleFunction):
+        class DoubleValues(TableInOutFunction):
             def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
                 doubled = pc.multiply(batch.column(0), 2)
                 return batch.set_column(0, batch.schema[0].name, doubled)
 
     Multiple outputs per input:
 
-        class TripleOutput(TableInOutSimpleFunction):
+        class TripleOutput(TableInOutFunction):
             def transform(self, batch: pa.RecordBatch) -> list[pa.RecordBatch]:
                 return [batch, batch, batch]  # Emit 3 copies
 
     Aggregation with logging:
 
-        class SumColumn(TableInOutSimpleFunction):
+        class SumColumn(TableInOutFunction):
             def __init__(self, invocation, logger):
                 super().__init__(invocation, logger)
                 self.total = 0
@@ -791,7 +791,7 @@ class TableInOutSimpleFunction(TableInOutFunction):
 
     Distributed aggregation (parallel workers):
 
-        class DistributedSum(TableInOutSimpleFunction):
+        class DistributedSum(TableInOutFunction):
             def __init__(self, invocation, logger):
                 super().__init__(invocation, logger)
                 self.total = 0
@@ -930,9 +930,7 @@ class TableInOutSimpleFunction(TableInOutFunction):
         """
         return None
 
-    def load_states(
-        self, states: list[vgi.ipc_utils.RecordBatchState]
-    ) -> None:
+    def load_states(self, states: list[vgi.ipc_utils.RecordBatchState]) -> None:
         """Load and merge states from all workers (for distributed processing).
 
         Override this method to combine partial states from all workers.
