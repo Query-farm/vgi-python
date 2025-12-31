@@ -3,27 +3,34 @@
 A worker is a subprocess that communicates via stdin/stdout using Arrow IPC.
 Workers are spawned by Client for each function invocation.
 
+SUPPORTED FUNCTION TYPES
+------------------------
+The worker supports two function types, dispatched based on class inheritance:
+
+1. TableInOutGeneratorFunction: Reads input batches, produces output batches.
+   Use for transforming, filtering, or aggregating input data.
+
+2. TableFunctionGenerator: Generates output batches without reading input.
+   Use for data generation functions like sequence(), range(), random_sample().
+
 QUICK START
 -----------
 Create a worker by subclassing Worker and listing your functions:
 
     from vgi.worker import Worker
     from vgi.table_in_out_function import TableInOutGeneratorFunction
+    from vgi.table_function import TableFunctionGenerator
 
-    class MyFunction(TableInOutGeneratorFunction):
-        class Meta:
-            name = "my_function"  # Optional: defaults to snake_case of class name
+    class EchoFunction(TableInOutGeneratorFunction):
+        # Transforms input batches
+        ...
 
-        def process(self, batch):
-            _ = yield None
-            while True:
-                yield Output(batch)
-                batch = yield None
-                if batch is None:
-                    break
+    class SequenceFunction(TableFunctionGenerator):
+        # Generates output without input
+        ...
 
     class MyWorker(Worker):
-        functions = [MyFunction]
+        functions = [EchoFunction, SequenceFunction]
 
     if __name__ == "__main__":
         MyWorker().run()
@@ -31,13 +38,20 @@ Create a worker by subclassing Worker and listing your functions:
 Function names are derived from metadata (Meta.name or class name converted to
 snake_case). No manual name mapping required.
 
-PROTOCOL FLOW
--------------
+PROTOCOL FLOW (TableInOutGeneratorFunction)
+-------------------------------------------
 1. Read Invocation: function name, arguments, input schema
 2. Write OutputSpec: output schema, max_processes, invocation_id
 3. Read/write GlobalStateInitInput/GlobalInitResult for initialization
 4. Stream: read input batches -> process -> write output batches
 5. Finalize: receive FINALIZE signal -> emit final results
+
+PROTOCOL FLOW (TableFunctionGenerator)
+--------------------------------------
+1. Read Invocation: function name, arguments (no input schema)
+2. Write OutputSpec: output schema, max_processes, invocation_id
+3. Read/write GlobalStateInitInput/GlobalInitResult for initialization
+4. Generate: produce output batches until generator exhausted
 
 KEY CLASSES
 -----------
@@ -68,6 +82,7 @@ from vgi.function import (
     negotiate_protocol_version,
 )
 from vgi.ipc_utils import read_ipc_batch
+from vgi.table_function import GlobalStateInitInput, TableFunctionGenerator
 from vgi.table_in_out_function import (
     ProtocolInput,
     TableInOutGeneratorFunction,
@@ -341,6 +356,47 @@ class Worker:
             total_output_rows=total_output_rows,
         )
 
+    def _generate_batches(
+        self,
+        instance: TableFunctionGenerator,
+        invocation: Invocation,
+        fn_log: structlog.stdlib.BoundLogger,
+    ) -> WorkerStats:
+        """Generate output batches from a TableFunctionGenerator.
+
+        Unlike _process_batches, this method doesn't read input batches.
+        The function generates output independently.
+
+        Returns:
+            WorkerStats with batch_count=0, total_input_rows=0, total_output_rows.
+
+        """
+        generator = instance.run()
+
+        with ipc.new_stream(sys.stdout, instance.output_schema) as writer:
+            batch_count = 0
+            total_output_rows = 0
+
+            for output in generator:
+                batch_count += 1
+                output_rows = output.batch.num_rows if output.batch else 0
+                total_output_rows += output_rows
+
+                writer.write_batch(
+                    output.batch, custom_metadata=output.metadata(invocation)
+                )
+                fn_log.debug(
+                    "batch_written",
+                    batch_index=batch_count,
+                    output_rows=output_rows,
+                )
+
+        return WorkerStats(
+            batch_count=batch_count,
+            total_input_rows=0,
+            total_output_rows=total_output_rows,
+        )
+
     def run(self) -> None:
         """Run the worker, reading from stdin and writing to stdout."""
         self.log.info("worker_starting")
@@ -365,10 +421,9 @@ class Worker:
 
         candidates = registry[invocation.function_name]
         func_cls = self._match_function(invocation, candidates)
-        # Workers currently only support TableInOutGeneratorFunction
-        instance: TableInOutGeneratorFunction = func_cls(  # type: ignore[assignment]
-            invocation=invocation, logger=fn_log
-        )
+
+        # Instantiate the function
+        instance = func_cls(invocation=invocation, logger=fn_log)
 
         # Negotiate protocol version with client
         negotiated_version = negotiate_protocol_version(invocation.protocol_version)
@@ -389,6 +444,7 @@ class Worker:
             raise OSError("Failed to write bind result record batch")
 
         if invocation.global_init_identifier is None:
+            # Primary worker: perform init and store in storage
             fn_log.info("processing_init")
             init_result = instance.perform_init(self._read_init_data())
             init_result_bytes = init_result.serialize()
@@ -397,10 +453,24 @@ class Worker:
             fn_log.info("processing_init_complete", init_result=init_result)
             invocation = invocation.with_global_init_identifier(init_result)
         else:
+            # Secondary worker: retrieve shared init from storage
             fn_log.info("retrieving_init")
             instance.retrieve_init(invocation.global_init_identifier)
 
-        stats = self._process_batches(instance, invocation, fn_log)
+        # Dispatch to appropriate processing method based on function type.
+        # TableInOutGeneratorFunction reads input batches and produces output.
+        # TableFunctionGenerator generates output without input batches.
+        # Note: Check TableInOutGeneratorFunction first since it's more specific
+        # (TableFunctionGenerator is a parent of TableInOutGeneratorFunction's parent).
+        if isinstance(instance, TableInOutGeneratorFunction):
+            stats = self._process_batches(instance, invocation, fn_log)
+        elif isinstance(instance, TableFunctionGenerator):
+            stats = self._generate_batches(instance, invocation, fn_log)
+        else:
+            raise TypeError(
+                f"Unsupported function type: {type(instance).__name__}. "
+                f"Expected TableInOutGeneratorFunction or TableFunctionGenerator."
+            )
 
         fn_log.info(
             "worker_complete",

@@ -661,7 +661,7 @@ class SqliteWorkerStateStorage:
         return conn
 
     def _ensure_table(self) -> None:
-        """Create the worker_state table if it doesn't exist."""
+        """Create the worker_state and work_queue tables if they don't exist."""
         conn = self._connect()
         try:
             conn.execute("""
@@ -672,6 +672,18 @@ class SqliteWorkerStateStorage:
                     created_at REAL DEFAULT (julianday('now')),
                     PRIMARY KEY (invocation_id, process_id)
                 )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS work_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    invocation_id BLOB NOT NULL,
+                    work_item BLOB NOT NULL,
+                    created_at REAL DEFAULT (julianday('now'))
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_work_queue_invocation
+                ON work_queue(invocation_id)
             """)
             conn.commit()
         finally:
@@ -729,6 +741,86 @@ class SqliteWorkerStateStorage:
             states = [row[0] for row in cursor.fetchall()]
             conn.commit()
             return states
+        finally:
+            conn.close()
+
+    def enqueue_work(self, invocation_id: bytes, work_items: list[bytes]) -> int:
+        """Add work items to the queue for an invocation.
+
+        Args:
+            invocation_id: Unique identifier for the function invocation.
+            work_items: List of serialized work item bytes (opaque to storage).
+
+        Returns:
+            Number of items enqueued.
+
+        """
+        if not work_items:
+            return 0
+        conn = self._connect()
+        try:
+            conn.executemany(
+                """
+                INSERT INTO work_queue (invocation_id, work_item)
+                VALUES (?, ?)
+                """,
+                [(invocation_id, item) for item in work_items],
+            )
+            conn.commit()
+            return len(work_items)
+        finally:
+            conn.close()
+
+    def dequeue_work(self, invocation_id: bytes) -> bytes | None:
+        """Atomically claim and delete one work item from the queue.
+
+        Returns None if the queue is empty.
+
+        Args:
+            invocation_id: Unique identifier for the function invocation.
+
+        Returns:
+            Serialized work item bytes, or None if queue is empty.
+
+        """
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                """
+                DELETE FROM work_queue
+                WHERE id = (
+                    SELECT id FROM work_queue
+                    WHERE invocation_id = ?
+                    LIMIT 1
+                )
+                RETURNING work_item
+                """,
+                (invocation_id,),
+            )
+            row = cursor.fetchone()
+            conn.commit()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    def cleanup_queue(self, invocation_id: bytes) -> int:
+        """Delete all remaining work items for an invocation.
+
+        Args:
+            invocation_id: Unique identifier for the function invocation.
+
+        Returns:
+            Number of items deleted.
+
+        """
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "DELETE FROM work_queue WHERE invocation_id = ?",
+                (invocation_id,),
+            )
+            conn.commit()
+            return cursor.rowcount
         finally:
             conn.close()
 
@@ -926,3 +1018,63 @@ class Function(MetadataMixin):
             raise ValueError("init_identifier must be set before collecting states")
         state_bytes_list = self.state_storage.collect_and_delete(self.init_identifier)
         return [state_class.deserialize(data) for data in state_bytes_list]
+
+    def enqueue_work(self, work_items: list[bytes]) -> int:
+        """Add work items to the queue for this invocation.
+
+        Call this during initialization (perform_init or setup) to populate
+        the work queue that workers will pull from during process().
+
+        Args:
+            work_items: List of opaque bytes representing work items.
+                The function is responsible for serializing/deserializing
+                these bytes as needed.
+
+        Returns:
+            Number of items enqueued.
+
+        Raises:
+            ValueError: If init_identifier has not been set.
+
+        Example:
+            def perform_init(self, init_input: pa.RecordBatch) -> GlobalInitResult:
+                result = super().perform_init(init_input)
+                # Create work items (e.g., ranges to process)
+                work_items = [struct.pack(">QQ", start, end) for start, end in ranges]
+                self.enqueue_work(work_items)
+                return result
+
+        """
+        if self.init_identifier is None:
+            raise ValueError("init_identifier must be set before enqueuing work")
+        return self.state_storage.enqueue_work(self.init_identifier, work_items)
+
+    def dequeue_work(self) -> bytes | None:
+        """Claim and return the next work item from the queue.
+
+        Each call atomically claims one item from the queue. Returns None
+        when the queue is empty (all work has been claimed).
+
+        Multiple workers can safely call this concurrently - each item
+        will be returned to exactly one worker.
+
+        Returns:
+            Opaque bytes representing a work item, or None if queue is empty.
+
+        Raises:
+            ValueError: If init_identifier has not been set.
+
+        Example:
+            def process(self) -> OutputGenerator:
+                while True:
+                    work_data = self.dequeue_work()
+                    if work_data is None:
+                        break  # Queue empty, done
+                    start, end = struct.unpack(">QQ", work_data)
+                    # Generate output for this range...
+                    yield Output(batch)
+
+        """
+        if self.init_identifier is None:
+            raise ValueError("init_identifier must be set before dequeuing work")
+        return self.state_storage.dequeue_work(self.init_identifier)

@@ -85,8 +85,10 @@ from vgi.function import Arguments, Invocation
 from vgi.log import Level, Message
 from vgi.table_function import (
     GlobalStateInitInput,
-    ProtocolOutput as TableProtocolOutput,
     TableFunctionGenerator,
+)
+from vgi.table_function import (
+    ProtocolOutput as TableProtocolOutput,
 )
 from vgi.table_in_out_function import (
     ProtocolInput,

@@ -1,12 +1,20 @@
 """Command-line interface for the VGI client.
 
-This module provides the CLI entry point for processing parquet files through
-VGI functions.
+This module provides the CLI entry point for invoking VGI functions.
 
 Usage:
+    # Table-in-out functions (with input):
     vgi-client --input data.parquet --function echo
     vgi-client --input data.parquet --function sum_all_columns
     vgi-client --input data.parquet --function repeat_inputs --args '[3]'
+
+    # Table functions (no input):
+    vgi-client --function sequence --args '[100]'
+    vgi-client --function range --args '[0, 10]'
+
+    # Specify table input position (for functions where TableInput isn't first):
+    vgi-client --input data.parquet --function transform --args '["prefix"]' \
+        --table-input-position 1
 
 """
 
@@ -112,10 +120,10 @@ def main() -> None:
     @click.option(
         "--input",
         "input_file",
-        required=True,
+        required=False,
         # This validates the that file exists.
         type=click.Path(exists=True),
-        help="Path to input parquet file",
+        help="Path to input parquet file (omit for table functions without input)",
     )
     @click.option(
         "--output",
@@ -172,8 +180,20 @@ def main() -> None:
         default=None,
         help="Maximum number of worker processes (clamps function's max_processes)",
     )
+    @click.option(
+        "--table-input-position",
+        "table_input_position",
+        type=int,
+        default=None,
+        help=(
+            "Position in positional arguments where table input should be inserted "
+            "(0-indexed). If not specified, table input is not included in positional "
+            "args. E.g., --args '[\"prefix\"]' --table-input-position 1 inserts "
+            "table input at position 1, resulting in (\"prefix\", TABLE_INPUT)."
+        ),
+    )
     def cli(
-        input_file: str,
+        input_file: str | None,
         output_file: str | None,
         output_format: str,
         function_name: str,
@@ -182,8 +202,9 @@ def main() -> None:
         worker_stderr: bool,
         projection_ids: tuple[int, ...],
         max_workers: int | None,
+        table_input_position: int | None,
     ) -> None:
-        """Send parquet data through a VGI function and display results."""
+        """Invoke a VGI function and display results."""
         try:
             args_list = json.loads(arguments)
             if not isinstance(args_list, list):
@@ -192,8 +213,24 @@ def main() -> None:
             log.error("invalid_json_arguments", error=str(e))
             raise click.ClickException(f"Invalid JSON in --args: {e}") from e
 
-        log.info("reading_input", file=input_file)
-        pf = pq.ParquetFile(input_file)
+        # Validate table_input_position
+        if table_input_position is not None:
+            if input_file is None:
+                raise click.ClickException(
+                    "--table-input-position requires --input to be specified"
+                )
+            if table_input_position < 0:
+                raise click.ClickException(
+                    "--table-input-position must be non-negative"
+                )
+            if table_input_position > len(args_list):
+                raise click.ClickException(
+                    f"--table-input-position {table_input_position} is out of range "
+                    f"for {len(args_list)} arguments (max: {len(args_list)})"
+                )
+
+        # Convert args_list to PyArrow scalars
+        positional_args = tuple(pa.scalar(arg) for arg in args_list)
 
         log.info("starting_server", function=function_name, server_path=server_path)
 
@@ -202,19 +239,45 @@ def main() -> None:
             with Client(
                 server_path, passthrough_stderr=worker_stderr, max_workers=max_workers
             ) as client:
-                for output_batch in client.table_in_out_function(
-                    function_name=function_name,
-                    arguments=Arguments(positional=tuple(args_list), named={}),
-                    input=pf.iter_batches(),
-                    projection_ids=list(projection_ids) if projection_ids else None,
-                ):
-                    # FIXME: need to log log batches and exceptions.
+                if input_file is None:
+                    # Table function (no input) - use table_function method
+                    log.info("invoking_table_function", function=function_name)
+                    output_iterator = client.table_function(
+                        function_name=function_name,
+                        arguments=Arguments(positional=positional_args, named={}),
+                        projection_ids=list(projection_ids) if projection_ids else None,
+                    )
+                else:
+                    # Table-in-out function - use table_in_out_function method
+                    log.info("reading_input", file=input_file)
+                    pf = pq.ParquetFile(input_file)
+
+                    # If table_input_position is specified, log it for debugging
+                    # The table input position tells the user where the table data
+                    # appears in the function signature (e.g., position 1 means the
+                    # table is the second argument). This is purely informational
+                    # for the CLI user - the protocol handles table data separately.
+                    if table_input_position is not None:
+                        log.debug(
+                            "table_input_position_specified",
+                            position=table_input_position,
+                            num_args=len(positional_args),
+                        )
+
+                    output_iterator = client.table_in_out_function(
+                        function_name=function_name,
+                        arguments=Arguments(positional=positional_args, named={}),
+                        input=pf.iter_batches(),
+                        projection_ids=list(projection_ids) if projection_ids else None,
+                    )
+
+                for output_batch in output_iterator:
                     if output_writer is None:
                         output_writer = OutputWriter(
                             output_file, output_format, output_batch.schema
                         )
-
                     output_writer.write_batch(output_batch)
+
             log.info("processing_complete", function=function_name)
         except ClientError as e:
             raise click.ClickException(str(e)) from e

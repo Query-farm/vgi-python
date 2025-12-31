@@ -89,6 +89,11 @@ class GlobalStateInitInput:
     Attributes:
         projection_ids: Optional list of column indices to project, or None for all.
 
+    Note:
+        For parallel execution, functions should use the work queue pattern
+        via enqueue_work() and dequeue_work() methods on the Function base class
+        instead of static partitioning.
+
     """
 
     projection_ids: list[int] | None = None
@@ -105,7 +110,8 @@ class GlobalStateInitInput:
     def deserialize(batch: pa.RecordBatch) -> "GlobalStateInitInput":
         """Deserialize GlobalStateInitInput from a RecordBatch."""
         values = batch.to_pylist()[0]
-        return GlobalStateInitInput(**values)
+        # Handle backward compatibility: ignore extra fields
+        return GlobalStateInitInput(projection_ids=values.get("projection_ids"))
 
     @staticmethod
     def deserialize_bytes(data: bytes) -> "GlobalStateInitInput":
