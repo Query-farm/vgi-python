@@ -882,7 +882,7 @@ class TestArgValidation:
 
         obj = MyClass()
         with pytest.raises(
-            ArgumentValidationError, match="must be one of: 'fast', 'slow', 'auto'"
+            ArgumentValidationError, match="must be one of the allowed choices"
         ):
             _ = obj.mode
 
@@ -908,7 +908,9 @@ class TestArgValidation:
             name = Arg[str](0, pattern=r"^[a-z_][a-z0-9_]*$")
 
         obj = MyClass()
-        with pytest.raises(ArgumentValidationError, match="does not match pattern"):
+        with pytest.raises(
+            ArgumentValidationError, match="does not match the required pattern"
+        ):
             _ = obj.name
 
     def test_pattern_validation_requires_string(self) -> None:
@@ -919,7 +921,9 @@ class TestArgValidation:
             value = Arg[int](0, pattern=r".*")
 
         obj = MyClass()
-        with pytest.raises(ArgumentValidationError, match="requires string"):
+        with pytest.raises(
+            ArgumentValidationError, match="must be a string for pattern validation"
+        ):
             _ = obj.value
 
     def test_conflicting_ge_gt_raises(self) -> None:
@@ -951,3 +955,173 @@ class TestArgValidation:
         assert "le=100" in repr_str
         assert "choices=" in repr_str
         assert "pattern=" in repr_str
+
+
+class TestArgumentValidationErrorMessages:
+    """Tests for rich error messages in ArgumentValidationError."""
+
+    def test_error_includes_argument_info(self) -> None:
+        """Error should include argument position and attribute name."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(0),)))
+            count = Arg[int](0, ge=1, doc="Number of items to process")
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError) as exc_info:
+            _ = obj.count
+
+        error = exc_info.value
+        error_str = str(error)
+
+        # Check rich attributes
+        assert error.arg_name == "count"
+        assert error.position == 0
+        assert error.value == 0
+        assert error.constraint == "must be >= 1"
+        assert error.doc == "Number of items to process"
+
+        # Check formatted message includes all info
+        assert "positional argument 0" in error_str
+        assert "self.count" in error_str
+        assert "Value: 0" in error_str
+        assert "must be >= 1" in error_str
+        assert "Number of items to process" in error_str
+
+    def test_error_includes_valid_range(self) -> None:
+        """Error should include valid range description."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(200),)))
+            count = Arg[int](0, ge=1, le=100)
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError) as exc_info:
+            _ = obj.count
+
+        error = exc_info.value
+        assert error.valid_range == ">= 1 and <= 100"
+        assert ">= 1 and <= 100" in str(error)
+
+    def test_error_includes_default_hint(self) -> None:
+        """Error should suggest using default value if available."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(-5),)))
+            count = Arg[int](0, ge=0, default=10)
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError) as exc_info:
+            _ = obj.count
+
+        error_str = str(exc_info.value)
+        assert "default value: 10" in error_str
+
+    def test_error_suggests_similar_choices(self) -> None:
+        """Error should suggest similar choices for typos."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("fst"),)))
+            mode = Arg[str](0, choices=["fast", "slow", "auto"])
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError) as exc_info:
+            _ = obj.mode
+
+        error = exc_info.value
+        error_str = str(error)
+
+        # Should suggest 'fast' as it's similar to 'fst'
+        assert "Did you mean:" in error_str
+        assert "'fast'" in error_str
+
+    def test_error_for_named_argument(self) -> None:
+        """Error should format named arguments correctly."""
+
+        class MyClass:
+            invocation = _MockInvocation(
+                Arguments(named={"threshold": pa.scalar(-1.0)})
+            )
+            threshold = Arg[float]("threshold", ge=0.0, le=1.0)
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError) as exc_info:
+            _ = obj.threshold
+
+        error = exc_info.value
+        error_str = str(error)
+
+        assert error.position == "threshold"
+        assert "named argument 'threshold'" in error_str
+        assert "self.threshold" in error_str
+
+    def test_error_with_doc_shows_purpose(self) -> None:
+        """Error should show documentation explaining the argument's purpose."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("xyz"),)))
+            mode = Arg[str](
+                0,
+                choices=["json", "csv", "parquet"],
+                doc="Output format for exported data",
+            )
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError) as exc_info:
+            _ = obj.mode
+
+        error_str = str(exc_info.value)
+        assert "Purpose: Output format for exported data" in error_str
+
+    def test_choices_truncated_for_many_options(self) -> None:
+        """Valid range should truncate long choice lists."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("invalid"),)))
+            mode = Arg[str](0, choices=["a", "b", "c", "d", "e", "f", "g", "h"])
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError) as exc_info:
+            _ = obj.mode
+
+        error = exc_info.value
+        assert error.valid_range is not None
+        assert "8 total options" in error.valid_range
+
+    def test_pattern_validation_shows_pattern(self) -> None:
+        """Pattern validation error should show the expected pattern."""
+
+        class MyClass:
+            invocation = _MockInvocation(
+                Arguments(positional=(pa.scalar("123abc"),))
+            )
+            name = Arg[str](0, pattern=r"^[a-z][a-z0-9]*$", doc="Variable name")
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError) as exc_info:
+            _ = obj.name
+
+        error = exc_info.value
+        error_str = str(error)
+
+        assert "must match pattern" in error.constraint  # type: ignore[operator]
+        assert "^[a-z][a-z0-9]*$" in error_str
+        assert "Variable name" in error_str
+
+    def test_numeric_choices_suggests_closest(self) -> None:
+        """For numeric choices, should suggest closest values."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(15),)))
+            size = Arg[int](0, choices=[8, 16, 32, 64, 128])
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError) as exc_info:
+            _ = obj.size
+
+        error = exc_info.value
+        suggestions = error._suggest_similar_choices()
+
+        # 16 is closest to 15, then 8
+        assert suggestions[0] == 16
+        assert suggestions[1] == 8

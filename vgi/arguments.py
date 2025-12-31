@@ -234,7 +234,150 @@ class Arguments:
 
 
 class ArgumentValidationError(ValueError):
-    """Raised when an argument fails validation."""
+    """Raised when an argument fails validation.
+
+    This exception provides detailed context about what went wrong and
+    suggests how to fix the issue.
+
+    Attributes:
+        arg_name: Name of the argument that failed validation.
+        value: The invalid value that was provided.
+        constraint: Description of the constraint that was violated.
+        doc: Documentation string for the argument (if provided).
+        valid_range: Human-readable description of valid values.
+        default: Default value (if any) that could be used instead.
+        suggestions: List of valid values close to the provided value.
+
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        arg_name: str | None = None,
+        position: int | str | None = None,
+        value: Any = None,
+        constraint: str | None = None,
+        doc: str | None = None,
+        valid_range: str | None = None,
+        default: Any = _MISSING,
+        choices: Sequence[Any] | None = None,
+    ) -> None:
+        """Initialize with rich context for helpful error messages.
+
+        Args:
+            message: Base error message.
+            arg_name: Attribute name of the Arg descriptor.
+            position: Positional index or named key.
+            value: The value that failed validation.
+            constraint: What constraint was violated (e.g., "must be >= 1").
+            doc: Documentation for what this argument does.
+            valid_range: Description of valid values.
+            default: Default value if any.
+            choices: List of valid choices if applicable.
+
+        """
+        self.arg_name = arg_name
+        self.position = position
+        self.value = value
+        self.constraint = constraint
+        self.doc = doc
+        self.valid_range = valid_range
+        self.default = default
+        self.choices = choices
+
+        # Build detailed message
+        full_message = self._build_message(message)
+        super().__init__(full_message)
+
+    def _build_message(self, base_message: str) -> str:
+        """Build a detailed, helpful error message."""
+        lines = [base_message, ""]
+
+        # Add position info
+        if self.position is not None:
+            if isinstance(self.position, int):
+                lines.append(f"  Argument: positional argument {self.position}")
+            else:
+                lines.append(f"  Argument: named argument '{self.position}'")
+
+        # Always show attribute name if set (helps identify where in code to fix)
+        if self.arg_name:
+            lines.append(f"  Attribute: self.{self.arg_name}")
+
+        # Add value info
+        if self.value is not None:
+            lines.append(f"  Value: {self.value!r}")
+
+        # Add constraint info
+        if self.constraint:
+            lines.append(f"  Constraint: {self.constraint}")
+
+        # Add documentation
+        if self.doc:
+            lines.append("")
+            lines.append(f"  Purpose: {self.doc}")
+
+        # Add valid range
+        if self.valid_range:
+            lines.append(f"  Valid values: {self.valid_range}")
+
+        # Add suggestions for choices
+        if self.choices:
+            suggestions = self._suggest_similar_choices()
+            if suggestions:
+                lines.append("")
+                lines.append("  Did you mean:")
+                for suggestion in suggestions[:3]:
+                    lines.append(f"    - {suggestion!r}")
+
+        # Add default value hint
+        if self.default is not _MISSING:
+            lines.append("")
+            lines.append(f"  Tip: Omit this argument to use default value: {self.default!r}")
+
+        return "\n".join(lines)
+
+    def _suggest_similar_choices(self) -> list[Any]:
+        """Find choices similar to the provided value."""
+        if not self.choices or self.value is None:
+            return []
+
+        # For strings, find similar by edit distance or prefix
+        if isinstance(self.value, str):
+            value_lower = self.value.lower()
+            scored: list[tuple[int, Any]] = []
+
+            for choice in self.choices:
+                if isinstance(choice, str):
+                    choice_lower = choice.lower()
+                    # Prioritize prefix matches
+                    if choice_lower.startswith(value_lower):
+                        scored.append((0, choice))
+                    elif value_lower.startswith(choice_lower):
+                        scored.append((1, choice))
+                    # Then substring matches
+                    elif value_lower in choice_lower or choice_lower in value_lower:
+                        scored.append((2, choice))
+                    else:
+                        # Simple character overlap score
+                        overlap = len(set(value_lower) & set(choice_lower))
+                        if overlap > len(value_lower) // 2:
+                            scored.append((10 - overlap, choice))
+
+            scored.sort(key=lambda x: x[0])
+            return [choice for _, choice in scored]
+
+        # For numbers, find closest values
+        if isinstance(self.value, int | float):
+            try:
+                numeric_choices = [c for c in self.choices if isinstance(c, int | float)]
+                numeric_choices.sort(key=lambda c: abs(c - self.value))
+                return numeric_choices
+            except TypeError:
+                pass
+
+        return list(self.choices)
 
 
 # TypeVar for Arg generic type
@@ -395,6 +538,42 @@ class Arg[ArgT]:
 
         return value
 
+    def _describe_valid_range(self) -> str | None:
+        """Build a human-readable description of valid values."""
+        parts = []
+
+        # Numeric bounds
+        if self.ge is not None:
+            parts.append(f">= {self.ge}")
+        if self.gt is not None:
+            parts.append(f"> {self.gt}")
+        if self.le is not None:
+            parts.append(f"<= {self.le}")
+        if self.lt is not None:
+            parts.append(f"< {self.lt}")
+
+        if parts:
+            # Format as range if we have both bounds
+            if len(parts) == 2:
+                lower = parts[0]
+                upper = parts[1]
+                return f"{lower} and {upper}"
+            return " and ".join(parts)
+
+        # Choices
+        if self.choices is not None:
+            if len(self.choices) <= 5:
+                return ", ".join(repr(c) for c in self.choices)
+            else:
+                shown = ", ".join(repr(c) for c in list(self.choices)[:4])
+                return f"{shown}, ... ({len(self.choices)} total options)"
+
+        # Pattern
+        if self.pattern is not None:
+            return f"string matching pattern: {self.pattern}"
+
+        return None
+
     def _validate(self, value: ArgT) -> None:
         """Validate value against all constraints.
 
@@ -406,46 +585,94 @@ class Arg[ArgT]:
 
         """
         arg_name = self._name or str(self.position)
+        valid_range = self._describe_valid_range()
 
         # Numeric range validation
         if self.ge is not None and value < self.ge:  # type: ignore[operator]
             raise ArgumentValidationError(
-                f"Argument '{arg_name}': value {value!r} must be >= {self.ge}"
+                f"Argument '{arg_name}' is too small.",
+                arg_name=self._name,
+                position=self.position,
+                value=value,
+                constraint=f"must be >= {self.ge}",
+                doc=self.doc if self.doc else None,
+                valid_range=valid_range,
+                default=self.default,
             )
 
         if self.le is not None and value > self.le:  # type: ignore[operator]
             raise ArgumentValidationError(
-                f"Argument '{arg_name}': value {value!r} must be <= {self.le}"
+                f"Argument '{arg_name}' is too large.",
+                arg_name=self._name,
+                position=self.position,
+                value=value,
+                constraint=f"must be <= {self.le}",
+                doc=self.doc if self.doc else None,
+                valid_range=valid_range,
+                default=self.default,
             )
 
         if self.gt is not None and value <= self.gt:  # type: ignore[operator]
             raise ArgumentValidationError(
-                f"Argument '{arg_name}': value {value!r} must be > {self.gt}"
+                f"Argument '{arg_name}' is too small.",
+                arg_name=self._name,
+                position=self.position,
+                value=value,
+                constraint=f"must be > {self.gt}",
+                doc=self.doc if self.doc else None,
+                valid_range=valid_range,
+                default=self.default,
             )
 
         if self.lt is not None and value >= self.lt:  # type: ignore[operator]
             raise ArgumentValidationError(
-                f"Argument '{arg_name}': value {value!r} must be < {self.lt}"
+                f"Argument '{arg_name}' is too large.",
+                arg_name=self._name,
+                position=self.position,
+                value=value,
+                constraint=f"must be < {self.lt}",
+                doc=self.doc if self.doc else None,
+                valid_range=valid_range,
+                default=self.default,
             )
 
         # Choices validation
         if self.choices is not None and value not in self.choices:
-            choices_str = ", ".join(repr(c) for c in self.choices)
             raise ArgumentValidationError(
-                f"Argument '{arg_name}': value {value!r} must be one of: {choices_str}"
+                f"Argument '{arg_name}' has an invalid value.",
+                arg_name=self._name,
+                position=self.position,
+                value=value,
+                constraint="must be one of the allowed choices",
+                doc=self.doc if self.doc else None,
+                valid_range=valid_range,
+                default=self.default,
+                choices=self.choices,
             )
 
         # Pattern validation (for strings)
         if self._compiled_pattern is not None:
             if not isinstance(value, str):
                 raise ArgumentValidationError(
-                    f"Argument '{arg_name}': pattern validation requires string, "
-                    f"got {type(value).__name__}"
+                    f"Argument '{arg_name}' must be a string for pattern validation.",
+                    arg_name=self._name,
+                    position=self.position,
+                    value=value,
+                    constraint=f"must be a string matching pattern '{self.pattern}'",
+                    doc=self.doc if self.doc else None,
+                    valid_range=valid_range,
+                    default=self.default,
                 )
             if not self._compiled_pattern.match(value):
                 raise ArgumentValidationError(
-                    f"Argument '{arg_name}': value {value!r} does not match "
-                    f"pattern '{self.pattern}'"
+                    f"Argument '{arg_name}' does not match the required pattern.",
+                    arg_name=self._name,
+                    position=self.position,
+                    value=value,
+                    constraint=f"must match pattern '{self.pattern}'",
+                    doc=self.doc if self.doc else None,
+                    valid_range=valid_range,
+                    default=self.default,
                 )
 
     def __repr__(self) -> str:

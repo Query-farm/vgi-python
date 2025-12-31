@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Vector Gateway Interface - Connect DuckDB to external programs via Apache Arrow"
 readme = "README.md"
 requires-python = ">=3.12.4"
-dependencies = ["click", "pyarrow", "structlog"]
+dependencies = ["click", "pyarrow", "structlog", "platformdirs"]
 
 [project.optional-dependencies]
 dev = ["mypy", "pytest", "pytest-mypy", "pytest-ruff", "ruff"]
@@ -24,8 +24,8 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "D"]
 ignore = [
-    "D203",  # incompatible with D211 (no-blank-line-before-class)
-    "D213",  # incompatible with D212 (multi-line-summary-first-line)
+    "D203", # incompatible with D211 (no-blank-line-before-class)
+    "D213", # incompatible with D212 (multi-line-summary-first-line)
 ]
 
 [tool.ruff.format]
