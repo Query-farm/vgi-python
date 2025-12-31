@@ -758,6 +758,10 @@ class Function(MetadataMixin):
         examples: List of SQL examples
         See vgi.metadata for all available attributes.
 
+    Attributes:
+        invocation: The Invocation containing function name, arguments, and schema.
+        logger: Structured logger for function diagnostics.
+
     For distributed functions that need to share state across workers:
     - Use store_state() to persist worker state during GeneratorExit
     - Use collect_states() in finalize() to gather all worker states
@@ -779,13 +783,21 @@ class Function(MetadataMixin):
     # Cache for resolved metadata
     _metadata_cache: ClassVar[ResolvedMetadata | None] = None
 
-    def __init__(self, *, logger: structlog.stdlib.BoundLogger):
-        """Initialize the function with a logger.
+    def __init__(
+        self,
+        *,
+        invocation: "Invocation",
+        logger: structlog.stdlib.BoundLogger,
+    ):
+        """Initialize the function with invocation data and logger.
 
         Args:
+            invocation: Complete invocation request including function name,
+                arguments, and input schema.
             logger: Structured logger for function diagnostics.
 
         """
+        self.invocation = invocation
         self.logger = logger
 
     def max_processes(self) -> int:

@@ -68,7 +68,7 @@ See TableInOutGeneratorFunction docstring for comprehensive documentation and ex
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from enum import Enum
-from functools import cached_property, wraps
+from functools import wraps
 from typing import ClassVar, final
 
 import pyarrow as pa
@@ -80,7 +80,6 @@ import vgi.log
 import vgi.table_function
 
 __all__ = [
-    "SchemaValidationError",
     "ProtocolInput",
     "ProtocolOutput",
     "Output",
@@ -206,17 +205,8 @@ class ProtocolOutput:
         )
 
 
-class SchemaValidationError(Exception):
-    """Raised when a batch schema doesn't match the expected schema.
-
-    This error is raised by the framework during input/output validation.
-    It indicates a programming error where a batch doesn't conform to the
-    declared schema.
-    """
-
-
 @dataclass(frozen=True, slots=True)
-class Output:
+class Output(vgi.table_function.Output):
     """Output yielded by process() and finalize() generators.
 
     Attributes:
@@ -238,7 +228,6 @@ class Output:
 
     """
 
-    batch: pa.RecordBatch | None
     has_more: bool = False
 
 
@@ -255,6 +244,7 @@ OutputGenerator = Generator[
 # Type alias for the simplified streaming function signature.
 # Used by the @streaming decorator.
 StreamingGenerator = Generator[Output | vgi.log.Message, pa.RecordBatch | None, None]
+
 
 def streaming[T](
     method: Callable[[T, pa.RecordBatch], StreamingGenerator],
@@ -407,7 +397,7 @@ class _OutputComplete:
         )
 
 
-class TableInOutGeneratorFunction(vgi.table_function.TableFunction):
+class TableInOutGeneratorFunction(vgi.table_function.TableFunctionBase):
     """Base class for streaming table functions that transform Arrow RecordBatches.
 
     This class handles functions that receive arguments and a streaming table input,
@@ -489,9 +479,11 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunction):
 
     AVAILABLE ATTRIBUTES
     --------------------
-    self.arguments: Arguments     - Arguments passed to the function
-    self.input_schema: pa.Schema  - Schema of incoming batches
+    self.invocation: Invocation   - The complete invocation request
+    self.input_schema: pa.Schema  - Input schema (from invocation)
     self.output_schema: pa.Schema - Property returning the output schema
+
+    Access arguments via self.invocation.arguments or use Arg descriptors.
 
     HELPER PROPERTIES/METHODS
     -------------------------
@@ -559,25 +551,15 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunction):
     ):
         """Initialize the function with invocation data and logger."""
         super().__init__(invocation=invocation, logger=logger)
-        self.arguments = invocation.arguments
         if invocation.in_out_function_input_schema is None:
             raise ValueError("Function requires a non-null input schema")
-        self.input_schema = invocation.in_out_function_input_schema
 
-    def setup(self) -> None:
-        """Acquire resources before processing starts.
-
-        Override to acquire resources like database connections, file handles,
-        or external service clients. Called after init_data is available.
-
-        Available at this point:
-            - self.init_data: The GlobalStateInitInput with projection info
-            - self.init_identifier: Storage key for distributed state
-            - self.input_schema: The input schema
-            - self.arguments: Function arguments
-
-        """
-        pass
+    @property
+    def input_schema(self) -> pa.Schema:
+        """Return the input schema from the invocation."""
+        # Validated as non-None in __init__
+        assert self.invocation.in_out_function_input_schema is not None
+        return self.invocation.in_out_function_input_schema
 
     def teardown(self) -> None:
         """Release resources after processing completes.
@@ -591,15 +573,6 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunction):
         """
         pass
 
-    @final
-    @cached_property
-    def empty_output_batch(self) -> pa.RecordBatch:
-        """Return an empty batch conforming to output_schema. Cached."""
-        return pa.RecordBatch.from_arrays(
-            [pa.array([], type=field.type) for field in self.output_schema],
-            schema=self.output_schema,
-        )
-
     @property
     def output_schema(self) -> pa.Schema:
         """Return the output schema (default: passthrough input schema)."""
@@ -609,18 +582,9 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunction):
     def _validate_input_schema(self, batch: pa.RecordBatch) -> None:
         """Validate that a batch conforms to the expected input schema."""
         if batch.schema != self.input_schema:
-            raise SchemaValidationError(
+            raise vgi.table_function.SchemaValidationError(
                 f"Input batch schema does not match expected input_schema. "
                 f"Expected: {self.input_schema}, got: {batch.schema}"
-            )
-
-    @final
-    def _validate_output_schema(self, batch: pa.RecordBatch) -> None:
-        """Validate that a batch conforms to the expected output schema."""
-        if batch.schema != self.output_schema:
-            raise SchemaValidationError(
-                f"Output batch schema does not match expected output_schema. "
-                f"Expected: {self.output_schema}, got: {batch.schema}"
             )
 
     @final
@@ -693,9 +657,10 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunction):
             Message: Emit log message directly; current input will be re-sent.
 
         When yielding Message directly, the framework sends an empty batch
-        with the log in metadata and re-sends the current input batch. The
-        re-sent value is returned by the yield expression but is typically
-        discarded since the original batch is still in scope.
+        with the Message in the RecordBatch's metadata and re-sends the
+        current input batch. The re-sent value is returned by the yield
+        expression but is typically discarded since the original batch is
+        still in scope.
 
         Returns:
             Generator yielding None, Output, or Message objects.

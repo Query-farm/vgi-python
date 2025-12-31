@@ -329,10 +329,10 @@ from vgi.table_in_out_function import (
 class MyFunction(TableInOutGeneratorFunction):
     def __init__(self, invocation: Invocation, logger: structlog.stdlib.BoundLogger):
         super().__init__(invocation, logger)
-        # Access arguments using self.arguments.get()
-        # self.my_arg = self.arguments.get(0)              # positional
-        # self.my_kwarg = self.arguments.get("name", default="value")  # named
-        # Access input schema via self.input_schema
+        # Access arguments via self.invocation.arguments
+        # self.my_arg = self.invocation.arguments.get(0)              # positional
+        # self.my_kwarg = self.invocation.arguments.get("name", default="value")  # named
+        # Access input schema via self.input_schema (property)
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -364,14 +364,16 @@ class MyFunction(TableInOutGeneratorFunction):
 from vgi.worker import Worker
 
 class MyWorker(Worker):
-    registry = {
-        "my_function": MyFunction,
-        "another_function": AnotherFunction,
-    }
+    # List function classes - names come from metadata (Meta.name or snake_case)
+    functions = [MyFunction, AnotherFunction]
 
 if __name__ == "__main__":
     MyWorker().run()
 ```
+
+Note: Multiple functions can share the same name if they have different argument
+signatures (function overloading). The worker matches invocations to functions
+based on argument count and names.
 
 ## Key Patterns
 
@@ -535,12 +537,12 @@ Always call the parent constructor when overriding `__init__`.
 ```python
 # ❌ WRONG - missing super().__init__()
 def __init__(self, invocation: Invocation, logger):
-    self.my_value = invocation.arguments.positional[0]
+    self.my_value = invocation.arguments.get(0)
 
 # ✅ CORRECT
 def __init__(self, invocation: Invocation, logger):
     super().__init__(invocation=invocation, logger=logger)
-    self.my_value = invocation.arguments.positional[0]
+    self.my_value = self.invocation.arguments.get(0)  # Access via self.invocation
 ```
 
 ### 6. Returning instead of yielding in finalize()
@@ -666,23 +668,44 @@ output_schema = schema_like(
 
 ### Type Summary
 
+**Function Base Classes (inheritance hierarchy):**
+
 | Type | Description | Module |
 |------|-------------|--------|
+| `Function` | Base class for all VGI functions | `vgi.function` |
+| `TableFunctionBase` | Adds cardinality, schema validation, lifecycle | `vgi.table_function` |
+| `TableFunctionGenerator` | Simple generator (no input via send) | `vgi.table_function` |
+| `TableInOutGeneratorFunction` | Full DATA/FINALIZE protocol | `vgi.table_in_out_function` |
 | `TableInOutFunction` | Callback-based API (recommended) | `vgi.table_in_out_function` |
-| `TableInOutGeneratorFunction` | Generator-based API (advanced) | `vgi.table_in_out_function` |
+
+**Protocol Types:**
+
+| Type | Description | Module |
+|------|-------------|--------|
 | `Output` | Yielded from process()/finalize() | `vgi.table_in_out_function` |
 | `OutputGenerator` | Return type for process()/finalize() | `vgi.table_in_out_function` |
 | `Invocation` | Function invocation request | `vgi.function` |
 | `Arguments` | Positional and named arguments | `vgi.function` |
 | `Arg` | Descriptor for declarative argument parsing | `vgi.function` |
+
+**Infrastructure:**
+
+| Type | Description | Module |
+|------|-------------|--------|
 | `Worker` | Base class for worker processes | `vgi.worker` |
 | `Client` | Invokes functions on workers | `vgi.client` |
 | `Level` | Log severity enum | `vgi.log` |
 | `Message` | Log message object | `vgi.log` |
 | `CardinalityInfo` | Row count estimates | `vgi.table_function` |
+| `SchemaValidationError` | Exception for schema mismatches | `vgi.table_function` |
 | `RecordBatchState` | State wrapper for distributed functions | `vgi.ipc_utils` |
 | `schema` | Build schemas from keyword arguments | `vgi.schema_utils` |
 | `schema_like` | Derive schemas with modifications | `vgi.schema_utils` |
+
+**Metadata:**
+
+| Type | Description | Module |
+|------|-------------|--------|
 | `ResolvedMetadata` | Resolved function metadata | `vgi.metadata` |
 | `ParameterInfo` | Parameter metadata (from Arg) | `vgi.metadata` |
 | `FunctionExample` | SQL example for documentation | `vgi.metadata` |
@@ -718,21 +741,24 @@ class MyFunction(TableInOutFunction):
         return batch
 ```
 
-**Option 2: Manual with `self.arguments.get()`**
+**Option 2: Manual via `self.invocation.arguments`**
 
 Parse arguments in `__init__`:
 
 ```python
+# Access via self.invocation.arguments
+args = self.invocation.arguments
+
 # Positional arguments (by index)
-count = self.arguments.get(0)                      # Required, raises if missing
-name = self.arguments.get(1, default="unnamed")    # Optional with default
+count = args.get(0)                      # Required, raises if missing
+name = args.get(1, default="unnamed")    # Optional with default
 
 # Named arguments (by string)
-separator = self.arguments.get("sep", default=",")
-threshold = self.arguments.get("threshold")        # Required
+separator = args.get("sep", default=",")
+threshold = args.get("threshold")        # Required
 
 # With Arrow type validation (optional)
-count = self.arguments.get(0, type=pa.int64())     # Raises TypeError if wrong type
+count = args.get(0, type=pa.int64())     # Raises TypeError if wrong type
 ```
 
 ### Function Skeleton Template (Simple API - Recommended)
@@ -846,7 +872,7 @@ Need to implement a VGI function?
 
 | Method | When to Override | Default Behavior |
 |--------|------------------|------------------|
-| `__init__` | Parse arguments, init state | Sets input_schema, arguments |
+| `__init__` | Init state, access invocation | Stores invocation, validates schema |
 | `output_schema` | Change output columns | Returns input_schema |
 | `process()` | Transform data | Passthrough |
 | `finalize()` | Emit final/aggregated data | Returns None |

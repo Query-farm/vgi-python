@@ -379,10 +379,11 @@ class Arg[ArgT]:
         return obj.__dict__[self._name]  # type: ignore[no-any-return]
 
     def _resolve(self, obj: object) -> ArgT:
-        """Parse argument from obj.arguments and validate."""
-        arguments = getattr(obj, "arguments", None)
-        if arguments is None:
-            raise RuntimeError("Object does not have 'arguments' attribute")
+        """Parse argument from obj.invocation.arguments and validate."""
+        invocation = getattr(obj, "invocation", None)
+        if invocation is None:
+            raise RuntimeError("Object does not have 'invocation' attribute")
+        arguments = invocation.arguments
 
         if self.default is _MISSING:
             value: ArgT = arguments.get(self.position)

@@ -602,6 +602,13 @@ class TestTableOutputSpec:
         assert data["cardinality_max"] is None
 
 
+class _MockInvocation:
+    """Mock invocation for testing Arg descriptor."""
+
+    def __init__(self, arguments: Arguments):
+        self.arguments = arguments
+
+
 class TestArg:
     """Tests for the Arg descriptor for declarative argument parsing."""
 
@@ -609,7 +616,7 @@ class TestArg:
         """Arg should parse required positional arguments."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar(42),))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(42),)))
             value = Arg[int](0)
 
         obj = MyClass()
@@ -619,7 +626,7 @@ class TestArg:
         """Arg should use default when positional argument is missing."""
 
         class MyClass:
-            arguments = Arguments(positional=())
+            invocation = _MockInvocation(Arguments(positional=()))
             value = Arg[int](0, default=99)
 
         obj = MyClass()
@@ -629,7 +636,7 @@ class TestArg:
         """Arg should parse required named arguments."""
 
         class MyClass:
-            arguments = Arguments(named={"name": pa.scalar("hello")})
+            invocation = _MockInvocation(Arguments(named={"name": pa.scalar("hello")}))
             name = Arg[str]("name")
 
         obj = MyClass()
@@ -639,7 +646,7 @@ class TestArg:
         """Arg should use default when named argument is missing."""
 
         class MyClass:
-            arguments = Arguments(named={})
+            invocation = _MockInvocation(Arguments(named={}))
             separator = Arg[str]("sep", default=",")
 
         obj = MyClass()
@@ -649,9 +656,11 @@ class TestArg:
         """Arg should work with multiple arguments on same class."""
 
         class MyClass:
-            arguments = Arguments(
-                positional=(pa.scalar(10), pa.scalar(20)),
-                named={"format": pa.scalar("json")},
+            invocation = _MockInvocation(
+                Arguments(
+                    positional=(pa.scalar(10), pa.scalar(20)),
+                    named={"format": pa.scalar("json")},
+                )
             )
             first = Arg[int](0)
             second = Arg[int](1)
@@ -666,7 +675,7 @@ class TestArg:
         """Accessing Arg on class should return the descriptor."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar(42),))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(42),)))
             value = Arg[int](0)
 
         assert isinstance(MyClass.value, Arg)
@@ -676,7 +685,7 @@ class TestArg:
         """Arg should cache the resolved value."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar(42),))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(42),)))
             value = Arg[int](0)
 
         obj = MyClass()
@@ -692,7 +701,7 @@ class TestArg:
         """Arg should raise when required argument is missing."""
 
         class MyClass:
-            arguments = Arguments(positional=())
+            invocation = _MockInvocation(Arguments(positional=()))
             value = Arg[int](0)
 
         obj = MyClass()
@@ -703,7 +712,7 @@ class TestArg:
         """Arg should raise when required named argument is missing."""
 
         class MyClass:
-            arguments = Arguments(named={})
+            invocation = _MockInvocation(Arguments(named={}))
             name = Arg[str]("name")
 
         obj = MyClass()
@@ -725,7 +734,7 @@ class TestArg:
         """Arg should handle None named arguments dict."""
 
         class MyClass:
-            arguments = Arguments(positional=(), named=None)
+            invocation = _MockInvocation(Arguments(positional=(), named=None))
             value = Arg[str]("key", default="default")
 
         obj = MyClass()
@@ -735,7 +744,7 @@ class TestArg:
         """Arg should use default when scalar is null."""
 
         class MyClass:
-            arguments = Arguments(positional=(None,))
+            invocation = _MockInvocation(Arguments(positional=(None,)))
             value = Arg[int](0, default=99)
 
         obj = MyClass()
@@ -748,7 +757,7 @@ class TestArg:
             value = Arg[int](0)
 
             def __init__(self, args: Arguments):
-                self.arguments = args
+                self.invocation = _MockInvocation(args)
 
         obj1 = MyClass(Arguments(positional=(pa.scalar(1),)))
         obj2 = MyClass(Arguments(positional=(pa.scalar(2),)))
@@ -764,7 +773,7 @@ class TestArgValidation:
         """Arg ge validation should pass when value >= threshold."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar(10),))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(10),)))
             value = Arg[int](0, ge=5)
 
         obj = MyClass()
@@ -774,7 +783,7 @@ class TestArgValidation:
         """Arg ge validation should fail when value < threshold."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar(3),))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(3),)))
             value = Arg[int](0, ge=5)
 
         obj = MyClass()
@@ -785,7 +794,7 @@ class TestArgValidation:
         """Arg le validation should pass when value <= threshold."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar(10),))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(10),)))
             value = Arg[int](0, le=100)
 
         obj = MyClass()
@@ -795,7 +804,7 @@ class TestArgValidation:
         """Arg le validation should fail when value > threshold."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar(150),))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(150),)))
             value = Arg[int](0, le=100)
 
         obj = MyClass()
@@ -806,7 +815,7 @@ class TestArgValidation:
         """Arg gt validation should pass when value > threshold."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar(0.5),))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(0.5),)))
             value = Arg[float](0, gt=0.0)
 
         obj = MyClass()
@@ -816,7 +825,7 @@ class TestArgValidation:
         """Arg gt validation should fail when value <= threshold."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar(0.0),))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(0.0),)))
             value = Arg[float](0, gt=0.0)
 
         obj = MyClass()
@@ -827,7 +836,7 @@ class TestArgValidation:
         """Arg lt validation should pass when value < threshold."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar(0.5),))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(0.5),)))
             value = Arg[float](0, lt=1.0)
 
         obj = MyClass()
@@ -837,7 +846,7 @@ class TestArgValidation:
         """Arg lt validation should fail when value >= threshold."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar(1.0),))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(1.0),)))
             value = Arg[float](0, lt=1.0)
 
         obj = MyClass()
@@ -848,7 +857,7 @@ class TestArgValidation:
         """Arg should support combined ge and le for range validation."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar(50),))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(50),)))
             value = Arg[int](0, ge=1, le=100)
 
         obj = MyClass()
@@ -858,7 +867,7 @@ class TestArgValidation:
         """Arg choices validation should pass when value in choices."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar("fast"),))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("fast"),)))
             mode = Arg[str](0, choices=["fast", "slow", "auto"])
 
         obj = MyClass()
@@ -868,7 +877,7 @@ class TestArgValidation:
         """Arg choices validation should fail when value not in choices."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar("invalid"),))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("invalid"),)))
             mode = Arg[str](0, choices=["fast", "slow", "auto"])
 
         obj = MyClass()
@@ -881,7 +890,9 @@ class TestArgValidation:
         """Arg pattern validation should pass when value matches pattern."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar("my_variable"),))
+            invocation = _MockInvocation(
+                Arguments(positional=(pa.scalar("my_variable"),))
+            )
             name = Arg[str](0, pattern=r"^[a-z_][a-z0-9_]*$")
 
         obj = MyClass()
@@ -891,7 +902,9 @@ class TestArgValidation:
         """Arg pattern validation should fail when value doesn't match."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar("123invalid"),))
+            invocation = _MockInvocation(
+                Arguments(positional=(pa.scalar("123invalid"),))
+            )
             name = Arg[str](0, pattern=r"^[a-z_][a-z0-9_]*$")
 
         obj = MyClass()
@@ -902,7 +915,7 @@ class TestArgValidation:
         """Arg pattern validation should fail for non-string types."""
 
         class MyClass:
-            arguments = Arguments(positional=(pa.scalar(123),))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(123),)))
             value = Arg[int](0, pattern=r".*")
 
         obj = MyClass()
@@ -923,7 +936,7 @@ class TestArgValidation:
         """Default values should also be validated."""
 
         class MyClass:
-            arguments = Arguments(positional=())
+            invocation = _MockInvocation(Arguments(positional=()))
             value = Arg[int](0, default=50, ge=1, le=100)
 
         obj = MyClass()

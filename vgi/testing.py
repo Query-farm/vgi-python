@@ -82,8 +82,12 @@ import pyarrow as pa
 import structlog
 
 from vgi.function import Arguments, Invocation
-from vgi.log import Message
-from vgi.table_function import GlobalStateInitInput
+from vgi.log import Level, Message
+from vgi.table_function import (
+    GlobalStateInitInput,
+    ProtocolOutput as TableProtocolOutput,
+    TableFunctionGenerator,
+)
 from vgi.table_in_out_function import (
     ProtocolInput,
     ProtocolOutput,
@@ -95,10 +99,13 @@ from vgi.table_in_out_function import (
 __all__ = [
     "FunctionTestClient",
     "FunctionTestClientError",
+    "TableFunctionTestClient",
     "batch",
     "assert_function_output",
     "assert_function_logs",
     "run_function",
+    "run_table_function",
+    "assert_table_function_output",
 ]
 
 
@@ -326,6 +333,115 @@ class FunctionTestClient:
             else:
                 msg = f"Unexpected finalize status: {output.status}"
                 raise FunctionTestClientError(msg)
+
+
+class TableFunctionTestClient:
+    """In-process client for testing TableFunctionGenerator functions.
+
+    Unlike FunctionTestClient (for TableInOut functions), this client is for
+    table functions that generate output without receiving input batches.
+
+    Example:
+        with TableFunctionTestClient(SequenceFunction) as client:
+            outputs = list(client.table_function(
+                arguments=Arguments(positional=(pa.scalar(10),)),
+            ))
+
+    Attributes:
+        logs: List of log messages emitted during the last function call.
+
+    """
+
+    def __init__(
+        self,
+        function_class: type[TableFunctionGenerator],
+    ) -> None:
+        """Initialize the TableFunctionTestClient.
+
+        Args:
+            function_class: The table function class to test (not an instance).
+
+        """
+        self.function_class = function_class
+        self.logs: list[Message] = []
+        self._logger = structlog.get_logger().bind(component="table_test_client")
+
+    def __enter__(self) -> "TableFunctionTestClient":
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
+        """Exit context manager."""
+        pass
+
+    def table_function(
+        self,
+        *,
+        arguments: Arguments | None = None,
+        projection_ids: list[int] | None = None,
+    ) -> Generator[pa.RecordBatch, None, None]:
+        """Call the table function with the given arguments.
+
+        Args:
+            arguments: Arguments container with positional and named arguments.
+            projection_ids: Optional list of column indices to project.
+
+        Yields:
+            Output RecordBatches from the function.
+
+        Raises:
+            FunctionTestClientError: If the function raises an exception.
+
+        """
+        # Clear logs from previous invocation
+        self.logs = []
+
+        if arguments is None:
+            arguments = Arguments()
+
+        # Create invocation (no input schema for table functions)
+        invocation_id = uuid.uuid4().bytes
+        invocation = Invocation(
+            function_name=self.function_class.__name__,
+            arguments=arguments,
+            in_out_function_input_schema=None,
+            correlation_id="test",
+            invocation_id=invocation_id,
+        )
+
+        # Instantiate function
+        func = self.function_class(invocation=invocation, logger=self._logger)
+
+        # Perform init with GlobalStateInitInput
+        init_input = GlobalStateInitInput(projection_ids=projection_ids)
+        init_batch = pa.RecordBatch.from_arrays(
+            [pa.array([init_input.projection_ids], type=pa.list_(pa.int32()))],
+            schema=pa.schema([pa.field("projection_ids", pa.list_(pa.int32()))]),
+        )
+        init_result = func.perform_init(init_batch)
+
+        # If this is a secondary worker scenario, retrieve init
+        if init_result.global_init_identifier is not None:
+            func.retrieve_init(init_result)
+
+        # Get the run generator (no priming needed for TableFunctionGenerator)
+        generator: Generator[TableProtocolOutput, None, None] = func.run()
+
+        # Collect all outputs
+        try:
+            for output in generator:
+                # Capture log message if present
+                if output.log_message is not None:
+                    self.logs.append(output.log_message)
+                    # Check for exception
+                    if output.log_message.level == Level.EXCEPTION:
+                        raise FunctionTestClientError(output.log_message.message)
+
+                # Yield output batch if it has rows
+                if output.batch is not None and output.batch.num_rows > 0:
+                    yield output.batch
+        except StopIteration:
+            pass
 
 
 # =============================================================================
@@ -624,3 +740,148 @@ def _log_matches(log: Message, expectation: dict[str, Any]) -> bool:
             and not log.message.startswith(expectation["message_startswith"])
         )
     )
+
+
+# =============================================================================
+# Table Function Helpers (for TableFunctionGenerator)
+# =============================================================================
+
+
+def run_table_function(
+    function: type[TableFunctionGenerator],
+    args: tuple[Any, ...] | None = None,
+    kwargs: dict[str, Any] | None = None,
+    projection_ids: list[int] | None = None,
+) -> tuple[list[pa.RecordBatch], list[Message]]:
+    """Run a table function and return outputs and logs.
+
+    A convenience wrapper around TableFunctionTestClient for simple test cases.
+    Unlike run_function(), this is for TableFunctionGenerator which generates
+    output without receiving input batches.
+
+    Args:
+        function: The table function class to test.
+        args: Optional positional arguments as a tuple.
+        kwargs: Optional named arguments as a dict.
+        projection_ids: Optional list of column indices to project.
+
+    Returns:
+        Tuple of (output_batches, log_messages).
+
+    Example:
+        outputs, logs = run_table_function(
+            SequenceFunction,
+            args=(10,),  # Generate 10 numbers
+        )
+        assert len(outputs) == 1
+        assert outputs[0].num_rows == 10
+
+    """
+    # Build Arguments from args/kwargs
+    positional: tuple[pa.Scalar, ...] = ()
+    named: dict[str, pa.Scalar] = {}
+
+    if args:
+        positional = tuple(pa.scalar(a) for a in args)
+    if kwargs:
+        named = {k: pa.scalar(v) for k, v in kwargs.items()}
+
+    arguments = Arguments(positional=positional, named=named)
+
+    with TableFunctionTestClient(function) as client:
+        outputs = list(
+            client.table_function(
+                arguments=arguments,
+                projection_ids=projection_ids,
+            )
+        )
+        return outputs, client.logs
+
+
+def assert_table_function_output(
+    function: type[TableFunctionGenerator],
+    expected: list[pa.RecordBatch],
+    args: tuple[Any, ...] | None = None,
+    kwargs: dict[str, Any] | None = None,
+    projection_ids: list[int] | None = None,
+    check_order: bool = True,
+    msg: str | None = None,
+) -> list[Message]:
+    """Assert that a table function produces expected output batches.
+
+    Runs the function with the given arguments and compares output to expected.
+    Returns captured log messages for additional assertions.
+
+    Args:
+        function: The table function class to test.
+        expected: List of expected output RecordBatches.
+        args: Optional positional arguments as a tuple.
+        kwargs: Optional named arguments as a dict.
+        projection_ids: Optional list of column indices to project.
+        check_order: If True, order of output batches must match. Default True.
+        msg: Optional custom assertion message prefix.
+
+    Returns:
+        List of log messages captured during execution.
+
+    Raises:
+        AssertionError: If output doesn't match expected.
+        FunctionTestClientError: If the function raises an exception.
+
+    Examples:
+        # Sequence test
+        assert_table_function_output(
+            SequenceFunction,
+            args=(5,),
+            expected=[batch(n=[0, 1, 2, 3, 4])],
+        )
+
+        # Constant table test
+        assert_table_function_output(
+            ConstantTableFunction,
+            args=(42,),
+            expected=[batch(value=[42])],
+        )
+
+    """
+    outputs, logs = run_table_function(
+        function=function,
+        args=args,
+        kwargs=kwargs,
+        projection_ids=projection_ids,
+    )
+
+    prefix = f"{msg}: " if msg else ""
+
+    # Check batch count
+    if len(outputs) != len(expected):
+        actual_rows = [o.num_rows for o in outputs]
+        expected_rows = [e.num_rows for e in expected]
+        raise AssertionError(
+            f"{prefix}Expected {len(expected)} output batches, got {len(outputs)}. "
+            f"Output rows: {actual_rows}, Expected rows: {expected_rows}"
+        )
+
+    # Compare batches
+    if check_order:
+        for i, (actual, exp) in enumerate(zip(outputs, expected, strict=True)):
+            if not actual.equals(exp):
+                raise AssertionError(
+                    f"{prefix}Batch {i} mismatch.\n"
+                    f"Expected:\n{exp.to_pydict()}\n"
+                    f"Got:\n{actual.to_pydict()}"
+                )
+    else:
+        # Convert to sets of dicts for unordered comparison
+        actual_dicts = [b.to_pydict() for b in outputs]
+        expected_dicts = [b.to_pydict() for b in expected]
+
+        for exp_dict in expected_dicts:
+            if exp_dict not in actual_dicts:
+                raise AssertionError(
+                    f"{prefix}Expected batch not found in output.\n"
+                    f"Expected:\n{exp_dict}\n"
+                    f"Actual outputs:\n{actual_dicts}"
+                )
+
+    return logs

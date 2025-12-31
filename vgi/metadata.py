@@ -77,7 +77,8 @@ __all__ = [
     # Resolution
     "resolve_metadata",
     "extract_parameters",
-    # Validation
+    # Exceptions
+    "FunctionTypeError",
     "TableInputValidationError",
     # Arrow serialization
     "metadata_to_arrow",
@@ -106,9 +107,6 @@ class FunctionType(Enum):
 
     TABLE = auto()
     """Table function: returns a table."""
-
-    TABLE_IN_OUT = auto()
-    """Table-in-out function: streaming table transformation."""
 
 
 class FunctionStability(Enum):
@@ -297,7 +295,7 @@ class ResolvedMetadata:
     # Identity
     name: str
     class_name: str
-    function_type: FunctionType = FunctionType.TABLE_IN_OUT
+    function_type: FunctionType
 
     # Documentation
     description: str = ""
@@ -494,19 +492,19 @@ def extract_parameters(
 
     sorted_params = sorted(parameters, key=sort_key)
 
-    # Validate TableInput for TableInOutFunction subclasses
+    # Validate TableInput constraints if any are present
     if validate_table_input:
-        is_table_in_out = any(
-            k.__name__ in _TABLE_IN_OUT_CLASS_NAMES for k in cls.__mro__
-        )
-        if is_table_in_out:
-            _validate_table_input(cls, sorted_params)
+        _validate_table_input(cls, sorted_params)
 
     return sorted_params
 
 
 def _validate_table_input(cls: type, parameters: list[ParameterInfo]) -> None:
-    """Validate TableInput requirements for a TableInOutFunction.
+    """Validate TableInput parameter constraints.
+
+    If a function has TableInput parameters, validates that:
+    - There is exactly one TableInput parameter
+    - The TableInput parameter is positional (not named)
 
     Args:
         cls: The function class being validated.
@@ -519,17 +517,13 @@ def _validate_table_input(cls: type, parameters: list[ParameterInfo]) -> None:
     table_inputs = [p for p in parameters if p.is_table_input]
 
     if len(table_inputs) == 0:
-        raise TableInputValidationError(
-            f"{cls.__name__}: TableInOutFunction must have exactly one "
-            f"Arg[TableInput] parameter. Add one like: "
-            f"data: TableInput = Arg[TableInput](0, doc='Input table')"
-        )
+        return  # No TableInput parameters, nothing to validate
 
     if len(table_inputs) > 1:
         names = [p.name for p in table_inputs]
         raise TableInputValidationError(
-            f"{cls.__name__}: TableInOutFunction must have exactly one "
-            f"Arg[TableInput] parameter, but found {len(table_inputs)}: {names}"
+            f"{cls.__name__}: Functions can have at most one Arg[TableInput] "
+            f"parameter, but found {len(table_inputs)}: {names}"
         )
 
     table_input = table_inputs[0]
@@ -559,48 +553,58 @@ def _normalize_examples(
 # Mapping from base class names to FunctionType.
 # Using a dict avoids typos and provides O(1) lookup.
 # Class names are used (not classes) to avoid circular imports.
+# Note: Functions with an Arg[TableInput] parameter receive table input.
 _CLASS_NAME_TO_FUNCTION_TYPE: dict[str, FunctionType] = {
-    "TableInOutFunction": FunctionType.TABLE_IN_OUT,
-    "TableInOutGeneratorFunction": FunctionType.TABLE_IN_OUT,
-    "TableFunction": FunctionType.TABLE,
+    # Table functions (including those with table input)
+    "TableFunctionBase": FunctionType.TABLE,
+    # Future function types (not yet implemented)
     "AggregateFunction": FunctionType.AGGREGATE,
     "ScalarFunction": FunctionType.SCALAR,
 }
 
-# Classes that require TableInput validation
-_TABLE_IN_OUT_CLASS_NAMES: frozenset[str] = frozenset({
-    "TableInOutFunction",
-    "TableInOutGeneratorFunction",
-})
-
 # Valid Meta class attribute names (for typo detection)
-_VALID_META_ATTRIBUTES: frozenset[str] = frozenset({
-    # Common
-    "name",
-    "description",
-    "examples",
-    "categories",
-    "stability",
-    "null_handling",
-    # Table function specific
-    "projection_pushdown",
-    "filter_pushdown",
-    "preserves_order",
-    "max_workers",
-    # Aggregate function specific
-    "order_dependent",
-    "distinct_dependent",
-    # Scalar function specific
-    "return_type",
-})
+_VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
+    {
+        # Common
+        "name",
+        "description",
+        "examples",
+        "categories",
+        "stability",
+        "null_handling",
+        # Table function specific
+        "projection_pushdown",
+        "filter_pushdown",
+        "preserves_order",
+        "max_workers",
+        # Aggregate function specific
+        "order_dependent",
+        "distinct_dependent",
+        # Scalar function specific
+        "return_type",
+    }
+)
+
+
+class FunctionTypeError(TypeError):
+    """Raised when a function's type cannot be determined from its class hierarchy."""
 
 
 def _infer_function_type(cls: type) -> FunctionType:
-    """Infer the function type from the class hierarchy."""
+    """Infer the function type from the class hierarchy.
+
+    Raises:
+        FunctionTypeError: If no recognized base class is found in the MRO.
+
+    """
     for klass in cls.__mro__:
         if klass.__name__ in _CLASS_NAME_TO_FUNCTION_TYPE:
             return _CLASS_NAME_TO_FUNCTION_TYPE[klass.__name__]
-    return FunctionType.TABLE_IN_OUT  # Default
+    recognized_bases = sorted(_CLASS_NAME_TO_FUNCTION_TYPE.keys())
+    raise FunctionTypeError(
+        f"Cannot determine function type for {cls.__name__}. "
+        f"Class must inherit from one of: {recognized_bases}"
+    )
 
 
 @functools.lru_cache(maxsize=256)
@@ -909,7 +913,7 @@ class MetadataMixin:
     @classmethod
     def get_metadata(cls) -> ResolvedMetadata:
         """Get the resolved metadata for this function class."""
-        return resolve_metadata(cls)
+        return resolve_metadata(cls)  # type: ignore[arg-type]
 
     @classmethod
     def describe(cls) -> dict[str, Any]:

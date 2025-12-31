@@ -5,12 +5,15 @@ Workers are spawned by Client for each function invocation.
 
 QUICK START
 -----------
-Create a worker by subclassing Worker and defining a registry:
+Create a worker by subclassing Worker and listing your functions:
 
     from vgi.worker import Worker
     from vgi.table_in_out_function import TableInOutGeneratorFunction
 
     class MyFunction(TableInOutGeneratorFunction):
+        class Meta:
+            name = "my_function"  # Optional: defaults to snake_case of class name
+
         def process(self, batch):
             _ = yield None
             while True:
@@ -20,12 +23,13 @@ Create a worker by subclassing Worker and defining a registry:
                     break
 
     class MyWorker(Worker):
-        registry = {
-            "my_function": MyFunction,
-        }
+        functions = [MyFunction]
 
     if __name__ == "__main__":
         MyWorker().run()
+
+Function names are derived from metadata (Meta.name or class name converted to
+snake_case). No manual name mapping required.
 
 PROTOCOL FLOW
 -------------
@@ -37,20 +41,20 @@ PROTOCOL FLOW
 
 KEY CLASSES
 -----------
-    Worker          - Base class to subclass (set registry attribute)
-    FunctionRegistry - Type alias: dict[str, type[TableInOutGeneratorFunction]]
-    WorkerStats     - Statistics about processing (batch_count, rows)
+    Worker      - Base class to subclass (set functions attribute)
+    WorkerStats - Statistics about processing (batch_count, rows)
 
 See Also
 --------
 vgi.client.Client : Spawns workers and sends data to them
-TableInOutGeneratorFunction : Base class for functions hosted by workers
+vgi.function.Function : Base class for all functions
 vgi.examples.worker : Example worker with built-in functions
 
 """
 
 import os
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
@@ -58,6 +62,7 @@ import structlog
 from pyarrow import ipc
 
 from vgi.function import (
+    Function,
     Invocation,
     OutputSpec,
     negotiate_protocol_version,
@@ -67,9 +72,6 @@ from vgi.table_in_out_function import (
     ProtocolInput,
     TableInOutGeneratorFunction,
 )
-
-# Type alias for the function registry mapping names to Function classes
-FunctionRegistry = dict[str, type[TableInOutGeneratorFunction]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,23 +93,138 @@ class WorkerStats:
 class Worker:
     """Base class for VGI workers that host user-defined functions.
 
-    Subclass this and define a `registry` class attribute mapping function names
-    to TableInOutGeneratorFunction subclasses. The worker handles the VGI protocol:
-    reading Invocation, instantiating functions, and streaming batches.
+    Subclass this and define a `functions` class attribute listing your function
+    classes. Function names are derived from metadata (Meta.name or snake_case
+    of class name). The worker handles the VGI protocol: reading Invocation,
+    instantiating functions, and streaming batches.
+
+    Multiple functions can share the same name if they have different argument
+    signatures (function overloading). The worker will select the appropriate
+    function based on the invocation's arguments.
 
     Example:
         class MyWorker(Worker):
-            registry = {
-                "echo": EchoFunction,
-                "transform": TransformFunction,
-            }
+            functions = [EchoFunction, TransformFunction]
 
         if __name__ == "__main__":
             MyWorker().run()
 
     """
 
-    registry: FunctionRegistry = {}
+    functions: Sequence[type[Function]] = []
+    _registry: dict[str, list[type[Function]]] | None = None
+
+    @classmethod
+    def _build_registry(cls) -> dict[str, list[type[Function]]]:
+        """Build function name -> list of classes mapping from functions list.
+
+        Multiple functions can share the same name if they have different
+        argument signatures (overloading).
+        """
+        if cls._registry is not None:
+            return cls._registry
+
+        registry: dict[str, list[type[Function]]] = {}
+        for func_cls in cls.functions:
+            meta = func_cls.get_metadata()
+            if meta.name not in registry:
+                registry[meta.name] = []
+            registry[meta.name].append(func_cls)
+
+        cls._registry = registry
+        return registry
+
+    @staticmethod
+    def _match_function(
+        invocation: Invocation,
+        candidates: Sequence[type[Function]],
+    ) -> type[Function]:
+        """Find the function that matches the invocation's arguments.
+
+        Compares the invocation's positional and named arguments against each
+        candidate function's parameter metadata to find a match.
+
+        Args:
+            invocation: The invocation with arguments to match.
+            candidates: Sequence of function classes with the same name.
+
+        Returns:
+            The matching function class.
+
+        Raises:
+            ValueError: If no function matches or multiple functions match.
+
+        """
+        args = invocation.arguments
+        num_positional = len(args.positional)
+        named_keys = set(args.named.keys()) if args.named else set()
+
+        matches: list[type[Function]] = []
+
+        for func_cls in candidates:
+            meta = func_cls.get_metadata()
+
+            # Split parameters into positional and named (excluding TableInput)
+            positional_params = [
+                p
+                for p in meta.parameters
+                if isinstance(p.position, int) and not p.is_table_input
+            ]
+            named_params = [
+                p for p in meta.parameters if isinstance(p.position, str)
+            ]
+
+            # Check positional arguments
+            required_positional = [p for p in positional_params if p.required]
+            max_positional = len(positional_params)
+            min_positional = len(required_positional)
+
+            if not (min_positional <= num_positional <= max_positional):
+                continue  # Wrong number of positional arguments
+
+            # Check named arguments
+            valid_named_keys = {p.position for p in named_params}
+            required_named_keys = {p.position for p in named_params if p.required}
+
+            # All provided named args must be valid
+            if not named_keys.issubset(valid_named_keys):
+                continue  # Unknown named argument
+
+            # All required named args must be provided
+            if not required_named_keys.issubset(named_keys):
+                continue  # Missing required named argument
+
+            matches.append(func_cls)
+
+        if len(matches) == 0:
+            # Build helpful error message
+            param_summaries = []
+            for func_cls in candidates:
+                meta = func_cls.get_metadata()
+                params = [
+                    p for p in meta.parameters if not p.is_table_input
+                ]
+                param_str = ", ".join(
+                    f"{p.name}: {p.type_name or '?'}"
+                    + ("" if p.required else f" = {p.default}")
+                    for p in params
+                )
+                param_summaries.append(f"  {func_cls.__name__}({param_str})")
+
+            raise ValueError(
+                f"No matching function '{invocation.function_name}' for arguments: "
+                f"{num_positional} positional, named={sorted(named_keys)}. "
+                f"Available overloads:\n" + "\n".join(param_summaries)
+            )
+
+        if len(matches) > 1:
+            match_names = [m.__name__ for m in matches]
+            raise ValueError(
+                f"Ambiguous function call '{invocation.function_name}': "
+                f"multiple overloads match: {match_names}"
+            )
+
+        return matches[0]
 
     def __init__(self) -> None:
         """Initialize the worker with structured logging."""
@@ -238,10 +355,20 @@ class Worker:
             "input_schema_parsed", schema=str(invocation.in_out_function_input_schema)
         )
 
-        if invocation.function_name not in self.registry:
-            raise ValueError(f"Unknown function: {invocation.function_name}")
+        registry = self._build_registry()
+        if invocation.function_name not in registry:
+            available = sorted(registry.keys())
+            raise ValueError(
+                f"Unknown function: {invocation.function_name}. "
+                f"Available: {available}"
+            )
 
-        instance = self.registry[invocation.function_name](invocation, fn_log)
+        candidates = registry[invocation.function_name]
+        func_cls = self._match_function(invocation, candidates)
+        # Workers currently only support TableInOutGeneratorFunction
+        instance: TableInOutGeneratorFunction = func_cls(  # type: ignore[assignment]
+            invocation=invocation, logger=fn_log
+        )
 
         # Negotiate protocol version with client
         negotiated_version = negotiate_protocol_version(invocation.protocol_version)

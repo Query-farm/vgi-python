@@ -1,7 +1,8 @@
 """Example worker with built-in functions for testing.
 
 This demonstrates how to create a worker by subclassing Worker
-and registering functions.
+and listing function classes. Function names are derived from
+each class's metadata (Meta.name or snake_case of class name).
 
 Usage:
     vgi-example-worker
@@ -18,23 +19,23 @@ from vgi.examples.table_in_out import (
     SumAllColumnsFunctionWithLogging,
     SumAllColumnsSimpleDistributed,
 )
-from vgi.worker import FunctionRegistry, Worker
+from vgi.worker import Worker
 
 
 class ExampleWorker(Worker):
     """Example worker with built-in test functions."""
 
-    registry: FunctionRegistry = {
-        "echo": EchoFunction,
-        "buffer_input": BufferInputFunction,
-        "repeat_inputs": RepeatInputsFunction,
-        "sum_all_columns": SumAllColumnsFunction,
-        "sum_all_columns_distributed": SumAllColumnsFunctionDistributed,
-        "sum_all_columns_simple_distributed": SumAllColumnsSimpleDistributed,
-        "sum_all_columns_with_logging": SumAllColumnsFunctionWithLogging,
-        "exception_finalize": ExceptionFinalizeFunction,
-        "exception_process": ExceptionProcessFunction,
-    }
+    functions = [
+        EchoFunction,
+        BufferInputFunction,
+        RepeatInputsFunction,
+        SumAllColumnsFunction,
+        SumAllColumnsFunctionDistributed,
+        SumAllColumnsSimpleDistributed,
+        SumAllColumnsFunctionWithLogging,
+        ExceptionFinalizeFunction,
+        ExceptionProcessFunction,
+    ]
 
 
 def main() -> None:

@@ -32,7 +32,7 @@ class TestResolveMetadata:
         assert meta.name == "minimal"  # Auto-converted from MinimalFunction
         assert meta.class_name == "MinimalFunction"
         assert meta.description == "A minimal function."  # From docstring
-        assert meta.function_type == FunctionType.TABLE_IN_OUT
+        assert meta.function_type == FunctionType.TABLE
         assert meta.max_workers is None
         assert meta.categories == []
 
@@ -360,4 +360,4 @@ class TestFunctionTypeInference:
             data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
 
         meta = resolve_metadata(TestFunc)
-        assert meta.function_type == FunctionType.TABLE_IN_OUT
+        assert meta.function_type == FunctionType.TABLE
