@@ -1432,7 +1432,8 @@ class Client:
                 projection_ids=projection_ids,
             )
 
-            # Use parallel processing for all cases (handles both single and multi-worker)
+            # Use parallel processing for all cases (handles both single and
+            # multi-worker)
             yield from self._table_in_out_function_parallel(
                 input_batch=input_batch,
                 input_iterator=input,
@@ -1580,8 +1581,7 @@ class Client:
         log.debug("finalizing_primary_worker")
         final_outputs = self._finalize_worker(primary_worker, empty_batch)
         # Yield finalize batches individually to preserve order
-        for batch in final_outputs:
-            yield batch
+        yield from final_outputs
 
         log.debug("parallel_processing_complete")
 

@@ -82,7 +82,7 @@ from vgi.function import (
     negotiate_protocol_version,
 )
 from vgi.ipc_utils import read_ipc_batch
-from vgi.table_function import GlobalStateInitInput, TableFunctionGenerator
+from vgi.table_function import TableFunctionGenerator
 from vgi.table_in_out_function import (
     ProtocolInput,
     TableInOutGeneratorFunction,
