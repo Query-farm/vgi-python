@@ -72,9 +72,7 @@ class AccumulatingStreamingFunction(TableInOutGeneratorFunction):
         """Emit final aggregation result."""
         _ = yield None
         yield Output(
-            pa.RecordBatch.from_pydict(
-                {"sum": [self.total]}, schema=self.output_schema
-            )
+            pa.RecordBatch.from_pydict({"sum": [self.total]}, schema=self.output_schema)
         )
 
 

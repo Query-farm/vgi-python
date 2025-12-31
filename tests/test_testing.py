@@ -134,9 +134,7 @@ class TestSumAllColumnsFunction:
         batch2 = pa.RecordBatch.from_pydict({"a": [4, 5], "b": [40, 50]})
 
         with FunctionTestClient(SumAllColumnsFunction) as client:
-            outputs = list(
-                client.table_in_out_function(input=iter([batch1, batch2]))
-            )
+            outputs = list(client.table_in_out_function(input=iter([batch1, batch2])))
 
         assert len(outputs) == 1
         result = outputs[0].to_pydict()
@@ -156,10 +154,12 @@ class TestSumAllColumnsFunction:
 
     def test_excludes_non_numeric_columns(self) -> None:
         """SumAllColumnsFunction should exclude non-numeric columns from output."""
-        batch = pa.RecordBatch.from_pydict({
-            "num": [1, 2, 3],
-            "name": ["a", "b", "c"],
-        })
+        batch = pa.RecordBatch.from_pydict(
+            {
+                "num": [1, 2, 3],
+                "name": ["a", "b", "c"],
+            }
+        )
 
         with FunctionTestClient(SumAllColumnsFunction) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
@@ -223,11 +223,13 @@ class TestProjectionIds:
 
     def test_projection_ids_filters_output_columns(self) -> None:
         """projection_ids should filter output to specified columns."""
-        batch = pa.RecordBatch.from_pydict({
-            "a": [1, 2, 3],
-            "b": [4, 5, 6],
-            "c": [7, 8, 9],
-        })
+        batch = pa.RecordBatch.from_pydict(
+            {
+                "a": [1, 2, 3],
+                "b": [4, 5, 6],
+                "c": [7, 8, 9],
+            }
+        )
 
         with FunctionTestClient(SumAllColumnsFunction) as client:
             # Only project column 0 (a) and column 2 (c)
@@ -287,9 +289,7 @@ class TestDistributedStateSupport:
         batch2 = pa.RecordBatch.from_pydict({"a": [3, 4], "b": [30, 40]})
 
         with FunctionTestClient(SumAllColumnsSimpleDistributed) as client:
-            outputs = list(
-                client.table_in_out_function(input=iter([batch1, batch2]))
-            )
+            outputs = list(client.table_in_out_function(input=iter([batch1, batch2])))
 
         assert len(outputs) == 1
         result = outputs[0].to_pydict()

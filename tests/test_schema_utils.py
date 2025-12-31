@@ -22,30 +22,36 @@ class TestSchema:
     def test_multiple_fields(self) -> None:
         """schema() with multiple fields preserves order."""
         s = schema(a=pa.int64(), b=pa.string(), c=pa.float64())
-        expected = pa.schema([
-            pa.field("a", pa.int64()),
-            pa.field("b", pa.string()),
-            pa.field("c", pa.float64()),
-        ])
+        expected = pa.schema(
+            [
+                pa.field("a", pa.int64()),
+                pa.field("b", pa.string()),
+                pa.field("c", pa.float64()),
+            ]
+        )
         assert s == expected
 
     def test_from_dict(self) -> None:
         """schema() accepts a dict as first positional argument."""
         fields = {"x": pa.int64(), "y": pa.string()}
         s = schema(fields)
-        expected = pa.schema([
-            pa.field("x", pa.int64()),
-            pa.field("y", pa.string()),
-        ])
+        expected = pa.schema(
+            [
+                pa.field("x", pa.int64()),
+                pa.field("y", pa.string()),
+            ]
+        )
         assert s == expected
 
     def test_dict_plus_kwargs(self) -> None:
         """schema() combines dict and kwargs."""
         s = schema({"a": pa.int64()}, b=pa.string())
-        expected = pa.schema([
-            pa.field("a", pa.int64()),
-            pa.field("b", pa.string()),
-        ])
+        expected = pa.schema(
+            [
+                pa.field("a", pa.int64()),
+                pa.field("b", pa.string()),
+            ]
+        )
         assert s == expected
 
     def test_kwargs_override_dict(self) -> None:
@@ -94,11 +100,13 @@ class TestSchemaLike:
     @pytest.fixture
     def base_schema(self) -> pa.Schema:
         """Fixture providing a base schema for tests."""
-        return pa.schema([
-            pa.field("a", pa.int64()),
-            pa.field("b", pa.string()),
-            pa.field("c", pa.float64()),
-        ])
+        return pa.schema(
+            [
+                pa.field("a", pa.int64()),
+                pa.field("b", pa.string()),
+                pa.field("c", pa.float64()),
+            ]
+        )
 
     def test_passthrough(self, base_schema: pa.Schema) -> None:
         """schema_like() with no modifications returns equivalent schema."""
@@ -108,12 +116,14 @@ class TestSchemaLike:
     def test_add_single_field(self, base_schema: pa.Schema) -> None:
         """schema_like() adds field at the end."""
         result = schema_like(base_schema, add={"d": pa.bool_()})
-        expected = pa.schema([
-            pa.field("a", pa.int64()),
-            pa.field("b", pa.string()),
-            pa.field("c", pa.float64()),
-            pa.field("d", pa.bool_()),
-        ])
+        expected = pa.schema(
+            [
+                pa.field("a", pa.int64()),
+                pa.field("b", pa.string()),
+                pa.field("c", pa.float64()),
+                pa.field("d", pa.bool_()),
+            ]
+        )
         assert result == expected
 
     def test_add_multiple_fields(self, base_schema: pa.Schema) -> None:
@@ -126,10 +136,12 @@ class TestSchemaLike:
     def test_remove_single_field(self, base_schema: pa.Schema) -> None:
         """schema_like() removes a field."""
         result = schema_like(base_schema, remove=["b"])
-        expected = pa.schema([
-            pa.field("a", pa.int64()),
-            pa.field("c", pa.float64()),
-        ])
+        expected = pa.schema(
+            [
+                pa.field("a", pa.int64()),
+                pa.field("c", pa.float64()),
+            ]
+        )
         assert result == expected
 
     def test_remove_multiple_fields(self, base_schema: pa.Schema) -> None:
@@ -141,11 +153,13 @@ class TestSchemaLike:
     def test_rename_single_field(self, base_schema: pa.Schema) -> None:
         """schema_like() renames a field."""
         result = schema_like(base_schema, rename={"a": "alpha"})
-        expected = pa.schema([
-            pa.field("alpha", pa.int64()),
-            pa.field("b", pa.string()),
-            pa.field("c", pa.float64()),
-        ])
+        expected = pa.schema(
+            [
+                pa.field("alpha", pa.int64()),
+                pa.field("b", pa.string()),
+                pa.field("c", pa.float64()),
+            ]
+        )
         assert result == expected
 
     def test_rename_multiple_fields(self, base_schema: pa.Schema) -> None:
@@ -156,11 +170,13 @@ class TestSchemaLike:
     def test_replace_type(self, base_schema: pa.Schema) -> None:
         """schema_like() replaces a field's type."""
         result = schema_like(base_schema, replace={"a": pa.int32()})
-        expected = pa.schema([
-            pa.field("a", pa.int32()),
-            pa.field("b", pa.string()),
-            pa.field("c", pa.float64()),
-        ])
+        expected = pa.schema(
+            [
+                pa.field("a", pa.int32()),
+                pa.field("b", pa.string()),
+                pa.field("c", pa.float64()),
+            ]
+        )
         assert result == expected
 
     def test_replace_preserves_position(self, base_schema: pa.Schema) -> None:
@@ -178,11 +194,13 @@ class TestSchemaLike:
             replace={"b": pa.large_string()},
             add={"new_col": pa.bool_()},
         )
-        expected = pa.schema([
-            pa.field("id", pa.int64()),
-            pa.field("b", pa.large_string()),
-            pa.field("new_col", pa.bool_()),
-        ])
+        expected = pa.schema(
+            [
+                pa.field("id", pa.int64()),
+                pa.field("b", pa.large_string()),
+                pa.field("new_col", pa.bool_()),
+            ]
+        )
         assert result == expected
 
     def test_operation_order(self, base_schema: pa.Schema) -> None:
@@ -194,11 +212,13 @@ class TestSchemaLike:
             rename={"b": "a"},
             add={"b": pa.bool_()},
         )
-        expected = pa.schema([
-            pa.field("a", pa.string()),  # was 'b', renamed to 'a'
-            pa.field("c", pa.float64()),
-            pa.field("b", pa.bool_()),  # new field
-        ])
+        expected = pa.schema(
+            [
+                pa.field("a", pa.string()),  # was 'b', renamed to 'a'
+                pa.field("c", pa.float64()),
+                pa.field("b", pa.bool_()),  # new field
+            ]
+        )
         assert result == expected
 
     def test_remove_nonexistent_raises(self, base_schema: pa.Schema) -> None:
@@ -262,10 +282,12 @@ class TestSchemaIntegration:
         logger = structlog.get_logger()
         func = TestFunction(invocation=invocation, logger=logger)
 
-        expected = pa.schema([
-            pa.field("sum", pa.int64()),
-            pa.field("count", pa.int64()),
-        ])
+        expected = pa.schema(
+            [
+                pa.field("sum", pa.int64()),
+                pa.field("count", pa.int64()),
+            ]
+        )
         assert func.output_schema == expected
 
     def test_schema_like_with_function(self) -> None:
@@ -284,10 +306,12 @@ class TestSchemaIntegration:
                     add={"total": pa.int64()},
                 )
 
-        input_schema = pa.schema([
-            pa.field("a", pa.int64()),
-            pa.field("b", pa.string()),
-        ])
+        input_schema = pa.schema(
+            [
+                pa.field("a", pa.int64()),
+                pa.field("b", pa.string()),
+            ]
+        )
 
         invocation = Invocation(
             function_name="test",
@@ -299,9 +323,11 @@ class TestSchemaIntegration:
         logger = structlog.get_logger()
         func = TestFunction(invocation=invocation, logger=logger)
 
-        expected = pa.schema([
-            pa.field("a", pa.int64()),
-            pa.field("b", pa.string()),
-            pa.field("total", pa.int64()),
-        ])
+        expected = pa.schema(
+            [
+                pa.field("a", pa.int64()),
+                pa.field("b", pa.string()),
+                pa.field("total", pa.int64()),
+            ]
+        )
         assert func.output_schema == expected

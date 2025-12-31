@@ -161,9 +161,7 @@ class Client:
         if not batches:
             return None
 
-        combined = list(
-            pa.Table.from_batches(batches).combine_chunks().to_batches()
-        )
+        combined = list(pa.Table.from_batches(batches).combine_chunks().to_batches())
         # If all batches were empty, combine_chunks returns empty list
         if len(combined) == 0:
             return batches[0]
@@ -1624,7 +1622,9 @@ class Client:
                 a worker sends an exception-level log message.
 
         """
-        primary_worker = self._create_primary_worker(output_reader=primary_output_reader)
+        primary_worker = self._create_primary_worker(
+            output_reader=primary_output_reader
+        )
         all_workers = [primary_worker] + self._additional_workers
         num_workers = len(all_workers)
 

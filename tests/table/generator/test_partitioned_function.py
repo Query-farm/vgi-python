@@ -17,9 +17,7 @@ class TestPartitionedRangeFunctionInProcess:
         """Single worker should generate the complete range."""
         with TableFunctionTestClient(PartitionedRangeFunction) as client:
             outputs = list(
-                client.table_function(
-                    arguments=Arguments(positional=(pa.scalar(10),))
-                )
+                client.table_function(arguments=Arguments(positional=(pa.scalar(10),)))
             )
 
         table = pa.Table.from_batches(outputs)
@@ -39,9 +37,7 @@ class TestPartitionedRangeFunctionInProcess:
         """Partitioned range with count=0 should produce no output."""
         with TableFunctionTestClient(PartitionedRangeFunction) as client:
             outputs = list(
-                client.table_function(
-                    arguments=Arguments(positional=(pa.scalar(0),))
-                )
+                client.table_function(arguments=Arguments(positional=(pa.scalar(0),)))
             )
 
         assert len(outputs) == 0

@@ -118,6 +118,6 @@ class TestRepeatInputsFunction:
         # Each value should appear exactly repeat_count times
         for expected_value in ["a", "b", "c", "d", "e", "f", "g", "h", "i"]:
             count = result["value"].count(expected_value)
-            assert (
-                count == repeat_count
-            ), f"value {expected_value} appeared {count} times"
+            assert count == repeat_count, (
+                f"value {expected_value} appeared {count} times"
+            )

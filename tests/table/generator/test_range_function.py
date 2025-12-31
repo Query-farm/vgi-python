@@ -82,9 +82,7 @@ class TestRangeFunctionBothModes:
         assert table.num_rows == 1
         assert table.column("value").to_pylist() == [42]
 
-    def test_large_range_batches(
-        self, run_table_function_mode: RunnerWithMode
-    ) -> None:
+    def test_large_range_batches(self, run_table_function_mode: RunnerWithMode) -> None:
         """Large ranges should be split into batches."""
         runner, mode = run_table_function_mode
         outputs, logs = runner(RangeFunction, (0, 2500))

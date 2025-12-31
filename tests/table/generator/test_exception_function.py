@@ -18,11 +18,7 @@ class TestGeneratorExceptionFunctionInProcess:
             TableFunctionTestClient(GeneratorExceptionFunction) as client,
             pytest.raises(FunctionTestClientError) as exc_info,
         ):
-            list(
-                client.table_function(
-                    arguments=Arguments(positional=(pa.scalar(3),))
-                )
-            )
+            list(client.table_function(arguments=Arguments(positional=(pa.scalar(3),))))
 
         assert "Intentional failure after 3 batches" in str(exc_info.value)
 
@@ -32,11 +28,7 @@ class TestGeneratorExceptionFunctionInProcess:
             TableFunctionTestClient(GeneratorExceptionFunction) as client,
             pytest.raises(FunctionTestClientError) as exc_info,
         ):
-            list(
-                client.table_function(
-                    arguments=Arguments(positional=(pa.scalar(0),))
-                )
-            )
+            list(client.table_function(arguments=Arguments(positional=(pa.scalar(0),))))
 
         assert "Intentional failure after 0 batches" in str(exc_info.value)
 

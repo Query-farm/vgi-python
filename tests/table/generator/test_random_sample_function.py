@@ -78,9 +78,7 @@ class TestRandomSampleFunctionBothModes:
         outputs, logs = runner(RandomSampleFunction, (0, 42))
         assert len(outputs) == 0
 
-    def test_ids_are_sequential(
-        self, run_table_function_mode: RunnerWithMode
-    ) -> None:
+    def test_ids_are_sequential(self, run_table_function_mode: RunnerWithMode) -> None:
         """IDs should be sequential starting from 0."""
         runner, mode = run_table_function_mode
         outputs, logs = runner(RandomSampleFunction, (50, 42))

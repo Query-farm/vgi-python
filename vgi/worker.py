@@ -185,9 +185,7 @@ class Worker:
                 for p in meta.parameters
                 if isinstance(p.position, int) and not p.is_table_input
             ]
-            named_params = [
-                p for p in meta.parameters if isinstance(p.position, str)
-            ]
+            named_params = [p for p in meta.parameters if isinstance(p.position, str)]
 
             # Check positional arguments
             required_positional = [p for p in positional_params if p.required]
@@ -216,9 +214,7 @@ class Worker:
             param_summaries = []
             for func_cls in candidates:
                 meta = func_cls.get_metadata()
-                params = [
-                    p for p in meta.parameters if not p.is_table_input
-                ]
+                params = [p for p in meta.parameters if not p.is_table_input]
                 param_str = ", ".join(
                     f"{p.name}: {p.type_name or '?'}"
                     + ("" if p.required else f" = {p.default}")
@@ -415,8 +411,7 @@ class Worker:
         if invocation.function_name not in registry:
             available = sorted(registry.keys())
             raise ValueError(
-                f"Unknown function: {invocation.function_name}. "
-                f"Available: {available}"
+                f"Unknown function: {invocation.function_name}. Available: {available}"
             )
 
         candidates = registry[invocation.function_name]

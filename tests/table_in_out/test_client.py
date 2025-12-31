@@ -24,9 +24,7 @@ class TestEdgeCases:
     def test_empty_batch(self, example_worker: str) -> None:
         """Empty batch (zero rows) should process correctly."""
         schema = pa.schema([pa.field("id", pa.int64()), pa.field("value", pa.int64())])
-        empty_batch = pa.RecordBatch.from_pydict(
-            {"id": [], "value": []}, schema=schema
-        )
+        empty_batch = pa.RecordBatch.from_pydict({"id": [], "value": []}, schema=schema)
 
         with Client(example_worker) as client:
             output_batches = list(

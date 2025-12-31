@@ -142,10 +142,12 @@ class TestAggregationFunction:
 
     def test_excludes_non_numeric(self) -> None:
         """Sum should exclude non-numeric columns from output."""
-        batch = pa.RecordBatch.from_pydict({
-            "num": [1, 2, 3],
-            "name": ["a", "b", "c"],
-        })
+        batch = pa.RecordBatch.from_pydict(
+            {
+                "num": [1, 2, 3],
+                "name": ["a", "b", "c"],
+            }
+        )
 
         with FunctionTestClient(SumAggregation) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
@@ -236,9 +238,7 @@ class TestFilterFunction:
         batch2 = pa.RecordBatch.from_pydict({"value": [3, -3, 4]})
 
         with FunctionTestClient(PositiveFilter) as client:
-            outputs = list(
-                client.table_in_out_function(input=iter([batch1, batch2]))
-            )
+            outputs = list(client.table_in_out_function(input=iter([batch1, batch2])))
 
         # Combine all outputs
         all_values: list[int] = []
@@ -249,11 +249,13 @@ class TestFilterFunction:
 
     def test_filter_preserves_other_columns(self) -> None:
         """Filter should preserve all columns, not just the predicate column."""
-        batch = pa.RecordBatch.from_pydict({
-            "id": [1, 2, 3, 4],
-            "value": [-1, 1, -2, 2],
-            "name": ["a", "b", "c", "d"],
-        })
+        batch = pa.RecordBatch.from_pydict(
+            {
+                "id": [1, 2, 3, 4],
+                "value": [-1, 1, -2, 2],
+                "name": ["a", "b", "c", "d"],
+            }
+        )
 
         with FunctionTestClient(PositiveFilter) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
@@ -272,9 +274,7 @@ class TestFilterFunction:
             outputs = list(
                 client.table_in_out_function(
                     input=iter([batch]),
-                    arguments=Arguments(
-                        positional=(pa.scalar(5), pa.scalar(15))
-                    ),
+                    arguments=Arguments(positional=(pa.scalar(5), pa.scalar(15))),
                 )
             )
 
@@ -292,8 +292,7 @@ class TestFilterFunction:
             debug_logs = [log for log in client.logs if log.level == Level.DEBUG]
             # Should log "kept X, dropped Y"
             assert any(
-                "kept" in log.message and "dropped" in log.message
-                for log in debug_logs
+                "kept" in log.message and "dropped" in log.message for log in debug_logs
             )
 
 
@@ -335,10 +334,12 @@ class CastToFloat(MapFunction):
     @property
     def output_schema(self) -> pa.Schema:
         """Output schema with value as float64."""
-        return pa.schema([
-            pa.field("id", pa.int64()),
-            pa.field("value", pa.float64()),
-        ])
+        return pa.schema(
+            [
+                pa.field("id", pa.int64()),
+                pa.field("value", pa.float64()),
+            ]
+        )
 
     def map_columns(self, batch: pa.RecordBatch) -> dict[str, pa.Array]:
         """Cast value to float64."""
@@ -373,11 +374,13 @@ class TestMapFunction:
 
     def test_map_preserves_other_columns(self) -> None:
         """Map should preserve columns not in map_columns result."""
-        batch = pa.RecordBatch.from_pydict({
-            "id": [1, 2, 3],
-            "value": [10, 20, 30],
-            "name": ["a", "b", "c"],
-        })
+        batch = pa.RecordBatch.from_pydict(
+            {
+                "id": [1, 2, 3],
+                "value": [10, 20, 30],
+                "name": ["a", "b", "c"],
+            }
+        )
 
         with FunctionTestClient(DoubleValues) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
@@ -405,9 +408,7 @@ class TestMapFunction:
         batch2 = pa.RecordBatch.from_pydict({"value": [3, 4, 5]})
 
         with FunctionTestClient(DoubleValues) as client:
-            outputs = list(
-                client.table_in_out_function(input=iter([batch1, batch2]))
-            )
+            outputs = list(client.table_in_out_function(input=iter([batch1, batch2])))
 
         assert len(outputs) == 2
         assert outputs[0].to_pydict()["value"] == [2, 4]
@@ -415,10 +416,12 @@ class TestMapFunction:
 
     def test_map_with_type_change(self) -> None:
         """Map with output_schema override should change column types."""
-        batch = pa.RecordBatch.from_pydict({
-            "id": [1, 2, 3],
-            "value": [10, 20, 30],
-        })
+        batch = pa.RecordBatch.from_pydict(
+            {
+                "id": [1, 2, 3],
+                "value": [10, 20, 30],
+            }
+        )
 
         with FunctionTestClient(CastToFloat) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))

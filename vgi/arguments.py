@@ -163,13 +163,9 @@ class Arguments:
         # Type validation (if requested)
         if type is not None and scalar.type != type:
             if isinstance(key, int):
-                raise TypeError(
-                    f"Argument {key}: expected {type}, got {scalar.type}"
-                )
+                raise TypeError(f"Argument {key}: expected {type}, got {scalar.type}")
             else:
-                raise TypeError(
-                    f"Argument '{key}': expected {type}, got {scalar.type}"
-                )
+                raise TypeError(f"Argument '{key}': expected {type}, got {scalar.type}")
 
         return scalar.as_py()
 
@@ -334,7 +330,9 @@ class ArgumentValidationError(ValueError):
         # Add default value hint
         if self.default is not _MISSING:
             lines.append("")
-            lines.append(f"  Tip: Omit this argument to use default value: {self.default!r}")
+            lines.append(
+                f"  Tip: Omit this argument to use default value: {self.default!r}"
+            )
 
         return "\n".join(lines)
 
@@ -371,7 +369,9 @@ class ArgumentValidationError(ValueError):
         # For numbers, find closest values
         if isinstance(self.value, int | float):
             try:
-                numeric_choices = [c for c in self.choices if isinstance(c, int | float)]
+                numeric_choices = [
+                    c for c in self.choices if isinstance(c, int | float)
+                ]
                 numeric_choices.sort(key=lambda c: abs(c - self.value))
                 return numeric_choices
             except TypeError:

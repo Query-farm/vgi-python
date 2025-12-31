@@ -564,12 +564,14 @@ class ProjectedDataFunction(TableFunctionGenerator):
     count: int = Arg[int](0, doc="Number of rows to generate", ge=0)  # type: ignore[assignment]
 
     # Full schema with all 4 columns
-    FULL_SCHEMA: pa.Schema = pa.schema([
-        pa.field("id", pa.int64()),
-        pa.field("name", pa.string()),
-        pa.field("value", pa.float64()),
-        pa.field("extra", pa.int64()),
-    ])
+    FULL_SCHEMA: pa.Schema = pa.schema(
+        [
+            pa.field("id", pa.int64()),
+            pa.field("name", pa.string()),
+            pa.field("value", pa.float64()),
+            pa.field("extra", pa.int64()),
+        ]
+    )
 
     BATCH_SIZE: int = 1000
 
@@ -627,9 +629,7 @@ class ProjectedDataFunction(TableFunctionGenerator):
                         i * i for i in range(current_id, current_id + batch_size)
                     ]
 
-            yield Output(
-                pa.RecordBatch.from_pydict(columns, schema=output_schema)
-            )
+            yield Output(pa.RecordBatch.from_pydict(columns, schema=output_schema))
 
             current_id += batch_size
             remaining -= batch_size

@@ -1092,9 +1092,7 @@ class TestArgumentValidationErrorMessages:
         """Pattern validation error should show the expected pattern."""
 
         class MyClass:
-            invocation = _MockInvocation(
-                Arguments(positional=(pa.scalar("123abc"),))
-            )
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("123abc"),)))
             name = Arg[str](0, pattern=r"^[a-z][a-z0-9]*$", doc="Variable name")
 
         obj = MyClass()

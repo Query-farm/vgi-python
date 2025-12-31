@@ -15,11 +15,7 @@ class TestLoggingGeneratorFunctionInProcess:
     def test_emits_start_and_end_logs(self) -> None:
         """Function should emit start and end log messages."""
         with TableFunctionTestClient(LoggingGeneratorFunction) as client:
-            list(
-                client.table_function(
-                    arguments=Arguments(positional=(pa.scalar(5),))
-                )
-            )
+            list(client.table_function(arguments=Arguments(positional=(pa.scalar(5),))))
             logs = client.logs
 
         assert len(logs) == 2
@@ -32,9 +28,7 @@ class TestLoggingGeneratorFunctionInProcess:
         """Function should generate correct output alongside logs."""
         with TableFunctionTestClient(LoggingGeneratorFunction) as client:
             outputs = list(
-                client.table_function(
-                    arguments=Arguments(positional=(pa.scalar(3),))
-                )
+                client.table_function(arguments=Arguments(positional=(pa.scalar(3),)))
             )
 
         # Combine outputs
@@ -48,9 +42,7 @@ class TestLoggingGeneratorFunctionInProcess:
         """Function with count=0 should still emit start/end logs."""
         with TableFunctionTestClient(LoggingGeneratorFunction) as client:
             outputs = list(
-                client.table_function(
-                    arguments=Arguments(positional=(pa.scalar(0),))
-                )
+                client.table_function(arguments=Arguments(positional=(pa.scalar(0),)))
             )
             logs = client.logs
 

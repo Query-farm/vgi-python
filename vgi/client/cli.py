@@ -189,7 +189,7 @@ def main() -> None:
             "Position in positional arguments where table input should be inserted "
             "(0-indexed). If not specified, table input is not included in positional "
             "args. E.g., --args '[\"prefix\"]' --table-input-position 1 inserts "
-            "table input at position 1, resulting in (\"prefix\", TABLE_INPUT)."
+            'table input at position 1, resulting in ("prefix", TABLE_INPUT).'
         ),
     )
     def cli(
