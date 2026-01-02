@@ -3,9 +3,12 @@
 Tests cover Invocation, Arguments, GlobalInitResult, and table_function classes.
 """
 
+from __future__ import annotations
+
 import pyarrow as pa
 import pytest
 
+from tests.utils import make_schema
 from vgi.function import (
     Arg,
     Arguments,
@@ -31,7 +34,7 @@ class TestArguments:
         assert encoded == {}
 
         # Decode from empty struct
-        schema = pa.schema([pa.field("args", pa.struct([]))])
+        schema = make_schema([pa.field("args", pa.struct([]))])
         batch = pa.RecordBatch.from_pylist([{"args": {}}], schema=schema)
         decoded = Arguments.decode(batch.column("args")[0])
         assert decoded.positional == ()
@@ -153,7 +156,7 @@ class TestInvocation:
         original = Invocation(
             function_name="test_function",
             arguments=Arguments(positional=(pa.scalar(42),), named={}),
-            in_out_function_input_schema=pa.schema([pa.field("col1", pa.int64())]),
+            in_out_function_input_schema=make_schema([pa.field("col1", pa.int64())]),
             correlation_id="test-123",
             invocation_id=b"bind-id-bytes",
         )
@@ -180,7 +183,7 @@ class TestInvocation:
         assert deserialized.arguments.positional[0] is not None
         assert deserialized.arguments.positional[0].as_py() == 42
 
-    def test_null_schema(self) -> None:
+    def test_nullmake_schema(self) -> None:
         """Invocation with null input schema should round-trip correctly."""
         original = Invocation(
             function_name="scalar_function",
@@ -200,9 +203,9 @@ class TestInvocation:
         assert deserialized.in_out_function_input_schema is None
         assert deserialized.invocation_id is None
 
-    def test_complex_schema(self) -> None:
+    def test_complexmake_schema(self) -> None:
         """Invocation with complex schema should round-trip correctly."""
-        complex_schema = pa.schema(
+        complex_schema = make_schema(
             [
                 pa.field("int_col", pa.int32()),
                 pa.field("float_col", pa.float64()),
@@ -333,7 +336,7 @@ class TestGlobalInitResult:
         """has_identifier should return False when field doesn't exist."""
         batch = pa.RecordBatch.from_pylist(
             [{"other_field": "value"}],
-            schema=pa.schema([pa.field("other_field", pa.string())]),
+            schema=make_schema([pa.field("other_field", pa.string())]),
         )
         assert GlobalInitResult.has_identifier(batch) is False
 
@@ -540,7 +543,7 @@ class TestTableOutputSpec:
     def test_serialization_with_cardinality(self) -> None:
         """OutputSpec with cardinality should serialize correctly."""
         spec = OutputSpec(
-            output_schema=pa.schema([pa.field("col1", pa.int64())]),
+            output_schema=make_schema([pa.field("col1", pa.int64())]),
             max_processes=4,
             invocation_id=b"test-id",
             cardinality=CardinalityInfo(estimate=100, max=1000),
@@ -553,7 +556,7 @@ class TestTableOutputSpec:
     def test_serialization_without_cardinality(self) -> None:
         """OutputSpec without cardinality should serialize correctly."""
         spec = OutputSpec(
-            output_schema=pa.schema([pa.field("col1", pa.int64())]),
+            output_schema=make_schema([pa.field("col1", pa.int64())]),
             max_processes=1,
             invocation_id=b"test-id",
             cardinality=None,
@@ -565,7 +568,7 @@ class TestTableOutputSpec:
     def test_serialize_schema_includes_cardinality_fields(self) -> None:
         """Serialize schema should include cardinality fields."""
         spec = OutputSpec(
-            output_schema=pa.schema([pa.field("col1", pa.int64())]),
+            output_schema=make_schema([pa.field("col1", pa.int64())]),
             max_processes=1,
             invocation_id=b"test-id",
             cardinality=CardinalityInfo(estimate=50, max=100),
@@ -578,7 +581,7 @@ class TestTableOutputSpec:
     def test_serialize_dict_includes_cardinality_values(self) -> None:
         """Serialize dict should include cardinality values."""
         spec = OutputSpec(
-            output_schema=pa.schema([pa.field("col1", pa.int64())]),
+            output_schema=make_schema([pa.field("col1", pa.int64())]),
             max_processes=1,
             invocation_id=b"test-id",
             cardinality=CardinalityInfo(estimate=50, max=100),
@@ -591,7 +594,7 @@ class TestTableOutputSpec:
     def test_serialize_dict_null_cardinality(self) -> None:
         """Serialize dict should handle null cardinality."""
         spec = OutputSpec(
-            output_schema=pa.schema([pa.field("col1", pa.int64())]),
+            output_schema=make_schema([pa.field("col1", pa.int64())]),
             max_processes=1,
             invocation_id=b"test-id",
             cardinality=None,

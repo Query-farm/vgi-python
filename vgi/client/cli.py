@@ -18,9 +18,10 @@ Usage:
 
 """
 
+import io
 import json
 import sys
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 
@@ -67,7 +68,8 @@ class OutputWriter:
             if self._writer is None:
                 if self._is_stdout:
                     self._writer = pq.ParquetWriter(
-                        pa.PythonFile(sys.stdout.buffer, mode="w"), batch.schema
+                        pa.PythonFile(cast(io.IOBase, sys.stdout.buffer), mode="w"),
+                        batch.schema,
                     )
                 else:
                     self._writer = pq.ParquetWriter(self.output_file, batch.schema)

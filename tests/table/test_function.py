@@ -1,9 +1,12 @@
 """Generic tests for TableFunctionGenerator behavior."""
 
+from __future__ import annotations
+
 import pyarrow as pa
 import pytest
 import structlog
 
+from tests.utils import make_schema
 from vgi.function import Arguments, Invocation
 from vgi.table_function import (
     CardinalityInfo,
@@ -23,7 +26,7 @@ class TestTableFunctionGeneratorProtocol:
         class EmptyFunction(TableFunctionGenerator):
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([pa.field("x", pa.int64())])
+                return make_schema([pa.field("x", pa.int64())])
 
         with TableFunctionTestClient(EmptyFunction) as client:
             outputs = list(client.table_function())
@@ -37,7 +40,7 @@ class TestTableFunctionGeneratorProtocol:
         class SingleBatchFunction(TableFunctionGenerator):
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([pa.field("x", pa.int64())])
+                return make_schema([pa.field("x", pa.int64())])
 
             def process(self) -> OutputGenerator:
                 yield Output(
@@ -58,7 +61,7 @@ class TestTableFunctionGeneratorProtocol:
         class MultiBatchFunction(TableFunctionGenerator):
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([pa.field("n", pa.int64())])
+                return make_schema([pa.field("n", pa.int64())])
 
             def process(self) -> OutputGenerator:
                 for i in range(3):
@@ -86,7 +89,7 @@ class TestTableFunctionGeneratorLifecycle:
         class LifecycleFunction(TableFunctionGenerator):
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([pa.field("x", pa.int64())])
+                return make_schema([pa.field("x", pa.int64())])
 
             def setup(self) -> None:
                 call_order.append("setup")
@@ -112,7 +115,7 @@ class TestTableFunctionGeneratorLifecycle:
         class ExceptionFunction(TableFunctionGenerator):
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([pa.field("x", pa.int64())])
+                return make_schema([pa.field("x", pa.int64())])
 
             def process(self) -> OutputGenerator:
                 raise ValueError("test error")
@@ -140,7 +143,7 @@ class TestTableFunctionGeneratorSchemaValidation:
         class ValidSchemaFunction(TableFunctionGenerator):
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([pa.field("x", pa.int64())])
+                return make_schema([pa.field("x", pa.int64())])
 
             def process(self) -> OutputGenerator:
                 yield Output(
@@ -158,11 +161,11 @@ class TestTableFunctionGeneratorSchemaValidation:
         class InvalidSchemaFunction(TableFunctionGenerator):
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([pa.field("x", pa.int64())])
+                return make_schema([pa.field("x", pa.int64())])
 
             def process(self) -> OutputGenerator:
                 # Return batch with wrong column name
-                wrong_schema = pa.schema([pa.field("y", pa.int64())])
+                wrong_schema = make_schema([pa.field("y", pa.int64())])
                 wrong_batch = pa.RecordBatch.from_pydict(
                     {"y": [1]}, schema=wrong_schema
                 )
@@ -187,7 +190,7 @@ class TestTableFunctionGeneratorCardinality:
         class NoCardinalityFunction(TableFunctionGenerator):
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([pa.field("x", pa.int64())])
+                return make_schema([pa.field("x", pa.int64())])
 
         invocation = Invocation(
             function_name="test",
@@ -209,7 +212,7 @@ class TestTableFunctionGeneratorCardinality:
         class CardinalityFunction(TableFunctionGenerator):
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([pa.field("x", pa.int64())])
+                return make_schema([pa.field("x", pa.int64())])
 
             def cardinality(self) -> CardinalityInfo:
                 return CardinalityInfo(estimate=100, max=1000)
@@ -244,7 +247,7 @@ class TestTableFunctionGeneratorArguments:
 
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([pa.field("n", pa.int64())])
+                return make_schema([pa.field("n", pa.int64())])
 
             def process(self) -> OutputGenerator:
                 yield Output(
@@ -270,7 +273,7 @@ class TestTableFunctionGeneratorArguments:
 
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([pa.field("result", pa.int64())])
+                return make_schema([pa.field("result", pa.int64())])
 
             def process(self) -> OutputGenerator:
                 yield Output(
@@ -299,7 +302,7 @@ class TestTableFunctionGeneratorEmptyBatch:
         class TestFunction(TableFunctionGenerator):
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema(
+                return make_schema(
                     [
                         pa.field("a", pa.int64()),
                         pa.field("b", pa.string()),

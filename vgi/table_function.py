@@ -254,7 +254,9 @@ class ProtocolOutput:
         if self.log_message is not None:
             metadata_dict = self.log_message.add_to_metadata(invocation, metadata_dict)
 
-        return pa.KeyValueMetadata(metadata_dict)
+        return pa.KeyValueMetadata(
+            {k.encode(): v.encode() for k, v in metadata_dict.items()}
+        )
 
     @classmethod
     def from_process_result(cls, process_result: "_OutputComplete") -> "ProtocolOutput":

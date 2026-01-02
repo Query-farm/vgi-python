@@ -70,9 +70,12 @@ import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
+from io import IOBase
+from typing import cast
 
 import pyarrow as pa
 import structlog
+import structlog.stdlib
 from pyarrow import ipc
 
 from vgi.function import (
@@ -247,7 +250,9 @@ class Worker:
             wrapper_class=structlog.make_filtering_bound_logger(0),
             logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
         )
-        self.log = structlog.get_logger().bind(component="worker")
+        self.log: structlog.stdlib.BoundLogger = structlog.get_logger().bind(
+            component="worker"
+        )
 
     def _read_ipc_batch(self, context: str) -> pa.RecordBatch:
         """Read a schema + record batch pair from stdin.
@@ -295,8 +300,8 @@ class Worker:
         next(generator)  # Prime the run() generator
 
         with (
-            ipc.new_stream(sys.stdout, instance.output_schema) as writer,
-            ipc.open_stream(sys.stdin) as data_reader,
+            ipc.new_stream(cast(IOBase, sys.stdout), instance.output_schema) as writer,
+            ipc.open_stream(cast(IOBase, sys.stdin)) as data_reader,
         ):
             # Validate data stream schema matches expected input schema
             if data_reader.schema != invocation.in_out_function_input_schema:
@@ -334,7 +339,9 @@ class Worker:
 
                 output = generator.send(ProtocolInput(batch=batch, metadata=metadata))
                 fn_log.debug("batch_processed", output=output)
-                output_rows = output.batch.num_rows if output.batch else 0
+                # After initial priming, batch is always set by the protocol
+                assert output.batch is not None
+                output_rows = output.batch.num_rows
                 total_output_rows += output_rows
                 writer.write_batch(
                     output.batch, custom_metadata=output.metadata(invocation)
@@ -368,13 +375,15 @@ class Worker:
         """
         generator = instance.run()
 
-        with ipc.new_stream(sys.stdout, instance.output_schema) as writer:
+        with ipc.new_stream(cast(IOBase, sys.stdout), instance.output_schema) as writer:
             batch_count = 0
             total_output_rows = 0
 
             for output in generator:
                 batch_count += 1
-                output_rows = output.batch.num_rows if output.batch else 0
+                # Table function generator always produces a batch
+                assert output.batch is not None
+                output_rows = output.batch.num_rows
                 total_output_rows += output_rows
 
                 writer.write_batch(

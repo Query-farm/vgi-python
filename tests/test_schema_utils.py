@@ -1,8 +1,11 @@
 """Tests for vgi.schema_utils module."""
 
+from __future__ import annotations
+
 import pyarrow as pa
 import pytest
 
+from tests.utils import make_schema
 from vgi import schema, schema_like
 
 
@@ -17,12 +20,12 @@ class TestSchema:
     def test_single_field(self) -> None:
         """schema() with one field."""
         s = schema(x=pa.int64())
-        assert s == pa.schema([pa.field("x", pa.int64())])
+        assert s == make_schema([pa.field("x", pa.int64())])
 
     def test_multiple_fields(self) -> None:
         """schema() with multiple fields preserves order."""
         s = schema(a=pa.int64(), b=pa.string(), c=pa.float64())
-        expected = pa.schema(
+        expected = make_schema(
             [
                 pa.field("a", pa.int64()),
                 pa.field("b", pa.string()),
@@ -33,9 +36,9 @@ class TestSchema:
 
     def test_from_dict(self) -> None:
         """schema() accepts a dict as first positional argument."""
-        fields = {"x": pa.int64(), "y": pa.string()}
+        fields: dict[str, pa.DataType] = {"x": pa.int64(), "y": pa.string()}
         s = schema(fields)
-        expected = pa.schema(
+        expected = make_schema(
             [
                 pa.field("x", pa.int64()),
                 pa.field("y", pa.string()),
@@ -46,7 +49,7 @@ class TestSchema:
     def test_dict_plus_kwargs(self) -> None:
         """schema() combines dict and kwargs."""
         s = schema({"a": pa.int64()}, b=pa.string())
-        expected = pa.schema(
+        expected = make_schema(
             [
                 pa.field("a", pa.int64()),
                 pa.field("b", pa.string()),
@@ -57,7 +60,7 @@ class TestSchema:
     def test_kwargs_override_dict(self) -> None:
         """Keyword args override dict values for same key."""
         s = schema({"x": pa.int64()}, x=pa.string())
-        assert s == pa.schema([pa.field("x", pa.string())])
+        assert s == make_schema([pa.field("x", pa.string())])
 
     def test_common_types(self) -> None:
         """schema() works with common Arrow types."""
@@ -82,7 +85,7 @@ class TestSchema:
     def test_invalid_type_raises(self) -> None:
         """schema() raises TypeError for non-DataType values."""
         with pytest.raises(TypeError) as exc_info:
-            schema(x="int64")  # Invalid type
+            schema(x="int64")  # type: ignore[arg-type]  # Intentionally invalid
         assert "Field 'x'" in str(exc_info.value)
         assert "expected pa.DataType" in str(exc_info.value)
         assert "got str" in str(exc_info.value)
@@ -90,7 +93,7 @@ class TestSchema:
     def test_invalid_type_in_dict_raises(self) -> None:
         """schema() raises TypeError for invalid types in dict."""
         with pytest.raises(TypeError) as exc_info:
-            schema({"x": 123})  # Invalid type
+            schema({"x": 123})  # type: ignore[dict-item]  # Intentionally invalid
         assert "Field 'x'" in str(exc_info.value)
 
 
@@ -100,7 +103,7 @@ class TestSchemaLike:
     @pytest.fixture
     def base_schema(self) -> pa.Schema:
         """Fixture providing a base schema for tests."""
-        return pa.schema(
+        return make_schema(
             [
                 pa.field("a", pa.int64()),
                 pa.field("b", pa.string()),
@@ -116,7 +119,7 @@ class TestSchemaLike:
     def test_add_single_field(self, base_schema: pa.Schema) -> None:
         """schema_like() adds field at the end."""
         result = schema_like(base_schema, add={"d": pa.bool_()})
-        expected = pa.schema(
+        expected = make_schema(
             [
                 pa.field("a", pa.int64()),
                 pa.field("b", pa.string()),
@@ -136,7 +139,7 @@ class TestSchemaLike:
     def test_remove_single_field(self, base_schema: pa.Schema) -> None:
         """schema_like() removes a field."""
         result = schema_like(base_schema, remove=["b"])
-        expected = pa.schema(
+        expected = make_schema(
             [
                 pa.field("a", pa.int64()),
                 pa.field("c", pa.float64()),
@@ -147,13 +150,13 @@ class TestSchemaLike:
     def test_remove_multiple_fields(self, base_schema: pa.Schema) -> None:
         """schema_like() removes multiple fields."""
         result = schema_like(base_schema, remove=["a", "c"])
-        expected = pa.schema([pa.field("b", pa.string())])
+        expected = make_schema([pa.field("b", pa.string())])
         assert result == expected
 
     def test_rename_single_field(self, base_schema: pa.Schema) -> None:
         """schema_like() renames a field."""
         result = schema_like(base_schema, rename={"a": "alpha"})
-        expected = pa.schema(
+        expected = make_schema(
             [
                 pa.field("alpha", pa.int64()),
                 pa.field("b", pa.string()),
@@ -170,7 +173,7 @@ class TestSchemaLike:
     def test_replace_type(self, base_schema: pa.Schema) -> None:
         """schema_like() replaces a field's type."""
         result = schema_like(base_schema, replace={"a": pa.int32()})
-        expected = pa.schema(
+        expected = make_schema(
             [
                 pa.field("a", pa.int32()),
                 pa.field("b", pa.string()),
@@ -194,7 +197,7 @@ class TestSchemaLike:
             replace={"b": pa.large_string()},
             add={"new_col": pa.bool_()},
         )
-        expected = pa.schema(
+        expected = make_schema(
             [
                 pa.field("id", pa.int64()),
                 pa.field("b", pa.large_string()),
@@ -212,7 +215,7 @@ class TestSchemaLike:
             rename={"b": "a"},
             add={"b": pa.bool_()},
         )
-        expected = pa.schema(
+        expected = make_schema(
             [
                 pa.field("a", pa.string()),  # was 'b', renamed to 'a'
                 pa.field("c", pa.float64()),
@@ -250,7 +253,7 @@ class TestSchemaLike:
     def test_add_invalid_type_raises(self, base_schema: pa.Schema) -> None:
         """schema_like() raises TypeError for invalid add type."""
         with pytest.raises(TypeError) as exc_info:
-            schema_like(base_schema, add={"d": "int64"})  # Invalid type
+            schema_like(base_schema, add={"d": "int64"})  # type: ignore[dict-item]  # Intentionally invalid
         assert "Field 'd'" in str(exc_info.value)
         assert "expected pa.DataType" in str(exc_info.value)
 
@@ -306,7 +309,7 @@ class TestSchemaIntegration:
                     add={"total": pa.int64()},
                 )
 
-        input_schema = pa.schema(
+        input_schema = make_schema(
             [
                 pa.field("a", pa.int64()),
                 pa.field("b", pa.string()),
@@ -323,7 +326,7 @@ class TestSchemaIntegration:
         logger = structlog.get_logger()
         func = TestFunction(invocation=invocation, logger=logger)
 
-        expected = pa.schema(
+        expected = make_schema(
             [
                 pa.field("a", pa.int64()),
                 pa.field("b", pa.string()),

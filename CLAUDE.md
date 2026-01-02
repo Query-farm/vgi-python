@@ -12,6 +12,11 @@ uv run ruff format .      # Format
 uv run mypy vgi/          # Type check
 ```
 
+**Before committing**, always run lint and format checks:
+```bash
+uv run ruff check --fix . && uv run ruff format . && uv run mypy vgi/
+```
+
 ## Project Overview
 
 VGI (Vector Gateway Interface) provides an Apache Arrow-based protocol for connecting DuckDB to external programs. It enables user-defined functions to run in separate processes, communicating via stdin/stdout using Arrow IPC streaming.

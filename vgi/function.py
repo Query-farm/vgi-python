@@ -392,14 +392,13 @@ class OutputSpec:
             Arrow schema with fields for each serialized attribute.
 
         """
-        return pa.schema(
-            [
-                pa.field("output_schema", pa.binary(), nullable=False),
-                pa.field("max_processes", pa.int64(), nullable=True),
-                pa.field("invocation_id", pa.binary(), nullable=True),
-                pa.field("active_features", pa.list_(pa.utf8()), nullable=False),
-            ]
-        )
+        fields: list[pa.Field[Any]] = [
+            pa.field("output_schema", pa.binary(), nullable=False),
+            pa.field("max_processes", pa.int64(), nullable=True),
+            pa.field("invocation_id", pa.binary(), nullable=True),
+            pa.field("active_features", pa.list_(pa.utf8()), nullable=False),
+        ]
+        return pa.schema(fields)
 
     def serialize_dict(self) -> dict[str, Any]:
         """Convert this bind result to a dictionary for Arrow serialization.

@@ -23,6 +23,8 @@ RepeatInputsFunction      - Duplicates each input batch N times
 SumAllColumnsFunction     - Aggregates numeric columns into sums
 """
 
+from typing import Any
+
 import pyarrow as pa
 import pyarrow.compute as pc
 import structlog
@@ -149,10 +151,10 @@ class BufferInputFunction(TableInOutGeneratorFunction):
         _ = yield None
 
         while True:
-            batch = yield None
-            if batch is None:
+            received = yield None
+            if received is None:
                 break
-            self.buffered_batches.append(batch)
+            self.buffered_batches.append(received)
 
     def finalize(self) -> OutputGenerator:
         """Emit all buffered batches sequentially."""
@@ -254,9 +256,10 @@ class RepeatInputsFunction(TableInOutGeneratorFunction):
             for _ in range(self.repeat_count):
                 yield Output(batch, has_more=True)
 
-            batch = yield None
-            if batch is None:
+            received = yield None
+            if received is None:
                 break
+            batch = received
 
 
 class SumAllColumnsFunction(TableInOutGeneratorFunction):
@@ -363,7 +366,7 @@ class SumAllColumnsFunction(TableInOutGeneratorFunction):
     ) -> None:
         """Initialize the sum accumulator."""
         super().__init__(invocation=invocation, logger=logger)
-        self.sums: dict[str, pa.Scalar] = {}
+        self.sums: dict[str, pa.Scalar[Any]] = {}
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -372,6 +375,7 @@ class SumAllColumnsFunction(TableInOutGeneratorFunction):
             raise ValueError("input_schema is required but was None")
         output_fields = []
         for field in self.input_schema:
+            out_type: pa.DataType
             if pa.types.is_integer(field.type):
                 out_type = pa.int64()
             elif pa.types.is_floating(field.type):
@@ -398,9 +402,10 @@ class SumAllColumnsFunction(TableInOutGeneratorFunction):
                 if col_sum.is_valid:
                     self.sums[name] = pc.add(self.sums[name], col_sum)
 
-            batch = yield None
-            if batch is None:
+            received = yield None
+            if received is None:
                 break
+            batch = received
 
     def finalize(self) -> OutputGenerator:
         """Emit single row containing the column sums."""
@@ -447,7 +452,7 @@ class SumAllColumnsFunctionDistributed(SumAllColumnsFunction):
         """Accumulate column sums across all batches."""
         _ = yield None
 
-        sums: dict[str, pa.Scalar] = {}
+        sums: dict[str, pa.Scalar[Any]] = {}
         # Initialize sums to zero for each numeric column
         for field in self.output_schema:
             sums[field.name] = pa.scalar(0, type=field.type)
@@ -460,9 +465,10 @@ class SumAllColumnsFunctionDistributed(SumAllColumnsFunction):
                     if col_sum.is_valid:
                         sums[name] = pc.add(sums[name], col_sum)
 
-                batch = yield None
-                if batch is None:
+                received = yield None
+                if received is None:
                     break
+                batch = received
         except GeneratorExit:
             # Generator is being closed - save state with explicit schema
             state_batch = pa.RecordBatch.from_pydict(
@@ -544,9 +550,10 @@ class SumAllColumnsFunctionWithLogging(SumAllColumnsFunction):
                 if col_sum.is_valid:
                     self.sums[name] = pc.add(self.sums[name], col_sum)
 
-            batch = yield None
-            if batch is None:
+            received = yield None
+            if received is None:
                 break
+            batch = received
 
     def finalize(self) -> OutputGenerator:
         """Emit single row containing the column sums with logging."""
@@ -578,13 +585,14 @@ class ExceptionProcessFunction(SumAllColumnsFunction):
     def process(self, batch: pa.RecordBatch) -> OutputGenerator:
         """Raise an exception on the second batch."""
         _ = yield None  # priming
+        _ = batch  # unused, first batch is passed as parameter
 
         batch_index = 1  # First batch is from parameter
         while True:
             if batch_index % 2 == 0:
                 raise ValueError(f"Intentional exception on batch {batch_index}")
-            batch = yield None
-            if batch is None:
+            received = yield None
+            if received is None:
                 break
             batch_index += 1
 
@@ -666,7 +674,7 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction):
     ) -> None:
         """Initialize with empty sums dict."""
         super().__init__(invocation=invocation, logger=logger)
-        self.sums: dict[str, pa.Scalar] = {}
+        self.sums: dict[str, pa.Scalar[Any]] = {}
 
     def cardinality(self) -> CardinalityInfo | None:
         """Return cardinality estimate of exactly 1 row."""
@@ -679,6 +687,7 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction):
             raise ValueError("input_schema is required but was None")
         output_fields = []
         for field in self.input_schema:
+            out_type: pa.DataType
             if pa.types.is_integer(field.type):
                 out_type = pa.int64()
             elif pa.types.is_floating(field.type):

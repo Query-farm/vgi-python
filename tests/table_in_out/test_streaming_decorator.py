@@ -21,8 +21,9 @@ class EchoStreamingFunction(TableInOutGeneratorFunction):
     @streaming
     def process(self, b: pa.RecordBatch) -> StreamingGenerator:
         """Process batches without priming yield."""
-        while b is not None:
-            b = yield Output(b)
+        current: pa.RecordBatch | None = b
+        while current is not None:
+            current = yield Output(current)
 
 
 class CountingStreamingFunction(TableInOutGeneratorFunction):
@@ -38,9 +39,10 @@ class CountingStreamingFunction(TableInOutGeneratorFunction):
     @streaming
     def process(self, b: pa.RecordBatch) -> StreamingGenerator:
         """Process batches and count them."""
-        while b is not None:
+        current: pa.RecordBatch | None = b
+        while current is not None:
             self.batch_count += 1
-            b = yield Output(b)
+            current = yield Output(current)
 
 
 class AccumulatingStreamingFunction(TableInOutGeneratorFunction):
@@ -61,12 +63,14 @@ class AccumulatingStreamingFunction(TableInOutGeneratorFunction):
     @streaming
     def process(self, b: pa.RecordBatch) -> StreamingGenerator:
         """Accumulate values from batches."""
-        while b is not None:
+        current: pa.RecordBatch | None = b
+        while current is not None:
             # Accumulate
-            col = b.column(0)
+            col = current.column(0)
             for val in col.to_pylist():
-                self.total += val
-            b = yield Output(self.empty_output_batch)
+                if val is not None:
+                    self.total += val
+            current = yield Output(self.empty_output_batch)
 
     def finalize(self) -> OutputGenerator:
         """Emit final aggregation result."""
@@ -82,9 +86,10 @@ class LoggingStreamingFunction(TableInOutGeneratorFunction):
     @streaming
     def process(self, b: pa.RecordBatch) -> StreamingGenerator:
         """Process batches with logging."""
-        while b is not None:
-            yield Message(Level.INFO, f"Processing {b.num_rows} rows")
-            b = yield Output(b)
+        current: pa.RecordBatch | None = b
+        while current is not None:
+            yield Message(Level.INFO, f"Processing {current.num_rows} rows")
+            current = yield Output(current)
 
 
 class TestStreamingDecorator:
@@ -170,10 +175,11 @@ class TestStreamingDecoratorComparedToManual:
             def process(self, b: pa.RecordBatch) -> OutputGenerator:
                 """Manual process without decorator."""
                 _ = yield None
+                current: pa.RecordBatch | None = b
                 while True:
                     # Combined yield-and-receive (correct pattern)
-                    b = yield Output(b)
-                    if b is None:
+                    current = yield Output(current)
+                    if current is None:
                         break
 
         # Need to create separate lists for each client since iter() is consumed

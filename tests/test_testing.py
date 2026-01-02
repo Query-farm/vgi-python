@@ -1,8 +1,11 @@
 """Tests for vgi.testing.FunctionTestClient using example functions."""
 
+from __future__ import annotations
+
 import pyarrow as pa
 import pytest
 
+from tests.utils import make_schema
 from vgi.examples.table_in_out import (
     BufferInputFunction,
     EchoFunction,
@@ -381,7 +384,7 @@ class TestBatchHelper:
 
     def test_batch_with_explicit_schema(self) -> None:
         """batch() should respect explicit schema."""
-        schema = pa.schema([("x", pa.int64()), ("y", pa.string())])
+        schema = make_schema([("x", pa.int64()), ("y", pa.string())])
         b = batch(schema, x=[1, 2, 3], y=["a", "b", "c"])
 
         assert b.schema == schema
@@ -389,7 +392,7 @@ class TestBatchHelper:
 
     def test_batch_empty(self) -> None:
         """batch() should handle empty columns."""
-        schema = pa.schema([("x", pa.int64())])
+        schema = make_schema([("x", pa.int64())])
         b = batch(schema, x=[])
 
         assert b.num_rows == 0

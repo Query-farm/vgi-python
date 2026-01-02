@@ -14,7 +14,7 @@ GeneratorExceptionFunction    - Demonstrates exception handling
 
 import random
 import struct
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import pyarrow as pa
 
@@ -292,12 +292,11 @@ class RandomSampleFunction(TableFunctionGenerator):
     @property
     def output_schema(self) -> pa.Schema:
         """Return output schema with id and value columns."""
-        return pa.schema(
-            [
-                pa.field("id", pa.int64()),
-                pa.field("value", pa.float64()),
-            ]
-        )
+        fields: list[tuple[str, pa.DataType]] = [
+            ("id", pa.int64()),
+            ("value", pa.float64()),
+        ]
+        return pa.schema(fields)
 
     def cardinality(self) -> CardinalityInfo:
         """Return cardinality estimate."""
@@ -565,12 +564,15 @@ class ProjectedDataFunction(TableFunctionGenerator):
 
     # Full schema with all 4 columns
     FULL_SCHEMA: pa.Schema = pa.schema(
-        [
-            pa.field("id", pa.int64()),
-            pa.field("name", pa.string()),
-            pa.field("value", pa.float64()),
-            pa.field("extra", pa.int64()),
-        ]
+        cast(
+            list[tuple[str, pa.DataType]],
+            [
+                ("id", pa.int64()),
+                ("name", pa.string()),
+                ("value", pa.float64()),
+                ("extra", pa.int64()),
+            ],
+        )
     )
 
     BATCH_SIZE: int = 1000
