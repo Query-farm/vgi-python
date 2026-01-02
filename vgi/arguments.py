@@ -22,9 +22,12 @@ Example:
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, TypeVar, overload
+from typing import TYPE_CHECKING, Any, TypeVar, overload
 
 import pyarrow as pa
+
+if TYPE_CHECKING:
+    from pyarrow import Scalar
 
 # Sentinel for missing default value
 _MISSING: Any = object()
@@ -90,8 +93,8 @@ class Arguments:
 
     """
 
-    positional: tuple[pa.Scalar | None, ...] = ()
-    named: dict[str, pa.Scalar] | None = None
+    positional: tuple["Scalar[Any] | None", ...] = ()
+    named: dict[str, "Scalar[Any]"] | None = None
 
     def get(
         self,
@@ -169,7 +172,7 @@ class Arguments:
 
         return scalar.as_py()
 
-    def encoded_dict(self) -> dict[str, pa.Scalar | None]:
+    def encoded_dict(self) -> dict[str, "Scalar[Any] | None"]:
         """Convert arguments to a dictionary suitable for serialization.
 
         Positional arguments are stored with keys "positional_0", "positional_1", etc.
@@ -215,8 +218,8 @@ class Arguments:
             Deserialized Arguments instance.
 
         """
-        positional: list[pa.Scalar | None] = []
-        named: dict[str, pa.Scalar] = {}
+        positional: list[Scalar[Any] | None] = []
+        named: dict[str, Scalar[Any]] = {}
         for key, value in data.items():
             if key.startswith("positional_"):
                 index = int(key[len("positional_") :])

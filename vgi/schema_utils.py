@@ -36,6 +36,7 @@ schema_like(source, add, remove, rename, replace)
 """
 
 from collections.abc import Mapping
+from typing import Any
 
 import pyarrow as pa
 
@@ -95,7 +96,7 @@ def schema(
     all_fields.update(kwargs)
 
     # Validate and build schema
-    pa_fields: list[pa.Field] = []
+    pa_fields: list[pa.Field[Any]] = []
     for name, dtype in all_fields.items():
         if not isinstance(dtype, pa.DataType):
             raise TypeError(
@@ -199,7 +200,7 @@ def schema_like(
     rename_map = rename or {}
     replace_map = replace or {}
 
-    new_fields: list[pa.Field] = []
+    new_fields: list[pa.Field[Any]] = []
     final_names: set[str] = set()
 
     for field in source:

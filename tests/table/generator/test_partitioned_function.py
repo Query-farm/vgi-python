@@ -1,5 +1,9 @@
 """Tests for the PartitionedRangeFunction with multi-worker support."""
 
+from __future__ import annotations
+
+from typing import Any
+
 import pyarrow as pa
 
 from vgi.client import Client
@@ -8,6 +12,11 @@ from vgi.function import Arguments
 from vgi.testing import TableFunctionTestClient
 
 from .conftest import RunnerWithMode
+
+
+def _sorted_non_null(values: list[Any | None]) -> list[Any]:
+    """Return sorted list, filtering out None values for type safety."""
+    return sorted(v for v in values if v is not None)
 
 
 class TestPartitionedRangeFunctionInProcess:
@@ -23,7 +32,7 @@ class TestPartitionedRangeFunctionInProcess:
         table = pa.Table.from_batches(outputs)
         assert table.num_rows == 10
 
-        values = sorted(table.column("value").to_pylist())
+        values = _sorted_non_null(table.column("value").to_pylist())
         assert values == list(range(10))
 
     def test_metadata(self) -> None:
@@ -64,7 +73,7 @@ class TestPartitionedRangeFunctionBothModes:
         outputs, logs = runner(PartitionedRangeFunction, (50,))
 
         table = pa.Table.from_batches(outputs)
-        values = sorted(table.column("value").to_pylist())
+        values = _sorted_non_null(table.column("value").to_pylist())
         assert values == list(range(50))
 
 
@@ -84,7 +93,7 @@ class TestPartitionedRangeFunctionMultiWorker:
         table = pa.Table.from_batches(outputs)
         assert table.num_rows == 20
 
-        values = sorted(table.column("value").to_pylist())
+        values = _sorted_non_null(table.column("value").to_pylist())
         assert values == list(range(20))
 
     def test_three_workers_produce_complete_range(self) -> None:
@@ -100,7 +109,7 @@ class TestPartitionedRangeFunctionMultiWorker:
         table = pa.Table.from_batches(outputs)
         assert table.num_rows == 30
 
-        values = sorted(table.column("value").to_pylist())
+        values = _sorted_non_null(table.column("value").to_pylist())
         assert values == list(range(30))
 
     def test_workers_produce_large_range(self) -> None:
@@ -116,7 +125,7 @@ class TestPartitionedRangeFunctionMultiWorker:
         table = pa.Table.from_batches(outputs)
         assert table.num_rows == 10000
 
-        values = sorted(table.column("value").to_pylist())
+        values = _sorted_non_null(table.column("value").to_pylist())
         assert values == list(range(10000))
 
     def test_uneven_distribution(self) -> None:
@@ -134,7 +143,7 @@ class TestPartitionedRangeFunctionMultiWorker:
         table = pa.Table.from_batches(outputs)
         assert table.num_rows == 7
 
-        values = sorted(table.column("value").to_pylist())
+        values = _sorted_non_null(table.column("value").to_pylist())
         assert values == list(range(7))
 
     def test_single_worker_fallback(self) -> None:
@@ -150,5 +159,5 @@ class TestPartitionedRangeFunctionMultiWorker:
         table = pa.Table.from_batches(outputs)
         assert table.num_rows == 15
 
-        values = sorted(table.column("value").to_pylist())
+        values = _sorted_non_null(table.column("value").to_pylist())
         assert values == list(range(15))

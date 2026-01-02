@@ -76,10 +76,11 @@ FEATURES
 
 import uuid
 from collections.abc import Callable, Generator, Iterator
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 import structlog
+import structlog.stdlib
 
 from vgi.function import Arguments, Invocation
 from vgi.log import Level, Message
@@ -145,7 +146,9 @@ class FunctionTestClient:
         """
         self.function_class = function_class
         self.logs: list[Message] = []
-        self._logger = structlog.get_logger().bind(component="test_client")
+        self._logger: structlog.stdlib.BoundLogger = structlog.get_logger().bind(
+            component="test_client"
+        )
 
     def __enter__(self) -> "FunctionTestClient":
         """Enter context manager."""
@@ -220,11 +223,14 @@ class FunctionTestClient:
                     }
                 ],
                 schema=pa.schema(
-                    [
-                        pa.field("output_schema", pa.binary()),
-                        pa.field("max_processes", pa.int64()),
-                        pa.field("invocation_id", pa.binary()),
-                    ]
+                    cast(
+                        list[tuple[str, pa.DataType]],
+                        [
+                            ("output_schema", pa.binary()),
+                            ("max_processes", pa.int64()),
+                            ("invocation_id", pa.binary()),
+                        ],
+                    )
                 ),
             )
             bind_result_callback(bind_batch)
@@ -366,7 +372,9 @@ class TableFunctionTestClient:
         """
         self.function_class = function_class
         self.logs: list[Message] = []
-        self._logger = structlog.get_logger().bind(component="table_test_client")
+        self._logger: structlog.stdlib.BoundLogger = structlog.get_logger().bind(
+            component="table_test_client"
+        )
 
     def __enter__(self) -> "TableFunctionTestClient":
         """Enter context manager."""
@@ -514,8 +522,8 @@ def run_function(
 
     """
     # Build Arguments from args/kwargs
-    positional: tuple[pa.Scalar, ...] = ()
-    named: dict[str, pa.Scalar] = {}
+    positional: tuple[pa.Scalar[Any], ...] = ()
+    named: dict[str, pa.Scalar[Any]] = {}
 
     if args:
         positional = tuple(pa.scalar(a) for a in args)
@@ -780,8 +788,8 @@ def run_table_function(
 
     """
     # Build Arguments from args/kwargs
-    positional: tuple[pa.Scalar, ...] = ()
-    named: dict[str, pa.Scalar] = {}
+    positional: tuple[pa.Scalar[Any], ...] = ()
+    named: dict[str, pa.Scalar[Any]] = {}
 
     if args:
         positional = tuple(pa.scalar(a) for a in args)

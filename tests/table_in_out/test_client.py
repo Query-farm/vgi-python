@@ -1,9 +1,12 @@
 """Tests for Client lifecycle, edge cases, and stderr capture."""
 
+from __future__ import annotations
+
 import time
 
 import pyarrow as pa
 
+from tests.utils import make_schema
 from vgi.client import Client
 
 
@@ -23,7 +26,9 @@ class TestEdgeCases:
 
     def test_empty_batch(self, example_worker: str) -> None:
         """Empty batch (zero rows) should process correctly."""
-        schema = pa.schema([pa.field("id", pa.int64()), pa.field("value", pa.int64())])
+        schema = make_schema(
+            [pa.field("id", pa.int64()), pa.field("value", pa.int64())]
+        )
         empty_batch = pa.RecordBatch.from_pydict({"id": [], "value": []}, schema=schema)
 
         with Client(example_worker) as client:
@@ -42,7 +47,7 @@ class TestEdgeCases:
 
     def test_empty_batch_with_aggregation(self, example_worker: str) -> None:
         """Aggregation with empty batch should handle zero rows."""
-        schema = pa.schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
+        schema = make_schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
         empty_batch = pa.RecordBatch.from_pydict({"a": [], "b": []}, schema=schema)
 
         with Client(example_worker) as client:
@@ -65,7 +70,9 @@ class TestEdgeCases:
 
     def test_single_row_batch(self, example_worker: str) -> None:
         """Single row batch should process correctly."""
-        schema = pa.schema([pa.field("id", pa.int64()), pa.field("value", pa.int64())])
+        schema = make_schema(
+            [pa.field("id", pa.int64()), pa.field("value", pa.int64())]
+        )
         single_row_batch = pa.RecordBatch.from_pydict(
             {"id": [1], "value": [100]}, schema=schema
         )
@@ -84,7 +91,7 @@ class TestEdgeCases:
 
     def test_large_batch_count(self, example_worker: str) -> None:
         """Many small batches should process correctly."""
-        schema = pa.schema([pa.field("id", pa.int64())])
+        schema = make_schema([pa.field("id", pa.int64())])
         batches = [
             pa.RecordBatch.from_pydict({"id": [i]}, schema=schema) for i in range(50)
         ]

@@ -1,7 +1,10 @@
 """Tests for the RepeatInputsFunction (explosion)."""
 
+from __future__ import annotations
+
 import pyarrow as pa
 
+from tests.utils import make_schema
 from vgi.client import Client
 from vgi.function import Arguments
 
@@ -18,7 +21,7 @@ class TestRepeatInputsFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="repeat_inputs",
-                    arguments=Arguments(positional=tuple([repeat_count]), named={}),
+                    arguments=Arguments(positional=(pa.scalar(repeat_count),)),
                     input=iter(simple_batches),
                 )
             )
@@ -35,7 +38,7 @@ class TestRepeatInputsFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="repeat_inputs",
-                    arguments=Arguments(positional=tuple([1]), named={}),
+                    arguments=Arguments(positional=(pa.scalar(1),), named={}),
                     input=iter(simple_batches),
                 )
             )
@@ -46,7 +49,7 @@ class TestRepeatInputsFunction:
 
     def test_repeat_distributed_many_batches(self, example_worker: str) -> None:
         """Should correctly repeat across many batches with multiple workers."""
-        schema = pa.schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
+        schema = make_schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
 
         # Create 100 batches, each with 50 rows
         num_batches = 100
@@ -69,7 +72,7 @@ class TestRepeatInputsFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="repeat_inputs",
-                    arguments=Arguments(positional=tuple([repeat_count]), named={}),
+                    arguments=Arguments(positional=(pa.scalar(repeat_count),)),
                     input=iter(batches),
                 )
             )
@@ -80,7 +83,9 @@ class TestRepeatInputsFunction:
 
     def test_repeat_distributed_preserves_data(self, example_worker: str) -> None:
         """Should preserve data correctly when repeated across workers."""
-        schema = pa.schema([pa.field("id", pa.int64()), pa.field("value", pa.string())])
+        schema = make_schema(
+            [pa.field("id", pa.int64()), pa.field("value", pa.string())]
+        )
 
         # Create batches with distinct values to verify data integrity
         batches = [
@@ -101,7 +106,7 @@ class TestRepeatInputsFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="repeat_inputs",
-                    arguments=Arguments(positional=tuple([repeat_count]), named={}),
+                    arguments=Arguments(positional=(pa.scalar(repeat_count),)),
                     input=iter(batches),
                 )
             )

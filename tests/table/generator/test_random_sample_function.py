@@ -95,4 +95,4 @@ class TestRandomSampleFunctionBothModes:
         table = pa.Table.from_batches(outputs)
         values = table.column("value").to_pylist()
 
-        assert all(0 <= v < 1 for v in values)
+        assert all(v is not None and 0 <= v < 1 for v in values)

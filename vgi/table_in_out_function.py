@@ -127,7 +127,7 @@ class ProtocolInput:
         """Check if this input signals the FINALIZE phase."""
         return (
             self.metadata is not None
-            and self.metadata.get("type") == self._FINALIZE_SIGNAL
+            and self.metadata.get(b"type") == self._FINALIZE_SIGNAL
         )
 
     @classmethod
@@ -137,7 +137,7 @@ class ProtocolInput:
         This is only sent once so there is no benefit to caching it.
         """
         return cls(
-            batch=batch, metadata=pa.KeyValueMetadata({"type": cls._FINALIZE_SIGNAL})
+            batch=batch, metadata=pa.KeyValueMetadata({b"type": cls._FINALIZE_SIGNAL})
         )
 
 
@@ -170,12 +170,14 @@ class ProtocolOutput:
             KeyValueMetadata containing status and optional log message fields.
 
         """
-        metadata_dict = {"status": self.status.value}
+        metadata_dict: dict[str, str] = {"status": self.status.value}
 
         if self.log_message is not None:
             metadata_dict = self.log_message.add_to_metadata(invocation, metadata_dict)
 
-        return pa.KeyValueMetadata(metadata_dict)
+        return pa.KeyValueMetadata(
+            {k.encode(): v.encode() for k, v in metadata_dict.items()}
+        )
 
     @classmethod
     def from_process_result(
@@ -669,9 +671,10 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunctionBase):
         _ = yield None  # Priming yield
 
         while True:
-            batch = yield Output(batch)
-            if batch is None:
+            received = yield Output(batch)
+            if received is None:
                 break
+            batch = received
 
     def finalize(self) -> OutputGenerator | None:
         """Finalize processing and produce any remaining output.
@@ -1052,16 +1055,17 @@ class TableInOutFunction(TableInOutGeneratorFunction):
                         is_last = i == len(result) - 1
                         if is_last:
                             # Last batch: receive next input
-                            batch = yield Output(output_batch, has_more=False)
+                            received = yield Output(output_batch, has_more=False)
                         else:
                             # More batches: caller re-sends same input, we ignore it
                             _ = yield Output(output_batch, has_more=True)
                 else:
                     # Single batch: yield output and receive next input
-                    batch = yield Output(result)
+                    received = yield Output(result)
 
-                if batch is None:
+                if received is None:
                     break
+                batch = received
         except GeneratorExit:
             # Save state for distributed processing before generator closes
             state = self.save_state()

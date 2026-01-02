@@ -1,8 +1,11 @@
 """Tests for the SumAllColumnsFunction (aggregation)."""
 
+from __future__ import annotations
+
 import pyarrow as pa
 import pytest
 
+from tests.utils import make_schema
 from vgi.client import Client
 
 
@@ -146,7 +149,7 @@ class TestSumAllColumnsFunctionDistributed:
 
     def test_sum_distributed_many_batches(self, example_worker: str) -> None:
         """Should correctly sum across multiple batches."""
-        schema = pa.schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
+        schema = make_schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
 
         # Create 20 batches, each with 100 rows (enough to exercise distributed path)
         num_batches = 20
@@ -209,7 +212,7 @@ class TestSumAllColumnsFunctionDistributed:
 
     def test_sum_distributed_empty_batch(self, example_worker: str) -> None:
         """Should handle empty batch correctly."""
-        schema = pa.schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
+        schema = make_schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
         empty_batch = pa.RecordBatch.from_pydict({"a": [], "b": []}, schema=schema)
 
         with Client(example_worker) as client:
@@ -255,7 +258,7 @@ class TestSumAllColumnsSimpleDistributed:
 
     def test_sum_simple_distributed_many_batches(self, example_worker: str) -> None:
         """Should correctly sum across multiple batches."""
-        schema = pa.schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
+        schema = make_schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
 
         # Create 20 batches, each with 100 rows (enough to exercise distributed path)
         num_batches = 20
@@ -317,7 +320,7 @@ class TestSumAllColumnsSimpleDistributed:
 
     def test_sum_simple_distributed_empty_batch(self, example_worker: str) -> None:
         """Should handle empty batch correctly."""
-        schema = pa.schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
+        schema = make_schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
         empty_batch = pa.RecordBatch.from_pydict({"a": [], "b": []}, schema=schema)
 
         with Client(example_worker) as client:

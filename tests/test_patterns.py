@@ -1,5 +1,9 @@
 """Tests for vgi.table_in_out_function_patterns base classes."""
 
+from __future__ import annotations
+
+from typing import Any
+
 import pyarrow as pa
 import pyarrow.compute as pc
 import structlog
@@ -38,12 +42,12 @@ class SumAggregation(AggregationFunction):
     ) -> None:
         """Initialize with empty sums dict."""
         super().__init__(invocation, logger)
-        self._sums: dict[str, pa.Scalar] = {}
+        self._sums: dict[str, pa.Scalar[Any]] = {}
 
     @property
     def output_schema(self) -> pa.Schema:
         """Build schema with numeric columns promoted to int64/float64."""
-        fields = []
+        fields: list[pa.Field[Any]] = []
         for field in self.input_schema:
             if pa.types.is_integer(field.type):
                 fields.append(pa.field(field.name, pa.int64()))
@@ -177,9 +181,9 @@ class TestAggregationFunction:
 class PositiveFilter(FilterFunction):
     """Test filter: keep rows where 'value' column is positive."""
 
-    def predicate(self, batch: pa.RecordBatch) -> pa.Array:
+    def predicate(self, batch: pa.RecordBatch) -> pa.Array[Any]:
         """Return True for positive values."""
-        return pc.greater(batch.column("value"), 0)
+        return pc.greater(batch.column("value"), pa.scalar(0))
 
 
 class RangeFilter(FilterFunction):
@@ -188,11 +192,11 @@ class RangeFilter(FilterFunction):
     min_val = Arg[int](0)
     max_val = Arg[int](1)
 
-    def predicate(self, batch: pa.RecordBatch) -> pa.Array:
+    def predicate(self, batch: pa.RecordBatch) -> pa.Array[Any]:
         """Return True for values in the specified range."""
         col = batch.column("value")
-        above_min = pc.greater_equal(col, self.min_val)
-        below_max = pc.less_equal(col, self.max_val)
+        above_min = pc.greater_equal(col, pa.scalar(self.min_val))
+        below_max = pc.less_equal(col, pa.scalar(self.max_val))
         return pc.and_(above_min, below_max)
 
 
@@ -304,7 +308,7 @@ class TestFilterFunction:
 class DoubleValues(MapFunction):
     """Test map: double the 'value' column."""
 
-    def map_columns(self, batch: pa.RecordBatch) -> dict[str, pa.Array]:
+    def map_columns(self, batch: pa.RecordBatch) -> dict[str, pa.Array[Any]]:
         """Double the value column."""
         return {"value": pc.multiply(batch.column("value"), 2)}
 
@@ -312,7 +316,7 @@ class DoubleValues(MapFunction):
 class MultiColumnMap(MapFunction):
     """Test map: transform multiple columns."""
 
-    def map_columns(self, batch: pa.RecordBatch) -> dict[str, pa.Array]:
+    def map_columns(self, batch: pa.RecordBatch) -> dict[str, pa.Array[Any]]:
         """Multiply a by 10, add 100 to b."""
         return {
             "a": pc.multiply(batch.column("a"), 10),
@@ -323,7 +327,7 @@ class MultiColumnMap(MapFunction):
 class UpperCaseMap(MapFunction):
     """Test map: convert string column to uppercase."""
 
-    def map_columns(self, batch: pa.RecordBatch) -> dict[str, pa.Array]:
+    def map_columns(self, batch: pa.RecordBatch) -> dict[str, pa.Array[Any]]:
         """Convert name to uppercase."""
         return {"name": pc.utf8_upper(batch.column("name"))}
 
@@ -334,14 +338,13 @@ class CastToFloat(MapFunction):
     @property
     def output_schema(self) -> pa.Schema:
         """Output schema with value as float64."""
-        return pa.schema(
-            [
-                pa.field("id", pa.int64()),
-                pa.field("value", pa.float64()),
-            ]
-        )
+        fields: list[pa.Field[Any]] = [
+            pa.field("id", pa.int64()),
+            pa.field("value", pa.float64()),
+        ]
+        return pa.schema(fields)
 
-    def map_columns(self, batch: pa.RecordBatch) -> dict[str, pa.Array]:
+    def map_columns(self, batch: pa.RecordBatch) -> dict[str, pa.Array[Any]]:
         """Cast value to float64."""
         return {"value": batch.column("value").cast(pa.float64())}
 

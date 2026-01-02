@@ -39,8 +39,10 @@ For other patterns, use TableInOutFunction directly.
 
 """
 
+from __future__ import annotations
+
 from abc import abstractmethod
-from typing import final
+from typing import Any, final
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -370,7 +372,7 @@ class FilterFunction(TableInOutFunction):
     """
 
     @abstractmethod
-    def predicate(self, batch: pa.RecordBatch) -> pa.Array:
+    def predicate(self, batch: pa.RecordBatch) -> pa.Array[Any]:
         """Return boolean array indicating which rows to keep.
 
         Args:
@@ -381,7 +383,7 @@ class FilterFunction(TableInOutFunction):
             True = keep row, False = drop row.
 
         Example:
-            def predicate(self, batch: pa.RecordBatch) -> pa.Array:
+            def predicate(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 # Keep rows where 'status' equals 'active'
                 return pc.equal(batch.column("status"), "active")
 
@@ -397,7 +399,8 @@ class FilterFunction(TableInOutFunction):
 
         """
         mask = self.predicate(batch)
-        result = pc.filter(batch, mask)
+        # pc.filter supports RecordBatch but pyarrow-stubs don't have the overload
+        result = pc.filter(batch, mask)  # type: ignore[call-overload]
 
         # Calculate and log filtering stats
         # pc.sum on boolean array counts True values
@@ -411,11 +414,8 @@ class FilterFunction(TableInOutFunction):
                 f"Filtered batch: {kept} rows kept, {dropped} rows dropped",
             )
 
-        # pc.filter returns a ChunkedArray for RecordBatch, need to handle this
-        if isinstance(result, pa.ChunkedArray):
-            # This shouldn't happen with RecordBatch input, but handle it
-            result = result.combine_chunks()
-
+        # pc.filter returns RecordBatch for RecordBatch input
+        assert isinstance(result, pa.RecordBatch)
         return result
 
 
@@ -487,7 +487,7 @@ class MapFunction(TableInOutFunction):
     """
 
     @abstractmethod
-    def map_columns(self, batch: pa.RecordBatch) -> dict[str, pa.Array]:
+    def map_columns(self, batch: pa.RecordBatch) -> dict[str, pa.Array[Any]]:
         """Return dictionary mapping column names to transformed arrays.
 
         Only include columns that are being modified. Columns not in the
@@ -501,7 +501,7 @@ class MapFunction(TableInOutFunction):
             Each array must have the same length as the input batch.
 
         Example:
-            def map_columns(self, batch: pa.RecordBatch) -> dict[str, pa.Array]:
+            def map_columns(self, batch: pa.RecordBatch) -> dict[str, pa.Array[Any]]:
                 return {
                     "value": pc.multiply(batch.column("value"), 2),
                     "name": pc.utf8_lower(batch.column("name")),

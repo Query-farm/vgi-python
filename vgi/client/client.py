@@ -50,6 +50,8 @@ vgi.function.Arguments : Container for function arguments
 
 """
 
+from __future__ import annotations
+
 import io
 import json
 import os
@@ -59,10 +61,11 @@ import threading
 from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
 from queue import Queue
-from typing import IO, Any
+from typing import IO, Any, cast
 
 import pyarrow as pa
 import structlog
+import structlog.stdlib
 from pyarrow import ipc
 
 from vgi.function import (
@@ -84,9 +87,11 @@ structlog.configure(
     logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
 )
 
-log = structlog.get_logger().bind(component="client")
+log: structlog.stdlib.BoundLogger = structlog.get_logger().bind(component="client")
 
-worker_log = structlog.get_logger().bind(component="worker")
+worker_log: structlog.stdlib.BoundLogger = structlog.get_logger().bind(
+    component="worker"
+)
 
 
 class ClientError(Exception):
@@ -98,7 +103,7 @@ class WorkerConnection:
     """Holds state for a single worker subprocess connection."""
 
     proc: subprocess.Popen[bytes]
-    stdout_buffered: Any  # io.BufferedReader - typed as Any due to subprocess IO quirks
+    stdout_buffered: io.BufferedReader[Any]
     stdin_sink: pa.PythonFile
     worker_index: int
     data_writer: ipc.RecordBatchStreamWriter | None = None
@@ -166,7 +171,9 @@ class Client:
         return combined[0]
 
     def _handle_log_message(
-        self, output_batch: pa.RecordBatch, output_metadata: dict[bytes, bytes] | None
+        self,
+        output_batch: pa.RecordBatch,
+        output_metadata: pa.KeyValueMetadata | None,
     ) -> bool:
         """Handle a log message from the worker if present.
 
@@ -254,7 +261,11 @@ class Client:
         max_processes_array = batch.column(
             batch.schema.get_field_index("max_processes")
         )
-        max_processes = max_processes_array.cast(pa.int32()).to_pylist()[0]
+        max_processes_value = max_processes_array.cast(pa.int32()).to_pylist()[0]
+        # max_processes should always be set in the bind result
+        max_processes: int = (
+            max_processes_value if max_processes_value is not None else 1
+        )
 
         invocation_id_array = batch.column(
             batch.schema.get_field_index("invocation_id")
@@ -274,7 +285,7 @@ class Client:
         output_schema_bytes = batch.column(
             batch.schema.get_field_index("output_schema")
         ).to_pylist()[0]
-        output_schema = pa.ipc.read_schema(pa.BufferReader(output_schema_bytes))
+        output_schema = pa.ipc.read_schema(pa.BufferReader(output_schema_bytes))  # type: ignore[arg-type]
 
         return _BindResult(
             max_processes=max_processes,
@@ -306,9 +317,7 @@ class Client:
         """
         if not active <= requested:
             unexpected = active - requested
-            raise ClientError(
-                f"Worker activated unsupported features: {unexpected}"
-            )
+            raise ClientError(f"Worker activated unsupported features: {unexpected}")
 
         log.debug(
             "features_validated",
@@ -632,6 +641,7 @@ class Client:
         # Create data writer for table-in-out functions
         data_writer: ipc.RecordBatchStreamWriter | None = None
         if input_schema is not None:
+            assert self._stdin_sink is not None
             data_writer = ipc.new_stream(self._stdin_sink, input_schema)
             log.debug("starting_data_batches")
 
@@ -640,6 +650,7 @@ class Client:
         # because the worker waits for input before writing output.
         output_reader: ipc.RecordBatchStreamReader | None = None
         if input_schema is None:
+            assert self._stdout_buffered is not None
             output_reader = ipc.open_stream(self._stdout_buffered)
             log.debug("output_stream_opened")
 
@@ -691,7 +702,7 @@ class Client:
         self._max_workers = max_workers
         self._attach_id = attach_id
         self._proc: subprocess.Popen[bytes] | None = None
-        self._stdout_buffered: io.BufferedReader | None = None
+        self._stdout_buffered: io.BufferedReader[Any] | None = None
         self._stdin_sink: pa.PythonFile | None = None
         self._stderr_buffer: list[bytes] = []
         self._stderr_lock = threading.Lock()
@@ -779,7 +790,8 @@ class Client:
             self._stderr_threads.append(stderr_thread)
 
         stdout_buffered = io.BufferedReader(proc.stdout)  # type: ignore[type-var]
-        stdin_sink = pa.PythonFile(proc.stdin)
+        assert proc.stdin is not None, "stdin pipe not created for worker"
+        stdin_sink = pa.PythonFile(cast(io.IOBase, proc.stdin))
 
         return WorkerConnection(
             proc=proc,
@@ -953,8 +965,8 @@ class Client:
     def _create_primary_worker(
         self,
         *,
-        data_writer: "ipc.RecordBatchStreamWriter | None" = None,
-        output_reader: "ipc.RecordBatchStreamReader | None" = None,
+        data_writer: ipc.RecordBatchStreamWriter | None = None,
+        output_reader: ipc.RecordBatchStreamReader | None = None,
     ) -> WorkerConnection:
         """Create a WorkerConnection wrapper for the primary worker subprocess.
 
@@ -1046,7 +1058,7 @@ class Client:
             output_batch, output_metadata = (
                 worker.output_reader.read_next_batch_with_custom_metadata()
             )
-            status = output_metadata.get("status") if output_metadata else None
+            status = output_metadata.get(b"status") if output_metadata else None
 
             log.debug(
                 "received_output_from_worker",
@@ -1066,7 +1078,7 @@ class Client:
                 break
             else:
                 raise ClientError(
-                    f"Unexpected status from worker {worker.worker_index}: {status}"
+                    f"Unexpected status from worker {worker.worker_index}: {status!r}"
                 )
 
         return output_batches
@@ -1110,13 +1122,13 @@ class Client:
         while True:
             log.debug("sending_finalize_to_worker", worker_index=worker.worker_index)
             worker.data_writer.write_batch(
-                empty_batch, custom_metadata={"type": "FINALIZE"}
+                empty_batch, custom_metadata={b"type": b"FINALIZE"}
             )
 
             output_batch, output_metadata = (
                 worker.output_reader.read_next_batch_with_custom_metadata()
             )
-            status = output_metadata.get("status") if output_metadata else None
+            status = output_metadata.get(b"status") if output_metadata else None
             log.debug(
                 "received_finalize_from_worker",
                 worker_index=worker.worker_index,
@@ -1136,7 +1148,7 @@ class Client:
             else:
                 raise ClientError(
                     f"Unexpected finalize status from worker "
-                    f"{worker.worker_index}: {status}"
+                    f"{worker.worker_index}: {status!r}"
                 )
 
         worker.data_writer.close()
@@ -1145,8 +1157,8 @@ class Client:
     def _worker_thread_loop(
         self,
         worker: WorkerConnection,
-        input_queue: "Queue[tuple[int, pa.RecordBatch] | None]",
-        output_queue: "Queue[tuple[int, list[pa.RecordBatch]] | BaseException]",
+        input_queue: Queue[tuple[int, pa.RecordBatch] | None],
+        output_queue: Queue[tuple[int, list[pa.RecordBatch]] | BaseException],
     ) -> None:
         """Thread function that processes batches for a single worker.
 
@@ -1243,8 +1255,9 @@ class Client:
             )
             self._stderr_thread.start()
 
-        self._stdout_buffered = io.BufferedReader(self._proc.stdout)  # type: ignore[arg-type]
-        self._stdin_sink = pa.PythonFile(self._proc.stdin)
+        self._stdout_buffered = io.BufferedReader(self._proc.stdout)
+        assert self._proc.stdin is not None, "stdin pipe not created for worker"
+        self._stdin_sink = pa.PythonFile(cast(io.IOBase, self._proc.stdin))
 
     def stop(self) -> int:
         """Stop all worker subprocesses and clean up resources.
@@ -1307,7 +1320,7 @@ class Client:
         self._stderr_thread = None
         return returncode
 
-    def __enter__(self) -> "Client":
+    def __enter__(self) -> Client:
         """Enter the context manager by starting the worker subprocess.
 
         Calls start() to spawn the primary worker process and prepare for
@@ -1435,6 +1448,7 @@ class Client:
 
             # Use parallel processing for all cases (handles both single and
             # multi-worker)
+            assert data_writer is not None  # set when input_schema is not None
             yield from self._table_in_out_function_parallel(
                 input_batch=input_batch,
                 input_iterator=input,

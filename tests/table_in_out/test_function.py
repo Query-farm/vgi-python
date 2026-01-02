@@ -275,7 +275,8 @@ class TestOutputSchema:
                 return pa.schema([("length", pa.int64())])
 
             def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
-                lengths = pc.utf8_length(batch.column("name"))
+                # Type ignore: stubs don't properly type cast result as StringArray
+                lengths = pc.utf8_length(batch.column("name"))  # type: ignore[call-overload]
                 return pa.RecordBatch.from_arrays([lengths], schema=self.output_schema)
 
         schema = pa.schema([("name", pa.string())])
@@ -302,8 +303,12 @@ class TestEmptyOutput:
         class FilterOddFunction(TableInOutFunction):
             def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
                 # Filter to only even values
-                mask = pc.equal(pc.bit_wise_and(batch.column("x"), 1), 0)
-                filtered = pc.filter(batch.column("x"), mask)
+                x_col = batch.column("x")
+                mask = pc.equal(
+                    pc.bit_wise_and(x_col, pa.scalar(1, type=pa.int64())),
+                    pa.scalar(0, type=pa.int64()),
+                )
+                filtered = pc.filter(x_col, mask)
                 if len(filtered) == 0:
                     return self.empty_output_batch
                 return pa.RecordBatch.from_arrays([filtered], schema=batch.schema)
