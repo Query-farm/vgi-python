@@ -383,7 +383,12 @@ class TableFunctionBase(vgi.function.Function):
     def retrieve_init(self, init_input: vgi.function.GlobalInitResult) -> None:
         """Retrieve and store init data from the storage."""
         if init_input.global_init_identifier is None:
-            raise ValueError("global_init_identifier is required but was None")
+            raise ValueError(
+                "global_init_identifier is required but was None. "
+                "This indicates the GlobalInitResult was not properly initialized. "
+                "Ensure perform_init() returns a GlobalInitResult with a valid "
+                "identifier."
+            )
         self.init_identifier = init_input.global_init_identifier
         self.init_data = GlobalStateInitInput.deserialize_bytes(
             self.init_storage.get(self.init_identifier)

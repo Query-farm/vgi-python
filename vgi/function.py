@@ -944,7 +944,13 @@ class Function(MetadataMixin):
 
         """
         if self.init_identifier is None:
-            raise ValueError("init_identifier must be set before storing state")
+            raise ValueError(
+                "init_identifier must be set before storing state. "
+                "This is typically set automatically during perform_init() or "
+                "retrieve_init(). Ensure your function calls super().perform_init() "
+                "in perform_init(), or that the worker correctly calls "
+                "retrieve_init() for secondary workers."
+            )
         self.state_storage.store(
             self.init_identifier,
             os.getpid(),
@@ -977,7 +983,13 @@ class Function(MetadataMixin):
 
         """
         if self.init_identifier is None:
-            raise ValueError("init_identifier must be set before collecting states")
+            raise ValueError(
+                "init_identifier must be set before collecting states. "
+                "This is typically set automatically during perform_init() or "
+                "retrieve_init(). Ensure your function calls super().perform_init() "
+                "in perform_init(), or that the worker correctly calls "
+                "retrieve_init() for secondary workers."
+            )
         state_bytes_list = self.state_storage.collect_and_delete(self.init_identifier)
         return [state_class.deserialize(data) for data in state_bytes_list]
 
@@ -1008,7 +1020,11 @@ class Function(MetadataMixin):
 
         """
         if self.init_identifier is None:
-            raise ValueError("init_identifier must be set before enqueuing work")
+            raise ValueError(
+                "init_identifier must be set before enqueuing work. "
+                "Call enqueue_work() after perform_init() has completed, typically "
+                "at the end of your perform_init() override or in setup()."
+            )
         return self.state_storage.enqueue_work(self.init_identifier, work_items)
 
     def dequeue_work(self) -> bytes | None:
@@ -1038,5 +1054,11 @@ class Function(MetadataMixin):
 
         """
         if self.init_identifier is None:
-            raise ValueError("init_identifier must be set before dequeuing work")
+            raise ValueError(
+                "init_identifier must be set before dequeuing work. "
+                "This is typically set automatically during perform_init() or "
+                "retrieve_init(). Ensure your function calls super().perform_init() "
+                "in perform_init(), or that the worker correctly calls "
+                "retrieve_init() for secondary workers."
+            )
         return self.state_storage.dequeue_work(self.init_identifier)

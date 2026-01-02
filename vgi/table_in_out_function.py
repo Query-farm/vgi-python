@@ -554,7 +554,13 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunctionBase):
         """Initialize the function with invocation data and logger."""
         super().__init__(invocation=invocation, logger=logger)
         if invocation.in_out_function_input_schema is None:
-            raise ValueError("Function requires a non-null input schema")
+            raise ValueError(
+                f"{type(self).__name__} requires an input schema, but none was "
+                f"provided. TableInOutGeneratorFunction processes input batches and "
+                f"requires in_out_function_input_schema to be set in the Invocation. "
+                f"If your function generates output without input, inherit from "
+                f"TableFunctionGenerator instead."
+            )
 
     @property
     def input_schema(self) -> pa.Schema:

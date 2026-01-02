@@ -295,7 +295,11 @@ class Worker:
 
         """
         if invocation.global_init_identifier is None:
-            raise ValueError("global_init_identifier is required but was None")
+            raise ValueError(
+                "global_init_identifier is required but was None. "
+                "This is an internal protocol error - the worker should have set "
+                "global_init_identifier after perform_init() completed successfully."
+            )
         generator = instance.run()
         next(generator)  # Prime the run() generator
 
@@ -474,7 +478,10 @@ class Worker:
         else:
             raise TypeError(
                 f"Unsupported function type: {type(instance).__name__}. "
-                f"Expected TableInOutGeneratorFunction or TableFunctionGenerator."
+                f"Functions must inherit from TableInOutGeneratorFunction (for "
+                f"functions that process input batches) or TableFunctionGenerator "
+                f"(for functions that generate output without input). "
+                f"See vgi.table_in_out_function and vgi.table_function modules."
             )
 
         fn_log.info(

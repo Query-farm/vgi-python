@@ -518,7 +518,12 @@ class Arg[ArgT]:
 
         # Instance access - parse and cache
         if self._name is None:
-            raise RuntimeError("Arg descriptor was not properly initialized")
+            raise RuntimeError(
+                "Arg descriptor was not properly initialized. "
+                "This typically means the descriptor was accessed before __set_name__ "
+                "was called. Ensure Arg is used as a class attribute, not instantiated "
+                "dynamically."
+            )
 
         if self._name not in obj.__dict__:
             obj.__dict__[self._name] = self._resolve(obj)
@@ -528,7 +533,12 @@ class Arg[ArgT]:
         """Parse argument from obj.invocation.arguments and validate."""
         invocation = getattr(obj, "invocation", None)
         if invocation is None:
-            raise RuntimeError("Object does not have 'invocation' attribute")
+            raise RuntimeError(
+                f"Cannot resolve Arg '{self._name}': object {type(obj).__name__} does "
+                f"not have an 'invocation' attribute. Arg descriptors can only be used "
+                f"on classes that have an 'invocation' attribute (e.g., "
+                f"TableInOutFunction, TableFunctionGenerator)."
+            )
         arguments = invocation.arguments
 
         if self.default is _MISSING:
