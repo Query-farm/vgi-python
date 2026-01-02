@@ -4,23 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
-This project uses `uv` for Python package management.
-
 ```bash
-# Install dependencies (required before running any commands)
-uv sync --all-extras
-
-# Run tests
-uv run pytest
-
-# Lint code
-uv run ruff check .
-
-# Format code
-uv run ruff format .
-
-# Type check
-uv run mypy vgi/
+uv sync --all-extras      # Install dependencies
+uv run pytest             # Run tests
+uv run ruff check .       # Lint
+uv run ruff format .      # Format
+uv run mypy vgi/          # Type check
 ```
 
 ## Project Overview
@@ -28,8 +17,6 @@ uv run mypy vgi/
 VGI (Vector Gateway Interface) provides an Apache Arrow-based protocol for connecting DuckDB to external programs. It enables user-defined functions to run in separate processes, communicating via stdin/stdout using Arrow IPC streaming.
 
 ## Architecture
-
-VGI supports two types of functions:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -42,365 +29,92 @@ VGI supports two types of functions:
 │                              ▼                                      │
 │  ┌───────────────────────────────────────────────────────────────┐  │
 │  │                      Worker Process                           │  │
-│  │                                                               │  │
-│  │  ┌─────────────────────────────────────────────────────────┐  │  │
-│  │  │ TABLE FUNCTION (TableFunctionGenerator)                 │  │  │
-│  │  │ - process(): Generator yielding output batches          │  │  │
-│  │  │ - No input data, generates output (sequences, ranges)   │  │  │
-│  │  └─────────────────────────────────────────────────────────┘  │  │
+│  │  TABLE FUNCTION (TableFunctionGenerator)                      │  │
+│  │  - process(): Generator yielding output batches (no input)    │  │
 │  │                           OR                                  │  │
-│  │  ┌─────────────────────────────────────────────────────────┐  │  │
-│  │  │ TABLE-IN-OUT FUNCTION (TableInOutFunction)              │  │  │
-│  │  │ - transform(batch): Process each input batch            │  │  │
-│  │  │ - finish(): Emit final results after all input          │  │  │
-│  │  │ - Transforms input data to output data                  │  │  │
-│  │  └─────────────────────────────────────────────────────────┘  │  │
-│  │                                                               │  │
+│  │  TABLE-IN-OUT FUNCTION (TableInOutFunction)                   │  │
+│  │  - transform(batch): Process each input batch                 │  │
+│  │  - finish(): Emit final results after all input               │  │
 │  └───────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Function Types
-
 | Type | Base Class | Input | Use Case |
 |------|------------|-------|----------|
-| **Table Function** | `TableFunctionGenerator` | None | Generate data (sequences, ranges, random samples) |
-| **Table-In-Out Function** | `TableInOutFunction` | Batches | Transform, filter, aggregate input data |
+| **Table Function** | `TableFunctionGenerator` | None | Generate data (sequences, ranges) |
+| **Table-In-Out Function** | `TableInOutFunction` | Batches | Transform, filter, aggregate |
 
 ### Key Components
 
-- **Worker** (`vgi/worker.py`): Subprocess that hosts functions, handles protocol
-- **Client** (`vgi/client/client.py`): Spawns workers, streams data through functions
-- **TableFunctionGenerator** (`vgi/table_function.py`): Base class for table functions (no input)
-- **TableInOutFunction** (`vgi/table_in_out_function.py`): Base class for table-in-out functions
-- **Invocation/OutputSpec** (`vgi/function.py`): Protocol messages for initialization
-- **GlobalInitResult** (`vgi/function.py`): Shared state for parallel workers
-
-## Protocol Flow
-
-### Table Function (no input)
-
-```
-Client                                  Worker
-  │                                       │
-  │──── Invocation (function, args) ─────▶│
-  │                                       │ instantiate function
-  │◀──── OutputSpec (output schema) ──────│
-  │                                       │
-  │──── GlobalStateInitInput ────────────▶│
-  │◀──── GlobalInitResult ────────────────│ perform_init()
-  │                                       │
-  │◀──── Output Batch 1 ──────────────────│ process() yields
-  │◀──── Output Batch 2 ──────────────────│
-  │◀──── ... ─────────────────────────────│
-  │◀──── Final Output (FINISHED) ─────────│
-  │                                       │
-```
-
-### Table-In-Out Function (with input)
-
-```
-Client                                  Worker
-  │                                       │
-  │──── Invocation (function, args) ─────▶│
-  │                                       │ instantiate function
-  │◀──── OutputSpec (output schema) ──────│
-  │                                       │
-  │──── GlobalStateInitInput ────────────▶│
-  │◀──── GlobalInitResult ────────────────│ perform_init()
-  │                                       │
-  │──── Input Batch 1 ───────────────────▶│
-  │◀──── Output Batch 1 (NEED_MORE_INPUT)─│ transform() / process()
-  │                                       │
-  │──── Input Batch 2 ───────────────────▶│
-  │◀──── Output Batch 2 (NEED_MORE_INPUT)─│
-  │                                       │
-  │──── FINALIZE (empty batch) ──────────▶│
-  │◀──── Final Output (FINISHED) ─────────│ finish() / finalize()
-  │                                       │
-```
+- **Worker** (`vgi/worker.py`): Subprocess that hosts functions
+- **Client** (`vgi/client/client.py`): Spawns workers, streams data
+- **TableFunctionGenerator** (`vgi/table_function.py`): Base for table functions
+- **TableInOutFunction** (`vgi/table_in_out_function.py`): Base for table-in-out functions
 
 ## Project Structure
 
 ```
 vgi/
-  __init__.py              # Package exports and module docstring
+  __init__.py              # Package exports
   function.py              # Invocation, OutputSpec, Arguments, GlobalInitResult
   table_function.py        # TableFunctionGenerator, CardinalityInfo, Output
   table_in_out_function.py # TableInOutFunction, TableInOutGeneratorFunction
-  metadata.py              # Function metadata for introspection and registration
+  metadata.py              # Function metadata for introspection
   schema_utils.py          # Schema builder helpers (schema, schema_like)
-  ipc_utils.py             # Arrow IPC serialization utilities
   worker.py                # Worker base class
   client/
     client.py              # Client class
-    __main__.py            # CLI entry point
   examples/
-    table.py               # Table functions (Sequence, Range, RandomSample, etc.)
-    table_in_out.py        # Table-in-out functions (Echo, BufferInput, SumAllColumns)
+    table.py               # Example table functions
+    table_in_out.py        # Example table-in-out functions
     worker.py              # ExampleWorker with registry
-```
-
-## Function Metadata
-
-Functions can define a nested `Meta` class to provide introspection metadata. No inheritance is required - just define the attributes you need:
-
-```python
-from vgi import TableInOutFunction, Arg
-
-class SumColumnsFunction(TableInOutFunction):
-    """Sum all numeric columns in the input."""
-
-    class Meta:
-        name = "sum_columns"  # Registration name (default: snake_case of class)
-        description = "Sum all numeric columns and return a single row"
-        categories = ["aggregation", "numeric"]
-        max_workers = 1  # Single-threaded (replaces max_processes())
-        supports_distributed = True
-
-    # Parameters are auto-extracted from Arg descriptors
-    columns = Arg[list]("columns", default=None, doc="Columns to sum")
-
-    def transform(self, batch):
-        ...
-```
-
-### Accessing Metadata
-
-```python
-# Get resolved metadata
-meta = SumColumnsFunction.get_metadata()
-print(meta.name)        # "sum_columns"
-print(meta.max_workers) # 1
-print(meta.parameters)  # [ParameterInfo(name='columns', ...)]
-
-# Get as JSON-serializable dict
-info = SumColumnsFunction.describe()
-```
-
-### Available Meta Attributes
-
-| Attribute | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `name` | `str` | Class name → snake_case | Function registration name |
-| `description` | `str` | First docstring line | Human-readable description |
-| `categories` | `list[str]` | `[]` | Classification tags |
-| `examples` | `list` | `[]` | SQL examples (str or FunctionExample) |
-| `max_workers` | `int\|None` | `None` (unlimited) | Max parallel workers |
-| `stability` | `FunctionStability` | `CONSISTENT` | Output determinism |
-| `projection_pushdown` | `bool` | `True` | Enable column pruning |
-| `filter_pushdown` | `bool` | `False` | Enable filter pushdown |
-| `preserves_order` | `OrderPreservation` | `PRESERVES_ORDER` | Row order guarantee |
-| `supports_distributed` | `bool` | `False` | Enable distributed execution |
-| `internal` | `bool` | `False` | Mark as internal function |
-
-### Metadata Inheritance
-
-Meta attributes are inherited from parent classes:
-
-```python
-class FilterFunction(TableInOutFunction):
-    class Meta:
-        categories = ["filter"]
-        preserves_order = OrderPreservation.PRESERVES_ORDER
-
-class PositiveFilter(FilterFunction):
-    class Meta:
-        description = "Keep only positive values"
-    # Inherits categories=["filter"] from parent
-```
-
-### Arrow Serialization (Worker Registration)
-
-Metadata can be serialized to Arrow for worker registration:
-
-```python
-from vgi import functions_to_arrow
-from vgi.metadata import arrow_to_functions
-
-# Worker sends available functions to client
-batch = functions_to_arrow([EchoFunction, SumFunction])
-
-# Client deserializes
-function_infos = arrow_to_functions(batch)
-for info in function_infos:
-    print(f"{info.name}: {info.description}")
 ```
 
 ## CLI Commands
 
 ```bash
-# Run example worker (has echo, buffer_input, repeat_inputs, sum_all_columns)
-vgi-example-worker
-
-# Send data through a function
+vgi-example-worker                                                    # Run example worker
 vgi-client --input data.parquet --function echo --server vgi-example-worker
 vgi-client --input data.parquet --function sum_all_columns --server vgi-example-worker
-vgi-client --input data.parquet --function repeat_inputs --args '[3]' --server vgi-example-worker
 ```
 
-## Creating a Table Function (Data Generation)
-
-Use `TableFunctionGenerator` when you need to generate data without input. Override `process()` to yield output batches:
+## Creating a Table-In-Out Function (Recommended)
 
 ```python
 import pyarrow as pa
-from vgi import TableFunctionGenerator, Output, Arg
-
-class SequenceFunction(TableFunctionGenerator):
-    """Generate a sequence of integers from 0 to n-1."""
-
-    class Meta:
-        name = "sequence"
-        max_workers = 1  # Single worker for sequential output
-
-    count = Arg[int](0, doc="Number of integers to generate")
-
-    @property
-    def output_schema(self) -> pa.Schema:
-        return pa.schema([("n", pa.int64())])
-
-    def process(self):
-        """Yield output batches (no input received)."""
-        for i in range(0, self.count, 1000):  # Batch by 1000
-            batch_size = min(1000, self.count - i)
-            values = list(range(i, i + batch_size))
-            yield Output(
-                pa.RecordBatch.from_pydict({"n": values}, schema=self.output_schema)
-            )
-```
-
-### TableFunctionGenerator Methods
-
-| Method | When to Override | Default |
-|--------|------------------|---------|
-| `process()` | Always - generate output | Required |
-| `output_schema` | Define output columns | Required |
-| `cardinality()` | Provide row count estimates | Returns None |
-| `setup()` | Acquire resources | No-op |
-| `teardown()` | Release resources | No-op |
-| `perform_init()` | Distributed init (primary) | Default impl |
-| `retrieve_init()` | Distributed init (secondary) | Default impl |
-
-### Table Function Patterns
-
-**Simple sequence:**
-```python
-def process(self):
-    for i in range(self.count):
-        yield Output(pa.RecordBatch.from_pydict(
-            {"n": [i]}, schema=self.output_schema
-        ))
-```
-
-**Batched output (recommended for large outputs):**
-```python
-BATCH_SIZE = 1000
-
-def process(self):
-    for start in range(0, self.count, self.BATCH_SIZE):
-        end = min(start + self.BATCH_SIZE, self.count)
-        values = list(range(start, end))
-        yield Output(pa.RecordBatch.from_pydict(
-            {"n": values}, schema=self.output_schema
-        ))
-```
-
-**Parallel generation with work queue:**
-```python
-def perform_init(self, init_input):
-    # Primary worker: populate work queue
-    work_items = [chunk.serialize() for chunk in self.create_chunks()]
-    self.enqueue_work(work_items)
-    return GlobalInitResult(self.init_identifier)
-
-def process(self):
-    # All workers: pull from queue until empty
-    while True:
-        work = self.dequeue_work()
-        if work is None:
-            break
-        for batch in self.generate_chunk(work):
-            yield Output(batch)
-```
-
-## Creating a Table-In-Out Function (Simple API - Recommended)
-
-Use `TableInOutFunction` for most use cases. Override `transform()` for per-batch processing and `finish()` for final output:
-
-```python
-import pyarrow as pa
-import pyarrow.compute as pc
-import structlog
-
-from vgi import TableInOutFunction, Invocation
-
+from vgi import TableInOutFunction, Arg
 
 class MyFunction(TableInOutFunction):
     """Transform each batch by doubling numeric values."""
 
-    def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
-        # Called for each input batch. Return transformed batch.
-        doubled = pc.multiply(batch.column(0), 2)
-        return batch.set_column(0, batch.schema[0].name, doubled)
-
-
-class SumFunction(TableInOutFunction):
-    """Aggregate: sum all values, emit single result."""
-
-    def __init__(self, invocation: Invocation, logger: structlog.stdlib.BoundLogger):
-        super().__init__(invocation, logger)
-        self.total = 0
+    # Declare arguments as class attributes
+    multiplier = Arg[int](0, default=2)  # positional with default
 
     @property
     def output_schema(self) -> pa.Schema:
-        return pa.schema([("sum", pa.int64())])
+        return self.input_schema  # Or custom schema
 
     def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
-        self.total += pc.sum(batch.column(0)).as_py()
-        return self.empty_output_batch  # No output during processing
+        # Called for each input batch
+        return batch
 
     def finish(self) -> list[pa.RecordBatch]:
-        return [pa.RecordBatch.from_pydict(
-            {"sum": [self.total]},
-            schema=self.output_schema
-        )]
-
-    def max_processes(self) -> int:
-        return 1  # Aggregations must be single-process
+        # Called after all input (optional)
+        return []
 ```
 
-### TableInOutFunction Methods
-
-| Method | When to Override | Default |
-|--------|------------------|---------|
-| `transform(batch)` | Per-batch transformation | Returns batch unchanged |
-| `finish()` | Final output after all input | Returns empty list |
-| `output_schema` | Different output columns | Returns input_schema |
-| `log(level, msg)` | N/A - call to emit logs | N/A |
-| `save_state()` | Distributed processing | Returns None |
-| `load_states(states)` | Distributed processing | No-op |
-
-### Logging Example
+### Aggregation Example
 
 ```python
-from vgi.log import Level
+class SumFunction(TableInOutFunction):
+    """Sum all values, emit single result."""
 
-class LoggingFunction(TableInOutFunction):
-    def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
-        self.log(Level.INFO, f"Processing {batch.num_rows} rows")
-        return batch
-```
-
-### Distributed Aggregation Example
-
-```python
-from vgi.ipc_utils import RecordBatchState
-
-class DistributedSum(TableInOutFunction):
     def __init__(self, invocation, logger):
         super().__init__(invocation, logger)
         self.total = 0
+
+    class Meta:
+        max_workers = 1  # Aggregations must be single-process
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -410,604 +124,99 @@ class DistributedSum(TableInOutFunction):
         self.total += pc.sum(batch.column(0)).as_py()
         return self.empty_output_batch
 
-    def save_state(self) -> RecordBatchState:
-        return RecordBatchState(batch=pa.RecordBatch.from_pydict(
-            {"partial": [self.total]}, schema=self.output_schema
-        ))
-
-    def load_states(self, states: list[RecordBatchState]) -> None:
-        table = pa.Table.from_batches([s.batch for s in states])
-        self.total = pc.sum(table.column(0)).as_py()
-
     def finish(self) -> list[pa.RecordBatch]:
-        return [pa.RecordBatch.from_pydict(
-            {"sum": [self.total]}, schema=self.output_schema
-        )]
+        return [pa.RecordBatch.from_pydict({"sum": [self.total]}, schema=self.output_schema)]
 ```
 
-### When to Use Each Base Class
-
-| Use Case | Base Class |
-|----------|------------|
-| **Table Functions (no input)** | |
-| Generate sequences, ranges | `TableFunctionGenerator` |
-| Generate random/test data | `TableFunctionGenerator` |
-| Parallel data generation | `TableFunctionGenerator` + work queue |
-| **Table-In-Out Functions (with input)** | |
-| Transform each batch independently | `TableInOutFunction` |
-| Aggregate to single result | `TableInOutFunction` + `finish()` |
-| Buffer all input, emit on finalize | `TableInOutFunction` + `finish()` |
-| Multiple outputs per input | `TableInOutFunction` (return list) |
-| Distributed aggregation | `TableInOutFunction` + `save_state()/load_states()` |
-| Need GeneratorExit handling | `TableInOutGeneratorFunction` |
-| Fine-grained streaming control | `TableInOutGeneratorFunction` |
-
-## Creating a Custom Function (Generator API - Advanced)
-
-For advanced streaming control, use `TableInOutGeneratorFunction` with generators:
+## Creating a Table Function (No Input)
 
 ```python
 import pyarrow as pa
-import structlog
+from vgi import TableFunctionGenerator, Output, Arg
 
-from vgi.function import Invocation
-from vgi.table_in_out_function import (
-    OutputGenerator,
-    Output,
-    TableInOutGeneratorFunction,
-)
+class SequenceFunction(TableFunctionGenerator):
+    """Generate a sequence of integers."""
 
+    class Meta:
+        max_workers = 1
 
-class MyFunction(TableInOutGeneratorFunction):
-    def __init__(self, invocation: Invocation, logger: structlog.stdlib.BoundLogger):
-        super().__init__(invocation, logger)
-        # Access arguments via self.invocation.arguments
-        # self.my_arg = self.invocation.arguments.get(0)              # positional
-        # self.my_kwarg = self.invocation.arguments.get("name", default="value")  # named
-        # Access input schema via self.input_schema (property)
+    count = Arg[int](0, doc="Number of integers")
 
     @property
     def output_schema(self) -> pa.Schema:
-        # Override to define output schema
-        # Default: returns self.input_schema (passthrough)
-        return self.input_schema
+        return pa.schema([("n", pa.int64())])
 
-    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-        # Priming yield (framework calls send(None) to advance past this)
-        _ = yield None
-
-        # Process batches - first batch comes from parameter, rest via yield
-        while True:
-            # Transform batch and yield output
-            yield Output(batch)
-            batch = yield None
-            if batch is None:
-                break
-
-    # Optional: override finalize() only if you need to emit final results
-    # def finalize(self) -> OutputGenerator | None:
-    #     _ = yield None
-    #     yield Output(final_batch)
+    def process(self):
+        for start in range(0, self.count, 1000):
+            end = min(start + 1000, self.count)
+            yield Output(pa.RecordBatch.from_pydict(
+                {"n": list(range(start, end))}, schema=self.output_schema
+            ))
 ```
 
-## Creating a Custom Worker
+## Creating a Worker
 
 ```python
 from vgi.worker import Worker
 
 class MyWorker(Worker):
-    # List function classes - names come from metadata (Meta.name or snake_case)
     functions = [MyFunction, AnotherFunction]
 
 if __name__ == "__main__":
     MyWorker().run()
 ```
 
-Note: Multiple functions can share the same name if they have different argument
-signatures (function overloading). The worker matches invocations to functions
-based on argument count and names.
+## Quick Reference
 
-## Key Patterns
-
-### 1. Passthrough (Echo)
-```python
-class EchoFunction(TableInOutGeneratorFunction):
-    pass  # Default process() passes input unchanged
-```
-
-### 2. Aggregation (emit on finalize)
-```python
-class SumFunction(TableInOutGeneratorFunction):
-    @property
-    def output_schema(self):
-        return pa.schema([pa.field("sum", pa.int64())])
-
-    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-        self.total = 0
-        _ = yield None
-
-        while True:
-            self.total += sum(batch.column("value").to_pylist())
-            batch = yield None
-            if batch is None:
-                break
-
-    def finalize(self) -> OutputGenerator:
-        _ = yield None
-        yield Output(
-            pa.RecordBatch.from_pydict(
-                {"sum": [self.total]}, schema=self.output_schema
-            )
-        )
-```
-
-### 3. Multiple outputs per input (has_more=True)
-```python
-def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-    _ = yield None
-
-    while True:
-        # Emit the same batch 3 times
-        for _ in range(3):
-            yield Output(batch, has_more=True)
-        batch = yield None
-        if batch is None:
-            break
-```
-
-### 4. Logging (yield Message directly)
-```python
-from vgi.log import Level, Message
-
-def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-    _ = yield None
-
-    while True:
-        # Emit log message - input will be re-sent after logging
-        yield Message(Level.INFO, f"Processing {batch.num_rows} rows")
-        # Process and emit result
-        yield Output(transformed_batch)
-        batch = yield None
-        if batch is None:
-            break
-```
-
-## Common Mistakes
-
-### 1. Forgetting the priming yield
-
-The generator MUST start with `_ = yield None`. This is required by the framework.
+### Imports
 
 ```python
-# ❌ WRONG - will raise TypeError on first send()
-def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-    while True:
-        yield Output(batch)
-        batch = yield None
-        if batch is None:
-            break
-
-# ✅ CORRECT
-def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-    _ = yield None  # Required priming yield
-    while True:
-        yield Output(batch)
-        batch = yield None
-        if batch is None:
-            break
-```
-
-### 2. Not checking for None at end of loop
-
-When input is exhausted, `yield None` returns `None`. You must check for this.
-
-```python
-# ❌ WRONG - infinite loop when input ends
-def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-    _ = yield None
-    while True:
-        yield Output(batch)
-        batch = yield None
-        # Missing: if batch is None: break
-
-# ✅ CORRECT
-def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-    _ = yield None
-    while True:
-        yield Output(batch)
-        batch = yield None
-        if batch is None:
-            break
-```
-
-### 3. Using walrus operator incorrectly
-
-The compact form `while batch := (yield ...)` is error-prone. Prefer the explicit pattern.
-
-```python
-# ⚠️ COMPACT but confusing - avoid unless you understand it well
-def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-    _ = yield None
-    while batch := (yield Output(batch)):
-        pass
-
-# ✅ RECOMMENDED - explicit and clear
-def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-    _ = yield None
-    while True:
-        yield Output(batch)
-        batch = yield None
-        if batch is None:
-            break
-```
-
-### 4. Initializing state in process() instead of __init__
-
-State that persists across batches should be initialized in `__init__`, not at the start of `process()`.
-
-```python
-# ⚠️ PROBLEMATIC - self.total reset on each process() call if generator restarts
-def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-    self.total = 0  # This runs once per generator, which is usually fine
-    _ = yield None
-    # ...
-
-# ✅ CLEARER - initialize in __init__
-def __init__(self, invocation, logger):
-    super().__init__(invocation, logger)
-    self.total = 0
-
-def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-    _ = yield None
-    # ...
-```
-
-### 5. Forgetting to call super().__init__()
-
-Always call the parent constructor when overriding `__init__`.
-
-```python
-# ❌ WRONG - missing super().__init__()
-def __init__(self, invocation: Invocation, logger):
-    self.my_value = invocation.arguments.get(0)
-
-# ✅ CORRECT
-def __init__(self, invocation: Invocation, logger):
-    super().__init__(invocation=invocation, logger=logger)
-    self.my_value = self.invocation.arguments.get(0)  # Access via self.invocation
-```
-
-### 6. Returning instead of yielding in finalize()
-
-`finalize()` must be a generator (using yield) or return None.
-
-```python
-# ❌ WRONG - returning a batch instead of yielding
-def finalize(self) -> OutputGenerator:
-    return Output(final_batch)  # This doesn't work!
-
-# ✅ CORRECT
-def finalize(self) -> OutputGenerator:
-    _ = yield None
-    yield Output(final_batch)
-
-# ✅ ALSO CORRECT - if no finalization needed
-def finalize(self) -> OutputGenerator | None:
-    return None
-```
-
-## LLM Quick Reference
-
-### Import Cheatsheet
-
-```python
-# Table Functions (no input - generate data)
+# Table Functions (no input)
 from vgi import TableFunctionGenerator, Output, Arg, Worker
 
 # Table-In-Out Functions (transform input)
-from vgi import TableInOutFunction, Invocation, Arg, Worker
+from vgi import TableInOutFunction, Arg, Worker
 
-# Schema helpers (for output_schema definitions)
+# Schema helpers
 from vgi import schema, schema_like
 
-# Generator API (advanced table-in-out)
-from vgi import TableInOutGeneratorFunction, Output, OutputGenerator, Invocation, Arg, Worker
-
 # Logging
-from vgi.log import Level, Message
+from vgi.log import Level
+```
 
-# Cardinality hints (optional)
-from vgi.table_function import CardinalityInfo
+### Argument Declaration
 
-# Distributed state (for parallel functions)
-from vgi.ipc_utils import RecordBatchState
-
-# Client for invoking functions
-from vgi.client import Client
+```python
+class MyFunction(TableInOutFunction):
+    count = Arg[int](0)                        # Required positional
+    multiplier = Arg[int](1, default=1)        # Optional positional
+    column = Arg[str]("column")                # Required named
+    format = Arg[str]("format", default="json") # Optional named
 ```
 
 ### Schema Helpers
 
-Use `schema()` and `schema_like()` to define output schemas with minimal boilerplate.
-
-**schema() - Build from scratch:**
-
 ```python
-from vgi import schema, TableInOutFunction
-import pyarrow as pa
+from vgi import schema, schema_like
 
-class MyFunction(TableInOutFunction):
-    @property
-    def output_schema(self) -> pa.Schema:
-        # Concise: keyword arguments map names to types
-        return schema(sum=pa.int64(), count=pa.int64(), avg=pa.float64())
-
-        # Equivalent verbose form:
-        # return pa.schema([
-        #     pa.field("sum", pa.int64()),
-        #     pa.field("count", pa.int64()),
-        #     pa.field("avg", pa.float64()),
-        # ])
-```
-
-**schema_like() - Derive from input:**
-
-```python
-from vgi import schema_like, TableInOutFunction
-import pyarrow as pa
-
-class MyFunction(TableInOutFunction):
-    @property
-    def output_schema(self) -> pa.Schema:
-        # Add a column to input schema
-        return schema_like(self.input_schema, add={"total": pa.int64()})
-
-        # Remove columns
-        return schema_like(self.input_schema, remove=["temp", "debug"])
-
-        # Rename columns
-        return schema_like(self.input_schema, rename={"old_name": "new_name"})
-
-        # Change column type (keeps position)
-        return schema_like(self.input_schema, replace={"count": pa.float64()})
-
-        # Combine operations (order: remove → rename → replace → add)
-        return schema_like(
-            self.input_schema,
-            remove=["temp"],
-            rename={"val": "value"},
-            replace={"count": pa.float64()},
-            add={"computed": pa.int64()},
-        )
-```
-
-**Common Schema Patterns:**
-
-```python
-# Aggregation output (different from input)
+# Build from scratch
 output_schema = schema(sum=pa.int64(), count=pa.int64())
 
-# Passthrough with extra column
-output_schema = schema_like(self.input_schema, add={"processed": pa.bool_()})
-
-# From a dict (programmatic)
-fields = {"a": pa.int64(), "b": pa.string()}
-output_schema = schema(fields)
-
-# Type promotion for aggregation
-output_schema = schema_like(
-    self.input_schema,
-    replace={"value": pa.float64()},  # int32 → float64 for avg
-)
+# Derive from input
+output_schema = schema_like(self.input_schema, add={"total": pa.int64()})
+output_schema = schema_like(self.input_schema, remove=["temp"])
+output_schema = schema_like(self.input_schema, rename={"old": "new"})
 ```
 
-### Type Summary
+### Method Override Summary
 
-**Function Base Classes (inheritance hierarchy):**
-
-| Type | Description | Module |
-|------|-------------|--------|
-| `Function` | Base class for all VGI functions | `vgi.function` |
-| `TableFunctionBase` | Adds cardinality, schema validation, lifecycle | `vgi.table_function` |
-| `TableFunctionGenerator` | Simple generator (no input via send) | `vgi.table_function` |
-| `TableInOutGeneratorFunction` | Full DATA/FINALIZE protocol | `vgi.table_in_out_function` |
-| `TableInOutFunction` | Callback-based API (recommended) | `vgi.table_in_out_function` |
-
-**Protocol Types:**
-
-| Type | Description | Module |
-|------|-------------|--------|
-| `Output` | Yielded from process()/finalize() | `vgi.table_in_out_function` |
-| `OutputGenerator` | Return type for process()/finalize() | `vgi.table_in_out_function` |
-| `Invocation` | Function invocation request | `vgi.function` |
-| `Arguments` | Positional and named arguments | `vgi.function` |
-| `Arg` | Descriptor for declarative argument parsing | `vgi.function` |
-
-**Infrastructure:**
-
-| Type | Description | Module |
-|------|-------------|--------|
-| `Worker` | Base class for worker processes | `vgi.worker` |
-| `Client` | Invokes functions on workers | `vgi.client` |
-| `Level` | Log severity enum | `vgi.log` |
-| `Message` | Log message object | `vgi.log` |
-| `CardinalityInfo` | Row count estimates | `vgi.table_function` |
-| `SchemaValidationError` | Exception for schema mismatches | `vgi.table_function` |
-| `RecordBatchState` | State wrapper for distributed functions | `vgi.ipc_utils` |
-| `schema` | Build schemas from keyword arguments | `vgi.schema_utils` |
-| `schema_like` | Derive schemas with modifications | `vgi.schema_utils` |
-
-**Metadata:**
-
-| Type | Description | Module |
-|------|-------------|--------|
-| `ResolvedMetadata` | Resolved function metadata | `vgi.metadata` |
-| `ParameterInfo` | Parameter metadata (from Arg) | `vgi.metadata` |
-| `FunctionExample` | SQL example for documentation | `vgi.metadata` |
-| `FunctionType` | Function type enum (SCALAR, AGGREGATE, TABLE, TABLE_IN_OUT) | `vgi.metadata` |
-| `FunctionStability` | Output stability enum (CONSISTENT, VOLATILE) | `vgi.metadata` |
-| `functions_to_arrow` | Serialize function metadata to Arrow | `vgi.metadata` |
-
-### Accessing Arguments
-
-**Option 1: Declarative with `Arg` descriptor (recommended)**
-
-Declare arguments as class attributes - no `__init__` override needed:
-
-```python
-from vgi import TableInOutFunction, Arg
-
-class MyFunction(TableInOutFunction):
-    # Required positional argument (index 0)
-    count = Arg[int](0)
-
-    # Optional positional with default
-    multiplier = Arg[int](1, default=1)
-
-    # Required named argument
-    column = Arg[str]("column")
-
-    # Optional named with default
-    format = Arg[str]("format", default="json")
-
-    def transform(self, batch):
-        # self.count, self.multiplier, etc. are available
-        # IDE knows: self.count is int, self.format is str
-        return batch
-```
-
-**Option 2: Manual via `self.invocation.arguments`**
-
-Parse arguments in `__init__`:
-
-```python
-# Access via self.invocation.arguments
-args = self.invocation.arguments
-
-# Positional arguments (by index)
-count = args.get(0)                      # Required, raises if missing
-name = args.get(1, default="unnamed")    # Optional with default
-
-# Named arguments (by string)
-separator = args.get("sep", default=",")
-threshold = args.get("threshold")        # Required
-
-# With Arrow type validation (optional)
-count = args.get(0, type=pa.int64())     # Raises TypeError if wrong type
-```
-
-### Function Skeleton Template (Table Function - No Input)
-
-```python
-import pyarrow as pa
-from vgi import TableFunctionGenerator, Output, Arg
-from vgi.table_function import CardinalityInfo
-
-class MyTableFunction(TableFunctionGenerator):
-    """One-line description.
-
-    Detailed description of what this function generates.
-    """
-
-    class Meta:
-        name = "my_table_function"
-        max_workers = 1  # Or None for parallel
-
-    # Declare arguments as class attributes
-    count = Arg[int](0, doc="Number of rows to generate")
-
-    BATCH_SIZE = 1000  # Recommended for large outputs
-
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Define the output schema."""
-        return pa.schema([("value", pa.int64())])
-
-    def cardinality(self) -> CardinalityInfo:
-        """Optional: provide row count estimate."""
-        return CardinalityInfo(estimate=self.count, max=self.count)
-
-    def process(self):
-        """Generate output batches."""
-        for start in range(0, self.count, self.BATCH_SIZE):
-            end = min(start + self.BATCH_SIZE, self.count)
-            values = list(range(start, end))
-            yield Output(
-                pa.RecordBatch.from_pydict(
-                    {"value": values}, schema=self.output_schema
-                )
-            )
-```
-
-### Function Skeleton Template (Table-In-Out - Recommended)
-
-```python
-import pyarrow as pa
-from vgi import TableInOutFunction, Arg
-
-class MyFunction(TableInOutFunction):
-    """One-line description.
-
-    Detailed description of what this function does.
-    """
-
-    # Declare arguments as class attributes (no __init__ needed)
-    # count = Arg[int](0)                        # Required positional
-    # separator = Arg[str]("sep", default=",")   # Optional named
-
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return output schema (default: passthrough)."""
-        return self.input_schema  # Or build custom schema
-
-    def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
-        """Transform each input batch."""
-        # Your transformation here
-        return batch
-
-    def finish(self) -> list[pa.RecordBatch]:
-        """Emit final results (optional)."""
-        return []  # Or return list of batches
-```
-
-### Function Skeleton Template (Generator API - Advanced)
-
-```python
-import pyarrow as pa
-from vgi import TableInOutGeneratorFunction, Output, OutputGenerator, Arg
-
-class MyFunction(TableInOutGeneratorFunction):
-    """One-line description.
-
-    Detailed description of what this function does.
-    """
-
-    # Declare arguments as class attributes (no __init__ needed)
-    # count = Arg[int](0)                        # Required positional
-    # separator = Arg[str]("sep", default=",")   # Optional named
-
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return output schema (default: passthrough)."""
-        return self.input_schema  # Or build custom schema
-
-    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-        """Process input batches."""
-        _ = yield None  # REQUIRED: priming yield
-
-        while True:
-            # Transform batch here
-            result = batch  # Your transformation
-            yield Output(result)
-
-            batch = yield None
-            if batch is None:
-                break
-
-    def finalize(self) -> OutputGenerator | None:
-        """Emit final results (optional)."""
-        return None  # Or implement if needed
-```
+| Method | When to Override | Default |
+|--------|------------------|---------|
+| `output_schema` | Change output columns | Returns input_schema |
+| `transform(batch)` | Per-batch processing | Returns batch unchanged |
+| `finish()` | Final output after all input | Returns empty list |
+| `setup()` | Acquire resources | No-op |
+| `teardown()` | Release resources | No-op |
 
 ### Pattern Decision Tree
 
@@ -1016,201 +225,18 @@ Need to implement a VGI function?
 │
 ├─ Does the function receive input data?
 │  │
-│  ├─ NO (generate data from scratch)
-│  │  └─ Use TableFunctionGenerator
-│  │     ├─ Sequential output? Set max_workers=1
-│  │     ├─ Parallel generation? Use work queue pattern
-│  │     └─ Override process() to yield Output batches
+│  ├─ NO → Use TableFunctionGenerator
+│  │       Override process() to yield Output batches
 │  │
-│  └─ YES (transform input data)
-│     │
-│     ├─ No transformation needed?
-│     │  └─ class Echo(TableInOutFunction): pass
-│     │
-│     ├─ Transform each batch independently?
-│     │  └─ Override transform() → returns pa.RecordBatch
-│     │
-│     ├─ Produce multiple outputs per input?
-│     │  └─ Override transform() → returns list[pa.RecordBatch]
-│     │
-│     ├─ Aggregate across all batches?
-│     │  └─ Accumulate in transform(), emit in finish()
-│     │      └─ Set max_processes() -> 1
-│     │
-│     ├─ Buffer all input, emit on finalize?
-│     │  └─ Buffer in transform(), return in finish()
-│     │      └─ Set max_processes() -> 1
-│     │
-│     ├─ Need GeneratorExit handling or distributed state?
-│     │  └─ Use TableInOutGeneratorFunction (generator API)
-│     │
-│     └─ Need fine-grained streaming control?
-│        └─ Use TableInOutGeneratorFunction (generator API)
+│  └─ YES → Use TableInOutFunction
+│           ├─ Transform each batch? → Override transform()
+│           ├─ Aggregate results? → Accumulate in transform(), emit in finish()
+│           └─ Need generator control? → See docs/generator-api.md
 ```
 
-### Status Values (in IPC metadata)
+## Additional Documentation
 
-| Status | Meaning |
-|--------|---------|
-| `NEED_MORE_INPUT` | Ready for next input batch |
-| `HAVE_MORE_OUTPUT` | Call send() again for more output |
-| `FINISHED` | Processing complete |
-
-### Method Override Summary
-
-| Method | When to Override | Default Behavior |
-|--------|------------------|------------------|
-| `__init__` | Init state, access invocation | Stores invocation, validates schema |
-| `output_schema` | Change output columns | Returns input_schema |
-| `process()` | Transform data | Passthrough |
-| `finalize()` | Emit final/aggregated data | Returns None |
-| `max_processes()` | Limit parallelism | Returns 99999 |
-| `cardinality()` | Provide row estimates | Returns None |
-| `setup()` | Acquire resources | No-op |
-| `teardown()` | Release resources | No-op |
-
-### Function Lifecycle
-
-Understanding when lifecycle methods are called is critical for resource management
-and distributed processing.
-
-#### Single-Process Lifecycle (max_processes=1)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  __init__(invocation, logger)                                   │
-│    ↓                                                            │
-│  output_schema (property accessed)                              │
-│    ↓                                                            │
-│  perform_init(init_batch) → GlobalInitResult                    │
-│    ↓                                                            │
-│  setup()  ← Acquire resources here (DB connections, files)      │
-│    ↓                                                            │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  process(batch1) → OutputGenerator                      │    │
-│  │    ↓                                                    │    │
-│  │  [yield outputs for batch1]                             │    │
-│  │    ↓                                                    │    │
-│  │  process receives batch2 via yield                      │    │
-│  │    ↓                                                    │    │
-│  │  [yield outputs for batch2]                             │    │
-│  │    ↓                                                    │    │
-│  │  ... (repeat for all batches)                           │    │
-│  │    ↓                                                    │    │
-│  │  process receives None (end of input)                   │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│    ↓                                                            │
-│  finalize() → OutputGenerator                                   │
-│    ↓                                                            │
-│  [yield final outputs]                                          │
-│    ↓                                                            │
-│  teardown()  ← Release resources here (always called)           │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-#### Multi-Process Lifecycle (max_processes > 1)
-
-When `max_processes() > 1`, the client spawns multiple worker processes.
-One becomes the **primary worker** (runs finalize), others are **secondary workers**.
-
-**Primary Worker:**
-```
-__init__ → output_schema → perform_init → setup → process → finalize → teardown
-```
-
-**Secondary Workers:**
-```
-__init__ → output_schema → retrieve_init → setup → process → teardown
-                                                      ↓
-                                              (NO finalize!)
-```
-
-**Key Differences:**
-
-| Aspect | Primary Worker | Secondary Workers |
-|--------|---------------|-------------------|
-| `perform_init()` called? | Yes | No |
-| `retrieve_init()` called? | No | Yes |
-| `finalize()` called? | Yes | No |
-| `teardown()` called? | Yes (after finalize) | Yes (after process ends) |
-| Receives all batches? | Subset (round-robin) | Subset (round-robin) |
-
-#### Lifecycle with save_state/load_states (Distributed Aggregation)
-
-For distributed aggregations, state flows from secondary workers to primary:
-
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                         SECONDARY WORKERS                                 │
-│  ┌────────────────────┐  ┌────────────────────┐  ┌────────────────────┐  │
-│  │ Worker 1           │  │ Worker 2           │  │ Worker N           │  │
-│  │ setup()            │  │ setup()            │  │ setup()            │  │
-│  │ process(batches)   │  │ process(batches)   │  │ process(batches)   │  │
-│  │ save_state() ──────┼──┼─────────┬──────────┼──┼→ SQLite Storage    │  │
-│  │ teardown()         │  │ teardown()         │  │ teardown()         │  │
-│  └────────────────────┘  └─────────│──────────┘  └────────────────────┘  │
-│                                    ↓                                      │
-│                         ┌──────────────────────┐                          │
-│                         │   PRIMARY WORKER     │                          │
-│                         │ setup()              │                          │
-│                         │ process(batches)     │                          │
-│                         │ save_state() ────────┼→ SQLite Storage          │
-│                         │ load_states() ←──────┼─ (collects ALL states)   │
-│                         │ finalize()           │                          │
-│                         │ teardown()           │                          │
-│                         └──────────────────────┘                          │
-└──────────────────────────────────────────────────────────────────────────┘
-```
-
-**Timing Guarantees:**
-
-1. `save_state()` is called automatically when the process generator closes
-2. Secondary workers' `teardown()` completes BEFORE primary's `load_states()`
-3. Primary's `load_states()` receives states from ALL workers (including itself)
-4. `teardown()` is ALWAYS called, even if an exception occurs
-
-#### Resource Management Best Practices
-
-```python
-class MyFunction(TableInOutFunction):
-    def setup(self) -> None:
-        """Acquire resources. Called once per worker."""
-        self.db_conn = sqlite3.connect("my.db")
-        self.temp_file = tempfile.NamedTemporaryFile()
-
-    def teardown(self) -> None:
-        """Release resources. ALWAYS called, even on error."""
-        if hasattr(self, 'db_conn'):
-            self.db_conn.close()
-        if hasattr(self, 'temp_file'):
-            self.temp_file.close()
-
-    def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
-        # Safe to use self.db_conn here
-        return batch
-```
-
-**Anti-Pattern: Don't acquire resources in __init__:**
-```python
-# ❌ WRONG - resources acquired before setup()
-def __init__(self, invocation, logger):
-    super().__init__(invocation, logger)
-    self.db_conn = sqlite3.connect("my.db")  # Too early!
-
-# ✅ CORRECT - acquire in setup()
-def setup(self) -> None:
-    self.db_conn = sqlite3.connect("my.db")
-```
-
-#### When to Use Each Lifecycle Hook
-
-| Hook | Use For | Example |
-|------|---------|---------|
-| `__init__` | Parse arguments, initialize simple state | `self.total = 0` |
-| `setup()` | Acquire external resources | DB connections, file handles |
-| `process()` | Transform/accumulate data | Main processing logic |
-| `save_state()` | Persist partial results (distributed) | Serialize aggregation state |
-| `load_states()` | Merge worker states (primary only) | Combine partial aggregations |
-| `finalize()` | Emit final results | Output aggregation results |
-| `teardown()` | Release external resources | Close connections, delete temp files |
-
+- **Protocol details**: `docs/protocol.md`
+- **Function metadata**: `docs/metadata.md`
+- **Function lifecycle**: `docs/lifecycle.md`
+- **Generator API (advanced)**: `docs/generator-api.md`
