@@ -417,6 +417,7 @@ class Client:
             correlation_id=self.correlation_id,
             invocation_id=None,
             client_features=client_features,
+            attach_id=self._attach_id,
         )
         call_parameters_batch_bytes = initial_request.serialize()
 
@@ -650,6 +651,7 @@ class Client:
         correlation_id: str = "",
         passthrough_stderr: bool = False,
         max_workers: int | None = None,
+        attach_id: bytes | None = None,
     ):
         """Initialize the VGI client.
 
@@ -672,6 +674,9 @@ class Client:
                 overrides the function's max_processes when that value exceeds
                 this limit. Also capped by os.cpu_count(). If None, uses the
                 function's max_processes (still capped by CPU count).
+            attach_id: Optional unique identifier for the DuckDB database
+                attachment. When VGI is used from an attached database, this
+                allows tracing calls back to that specific attachment.
 
         Example:
             >>> client = Client("vgi-example-worker", max_workers=4)
@@ -684,6 +689,7 @@ class Client:
         self.correlation_id = correlation_id
         self.passthrough_stderr = passthrough_stderr
         self._max_workers = max_workers
+        self._attach_id = attach_id
         self._proc: subprocess.Popen[bytes] | None = None
         self._stdout_buffered: io.BufferedReader | None = None
         self._stdin_sink: pa.PythonFile | None = None

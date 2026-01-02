@@ -192,6 +192,16 @@ def main() -> None:
             'table input at position 1, resulting in ("prefix", TABLE_INPUT).'
         ),
     )
+    @click.option(
+        "--attach-id",
+        "attach_id",
+        type=str,
+        default=None,
+        help=(
+            "Unique identifier for the DuckDB database attachment as a hex string. "
+            "Used to trace calls back to a specific attachment."
+        ),
+    )
     def cli(
         input_file: str | None,
         output_file: str | None,
@@ -203,6 +213,7 @@ def main() -> None:
         projection_ids: tuple[int, ...],
         max_workers: int | None,
         table_input_position: int | None,
+        attach_id: str | None,
     ) -> None:
         """Invoke a VGI function and display results."""
         try:
@@ -232,12 +243,25 @@ def main() -> None:
         # Convert args_list to PyArrow scalars
         positional_args = tuple(pa.scalar(arg) for arg in args_list)
 
+        # Parse attach_id from hex string if provided
+        attach_id_bytes: bytes | None = None
+        if attach_id is not None:
+            try:
+                attach_id_bytes = bytes.fromhex(attach_id)
+            except ValueError as e:
+                raise click.ClickException(
+                    f"Invalid --attach-id: must be a valid hex string: {e}"
+                ) from e
+
         log.info("starting_server", function=function_name, server_path=server_path)
 
         output_writer: OutputWriter | None = None
         try:
             with Client(
-                server_path, passthrough_stderr=worker_stderr, max_workers=max_workers
+                server_path,
+                passthrough_stderr=worker_stderr,
+                max_workers=max_workers,
+                attach_id=attach_id_bytes,
             ) as client:
                 if input_file is None:
                     # Table function (no input) - use table_function method

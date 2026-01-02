@@ -194,6 +194,9 @@ class Invocation:
         client_features: Feature flags supported by the client. The worker will
             respond with active_features in OutputSpec indicating which features
             will be used for this invocation.
+        attach_id: Optional unique identifier for the DuckDB database attachment.
+            When VGI is used from an attached database, this allows tracing calls
+            back to that specific attachment. None when not using attached databases.
 
     Example:
         invocation = Invocation(
@@ -216,6 +219,7 @@ class Invocation:
     global_init_identifier: GlobalInitResult | None = None
     arguments: Arguments = Arguments()
     client_features: frozenset[str] = frozenset()
+    attach_id: bytes | None = None
 
     def with_global_init_identifier(
         self, global_init_identifier: GlobalInitResult
@@ -257,6 +261,7 @@ class Invocation:
                         else None
                     ),
                     "client_features": list(self.client_features),
+                    "attach_id": self.attach_id,
                 }
             ],
             schema=pa.schema(
@@ -274,6 +279,7 @@ class Invocation:
                         nullable=True,
                     ),
                     pa.field("client_features", pa.list_(pa.utf8()), nullable=False),
+                    pa.field("attach_id", pa.binary(), nullable=True),
                 ]
             ),
         )
@@ -326,6 +332,11 @@ class Invocation:
             if features_list is not None:
                 client_features = frozenset(features_list)
 
+        # Parse attach_id - optional field for database attachment tracking
+        attach_id: bytes | None = None
+        if "attach_id" in data.schema.names:
+            attach_id = first_row.get("attach_id")
+
         return Invocation(
             function_name=first_row["function_name"],
             arguments=Arguments.decode(data.column("arguments")[0]),
@@ -334,6 +345,7 @@ class Invocation:
             correlation_id=first_row["correlation_id"],
             global_init_identifier=global_init_identifier,
             client_features=client_features,
+            attach_id=attach_id,
         )
 
     @staticmethod
