@@ -12,3 +12,8 @@ wheels/
 # Mypy reports
 mypy-reports/
 mypy-html-report/
+
+# Coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
