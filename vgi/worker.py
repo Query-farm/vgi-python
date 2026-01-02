@@ -84,6 +84,7 @@ from vgi.function import (
     OutputSpec,
 )
 from vgi.ipc_utils import read_ipc_batch
+from vgi.scalar_function import ProtocolInput as ScalarProtocolInput
 from vgi.scalar_function import ScalarFunctionGenerator
 from vgi.table_function import TableFunctionGenerator
 from vgi.table_in_out_function import (
@@ -339,7 +340,7 @@ class Worker:
                     input_rows=batch.num_rows,
                 )
 
-                protocol_input = ProtocolInput(batch=batch, metadata=metadata)
+                protocol_input = ScalarProtocolInput(batch=batch, metadata=metadata)
                 output = generator.send(protocol_input)
 
                 # Handle log messages (HAVE_MORE_OUTPUT)

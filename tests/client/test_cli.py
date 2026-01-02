@@ -580,3 +580,288 @@ class TestCLIErrorHandling:
         assert result.exit_code == 0
         # Should have JSON output
         assert "n" in result.output
+
+
+class TestCLIScalarFunction:
+    """Tests for CLI scalar function invocation with --type scalar."""
+
+    @pytest.fixture
+    def scalar_input_parquet(self, tmp_path: Path) -> Path:
+        """Create a parquet file suitable for scalar function tests."""
+        batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3, 4, 5]})
+        input_file = tmp_path / "scalar_input.parquet"
+        pq.write_table(pa.Table.from_batches([batch]), str(input_file))
+        return input_file
+
+    def test_scalar_function_invocation(
+        self, example_worker: str, scalar_input_parquet: Path
+    ) -> None:
+        """Invoke a scalar function with --type scalar."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--input",
+                str(scalar_input_parquet),
+                "--function",
+                "double_column",
+                "--args",
+                '["x"]',
+                "--type",
+                "scalar",
+                "--server",
+                example_worker,
+            ],
+        )
+        assert result.exit_code == 0
+
+    def test_scalar_function_with_output_file(
+        self, example_worker: str, scalar_input_parquet: Path, tmp_path: Path
+    ) -> None:
+        """Scalar function with output to file."""
+        output_file = tmp_path / "output.jsonl"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--input",
+                str(scalar_input_parquet),
+                "--output",
+                str(output_file),
+                "--format",
+                "json",
+                "--function",
+                "double_column",
+                "--args",
+                '["x"]',
+                "--type",
+                "scalar",
+                "--server",
+                example_worker,
+            ],
+        )
+        assert result.exit_code == 0
+        assert output_file.exists()
+        lines = output_file.read_text().strip().split("\n")
+        # Should have 5 rows
+        assert len(lines) == 5
+        # Verify first row is doubled
+        first_row = json.loads(lines[0])
+        assert first_row["result"] == 2
+
+    def test_scalar_function_parquet_output(
+        self, example_worker: str, scalar_input_parquet: Path, tmp_path: Path
+    ) -> None:
+        """Scalar function with parquet output."""
+        output_file = tmp_path / "output.parquet"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--input",
+                str(scalar_input_parquet),
+                "--output",
+                str(output_file),
+                "--format",
+                "parquet",
+                "--function",
+                "double_column",
+                "--args",
+                '["x"]',
+                "--type",
+                "scalar",
+                "--server",
+                example_worker,
+            ],
+        )
+        assert result.exit_code == 0
+        # Verify parquet output
+        table = pq.read_table(str(output_file))
+        assert table.num_rows == 5
+        assert table.column_names == ["result"]
+        assert table.column("result").to_pylist() == [2, 4, 6, 8, 10]
+
+    def test_scalar_type_requires_input(self, example_worker: str) -> None:
+        """--type scalar requires --input."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--function",
+                "double_column",
+                "--args",
+                '["x"]',
+                "--type",
+                "scalar",
+                "--server",
+                example_worker,
+            ],
+        )
+        assert result.exit_code != 0
+        assert "requires --input" in result.output
+
+    def test_table_in_out_type_requires_input(self, example_worker: str) -> None:
+        """--type table-in-out requires --input."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--function",
+                "echo",
+                "--type",
+                "table-in-out",
+                "--server",
+                example_worker,
+            ],
+        )
+        assert result.exit_code != 0
+        assert "requires --input" in result.output
+
+    def test_table_type_rejects_input(
+        self, example_worker: str, scalar_input_parquet: Path
+    ) -> None:
+        """--type table does not accept --input."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--input",
+                str(scalar_input_parquet),
+                "--function",
+                "sequence",
+                "--args",
+                "[5]",
+                "--type",
+                "table",
+                "--server",
+                example_worker,
+            ],
+        )
+        assert result.exit_code != 0
+        assert "does not accept --input" in result.output
+
+    def test_auto_type_with_input_uses_table_in_out(
+        self, example_worker: str, scalar_input_parquet: Path, tmp_path: Path
+    ) -> None:
+        """--type auto with --input uses table-in-out (echo function)."""
+        output_file = tmp_path / "output.jsonl"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--input",
+                str(scalar_input_parquet),
+                "--output",
+                str(output_file),
+                "--format",
+                "json",
+                "--function",
+                "echo",
+                "--type",
+                "auto",
+                "--server",
+                example_worker,
+            ],
+        )
+        assert result.exit_code == 0
+        # Echo should preserve the original column name "x"
+        content = output_file.read_text()
+        assert '"x"' in content
+
+    def test_auto_type_without_input_uses_table(
+        self, example_worker: str, tmp_path: Path
+    ) -> None:
+        """--type auto without --input uses table function."""
+        output_file = tmp_path / "output.jsonl"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--output",
+                str(output_file),
+                "--format",
+                "json",
+                "--function",
+                "sequence",
+                "--args",
+                "[3]",
+                "--type",
+                "auto",
+                "--server",
+                example_worker,
+            ],
+        )
+        assert result.exit_code == 0
+        lines = output_file.read_text().strip().split("\n")
+        assert len(lines) == 3
+
+    def test_scalar_with_add_columns(
+        self, example_worker: str, tmp_path: Path
+    ) -> None:
+        """Test add_columns scalar function via CLI."""
+        # Create input with two columns
+        batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3], "b": [10, 20, 30]})
+        input_file = tmp_path / "input.parquet"
+        pq.write_table(pa.Table.from_batches([batch]), str(input_file))
+
+        output_file = tmp_path / "output.jsonl"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--input",
+                str(input_file),
+                "--output",
+                str(output_file),
+                "--format",
+                "json",
+                "--function",
+                "add_columns",
+                "--args",
+                '["a", "b"]',
+                "--type",
+                "scalar",
+                "--server",
+                example_worker,
+            ],
+        )
+        assert result.exit_code == 0
+        lines = output_file.read_text().strip().split("\n")
+        assert len(lines) == 3
+        # Verify sums
+        results = [json.loads(line)["result"] for line in lines]
+        assert results == [11, 22, 33]
+
+    def test_scalar_with_upper_case(
+        self, example_worker: str, tmp_path: Path
+    ) -> None:
+        """Test upper_case scalar function via CLI."""
+        batch = pa.RecordBatch.from_pydict({"name": ["alice", "bob"]})
+        input_file = tmp_path / "input.parquet"
+        pq.write_table(pa.Table.from_batches([batch]), str(input_file))
+
+        output_file = tmp_path / "output.jsonl"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--input",
+                str(input_file),
+                "--output",
+                str(output_file),
+                "--format",
+                "json",
+                "--function",
+                "upper_case",
+                "--args",
+                '["name"]',
+                "--type",
+                "scalar",
+                "--server",
+                example_worker,
+            ],
+        )
+        assert result.exit_code == 0
+        lines = output_file.read_text().strip().split("\n")
+        results = [json.loads(line)["result"] for line in lines]
+        assert results == ["ALICE", "BOB"]

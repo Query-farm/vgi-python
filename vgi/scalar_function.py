@@ -44,14 +44,31 @@ __all__ = [
 ]
 
 
-# Protocol types - reuse from table_in_out_function
+# Protocol types - reuse Output/OutputGenerator from table_in_out_function
 from vgi.table_in_out_function import (  # noqa: E402
     Output,
     OutputGenerator,
-    ProtocolInput,
     ProtocolOutput,
     _OutputStatus,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ProtocolInput:
+    """Input sent to the scalar function generator via send().
+
+    This is a simplified version of table_in_out_function.ProtocolInput
+    without finalization support, since scalar functions don't have a
+    finalize phase.
+
+    Attributes:
+        batch: The input RecordBatch to process.
+        metadata: Optional metadata from the IPC stream.
+
+    """
+
+    batch: pa.RecordBatch
+    metadata: pa.KeyValueMetadata | None = None
 
 
 @dataclass(frozen=True, slots=True)
