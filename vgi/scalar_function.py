@@ -278,12 +278,12 @@ class ScalarFunctionGenerator(vgi.table_function.TableFunctionBase):
         """Run the scalar function protocol. Do not override.
 
         This generator implements the SETUP -> DATA -> TEARDOWN lifecycle.
-        No FINALIZE phase for scalar functions.
+        The generator is closed by the caller when input is exhausted.
 
         Protocol:
             - Caller primes with next() or send(None)
             - Caller sends ProtocolInput for each batch
-            - When input exhausted, generator closes (no FINALIZE signal needed)
+            - When input exhausted, caller closes the generator
         """
         # Priming yield - caller calls next() or send(None)
         input: ProtocolInput | None = yield ProtocolOutput(
@@ -300,8 +300,8 @@ class ScalarFunctionGenerator(vgi.table_function.TableFunctionBase):
         generator.send(None)
 
         try:
-            # DATA phase - no FINALIZE for scalar functions
-            while not input.is_finalize:
+            # DATA phase - process batches until generator is closed
+            while True:
                 result = self._process_with_exception_handling(generator, input.batch)
 
                 # Determine status based on result
@@ -320,11 +320,6 @@ class ScalarFunctionGenerator(vgi.table_function.TableFunctionBase):
                     raise ValueError("Expected ProtocolInput, got None")
                 if self._should_terminate(result):
                     return
-
-            # When FINALIZE signal comes, just emit FINISHED (no finalize phase)
-            yield ProtocolOutput(
-                batch=self.empty_output_batch, status=_OutputStatus.FINISHED
-            )
         finally:
             generator.close()
             # Release resources after processing completes

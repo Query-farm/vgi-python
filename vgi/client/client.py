@@ -1818,16 +1818,14 @@ class Client:
         """Invoke a scalar function on the worker and stream results.
 
         Scalar functions transform input batches to single-column output with
-        1:1 row mapping. Unlike table_in_out_function, scalar functions have
-        no finalize phase - processing ends when input is exhausted.
+        1:1 row mapping. Processing ends when input is exhausted.
 
         Processing flow:
         1. Reads the first input batch to determine the input schema
         2. Sends Invocation to worker and receives bind result
         3. Spawns additional workers if max_processes > 1
         4. Distributes input batches to workers (round-robin for parallel mode)
-        5. Collects output batches, handling HAVE_MORE_OUTPUT for log messages
-        6. Returns when input is exhausted (no FINALIZE signal)
+        5. Collects and yields output batches
 
         For parallel processing (max_processes > 1), input batches are distributed
         round-robin across workers using dedicated threads. Output order may not
@@ -1915,7 +1913,6 @@ class Client:
     ) -> Generator[pa.RecordBatch, None, None]:
         """Process scalar function batches across one or more workers using threads.
 
-        Similar to _table_in_out_function_parallel but without finalization.
         Handles both single-worker and multi-worker cases uniformly.
 
         Processing flow:
@@ -1925,7 +1922,7 @@ class Client:
         4. Signals end-of-input to all workers via None sentinel
         5. Collects all output batches from shared output queue
         6. Waits for worker threads to complete
-        7. Closes all workers (no finalize phase)
+        7. Closes all workers
 
         Args:
             input_batch: The first input batch, already consumed from the
@@ -1937,8 +1934,7 @@ class Client:
 
         Yields:
             Output RecordBatches from processing, in non-deterministic order for
-            multi-worker mode. When multiple batches are returned for a single
-            input (HAVE_MORE_OUTPUT for logs), they are combined into one batch.
+            multi-worker mode.
 
         Raises:
             ClientError: If a worker thread fails with an exception.
@@ -2020,7 +2016,6 @@ class Client:
         self._join_threads(threads)
         log.debug("all_scalar_worker_threads_complete")
 
-        # Close all workers (no finalize for scalar functions)
         # Close data writers to signal EOF to workers
         for worker in all_workers:
             if worker.data_writer is not None:
