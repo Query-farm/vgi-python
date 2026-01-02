@@ -5,9 +5,11 @@ from __future__ import annotations
 import time
 
 import pyarrow as pa
+import pytest
 
 from tests.utils import make_schema
 from vgi.client import Client
+from vgi.client.client import ClientError
 
 
 class TestClientLifecycle:
@@ -19,6 +21,38 @@ class TestClientLifecycle:
             assert client._proc is not None
         # After context exit, process should be cleaned up
         assert client._proc is None
+
+    def test_start_when_already_started_raises(self, example_worker: str) -> None:
+        """Starting an already-started client should raise ClientError."""
+        client = Client(example_worker)
+        client.start()
+        try:
+            with pytest.raises(ClientError, match="already started"):
+                client.start()
+        finally:
+            client.stop()
+
+    def test_stop_when_not_started_raises(self, example_worker: str) -> None:
+        """Stopping a client that wasn't started should raise ClientError."""
+        client = Client(example_worker)
+        with pytest.raises(ClientError, match="not started"):
+            client.stop()
+
+    def test_table_in_out_function_not_started_raises(
+        self, example_worker: str
+    ) -> None:
+        """Calling table_in_out_function before start should raise ClientError."""
+        client = Client(example_worker)
+        schema = make_schema([pa.field("id", pa.int64())])
+        batch = pa.RecordBatch.from_pydict({"id": [1]}, schema=schema)
+
+        with pytest.raises(ClientError, match="not started"):
+            list(
+                client.table_in_out_function(
+                    function_name="echo",
+                    input=iter([batch]),
+                )
+            )
 
 
 class TestEdgeCases:
