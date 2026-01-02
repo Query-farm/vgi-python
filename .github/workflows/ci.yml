@@ -49,5 +49,8 @@ jobs:
       - name: Check linting
         run: uv run ruff check .
 
-      - name: Type check
+      - name: Type check (mypy)
         run: uv run mypy vgi/
+
+      - name: Type check (ty)
+        run: uv run ty check vgi/
