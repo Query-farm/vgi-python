@@ -59,6 +59,8 @@ Classes and functions exported from this module:
 
     TableInOutFunction       - Callback-based API (recommended)
     TableInOutGeneratorFunction - Generator-based API (advanced)
+    ScalarFunction           - Scalar function with compute() (single-column output)
+    ScalarFunctionGenerator  - Scalar function with generator protocol
     Output                   - Output batch from process()/finalize()
     OutputGenerator          - Type alias for process()/finalize()
     StreamingGenerator       - Type alias for @streaming decorated methods
@@ -110,12 +112,14 @@ ADDITIONAL MODULES
 CLASS HIERARCHY
 ---------------
     vgi.function.Function                - Base (max_processes, invocation_id)
-    └─ vgi.table_function.TableFunction  - Adds cardinality hints, projection
-       └─ TableInOutGeneratorFunction             - Full streaming (process/finalize)
-          └─ TableInOutFunction    - Callback API (transform/finish)
-             ├─ AggregationFunction - Reduce to summary
-             ├─ FilterFunction      - Row filtering
-             └─ MapFunction         - Column transformation
+    └─ vgi.table_function.TableFunctionBase - Adds cardinality hints, projection
+       ├─ TableInOutGeneratorFunction   - Full streaming (process/finalize)
+       │  └─ TableInOutFunction         - Callback API (transform/finish)
+       │     ├─ AggregationFunction     - Reduce to summary
+       │     ├─ FilterFunction          - Row filtering
+       │     └─ MapFunction             - Column transformation
+       └─ ScalarFunctionGenerator       - Single-column output (1:1 rows)
+          └─ ScalarFunction             - Callback API (compute)
 
 Examples
 --------
@@ -142,7 +146,9 @@ from vgi.metadata import (
     TableInputValidationError,
     functions_to_arrow,
 )
+from vgi.scalar_function import ScalarFunction, ScalarFunctionGenerator
 from vgi.schema_utils import schema, schema_like
+from vgi.table_function import RowCountMismatchError
 from vgi.table_in_out_function import (
     Output,
     OutputGenerator,
@@ -178,6 +184,9 @@ __all__ = [
     "OutputGenerator",
     "ParameterInfo",
     "ResolvedMetadata",
+    "RowCountMismatchError",
+    "ScalarFunction",
+    "ScalarFunctionGenerator",
     "StreamingGenerator",
     "TableInOutFunction",
     "TableInOutGeneratorFunction",

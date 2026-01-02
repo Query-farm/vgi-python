@@ -4,14 +4,20 @@ This demonstrates how to create a worker by subclassing Worker
 and listing function classes. Function names are derived from
 each class's metadata (Meta.name or snake_case of class name).
 
-The worker supports both:
+The worker supports:
 - TableInOutGeneratorFunction: Transforms input batches to output batches
 - TableFunctionGenerator: Generates output batches without input
+- ScalarFunctionGenerator: Transforms input to single-column output (1:1 rows)
 
 Usage:
     vgi-example-worker
 """
 
+from vgi.examples.scalar import (
+    AddColumnsFunction,
+    DoubleColumnFunction,
+    UpperCaseFunction,
+)
 from vgi.examples.table import (
     ConstantTableFunction,
     GeneratorExceptionFunction,
@@ -59,6 +65,10 @@ class ExampleWorker(Worker):
         LoggingGeneratorFunction,
         PartitionedRangeFunction,
         ProjectedDataFunction,
+        # ScalarFunctionGenerator - transform to single-column output
+        DoubleColumnFunction,
+        AddColumnsFunction,
+        UpperCaseFunction,
     ]
 
 

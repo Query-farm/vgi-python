@@ -84,6 +84,13 @@ import structlog.stdlib
 
 from vgi.function import Arguments, Invocation
 from vgi.log import Level, Message
+from vgi.scalar_function import (
+    ProtocolInput as ScalarProtocolInput,
+)
+from vgi.scalar_function import (
+    ScalarFunction,
+    ScalarFunctionGenerator,
+)
 from vgi.table_function import (
     GlobalStateInitInput,
     TableFunctionGenerator,
@@ -103,12 +110,15 @@ __all__ = [
     "FunctionTestClient",
     "FunctionTestClientError",
     "TableFunctionTestClient",
+    "ScalarFunctionTestClient",
     "batch",
     "assert_function_output",
     "assert_function_logs",
     "run_function",
     "run_table_function",
     "assert_table_function_output",
+    "run_scalar_function",
+    "assert_scalar_function_output",
 ]
 
 
@@ -859,6 +869,326 @@ def assert_table_function_output(
         args=args,
         kwargs=kwargs,
         projection_ids=projection_ids,
+    )
+
+    prefix = f"{msg}: " if msg else ""
+
+    # Check batch count
+    if len(outputs) != len(expected):
+        actual_rows = [o.num_rows for o in outputs]
+        expected_rows = [e.num_rows for e in expected]
+        raise AssertionError(
+            f"{prefix}Expected {len(expected)} output batches, got {len(outputs)}. "
+            f"Output rows: {actual_rows}, Expected rows: {expected_rows}"
+        )
+
+    # Compare batches
+    if check_order:
+        for i, (actual, exp) in enumerate(zip(outputs, expected, strict=True)):
+            if not actual.equals(exp):
+                raise AssertionError(
+                    f"{prefix}Batch {i} mismatch.\n"
+                    f"Expected:\n{exp.to_pydict()}\n"
+                    f"Got:\n{actual.to_pydict()}"
+                )
+    else:
+        # Convert to sets of dicts for unordered comparison
+        actual_dicts = [b.to_pydict() for b in outputs]
+        expected_dicts = [b.to_pydict() for b in expected]
+
+        for exp_dict in expected_dicts:
+            if exp_dict not in actual_dicts:
+                raise AssertionError(
+                    f"{prefix}Expected batch not found in output.\n"
+                    f"Expected:\n{exp_dict}\n"
+                    f"Actual outputs:\n{actual_dicts}"
+                )
+
+    return logs
+
+
+# =============================================================================
+# Scalar Function Test Client and Helpers
+# =============================================================================
+
+
+class ScalarFunctionTestClient:
+    """In-process client for testing ScalarFunction and ScalarFunctionGenerator.
+
+    Scalar functions transform input batches to single-column output with 1:1
+    row mapping. Unlike TableInOut functions, scalar functions have no finalize
+    phase.
+
+    Example:
+        with ScalarFunctionTestClient(DoubleColumnFunction) as client:
+            outputs = list(client.scalar_function(
+                input=iter([batch]),
+                arguments=Arguments(positional=(pa.scalar("x"),)),
+            ))
+
+    Attributes:
+        logs: List of log messages emitted during the last function call.
+
+    """
+
+    def __init__(
+        self,
+        function_class: type[ScalarFunctionGenerator] | type[ScalarFunction],
+    ) -> None:
+        """Initialize the ScalarFunctionTestClient.
+
+        Args:
+            function_class: The scalar function class to test (not an instance).
+
+        """
+        self.function_class = function_class
+        self.logs: list[Message] = []
+        self._logger: structlog.stdlib.BoundLogger = structlog.get_logger().bind(
+            component="scalar_test_client"
+        )
+
+    def __enter__(self) -> "ScalarFunctionTestClient":
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
+        """Exit context manager."""
+        pass
+
+    def scalar_function(
+        self,
+        *,
+        input: Iterator[pa.RecordBatch],
+        arguments: Arguments | None = None,
+        bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
+    ) -> Generator[pa.RecordBatch, None, None]:
+        """Call the scalar function with the given input data.
+
+        This method implements the VGI scalar function protocol directly in-process,
+        without any IPC or subprocess communication.
+
+        Args:
+            input: Iterator yielding input RecordBatches.
+            arguments: Arguments container with positional and named arguments.
+            bind_result_callback: Optional callback invoked with the bind result.
+
+        Yields:
+            Output RecordBatches from the function (single-column).
+
+        Raises:
+            FunctionTestClientError: If the function raises an exception.
+
+        """
+        # Clear logs from previous invocation
+        self.logs = []
+
+        if arguments is None:
+            arguments = Arguments()
+
+        # Get first batch to determine input schema
+        try:
+            first_batch = next(input)
+        except StopIteration:
+            # No input batches - nothing to process
+            return
+
+        input_schema = first_batch.schema
+
+        # Create invocation
+        invocation_id = uuid.uuid4().bytes
+        invocation = Invocation(
+            function_name=self.function_class.__name__,
+            arguments=arguments,
+            in_out_function_input_schema=input_schema,
+            correlation_id="test",
+            invocation_id=invocation_id,
+        )
+
+        # Instantiate function
+        func = self.function_class(invocation=invocation, logger=self._logger)
+
+        # Create bind result for callback
+        if bind_result_callback is not None:
+            bind_batch = pa.RecordBatch.from_pylist(
+                [
+                    {
+                        "output_schema": func.output_schema.serialize().to_pybytes(),
+                        "max_processes": func.max_processes(),
+                        "invocation_id": invocation_id,
+                    }
+                ],
+                schema=pa.schema(
+                    cast(
+                        list[tuple[str, pa.DataType]],
+                        [
+                            ("output_schema", pa.binary()),
+                            ("max_processes", pa.int64()),
+                            ("invocation_id", pa.binary()),
+                        ],
+                    )
+                ),
+            )
+            bind_result_callback(bind_batch)
+
+        # Get the run generator
+        generator = func.run()
+
+        # Prime the generator
+        try:
+            priming_output = next(generator)
+            assert priming_output.status == _OutputStatus.NEED_MORE_INPUT
+        except StopIteration:
+            return
+
+        # Process first batch
+        yield from self._process_scalar_batch(generator, first_batch)
+
+        # Process remaining batches
+        for batch in input:
+            yield from self._process_scalar_batch(generator, batch)
+
+        # No finalize for scalar functions - just close
+        generator.close()
+
+    def _process_scalar_batch(
+        self,
+        generator: Generator[ProtocolOutput, ScalarProtocolInput | None, None],
+        batch: pa.RecordBatch,
+    ) -> Generator[pa.RecordBatch, None, None]:
+        """Process a single input batch, handling HAVE_MORE_OUTPUT for logs."""
+        while True:
+            try:
+                output = generator.send(ScalarProtocolInput(batch=batch))
+            except StopIteration:
+                return
+
+            # Capture log message if present
+            if output.log_message is not None:
+                self.logs.append(output.log_message)
+                # Check for exception
+                if output.log_message.level == Level.EXCEPTION:
+                    raise FunctionTestClientError(output.log_message.message)
+
+            # Yield output batch if it has rows
+            if output.batch is not None and output.batch.num_rows > 0:
+                yield output.batch
+
+            # Check status
+            if output.status == _OutputStatus.HAVE_MORE_OUTPUT:
+                # Re-send the same batch to get more output (log messages)
+                continue
+            elif output.status == _OutputStatus.NEED_MORE_INPUT:
+                # Ready for next input batch
+                break
+            elif output.status == _OutputStatus.FINISHED:
+                # Scalar function ended
+                return
+            else:
+                raise FunctionTestClientError(f"Unexpected status: {output.status}")
+
+
+def run_scalar_function(
+    function: type[ScalarFunctionGenerator] | type[ScalarFunction],
+    input_batches: list[pa.RecordBatch],
+    args: tuple[Any, ...] | None = None,
+    kwargs: dict[str, Any] | None = None,
+) -> tuple[list[pa.RecordBatch], list[Message]]:
+    """Run a scalar function and return outputs and logs.
+
+    A convenience wrapper around ScalarFunctionTestClient for simple test cases.
+
+    Args:
+        function: The scalar function class to test.
+        input_batches: List of input RecordBatches.
+        args: Optional positional arguments as a tuple.
+        kwargs: Optional named arguments as a dict.
+
+    Returns:
+        Tuple of (output_batches, log_messages).
+
+    Example:
+        outputs, logs = run_scalar_function(
+            DoubleColumnFunction,
+            [batch(x=[1, 2, 3])],
+            args=("x",),
+        )
+        assert outputs[0].to_pydict() == {"result": [2, 4, 6]}
+
+    """
+    # Build Arguments from args/kwargs
+    positional: tuple[pa.Scalar[Any], ...] = ()
+    named: dict[str, pa.Scalar[Any]] = {}
+
+    if args:
+        positional = tuple(pa.scalar(a) for a in args)
+    if kwargs:
+        named = {k: pa.scalar(v) for k, v in kwargs.items()}
+
+    arguments = Arguments(positional=positional, named=named)
+
+    with ScalarFunctionTestClient(function) as client:
+        outputs = list(
+            client.scalar_function(
+                input=iter(input_batches),
+                arguments=arguments,
+            )
+        )
+        return outputs, client.logs
+
+
+def assert_scalar_function_output(
+    function: type[ScalarFunctionGenerator] | type[ScalarFunction],
+    input: list[pa.RecordBatch],
+    expected: list[pa.RecordBatch],
+    args: tuple[Any, ...] | None = None,
+    kwargs: dict[str, Any] | None = None,
+    check_order: bool = True,
+    msg: str | None = None,
+) -> list[Message]:
+    """Assert that a scalar function produces expected output batches.
+
+    Runs the function with the given input and compares output to expected batches.
+    Returns captured log messages for additional assertions.
+
+    Args:
+        function: The scalar function class to test.
+        input: List of input RecordBatches.
+        expected: List of expected output RecordBatches.
+        args: Optional positional arguments as a tuple.
+        kwargs: Optional named arguments as a dict.
+        check_order: If True, order of output batches must match. Default True.
+        msg: Optional custom assertion message prefix.
+
+    Returns:
+        List of log messages captured during execution.
+
+    Raises:
+        AssertionError: If output doesn't match expected.
+        FunctionTestClientError: If the function raises an exception.
+
+    Examples:
+        # Double column test
+        assert_scalar_function_output(
+            DoubleColumnFunction,
+            input=[batch(x=[1, 2, 3])],
+            expected=[batch(result=[2, 4, 6])],
+            args=("x",),
+        )
+
+        # Add columns test
+        assert_scalar_function_output(
+            AddColumnsFunction,
+            input=[batch(a=[1, 2], b=[10, 20])],
+            expected=[batch(result=[11, 22])],
+            args=("a", "b"),
+        )
+
+    """
+    outputs, logs = run_scalar_function(
+        function=function,
+        input_batches=input,
+        args=args,
+        kwargs=kwargs,
     )
 
     prefix = f"{msg}: " if msg else ""

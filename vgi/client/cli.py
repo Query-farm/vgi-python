@@ -1,4 +1,4 @@
-"""Command-line interface for the VGI client.
+r"""Command-line interface for the VGI client.
 
 This module provides the CLI entry point for invoking VGI functions.
 
@@ -11,6 +11,10 @@ Usage:
     # Table functions (no input):
     vgi-client --function sequence --args '[100]'
     vgi-client --function range --args '[0, 10]'
+
+    # Scalar functions (with input, single-column output):
+    vgi-client --input data.parquet --function double_column \
+        --args '["x"]' --type scalar
 
     # Specify table input position (for functions where TableInput isn't first):
     vgi-client --input data.parquet --function transform --args '["prefix"]' \
@@ -204,6 +208,16 @@ def _create_cli() -> Any:
             "Used to trace calls back to a specific attachment."
         ),
     )
+    @click.option(
+        "--type",
+        "function_type",
+        type=click.Choice(["auto", "table", "table-in-out", "scalar"]),
+        default="auto",
+        help=(
+            "Function type. 'auto' (default) uses table-in-out if --input is provided, "
+            "otherwise table. Use 'scalar' for scalar functions."
+        ),
+    )
     def cli(
         input_file: str | None,
         output_file: str | None,
@@ -216,6 +230,7 @@ def _create_cli() -> Any:
         max_workers: int | None,
         table_input_position: int | None,
         attach_id: str | None,
+        function_type: str,
     ) -> None:
         """Invoke a VGI function and display results."""
         try:
@@ -257,6 +272,18 @@ def _create_cli() -> Any:
 
         log.info("starting_server", function=function_name, server_path=server_path)
 
+        # Validate function_type requirements
+        if function_type == "scalar" and input_file is None:
+            raise click.ClickException("--type scalar requires --input to be specified")
+        if function_type == "table-in-out" and input_file is None:
+            raise click.ClickException(
+                "--type table-in-out requires --input to be specified"
+            )
+        if function_type == "table" and input_file is not None:
+            raise click.ClickException(
+                "--type table does not accept --input (table functions have no input)"
+            )
+
         output_writer: OutputWriter | None = None
         try:
             with Client(
@@ -265,16 +292,37 @@ def _create_cli() -> Any:
                 max_workers=max_workers,
                 attach_id=attach_id_bytes,
             ) as client:
-                if input_file is None:
-                    # Table function (no input) - use table_function method
+                # Determine effective function type
+                if function_type == "auto":
+                    effective_type = "table" if input_file is None else "table-in-out"
+                else:
+                    effective_type = function_type
+
+                if effective_type == "table":
+                    # Table function (no input)
                     log.info("invoking_table_function", function=function_name)
                     output_iterator = client.table_function(
                         function_name=function_name,
                         arguments=Arguments(positional=positional_args, named={}),
                         projection_ids=list(projection_ids) if projection_ids else None,
                     )
+                elif effective_type == "scalar":
+                    # Scalar function (with input, single-column output)
+                    assert input_file is not None  # Validated earlier
+                    log.info("invoking_scalar_function", function=function_name)
+                    log.info("reading_input", file=input_file)
+                    pf = pq.ParquetFile(input_file)
+
+                    output_iterator = client.scalar_function(
+                        function_name=function_name,
+                        arguments=Arguments(positional=positional_args, named={}),
+                        input=pf.iter_batches(),
+                        projection_ids=list(projection_ids) if projection_ids else None,
+                    )
                 else:
-                    # Table-in-out function - use table_in_out_function method
+                    # Table-in-out function (with input)
+                    assert input_file is not None  # Validated earlier
+                    log.info("invoking_table_in_out_function", function=function_name)
                     log.info("reading_input", file=input_file)
                     pf = pq.ParquetFile(input_file)
 

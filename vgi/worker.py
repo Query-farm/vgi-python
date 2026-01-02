@@ -84,10 +84,12 @@ from vgi.function import (
     OutputSpec,
 )
 from vgi.ipc_utils import read_ipc_batch
+from vgi.scalar_function import ScalarFunctionGenerator
 from vgi.table_function import TableFunctionGenerator
 from vgi.table_in_out_function import (
     ProtocolInput,
     TableInOutGeneratorFunction,
+    _OutputStatus,
 )
 
 
@@ -278,6 +280,97 @@ class Worker:
         """Read and parse the init data from stdin."""
         return self._read_ipc_batch("init_data")
 
+    def _process_scalar_batches(
+        self,
+        instance: ScalarFunctionGenerator,
+        invocation: Invocation,
+        fn_log: structlog.stdlib.BoundLogger,
+    ) -> WorkerStats:
+        """Process data batches through a scalar function.
+
+        Similar to _process_batches but simplified:
+        - No FINALIZE phase (ends when input exhausted)
+        - HAVE_MORE_OUTPUT only used for log messages (not multiple output batches)
+
+        Returns:
+            WorkerStats with batch_count, total_input_rows, total_output_rows.
+
+        """
+        if invocation.global_init_identifier is None:
+            raise ValueError(
+                "global_init_identifier is required but was None. "
+                "This is an internal protocol error - the worker should have set "
+                "global_init_identifier after perform_init() completed successfully."
+            )
+        generator = instance.run()
+        next(generator)  # Prime the run() generator
+
+        with (
+            ipc.new_stream(cast(IOBase, sys.stdout), instance.output_schema) as writer,
+            ipc.open_stream(cast(IOBase, sys.stdin)) as data_reader,
+        ):
+            # Validate data stream schema matches expected input schema
+            if data_reader.schema != invocation.in_out_function_input_schema:
+                expected = invocation.in_out_function_input_schema
+                raise ValueError(
+                    f"Data stream schema mismatch. Expected: {expected}, "
+                    f"got: {data_reader.schema}"
+                )
+
+            batch_count = 0
+            total_input_rows = 0
+            total_output_rows = 0
+            while True:
+                fn_log.debug("batch_waiting")
+
+                try:
+                    batch, metadata = data_reader.read_next_batch_with_custom_metadata()
+                except StopIteration:
+                    fn_log.debug("input_stream_ended")
+                    # Close the generator - no FINALIZE for scalar functions
+                    generator.close()
+                    break
+
+                batch_count += 1
+                total_input_rows += batch.num_rows
+                fn_log.debug(
+                    "batch_received",
+                    batch_index=batch_count,
+                    input_rows=batch.num_rows,
+                )
+
+                protocol_input = ProtocolInput(batch=batch, metadata=metadata)
+                output = generator.send(protocol_input)
+
+                # Handle log messages (HAVE_MORE_OUTPUT)
+                while output.status == _OutputStatus.HAVE_MORE_OUTPUT:
+                    fn_log.debug("log_message_received", output=output)
+                    assert output.batch is not None
+                    writer.write_batch(
+                        output.batch, custom_metadata=output.metadata(invocation)
+                    )
+                    # Re-send same input to continue
+                    output = generator.send(protocol_input)
+
+                fn_log.debug("batch_processed", output=output)
+                assert output.batch is not None
+                output_rows = output.batch.num_rows
+                total_output_rows += output_rows
+                writer.write_batch(
+                    output.batch, custom_metadata=output.metadata(invocation)
+                )
+                fn_log.debug(
+                    "batch_written",
+                    batch_index=batch_count,
+                    output_rows=output_rows,
+                    status=output.status.value if output.status else None,
+                )
+        return WorkerStats(
+            batch_count=batch_count,
+            total_input_rows=total_input_rows,
+            total_output_rows=total_output_rows,
+        )
+
     def _process_batches(
         self,
         instance: TableInOutGeneratorFunction,
@@ -467,21 +560,26 @@ class Worker:
             instance.retrieve_init(invocation.global_init_identifier)
 
         # Dispatch to appropriate processing method based on function type.
+        # ScalarFunctionGenerator processes input batches to single-column output.
         # TableInOutGeneratorFunction reads input batches and produces output.
         # TableFunctionGenerator generates output without input batches.
-        # Note: Check TableInOutGeneratorFunction first since it's more specific
-        # (TableFunctionGenerator is a parent of TableInOutGeneratorFunction's parent).
-        if isinstance(instance, TableInOutGeneratorFunction):
+        # Note: Check ScalarFunctionGenerator first since it doesn't inherit from
+        # TableInOutGeneratorFunction, then TableInOutGeneratorFunction.
+        if isinstance(instance, ScalarFunctionGenerator):
+            stats = self._process_scalar_batches(instance, invocation, fn_log)
+        elif isinstance(instance, TableInOutGeneratorFunction):
             stats = self._process_batches(instance, invocation, fn_log)
         elif isinstance(instance, TableFunctionGenerator):
             stats = self._generate_batches(instance, invocation, fn_log)
         else:
             raise TypeError(
                 f"Unsupported function type: {type(instance).__name__}. "
-                f"Functions must inherit from TableInOutGeneratorFunction (for "
-                f"functions that process input batches) or TableFunctionGenerator "
-                f"(for functions that generate output without input). "
-                f"See vgi.table_in_out_function and vgi.table_function modules."
+                f"Functions must inherit from ScalarFunctionGenerator (for "
+                f"scalar functions), TableInOutGeneratorFunction (for functions "
+                f"that process input batches), or TableFunctionGenerator (for "
+                f"functions that generate output without input). "
+                f"See vgi.scalar_function, vgi.table_in_out_function, and "
+                f"vgi.table_function modules."
             )
 
         fn_log.info(

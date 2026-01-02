@@ -40,6 +40,7 @@ __all__ = [
     "OutputGenerator",
     "OutputSpec",
     "ProtocolOutput",
+    "RowCountMismatchError",
     "SchemaValidationError",
     "TableFunctionBase",
     "TableFunctionGenerator",
@@ -52,6 +53,15 @@ class SchemaValidationError(Exception):
     This error is raised by the framework during input/output validation.
     It indicates a programming error where a batch doesn't conform to the
     declared schema.
+    """
+
+
+class RowCountMismatchError(Exception):
+    """Raised when scalar function output row count doesn't match input.
+
+    Scalar functions must produce exactly one output row for each input row.
+    This error indicates the compute() method returned an array with the
+    wrong number of elements.
     """
 
 
