@@ -42,6 +42,9 @@ warn_unused_ignores = true
 module = "structlog.*"
 ignore_missing_imports = true
 
+[tool.ty.environment]
+python-version = "3.12"
+
 [tool.pytest.ini_options]
 addopts = "--mypy --ruff"
 testpaths = ["tests"]
@@ -50,4 +53,5 @@ testpaths = ["tests"]
 dev = [
     "lxml>=6.0.2",
     "pytest-timeout>=2.4.0",
+    "ty>=0.0.8",
 ]

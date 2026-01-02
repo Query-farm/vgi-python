@@ -1255,7 +1255,7 @@ class Client:
             )
             self._stderr_thread.start()
 
-        self._stdout_buffered = io.BufferedReader(self._proc.stdout)
+        self._stdout_buffered = io.BufferedReader(cast(io.RawIOBase, self._proc.stdout))
         assert self._proc.stdin is not None, "stdin pipe not created for worker"
         self._stdin_sink = pa.PythonFile(cast(io.IOBase, self._proc.stdin))
 
