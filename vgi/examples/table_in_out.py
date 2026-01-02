@@ -1,7 +1,19 @@
-"""Example table-in/table-out function implementations.
+"""Example table-in/table-out function implementations for testing VGI.
 
-This module contains ready-to-use table functions that demonstrate common patterns.
-Each function is documented to serve as a reference for implementing new functions.
+WARNING: EXAMPLE/TEST FUNCTIONS ONLY
+-------------------------------------
+These functions are reference implementations for testing and validating the VGI
+protocol. They are NOT intended for production use. The VGI protocol will have
+multiple implementations (Python, Go, JavaScript), and these examples serve as:
+
+1. Protocol conformance tests - Verify implementations correctly handle the
+   VGI streaming protocol (DATA, FINALIZE, HAVE_MORE_OUTPUT, etc.)
+2. Pattern demonstrations - Show how to implement common function patterns
+3. Cross-implementation test cases - Ensure consistent behavior across languages
+
+Production considerations like memory limits, error recovery, and performance
+optimizations are intentionally omitted to keep the examples simple and focused
+on protocol correctness.
 
 AVAILABLE FUNCTIONS
 -------------------
@@ -101,9 +113,10 @@ class BufferInputFunction(TableInOutGeneratorFunction):
     buffered_batches: list[pa.RecordBatch]
         Accumulates all input batches in memory (instance attribute).
 
-    Warning:
-    -------
-    Memory usage grows with input size. Not suitable for very large datasets.
+    Note:
+    ----
+    This is a test/example function for protocol validation. Memory buffering is
+    intentional to test the FINALIZE phase of the VGI protocol.
 
     Example:
     -------
