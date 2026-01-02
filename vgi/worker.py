@@ -79,7 +79,6 @@ from vgi.function import (
     Function,
     Invocation,
     OutputSpec,
-    negotiate_protocol_version,
 )
 from vgi.ipc_utils import read_ipc_batch
 from vgi.table_function import TableFunctionGenerator
@@ -420,19 +419,21 @@ class Worker:
         # Instantiate the function
         instance = func_cls(invocation=invocation, logger=fn_log)
 
-        # Negotiate protocol version with client
-        negotiated_version = negotiate_protocol_version(invocation.protocol_version)
+        # Determine active features from client features
+        # Worker can define supported features; active = intersection
+        worker_features: frozenset[str] = frozenset()  # No features supported yet
+        active_features = invocation.client_features & worker_features
         fn_log.debug(
-            "protocol_version_negotiated",
-            client_version=invocation.protocol_version,
-            negotiated_version=negotiated_version,
+            "features_negotiated",
+            client_features=invocation.client_features,
+            active_features=active_features,
         )
 
         bind_result_bytes = OutputSpec(
             output_schema=instance.output_schema,
             max_processes=instance.max_processes(),
             invocation_id=instance.create_invocation_id(),
-            protocol_version=negotiated_version,
+            active_features=active_features,
         ).serialize()
 
         if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):

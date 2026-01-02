@@ -30,8 +30,8 @@ import pyarrow as pa
 import structlog
 
 import vgi.function
+import vgi.ipc_utils
 import vgi.log
-import vgi.util
 
 __all__ = [
     "CardinalityInfo",
@@ -104,7 +104,7 @@ class GlobalStateInitInput:
             [pa.array([self.projection_ids], type=pa.list_(pa.int32()))],
             schema=pa.schema([pa.field("projection_ids", pa.list_(pa.int32()))]),
         )
-        return vgi.util.recordbatch_to_bytes(batch)
+        return vgi.ipc_utils.serialize_record_batch(batch)
 
     @staticmethod
     def deserialize(batch: pa.RecordBatch) -> "GlobalStateInitInput":
@@ -116,7 +116,7 @@ class GlobalStateInitInput:
     @staticmethod
     def deserialize_bytes(data: bytes) -> "GlobalStateInitInput":
         """Deserialize GlobalStateInitInput from bytes."""
-        batch = vgi.util.bytes_to_recordbatch(data)
+        batch = vgi.ipc_utils.deserialize_record_batch(data)
         return GlobalStateInitInput.deserialize(batch)
 
 

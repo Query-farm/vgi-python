@@ -66,11 +66,9 @@ import structlog
 from pyarrow import ipc
 
 from vgi.function import (
-    PROTOCOL_VERSION,
     Arguments,
     GlobalInitResult,
     Invocation,
-    ProtocolVersionError,
 )
 from vgi.ipc_utils import IPCError, read_ipc_batch
 from vgi.table_function import GlobalStateInitInput
@@ -114,7 +112,7 @@ class _BindResult:
     max_processes: int
     invocation_id: bytes | None
     output_schema: pa.Schema
-    protocol_version: tuple[int, int] | None
+    active_features: frozenset[str]
     raw_batch: pa.RecordBatch
 
 
@@ -234,22 +232,22 @@ class Client:
         """Parse the bind result batch from a worker into structured data.
 
         Extracts function metadata from the worker's bind response, including
-        max_processes (cast to int32), invocation_id, protocol version (if
-        present), and the output schema (deserialized from IPC bytes).
+        max_processes (cast to int32), invocation_id, active_features,
+        and the output schema (deserialized from IPC bytes).
 
         Args:
             batch: The bind result RecordBatch from the worker. Expected columns:
                 - max_processes: Maximum parallel workers the function supports
                 - invocation_id: Unique identifier for this invocation (bytes)
                 - output_schema: IPC-serialized Arrow schema for output batches
-                - protocol_version_major/minor: Optional protocol version fields
+                - active_features: List of feature flags active for this invocation
 
         Returns:
             A _BindResult dataclass containing:
                 - max_processes: int, the function's parallelism limit
                 - invocation_id: bytes or None, unique invocation identifier
                 - output_schema: pa.Schema, deserialized output schema
-                - protocol_version: tuple[int, int] or None, (major, minor) version
+                - active_features: frozenset[str], features active for this invocation
                 - raw_batch: The original RecordBatch for reference
 
         """
@@ -263,16 +261,14 @@ class Client:
         )
         invocation_id = invocation_id_array.to_pylist()[0]
 
-        # Extract protocol version if present
-        protocol_version: tuple[int, int] | None = None
-        if "protocol_version_major" in batch.schema.names:
-            worker_major = batch.column(
-                batch.schema.get_field_index("protocol_version_major")
+        # Extract active features - default to empty set for backward compatibility
+        active_features: frozenset[str] = frozenset()
+        if "active_features" in batch.schema.names:
+            features_list = batch.column(
+                batch.schema.get_field_index("active_features")
             ).to_pylist()[0]
-            worker_minor = batch.column(
-                batch.schema.get_field_index("protocol_version_minor")
-            ).to_pylist()[0]
-            protocol_version = (worker_major, worker_minor)
+            if features_list is not None:
+                active_features = frozenset(features_list)
 
         # Extract output schema
         output_schema_bytes = batch.column(
@@ -284,45 +280,40 @@ class Client:
             max_processes=max_processes,
             invocation_id=invocation_id,
             output_schema=output_schema,
-            protocol_version=protocol_version,
+            active_features=active_features,
             raw_batch=batch,
         )
 
-    def _validate_protocol_version(
-        self, protocol_version: tuple[int, int] | None
+    def _validate_features(
+        self,
+        requested: frozenset[str],
+        active: frozenset[str],
     ) -> None:
-        """Validate that the worker's protocol version is compatible with the client.
+        """Validate that the worker activated only features we support.
 
-        Checks that the major version matches between client and worker. Minor
-        version differences are allowed (backward compatible). If the worker
-        did not report a protocol version, validation is skipped (assumed
-        compatible for older workers).
+        Checks that the active features returned by the worker are a subset
+        of the features the client requested. This ensures the worker doesn't
+        activate features the client cannot handle.
 
         Args:
-            protocol_version: The worker's protocol version as a (major, minor)
-                tuple, or None if the worker did not report a version.
+            requested: The client_features sent in the Invocation.
+            active: The active_features returned in the OutputSpec.
 
         Raises:
-            ProtocolVersionError: If the major version differs between client
-                and worker. The error message includes both versions.
+            ClientError: If the worker activated features not requested by
+                the client.
 
         """
-        if protocol_version is None:
-            return  # No version info, assume compatible
-
-        worker_major, worker_minor = protocol_version
-
-        if worker_major != PROTOCOL_VERSION[0]:
-            raise ProtocolVersionError(
-                f"Protocol version mismatch: client uses major version "
-                f"{PROTOCOL_VERSION[0]}, worker responded with major version "
-                f"{worker_major}. Major versions must match."
+        if not active <= requested:
+            unexpected = active - requested
+            raise ClientError(
+                f"Worker activated unsupported features: {unexpected}"
             )
 
         log.debug(
-            "protocol_version_validated",
-            client_version=PROTOCOL_VERSION,
-            worker_version=protocol_version,
+            "features_validated",
+            requested_features=requested,
+            active_features=active,
         )
 
     def _determine_max_processes(self, requested: int) -> int:
@@ -407,7 +398,7 @@ class Client:
             ClientError: If the worker process is not started, or if reading
                 the bind result or init result fails.
             OSError: If writing the Invocation or GlobalStateInitInput fails.
-            ProtocolVersionError: If the worker's protocol version is incompatible.
+            ClientError: If the worker activated unsupported features.
 
         """
         if self._stdin_sink is None or self._stdout_buffered is None:
@@ -416,12 +407,16 @@ class Client:
         # Send initialization batch
         log.debug("sending_init_batch", function=function_name, arguments=arguments)
 
+        # Client features - currently empty, will be populated as features are added
+        client_features: frozenset[str] = frozenset()
+
         initial_request = Invocation(
             function_name=function_name,
             arguments=arguments,
             in_out_function_input_schema=input_schema,
             correlation_id=self.correlation_id,
             invocation_id=None,
+            client_features=client_features,
         )
         call_parameters_batch_bytes = initial_request.serialize()
 
@@ -444,15 +439,15 @@ class Client:
 
         bind_result = self._parse_bind_result(bind_result_batch)
 
-        # Validate protocol version
-        self._validate_protocol_version(bind_result.protocol_version)
+        # Validate features
+        self._validate_features(client_features, bind_result.active_features)
 
         # Apply limits to max_processes
         bind_result = _BindResult(
             max_processes=self._determine_max_processes(bind_result.max_processes),
             invocation_id=bind_result.invocation_id,
             output_schema=bind_result.output_schema,
-            protocol_version=bind_result.protocol_version,
+            active_features=bind_result.active_features,
             raw_batch=bind_result.raw_batch,
         )
 

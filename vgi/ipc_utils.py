@@ -8,6 +8,8 @@ KEY FUNCTIONS
 serialize_record_batch(batch) : Serialize RecordBatch to bytes
 deserialize_record_batch(data) : Deserialize bytes to RecordBatch
 read_ipc_batch(stream, context) : Read schema + batch from stream
+validate_single_row_batch(batch, class_name, required_fields)
+    : Validate batch has exactly one row and return as dict
 
 KEY CLASSES
 -----------
@@ -51,7 +53,7 @@ vgi.function.Function.collect_states : Collect states from all workers
 """
 
 from dataclasses import dataclass
-from typing import Any, Self, cast
+from typing import Any, Self
 
 import pyarrow as pa
 from pyarrow import ipc
@@ -62,19 +64,22 @@ class IPCError(Exception):
 
 
 def serialize_record_batch(batch: pa.RecordBatch) -> bytes:
-    """Serialize a RecordBatch to bytes using Arrow IPC stream format.
+    """Serialize a RecordBatch to bytes (schema message + batch message).
+
+    This format is compatible with both ipc.open_stream() for reading
+    and manual message reading via ipc.read_message().
 
     Args:
         batch: The RecordBatch to serialize.
 
     Returns:
-        Bytes containing the serialized RecordBatch.
+        Concatenated schema and batch bytes for IPC transmission.
 
     """
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, batch.schema) as writer:
-        writer.write_batch(batch)
-    return cast(bytes, sink.getvalue().to_pybytes())
+    result: bytes = (
+        batch.schema.serialize().to_pybytes() + batch.serialize().to_pybytes()
+    )
+    return result
 
 
 def deserialize_record_batch(data: bytes) -> pa.RecordBatch:
@@ -122,6 +127,48 @@ def read_ipc_batch(
     if msg.type != "record batch":
         raise IPCError(f"Expected record batch for {context}, got {msg.type}")
     return ipc.read_record_batch(msg, schema)
+
+
+def validate_single_row_batch(
+    data: pa.RecordBatch,
+    class_name: str,
+    required_fields: list[str] | None = None,
+) -> dict[str, Any]:
+    """Validate a RecordBatch has exactly one row and return it as a dict.
+
+    Args:
+        data: The RecordBatch to validate.
+        class_name: Name of the class being deserialized (for error messages).
+        required_fields: Optional list of field names that must be present.
+
+    Returns:
+        The first (and only) row as a dictionary.
+
+    Raises:
+        ValueError: If the batch is empty, has multiple rows, or is missing
+            required fields.
+
+    """
+    if data.num_rows == 0:
+        raise ValueError(f"Cannot deserialize {class_name} from empty RecordBatch")
+    if data.num_rows > 1:
+        raise ValueError(
+            f"Expected single-row RecordBatch for {class_name} deserialization, "
+            f"got {data.num_rows} rows"
+        )
+
+    first_row: dict[str, Any] = data.to_pylist()[0]
+
+    if required_fields:
+        found_fields = set(first_row.keys())
+        missing = [f for f in required_fields if f not in found_fields]
+        if missing:
+            raise ValueError(
+                f"Missing fields in {class_name} RecordBatch: {missing}. "
+                f"Found: {sorted(found_fields)}"
+            )
+
+    return first_row
 
 
 @dataclass

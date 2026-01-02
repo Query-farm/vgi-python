@@ -29,18 +29,13 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self, TypeVar
 import pyarrow as pa
 import structlog
 
-import vgi.util
+import vgi.ipc_utils
 from vgi.arguments import Arg, Arguments, ArgumentValidationError
 from vgi.log import Level, Message
 from vgi.metadata import MetadataMixin, ResolvedMetadata
 
 if TYPE_CHECKING:
     pass
-
-# Protocol version as (major, minor) tuple.
-# Major version changes indicate breaking changes requiring code updates.
-# Minor version changes are backward-compatible additions.
-PROTOCOL_VERSION = (1, 0)
 
 __all__ = [
     "Arg",
@@ -51,53 +46,11 @@ __all__ = [
     "Level",
     "Message",
     "OutputSpec",
-    "PROTOCOL_VERSION",
-    "ProtocolVersionError",
     "Invocation",
     "Serializable",
     "SqliteInitStorage",
     "SqliteWorkerStateStorage",
-    "negotiate_protocol_version",
 ]
-
-
-class ProtocolVersionError(Exception):
-    """Raised when protocol version negotiation fails."""
-
-
-def negotiate_protocol_version(
-    client_version: tuple[int, int],
-    worker_version: tuple[int, int] = PROTOCOL_VERSION,
-) -> tuple[int, int]:
-    """Negotiate the protocol version between client and worker.
-
-    The negotiated version is the highest version both sides support.
-    Major versions must match; minor version is the minimum of both.
-
-    Args:
-        client_version: Protocol version tuple (major, minor) from client.
-        worker_version: Protocol version tuple (major, minor) the worker supports.
-
-    Returns:
-        The negotiated protocol version tuple (major, minor).
-
-    Raises:
-        ProtocolVersionError: If major versions are incompatible.
-
-    """
-    client_major, client_minor = client_version
-    worker_major, worker_minor = worker_version
-
-    if client_major != worker_major:
-        raise ProtocolVersionError(
-            f"Protocol version mismatch: client uses major version {client_major}, "
-            f"worker uses major version {worker_major}. "
-            f"Major versions must match."
-        )
-
-    # Use the minimum minor version both sides support
-    negotiated_minor = min(client_minor, worker_minor)
-    return (client_major, negotiated_minor)
 
 
 class Serializable(Protocol):
@@ -196,7 +149,7 @@ class GlobalInitResult:
             ],
             schema=self.schema(),
         )
-        return vgi.util.recordbatch_to_bytes(batch)
+        return vgi.ipc_utils.serialize_record_batch(batch)
 
     @classmethod
     def deserialize(cls, data: pa.RecordBatch) -> "GlobalInitResult":
@@ -209,7 +162,7 @@ class GlobalInitResult:
           Deserialized GlobalInitResult instance.
 
         """
-        first_row = vgi.util.validate_single_row_batch(
+        first_row = vgi.ipc_utils.validate_single_row_batch(
             data, "GlobalInitResult", required_fields=[cls._IDENTIFIER_FIELD_NAME]
         )
         return GlobalInitResult(
@@ -238,8 +191,9 @@ class Invocation:
         invocation_id: Unique bytes identifying this function binding. Used to
             correlate multiple parallel workers processing the same logical call.
         global_init_identifier: Optional result from global initialization phase.
-        protocol_version: Protocol version tuple (major, minor) that the client
-            supports. The worker will respond with its version in OutputSpec.
+        client_features: Feature flags supported by the client. The worker will
+            respond with active_features in OutputSpec indicating which features
+            will be used for this invocation.
 
     Example:
         invocation = Invocation(
@@ -261,7 +215,7 @@ class Invocation:
 
     global_init_identifier: GlobalInitResult | None = None
     arguments: Arguments = Arguments()
-    protocol_version: tuple[int, int] = PROTOCOL_VERSION
+    client_features: frozenset[str] = frozenset()
 
     def with_global_init_identifier(
         self, global_init_identifier: GlobalInitResult
@@ -302,8 +256,7 @@ class Invocation:
                         if self.global_init_identifier
                         else None
                     ),
-                    "protocol_version_major": self.protocol_version[0],
-                    "protocol_version_minor": self.protocol_version[1],
+                    "client_features": list(self.client_features),
                 }
             ],
             schema=pa.schema(
@@ -320,12 +273,11 @@ class Invocation:
                         pa.binary(),
                         nullable=True,
                     ),
-                    pa.field("protocol_version_major", pa.int32(), nullable=False),
-                    pa.field("protocol_version_minor", pa.int32(), nullable=False),
+                    pa.field("client_features", pa.list_(pa.utf8()), nullable=False),
                 ]
             ),
         )
-        return vgi.util.recordbatch_to_bytes(batch)
+        return vgi.ipc_utils.serialize_record_batch(batch)
 
     @staticmethod
     def deserialize(data: pa.RecordBatch) -> "Invocation":
@@ -349,7 +301,7 @@ class Invocation:
             "invocation_id",
             "correlation_id",
         ]
-        first_row = vgi.util.validate_single_row_batch(
+        first_row = vgi.ipc_utils.validate_single_row_batch(
             data, "Invocation", required_fields=required_fields
         )
 
@@ -367,12 +319,12 @@ class Invocation:
             if identifier_value is not None:
                 global_init_identifier = GlobalInitResult(identifier_value)
 
-        # Parse protocol version - default to (1, 0) for backward compatibility
-        protocol_version = PROTOCOL_VERSION
-        if "protocol_version_major" in data.schema.names:
-            major = first_row["protocol_version_major"]
-            minor = first_row.get("protocol_version_minor", 0)
-            protocol_version = (major, minor)
+        # Parse client_features - default to empty set for backward compatibility
+        client_features: frozenset[str] = frozenset()
+        if "client_features" in data.schema.names:
+            features_list = first_row.get("client_features")
+            if features_list is not None:
+                client_features = frozenset(features_list)
 
         return Invocation(
             function_name=first_row["function_name"],
@@ -381,7 +333,7 @@ class Invocation:
             invocation_id=first_row["invocation_id"],
             correlation_id=first_row["correlation_id"],
             global_init_identifier=global_init_identifier,
-            protocol_version=protocol_version,
+            client_features=client_features,
         )
 
     @staticmethod
@@ -406,15 +358,16 @@ class OutputSpec:
         invocation_id: Unique bytes identifying this function invocation.
             Used to correlate multiple parallel workers processing the same
             logical function call.
-        protocol_version: Protocol version tuple (major, minor) that the worker
-            will use. Must be <= the client's requested version.
+        active_features: Feature flags that the worker will use for this
+            invocation. This is the intersection of client_features from the
+            Invocation and the worker's supported features.
 
     """
 
     output_schema: pa.Schema
     max_processes: int
     invocation_id: bytes
-    protocol_version: tuple[int, int] = PROTOCOL_VERSION
+    active_features: frozenset[str] = frozenset()
 
     def serialize_schema(self) -> pa.Schema:
         """Return the Arrow schema used when serializing this bind result.
@@ -432,8 +385,7 @@ class OutputSpec:
                 pa.field("output_schema", pa.binary(), nullable=False),
                 pa.field("max_processes", pa.int64(), nullable=True),
                 pa.field("invocation_id", pa.binary(), nullable=True),
-                pa.field("protocol_version_major", pa.int32(), nullable=False),
-                pa.field("protocol_version_minor", pa.int32(), nullable=False),
+                pa.field("active_features", pa.list_(pa.utf8()), nullable=False),
             ]
         )
 
@@ -452,8 +404,7 @@ class OutputSpec:
             "output_schema": self.output_schema.serialize().to_pybytes(),
             "max_processes": self.max_processes,
             "invocation_id": self.invocation_id,
-            "protocol_version_major": self.protocol_version[0],
-            "protocol_version_minor": self.protocol_version[1],
+            "active_features": list(self.active_features),
         }
 
     def serialize(self) -> bytes:
@@ -473,7 +424,7 @@ class OutputSpec:
             [self.serialize_dict()],
             schema=bind_result_schema,
         )
-        return vgi.util.recordbatch_to_bytes(bind_result_batch)
+        return vgi.ipc_utils.serialize_record_batch(bind_result_batch)
 
 
 def _get_default_db_path() -> str:
