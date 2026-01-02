@@ -147,6 +147,31 @@ class TestArguments:
         assert schema.field("positional_1").type == pa.string()
         assert schema.field("named_flag").type == pa.bool_()
 
+    def test_null_positional_without_default_raises(self) -> None:
+        """Null positional argument without default should raise ValueError."""
+        # Create a null scalar explicitly
+        args = Arguments(positional=(pa.scalar(None, type=pa.int64()),))
+        with pytest.raises(ValueError, match="Argument 0: value is null"):
+            args.get(0)
+
+    def test_null_named_without_default_raises(self) -> None:
+        """Null named argument without default should raise ValueError."""
+        args = Arguments(named={"key": pa.scalar(None, type=pa.string())})
+        with pytest.raises(ValueError, match="Argument 'key': value is null"):
+            args.get("key")
+
+    def test_type_validation_positional_mismatch(self) -> None:
+        """Type mismatch for positional argument should raise TypeError."""
+        args = Arguments(positional=(pa.scalar("string"),))
+        with pytest.raises(TypeError, match="Argument 0: expected int64, got"):
+            args.get(0, type=pa.int64())
+
+    def test_type_validation_named_mismatch(self) -> None:
+        """Type mismatch for named argument should raise TypeError."""
+        args = Arguments(named={"count": pa.scalar(42)})
+        with pytest.raises(TypeError, match="Argument 'count': expected string, got"):
+            args.get("count", type=pa.string())
+
 
 class TestInvocation:
     """Tests for Invocation serialization and deserialization."""

@@ -10,6 +10,12 @@ uv run pytest             # Run tests
 uv run ruff check .       # Lint
 uv run ruff format .      # Format
 uv run mypy vgi/          # Type check
+
+# Run tests with coverage (includes subprocess/worker coverage)
+uv run coverage run -m pytest --no-cov
+uv run coverage combine   # Merge subprocess coverage data
+uv run coverage report    # Show coverage report
+uv run coverage html      # Generate HTML report in htmlcov/
 ```
 
 **Before committing**, always run lint and format checks:

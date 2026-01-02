@@ -46,6 +46,42 @@ ignore_missing_imports = true
 addopts = "--mypy --ruff"
 testpaths = ["tests"]
 
+[tool.coverage.run]
+# Enable subprocess coverage - automatically patches subprocess.Popen
+# to inject coverage measurement into spawned worker processes
+patch = ["subprocess"]
+# Each subprocess writes to its own data file (.coverage.<hostname>.<pid>)
+parallel = true
+# Handle SIGTERM gracefully (writes coverage data before exit)
+sigterm = true
+# Measure branch coverage
+branch = true
+# What to measure
+source = ["vgi"]
+# Omit test files and examples from coverage
+omit = [
+    "vgi/examples/*",
+    "tests/*",
+]
+
+[tool.coverage.report]
+# Fail if coverage drops below this threshold
+fail_under = 80
+# Show missing lines in the report
+show_missing = true
+# Exclude common patterns from coverage
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "@overload",
+    "raise NotImplementedError",
+    "\\.\\.\\.",  # Ellipsis in stub files
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
 [dependency-groups]
 dev = [
     "lxml>=6.0.2",

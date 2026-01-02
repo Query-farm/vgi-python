@@ -113,8 +113,8 @@ class OutputWriter:
             self._writer.close()
 
 
-def main() -> None:
-    """CLI entry point for vgi-client."""
+def _create_cli() -> Any:
+    """Create the CLI command. Separated for testability."""
     import click
     import pyarrow.parquet as pq
 
@@ -311,6 +311,15 @@ def main() -> None:
             if output_writer is not None:
                 output_writer.close()
 
+    return cli
+
+
+# Module-level command for testing
+cli = _create_cli()
+
+
+def main() -> None:
+    """CLI entry point for vgi-client."""
     cli()
 
 
