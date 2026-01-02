@@ -68,9 +68,7 @@ class TestScalarFunctionGenerator:
         next(generator)  # Prime
 
         # Send a batch
-        input_batch = pa.RecordBatch.from_pydict(
-            {"x": [1, 2, 3]}, schema=input_schema
-        )
+        input_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=input_schema)
         output = generator.send(ProtocolInput(batch=input_batch))
 
         assert output.batch is not None
@@ -146,9 +144,7 @@ class TestScalarFunctionGenerator:
         generator = func.run()
         next(generator)
 
-        input_batch = pa.RecordBatch.from_pydict(
-            {"x": [1, 2, 3]}, schema=input_schema
-        )
+        input_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=input_schema)
 
         # First yield should be the log message
         output = generator.send(ProtocolInput(batch=input_batch))
@@ -195,9 +191,7 @@ class TestScalarFunction:
         generator = func.run()
         next(generator)
 
-        input_batch = pa.RecordBatch.from_pydict(
-            {"x": [1, 2, 3]}, schema=input_schema
-        )
+        input_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=input_schema)
         output = generator.send(ProtocolInput(batch=input_batch))
 
         assert output.batch is not None
@@ -248,9 +242,7 @@ class TestScalarFunction:
         generator = func.run()
         next(generator)
 
-        input_batch = pa.RecordBatch.from_pydict(
-            {"x": [1, 2, 3]}, schema=input_schema
-        )
+        input_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=input_schema)
 
         # First yield should be the log message
         output = generator.send(ProtocolInput(batch=input_batch))
@@ -282,9 +274,7 @@ class TestScalarFunction:
         generator = func.run()
         next(generator)
 
-        input_batch = pa.RecordBatch.from_pydict(
-            {"x": [1, 2, 3]}, schema=input_schema
-        )
+        input_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=input_schema)
         output = generator.send(ProtocolInput(batch=input_batch))
 
         # Should have an exception log message
