@@ -29,55 +29,94 @@ VGI (Vector Gateway Interface) provides an Apache Arrow-based protocol for conne
 
 ## Architecture
 
+VGI supports two types of functions:
+
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                           DuckDB / Client                           │
 │  ┌───────────────────────────────────────────────────────────────┐  │
-│  │ Client spawns worker subprocess, sends FunctionInvocation, streams      │  │
-│  │ input batches, receives output batches via Arrow IPC          │  │
+│  │ Client spawns worker subprocess, sends Invocation,            │  │
+│  │ streams input batches (if any), receives output via Arrow IPC │  │
 │  └───────────────────────────────────────────────────────────────┘  │
 │                              │ stdin/stdout                         │
 │                              ▼                                      │
 │  ┌───────────────────────────────────────────────────────────────┐  │
 │  │                      Worker Process                           │  │
+│  │                                                               │  │
 │  │  ┌─────────────────────────────────────────────────────────┐  │  │
-│  │  │ TableInOutGeneratorFunction.process() / finalize()      │  │  │
-│  │  │ - process(): Generator receiving RecordBatch via yield  │  │  │
-│  │  │ - finalize(): Generator emitting final results          │  │  │
-│  │  │ - Yields Output with output RecordBatches        │  │  │
+│  │  │ TABLE FUNCTION (TableFunctionGenerator)                 │  │  │
+│  │  │ - process(): Generator yielding output batches          │  │  │
+│  │  │ - No input data, generates output (sequences, ranges)   │  │  │
 │  │  └─────────────────────────────────────────────────────────┘  │  │
+│  │                           OR                                  │  │
+│  │  ┌─────────────────────────────────────────────────────────┐  │  │
+│  │  │ TABLE-IN-OUT FUNCTION (TableInOutFunction)              │  │  │
+│  │  │ - transform(batch): Process each input batch            │  │  │
+│  │  │ - finish(): Emit final results after all input          │  │  │
+│  │  │ - Transforms input data to output data                  │  │  │
+│  │  └─────────────────────────────────────────────────────────┘  │  │
+│  │                                                               │  │
 │  └───────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+### Function Types
+
+| Type | Base Class | Input | Use Case |
+|------|------------|-------|----------|
+| **Table Function** | `TableFunctionGenerator` | None | Generate data (sequences, ranges, random samples) |
+| **Table-In-Out Function** | `TableInOutFunction` | Batches | Transform, filter, aggregate input data |
+
 ### Key Components
 
 - **Worker** (`vgi/worker.py`): Subprocess that hosts functions, handles protocol
-- **Client** (`vgi/client.py`): Spawns workers, streams data through functions
-- **TableInOutGeneratorFunction** (`vgi/table_in_out_function.py`): Base class for table-in-out functions
-- **FunctionInvocation/FunctionOutputSpec** (`vgi/function.py`): Protocol messages for initialization
+- **Client** (`vgi/client/client.py`): Spawns workers, streams data through functions
+- **TableFunctionGenerator** (`vgi/table_function.py`): Base class for table functions (no input)
+- **TableInOutFunction** (`vgi/table_in_out_function.py`): Base class for table-in-out functions
+- **Invocation/OutputSpec** (`vgi/function.py`): Protocol messages for initialization
 - **GlobalInitResult** (`vgi/function.py`): Shared state for parallel workers
 
 ## Protocol Flow
 
+### Table Function (no input)
+
 ```
 Client                                  Worker
   │                                       │
-  │──── FunctionInvocation (function, args) ───────▶│
+  │──── Invocation (function, args) ─────▶│
   │                                       │ instantiate function
-  │◀──── FunctionOutputSpec (output schema) ──────│
+  │◀──── OutputSpec (output schema) ──────│
+  │                                       │
+  │──── GlobalStateInitInput ────────────▶│
+  │◀──── GlobalInitResult ────────────────│ perform_init()
+  │                                       │
+  │◀──── Output Batch 1 ──────────────────│ process() yields
+  │◀──── Output Batch 2 ──────────────────│
+  │◀──── ... ─────────────────────────────│
+  │◀──── Final Output (FINISHED) ─────────│
+  │                                       │
+```
+
+### Table-In-Out Function (with input)
+
+```
+Client                                  Worker
+  │                                       │
+  │──── Invocation (function, args) ─────▶│
+  │                                       │ instantiate function
+  │◀──── OutputSpec (output schema) ──────│
   │                                       │
   │──── GlobalStateInitInput ────────────▶│
   │◀──── GlobalInitResult ────────────────│ perform_init()
   │                                       │
   │──── Input Batch 1 ───────────────────▶│
-  │◀──── Output Batch 1 (NEED_MORE_INPUT)─│ process() yields
+  │◀──── Output Batch 1 (NEED_MORE_INPUT)─│ transform() / process()
   │                                       │
   │──── Input Batch 2 ───────────────────▶│
   │◀──── Output Batch 2 (NEED_MORE_INPUT)─│
   │                                       │
   │──── FINALIZE (empty batch) ──────────▶│
-  │◀──── Final Output (FINISHED) ─────────│ finalize() yields
+  │◀──── Final Output (FINISHED) ─────────│ finish() / finalize()
   │                                       │
 ```
 
@@ -86,16 +125,19 @@ Client                                  Worker
 ```
 vgi/
   __init__.py              # Package exports and module docstring
-  function.py              # FunctionInvocation, FunctionOutputSpec, Arguments, GlobalInitResult
-  table_function.py        # CardinalityInfo, TableFunction base class
-  table_in_out_function.py # TableInOutGeneratorFunction, Output, OutputGenerator
+  function.py              # Invocation, OutputSpec, Arguments, GlobalInitResult
+  table_function.py        # TableFunctionGenerator, CardinalityInfo, Output
+  table_in_out_function.py # TableInOutFunction, TableInOutGeneratorFunction
   metadata.py              # Function metadata for introspection and registration
   schema_utils.py          # Schema builder helpers (schema, schema_like)
+  ipc_utils.py             # Arrow IPC serialization utilities
   worker.py                # Worker base class
-  client.py                # Client class and CLI
-  util.py                  # Serialization utilities
+  client/
+    client.py              # Client class
+    __main__.py            # CLI entry point
   examples/
-    table_in_out.py        # Example functions (Echo, BufferInput, SumAllColumns, etc.)
+    table.py               # Table functions (Sequence, Range, RandomSample, etc.)
+    table_in_out.py        # Table-in-out functions (Echo, BufferInput, SumAllColumns)
     worker.py              # ExampleWorker with registry
 ```
 
@@ -197,7 +239,92 @@ vgi-client --input data.parquet --function sum_all_columns --server vgi-example-
 vgi-client --input data.parquet --function repeat_inputs --args '[3]' --server vgi-example-worker
 ```
 
-## Creating a Custom Function (Simple API - Recommended)
+## Creating a Table Function (Data Generation)
+
+Use `TableFunctionGenerator` when you need to generate data without input. Override `process()` to yield output batches:
+
+```python
+import pyarrow as pa
+from vgi import TableFunctionGenerator, Output, Arg
+
+class SequenceFunction(TableFunctionGenerator):
+    """Generate a sequence of integers from 0 to n-1."""
+
+    class Meta:
+        name = "sequence"
+        max_workers = 1  # Single worker for sequential output
+
+    count = Arg[int](0, doc="Number of integers to generate")
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        return pa.schema([("n", pa.int64())])
+
+    def process(self):
+        """Yield output batches (no input received)."""
+        for i in range(0, self.count, 1000):  # Batch by 1000
+            batch_size = min(1000, self.count - i)
+            values = list(range(i, i + batch_size))
+            yield Output(
+                pa.RecordBatch.from_pydict({"n": values}, schema=self.output_schema)
+            )
+```
+
+### TableFunctionGenerator Methods
+
+| Method | When to Override | Default |
+|--------|------------------|---------|
+| `process()` | Always - generate output | Required |
+| `output_schema` | Define output columns | Required |
+| `cardinality()` | Provide row count estimates | Returns None |
+| `setup()` | Acquire resources | No-op |
+| `teardown()` | Release resources | No-op |
+| `perform_init()` | Distributed init (primary) | Default impl |
+| `retrieve_init()` | Distributed init (secondary) | Default impl |
+
+### Table Function Patterns
+
+**Simple sequence:**
+```python
+def process(self):
+    for i in range(self.count):
+        yield Output(pa.RecordBatch.from_pydict(
+            {"n": [i]}, schema=self.output_schema
+        ))
+```
+
+**Batched output (recommended for large outputs):**
+```python
+BATCH_SIZE = 1000
+
+def process(self):
+    for start in range(0, self.count, self.BATCH_SIZE):
+        end = min(start + self.BATCH_SIZE, self.count)
+        values = list(range(start, end))
+        yield Output(pa.RecordBatch.from_pydict(
+            {"n": values}, schema=self.output_schema
+        ))
+```
+
+**Parallel generation with work queue:**
+```python
+def perform_init(self, init_input):
+    # Primary worker: populate work queue
+    work_items = [chunk.serialize() for chunk in self.create_chunks()]
+    self.enqueue_work(work_items)
+    return GlobalInitResult(self.init_identifier)
+
+def process(self):
+    # All workers: pull from queue until empty
+    while True:
+        work = self.dequeue_work()
+        if work is None:
+            break
+        for batch in self.generate_chunk(work):
+            yield Output(batch)
+```
+
+## Creating a Table-In-Out Function (Simple API - Recommended)
 
 Use `TableInOutFunction` for most use cases. Override `transform()` for per-batch processing and `finish()` for final output:
 
@@ -302,6 +429,11 @@ class DistributedSum(TableInOutFunction):
 
 | Use Case | Base Class |
 |----------|------------|
+| **Table Functions (no input)** | |
+| Generate sequences, ranges | `TableFunctionGenerator` |
+| Generate random/test data | `TableFunctionGenerator` |
+| Parallel data generation | `TableFunctionGenerator` + work queue |
+| **Table-In-Out Functions (with input)** | |
 | Transform each batch independently | `TableInOutFunction` |
 | Aggregate to single result | `TableInOutFunction` + `finish()` |
 | Buffer all input, emit on finalize | `TableInOutFunction` + `finish()` |
@@ -569,13 +701,16 @@ def finalize(self) -> OutputGenerator | None:
 ### Import Cheatsheet
 
 ```python
-# Simple API (recommended for most uses)
+# Table Functions (no input - generate data)
+from vgi import TableFunctionGenerator, Output, Arg, Worker
+
+# Table-In-Out Functions (transform input)
 from vgi import TableInOutFunction, Invocation, Arg, Worker
 
 # Schema helpers (for output_schema definitions)
 from vgi import schema, schema_like
 
-# Generator API (advanced)
+# Generator API (advanced table-in-out)
 from vgi import TableInOutGeneratorFunction, Output, OutputGenerator, Invocation, Arg, Worker
 
 # Logging
@@ -761,7 +896,50 @@ threshold = args.get("threshold")        # Required
 count = args.get(0, type=pa.int64())     # Raises TypeError if wrong type
 ```
 
-### Function Skeleton Template (Simple API - Recommended)
+### Function Skeleton Template (Table Function - No Input)
+
+```python
+import pyarrow as pa
+from vgi import TableFunctionGenerator, Output, Arg
+from vgi.table_function import CardinalityInfo
+
+class MyTableFunction(TableFunctionGenerator):
+    """One-line description.
+
+    Detailed description of what this function generates.
+    """
+
+    class Meta:
+        name = "my_table_function"
+        max_workers = 1  # Or None for parallel
+
+    # Declare arguments as class attributes
+    count = Arg[int](0, doc="Number of rows to generate")
+
+    BATCH_SIZE = 1000  # Recommended for large outputs
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        """Define the output schema."""
+        return pa.schema([("value", pa.int64())])
+
+    def cardinality(self) -> CardinalityInfo:
+        """Optional: provide row count estimate."""
+        return CardinalityInfo(estimate=self.count, max=self.count)
+
+    def process(self):
+        """Generate output batches."""
+        for start in range(0, self.count, self.BATCH_SIZE):
+            end = min(start + self.BATCH_SIZE, self.count)
+            values = list(range(start, end))
+            yield Output(
+                pa.RecordBatch.from_pydict(
+                    {"value": values}, schema=self.output_schema
+                )
+            )
+```
+
+### Function Skeleton Template (Table-In-Out - Recommended)
 
 ```python
 import pyarrow as pa
@@ -836,28 +1014,38 @@ class MyFunction(TableInOutGeneratorFunction):
 ```
 Need to implement a VGI function?
 │
-├─ No transformation needed?
-│  └─ class Echo(TableInOutFunction): pass
-│
-├─ Transform each batch independently?
-│  └─ Override transform() → returns pa.RecordBatch
-│
-├─ Produce multiple outputs per input?
-│  └─ Override transform() → returns list[pa.RecordBatch]
-│
-├─ Aggregate across all batches?
-│  └─ Accumulate in transform(), emit in finish()
-│      └─ Set max_processes() -> 1
-│
-├─ Buffer all input, emit on finalize?
-│  └─ Buffer in transform(), return in finish()
-│      └─ Set max_processes() -> 1
-│
-├─ Need GeneratorExit handling or distributed state?
-│  └─ Use TableInOutGeneratorFunction (generator API)
-│
-└─ Need fine-grained streaming control?
-   └─ Use TableInOutGeneratorFunction (generator API)
+├─ Does the function receive input data?
+│  │
+│  ├─ NO (generate data from scratch)
+│  │  └─ Use TableFunctionGenerator
+│  │     ├─ Sequential output? Set max_workers=1
+│  │     ├─ Parallel generation? Use work queue pattern
+│  │     └─ Override process() to yield Output batches
+│  │
+│  └─ YES (transform input data)
+│     │
+│     ├─ No transformation needed?
+│     │  └─ class Echo(TableInOutFunction): pass
+│     │
+│     ├─ Transform each batch independently?
+│     │  └─ Override transform() → returns pa.RecordBatch
+│     │
+│     ├─ Produce multiple outputs per input?
+│     │  └─ Override transform() → returns list[pa.RecordBatch]
+│     │
+│     ├─ Aggregate across all batches?
+│     │  └─ Accumulate in transform(), emit in finish()
+│     │      └─ Set max_processes() -> 1
+│     │
+│     ├─ Buffer all input, emit on finalize?
+│     │  └─ Buffer in transform(), return in finish()
+│     │      └─ Set max_processes() -> 1
+│     │
+│     ├─ Need GeneratorExit handling or distributed state?
+│     │  └─ Use TableInOutGeneratorFunction (generator API)
+│     │
+│     └─ Need fine-grained streaming control?
+│        └─ Use TableInOutGeneratorFunction (generator API)
 ```
 
 ### Status Values (in IPC metadata)
