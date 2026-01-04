@@ -1,7 +1,5 @@
 """Tests for TableInOutFunction (callback-based API)."""
 
-from typing import Literal, overload
-
 import pyarrow as pa
 import pyarrow.compute as pc
 import structlog
@@ -10,108 +8,8 @@ from tests.conftest import make_invocation
 from vgi.function import Arg, Arguments, Invocation
 from vgi.ipc_utils import RecordBatchState
 from vgi.log import Level
-from vgi.table_in_out_function import (
-    ProtocolInput,
-    ProtocolOutput,
-    TableInOutFunction,
-)
-
-
-def make_invocation_with_args(
-    input_schema: pa.Schema, positional: list[int]
-) -> Invocation:
-    """Create an Invocation with positional arguments."""
-    return make_invocation(
-        input_schema=input_schema,
-        arguments=Arguments(positional=tuple(pa.scalar(v) for v in positional)),
-    )
-
-
-@overload
-def run_simple_function(
-    func: TableInOutFunction,
-    input_batches: list[pa.RecordBatch],
-    capture_logs: Literal[False] = False,
-) -> list[pa.RecordBatch]: ...
-
-
-@overload
-def run_simple_function(
-    func: TableInOutFunction,
-    input_batches: list[pa.RecordBatch],
-    capture_logs: Literal[True],
-) -> tuple[list[pa.RecordBatch], list[ProtocolOutput]]: ...
-
-
-def run_simple_function(
-    func: TableInOutFunction,
-    input_batches: list[pa.RecordBatch],
-    capture_logs: bool = False,
-) -> list[pa.RecordBatch] | tuple[list[pa.RecordBatch], list[ProtocolOutput]]:
-    """Run a simple function through the protocol and collect outputs.
-
-    Args:
-        func: The function instance to run
-        input_batches: Input batches to process
-        capture_logs: If True, also return all protocol outputs for log inspection
-
-    Returns:
-        If capture_logs is False: list of output batches
-        If capture_logs is True: tuple of (output_batches, all_outputs)
-
-    """
-    generator = func.run()
-
-    # Prime the generator
-    next(generator)
-
-    output_batches: list[pa.RecordBatch] = []
-    all_outputs: list[ProtocolOutput] = []
-
-    # Send input batches
-    for batch in input_batches:
-        protocol_input = ProtocolInput(batch=batch)
-        output = generator.send(protocol_input)
-
-        if capture_logs:
-            all_outputs.append(output)
-
-        if output.batch is not None and output.batch.num_rows > 0:
-            output_batches.append(output.batch)
-
-        # Handle multiple outputs per input
-        while output.status.value == "HAVE_MORE_OUTPUT":
-            output = generator.send(protocol_input)
-            if capture_logs:
-                all_outputs.append(output)
-            if output.batch is not None and output.batch.num_rows > 0:
-                output_batches.append(output.batch)
-
-    # Send finalize signal
-    empty_batch = pa.RecordBatch.from_arrays(
-        [pa.array([], type=field.type) for field in func.output_schema],
-        schema=func.output_schema,
-    )
-    finalize_input = ProtocolInput.create_finalize(empty_batch)
-    output = generator.send(finalize_input)
-
-    if capture_logs:
-        all_outputs.append(output)
-
-    if output.batch is not None and output.batch.num_rows > 0:
-        output_batches.append(output.batch)
-
-    # Collect remaining finalize outputs
-    while output.status.value == "HAVE_MORE_OUTPUT":
-        output = generator.send(finalize_input)
-        if capture_logs:
-            all_outputs.append(output)
-        if output.batch is not None and output.batch.num_rows > 0:
-            output_batches.append(output.batch)
-
-    if capture_logs:
-        return output_batches, all_outputs
-    return output_batches
+from vgi.table_in_out_function import TableInOutFunction
+from vgi.testing import FunctionTestClient, batch
 
 
 class TestPassthrough:
@@ -123,16 +21,12 @@ class TestPassthrough:
         class PassthroughFunction(TableInOutFunction):
             pass
 
-        schema = pa.schema([("x", pa.int64())])
-        invocation = make_invocation(schema)
-        func = PassthroughFunction(invocation, structlog.get_logger())
-
-        input_batches = [
-            pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=schema),
-            pa.RecordBatch.from_pydict({"x": [4, 5]}, schema=schema),
-        ]
-
-        outputs = run_simple_function(func, input_batches)
+        with FunctionTestClient(PassthroughFunction) as client:
+            outputs = list(
+                client.table_in_out_function(
+                    input=iter([batch(x=[1, 2, 3]), batch(x=[4, 5])]),
+                )
+            )
 
         # Should have same number of batches
         assert len(outputs) == 2
@@ -153,15 +47,10 @@ class TestTransform:
                 doubled = pc.multiply(batch.column("x"), 2)
                 return pa.RecordBatch.from_arrays([doubled], schema=batch.schema)
 
-        schema = pa.schema([("x", pa.int64())])
-        invocation = make_invocation(schema)
-        func = DoubleFunction(invocation, structlog.get_logger())
-
-        input_batches = [
-            pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=schema),
-        ]
-
-        outputs = run_simple_function(func, input_batches)
+        with FunctionTestClient(DoubleFunction) as client:
+            outputs = list(
+                client.table_in_out_function(input=iter([batch(x=[1, 2, 3])]))
+            )
 
         assert len(outputs) == 1
         assert outputs[0].to_pydict() == {"x": [2, 4, 6]}
@@ -173,15 +62,8 @@ class TestTransform:
             def transform(self, batch: pa.RecordBatch) -> list[pa.RecordBatch]:
                 return [batch, batch, batch]
 
-        schema = pa.schema([("x", pa.int64())])
-        invocation = make_invocation(schema)
-        func = TripleFunction(invocation, structlog.get_logger())
-
-        input_batches = [
-            pa.RecordBatch.from_pydict({"x": [1, 2]}, schema=schema),
-        ]
-
-        outputs = run_simple_function(func, input_batches)
+        with FunctionTestClient(TripleFunction) as client:
+            outputs = list(client.table_in_out_function(input=iter([batch(x=[1, 2])])))
 
         # Should have 3 outputs from 1 input
         assert len(outputs) == 3
@@ -197,15 +79,13 @@ class TestTransform:
             def transform(self, batch: pa.RecordBatch) -> list[pa.RecordBatch]:
                 return [batch] * self.count
 
-        schema = pa.schema([("x", pa.int64())])
-        invocation = make_invocation_with_args(schema, [4])
-        func = RepeatFunction(invocation, structlog.get_logger())
-
-        input_batches = [
-            pa.RecordBatch.from_pydict({"x": [1]}, schema=schema),
-        ]
-
-        outputs = run_simple_function(func, input_batches)
+        with FunctionTestClient(RepeatFunction) as client:
+            outputs = list(
+                client.table_in_out_function(
+                    input=iter([batch(x=[1])]),
+                    arguments=Arguments(positional=(pa.scalar(4),)),
+                )
+            )
 
         assert len(outputs) == 4
 
@@ -223,6 +103,9 @@ class TestFinish:
                 super().__init__(invocation, logger)
                 self.total = 0
 
+            class Meta:
+                max_workers = 1
+
             @property
             def output_schema(self) -> pa.Schema:
                 return pa.schema([("sum", pa.int64())])
@@ -238,19 +121,12 @@ class TestFinish:
                     )
                 ]
 
-            def max_processes(self) -> int:
-                return 1
-
-        schema = pa.schema([("x", pa.int64())])
-        invocation = make_invocation(schema)
-        func = SumFunction(invocation, structlog.get_logger())
-
-        input_batches = [
-            pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=schema),
-            pa.RecordBatch.from_pydict({"x": [4, 5]}, schema=schema),
-        ]
-
-        outputs = run_simple_function(func, input_batches)
+        with FunctionTestClient(SumFunction) as client:
+            outputs = list(
+                client.table_in_out_function(
+                    input=iter([batch(x=[1, 2, 3]), batch(x=[4, 5])])
+                )
+            )
 
         # Should only have the finalize output
         assert len(outputs) == 1
@@ -266,6 +142,9 @@ class TestFinish:
                 super().__init__(invocation, logger)
                 self.buffer: list[pa.RecordBatch] = []
 
+            class Meta:
+                max_workers = 1
+
             def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
                 self.buffer.append(batch)
                 return self.empty_output_batch
@@ -273,19 +152,12 @@ class TestFinish:
             def finish(self) -> list[pa.RecordBatch]:
                 return self.buffer
 
-            def max_processes(self) -> int:
-                return 1
-
-        schema = pa.schema([("x", pa.int64())])
-        invocation = make_invocation(schema)
-        func = BufferFunction(invocation, structlog.get_logger())
-
-        input_batches = [
-            pa.RecordBatch.from_pydict({"x": [1, 2]}, schema=schema),
-            pa.RecordBatch.from_pydict({"x": [3, 4]}, schema=schema),
-        ]
-
-        outputs = run_simple_function(func, input_batches)
+        with FunctionTestClient(BufferFunction) as client:
+            outputs = list(
+                client.table_in_out_function(
+                    input=iter([batch(x=[1, 2]), batch(x=[3, 4])])
+                )
+            )
 
         # Should emit buffered batches in finalize
         assert len(outputs) == 2
@@ -309,15 +181,12 @@ class TestOutputSchema:
                 lengths = pc.utf8_length(batch.column("name"))  # type: ignore[call-overload]
                 return pa.RecordBatch.from_arrays([lengths], schema=self.output_schema)
 
-        schema = pa.schema([("name", pa.string())])
-        invocation = make_invocation(schema)
-        func = LengthFunction(invocation, structlog.get_logger())
-
-        input_batches = [
-            pa.RecordBatch.from_pydict({"name": ["hello", "world!"]}, schema=schema),
-        ]
-
-        outputs = run_simple_function(func, input_batches)
+        with FunctionTestClient(LengthFunction) as client:
+            outputs = list(
+                client.table_in_out_function(
+                    input=iter([batch(name=["hello", "world!"])])
+                )
+            )
 
         assert len(outputs) == 1
         assert outputs[0].schema == pa.schema([("length", pa.int64())])
@@ -343,16 +212,12 @@ class TestEmptyOutput:
                     return self.empty_output_batch
                 return pa.RecordBatch.from_arrays([filtered], schema=batch.schema)
 
-        schema = pa.schema([("x", pa.int64())])
-        invocation = make_invocation(schema)
-        func = FilterOddFunction(invocation, structlog.get_logger())
-
-        input_batches = [
-            pa.RecordBatch.from_pydict({"x": [1, 3, 5]}, schema=schema),  # All odd
-            pa.RecordBatch.from_pydict({"x": [2, 4]}, schema=schema),  # All even
-        ]
-
-        outputs = run_simple_function(func, input_batches)
+        with FunctionTestClient(FilterOddFunction) as client:
+            outputs = list(
+                client.table_in_out_function(
+                    input=iter([batch(x=[1, 3, 5]), batch(x=[2, 4])])  # odd, even
+                )
+            )
 
         # Should only have 1 output (the even batch)
         assert len(outputs) == 1
@@ -364,15 +229,8 @@ class TestEmptyOutput:
         class PassthroughFunction(TableInOutFunction):
             pass
 
-        schema = pa.schema([("x", pa.int64())])
-        invocation = make_invocation(schema)
-        func = PassthroughFunction(invocation, structlog.get_logger())
-
-        input_batches = [
-            pa.RecordBatch.from_pydict({"x": [1, 2]}, schema=schema),
-        ]
-
-        outputs = run_simple_function(func, input_batches)
+        with FunctionTestClient(PassthroughFunction) as client:
+            outputs = list(client.table_in_out_function(input=iter([batch(x=[1, 2])])))
 
         # Should only have the transform output, no finalize output
         assert len(outputs) == 1
@@ -390,28 +248,19 @@ class TestLogging:
                 self.log(Level.INFO, f"Processing {batch.num_rows} rows")
                 return batch
 
-        schema = pa.schema([("x", pa.int64())])
-        invocation = make_invocation(schema)
-        func = LoggingFunction(invocation, structlog.get_logger())
+        with FunctionTestClient(LoggingFunction) as client:
+            outputs = list(
+                client.table_in_out_function(input=iter([batch(x=[1, 2, 3])]))
+            )
 
-        input_batches = [
-            pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=schema),
-        ]
+            # Should have 1 output batch
+            assert len(outputs) == 1
+            assert outputs[0].to_pydict() == {"x": [1, 2, 3]}
 
-        outputs, all_outputs = run_simple_function(
-            func, input_batches, capture_logs=True
-        )
-
-        # Should have 1 output batch
-        assert len(outputs) == 1
-        assert outputs[0].to_pydict() == {"x": [1, 2, 3]}
-
-        # Should have at least one log message
-        log_messages = [o for o in all_outputs if o.log_message is not None]
-        assert len(log_messages) == 1
-        assert log_messages[0].log_message is not None
-        assert log_messages[0].log_message.level == Level.INFO
-        assert "Processing 3 rows" in log_messages[0].log_message.message
+            # Should have at least one log message
+            assert len(client.logs) == 1
+            assert client.logs[0].level == Level.INFO
+            assert "Processing 3 rows" in client.logs[0].message
 
     def test_log_in_finish(self) -> None:
         """log() can emit messages during finish()."""
@@ -422,6 +271,9 @@ class TestLogging:
             ) -> None:
                 super().__init__(invocation, logger)
                 self.total = 0
+
+            class Meta:
+                max_workers = 1
 
             @property
             def output_schema(self) -> pa.Schema:
@@ -439,30 +291,18 @@ class TestLogging:
                     )
                 ]
 
-            def max_processes(self) -> int:
-                return 1
+        with FunctionTestClient(LoggingAggregateFunction) as client:
+            outputs = list(
+                client.table_in_out_function(input=iter([batch(x=[1, 2, 3])]))
+            )
 
-        schema = pa.schema([("x", pa.int64())])
-        invocation = make_invocation(schema)
-        func = LoggingAggregateFunction(invocation, structlog.get_logger())
+            # Should have 1 output batch with sum
+            assert len(outputs) == 1
+            assert outputs[0].to_pydict() == {"sum": [6]}
 
-        input_batches = [
-            pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=schema),
-        ]
-
-        outputs, all_outputs = run_simple_function(
-            func, input_batches, capture_logs=True
-        )
-
-        # Should have 1 output batch with sum
-        assert len(outputs) == 1
-        assert outputs[0].to_pydict() == {"sum": [6]}
-
-        # Should have log message from finish()
-        log_messages = [o for o in all_outputs if o.log_message is not None]
-        assert len(log_messages) == 1
-        assert log_messages[0].log_message is not None
-        assert "Final sum: 6" in log_messages[0].log_message.message
+            # Should have log message from finish()
+            assert len(client.logs) == 1
+            assert "Final sum: 6" in client.logs[0].message
 
     def test_multiple_log_messages(self) -> None:
         """Multiple log() calls queue multiple messages."""
@@ -473,28 +313,16 @@ class TestLogging:
                 self.log(Level.INFO, f"Rows: {batch.num_rows}")
                 return batch
 
-        schema = pa.schema([("x", pa.int64())])
-        invocation = make_invocation(schema)
-        func = MultiLogFunction(invocation, structlog.get_logger())
+        with FunctionTestClient(MultiLogFunction) as client:
+            outputs = list(client.table_in_out_function(input=iter([batch(x=[1, 2])])))
 
-        input_batches = [
-            pa.RecordBatch.from_pydict({"x": [1, 2]}, schema=schema),
-        ]
+            # Should have 1 output batch
+            assert len(outputs) == 1
 
-        outputs, all_outputs = run_simple_function(
-            func, input_batches, capture_logs=True
-        )
-
-        # Should have 1 output batch
-        assert len(outputs) == 1
-
-        # Should have 2 log messages
-        log_messages = [o for o in all_outputs if o.log_message is not None]
-        assert len(log_messages) == 2
-        assert log_messages[0].log_message is not None
-        assert log_messages[1].log_message is not None
-        assert log_messages[0].log_message.level == Level.DEBUG
-        assert log_messages[1].log_message.level == Level.INFO
+            # Should have 2 log messages
+            assert len(client.logs) == 2
+            assert client.logs[0].level == Level.DEBUG
+            assert client.logs[1].level == Level.INFO
 
 
 class TestDistributedState:
