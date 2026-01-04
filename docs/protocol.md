@@ -2,6 +2,34 @@
 
 This document describes the Arrow IPC protocol between client and worker.
 
+## Scalar Function (row transform)
+
+Scalar functions transform input batches to single-column output with 1:1 row mapping.
+They are used for per-row computations like `upper()`, `abs()`, or `concat()`.
+
+```
+Client                                  Worker
+  │                                       │
+  │──── Invocation (function, args) ─────▶│
+  │                                       │ instantiate function
+  │◀──── OutputSpec (output schema) ──────│ (single column)
+  │                                       │
+  │──── Input Batch 1 ───────────────────▶│
+  │◀──── Output Batch 1 ─────────────────│ compute() / process()
+  │                                       │ (same row count)
+  │──── Input Batch 2 ───────────────────▶│
+  │◀──── Output Batch 2 ─────────────────│
+  │                                       │
+  │──── (generator closed) ──────────────▶│
+  │                                       │ teardown()
+```
+
+**Key differences from Table-In-Out:**
+- Output schema must have exactly one column
+- Output row count must equal input row count (1:1 mapping)
+- No finalize phase - processing ends when input stream ends
+- No `NEED_MORE_INPUT` status (always expects more input until closed)
+
 ## Table Function (no input)
 
 Table functions generate data without receiving input batches.

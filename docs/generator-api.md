@@ -1,6 +1,74 @@
 # Generator API (Advanced)
 
-This document covers the generator-based APIs for both table functions and table-in-out functions.
+This document covers the generator-based APIs for scalar, table, and table-in-out functions.
+
+## Scalar Function Generator (Row Transform)
+
+Use `ScalarFunctionGenerator` when you need full generator control for scalar transforms,
+including yielding log messages during processing. For most use cases, prefer the simpler
+`ScalarFunction` with its `compute()` callback.
+
+### Basic Template
+
+```python
+import pyarrow as pa
+import pyarrow.compute as pc
+from vgi import ScalarFunctionGenerator, Output, Arg
+from vgi.log import Level, Message
+
+class MyScalarFunction(ScalarFunctionGenerator):
+    """Transform each row to a single output value."""
+
+    column = Arg[str](0, doc="Column to transform")
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        # Must have exactly one column
+        return pa.schema([("result", pa.int64())])
+
+    def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
+        # Priming yield - REQUIRED
+        _ = yield Output(self.empty_output_batch)
+
+        while True:
+            # Optional: yield log messages
+            yield Message(Level.INFO, f"Processing {batch.num_rows} rows")
+
+            # Compute result - must have same row count as input
+            result = pc.multiply(batch.column(self.column), 2)
+            output = pa.RecordBatch.from_arrays([result], schema=self.output_schema)
+
+            batch = yield Output(output)
+            if batch is None:
+                break
+```
+
+### ScalarFunctionGenerator Methods
+
+| Method | When to Override | Default |
+|--------|------------------|---------|
+| `process(batch)` | Always - transform input | Required |
+| `output_schema` | Define single-column output | Required |
+| `setup()` | Acquire resources | No-op |
+| `teardown()` | Release resources | No-op |
+
+### Key Constraints
+
+1. **Single-column output**: `output_schema` must have exactly one column
+2. **1:1 row mapping**: Output `num_rows` must equal input `num_rows`
+3. **No finalize phase**: Processing ends when input stream ends
+4. **Priming yield required**: Generator must start with `_ = yield Output(...)`
+
+### When to Use Generator vs Callback API
+
+| Feature | ScalarFunctionGenerator | ScalarFunction |
+|---------|------------------------|----------------|
+| API style | Generator with `process()` | Callback with `compute()` |
+| Logging | Yield `Message` directly | Call `self.log(level, msg)` |
+| Complexity | More control, more code | Simpler, less code |
+| Use when | Need log messages mid-batch | Standard transforms |
+
+---
 
 ## Table Function Generator (No Input)
 

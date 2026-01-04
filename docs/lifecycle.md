@@ -2,7 +2,40 @@
 
 Understanding when lifecycle methods are called is critical for resource management and distributed processing.
 
-## Single-Process Lifecycle (max_processes=1)
+## Scalar Function Lifecycle
+
+Scalar functions have a simplified lifecycle with no finalize phase. Processing ends when input is exhausted.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  __init__(invocation, logger)                                   │
+│    ↓                                                            │
+│  output_schema (property accessed, must be single column)       │
+│    ↓                                                            │
+│  setup()  ← Acquire resources here                              │
+│    ↓                                                            │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │  process(batch1) → compute(batch1) → Array              │    │
+│  │    ↓                                                    │    │
+│  │  [return output with same row count]                    │    │
+│  │    ↓                                                    │    │
+│  │  process(batch2) → compute(batch2) → Array              │    │
+│  │    ↓                                                    │    │
+│  │  ... (repeat for all batches)                           │    │
+│  │    ↓                                                    │    │
+│  │  Input stream ends (generator closed)                   │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│    ↓                                                            │
+│  teardown()  ← Release resources (always called)                │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key differences from Table-In-Out:**
+- No `finalize()` phase - processing ends when input ends
+- No `save_state()` / `load_states()` - not designed for distributed aggregation
+- Output must have exactly 1 column with same row count as input
+
+## Table-In-Out Single-Process Lifecycle (max_processes=1)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐

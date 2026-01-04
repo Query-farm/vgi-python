@@ -4,6 +4,8 @@ Functions can define a nested `Meta` class to provide introspection metadata. No
 
 ## Basic Usage
 
+Metadata works with all function types: `ScalarFunction`, `TableFunctionGenerator`, and `TableInOutFunction`.
+
 ```python
 from vgi import TableInOutFunction, Arg
 
@@ -21,6 +23,28 @@ class SumColumnsFunction(TableInOutFunction):
 
     def transform(self, batch):
         ...
+```
+
+```python
+from vgi import ScalarFunction, Arg
+import pyarrow as pa
+import pyarrow.compute as pc
+
+class DoubleColumn(ScalarFunction):
+    """Double the values in a numeric column."""
+
+    class Meta:
+        name = "double"
+        categories = ["numeric", "transform"]
+
+    column = Arg[str](0, doc="Column to double")
+
+    @property
+    def output_type(self) -> pa.DataType:
+        return self.input_schema.field(self.column).type
+
+    def compute(self, batch):
+        return pc.multiply(batch.column(self.column), 2)
 ```
 
 ## Accessing Metadata
