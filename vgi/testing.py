@@ -395,7 +395,7 @@ class FunctionTestClient(_BaseTestClient):
         # Create bind result for callback
         if bind_result_callback is not None:
             bind_batch = _create_bind_result_batch(
-                func.output_schema, func.max_processes(), invocation_id
+                func.output_schema, func.max_processes, invocation_id
             )
             bind_result_callback(bind_batch)
 
@@ -405,11 +405,11 @@ class FunctionTestClient(_BaseTestClient):
             [pa.array([init_input.projection_ids], type=pa.list_(pa.int32()))],
             schema=pa.schema([pa.field("projection_ids", pa.list_(pa.int32()))]),
         )
-        init_result = func.perform_init(init_batch)
+        init_result = func.initialize_global_state(init_batch)
 
         # If this is a secondary worker scenario, retrieve init
-        if init_result.global_init_identifier is not None:
-            func.retrieve_init(init_result)
+        if init_result.global_execution_identifier is not None:
+            func.load_global_state(init_result)
 
         # Get the run generator
         generator: Generator[ProtocolOutput, ProtocolInput | None, None] = func.run()
@@ -574,11 +574,11 @@ class TableFunctionTestClient(_BaseTestClient):
             [pa.array([init_input.projection_ids], type=pa.list_(pa.int32()))],
             schema=pa.schema([pa.field("projection_ids", pa.list_(pa.int32()))]),
         )
-        init_result = func.perform_init(init_batch)
+        init_result = func.initialize_global_state(init_batch)
 
         # If this is a secondary worker scenario, retrieve init
-        if init_result.global_init_identifier is not None:
-            func.retrieve_init(init_result)
+        if init_result.global_execution_identifier is not None:
+            func.load_global_state(init_result)
 
         # Get the run generator (no priming needed for TableFunctionGenerator)
         generator: Generator[TableProtocolOutput, None, None] = func.run()
@@ -1050,7 +1050,7 @@ class ScalarFunctionTestClient(_BaseTestClient):
         # Create bind result for callback
         if bind_result_callback is not None:
             bind_batch = _create_bind_result_batch(
-                func.output_schema, func.max_processes(), invocation_id
+                func.output_schema, func.max_processes, invocation_id
             )
             bind_result_callback(bind_batch)
 

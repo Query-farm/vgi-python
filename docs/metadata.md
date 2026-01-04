@@ -16,7 +16,7 @@ class SumColumnsFunction(TableInOutFunction):
         name = "sum_columns"  # Registration name (default: snake_case of class)
         description = "Sum all numeric columns and return a single row"
         categories = ["aggregation", "numeric"]
-        max_workers = 1  # Single-threaded (replaces max_processes())
+        max_workers = 1  # Single-threaded (used by max_processes property)
         supports_distributed = True
 
     columns = Arg[list]("columns", default=None, doc="Columns to sum")

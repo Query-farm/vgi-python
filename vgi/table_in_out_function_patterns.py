@@ -94,7 +94,7 @@ class AggregationFunction(TableInOutFunction):
 
     DISTRIBUTED AGGREGATION
     -----------------------
-    When max_processes() > 1, the aggregation runs in parallel:
+    When max_processes > 1, the aggregation runs in parallel:
 
     1. Each worker calls accumulate() for its assigned batches
     2. Each worker's state is saved via get_accumulated_state()

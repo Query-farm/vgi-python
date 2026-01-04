@@ -209,10 +209,10 @@ class TestExtractParameters:
 
 
 class TestMaxWorkersIntegration:
-    """Tests for max_workers integration with max_processes()."""
+    """Tests for max_workers integration with max_processes property."""
 
     def test_max_workers_used(self, test_logger: structlog.stdlib.BoundLogger) -> None:
-        """max_processes() returns Meta.max_workers when defined."""
+        """max_processes returns Meta.max_workers when defined."""
         from tests.conftest import make_invocation
 
         class LimitedFunction(TableInOutFunction):
@@ -223,12 +223,12 @@ class TestMaxWorkersIntegration:
 
         invocation = make_invocation(input_schema=pa.schema([]))
         func = LimitedFunction(invocation=invocation, logger=test_logger)
-        assert func.max_processes() == 2
+        assert func.max_processes == 2
 
     def test_default_max_workers(
         self, test_logger: structlog.stdlib.BoundLogger
     ) -> None:
-        """max_processes() returns default when max_workers not defined."""
+        """max_processes returns default when max_workers not defined."""
         from tests.conftest import make_invocation
 
         class UnlimitedFunction(TableInOutFunction):
@@ -236,7 +236,7 @@ class TestMaxWorkersIntegration:
 
         invocation = make_invocation(input_schema=pa.schema([]))
         func = UnlimitedFunction(invocation=invocation, logger=test_logger)
-        assert func.max_processes() == 99999
+        assert func.max_processes == 99999
 
 
 class TestArrowSerialization:

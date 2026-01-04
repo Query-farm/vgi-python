@@ -3,7 +3,7 @@
 This module defines custom exceptions used throughout the VGI framework.
 
 Classes:
-    InitIdentifierError: Raised when init_identifier is required but not set.
+    InitIdentifierError: Raised when execution_identifier is required but not set.
     SchemaValidationError: Raised when a batch schema doesn't match expected schema.
 
 """
@@ -16,26 +16,26 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
 __all__ = [
-    "InitIdentifierError",
+    "ExecutionIdentifierError",
     "SchemaValidationError",
 ]
 
 
-class InitIdentifierError(ValueError):
-    """Raised when an operation requires an init_identifier that hasn't been set.
+class ExecutionIdentifierError(ValueError):
+    """Raised when an operation requires an execution_identifier that hasn't been set.
 
     This typically occurs when:
-    - store_state() is called before perform_init() or retrieve_init()
-    - collect_states() is called before perform_init() or retrieve_init()
+    - store_state() is called before initialize_global_state() or load_global_state()
+    - collect_states() is called before initialize_global_state() or load_global_state()
     - Work queue operations are attempted before initialization
 
-    The init_identifier is automatically set during:
-    - perform_init() for the primary worker
-    - retrieve_init() for secondary workers
+    The execution_identifier is automatically set during:
+    - initialize_global_state() for the primary worker
+    - load_global_state() for secondary workers
 
     Resolution:
-    - Ensure your function calls super().perform_init() in perform_init()
-    - Ensure the worker correctly calls retrieve_init() for secondary workers
+    - Ensure your function calls super().initialize_global_state()
+    - Ensure the worker correctly calls load_global_state() for secondary workers
 
     """
 

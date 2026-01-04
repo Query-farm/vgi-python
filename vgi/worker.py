@@ -321,7 +321,7 @@ class Worker:
         """Read a schema + record batch pair from stdin.
 
         Args:
-            context: Description for debug logging (e.g., "invocation", "init_data").
+            context: Description for debug logging (e.g., "invocation", "init_input").
 
         Returns:
             The deserialized RecordBatch.
@@ -337,9 +337,9 @@ class Worker:
         """Read and parse the call data from stdin."""
         return Invocation.deserialize(self._read_ipc_batch("invocation"))
 
-    def _read_init_data(self) -> pa.RecordBatch:
+    def _read_init_input(self) -> pa.RecordBatch:
         """Read and parse the init data from stdin."""
-        return self._read_ipc_batch("init_data")
+        return self._read_ipc_batch("init_input")
 
     def _process_scalar_batches(
         self,
@@ -357,11 +357,11 @@ class Worker:
             WorkerStats with batch_count, total_input_rows, total_output_rows.
 
         """
-        if invocation.global_init_identifier is None:
+        if invocation.global_execution_identifier is None:
             raise ValueError(
-                "global_init_identifier is required but was None. "
+                "global_execution_identifier is required but was None. "
                 "This is an internal protocol error - the worker should have set "
-                "global_init_identifier after perform_init() completed successfully."
+                "global_execution_identifier after initialize_global_state()."
             )
         generator = instance.run()
         next(generator)  # Prime the run() generator
@@ -448,11 +448,11 @@ class Worker:
             WorkerStats with batch_count, total_input_rows, total_output_rows.
 
         """
-        if invocation.global_init_identifier is None:
+        if invocation.global_execution_identifier is None:
             raise ValueError(
-                "global_init_identifier is required but was None. "
+                "global_execution_identifier is required but was None. "
                 "This is an internal protocol error - the worker should have set "
-                "global_init_identifier after perform_init() completed successfully."
+                "global_execution_identifier after initialize_global_state()."
             )
         generator = instance.run()
         next(generator)  # Prime the run() generator
@@ -607,7 +607,7 @@ class Worker:
 
         bind_result_bytes = OutputSpec(
             output_schema=instance.output_schema,
-            max_processes=instance.max_processes(),
+            max_processes=instance.max_processes,
             invocation_id=instance.create_invocation_id(),
             active_features=active_features,
         ).serialize()
@@ -615,19 +615,19 @@ class Worker:
         if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):
             raise OSError("Failed to write bind result record batch")
 
-        if invocation.global_init_identifier is None:
+        if invocation.global_execution_identifier is None:
             # Primary worker: perform init and store in storage
             fn_log.info("processing_init")
-            init_result = instance.perform_init(self._read_init_data())
+            init_result = instance.initialize_global_state(self._read_init_input())
             init_result_bytes = init_result.serialize()
             if sys.stdout.write(init_result_bytes) != len(init_result_bytes):
                 raise OSError("Failed to write init result record batch")
             fn_log.info("processing_init_complete", init_result=init_result)
-            invocation = invocation.with_global_init_identifier(init_result)
+            invocation = invocation.with_global_execution_identifier(init_result)
         else:
             # Secondary worker: retrieve shared init from storage
             fn_log.info("retrieving_init")
-            instance.retrieve_init(invocation.global_init_identifier)
+            instance.load_global_state(invocation.global_execution_identifier)
 
         # Dispatch to appropriate processing method based on function type.
         # ScalarFunctionGenerator processes input batches to single-column output.

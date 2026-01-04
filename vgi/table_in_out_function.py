@@ -469,7 +469,7 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunctionBase):
         Default: returns None (no finalization output)
 
     setup() -> None
-        Called before processing starts, after init_data is available.
+        Called before processing starts, after init_input is available.
         Override to acquire resources like database connections, file handles,
         or external service clients. Default: no-op.
 
@@ -858,8 +858,8 @@ class TableInOutFunction(TableInOutGeneratorFunction):
                     schema=self.output_schema
                 )]
 
-            def max_processes(self) -> int:
-                return 1  # Single-process aggregation
+            class Meta:
+                max_workers = 1  # Single-process aggregation
 
     Distributed aggregation (parallel workers):
 
@@ -1076,8 +1076,8 @@ class TableInOutFunction(TableInOutGeneratorFunction):
 
         """
         # Collect states from all workers for distributed processing
-        # Only attempt if init_identifier is set (indicates distributed mode)
-        if self.init_identifier is not None:
+        # Only attempt if execution_identifier is set (indicates distributed mode)
+        if self.execution_identifier is not None:
             states = self.collect_states(vgi.ipc_utils.RecordBatchState)
             if states:
                 self.load_states(states)

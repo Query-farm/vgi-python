@@ -43,7 +43,7 @@ Scalar functions have a simplified lifecycle with no finalize phase. Processing 
 │    ↓                                                            │
 │  output_schema (property accessed)                              │
 │    ↓                                                            │
-│  perform_init(init_batch) → InitResult                    │
+│  initialize_global_state(init_batch) → InitResult                    │
 │    ↓                                                            │
 │  setup()  ← Acquire resources here (DB connections, files)      │
 │    ↓                                                            │
@@ -71,17 +71,17 @@ Scalar functions have a simplified lifecycle with no finalize phase. Processing 
 
 ## Multi-Process Lifecycle (max_processes > 1)
 
-When `max_processes() > 1`, the client spawns multiple worker processes.
+When `max_processes > 1`, the client spawns multiple worker processes.
 One becomes the **primary worker** (runs finalize), others are **secondary workers**.
 
 **Primary Worker:**
 ```
-__init__ → output_schema → perform_init → setup → process → finalize → teardown
+__init__ → output_schema → initialize_global_state → setup → process → finalize → teardown
 ```
 
 **Secondary Workers:**
 ```
-__init__ → output_schema → retrieve_init → setup → process → teardown
+__init__ → output_schema → load_global_state → setup → process → teardown
                                                       ↓
                                               (NO finalize!)
 ```
@@ -90,8 +90,8 @@ __init__ → output_schema → retrieve_init → setup → process → teardown
 
 | Aspect | Primary Worker | Secondary Workers |
 |--------|---------------|-------------------|
-| `perform_init()` called? | Yes | No |
-| `retrieve_init()` called? | No | Yes |
+| `initialize_global_state()` called? | Yes | No |
+| `load_global_state()` called? | No | Yes |
 | `finalize()` called? | Yes | No |
 | `teardown()` called? | Yes (after finalize) | Yes (after process ends) |
 | Receives all batches? | Subset (round-robin) | Subset (round-robin) |

@@ -41,7 +41,7 @@ import pyarrow as pa
 import structlog
 
 import vgi.ipc_utils
-from vgi.exceptions import InitIdentifierError, SchemaValidationError
+from vgi.exceptions import ExecutionIdentifierError, SchemaValidationError
 from vgi.function_storage import SqliteInitStorage, SqliteWorkerStateStorage
 from vgi.invocation import InitResult, Invocation
 from vgi.metadata import MetadataMixin, ResolvedMetadata
@@ -262,19 +262,21 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
 
     """
 
-    init_storage: ClassVar[SqliteInitStorage] = SqliteInitStorage()
-    state_storage: ClassVar[SqliteWorkerStateStorage] = SqliteWorkerStateStorage()
+    global_state_storage: ClassVar[SqliteInitStorage] = SqliteInitStorage()
+    worker_state_storage: ClassVar[SqliteWorkerStateStorage] = (
+        SqliteWorkerStateStorage()
+    )
 
     # Cache for resolved metadata
     _metadata_cache: ClassVar[ResolvedMetadata | None] = None
 
-    # The unique identifier for init data in storage. Set by perform_init()
-    # or retrieve_init(). Used to correlate parallel workers and for state storage.
-    init_identifier: bytes | None = None
+    # The unique identifier for init data in storage. Set by initialize_global_state()
+    # or load_global_state(). Used to correlate parallel workers and for state storage.
+    execution_identifier: bytes | None = None
 
     # This is the init data that may be been read.
-    InitDataCls: type[T]
-    init_data: T | None = None
+    InitInputType: type[T]
+    init_input: T | None = None
 
     def __init__(
         self,
@@ -293,10 +295,11 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
         self.invocation = invocation
         self.logger = logger
 
+    @property
     def max_processes(self) -> int:
-        """Return maximum number of parallel processes this function can utilize.
+        """Maximum number of parallel processes this function can utilize.
 
-        This method checks Meta.max_workers first. If not defined, returns
+        This property checks Meta.max_workers first. If not defined, returns
         the default of 99999 (effectively unlimited).
 
         To limit parallelism, define max_workers in your Meta class:
@@ -339,14 +342,14 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
         intermediate state (e.g., partial aggregations) that will be collected
         by the primary worker during finalization.
 
-        The state is keyed by (init_identifier, process_id), so calling this
+        The state is keyed by (execution_identifier, process_id), so calling this
         multiple times from the same process will overwrite the previous state.
 
         Args:
             state: A Serializable object to store.
 
         Raises:
-            ValueError: If init_identifier has not been set.
+            ValueError: If execution_identifier has not been set.
 
         Example:
             def process(self, batch: pa.RecordBatch) -> OutputGenerator:
@@ -362,13 +365,13 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
                     raise
 
         """
-        if self.init_identifier is None:
-            raise InitIdentifierError(
-                "Cannot store state: init_identifier is not set. "
-                "Call perform_init() or retrieve_init() before storing state."
+        if self.execution_identifier is None:
+            raise ExecutionIdentifierError(
+                "Cannot store state: execution_identifier is not set. "
+                "Call initialize_global_state() or load_global_state() first."
             )
-        self.state_storage.store(
-            self.init_identifier,
+        self.worker_state_storage.store(
+            self.execution_identifier,
             os.getpid(),
             state.serialize(),
         )
@@ -388,7 +391,7 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
             List of deserialized state objects from all workers.
 
         Raises:
-            ValueError: If init_identifier has not been set.
+            ValueError: If execution_identifier has not been set.
 
         Example:
             def finalize(self) -> OutputGenerator:
@@ -398,18 +401,20 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
                 yield Output(combined.to_batch())
 
         """
-        if self.init_identifier is None:
-            raise InitIdentifierError(
-                "Cannot collect states: init_identifier is not set. "
-                "Call perform_init() or retrieve_init() before collecting states."
+        if self.execution_identifier is None:
+            raise ExecutionIdentifierError(
+                "Cannot collect states: execution_identifier is not set. "
+                "Call initialize_global_state() or load_global_state() first."
             )
-        state_bytes_list = self.state_storage.collect_and_delete(self.init_identifier)
+        state_bytes_list = self.worker_state_storage.collect_and_delete(
+            self.execution_identifier
+        )
         return [state_class.deserialize(data) for data in state_bytes_list]
 
     def enqueue_work(self, work_items: list[bytes]) -> int:
         """Add work items to the queue for this invocation.
 
-        Call this during initialization (perform_init or setup) to populate
+        Call this during initialization (initialize_global_state or setup) to populate
         the work queue that workers will pull from during process().
 
         Args:
@@ -421,23 +426,25 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
             Number of items enqueued.
 
         Raises:
-            ValueError: If init_identifier has not been set.
+            ValueError: If execution_identifier has not been set.
 
         Example:
-            def perform_init(self, init_input: pa.RecordBatch) -> InitResult:
-                result = super().perform_init(init_input)
+            def initialize_global_state(self, init_input: pa.RecordBatch) -> InitResult:
+                result = super().initialize_global_state(init_input)
                 # Create work items (e.g., ranges to process)
                 work_items = [struct.pack(">QQ", start, end) for start, end in ranges]
                 self.enqueue_work(work_items)
                 return result
 
         """
-        if self.init_identifier is None:
-            raise InitIdentifierError(
-                "Cannot enqueue work: init_identifier is not set. "
-                "Call enqueue_work() after perform_init() has completed."
+        if self.execution_identifier is None:
+            raise ExecutionIdentifierError(
+                "Cannot enqueue work: execution_identifier is not set. "
+                "Call enqueue_work() after initialize_global_state() has completed."
             )
-        return self.state_storage.enqueue_work(self.init_identifier, work_items)
+        return self.worker_state_storage.enqueue_work(
+            self.execution_identifier, work_items
+        )
 
     def dequeue_work(self) -> bytes | None:
         """Claim and return the next work item from the queue.
@@ -452,7 +459,7 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
             Opaque bytes representing a work item, or None if queue is empty.
 
         Raises:
-            ValueError: If init_identifier has not been set.
+            ValueError: If execution_identifier has not been set.
 
         Example:
             def process(self) -> OutputGenerator:
@@ -465,12 +472,12 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
                     yield Output(batch)
 
         """
-        if self.init_identifier is None:
-            raise InitIdentifierError(
-                "Cannot dequeue work: init_identifier is not set. "
-                "Call perform_init() or retrieve_init() before dequeuing work."
+        if self.execution_identifier is None:
+            raise ExecutionIdentifierError(
+                "Cannot dequeue work: execution_identifier is not set. "
+                "Call initialize_global_state() or load_global_state() first."
             )
-        return self.state_storage.dequeue_work(self.init_identifier)
+        return self.worker_state_storage.dequeue_work(self.execution_identifier)
 
     @final
     @cached_property
@@ -523,35 +530,37 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
                 context=f"input to {type(self).__name__}",
             )
 
-    def perform_init(self, init_input: pa.RecordBatch) -> InitResult:
+    def initialize_global_state(self, init_input: pa.RecordBatch) -> InitResult:
         """Perform a new init call and store it in the storage."""
-        self.init_data = self.InitDataCls.deserialize(init_input)
-        assert self.init_data is not None
-        self.init_identifier = self.init_storage.create(self.init_data.serialize())
-        return InitResult(self.init_identifier)
+        self.init_input = self.InitInputType.deserialize(init_input)
+        assert self.init_input is not None
+        self.execution_identifier = self.global_state_storage.create(
+            self.init_input.serialize()
+        )
+        return InitResult(self.execution_identifier)
 
-    def retrieve_init(self, init_input: InitResult) -> None:
+    def load_global_state(self, init_input: InitResult) -> None:
         """Retrieve and store init data from the storage."""
-        if init_input.global_init_identifier is None:
-            raise InitIdentifierError(
-                "Cannot retrieve init: global_init_identifier in InitResult is None. "
-                "Ensure perform_init() returns an InitResult with a valid identifier."
+        if init_input.global_execution_identifier is None:
+            raise ExecutionIdentifierError(
+                "Cannot retrieve init: global_execution_identifier is None. "
+                "Ensure initialize_global_state() returns a valid InitResult."
             )
-        self.init_identifier = init_input.global_init_identifier
-        self.init_data = self.InitDataCls.deserialize_bytes(
-            self.init_storage.get(self.init_identifier)
+        self.execution_identifier = init_input.global_execution_identifier
+        self.init_input = self.InitInputType.deserialize_bytes(
+            self.global_state_storage.get(self.execution_identifier)
         )
 
     def setup(self) -> None:
         """Acquire resources before processing starts.
 
         Override to acquire resources like database connections, file handles,
-        or external service clients. Called after init_data is available.
+        or external service clients. Called after init_input is available.
 
         Available at this point:
-            - self.init_data: The init data (FunctionInitInput or
+            - self.init_input: The init data (FunctionInitInput or
               TableFunctionInitInput)
-            - self.init_identifier: Storage key for distributed state
+            - self.execution_identifier: Storage key for distributed state
             - self.invocation: The complete invocation request
 
         """

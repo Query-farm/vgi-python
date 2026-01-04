@@ -183,7 +183,7 @@ class RepeatInputsFunction(TableInOutGeneratorFunction):
     --------
     - output_schema: Returns input schema unchanged (default)
     - process(): For each input, yields it N times using has_more=True
-    - max_processes(): Returns high value to enable parallel processing
+    - max_processes: Uses default high value to enable parallel processing
 
     SCHEMA TRANSFORMATION
     ---------------------
@@ -212,7 +212,7 @@ class RepeatInputsFunction(TableInOutGeneratorFunction):
     ----------------------------------------------
     This function is stateless - each batch is processed independently without
     any cross-batch state. This makes it trivially parallelizable using the
-    default max_processes() from the base class.
+    default max_processes from the base class.
 
     Example:
     -------
@@ -428,7 +428,7 @@ class SumAllColumnsFunctionDistributed(SumAllColumnsFunction):
     - On GeneratorExit, each worker stores its state via store_state()
     - During finalize(), the primary worker collects all states via collect_states()
 
-    Uses the default max_processes() from the base class to enable parallelism.
+    Uses the default max_processes from the base class to enable parallelism.
 
     """
 
@@ -629,7 +629,7 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction):
     4. Emit final result in finish()
 
     Unlike single-process aggregations, this function:
-    - Uses default max_processes() (allows parallelism)
+    - Uses default max_processes (allows parallelism)
     - Stores partial state via save_state() before finalize
     - Merges all worker states via load_states() before finish()
 
