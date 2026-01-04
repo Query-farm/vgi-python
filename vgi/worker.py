@@ -259,6 +259,43 @@ class Worker:
         return matches[0]
 
     @staticmethod
+    def _validate_required_settings(
+        func_cls: type[Function[Any]], invocation: "Invocation"
+    ) -> None:
+        """Validate that all required settings are present in invocation.
+
+        Functions can declare required DuckDB settings via Meta.required_settings.
+        This method checks that all required settings are provided in the
+        invocation.duckdb_settings dictionary.
+
+        Args:
+            func_cls: The function class to validate settings for.
+            invocation: The invocation containing duckdb_settings.
+
+        Raises:
+            ValueError: If required settings are missing from the invocation.
+
+        """
+        meta = func_cls.get_metadata()
+        required = set(meta.required_settings)
+
+        if not required:
+            return  # No settings required
+
+        provided = (
+            set(invocation.duckdb_settings.keys())
+            if invocation.duckdb_settings
+            else set()
+        )
+        missing = required - provided
+
+        if missing:
+            raise ValueError(
+                f"Function '{meta.name}' requires DuckDB settings {sorted(missing)} "
+                f"but they were not provided. Provided settings: {sorted(provided)}"
+            )
+
+    @staticmethod
     def _suggest_similar_names(name: str, candidates: list[str]) -> list[str]:
         """Find function names similar to the given name.
 
@@ -591,6 +628,9 @@ class Worker:
 
         candidates = registry[invocation.function_name]
         func_cls = self._match_function(invocation, candidates)
+
+        # Validate required settings before instantiation
+        self._validate_required_settings(func_cls, invocation)
 
         # Instantiate the function
         instance = func_cls(invocation=invocation, logger=fn_log)

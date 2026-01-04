@@ -207,6 +207,53 @@ class SequenceFunction(TableFunctionGenerator):
             ))
 ```
 
+## Using DuckDB Settings
+
+Functions can declare required DuckDB settings via `Meta.required_settings` and
+access them via `self.settings` or `self.get_setting()`. Settings are available
+during the bind phase, allowing output schema to depend on setting values.
+
+```python
+class SettingsAwareFunction(TableFunctionGenerator):
+    """Function that uses DuckDB settings to determine output."""
+
+    class Meta:
+        required_settings = ["vgi_verbose_mode"]  # Declare required settings
+        max_workers = 1
+
+    count = Arg[int](0, doc="Number of rows")
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        # Settings available during bind - can influence output schema
+        fields = [pa.field("id", pa.int64())]
+
+        if self.get_setting("vgi_verbose_mode") == "true":
+            fields.append(pa.field("details", pa.string()))
+
+        return pa.schema(fields)
+
+    def process(self):
+        verbose = self.get_setting("vgi_verbose_mode") == "true"
+        for i in range(self.count):
+            data = {"id": [i]}
+            if verbose:
+                data["details"] = [f"row_{i}"]
+            yield Output(pa.RecordBatch.from_pydict(data, schema=self.output_schema))
+```
+
+Client passes settings when invoking:
+
+```python
+with Client("vgi-example-worker") as client:
+    for batch in client.table_function(
+        function_name="settings_aware",
+        arguments=Arguments(positional=(pa.scalar(10),)),
+        duckdb_settings={"vgi_verbose_mode": "true"},
+    ):
+        process(batch)
+```
+
 ## Creating a Worker
 
 ```python
@@ -284,6 +331,13 @@ output_schema = schema_like(self.input_schema, rename={"old": "new"})
 | `finish()` | Final output after all input | Returns empty list |
 | `setup()` | Acquire resources | No-op |
 | `teardown()` | Release resources | No-op |
+
+**All Functions (Common):**
+
+| Property/Method | Description |
+|-----------------|-------------|
+| `settings` | Dict of DuckDB settings passed to function |
+| `get_setting(name, default)` | Get specific setting value |
 
 ### Pattern Decision Tree
 

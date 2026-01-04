@@ -39,6 +39,7 @@ __all__ = [
     "LoggingGeneratorFunction",
     "PartitionedRangeFunction",
     "ProjectedDataFunction",
+    "SettingsAwareFunction",
 ]
 
 
@@ -635,3 +636,91 @@ class ProjectedDataFunction(TableFunctionGenerator):
 
             current_id += batch_size
             remaining -= batch_size
+
+
+class SettingsAwareFunction(TableFunctionGenerator):
+    """Generates data with output schema determined by DuckDB settings.
+
+    USE CASE
+    --------
+    Demonstrates how functions can declare required DuckDB settings via
+    Meta.required_settings and access them via self.settings or
+    self.get_setting(). The output schema is determined at bind time based
+    on the provided settings.
+
+    When vgi_verbose_mode is "true", an extra "details" column is included
+    in the output schema. This shows how settings can affect the bind result.
+
+    SCHEMA
+    ------
+    Base output: {"id": int64, "value": float64}
+    With vgi_verbose_mode="true": {"id": int64, "value": float64, "details": string}
+
+    PARALLELIZATION
+    ---------------
+    Single worker only (max_workers=1).
+
+    Example:
+    -------
+    With duckdb_settings={"vgi_verbose_mode": "true"}:
+    Returns: [{"id": 0, "value": 0.0, "details": "row_0"}, ...]
+
+    With duckdb_settings={"vgi_verbose_mode": "false"}:
+    Returns: [{"id": 0, "value": 0.0}, ...]
+
+    """
+
+    class Meta:
+        """Metadata for SettingsAwareFunction."""
+
+        name = "settings_aware"
+        description = "Generates data with schema determined by DuckDB settings"
+        categories = ["generator", "settings"]
+        max_workers = 1
+        required_settings = ["vgi_verbose_mode"]
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM settings_aware(5)",
+                description="Generate 5 rows (requires vgi_verbose_mode setting)",
+            )
+        ]
+
+    count: int = Arg[int](0, doc="Number of rows to generate", ge=0)  # type: ignore[assignment]
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        """Return output schema based on vgi_verbose_mode setting.
+
+        When vgi_verbose_mode is "true", includes an extra "details" column.
+        This demonstrates how settings can affect the bind result.
+        """
+        fields: list[pa.Field] = [
+            pa.field("id", pa.int64()),
+            pa.field("value", pa.float64()),
+        ]
+
+        # Add details column if verbose mode is enabled
+        if self.get_setting("vgi_verbose_mode") == "true":
+            fields.append(pa.field("details", pa.string()))
+
+        return pa.schema(fields)
+
+    def cardinality(self) -> TableCardinality:
+        """Return exact cardinality since we know the count."""
+        return TableCardinality(estimate=self.count, max=self.count)
+
+    def process(self) -> OutputGenerator:
+        """Generate data based on settings."""
+        verbose = self.get_setting("vgi_verbose_mode") == "true"
+        output_schema = self.output_schema
+
+        for i in range(self.count):
+            data: dict[str, list[int] | list[float] | list[str]] = {
+                "id": [i],
+                "value": [float(i) * 2.5],
+            }
+
+            if verbose:
+                data["details"] = [f"row_{i}"]
+
+            yield Output(pa.RecordBatch.from_pydict(data, schema=output_schema))

@@ -27,6 +27,7 @@ from vgi.examples.table import (
     RandomSampleFunction,
     RangeFunction,
     SequenceFunction,
+    SettingsAwareFunction,
 )
 from vgi.examples.table_in_out import (
     BufferInputFunction,
@@ -65,6 +66,7 @@ class ExampleWorker(Worker):
         LoggingGeneratorFunction,
         PartitionedRangeFunction,
         ProjectedDataFunction,
+        SettingsAwareFunction,
         # ScalarFunctionGenerator - transform to single-column output
         DoubleColumnFunction,
         AddColumnsFunction,

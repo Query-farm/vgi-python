@@ -58,23 +58,23 @@ class InitResult:
     """Result from the global initialization phase of a function.
 
     When a function supports parallel execution (max_processes > 1), the first
-    worker runs perform_init() which returns a InitResult. This result
+    worker runs initialize_global_state() which returns a InitResult. This result
     contains an identifier that is passed to all subsequent parallel workers
-    via retrieve_init(), allowing them to share state or coordinate processing.
+    via load_global_state(), allowing them to share state or coordinate processing.
 
     Attributes:
-        global_init_identifier: Opaque bytes that identify the initialized state.
+        global_execution_identifier: Opaque bytes that identify the initialized state.
             None if no global initialization was performed.
 
     """
 
-    global_init_identifier: bytes | None = None
+    global_execution_identifier: bytes | None = None
 
-    _IDENTIFIER_FIELD_NAME: ClassVar[str] = "global_init_identifier"
+    _IDENTIFIER_FIELD_NAME: ClassVar[str] = "global_execution_identifier"
 
     @classmethod
     def has_identifier(cls, data: pa.RecordBatch) -> bool:
-        """Check if the RecordBatch contains a global_init_identifier field.
+        """Check if the RecordBatch contains a global_execution_identifier field.
 
         Args:
             data: RecordBatch to check for the field.
@@ -108,7 +108,7 @@ class InitResult:
         batch = pa.RecordBatch.from_pylist(
             [
                 {
-                    self._IDENTIFIER_FIELD_NAME: self.global_init_identifier,
+                    self._IDENTIFIER_FIELD_NAME: self.global_execution_identifier,
                 }
             ],
             schema=self.schema(),
@@ -130,7 +130,7 @@ class InitResult:
             data, "InitResult", required_fields=[cls._IDENTIFIER_FIELD_NAME]
         )
         return InitResult(
-            global_init_identifier=first_row[cls._IDENTIFIER_FIELD_NAME],
+            global_execution_identifier=first_row[cls._IDENTIFIER_FIELD_NAME],
         )
 
 
@@ -155,7 +155,7 @@ class Invocation:
         correlation_id: String identifier for logging and correlation purposes.
         invocation_id: Unique bytes identifying this function binding. Used to
             correlate multiple parallel workers processing the same logical call.
-        global_init_identifier: Optional result from global initialization phase.
+        global_execution_identifier: Optional result from global initialization phase.
         arguments: Positional and named arguments passed to the function.
         client_features: Feature flags supported by the client. The worker will
             respond with active_features in OutputSpec indicating which features
@@ -163,6 +163,11 @@ class Invocation:
         attach_id: Optional unique identifier for the DuckDB database attachment.
             When VGI is used from an attached database, this allows tracing calls
             back to that specific attachment. None when not using attached databases.
+        duckdb_settings: Optional dictionary of DuckDB settings/pragmas to pass
+            to the function. Functions can declare required settings via
+            Meta.required_settings and access them via self.settings or
+            self.get_setting(). Settings are available during bind phase,
+            allowing output schema to depend on settings.
 
     Example:
         invocation = Invocation(
@@ -184,16 +189,17 @@ class Invocation:
     # The unique identifier for the call, typically this may be a uuid.
     invocation_id: bytes | None
 
-    global_init_identifier: InitResult | None = None
+    global_execution_identifier: InitResult | None = None
     arguments: Arguments = Arguments()
     client_features: frozenset[str] = frozenset()
     attach_id: bytes | None = None
+    duckdb_settings: dict[str, str] | None = None
 
-    def with_global_init_identifier(
-        self, global_init_identifier: InitResult
+    def with_global_execution_identifier(
+        self, global_execution_identifier: InitResult
     ) -> Invocation:
-        """Return a new Invocation with the given global_init_identifier."""
-        return replace(self, global_init_identifier=global_init_identifier)
+        """Return a new Invocation with the given global_execution_identifier."""
+        return replace(self, global_execution_identifier=global_execution_identifier)
 
     def serialize(self) -> bytes:
         """Serialize Invocation to an Arrow RecordBatch.
@@ -225,12 +231,17 @@ class Invocation:
                     "invocation_id": self.invocation_id,
                     "correlation_id": self.correlation_id,
                     InitResult._IDENTIFIER_FIELD_NAME: (
-                        self.global_init_identifier.global_init_identifier
-                        if self.global_init_identifier
+                        self.global_execution_identifier.global_execution_identifier
+                        if self.global_execution_identifier
                         else None
                     ),
                     "client_features": list(self.client_features),
                     "attach_id": self.attach_id,
+                    "duckdb_settings": (
+                        list(self.duckdb_settings.items())
+                        if self.duckdb_settings
+                        else None
+                    ),
                 }
             ],
             schema=pa.schema(
@@ -248,6 +259,11 @@ class Invocation:
                     ),
                     pa.field("client_features", pa.list_(pa.utf8()), nullable=False),
                     pa.field("attach_id", pa.binary(), nullable=True),
+                    pa.field(
+                        "duckdb_settings",
+                        pa.map_(pa.utf8(), pa.utf8()),
+                        nullable=True,
+                    ),
                 ]
             ),
         )
@@ -287,13 +303,13 @@ class Invocation:
         # Parse function_type from string value
         function_type = InvocationType(first_row["function_type"])
 
-        # Parse global_init_identifier - only create InitResult if field exists
+        # Parse global_execution_identifier - only create InitResult if field exists
         # and has a non-None value
-        global_init_identifier = None
+        global_execution_identifier = None
         if InitResult._IDENTIFIER_FIELD_NAME in data.schema.names:
             identifier_value = first_row[InitResult._IDENTIFIER_FIELD_NAME]
             if identifier_value is not None:
-                global_init_identifier = InitResult(identifier_value)
+                global_execution_identifier = InitResult(identifier_value)
 
         # Parse client_features - default to empty set for backward compatibility
         client_features: frozenset[str] = frozenset()
@@ -307,6 +323,14 @@ class Invocation:
         if "attach_id" in data.schema.names:
             attach_id = first_row.get("attach_id")
 
+        # Parse duckdb_settings - optional field for DuckDB settings/pragmas
+        duckdb_settings: dict[str, str] | None = None
+        if "duckdb_settings" in data.schema.names:
+            settings_value = first_row.get("duckdb_settings")
+            if settings_value is not None:
+                # Map type deserializes as list of (key, value) tuples
+                duckdb_settings = dict(settings_value)
+
         return Invocation(
             function_name=first_row["function_name"],
             input_schema=input_schema,
@@ -314,9 +338,10 @@ class Invocation:
             arguments=Arguments.decode(data.column("arguments")[0]),
             invocation_id=first_row["invocation_id"],
             correlation_id=first_row["correlation_id"],
-            global_init_identifier=global_init_identifier,
+            global_execution_identifier=global_execution_identifier,
             client_features=client_features,
             attach_id=attach_id,
+            duckdb_settings=duckdb_settings,
         )
 
     @staticmethod

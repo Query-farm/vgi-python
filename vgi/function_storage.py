@@ -265,7 +265,8 @@ class FunctionStorageSqlite:
         if row is None:
             raise KeyError(f"Key {key.hex()} not found in FunctionStorageSqlite")
 
-        return row[0]
+        result: bytes = row[0]
+        return result
 
     def global_delete(self, key: bytes) -> None:
         """Delete global value by key."""

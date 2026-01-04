@@ -512,6 +512,41 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
             )
         return self.invocation.input_schema
 
+    @property
+    def settings(self) -> dict[str, str]:
+        """Return all DuckDB settings passed to this function.
+
+        Settings are passed during the bind phase via Invocation.duckdb_settings.
+        Functions can declare required settings in Meta.required_settings.
+
+        Returns:
+            Dictionary of setting name to value. Empty dict if no settings.
+
+        Example:
+            tz = self.settings.get("TimeZone", "UTC")
+
+        """
+        return dict(self.invocation.duckdb_settings or {})
+
+    def get_setting(self, name: str, default: str | None = None) -> str | None:
+        """Get a specific DuckDB setting value.
+
+        Args:
+            name: DuckDB setting name (e.g., "TimeZone", "threads").
+            default: Value to return if setting is not present.
+
+        Returns:
+            Setting value as string, or default if not present.
+
+        Example:
+            tz = self.get_setting("TimeZone", "UTC")
+            threads = self.get_setting("threads")
+
+        """
+        if self.invocation.duckdb_settings is None:
+            return default
+        return self.invocation.duckdb_settings.get(name, default)
+
     @final
     def _validate_input_schema(self, batch: pa.RecordBatch) -> None:
         """Validate that a batch conforms to the expected input schema."""

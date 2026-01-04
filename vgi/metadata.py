@@ -307,6 +307,9 @@ class ResolvedMetadata:
     stability: FunctionStability = FunctionStability.CONSISTENT
     null_handling: NullHandling = NullHandling.DEFAULT
 
+    # DuckDB settings required by the function
+    required_settings: list[str] = field(default_factory=list)
+
     # Table function specific
     projection_pushdown: bool = True
     filter_pushdown: bool = False
@@ -332,6 +335,7 @@ class ResolvedMetadata:
             "parameters": [p.to_dict() for p in self.parameters],
             "stability": self.stability.name,
             "null_handling": self.null_handling.name,
+            "required_settings": self.required_settings,
             "projection_pushdown": self.projection_pushdown,
             "filter_pushdown": self.filter_pushdown,
             "preserves_order": self.preserves_order.name,
@@ -354,6 +358,7 @@ class ResolvedMetadata:
             parameters=[ParameterInfo.from_dict(p) for p in d.get("parameters", [])],
             stability=FunctionStability[d.get("stability", "CONSISTENT")],
             null_handling=NullHandling[d.get("null_handling", "DEFAULT")],
+            required_settings=d.get("required_settings", []),
             projection_pushdown=d.get("projection_pushdown", True),
             filter_pushdown=d.get("filter_pushdown", False),
             preserves_order=OrderPreservation[
@@ -572,6 +577,7 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         "categories",
         "stability",
         "null_handling",
+        "required_settings",  # DuckDB settings/pragmas required by function
         # Table function specific
         "projection_pushdown",
         "filter_pushdown",
@@ -708,6 +714,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         parameters=parameters,
         stability=attrs.get("stability", FunctionStability.CONSISTENT),
         null_handling=attrs.get("null_handling", NullHandling.DEFAULT),
+        required_settings=attrs.get("required_settings", []),
         projection_pushdown=attrs.get("projection_pushdown", True),
         filter_pushdown=attrs.get("filter_pushdown", False),
         preserves_order=attrs.get("preserves_order", OrderPreservation.PRESERVES_ORDER),
@@ -762,6 +769,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("parameters", pa.list_(_PARAMETER_STRUCT)),
         pa.field("stability", pa.string()),
         pa.field("null_handling", pa.string()),
+        pa.field("required_settings", pa.list_(pa.string())),
         pa.field("projection_pushdown", pa.bool_()),
         pa.field("filter_pushdown", pa.bool_()),
         pa.field("preserves_order", pa.string()),
@@ -773,7 +781,9 @@ _METADATA_SCHEMA = pa.schema(
 )
 
 # Fields that contain lists and need None -> [] conversion during deserialization
-_LIST_FIELDS: frozenset[str] = frozenset({"examples", "categories", "parameters"})
+_LIST_FIELDS: frozenset[str] = frozenset(
+    {"examples", "categories", "parameters", "required_settings"}
+)
 
 
 def _extract_arrow_row(columns: dict[str, list[Any]], index: int) -> dict[str, Any]:

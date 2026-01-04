@@ -28,6 +28,7 @@ def make_invocation(
     function_type: InvocationType = InvocationType.TABLE,
     arguments: Arguments | None = None,
     function_name: str = "test",
+    duckdb_settings: dict[str, str] | None = None,
 ) -> Invocation:
     """Create a test invocation with flexible parameters."""
     return Invocation(
@@ -37,6 +38,7 @@ def make_invocation(
         correlation_id="test",
         invocation_id=b"test",
         arguments=arguments or Arguments(),
+        duckdb_settings=duckdb_settings,
     )
 
 
