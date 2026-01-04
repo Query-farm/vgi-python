@@ -42,7 +42,7 @@ import structlog
 
 import vgi.ipc_utils
 from vgi.exceptions import ExecutionIdentifierError, SchemaValidationError
-from vgi.function_storage import SqliteInitStorage, SqliteWorkerStateStorage
+from vgi.function_storage import FunctionStorage, FunctionStorageSqlite
 from vgi.invocation import InitResult, Invocation
 from vgi.metadata import MetadataMixin, ResolvedMetadata
 
@@ -262,10 +262,7 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
 
     """
 
-    global_state_storage: ClassVar[SqliteInitStorage] = SqliteInitStorage()
-    worker_state_storage: ClassVar[SqliteWorkerStateStorage] = (
-        SqliteWorkerStateStorage()
-    )
+    storage: ClassVar[FunctionStorage] = FunctionStorageSqlite()
 
     # Cache for resolved metadata
     _metadata_cache: ClassVar[ResolvedMetadata | None] = None
@@ -370,7 +367,7 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
                 "Cannot store state: execution_identifier is not set. "
                 "Call initialize_global_state() or load_global_state() first."
             )
-        self.worker_state_storage.store(
+        self.storage.worker_put(
             self.execution_identifier,
             os.getpid(),
             state.serialize(),
@@ -406,9 +403,7 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
                 "Cannot collect states: execution_identifier is not set. "
                 "Call initialize_global_state() or load_global_state() first."
             )
-        state_bytes_list = self.worker_state_storage.collect_and_delete(
-            self.execution_identifier
-        )
+        state_bytes_list = self.storage.worker_collect(self.execution_identifier)
         return [state_class.deserialize(data) for data in state_bytes_list]
 
     def enqueue_work(self, work_items: list[bytes]) -> int:
@@ -442,9 +437,7 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
                 "Cannot enqueue work: execution_identifier is not set. "
                 "Call enqueue_work() after initialize_global_state() has completed."
             )
-        return self.worker_state_storage.enqueue_work(
-            self.execution_identifier, work_items
-        )
+        return self.storage.queue_push(self.execution_identifier, work_items)
 
     def dequeue_work(self) -> bytes | None:
         """Claim and return the next work item from the queue.
@@ -477,7 +470,7 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
                 "Cannot dequeue work: execution_identifier is not set. "
                 "Call initialize_global_state() or load_global_state() first."
             )
-        return self.worker_state_storage.dequeue_work(self.execution_identifier)
+        return self.storage.queue_pop(self.execution_identifier)
 
     @final
     @cached_property
@@ -534,9 +527,7 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
         """Perform a new init call and store it in the storage."""
         self.init_input = self.InitInputType.deserialize(init_input)
         assert self.init_input is not None
-        self.execution_identifier = self.global_state_storage.create(
-            self.init_input.serialize()
-        )
+        self.execution_identifier = self.storage.global_put(self.init_input.serialize())
         return InitResult(self.execution_identifier)
 
     def load_global_state(self, init_input: InitResult) -> None:
@@ -548,7 +539,7 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
             )
         self.execution_identifier = init_input.global_execution_identifier
         self.init_input = self.InitInputType.deserialize_bytes(
-            self.global_state_storage.get(self.execution_identifier)
+            self.storage.global_get(self.execution_identifier)
         )
 
     def setup(self) -> None:

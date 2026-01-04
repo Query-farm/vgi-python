@@ -473,11 +473,11 @@ class PartitionedRangeFunction(TableFunctionGenerator):
         """
         return TableCardinality(estimate=self.count, max=self.count)
 
-    def perform_init(self, init_input: pa.RecordBatch) -> InitResult:
+    def initialize_global_state(self, init_input: pa.RecordBatch) -> InitResult:
         """Populate the work queue with range chunks."""
-        # Parse init data and store in init_storage
-        self.init_data = TableFunctionInitInput.deserialize(init_input)
-        self.init_identifier = self.init_storage.create(self.init_data.serialize())
+        # Parse init data and store in storage
+        self.init_input = TableFunctionInitInput.deserialize(init_input)
+        self.execution_identifier = self.storage.global_put(self.init_input.serialize())
 
         # Create work items for each chunk of the range
         work_items: list[bytes] = []
@@ -489,7 +489,7 @@ class PartitionedRangeFunction(TableFunctionGenerator):
         if work_items:
             self.enqueue_work(work_items)
 
-        return InitResult(self.init_identifier)
+        return InitResult(self.execution_identifier)
 
     def process(self) -> OutputGenerator:
         """Generate values by pulling chunks from the work queue."""
@@ -579,7 +579,7 @@ class ProjectedDataFunction(TableFunctionGenerator):
 
     @property
     def output_schema(self) -> pa.Schema:
-        """Return the projected schema based on init_data."""
+        """Return the projected schema based on init_input."""
         return self.apply_projection(self.FULL_SCHEMA)
 
     def cardinality(self) -> TableCardinality:
@@ -591,8 +591,8 @@ class ProjectedDataFunction(TableFunctionGenerator):
 
         Returns indices from projection_ids if set, otherwise all columns.
         """
-        if self.init_data and self.init_data.projection_ids is not None:
-            return self.init_data.projection_ids
+        if self.init_input and self.init_input.projection_ids is not None:
+            return self.init_input.projection_ids
         return list(range(len(self.FULL_SCHEMA)))
 
     def process(self) -> OutputGenerator:
