@@ -24,8 +24,10 @@ See Also:
 """
 
 import os
+import random
 import sqlite3
 import uuid
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from enum import Enum
 from functools import cached_property
@@ -51,6 +53,7 @@ __all__ = [
     "ArgumentValidationError",
     "Arguments",
     "Function",
+    "InitIdentifierError",
     "InvocationType",
     "InitResult",
     "Level",
@@ -62,6 +65,25 @@ __all__ = [
     "SqliteInitStorage",
     "SqliteWorkerStateStorage",
 ]
+
+
+class InitIdentifierError(ValueError):
+    """Raised when an operation requires an init_identifier that hasn't been set.
+
+    This typically occurs when:
+    - store_state() is called before perform_init() or retrieve_init()
+    - collect_states() is called before perform_init() or retrieve_init()
+    - Work queue operations are attempted before initialization
+
+    The init_identifier is automatically set during:
+    - perform_init() for the primary worker
+    - retrieve_init() for secondary workers
+
+    Resolution:
+    - Ensure your function calls super().perform_init() in perform_init()
+    - Ensure the worker correctly calls retrieve_init() for secondary workers
+
+    """
 
 
 class SchemaValidationError(Exception):
@@ -673,6 +695,10 @@ class SqliteInitStorage:
             Unique key for retrieving the value.
 
         """
+        # Opportunistically clean old entries (1% of calls)
+        if random.random() < 0.01:
+            self.cleanup_old_entries(max_age_days=1.0)
+
         key = uuid.uuid4().bytes
 
         conn = self._connect()
@@ -833,6 +859,10 @@ class SqliteWorkerStateStorage:
             state_data: Serialized state bytes.
 
         """
+        # Opportunistically clean old entries (1% of calls)
+        if random.random() < 0.01:
+            self.cleanup_old_entries(max_age_days=1.0)
+
         conn = self._connect()
         try:
             conn.execute(
@@ -956,6 +986,37 @@ class SqliteWorkerStateStorage:
         finally:
             conn.close()
 
+    def cleanup_old_entries(self, max_age_days: float = 1.0) -> int:
+        """Remove worker state and work queue entries older than the specified age.
+
+        Args:
+            max_age_days: Maximum age in days for entries to keep.
+
+        Returns:
+            Number of entries deleted (from both tables).
+
+        """
+        conn = self._connect()
+        try:
+            cursor1 = conn.execute(
+                """
+                DELETE FROM worker_state
+                WHERE julianday('now') - created_at > ?
+                """,
+                (max_age_days,),
+            )
+            cursor2 = conn.execute(
+                """
+                DELETE FROM work_queue
+                WHERE julianday('now') - created_at > ?
+                """,
+                (max_age_days,),
+            )
+            conn.commit()
+            return int(cursor1.rowcount) + int(cursor2.rowcount)
+        finally:
+            conn.close()
+
 
 class FunctionInitInput:
     """Input sent to initialize global state for a Function.
@@ -1004,7 +1065,7 @@ class FunctionInitInput:
         return cls.deserialize(batch)
 
 
-class Function[T: FunctionInitInput](MetadataMixin):
+class Function[T: FunctionInitInput](ABC, MetadataMixin):
     """Base class for all VGI functions.
 
     Functions are instantiated with Invocation describing the invocation,
@@ -1109,9 +1170,10 @@ class Function[T: FunctionInitInput](MetadataMixin):
         return uuid.uuid4().bytes
 
     @property
+    @abstractmethod
     def output_schema(self) -> pa.Schema:
         """Return the output schema (must be implemented by subclass)."""
-        raise NotImplementedError("Must be implemented by subclass.")
+        ...
 
     def store_state(self, state: Serializable) -> None:
         """Store this worker's state for later collection.
@@ -1144,12 +1206,9 @@ class Function[T: FunctionInitInput](MetadataMixin):
 
         """
         if self.init_identifier is None:
-            raise ValueError(
-                "init_identifier must be set before storing state. "
-                "This is typically set automatically during perform_init() or "
-                "retrieve_init(). Ensure your function calls super().perform_init() "
-                "in perform_init(), or that the worker correctly calls "
-                "retrieve_init() for secondary workers."
+            raise InitIdentifierError(
+                "Cannot store state: init_identifier is not set. "
+                "Call perform_init() or retrieve_init() before storing state."
             )
         self.state_storage.store(
             self.init_identifier,
@@ -1183,12 +1242,9 @@ class Function[T: FunctionInitInput](MetadataMixin):
 
         """
         if self.init_identifier is None:
-            raise ValueError(
-                "init_identifier must be set before collecting states. "
-                "This is typically set automatically during perform_init() or "
-                "retrieve_init(). Ensure your function calls super().perform_init() "
-                "in perform_init(), or that the worker correctly calls "
-                "retrieve_init() for secondary workers."
+            raise InitIdentifierError(
+                "Cannot collect states: init_identifier is not set. "
+                "Call perform_init() or retrieve_init() before collecting states."
             )
         state_bytes_list = self.state_storage.collect_and_delete(self.init_identifier)
         return [state_class.deserialize(data) for data in state_bytes_list]
@@ -1220,10 +1276,9 @@ class Function[T: FunctionInitInput](MetadataMixin):
 
         """
         if self.init_identifier is None:
-            raise ValueError(
-                "init_identifier must be set before enqueuing work. "
-                "Call enqueue_work() after perform_init() has completed, typically "
-                "at the end of your perform_init() override or in setup()."
+            raise InitIdentifierError(
+                "Cannot enqueue work: init_identifier is not set. "
+                "Call enqueue_work() after perform_init() has completed."
             )
         return self.state_storage.enqueue_work(self.init_identifier, work_items)
 
@@ -1254,12 +1309,9 @@ class Function[T: FunctionInitInput](MetadataMixin):
 
         """
         if self.init_identifier is None:
-            raise ValueError(
-                "init_identifier must be set before dequeuing work. "
-                "This is typically set automatically during perform_init() or "
-                "retrieve_init(). Ensure your function calls super().perform_init() "
-                "in perform_init(), or that the worker correctly calls "
-                "retrieve_init() for secondary workers."
+            raise InitIdentifierError(
+                "Cannot dequeue work: init_identifier is not set. "
+                "Call perform_init() or retrieve_init() before dequeuing work."
             )
         return self.state_storage.dequeue_work(self.init_identifier)
 
@@ -1324,11 +1376,9 @@ class Function[T: FunctionInitInput](MetadataMixin):
     def retrieve_init(self, init_input: InitResult) -> None:
         """Retrieve and store init data from the storage."""
         if init_input.global_init_identifier is None:
-            raise ValueError(
-                "global_init_identifier is required but was None. "
-                "This indicates the InitResult was not properly initialized. "
-                "Ensure perform_init() returns a InitResult with a valid "
-                "identifier."
+            raise InitIdentifierError(
+                "Cannot retrieve init: global_init_identifier in InitResult is None. "
+                "Ensure perform_init() returns an InitResult with a valid identifier."
             )
         self.init_identifier = init_input.global_init_identifier
         self.init_data = self.InitDataCls.deserialize_bytes(

@@ -168,10 +168,21 @@ class TestWorkerStderrCapture:
         client = Client(worker_script)
         client.start()
 
-        # Give the process a moment to write stderr and exit
-        time.sleep(0.1)
+        # Poll for stderr content with timeout instead of fixed sleep
+        # The worker exits quickly, but the stderr drain thread needs time
+        timeout = 2.0
+        poll_interval = 0.05
+        elapsed = 0.0
+        stderr_output = ""
 
-        stderr_output = client.get_worker_stderr()
+        while elapsed < timeout:
+            stderr_output = client.get_worker_stderr()
+            # Check if we have the expected content
+            if "Debug: worker starting" in stderr_output:
+                break
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+
         assert "Debug: worker starting" in stderr_output
         assert "Error: something went wrong" in stderr_output
 

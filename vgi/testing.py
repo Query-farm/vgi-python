@@ -76,7 +76,7 @@ FEATURES
 
 import uuid
 from collections.abc import Callable, Generator, Iterator
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import pyarrow as pa
 import structlog
@@ -126,7 +126,188 @@ class FunctionTestClientError(Exception):
     """Error raised by FunctionTestClient operations."""
 
 
-class FunctionTestClient:
+# =============================================================================
+# Shared Infrastructure
+# =============================================================================
+
+
+def _build_arguments(
+    args: tuple[Any, ...] | None = None,
+    kwargs: dict[str, Any] | None = None,
+) -> Arguments:
+    """Build an Arguments object from args and kwargs tuples/dicts.
+
+    Converts Python values to PyArrow scalars for use in function invocations.
+
+    Args:
+        args: Optional positional arguments as a tuple of Python values.
+        kwargs: Optional named arguments as a dict of Python values.
+
+    Returns:
+        An Arguments instance with PyArrow scalar values.
+
+    """
+    positional: tuple[pa.Scalar[Any], ...] = ()
+    named: dict[str, pa.Scalar[Any]] = {}
+
+    if args:
+        positional = tuple(pa.scalar(a) for a in args)
+    if kwargs:
+        named = {k: pa.scalar(v) for k, v in kwargs.items()}
+
+    return Arguments(positional=positional, named=named)
+
+
+def _create_bind_result_batch(
+    output_schema: pa.Schema,
+    max_processes: int,
+    invocation_id: bytes,
+) -> pa.RecordBatch:
+    """Create a bind result batch for callback invocation.
+
+    Args:
+        output_schema: The function's output schema.
+        max_processes: Maximum parallel workers the function supports.
+        invocation_id: Unique identifier for this invocation.
+
+    Returns:
+        A RecordBatch containing the bind result.
+
+    """
+    return pa.RecordBatch.from_pylist(
+        [
+            {
+                "output_schema": output_schema.serialize().to_pybytes(),
+                "max_processes": max_processes,
+                "invocation_id": invocation_id,
+            }
+        ],
+        schema=pa.schema(
+            cast(
+                list[tuple[str, pa.DataType]],
+                [
+                    ("output_schema", pa.binary()),
+                    ("max_processes", pa.int64()),
+                    ("invocation_id", pa.binary()),
+                ],
+            )
+        ),
+    )
+
+
+def _assert_batches_equal(
+    outputs: list[pa.RecordBatch],
+    expected: list[pa.RecordBatch],
+    check_order: bool = True,
+    msg: str | None = None,
+) -> None:
+    """Assert that output batches match expected batches.
+
+    Args:
+        outputs: Actual output batches from a function.
+        expected: Expected output batches.
+        check_order: If True, order of output batches must match. Default True.
+        msg: Optional custom assertion message prefix.
+
+    Raises:
+        AssertionError: If output doesn't match expected.
+
+    """
+    prefix = f"{msg}: " if msg else ""
+
+    # Check batch count
+    if len(outputs) != len(expected):
+        actual_rows = [o.num_rows for o in outputs]
+        expected_rows = [e.num_rows for e in expected]
+        raise AssertionError(
+            f"{prefix}Expected {len(expected)} output batches, got {len(outputs)}. "
+            f"Output rows: {actual_rows}, Expected rows: {expected_rows}"
+        )
+
+    # Compare batches
+    if check_order:
+        for i, (actual, exp) in enumerate(zip(outputs, expected, strict=True)):
+            if not actual.equals(exp):
+                raise AssertionError(
+                    f"{prefix}Batch {i} mismatch.\n"
+                    f"Expected:\n{exp.to_pydict()}\n"
+                    f"Got:\n{actual.to_pydict()}"
+                )
+    else:
+        # Convert to sets of dicts for unordered comparison
+        actual_dicts = [b.to_pydict() for b in outputs]
+        expected_dicts = [b.to_pydict() for b in expected]
+
+        for exp_dict in expected_dicts:
+            if exp_dict not in actual_dicts:
+                raise AssertionError(
+                    f"{prefix}Expected batch not found in output.\n"
+                    f"Expected:\n{exp_dict}\n"
+                    f"Actual outputs:\n{actual_dicts}"
+                )
+
+
+class _BaseTestClient:
+    """Base class for test clients with shared infrastructure.
+
+    Provides common functionality:
+    - Context manager support
+    - Log message capture
+    - Logger initialization
+
+    Subclasses implement the specific function type testing logic.
+
+    """
+
+    def __init__(self, function_class: type, component: str) -> None:
+        """Initialize the base test client.
+
+        Args:
+            function_class: The function class to test (not an instance).
+            component: Component name for logging context.
+
+        """
+        self.function_class = function_class
+        self.logs: list[Message] = []
+        self._logger: structlog.stdlib.BoundLogger = structlog.get_logger().bind(
+            component=component
+        )
+
+    def __enter__(self) -> Self:
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
+        """Exit context manager."""
+        pass
+
+    def _clear_logs(self) -> None:
+        """Clear logs from previous invocation."""
+        self.logs = []
+
+    def _capture_log(self, log_message: Message | None) -> bool:
+        """Capture a log message and check for exceptions.
+
+        Args:
+            log_message: The log message to capture, or None.
+
+        Returns:
+            True if a log message was captured (caller should continue processing).
+
+        Raises:
+            FunctionTestClientError: If the log level is EXCEPTION.
+
+        """
+        if log_message is None:
+            return False
+
+        self.logs.append(log_message)
+        if log_message.level == Level.EXCEPTION:
+            raise FunctionTestClientError(log_message.message)
+        return True
+
+
+class FunctionTestClient(_BaseTestClient):
     """In-process client for testing VGI functions.
 
     Provides the same interface as Client but runs functions directly in the
@@ -154,19 +335,7 @@ class FunctionTestClient:
             function_class: The function class to test (not an instance).
 
         """
-        self.function_class = function_class
-        self.logs: list[Message] = []
-        self._logger: structlog.stdlib.BoundLogger = structlog.get_logger().bind(
-            component="test_client"
-        )
-
-    def __enter__(self) -> "FunctionTestClient":
-        """Enter context manager."""
-        return self
-
-    def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
-        """Exit context manager."""
-        pass
+        super().__init__(function_class, "test_client")
 
     def table_in_out_function(
         self,
@@ -194,8 +363,7 @@ class FunctionTestClient:
             FunctionTestClientError: If the function raises an exception.
 
         """
-        # Clear logs from previous invocation
-        self.logs = []
+        self._clear_logs()
 
         if arguments is None:
             arguments = Arguments()
@@ -225,24 +393,8 @@ class FunctionTestClient:
 
         # Create bind result for callback
         if bind_result_callback is not None:
-            bind_batch = pa.RecordBatch.from_pylist(
-                [
-                    {
-                        "output_schema": func.output_schema.serialize().to_pybytes(),
-                        "max_processes": func.max_processes(),
-                        "invocation_id": invocation_id,
-                    }
-                ],
-                schema=pa.schema(
-                    cast(
-                        list[tuple[str, pa.DataType]],
-                        [
-                            ("output_schema", pa.binary()),
-                            ("max_processes", pa.int64()),
-                            ("invocation_id", pa.binary()),
-                        ],
-                    )
-                ),
+            bind_batch = _create_bind_result_batch(
+                func.output_schema, func.max_processes(), invocation_id
             )
             bind_result_callback(bind_batch)
 
@@ -297,12 +449,9 @@ class FunctionTestClient:
             except StopIteration:
                 return
 
-            # Capture log message if present
-            if output.log_message is not None:
-                self.logs.append(output.log_message)
-                # Check for exception
-                if output.log_message.level.name == "EXCEPTION":
-                    raise FunctionTestClientError(output.log_message.message)
+            # Capture log message if present (raises on EXCEPTION)
+            if self._capture_log(output.log_message):
+                pass  # Continue to check output batch and status
 
             # Yield output batch if it has rows
             if output.batch is not None and output.batch.num_rows > 0:
@@ -333,12 +482,9 @@ class FunctionTestClient:
             except StopIteration:
                 return
 
-            # Capture log message if present
-            if output.log_message is not None:
-                self.logs.append(output.log_message)
-                # Check for exception
-                if output.log_message.level.name == "EXCEPTION":
-                    raise FunctionTestClientError(output.log_message.message)
+            # Capture log message if present (raises on EXCEPTION)
+            if self._capture_log(output.log_message):
+                pass  # Continue to check output batch and status
 
             # Yield output batch if it has rows
             if output.batch is not None and output.batch.num_rows > 0:
@@ -354,7 +500,7 @@ class FunctionTestClient:
                 raise FunctionTestClientError(msg)
 
 
-class TableFunctionTestClient:
+class TableFunctionTestClient(_BaseTestClient):
     """In-process client for testing TableFunctionGenerator functions.
 
     Unlike FunctionTestClient (for TableInOut functions), this client is for
@@ -381,19 +527,7 @@ class TableFunctionTestClient:
             function_class: The table function class to test (not an instance).
 
         """
-        self.function_class = function_class
-        self.logs: list[Message] = []
-        self._logger: structlog.stdlib.BoundLogger = structlog.get_logger().bind(
-            component="table_test_client"
-        )
-
-    def __enter__(self) -> "TableFunctionTestClient":
-        """Enter context manager."""
-        return self
-
-    def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
-        """Exit context manager."""
-        pass
+        super().__init__(function_class, "table_test_client")
 
     def table_function(
         self,
@@ -414,8 +548,7 @@ class TableFunctionTestClient:
             FunctionTestClientError: If the function raises an exception.
 
         """
-        # Clear logs from previous invocation
-        self.logs = []
+        self._clear_logs()
 
         if arguments is None:
             arguments = Arguments()
@@ -452,12 +585,8 @@ class TableFunctionTestClient:
         # Collect all outputs
         try:
             for output in generator:
-                # Capture log message if present
-                if output.log_message is not None:
-                    self.logs.append(output.log_message)
-                    # Check for exception
-                    if output.log_message.level == Level.EXCEPTION:
-                        raise FunctionTestClientError(output.log_message.message)
+                # Capture log message if present (raises on EXCEPTION)
+                self._capture_log(output.log_message)
 
                 # Yield output batch if it has rows
                 if output.batch is not None and output.batch.num_rows > 0:
@@ -533,16 +662,7 @@ def run_function(
         )
 
     """
-    # Build Arguments from args/kwargs
-    positional: tuple[pa.Scalar[Any], ...] = ()
-    named: dict[str, pa.Scalar[Any]] = {}
-
-    if args:
-        positional = tuple(pa.scalar(a) for a in args)
-    if kwargs:
-        named = {k: pa.scalar(v) for k, v in kwargs.items()}
-
-    arguments = Arguments(positional=positional, named=named)
+    arguments = _build_arguments(args, kwargs)
 
     with FunctionTestClient(function) as client:
         outputs = list(
@@ -627,38 +747,7 @@ def assert_function_output(
         projection_ids=projection_ids,
     )
 
-    prefix = f"{msg}: " if msg else ""
-
-    # Check batch count
-    if len(outputs) != len(expected):
-        actual_rows = [o.num_rows for o in outputs]
-        expected_rows = [e.num_rows for e in expected]
-        raise AssertionError(
-            f"{prefix}Expected {len(expected)} output batches, got {len(outputs)}. "
-            f"Output rows: {actual_rows}, Expected rows: {expected_rows}"
-        )
-
-    # Compare batches
-    if check_order:
-        for i, (actual, exp) in enumerate(zip(outputs, expected, strict=True)):
-            if not actual.equals(exp):
-                raise AssertionError(
-                    f"{prefix}Batch {i} mismatch.\n"
-                    f"Expected:\n{exp.to_pydict()}\n"
-                    f"Got:\n{actual.to_pydict()}"
-                )
-    else:
-        # Convert to sets of dicts for unordered comparison
-        actual_dicts = [b.to_pydict() for b in outputs]
-        expected_dicts = [b.to_pydict() for b in expected]
-
-        for exp_dict in expected_dicts:
-            if exp_dict not in actual_dicts:
-                raise AssertionError(
-                    f"{prefix}Expected batch not found in output.\n"
-                    f"Expected:\n{exp_dict}\n"
-                    f"Actual outputs:\n{actual_dicts}"
-                )
+    _assert_batches_equal(outputs, expected, check_order=check_order, msg=msg)
 
     return logs
 
@@ -799,16 +888,7 @@ def run_table_function(
         assert outputs[0].num_rows == 10
 
     """
-    # Build Arguments from args/kwargs
-    positional: tuple[pa.Scalar[Any], ...] = ()
-    named: dict[str, pa.Scalar[Any]] = {}
-
-    if args:
-        positional = tuple(pa.scalar(a) for a in args)
-    if kwargs:
-        named = {k: pa.scalar(v) for k, v in kwargs.items()}
-
-    arguments = Arguments(positional=positional, named=named)
+    arguments = _build_arguments(args, kwargs)
 
     with TableFunctionTestClient(function) as client:
         outputs = list(
@@ -873,38 +953,7 @@ def assert_table_function_output(
         projection_ids=projection_ids,
     )
 
-    prefix = f"{msg}: " if msg else ""
-
-    # Check batch count
-    if len(outputs) != len(expected):
-        actual_rows = [o.num_rows for o in outputs]
-        expected_rows = [e.num_rows for e in expected]
-        raise AssertionError(
-            f"{prefix}Expected {len(expected)} output batches, got {len(outputs)}. "
-            f"Output rows: {actual_rows}, Expected rows: {expected_rows}"
-        )
-
-    # Compare batches
-    if check_order:
-        for i, (actual, exp) in enumerate(zip(outputs, expected, strict=True)):
-            if not actual.equals(exp):
-                raise AssertionError(
-                    f"{prefix}Batch {i} mismatch.\n"
-                    f"Expected:\n{exp.to_pydict()}\n"
-                    f"Got:\n{actual.to_pydict()}"
-                )
-    else:
-        # Convert to sets of dicts for unordered comparison
-        actual_dicts = [b.to_pydict() for b in outputs]
-        expected_dicts = [b.to_pydict() for b in expected]
-
-        for exp_dict in expected_dicts:
-            if exp_dict not in actual_dicts:
-                raise AssertionError(
-                    f"{prefix}Expected batch not found in output.\n"
-                    f"Expected:\n{exp_dict}\n"
-                    f"Actual outputs:\n{actual_dicts}"
-                )
+    _assert_batches_equal(outputs, expected, check_order=check_order, msg=msg)
 
     return logs
 
@@ -914,7 +963,7 @@ def assert_table_function_output(
 # =============================================================================
 
 
-class ScalarFunctionTestClient:
+class ScalarFunctionTestClient(_BaseTestClient):
     """In-process client for testing ScalarFunction and ScalarFunctionGenerator.
 
     Scalar functions transform input batches to single-column output with 1:1
@@ -943,19 +992,7 @@ class ScalarFunctionTestClient:
             function_class: The scalar function class to test (not an instance).
 
         """
-        self.function_class = function_class
-        self.logs: list[Message] = []
-        self._logger: structlog.stdlib.BoundLogger = structlog.get_logger().bind(
-            component="scalar_test_client"
-        )
-
-    def __enter__(self) -> "ScalarFunctionTestClient":
-        """Enter context manager."""
-        return self
-
-    def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
-        """Exit context manager."""
-        pass
+        super().__init__(function_class, "scalar_test_client")
 
     def scalar_function(
         self,
@@ -981,8 +1018,7 @@ class ScalarFunctionTestClient:
             FunctionTestClientError: If the function raises an exception.
 
         """
-        # Clear logs from previous invocation
-        self.logs = []
+        self._clear_logs()
 
         if arguments is None:
             arguments = Arguments()
@@ -1012,24 +1048,8 @@ class ScalarFunctionTestClient:
 
         # Create bind result for callback
         if bind_result_callback is not None:
-            bind_batch = pa.RecordBatch.from_pylist(
-                [
-                    {
-                        "output_schema": func.output_schema.serialize().to_pybytes(),
-                        "max_processes": func.max_processes(),
-                        "invocation_id": invocation_id,
-                    }
-                ],
-                schema=pa.schema(
-                    cast(
-                        list[tuple[str, pa.DataType]],
-                        [
-                            ("output_schema", pa.binary()),
-                            ("max_processes", pa.int64()),
-                            ("invocation_id", pa.binary()),
-                        ],
-                    )
-                ),
+            bind_batch = _create_bind_result_batch(
+                func.output_schema, func.max_processes(), invocation_id
             )
             bind_result_callback(bind_batch)
 
@@ -1064,12 +1084,8 @@ class ScalarFunctionTestClient:
             except StopIteration:
                 return
 
-            # Capture log message if present
-            if output.log_message is not None:
-                self.logs.append(output.log_message)
-                # Check for exception
-                if output.log_message.level == Level.EXCEPTION:
-                    raise FunctionTestClientError(output.log_message.message)
+            # Capture log message if present (raises on EXCEPTION)
+            if self._capture_log(output.log_message):
                 # Re-send the same batch to get actual output after log
                 continue
 
@@ -1109,16 +1125,7 @@ def run_scalar_function(
         assert outputs[0].to_pydict() == {"result": [2, 4, 6]}
 
     """
-    # Build Arguments from args/kwargs
-    positional: tuple[pa.Scalar[Any], ...] = ()
-    named: dict[str, pa.Scalar[Any]] = {}
-
-    if args:
-        positional = tuple(pa.scalar(a) for a in args)
-    if kwargs:
-        named = {k: pa.scalar(v) for k, v in kwargs.items()}
-
-    arguments = Arguments(positional=positional, named=named)
+    arguments = _build_arguments(args, kwargs)
 
     with ScalarFunctionTestClient(function) as client:
         outputs = list(
@@ -1185,37 +1192,6 @@ def assert_scalar_function_output(
         kwargs=kwargs,
     )
 
-    prefix = f"{msg}: " if msg else ""
-
-    # Check batch count
-    if len(outputs) != len(expected):
-        actual_rows = [o.num_rows for o in outputs]
-        expected_rows = [e.num_rows for e in expected]
-        raise AssertionError(
-            f"{prefix}Expected {len(expected)} output batches, got {len(outputs)}. "
-            f"Output rows: {actual_rows}, Expected rows: {expected_rows}"
-        )
-
-    # Compare batches
-    if check_order:
-        for i, (actual, exp) in enumerate(zip(outputs, expected, strict=True)):
-            if not actual.equals(exp):
-                raise AssertionError(
-                    f"{prefix}Batch {i} mismatch.\n"
-                    f"Expected:\n{exp.to_pydict()}\n"
-                    f"Got:\n{actual.to_pydict()}"
-                )
-    else:
-        # Convert to sets of dicts for unordered comparison
-        actual_dicts = [b.to_pydict() for b in outputs]
-        expected_dicts = [b.to_pydict() for b in expected]
-
-        for exp_dict in expected_dicts:
-            if exp_dict not in actual_dicts:
-                raise AssertionError(
-                    f"{prefix}Expected batch not found in output.\n"
-                    f"Expected:\n{exp_dict}\n"
-                    f"Actual outputs:\n{actual_dicts}"
-                )
+    _assert_batches_equal(outputs, expected, check_order=check_order, msg=msg)
 
     return logs
