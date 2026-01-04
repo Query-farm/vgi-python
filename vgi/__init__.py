@@ -48,7 +48,7 @@ To create a worker that hosts functions:
     from vgi import Worker
 
     class MyWorker(Worker):
-        registry = {"my_function": MyFunction}
+        functions = [MyFunction]
 
     if __name__ == "__main__":
         MyWorker().run()
@@ -112,14 +112,15 @@ ADDITIONAL MODULES
 CLASS HIERARCHY
 ---------------
     vgi.function.Function                - Base (max_processes, invocation_id)
-    └─ vgi.table_function.TableFunctionBase - Adds cardinality hints, projection
-       ├─ TableInOutGeneratorFunction   - Full streaming (process/finalize)
-       │  └─ TableInOutFunction         - Callback API (transform/finish)
-       │     ├─ AggregationFunction     - Reduce to summary
-       │     ├─ FilterFunction          - Row filtering
-       │     └─ MapFunction             - Column transformation
-       └─ ScalarFunctionGenerator       - Single-column output (1:1 rows)
-          └─ ScalarFunction             - Callback API (compute)
+    ├─ vgi.table_function.TableFunctionBase - Adds cardinality hints, projection
+    │  ├─ TableFunctionGenerator        - Generate output without input
+    │  └─ TableInOutGeneratorFunction   - Full streaming (process/finalize)
+    │     └─ TableInOutFunction         - Callback API (transform/finish)
+    │        ├─ AggregationFunction     - Reduce to summary
+    │        ├─ FilterFunction          - Row filtering
+    │        └─ MapFunction             - Column transformation
+    └─ ScalarFunctionGenerator          - Single-column output (1:1 rows)
+       └─ ScalarFunction                - Callback API (compute)
 
 Examples
 --------
@@ -146,7 +147,11 @@ from vgi.metadata import (
     TableInputValidationError,
     functions_to_arrow,
 )
-from vgi.scalar_function import ScalarFunction, ScalarFunctionGenerator
+from vgi.scalar_function import (
+    ScalarFunction,
+    ScalarFunctionGenerator,
+    ScalarOutputGenerator,
+)
 from vgi.schema_utils import schema, schema_like
 from vgi.table_function import RowCountMismatchError
 from vgi.table_in_out_function import (
@@ -187,6 +192,7 @@ __all__ = [
     "RowCountMismatchError",
     "ScalarFunction",
     "ScalarFunctionGenerator",
+    "ScalarOutputGenerator",
     "StreamingGenerator",
     "TableInOutFunction",
     "TableInOutGeneratorFunction",

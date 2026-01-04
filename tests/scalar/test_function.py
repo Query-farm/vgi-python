@@ -9,23 +9,23 @@ import pytest
 import structlog
 
 from vgi.arguments import Arg
-from vgi.function import Arguments, Invocation
+from vgi.function import Arguments, Invocation, InvocationType, SchemaValidationError
 from vgi.log import Level, Message
 from vgi.scalar_function import (
     Output,
-    OutputGenerator,
     ProtocolInput,
     ScalarFunction,
     ScalarFunctionGenerator,
+    ScalarOutputGenerator,
 )
-from vgi.table_function import SchemaValidationError
 
 
 def create_invocation(input_schema: pa.Schema) -> Invocation:
     """Create a test invocation with the given input schema."""
     return Invocation(
         function_name="test_function",
-        in_out_function_input_schema=input_schema,
+        input_schema=input_schema,
+        function_type=InvocationType.SCALAR,
         correlation_id="test-correlation",
         invocation_id=b"test-invocation",
         arguments=Arguments(),
@@ -43,8 +43,8 @@ class TestScalarFunctionGenerator:
             def output_schema(self) -> pa.Schema:
                 return pa.schema([("result", pa.int64())])
 
-            def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-                _ = yield None
+            def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
+                _ = yield Output(self.empty_output_batch)  # Priming yield
                 import pyarrow.compute as pc
 
                 while True:
@@ -83,12 +83,13 @@ class TestScalarFunctionGenerator:
             def output_schema(self) -> pa.Schema:
                 return pa.schema([("result", pa.int64())])
 
-            def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-                _ = yield None
+            def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
+                _ = yield Output(self.empty_output_batch)
 
         invocation = Invocation(
             function_name="test",
-            in_out_function_input_schema=None,
+            input_schema=None,
+            function_type=InvocationType.SCALAR,
             correlation_id="test",
             invocation_id=None,
             arguments=Arguments(),
@@ -105,8 +106,8 @@ class TestScalarFunctionGenerator:
             def output_schema(self) -> pa.Schema:
                 return pa.schema([("a", pa.int64()), ("b", pa.int64())])
 
-            def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-                _ = yield None
+            def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
+                _ = yield Output(self.empty_output_batch)
 
         input_schema = pa.schema([("x", pa.int64())])
         invocation = create_invocation(input_schema)
@@ -122,8 +123,8 @@ class TestScalarFunctionGenerator:
             def output_schema(self) -> pa.Schema:
                 return pa.schema([("result", pa.int64())])
 
-            def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-                _ = yield None
+            def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
+                _ = yield Output(self.empty_output_batch)  # Priming yield
                 import pyarrow.compute as pc
 
                 while True:
@@ -179,7 +180,8 @@ class TestScalarFunction:
         input_schema = pa.schema([("x", pa.int64())])
         invocation = Invocation(
             function_name="test",
-            in_out_function_input_schema=input_schema,
+            input_schema=input_schema,
+            function_type=InvocationType.SCALAR,
             correlation_id="test",
             invocation_id=None,
             arguments=Arguments(positional=(pa.scalar("x"),)),
@@ -197,29 +199,6 @@ class TestScalarFunction:
         assert output.batch is not None
         assert output.batch.num_rows == 3
         assert output.batch.column("result").to_pylist() == [2, 4, 6]
-
-    def test_custom_output_name(self) -> None:
-        """Test custom output column name."""
-
-        class CustomName(ScalarFunction):
-            @property
-            def output_name(self) -> str:
-                return "doubled"
-
-            @property
-            def output_type(self) -> pa.DataType:
-                return pa.int64()
-
-            def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
-                import pyarrow.compute as pc
-
-                return pc.multiply(batch.column("x"), 2)
-
-        input_schema = pa.schema([("x", pa.int64())])
-        invocation = create_invocation(input_schema)
-
-        func = CustomName(invocation=invocation, logger=structlog.get_logger())
-        assert func.output_schema.names == ["doubled"]
 
     def test_log_method(self) -> None:
         """Test self.log() method."""

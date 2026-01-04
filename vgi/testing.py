@@ -82,7 +82,7 @@ import pyarrow as pa
 import structlog
 import structlog.stdlib
 
-from vgi.function import Arguments, Invocation
+from vgi.function import Arguments, Invocation, InvocationType
 from vgi.log import Level, Message
 from vgi.scalar_function import (
     ProtocolInput as ScalarProtocolInput,
@@ -92,11 +92,11 @@ from vgi.scalar_function import (
     ScalarFunctionGenerator,
 )
 from vgi.table_function import (
-    GlobalStateInitInput,
-    TableFunctionGenerator,
+    ProtocolOutput as TableProtocolOutput,
 )
 from vgi.table_function import (
-    ProtocolOutput as TableProtocolOutput,
+    TableFunctionGenerator,
+    TableFunctionInitInput,
 )
 from vgi.table_in_out_function import (
     ProtocolInput,
@@ -213,10 +213,11 @@ class FunctionTestClient:
         invocation_id = uuid.uuid4().bytes
         invocation = Invocation(
             function_name=self.function_class.__name__,
-            arguments=arguments,
-            in_out_function_input_schema=input_schema,
+            input_schema=input_schema,
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=invocation_id,
+            arguments=arguments,
         )
 
         # Instantiate function
@@ -245,8 +246,8 @@ class FunctionTestClient:
             )
             bind_result_callback(bind_batch)
 
-        # Perform init with GlobalStateInitInput
-        init_input = GlobalStateInitInput(projection_ids=projection_ids)
+        # Perform init with TableFunctionInitInput
+        init_input = TableFunctionInitInput(projection_ids=projection_ids)
         init_batch = pa.RecordBatch.from_arrays(
             [pa.array([init_input.projection_ids], type=pa.list_(pa.int32()))],
             schema=pa.schema([pa.field("projection_ids", pa.list_(pa.int32()))]),
@@ -423,17 +424,18 @@ class TableFunctionTestClient:
         invocation_id = uuid.uuid4().bytes
         invocation = Invocation(
             function_name=self.function_class.__name__,
-            arguments=arguments,
-            in_out_function_input_schema=None,
+            input_schema=None,
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=invocation_id,
+            arguments=arguments,
         )
 
         # Instantiate function
         func = self.function_class(invocation=invocation, logger=self._logger)
 
-        # Perform init with GlobalStateInitInput
-        init_input = GlobalStateInitInput(projection_ids=projection_ids)
+        # Perform init with TableFunctionInitInput
+        init_input = TableFunctionInitInput(projection_ids=projection_ids)
         init_batch = pa.RecordBatch.from_arrays(
             [pa.array([init_input.projection_ids], type=pa.list_(pa.int32()))],
             schema=pa.schema([pa.field("projection_ids", pa.list_(pa.int32()))]),
@@ -998,10 +1000,11 @@ class ScalarFunctionTestClient:
         invocation_id = uuid.uuid4().bytes
         invocation = Invocation(
             function_name=self.function_class.__name__,
-            arguments=arguments,
-            in_out_function_input_schema=input_schema,
+            input_schema=input_schema,
+            function_type=InvocationType.SCALAR,
             correlation_id="test",
             invocation_id=invocation_id,
+            arguments=arguments,
         )
 
         # Instantiate function
@@ -1035,8 +1038,7 @@ class ScalarFunctionTestClient:
 
         # Prime the generator
         try:
-            priming_output = next(generator)
-            assert priming_output.status == _OutputStatus.NEED_MORE_INPUT
+            next(generator)  # Priming output is discarded
         except StopIteration:
             return
 
@@ -1052,10 +1054,10 @@ class ScalarFunctionTestClient:
 
     def _process_scalar_batch(
         self,
-        generator: Generator[ProtocolOutput, ScalarProtocolInput | None, None],
+        generator: Generator[TableProtocolOutput, ScalarProtocolInput | None, None],
         batch: pa.RecordBatch,
     ) -> Generator[pa.RecordBatch, None, None]:
-        """Process a single input batch, handling HAVE_MORE_OUTPUT for logs."""
+        """Process a single input batch, handling log messages."""
         while True:
             try:
                 output = generator.send(ScalarProtocolInput(batch=batch))
@@ -1068,23 +1070,15 @@ class ScalarFunctionTestClient:
                 # Check for exception
                 if output.log_message.level == Level.EXCEPTION:
                     raise FunctionTestClientError(output.log_message.message)
+                # Re-send the same batch to get actual output after log
+                continue
 
             # Yield output batch if it has rows
             if output.batch is not None and output.batch.num_rows > 0:
                 yield output.batch
 
-            # Check status
-            if output.status == _OutputStatus.HAVE_MORE_OUTPUT:
-                # Re-send the same batch to get more output (log messages)
-                continue
-            elif output.status == _OutputStatus.NEED_MORE_INPUT:
-                # Ready for next input batch
-                break
-            elif output.status == _OutputStatus.FINISHED:
-                # Scalar function ended
-                return
-            else:
-                raise FunctionTestClientError(f"Unexpected status: {output.status}")
+            # No log message means we're done with this batch
+            break
 
 
 def run_scalar_function(

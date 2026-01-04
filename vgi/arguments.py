@@ -601,6 +601,8 @@ class Arg[ArgT]:
         valid_range = self._describe_valid_range()
 
         # Numeric range validation
+        # Note: type: ignore needed because ArgT is generic - comparisons only valid
+        # for numeric types, but we can't express "ArgT when constraints are set"
         if self.ge is not None and value < self.ge:  # type: ignore[operator]
             raise ArgumentValidationError(
                 f"Argument '{arg_name}' is too small.",

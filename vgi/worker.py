@@ -5,12 +5,15 @@ Workers are spawned by Client for each function invocation.
 
 SUPPORTED FUNCTION TYPES
 ------------------------
-The worker supports two function types, dispatched based on class inheritance:
+The worker supports three function types, dispatched based on class inheritance:
 
-1. TableInOutGeneratorFunction: Reads input batches, produces output batches.
+1. ScalarFunctionGenerator: Transforms input batches to single-column output
+   with 1:1 row mapping. Use for per-row computations like add(), upper(), etc.
+
+2. TableInOutGeneratorFunction: Reads input batches, produces output batches.
    Use for transforming, filtering, or aggregating input data.
 
-2. TableFunctionGenerator: Generates output batches without reading input.
+3. TableFunctionGenerator: Generates output batches without reading input.
    Use for data generation functions like sequence(), range(), random_sample().
 
 QUICK START
@@ -18,8 +21,13 @@ QUICK START
 Create a worker by subclassing Worker and listing your functions:
 
     from vgi.worker import Worker
+    from vgi.scalar_function import ScalarFunction
     from vgi.table_in_out_function import TableInOutGeneratorFunction
     from vgi.table_function import TableFunctionGenerator
+
+    class DoubleColumn(ScalarFunction):
+        # Single-column output with 1:1 row mapping
+        ...
 
     class EchoFunction(TableInOutGeneratorFunction):
         # Transforms input batches
@@ -30,7 +38,7 @@ Create a worker by subclassing Worker and listing your functions:
         ...
 
     class MyWorker(Worker):
-        functions = [EchoFunction, SequenceFunction]
+        functions = [DoubleColumn, EchoFunction, SequenceFunction]
 
     if __name__ == "__main__":
         MyWorker().run()
@@ -38,11 +46,19 @@ Create a worker by subclassing Worker and listing your functions:
 Function names are derived from metadata (Meta.name or class name converted to
 snake_case). No manual name mapping required.
 
+PROTOCOL FLOW (ScalarFunctionGenerator)
+---------------------------------------
+1. Read Invocation: function name, arguments, input schema
+2. Write OutputSpec: output schema, max_processes, invocation_id
+3. Read/write FunctionInitInput/GlobalInitResult for initialization
+4. Stream: read input batches -> compute -> write single-column output batches
+   (ends when input exhausted, no FINALIZE phase)
+
 PROTOCOL FLOW (TableInOutGeneratorFunction)
 -------------------------------------------
 1. Read Invocation: function name, arguments, input schema
 2. Write OutputSpec: output schema, max_processes, invocation_id
-3. Read/write GlobalStateInitInput/GlobalInitResult for initialization
+3. Read/write TableFunctionInitInput/GlobalInitResult for initialization
 4. Stream: read input batches -> process -> write output batches
 5. Finalize: receive FINALIZE signal -> emit final results
 
@@ -50,7 +66,7 @@ PROTOCOL FLOW (TableFunctionGenerator)
 --------------------------------------
 1. Read Invocation: function name, arguments (no input schema)
 2. Write OutputSpec: output schema, max_processes, invocation_id
-3. Read/write GlobalStateInitInput/GlobalInitResult for initialization
+3. Read/write TableFunctionInitInput/GlobalInitResult for initialization
 4. Generate: produce output batches until generator exhausted
 
 KEY CLASSES
@@ -71,7 +87,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from io import IOBase
-from typing import cast
+from typing import Any, cast
 
 import pyarrow as pa
 import structlog
@@ -82,6 +98,7 @@ from vgi.function import (
     Function,
     Invocation,
     OutputSpec,
+    SchemaValidationError,
 )
 from vgi.ipc_utils import read_ipc_batch
 from vgi.scalar_function import ProtocolInput as ScalarProtocolInput
@@ -90,7 +107,6 @@ from vgi.table_function import TableFunctionGenerator
 from vgi.table_in_out_function import (
     ProtocolInput,
     TableInOutGeneratorFunction,
-    _OutputStatus,
 )
 
 
@@ -131,11 +147,11 @@ class Worker:
 
     """
 
-    functions: Sequence[type[Function]] = []
-    _registry: dict[str, list[type[Function]]] | None = None
+    functions: Sequence[type[Function[Any]]] = []
+    _registry: dict[str, list[type[Function[Any]]]] | None = None
 
     @classmethod
-    def _build_registry(cls) -> dict[str, list[type[Function]]]:
+    def _build_registry(cls) -> dict[str, list[type[Function[Any]]]]:
         """Build function name -> list of classes mapping from functions list.
 
         Multiple functions can share the same name if they have different
@@ -144,7 +160,7 @@ class Worker:
         if cls._registry is not None:
             return cls._registry
 
-        registry: dict[str, list[type[Function]]] = {}
+        registry: dict[str, list[type[Function[Any]]]] = {}
         for func_cls in cls.functions:
             meta = func_cls.get_metadata()
             if meta.name not in registry:
@@ -157,8 +173,8 @@ class Worker:
     @staticmethod
     def _match_function(
         invocation: Invocation,
-        candidates: Sequence[type[Function]],
-    ) -> type[Function]:
+        candidates: Sequence[type[Function[Any]]],
+    ) -> type[Function[Any]]:
         """Find the function that matches the invocation's arguments.
 
         Compares the invocation's positional and named arguments against each
@@ -179,7 +195,7 @@ class Worker:
         num_positional = len(args.positional)
         named_keys = set(args.named.keys()) if args.named else set()
 
-        matches: list[type[Function]] = []
+        matches: list[type[Function[Any]]] = []
 
         for func_cls in candidates:
             meta = func_cls.get_metadata()
@@ -241,6 +257,50 @@ class Worker:
             )
 
         return matches[0]
+
+    @staticmethod
+    def _suggest_similar_names(name: str, candidates: list[str]) -> list[str]:
+        """Find function names similar to the given name.
+
+        Uses prefix matching, substring matching, and character overlap to
+        suggest likely alternatives for typos.
+
+        Args:
+            name: The unknown function name.
+            candidates: List of valid function names.
+
+        Returns:
+            List of similar names, sorted by relevance.
+
+        """
+        if not candidates:
+            return []
+
+        name_lower = name.lower()
+        scored: list[tuple[int, str]] = []
+
+        for candidate in candidates:
+            candidate_lower = candidate.lower()
+
+            # Exact prefix match (highest priority)
+            if candidate_lower.startswith(name_lower):
+                scored.append((0, candidate))
+            elif name_lower.startswith(candidate_lower):
+                scored.append((1, candidate))
+            # Substring matches
+            elif name_lower in candidate_lower or candidate_lower in name_lower:
+                scored.append((2, candidate))
+            else:
+                # Character overlap score (for typos)
+                name_chars = set(name_lower)
+                candidate_chars = set(candidate_lower)
+                overlap = len(name_chars & candidate_chars)
+                # Require at least half the characters to match
+                if overlap > len(name_lower) // 2:
+                    scored.append((10 - overlap, candidate))
+
+        scored.sort(key=lambda x: (x[0], x[1]))
+        return [candidate for _, candidate in scored]
 
     def __init__(self) -> None:
         """Initialize the worker with structured logging."""
@@ -311,11 +371,12 @@ class Worker:
             ipc.open_stream(cast(IOBase, sys.stdin)) as data_reader,
         ):
             # Validate data stream schema matches expected input schema
-            if data_reader.schema != invocation.in_out_function_input_schema:
-                expected = invocation.in_out_function_input_schema
-                raise ValueError(
-                    f"Data stream schema mismatch. Expected: {expected}, "
-                    f"got: {data_reader.schema}"
+            if data_reader.schema != invocation.input_schema:
+                raise SchemaValidationError(
+                    "Data stream schema does not match expected input schema.",
+                    expected=invocation.input_schema,
+                    actual=data_reader.schema,
+                    context="input stream to scalar function",
                 )
 
             batch_count = 0
@@ -343,8 +404,8 @@ class Worker:
                 protocol_input = ScalarProtocolInput(batch=batch, metadata=metadata)
                 output = generator.send(protocol_input)
 
-                # Handle log messages (HAVE_MORE_OUTPUT)
-                while output.status == _OutputStatus.HAVE_MORE_OUTPUT:
+                # Handle log messages (indicated by log_message being set)
+                while output.log_message is not None:
                     fn_log.debug("log_message_received", output=output)
                     assert output.batch is not None
                     writer.write_batch(
@@ -364,7 +425,6 @@ class Worker:
                     "batch_written",
                     batch_index=batch_count,
                     output_rows=output_rows,
-                    status=output.status.value if output.status else None,
                 )
         return WorkerStats(
             batch_count=batch_count,
@@ -402,11 +462,12 @@ class Worker:
             ipc.open_stream(cast(IOBase, sys.stdin)) as data_reader,
         ):
             # Validate data stream schema matches expected input schema
-            if data_reader.schema != invocation.in_out_function_input_schema:
-                expected = invocation.in_out_function_input_schema
-                raise ValueError(
-                    f"Data stream schema mismatch. Expected: {expected}, "
-                    f"got: {data_reader.schema}"
+            if data_reader.schema != invocation.input_schema:
+                raise SchemaValidationError(
+                    "Data stream schema does not match expected input schema.",
+                    expected=invocation.input_schema,
+                    actual=data_reader.schema,
+                    context="input stream to table-in-out function",
                 )
 
             batch_count = 0
@@ -448,7 +509,6 @@ class Worker:
                     "batch_written",
                     batch_index=batch_count,
                     output_rows=output_rows,
-                    status=output.status.value if output.status else None,
                 )
         return WorkerStats(
             batch_count=batch_count,
@@ -509,16 +569,25 @@ class Worker:
 
         fn_log = self.log.bind(function=invocation.function_name)
         fn_log.info("init_received", arguments=invocation.arguments)
-        fn_log.debug(
-            "input_schema_parsed", schema=str(invocation.in_out_function_input_schema)
-        )
+        fn_log.debug("input_schema_parsed", schema=str(invocation.input_schema))
 
         registry = self._build_registry()
         if invocation.function_name not in registry:
             available = sorted(registry.keys())
-            raise ValueError(
-                f"Unknown function: {invocation.function_name}. Available: {available}"
+            suggestions = self._suggest_similar_names(
+                invocation.function_name, available
             )
+            msg_lines = [
+                f"Unknown function: '{invocation.function_name}'",
+                "",
+            ]
+            if suggestions:
+                msg_lines.append("  Did you mean:")
+                for suggestion in suggestions[:3]:
+                    msg_lines.append(f"    - {suggestion}")
+                msg_lines.append("")
+            msg_lines.append(f"  Available functions: {available}")
+            raise ValueError("\n".join(msg_lines))
 
         candidates = registry[invocation.function_name]
         func_cls = self._match_function(invocation, candidates)

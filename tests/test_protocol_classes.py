@@ -15,12 +15,13 @@ from vgi.function import (
     ArgumentValidationError,
     GlobalInitResult,
     Invocation,
+    InvocationType,
 )
 from vgi.log import Level, Message
 from vgi.table_function import (
     CardinalityInfo,
-    GlobalStateInitInput,
     OutputSpec,
+    TableFunctionInitInput,
 )
 
 
@@ -180,10 +181,11 @@ class TestInvocation:
         """Basic Invocation should serialize and deserialize correctly."""
         original = Invocation(
             function_name="test_function",
-            arguments=Arguments(positional=(pa.scalar(42),), named={}),
-            in_out_function_input_schema=make_schema([pa.field("col1", pa.int64())]),
+            input_schema=make_schema([pa.field("col1", pa.int64())]),
+            function_type=InvocationType.TABLE,
             correlation_id="test-123",
             invocation_id=b"bind-id-bytes",
+            arguments=Arguments(positional=(pa.scalar(42),), named={}),
         )
 
         serialized = original.serialize()
@@ -200,10 +202,7 @@ class TestInvocation:
         assert deserialized.function_name == original.function_name
         assert deserialized.correlation_id == original.correlation_id
         assert deserialized.invocation_id == original.invocation_id
-        assert (
-            deserialized.in_out_function_input_schema
-            == original.in_out_function_input_schema
-        )
+        assert deserialized.input_schema == original.input_schema
         assert len(deserialized.arguments.positional) == 1
         assert deserialized.arguments.positional[0] is not None
         assert deserialized.arguments.positional[0].as_py() == 42
@@ -212,7 +211,8 @@ class TestInvocation:
         """Invocation with null input schema should round-trip correctly."""
         original = Invocation(
             function_name="scalar_function",
-            in_out_function_input_schema=None,
+            input_schema=None,
+            function_type=InvocationType.TABLE,
             correlation_id="",
             invocation_id=None,
         )
@@ -225,7 +225,7 @@ class TestInvocation:
         deserialized = Invocation.deserialize(batch)
 
         assert deserialized.function_name == "scalar_function"
-        assert deserialized.in_out_function_input_schema is None
+        assert deserialized.input_schema is None
         assert deserialized.invocation_id is None
 
     def test_complexmake_schema(self) -> None:
@@ -242,7 +242,8 @@ class TestInvocation:
 
         original = Invocation(
             function_name="complex_function",
-            in_out_function_input_schema=complex_schema,
+            input_schema=complex_schema,
+            function_type=InvocationType.TABLE,
             correlation_id="complex-test",
             invocation_id=b"complex-bind",
         )
@@ -254,7 +255,7 @@ class TestInvocation:
         batch = reader.read_next_batch()
         deserialized = Invocation.deserialize(batch)
 
-        assert deserialized.in_out_function_input_schema == complex_schema
+        assert deserialized.input_schema == complex_schema
 
     def test_deserialize_empty_batch_raises(self) -> None:
         """Deserializing empty batch should raise ValueError."""
@@ -264,7 +265,7 @@ class TestInvocation:
                 [
                     pa.field("function_name", pa.string()),
                     pa.field("arguments", pa.struct([])),
-                    pa.field("in_out_function_input_schema", pa.binary()),
+                    pa.field("input_schema", pa.binary()),
                     pa.field("invocation_id", pa.binary()),
                     pa.field("correlation_id", pa.string()),
                 ]
@@ -281,14 +282,14 @@ class TestInvocation:
                 {
                     "function_name": "fn1",
                     "arguments": {},
-                    "in_out_function_input_schema": None,
+                    "input_schema": None,
                     "invocation_id": None,
                     "correlation_id": "",
                 },
                 {
                     "function_name": "fn2",
                     "arguments": {},
-                    "in_out_function_input_schema": None,
+                    "input_schema": None,
                     "invocation_id": None,
                     "correlation_id": "",
                 },
@@ -302,7 +303,8 @@ class TestInvocation:
         """Test that with_global_init_identifier creates a new Invocation."""
         original = Invocation(
             function_name="test",
-            in_out_function_input_schema=None,
+            input_schema=None,
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=None,
             global_init_identifier=None,
@@ -517,7 +519,7 @@ class TestGlobalStateInitInput:
 
     def test_basic_round_trip(self) -> None:
         """GlobalStateInitInput should serialize and deserialize correctly."""
-        original = GlobalStateInitInput(projection_ids=[0, 2, 4])
+        original = TableFunctionInitInput(projection_ids=[0, 2, 4])
 
         serialized = original.serialize()
         assert isinstance(serialized, bytes)
@@ -526,39 +528,39 @@ class TestGlobalStateInitInput:
 
         reader = ipc.open_stream(serialized)
         batch = reader.read_next_batch()
-        deserialized = GlobalStateInitInput.deserialize(batch)
+        deserialized = TableFunctionInitInput.deserialize(batch)
 
         assert deserialized.projection_ids == [0, 2, 4]
 
     def test_null_projection_ids(self) -> None:
         """GlobalStateInitInput with null projection_ids should round-trip."""
-        original = GlobalStateInitInput(projection_ids=None)
+        original = TableFunctionInitInput(projection_ids=None)
 
         serialized = original.serialize()
         from pyarrow import ipc
 
         reader = ipc.open_stream(serialized)
         batch = reader.read_next_batch()
-        deserialized = GlobalStateInitInput.deserialize(batch)
+        deserialized = TableFunctionInitInput.deserialize(batch)
 
         assert deserialized.projection_ids is None
 
     def test_empty_projection_ids(self) -> None:
         """GlobalStateInitInput with empty list should round-trip."""
-        original = GlobalStateInitInput(projection_ids=[])
+        original = TableFunctionInitInput(projection_ids=[])
 
         serialized = original.serialize()
         from pyarrow import ipc
 
         reader = ipc.open_stream(serialized)
         batch = reader.read_next_batch()
-        deserialized = GlobalStateInitInput.deserialize(batch)
+        deserialized = TableFunctionInitInput.deserialize(batch)
 
         assert deserialized.projection_ids == []
 
     def test_default_value(self) -> None:
         """GlobalStateInitInput default should have None projection_ids."""
-        default = GlobalStateInitInput()
+        default = TableFunctionInitInput()
         assert default.projection_ids is None
 
 

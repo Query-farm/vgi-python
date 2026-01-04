@@ -211,7 +211,7 @@ class TestMaxWorkersIntegration:
     def test_max_workers_used(self) -> None:
         """max_processes() returns Meta.max_workers when defined."""
         from vgi.arguments import Arguments
-        from vgi.function import Invocation
+        from vgi.function import Invocation, InvocationType
 
         class LimitedFunction(TableInOutFunction):
             class Meta:
@@ -221,10 +221,11 @@ class TestMaxWorkersIntegration:
 
         invocation = Invocation(
             function_name="test",
-            arguments=Arguments(),
-            in_out_function_input_schema=pa.schema([]),
+            input_schema=pa.schema([]),
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
+            arguments=Arguments(),
         )
         import structlog
 
@@ -234,17 +235,18 @@ class TestMaxWorkersIntegration:
     def test_default_max_workers(self) -> None:
         """max_processes() returns default when max_workers not defined."""
         from vgi.arguments import Arguments
-        from vgi.function import Invocation
+        from vgi.function import Invocation, InvocationType
 
         class UnlimitedFunction(TableInOutFunction):
             data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
 
         invocation = Invocation(
             function_name="test",
-            arguments=Arguments(),
-            in_out_function_input_schema=pa.schema([]),
+            input_schema=pa.schema([]),
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
+            arguments=Arguments(),
         )
         import structlog
 

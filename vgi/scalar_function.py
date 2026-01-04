@@ -3,15 +3,16 @@
 Scalar functions transform input batches to single-column output.
 
 Scalar functions receive input batches and produce output batches where:
-1. Output row count must exactly match input row count (1:1 mapping)
+1. Each Output yield must have row count matching input (1:1 mapping)
 2. Output schema has exactly one column
+3. Message yields (for logging) are exempt from row count validation
 
 This module provides:
 - ScalarFunctionGenerator: Generator-based base class (like TableInOutGeneratorFunction)
 - ScalarFunction: Callback-based API with compute() method (like TableInOutFunction)
 
 Class Hierarchy:
-    TableFunctionBase (vgi.table_function)
+    Function (vgi.function)
         └── ScalarFunctionGenerator  (generator protocol, validates row count)
                 └── ScalarFunction   (callback API with compute())
 
@@ -32,25 +33,21 @@ import structlog
 
 import vgi.function
 import vgi.log
-import vgi.table_function
-from vgi.table_function import RowCountMismatchError, SchemaValidationError
+from vgi.function import SchemaValidationError
+from vgi.table_function import Output, ProtocolOutput, RowCountMismatchError
 
 __all__ = [
     "ScalarFunctionGenerator",
     "ScalarFunction",
     "Output",
-    "OutputGenerator",
+    "ScalarOutputGenerator",
     "ProtocolInput",
 ]
 
 
-# Protocol types - reuse Output/OutputGenerator from table_in_out_function
-from vgi.table_in_out_function import (  # noqa: E402
-    Output,
-    OutputGenerator,
-    ProtocolOutput,
-    _OutputStatus,
-)
+# Scalar functions must always produce output - None is not valid
+# (unlike OutputGenerator which allows None for buffering/aggregation)
+ScalarOutputGenerator = Generator[vgi.log.Message | Output, pa.RecordBatch | None, None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,44 +70,36 @@ class ProtocolInput:
 
 @dataclass(frozen=True, slots=True)
 class _ScalarOutputComplete:
-    """Internal: Output with guaranteed non-None batch for scalar functions.
-
-    Similar to _OutputComplete in table_in_out_function, but tracks the input
-    batch for row count validation.
-    """
+    """Internal: Output with guaranteed non-None batch for scalar functions."""
 
     batch: pa.RecordBatch
-    has_more: bool = False
     log_message: vgi.log.Message | None = None
 
     @classmethod
     def from_process_result(
         cls,
-        source: vgi.log.Message | Output | None,
+        source: vgi.log.Message | Output,
         empty_batch: pa.RecordBatch,
     ) -> _ScalarOutputComplete:
         """Create from user's yield value.
 
         Args:
-            source: What the user yielded (Output, Message, or None).
-            empty_batch: Empty batch to substitute when needed.
+            source: What the user yielded (Output or Message).
+            empty_batch: Empty batch to substitute when yielding Message.
 
         Returns:
             Normalized output with guaranteed non-None batch.
 
         """
-        if source is None:
-            return cls(batch=empty_batch)
         if isinstance(source, vgi.log.Message):
-            return cls(batch=empty_batch, has_more=True, log_message=source)
+            return cls(batch=empty_batch, log_message=source)
         # source is Output
         return cls(
             batch=source.batch if source.batch is not None else empty_batch,
-            has_more=source.has_more,
         )
 
 
-class ScalarFunctionGenerator(vgi.table_function.TableFunctionBase):
+class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInput]):
     """Base class for scalar functions with generator protocol.
 
     Scalar functions transform input batches to single-column output with
@@ -119,10 +108,11 @@ class ScalarFunctionGenerator(vgi.table_function.TableFunctionBase):
     - Must produce exactly one output row per input row
     - Must have exactly one column in output_schema
 
-    Override process() for full generator control. Can yield Output or Message:
+    Override process() for full generator control. Must yield Output or Message
+    (unlike table-in-out functions, yielding None is not allowed):
 
-        def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-            _ = yield None  # Priming yield
+        def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
+            _ = yield Output(self.empty_output_batch)  # Priming yield
             while True:
                 # Optional: yield log messages
                 yield Message(Level.INFO, f"Processing {batch.num_rows} rows")
@@ -140,15 +130,8 @@ class ScalarFunctionGenerator(vgi.table_function.TableFunctionBase):
     output_schema -> pa.Schema (property)
         Override to define the single-column output schema.
 
-    process(batch: pa.RecordBatch) -> OutputGenerator
-        Generator that processes input batches. Must yield Output with
-        batch.num_rows matching input batch.num_rows.
-
-    setup() -> None
-        Called before processing starts. Default: no-op.
-
-    teardown() -> None
-        Called after processing completes. Default: no-op.
+    process(batch: pa.RecordBatch) -> ScalarOutputGenerator
+        Generator that processes input batches. Must yield Output or Message.
 
     AVAILABLE ATTRIBUTES
     --------------------
@@ -158,6 +141,8 @@ class ScalarFunctionGenerator(vgi.table_function.TableFunctionBase):
     self.empty_output_batch       - Empty batch conforming to output_schema
     """
 
+    InitDataCls = vgi.function.FunctionInitInput
+
     def __init__(
         self,
         invocation: vgi.function.Invocation,
@@ -165,42 +150,24 @@ class ScalarFunctionGenerator(vgi.table_function.TableFunctionBase):
     ):
         """Initialize the scalar function with invocation data and logger."""
         super().__init__(invocation=invocation, logger=logger)
-        if invocation.in_out_function_input_schema is None:
+        if invocation.input_schema is None:
             raise ValueError(
                 f"{type(self).__name__} requires an input schema, but none was "
                 f"provided. ScalarFunction processes input batches and requires "
-                f"in_out_function_input_schema to be set in the Invocation."
+                f"input_schema to be set in the Invocation."
             )
         # Validate single-column output at construction
         if len(self.output_schema) != 1:
+            cols = [f.name for f in self.output_schema]
             raise SchemaValidationError(
                 f"ScalarFunction must have exactly 1 output column, "
-                f"got {len(self.output_schema)}: {self.output_schema}"
+                f"but output_schema has {len(self.output_schema)} columns.\n\n"
+                f"  Columns found: {cols}\n\n"
+                f"  Scalar functions transform each input row to a single value.\n"
+                f"  If you need multiple output columns, use TableInOutFunction."
             )
 
-    @property
-    def input_schema(self) -> pa.Schema:
-        """Return the input schema from the invocation."""
-        # Validated as non-None in __init__
-        assert self.invocation.in_out_function_input_schema is not None
-        return self.invocation.in_out_function_input_schema
-
-    def teardown(self) -> None:
-        """Release resources after processing completes.
-
-        Override to release resources acquired in setup().
-        Always called, even if an error occurred during processing.
-        """
-        pass
-
-    @final
-    def _validate_input_schema(self, batch: pa.RecordBatch) -> None:
-        """Validate that a batch conforms to the expected input schema."""
-        if batch.schema != self.input_schema:
-            raise SchemaValidationError(
-                f"Input batch schema does not match expected input_schema. "
-                f"Expected: {self.input_schema}, got: {batch.schema}"
-            )
+    # input_schema property and _validate_input_schema inherited from Function
 
     @final
     def _validate_row_count(
@@ -209,14 +176,16 @@ class ScalarFunctionGenerator(vgi.table_function.TableFunctionBase):
         """Validate that output row count matches input row count."""
         if output_batch.num_rows != input_batch.num_rows:
             raise RowCountMismatchError(
-                f"ScalarFunction output must have same row count as input. "
-                f"Input: {input_batch.num_rows}, Output: {output_batch.num_rows}"
+                "Scalar function output must have same row count as input.",
+                input_rows=input_batch.num_rows,
+                output_rows=output_batch.num_rows,
+                function_name=type(self).__name__,
             )
 
     @final
     def _process_and_validate(
         self,
-        generator: OutputGenerator,
+        generator: ScalarOutputGenerator,
         input_batch: pa.RecordBatch,
     ) -> _ScalarOutputComplete:
         """Process a batch and validate schemas and row count.
@@ -239,15 +208,15 @@ class ScalarFunctionGenerator(vgi.table_function.TableFunctionBase):
             self.empty_output_batch,
         )
         self._validate_output_schema(result.batch)
-        # Only validate row count for actual output, not log messages
-        if result.log_message is None and result.batch.num_rows > 0:
+        # Validate row count for actual output (not log messages)
+        if result.log_message is None:
             self._validate_row_count(result.batch, input_batch)
         return result
 
     @final
     def _process_with_exception_handling(
         self,
-        generator: OutputGenerator,
+        generator: ScalarOutputGenerator,
         input_batch: pa.RecordBatch,
     ) -> _ScalarOutputComplete:
         """Process a batch with exception handling.
@@ -272,12 +241,10 @@ class ScalarFunctionGenerator(vgi.table_function.TableFunctionBase):
         )
 
     @abstractmethod
-    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+    def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
         """Process input batches.
 
         Override this method to implement your scalar transformation.
-        The generator must yield Output with batch.num_rows matching
-        input batch.num_rows.
 
         Args:
             batch: First input batch (subsequent batches via yield return).
@@ -285,7 +252,6 @@ class ScalarFunctionGenerator(vgi.table_function.TableFunctionBase):
         Yields:
             Output: Batch with same row count as input.
             Message: Log message (input will be re-sent).
-            None: No output (ready for next batch).
 
         """
         ...
@@ -303,9 +269,7 @@ class ScalarFunctionGenerator(vgi.table_function.TableFunctionBase):
             - When input exhausted, caller closes the generator
         """
         # Priming yield - caller calls next() or send(None)
-        input: ProtocolInput | None = yield ProtocolOutput(
-            batch=None, status=_OutputStatus.NEED_MORE_INPUT
-        )
+        input: ProtocolInput | None = yield ProtocolOutput(batch=None)
         if input is None:
             raise ValueError("Expected ProtocolInput, got None")
 
@@ -321,16 +285,8 @@ class ScalarFunctionGenerator(vgi.table_function.TableFunctionBase):
             while True:
                 result = self._process_with_exception_handling(generator, input.batch)
 
-                # Determine status based on result
-                has_more_output = result.has_more or result.log_message is not None
-                if has_more_output:
-                    status = _OutputStatus.HAVE_MORE_OUTPUT
-                else:
-                    status = _OutputStatus.NEED_MORE_INPUT
-
                 input = yield ProtocolOutput(
                     batch=result.batch,
-                    status=status,
                     log_message=result.log_message,
                 )
                 if input is None:
@@ -358,9 +314,6 @@ class ScalarFunction(ScalarFunctionGenerator):
     compute(batch) -> pa.Array
         Transform the input batch to a single output array.
         Must return an array with exactly batch.num_rows elements.
-
-    output_name -> str (property, optional)
-        Return the name of the output column. Default: "result"
 
     LOGGING
     -------
@@ -416,11 +369,6 @@ class ScalarFunction(ScalarFunctionGenerator):
         self._pending_messages.append(vgi.log.Message(level=level, message=message))
 
     @property
-    def output_name(self) -> str:
-        """Return the name of the output column. Override to customize."""
-        return "result"
-
-    @property
     @abstractmethod
     def output_type(self) -> pa.DataType:
         """Return the Arrow type for the output column.
@@ -444,7 +392,7 @@ class ScalarFunction(ScalarFunctionGenerator):
     @final
     def output_schema(self) -> pa.Schema:
         """Return single-column output schema. Do not override."""
-        return pa.schema([pa.field(self.output_name, self.output_type)])
+        return pa.schema([pa.field("result", self.output_type)])
 
     @abstractmethod
     def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
@@ -466,20 +414,21 @@ class ScalarFunction(ScalarFunctionGenerator):
         ...
 
     @final
-    def _yield_pending_messages(self) -> OutputGenerator:
+    def _yield_pending_messages(self) -> ScalarOutputGenerator:
         """Yield all pending log messages. Helper for process()."""
         while self._pending_messages:
             msg = self._pending_messages.pop(0)
             _ = yield msg
 
     @final
-    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+    def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
         """Convert compute() to generator protocol. Do not override.
 
         This method implements the generator protocol by calling your compute()
         method for each input batch.
         """
-        _ = yield None  # Priming yield
+        # Priming yield
+        _ = yield Output(self.empty_output_batch)
 
         while True:
             result = self.compute(batch)

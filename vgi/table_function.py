@@ -23,7 +23,6 @@ For functions that transform input batches, use TableInOutGeneratorFunction.
 
 from collections.abc import Generator
 from dataclasses import dataclass
-from functools import cached_property
 from typing import Any, final
 
 import pyarrow as pa
@@ -35,25 +34,15 @@ import vgi.log
 
 __all__ = [
     "CardinalityInfo",
-    "GlobalStateInitInput",
+    "TableFunctionInitInput",
     "Output",
     "OutputGenerator",
     "OutputSpec",
     "ProtocolOutput",
     "RowCountMismatchError",
-    "SchemaValidationError",
     "TableFunctionBase",
     "TableFunctionGenerator",
 ]
-
-
-class SchemaValidationError(Exception):
-    """Raised when a batch schema doesn't match the expected schema.
-
-    This error is raised by the framework during input/output validation.
-    It indicates a programming error where a batch doesn't conform to the
-    declared schema.
-    """
 
 
 class RowCountMismatchError(Exception):
@@ -62,7 +51,80 @@ class RowCountMismatchError(Exception):
     Scalar functions must produce exactly one output row for each input row.
     This error indicates the compute() method returned an array with the
     wrong number of elements.
+
+    Attributes:
+        input_rows: Number of rows in the input batch.
+        output_rows: Number of rows in the output batch.
+        function_name: Name of the function that produced the mismatch.
+
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        input_rows: int | None = None,
+        output_rows: int | None = None,
+        function_name: str = "",
+    ) -> None:
+        """Initialize with row count details.
+
+        Args:
+            message: Base error message.
+            input_rows: Number of input rows.
+            output_rows: Number of output rows.
+            function_name: Name of the function class.
+
+        """
+        self.input_rows = input_rows
+        self.output_rows = output_rows
+        self.function_name = function_name
+
+        if input_rows is not None and output_rows is not None:
+            full_message = self._build_detailed_message(
+                message, input_rows, output_rows
+            )
+        else:
+            full_message = message
+
+        super().__init__(full_message)
+
+    def _build_detailed_message(
+        self, base_message: str, input_rows: int, output_rows: int
+    ) -> str:
+        """Build a detailed, helpful error message."""
+        lines = [base_message, ""]
+
+        if self.function_name:
+            lines.append(f"  Function: {self.function_name}")
+
+        lines.append(f"  Input rows:  {input_rows}")
+        lines.append(f"  Output rows: {output_rows}")
+
+        # Provide specific guidance based on the mismatch type
+        lines.append("")
+        if output_rows < input_rows:
+            lines.append("  Problem: Output has fewer rows than input.")
+            lines.append("")
+            lines.append("  Possible causes:")
+            lines.append("    - compute() is filtering rows (not allowed)")
+            lines.append("    - compute() is aggregating (use TableInOutFunction)")
+            lines.append("    - Bug in array construction")
+            lines.append("")
+            lines.append("  If you need to filter or aggregate rows:")
+            lines.append("    Use TableInOutFunction instead of ScalarFunction.")
+        else:
+            lines.append("  Problem: Output has more rows than input.")
+            lines.append("")
+            lines.append("  Possible causes:")
+            lines.append("    - compute() is expanding rows (not allowed)")
+            lines.append("    - compute() is unnesting arrays")
+            lines.append("    - Bug in array construction")
+            lines.append("")
+            lines.append("  If you need to expand rows (1→N mapping):")
+            lines.append("    Use TableInOutFunction instead of ScalarFunction.")
+
+        return "\n".join(lines)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,44 +152,6 @@ class CardinalityInfo:
 
     estimate: int | None
     max: int | None
-
-
-@dataclass(frozen=True, slots=True)
-class GlobalStateInitInput:
-    """Input sent to initialize global state for a TableFunction.
-
-    Attributes:
-        projection_ids: Optional list of column indices to project, or None for all.
-
-    Note:
-        For parallel execution, functions should use the work queue pattern
-        via enqueue_work() and dequeue_work() methods on the Function base class
-        instead of static partitioning.
-
-    """
-
-    projection_ids: list[int] | None = None
-
-    def serialize(self) -> bytes:
-        """Serialize GlobalStateInitInput to bytes."""
-        batch = pa.RecordBatch.from_arrays(
-            [pa.array([self.projection_ids], type=pa.list_(pa.int32()))],
-            schema=pa.schema([pa.field("projection_ids", pa.list_(pa.int32()))]),
-        )
-        return vgi.ipc_utils.serialize_record_batch(batch)
-
-    @staticmethod
-    def deserialize(batch: pa.RecordBatch) -> "GlobalStateInitInput":
-        """Deserialize GlobalStateInitInput from a RecordBatch."""
-        values = batch.to_pylist()[0]
-        # Handle backward compatibility: ignore extra fields
-        return GlobalStateInitInput(projection_ids=values.get("projection_ids"))
-
-    @staticmethod
-    def deserialize_bytes(data: bytes) -> "GlobalStateInitInput":
-        """Deserialize GlobalStateInitInput from bytes."""
-        batch = vgi.ipc_utils.deserialize_record_batch(data)
-        return GlobalStateInitInput.deserialize(batch)
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,15 +306,49 @@ class ProtocolOutput:
         )
 
 
-class TableFunctionBase(vgi.function.Function):
+@dataclass(frozen=True, slots=True)
+class TableFunctionInitInput(vgi.function.FunctionInitInput):
+    """Input sent to initialize global state for a TableFunction.
+
+    Attributes:
+        projection_ids: Optional list of column indices to project, or None for all.
+
+    Note:
+        For parallel execution, functions should use the work queue pattern
+        via enqueue_work() and dequeue_work() methods on the Function base class
+        instead of static partitioning.
+
+    """
+
+    projection_ids: list[int] | None = None
+
+    def serialize(self) -> bytes:
+        """Serialize TableFunctionInitInput to bytes."""
+        batch = pa.RecordBatch.from_arrays(
+            [pa.array([self.projection_ids], type=pa.list_(pa.int32()))],
+            schema=pa.schema([pa.field("projection_ids", pa.list_(pa.int32()))]),
+        )
+        return vgi.ipc_utils.serialize_record_batch(batch)
+
+    @classmethod
+    def deserialize(cls, batch: pa.RecordBatch) -> "TableFunctionInitInput":
+        """Deserialize TableFunctionInitInput from a RecordBatch."""
+        values = batch.to_pylist()[0]
+        # Handle backward compatibility: ignore extra fields
+        return cls(projection_ids=values.get("projection_ids"))
+
+    @classmethod
+    def deserialize_bytes(cls, data: bytes) -> "TableFunctionInitInput":
+        """Deserialize TableFunctionInitInput from bytes."""
+        batch = vgi.ipc_utils.deserialize_record_batch(data)
+        return cls.deserialize(batch)
+
+
+class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
     """Base class for table functions with cardinality and schema validation.
 
     Extends Function with:
     - Cardinality hints for query optimization
-    - Output schema validation
-    - Setup/teardown lifecycle hooks
-    - Empty output batch helper (cached)
-    - Init data storage and retrieval
     - Projection pushdown support
 
     This class is not meant to be used directly. Subclass either:
@@ -298,7 +356,7 @@ class TableFunctionBase(vgi.function.Function):
     - TableInOutGeneratorFunction: For functions that transform input batches
 
     Attributes:
-        init_data: GlobalStateInitInput with projection info (set after init)
+        init_data: TableFunctionInitInput with projection info (set after init)
         empty_output_batch: Cached empty batch conforming to output_schema
 
     See Also:
@@ -307,8 +365,8 @@ class TableFunctionBase(vgi.function.Function):
 
     """
 
-    # This is the init data that may be been read.
-    init_data: GlobalStateInitInput | None = None
+    InitDataCls = TableFunctionInitInput
+    init_data: TableFunctionInitInput | None = None
 
     def __init__(
         self,
@@ -326,28 +384,6 @@ class TableFunctionBase(vgi.function.Function):
         """
         super().__init__(invocation=invocation, logger=logger)
 
-    def setup(self) -> None:
-        """Acquire resources before processing starts.
-
-        Override to acquire resources like database connections, file handles,
-        or external service clients. Called after init_data is available.
-
-        Available at this point:
-            - self.init_data: The GlobalStateInitInput with projection info
-            - self.init_identifier: Storage key for distributed state
-            - self.invocation: The complete invocation request
-
-        """
-        pass
-
-    def teardown(self) -> None:
-        """Release resources after processing completes.
-
-        Always called, even if an error occurred during processing.
-
-        """
-        pass
-
     def cardinality(self) -> CardinalityInfo | None:
         """Return optional cardinality estimate for the output.
 
@@ -359,50 +395,6 @@ class TableFunctionBase(vgi.function.Function):
 
         """
         return None
-
-    @final
-    @cached_property
-    def empty_output_batch(self) -> pa.RecordBatch:
-        """Return an empty batch conforming to output_schema. Cached."""
-        output_schema = self.output_schema
-        return pa.RecordBatch.from_arrays(
-            [pa.array([], type=field.type) for field in output_schema],
-            schema=output_schema,
-        )
-
-    @final
-    def _validate_output_schema(self, batch: pa.RecordBatch) -> None:
-        """Validate that a batch conforms to the expected output schema."""
-        if batch.schema != self.output_schema:
-            raise SchemaValidationError(
-                f"Output batch schema does not match expected output_schema. "
-                f"Expected: {self.output_schema}, got: {batch.schema}"
-            )
-
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return the output schema (default: passthrough input schema)."""
-        raise NotImplementedError("Subclasses must implement output_schema property")
-
-    def perform_init(self, init_input: pa.RecordBatch) -> vgi.function.GlobalInitResult:
-        """Perform a new init call and store it in the storage."""
-        self.init_data = GlobalStateInitInput.deserialize(init_input)
-        self.init_identifier = self.init_storage.create(self.init_data.serialize())
-        return vgi.function.GlobalInitResult(self.init_identifier)
-
-    def retrieve_init(self, init_input: vgi.function.GlobalInitResult) -> None:
-        """Retrieve and store init data from the storage."""
-        if init_input.global_init_identifier is None:
-            raise ValueError(
-                "global_init_identifier is required but was None. "
-                "This indicates the GlobalInitResult was not properly initialized. "
-                "Ensure perform_init() returns a GlobalInitResult with a valid "
-                "identifier."
-            )
-        self.init_identifier = init_input.global_init_identifier
-        self.init_data = GlobalStateInitInput.deserialize_bytes(
-            self.init_storage.get(self.init_identifier)
-        )
 
     def apply_projection(self, schema: pa.Schema) -> pa.Schema:
         """Apply any projection specified in the init data to the schema.

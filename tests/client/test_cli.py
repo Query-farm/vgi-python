@@ -795,9 +795,7 @@ class TestCLIScalarFunction:
         lines = output_file.read_text().strip().split("\n")
         assert len(lines) == 3
 
-    def test_scalar_with_add_columns(
-        self, example_worker: str, tmp_path: Path
-    ) -> None:
+    def test_scalar_with_add_columns(self, example_worker: str, tmp_path: Path) -> None:
         """Test add_columns scalar function via CLI."""
         # Create input with two columns
         batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3], "b": [10, 20, 30]})
@@ -832,9 +830,7 @@ class TestCLIScalarFunction:
         results = [json.loads(line)["result"] for line in lines]
         assert results == [11, 22, 33]
 
-    def test_scalar_with_upper_case(
-        self, example_worker: str, tmp_path: Path
-    ) -> None:
+    def test_scalar_with_upper_case(self, example_worker: str, tmp_path: Path) -> None:
         """Test upper_case scalar function via CLI."""
         batch = pa.RecordBatch.from_pydict({"name": ["alice", "bob"]})
         input_file = tmp_path / "input.parquet"

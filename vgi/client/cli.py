@@ -317,7 +317,6 @@ def _create_cli() -> Any:
                         function_name=function_name,
                         arguments=Arguments(positional=positional_args, named={}),
                         input=pf.iter_batches(),
-                        projection_ids=list(projection_ids) if projection_ids else None,
                     )
                 else:
                     # Table-in-out function (with input)

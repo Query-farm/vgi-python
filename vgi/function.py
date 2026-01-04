@@ -2,21 +2,24 @@
 
 This module defines the foundational classes used during function binding
 in the VGI protocol. When a client invokes a function, it sends Invocation
-describing the function name, arguments, and input schema. The worker
-returns an OutputSpec describing the output schema and execution hints.
+describing the function name, arguments, input schema, and function type.
+The worker returns an OutputSpec describing the output schema and execution hints.
 
 Classes:
+    InvocationType: Enum distinguishing scalar vs table invocation types.
     Arguments: Container for positional and named function arguments.
-    Invocation: Complete function invocation request (name, args, schema).
+    Invocation: Complete function invocation request (name, args, schema, type).
     OutputSpec: Result from binding a function (output schema, etc).
+    Function: Base class for all VGI functions.
 
 The Invocation and OutputSpec are serialized to Arrow IPC format
 for transmission between client and worker processes.
 
 See Also:
+    vgi.scalar_function: Scalar functions with 1:1 row transforms.
+    vgi.table_function: Table functions with cardinality hints.
+    vgi.table_in_out_function: Streaming table functions for batch transforms.
     vgi.log: LogLevel and LogMessage for function diagnostics.
-    vgi.table_function: Extended bind results with cardinality hints.
-    vgi.table_in_out_function: Streaming table functions built on these primitives.
 
 """
 
@@ -24,7 +27,16 @@ import os
 import sqlite3
 import uuid
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self, TypeVar
+from enum import Enum
+from functools import cached_property
+from typing import (
+    Any,
+    ClassVar,
+    Protocol,
+    Self,
+    TypeVar,
+    final,
+)
 
 import pyarrow as pa
 import structlog
@@ -34,23 +46,174 @@ from vgi.arguments import Arg, Arguments, ArgumentValidationError
 from vgi.log import Level, Message
 from vgi.metadata import MetadataMixin, ResolvedMetadata
 
-if TYPE_CHECKING:
-    pass
-
 __all__ = [
     "Arg",
     "ArgumentValidationError",
     "Arguments",
     "Function",
+    "InvocationType",
     "GlobalInitResult",
     "Level",
     "Message",
     "OutputSpec",
     "Invocation",
+    "SchemaValidationError",
     "Serializable",
     "SqliteInitStorage",
     "SqliteWorkerStateStorage",
 ]
+
+
+class SchemaValidationError(Exception):
+    """Raised when a batch schema doesn't match the expected schema.
+
+    This error is raised by the framework during input/output validation.
+    It indicates a programming error where a batch doesn't conform to the
+    declared schema.
+
+    The error message includes detailed information about what differs:
+    - Missing fields (in expected but not in actual)
+    - Extra fields (in actual but not in expected)
+    - Type mismatches (same field name, different types)
+    - Field order differences
+
+    Attributes:
+        expected: The expected Arrow schema.
+        actual: The actual Arrow schema that was received.
+        context: Description of where the validation occurred.
+
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        expected: "pa.Schema | None" = None,
+        actual: "pa.Schema | None" = None,
+        context: str = "",
+    ) -> None:
+        """Initialize with schema comparison details.
+
+        Args:
+            message: Base error message.
+            expected: The expected Arrow schema.
+            actual: The actual Arrow schema.
+            context: Where the error occurred (e.g., "output from transform()").
+
+        """
+        self.expected = expected
+        self.actual = actual
+        self.context = context
+
+        if expected is not None and actual is not None:
+            full_message = self._build_detailed_message(message, expected, actual)
+        else:
+            full_message = message
+
+        super().__init__(full_message)
+
+    def _build_detailed_message(
+        self, base_message: str, expected: "pa.Schema", actual: "pa.Schema"
+    ) -> str:
+        """Build a detailed message showing exactly what differs."""
+        lines = [base_message, ""]
+
+        if self.context:
+            lines.append(f"  Context: {self.context}")
+            lines.append("")
+
+        # Build field maps for comparison
+        expected_fields = {f.name: f for f in expected}
+        actual_fields = {f.name: f for f in actual}
+
+        expected_names = set(expected_fields.keys())
+        actual_names = set(actual_fields.keys())
+
+        # Find differences
+        missing = expected_names - actual_names
+        extra = actual_names - expected_names
+        common = expected_names & actual_names
+
+        # Check for type mismatches in common fields
+        type_mismatches = []
+        for name in common:
+            exp_field = expected_fields[name]
+            act_field = actual_fields[name]
+            if exp_field.type != act_field.type:
+                type_mismatches.append((name, exp_field.type, act_field.type))
+            elif exp_field.nullable != act_field.nullable:
+                exp_null = "nullable" if exp_field.nullable else "non-nullable"
+                act_null = "nullable" if act_field.nullable else "non-nullable"
+                type_mismatches.append((name, exp_null, act_null))
+
+        # Check for order differences (only if names match but order differs)
+        order_differs = False
+        if not missing and not extra and not type_mismatches:
+            expected_order = [f.name for f in expected]
+            actual_order = [f.name for f in actual]
+            if expected_order != actual_order:
+                order_differs = True
+
+        # Report missing fields
+        if missing:
+            lines.append("  Missing fields (expected but not found):")
+            for name in sorted(missing):
+                field = expected_fields[name]
+                lines.append(f"    - {name}: {field.type}")
+
+        # Report extra fields
+        if extra:
+            lines.append("  Extra fields (found but not expected):")
+            for name in sorted(extra):
+                field = actual_fields[name]
+                lines.append(f"    - {name}: {field.type}")
+
+        # Report type mismatches
+        if type_mismatches:
+            lines.append("  Type mismatches:")
+            for name, exp_type, act_type in type_mismatches:
+                lines.append(f"    - {name}: expected {exp_type}, got {act_type}")
+
+        # Report order differences
+        if order_differs:
+            lines.append("  Field order differs:")
+            lines.append(f"    Expected: {[f.name for f in expected]}")
+            lines.append(f"    Actual:   {[f.name for f in actual]}")
+
+        # Summary of schemas
+        lines.append("")
+        lines.append("  Expected schema:")
+        for field in expected:
+            nullable = " (nullable)" if field.nullable else ""
+            lines.append(f"    {field.name}: {field.type}{nullable}")
+
+        lines.append("  Actual schema:")
+        for field in actual:
+            nullable = " (nullable)" if field.nullable else ""
+            lines.append(f"    {field.name}: {field.type}{nullable}")
+
+        return "\n".join(lines)
+
+
+class InvocationType(Enum):
+    """Type of VGI invocation for protocol dispatch.
+
+    Used by the client to determine the correct init data format to send
+    to the worker. Scalar functions use FunctionInitInput (no projection),
+    while table functions use TableFunctionInitInput (with projection support).
+
+    Note: This is distinct from vgi.metadata.FunctionType which is used for
+    DuckDB catalog registration and includes AGGREGATE.
+
+    Attributes:
+        SCALAR: Scalar function that transforms input batches to single-column output.
+        TABLE: Table function (either generator or table-in-out) that produces
+            multi-column output.
+
+    """
+
+    SCALAR = "scalar"
+    TABLE = "table"
 
 
 class Serializable(Protocol):
@@ -176,21 +339,23 @@ class Invocation:
 
     Invocation encapsulates all information needed to bind and execute a function:
     the function name, its arguments, the expected input schema (for table
-    functions), and identifiers for logging and correlation.
+    functions), the function type, and identifiers for logging and correlation.
 
     This is serialized to Arrow IPC format and sent as the first message when
     the client connects to a worker subprocess.
 
     Attributes:
         function_name: Name of the function to invoke, must exist in worker registry.
-        arguments: Positional and named arguments passed to the function.
-        in_out_function_input_schema: Arrow schema of input data (required for
-            Function, None for scalar functions or functions that don't
-            process input tables).
+        input_schema: Arrow schema of input data. Required for table-in-out and
+            scalar functions that process input batches. None for table functions
+            that generate output without input.
+        function_type: Type of function being invoked (SCALAR or TABLE). Used by
+            the client to determine the correct init data format to send.
         correlation_id: String identifier for logging and correlation purposes.
         invocation_id: Unique bytes identifying this function binding. Used to
             correlate multiple parallel workers processing the same logical call.
         global_init_identifier: Optional result from global initialization phase.
+        arguments: Positional and named arguments passed to the function.
         client_features: Feature flags supported by the client. The worker will
             respond with active_features in OutputSpec indicating which features
             will be used for this invocation.
@@ -201,16 +366,18 @@ class Invocation:
     Example:
         invocation = Invocation(
             function_name="sum_columns",
-            arguments=Arguments(positional=("col1", "col2")),
-            in_out_function_input_schema=pa.schema([pa.field("col1", pa.int64())]),
+            input_schema=pa.schema([pa.field("col1", pa.int64())]),
+            function_type=InvocationType.TABLE,
             correlation_id="request-123",
             invocation_id=None,  # Set by worker after binding
+            arguments=Arguments(positional=("col1", "col2")),
         )
 
     """
 
     function_name: str
-    in_out_function_input_schema: pa.Schema | None
+    input_schema: pa.Schema | None
+    function_type: InvocationType
 
     correlation_id: str
     # The unique identifier for the call, typically this may be a uuid.
@@ -248,11 +415,12 @@ class Invocation:
                 {
                     "function_name": self.function_name,
                     "arguments": args_dict,
-                    "in_out_function_input_schema": (
-                        self.in_out_function_input_schema.serialize().to_pybytes()
-                        if self.in_out_function_input_schema
+                    "input_schema": (
+                        self.input_schema.serialize().to_pybytes()
+                        if self.input_schema
                         else None
                     ),
+                    "function_type": self.function_type.value,
                     "invocation_id": self.invocation_id,
                     "correlation_id": self.correlation_id,
                     GlobalInitResult._IDENTIFIER_FIELD_NAME: (
@@ -268,9 +436,8 @@ class Invocation:
                 [
                     pa.field("function_name", pa.string(), nullable=False),
                     pa.field("arguments", args_struct_type, nullable=True),
-                    pa.field(
-                        "in_out_function_input_schema", pa.binary(), nullable=True
-                    ),
+                    pa.field("input_schema", pa.binary(), nullable=True),
+                    pa.field("function_type", pa.string(), nullable=False),
                     pa.field("invocation_id", pa.binary(), nullable=True),
                     pa.field("correlation_id", pa.string(), nullable=False),
                     pa.field(
@@ -303,7 +470,8 @@ class Invocation:
         required_fields = [
             "function_name",
             "arguments",
-            "in_out_function_input_schema",
+            "input_schema",
+            "function_type",
             "invocation_id",
             "correlation_id",
         ]
@@ -311,11 +479,12 @@ class Invocation:
             data, "Invocation", required_fields=required_fields
         )
 
-        in_out_function_input_schema = None
-        if first_row["in_out_function_input_schema"] is not None:
-            in_out_function_input_schema = pa.ipc.read_schema(
-                pa.py_buffer(first_row["in_out_function_input_schema"])
-            )
+        input_schema = None
+        if first_row["input_schema"] is not None:
+            input_schema = pa.ipc.read_schema(pa.py_buffer(first_row["input_schema"]))
+
+        # Parse function_type from string value
+        function_type = InvocationType(first_row["function_type"])
 
         # Parse global_init_identifier - only create GlobalInitResult if field exists
         # and has a non-None value
@@ -339,8 +508,9 @@ class Invocation:
 
         return Invocation(
             function_name=first_row["function_name"],
+            input_schema=input_schema,
+            function_type=function_type,
             arguments=Arguments.decode(data.column("arguments")[0]),
-            in_out_function_input_schema=in_out_function_input_schema,
             invocation_id=first_row["invocation_id"],
             correlation_id=first_row["correlation_id"],
             global_init_identifier=global_init_identifier,
@@ -787,7 +957,54 @@ class SqliteWorkerStateStorage:
             conn.close()
 
 
-class Function(MetadataMixin):
+class FunctionInitInput:
+    """Input sent to initialize global state for a Function.
+
+    This is the base init input class for functions that don't require
+    any initialization data (like scalar functions). It serializes to
+    an empty single-row batch.
+    """
+
+    def serialize(self) -> bytes:
+        """Serialize FunctionInitInput to bytes.
+
+        Creates a single-row batch with an empty schema. The batch must have
+        exactly 1 row so that deserialize can access row 0.
+        """
+        # Create a batch with 1 row using a struct array approach
+        struct_array: pa.StructArray = pa.array([{}], type=pa.struct([]))  # type: ignore[assignment]
+        batch = pa.RecordBatch.from_struct_array(struct_array)
+        return vgi.ipc_utils.serialize_record_batch(batch)
+
+    @classmethod
+    def deserialize(cls, _batch: pa.RecordBatch) -> Self:
+        """Deserialize FunctionInitInput from a RecordBatch.
+
+        Args:
+            _batch: RecordBatch (unused - FunctionInitInput has no fields).
+
+        Returns:
+            New FunctionInitInput instance.
+
+        """
+        return cls()
+
+    @classmethod
+    def deserialize_bytes(cls, data: bytes) -> Self:
+        """Deserialize FunctionInitInput from bytes.
+
+        Args:
+            data: Serialized bytes.
+
+        Returns:
+            New FunctionInitInput instance.
+
+        """
+        batch = vgi.ipc_utils.deserialize_record_batch(data)
+        return cls.deserialize(batch)
+
+
+class Function[T: FunctionInitInput](MetadataMixin):
     """Base class for all VGI functions.
 
     Functions are instantiated with Invocation describing the invocation,
@@ -830,12 +1047,16 @@ class Function(MetadataMixin):
     init_storage: ClassVar[SqliteInitStorage] = SqliteInitStorage()
     state_storage: ClassVar[SqliteWorkerStateStorage] = SqliteWorkerStateStorage()
 
+    # Cache for resolved metadata
+    _metadata_cache: ClassVar[ResolvedMetadata | None] = None
+
     # The unique identifier for init data in storage. Set by perform_init()
     # or retrieve_init(). Used to correlate parallel workers and for state storage.
     init_identifier: bytes | None = None
 
-    # Cache for resolved metadata
-    _metadata_cache: ClassVar[ResolvedMetadata | None] = None
+    # This is the init data that may be been read.
+    InitDataCls: type[T]
+    init_data: T | None = None
 
     def __init__(
         self,
@@ -886,27 +1107,6 @@ class Function(MetadataMixin):
 
         """
         return uuid.uuid4().bytes
-
-    def perform_init(self, init_input: pa.RecordBatch) -> GlobalInitResult:
-        """Perform any global initialization required before processing.
-
-        This method is called once per worker process before any data
-        batches are processed. Override to set up shared resources, load
-        models, or perform expensive setup tasks.
-
-        Args:
-            init_input: An initial RecordBatch that may contain configuration
-                or context information for initialization.
-
-        """
-        # If there is an id supplied, detect it so it will be passed on.
-        if GlobalInitResult.has_identifier(init_input):
-            return GlobalInitResult.deserialize(init_input)
-
-        return GlobalInitResult()
-
-    def retrieve_init(self, init_input: GlobalInitResult) -> None:
-        """Retrieve init data from storage (default does nothing)."""
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -1062,3 +1262,98 @@ class Function(MetadataMixin):
                 "retrieve_init() for secondary workers."
             )
         return self.state_storage.dequeue_work(self.init_identifier)
+
+    @final
+    @cached_property
+    def empty_output_batch(self) -> pa.RecordBatch:
+        """Return an empty batch conforming to output_schema. Cached."""
+        output_schema = self.output_schema
+        return pa.RecordBatch.from_arrays(
+            [pa.array([], type=field.type) for field in output_schema],
+            schema=output_schema,
+        )
+
+    @final
+    def _validate_output_schema(self, batch: pa.RecordBatch) -> None:
+        """Validate that a batch conforms to the expected output schema."""
+        if batch.schema != self.output_schema:
+            raise SchemaValidationError(
+                "Output batch schema does not match expected output_schema.",
+                expected=self.output_schema,
+                actual=batch.schema,
+                context=f"output from {type(self).__name__}",
+            )
+
+    @property
+    def input_schema(self) -> pa.Schema:
+        """Return the input schema from the invocation.
+
+        This property is available for functions that receive input batches
+        (ScalarFunction, TableInOutFunction). For TableFunctionGenerator,
+        the invocation.input_schema is None.
+
+        Raises:
+            ValueError: If invocation.input_schema is None.
+
+        """
+        if self.invocation.input_schema is None:
+            raise ValueError(
+                "input_schema is not available for this function type. "
+                "TableFunctionGenerator does not receive input batches."
+            )
+        return self.invocation.input_schema
+
+    @final
+    def _validate_input_schema(self, batch: pa.RecordBatch) -> None:
+        """Validate that a batch conforms to the expected input schema."""
+        if batch.schema != self.input_schema:
+            raise SchemaValidationError(
+                "Input batch schema does not match expected input_schema.",
+                expected=self.input_schema,
+                actual=batch.schema,
+                context=f"input to {type(self).__name__}",
+            )
+
+    def perform_init(self, init_input: pa.RecordBatch) -> GlobalInitResult:
+        """Perform a new init call and store it in the storage."""
+        self.init_data = self.InitDataCls.deserialize(init_input)
+        assert self.init_data is not None
+        self.init_identifier = self.init_storage.create(self.init_data.serialize())
+        return GlobalInitResult(self.init_identifier)
+
+    def retrieve_init(self, init_input: GlobalInitResult) -> None:
+        """Retrieve and store init data from the storage."""
+        if init_input.global_init_identifier is None:
+            raise ValueError(
+                "global_init_identifier is required but was None. "
+                "This indicates the GlobalInitResult was not properly initialized. "
+                "Ensure perform_init() returns a GlobalInitResult with a valid "
+                "identifier."
+            )
+        self.init_identifier = init_input.global_init_identifier
+        self.init_data = self.InitDataCls.deserialize_bytes(
+            self.init_storage.get(self.init_identifier)
+        )
+
+    def setup(self) -> None:
+        """Acquire resources before processing starts.
+
+        Override to acquire resources like database connections, file handles,
+        or external service clients. Called after init_data is available.
+
+        Available at this point:
+            - self.init_data: The init data (FunctionInitInput or
+              TableFunctionInitInput)
+            - self.init_identifier: Storage key for distributed state
+            - self.invocation: The complete invocation request
+
+        """
+        pass
+
+    def teardown(self) -> None:
+        """Release resources after processing completes.
+
+        Always called, even if an error occurred during processing.
+
+        """
+        pass

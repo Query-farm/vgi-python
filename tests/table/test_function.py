@@ -7,7 +7,7 @@ import pytest
 import structlog
 
 from tests.utils import make_schema
-from vgi.function import Arguments, Invocation
+from vgi.function import Arguments, Invocation, InvocationType
 from vgi.table_function import (
     CardinalityInfo,
     Output,
@@ -194,10 +194,11 @@ class TestTableFunctionGeneratorCardinality:
 
         invocation = Invocation(
             function_name="test",
-            arguments=Arguments(),
-            in_out_function_input_schema=None,
+            input_schema=None,
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
+            arguments=Arguments(),
         )
         func = NoCardinalityFunction(
             invocation=invocation,
@@ -219,10 +220,11 @@ class TestTableFunctionGeneratorCardinality:
 
         invocation = Invocation(
             function_name="test",
-            arguments=Arguments(),
-            in_out_function_input_schema=None,
+            input_schema=None,
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
+            arguments=Arguments(),
         )
         func = CardinalityFunction(
             invocation=invocation,
@@ -311,10 +313,11 @@ class TestTableFunctionGeneratorEmptyBatch:
 
         invocation = Invocation(
             function_name="test",
-            arguments=Arguments(),
-            in_out_function_input_schema=None,
+            input_schema=None,
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
+            arguments=Arguments(),
         )
         func = TestFunction(
             invocation=invocation,
