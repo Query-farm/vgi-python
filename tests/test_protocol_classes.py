@@ -1,6 +1,6 @@
 """Unit tests for VGI protocol classes.
 
-Tests cover Invocation, Arguments, GlobalInitResult, and table_function classes.
+Tests cover Invocation, Arguments, InitResult, and table_function classes.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from vgi.function import (
     Arg,
     Arguments,
     ArgumentValidationError,
-    GlobalInitResult,
+    InitResult,
     Invocation,
     InvocationType,
 )
@@ -310,7 +310,7 @@ class TestInvocation:
             global_init_identifier=None,
         )
 
-        init_result = GlobalInitResult(global_init_identifier=b"init-data")
+        init_result = InitResult(global_init_identifier=b"init-data")
         updated = original.with_global_init_identifier(init_result)
 
         assert updated.function_name == original.function_name
@@ -318,12 +318,12 @@ class TestInvocation:
         assert original.global_init_identifier is None  # Original unchanged
 
 
-class TestGlobalInitResult:
-    """Tests for GlobalInitResult serialization."""
+class TestInitResult:
+    """Tests for InitResult serialization."""
 
     def test_basic_round_trip(self) -> None:
-        """GlobalInitResult should serialize and deserialize correctly."""
-        original = GlobalInitResult(global_init_identifier=b"test-init-id")
+        """InitResult should serialize and deserialize correctly."""
+        original = InitResult(global_init_identifier=b"test-init-id")
 
         serialized = original.serialize()
         assert isinstance(serialized, bytes)
@@ -332,20 +332,20 @@ class TestGlobalInitResult:
 
         reader = ipc.open_stream(serialized)
         batch = reader.read_next_batch()
-        deserialized = GlobalInitResult.deserialize(batch)
+        deserialized = InitResult.deserialize(batch)
 
         assert deserialized.global_init_identifier == b"test-init-id"
 
     def test_null_identifier(self) -> None:
-        """GlobalInitResult with null identifier should round-trip correctly."""
-        original = GlobalInitResult(global_init_identifier=None)
+        """InitResult with null identifier should round-trip correctly."""
+        original = InitResult(global_init_identifier=None)
 
         serialized = original.serialize()
         from pyarrow import ipc
 
         reader = ipc.open_stream(serialized)
         batch = reader.read_next_batch()
-        deserialized = GlobalInitResult.deserialize(batch)
+        deserialized = InitResult.deserialize(batch)
 
         assert deserialized.global_init_identifier is None
 
@@ -357,7 +357,7 @@ class TestGlobalInitResult:
                 [pa.field("global_init_identifier", pa.binary(), nullable=True)]
             ),
         )
-        assert GlobalInitResult.has_identifier(batch) is True
+        assert InitResult.has_identifier(batch) is True
 
     def test_has_identifier_false(self) -> None:
         """has_identifier should return False when field doesn't exist."""
@@ -365,7 +365,7 @@ class TestGlobalInitResult:
             [{"other_field": "value"}],
             schema=make_schema([pa.field("other_field", pa.string())]),
         )
-        assert GlobalInitResult.has_identifier(batch) is False
+        assert InitResult.has_identifier(batch) is False
 
     def test_deserialize_empty_batch_raises(self) -> None:
         """Deserializing empty batch should raise ValueError."""
@@ -377,7 +377,7 @@ class TestGlobalInitResult:
         )
 
         with pytest.raises(ValueError, match="empty RecordBatch"):
-            GlobalInitResult.deserialize(empty_batch)
+            InitResult.deserialize(empty_batch)
 
     def test_deserialize_multi_row_batch_raises(self) -> None:
         """Deserializing multi-row batch should raise ValueError."""
@@ -392,11 +392,11 @@ class TestGlobalInitResult:
         )
 
         with pytest.raises(ValueError, match="single-row"):
-            GlobalInitResult.deserialize(multi_row_batch)
+            InitResult.deserialize(multi_row_batch)
 
     def test_schema(self) -> None:
         """schema() should return correct Arrow schema."""
-        result = GlobalInitResult(global_init_identifier=b"test")
+        result = InitResult(global_init_identifier=b"test")
         schema = result.schema()
 
         assert len(schema) == 1

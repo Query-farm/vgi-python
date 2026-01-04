@@ -85,7 +85,7 @@ def perform_init(self, init_input):
     # Primary worker: populate work queue
     work_items = [chunk.serialize() for chunk in self.create_chunks()]
     self.enqueue_work(work_items)
-    return GlobalInitResult(self.init_identifier)
+    return InitResult(self.init_identifier)
 
 def process(self):
     # All workers: pull from queue until empty

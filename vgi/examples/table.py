@@ -19,7 +19,7 @@ from typing import ClassVar, cast
 import pyarrow as pa
 
 from vgi.arguments import Arg
-from vgi.function import GlobalInitResult
+from vgi.function import InitResult
 from vgi.log import Level, Message
 from vgi.metadata import FunctionExample
 from vgi.table_function import (
@@ -473,7 +473,7 @@ class PartitionedRangeFunction(TableFunctionGenerator):
         """
         return CardinalityInfo(estimate=self.count, max=self.count)
 
-    def perform_init(self, init_input: pa.RecordBatch) -> GlobalInitResult:
+    def perform_init(self, init_input: pa.RecordBatch) -> InitResult:
         """Populate the work queue with range chunks."""
         # Parse init data and store in init_storage
         self.init_data = TableFunctionInitInput.deserialize(init_input)
@@ -489,7 +489,7 @@ class PartitionedRangeFunction(TableFunctionGenerator):
         if work_items:
             self.enqueue_work(work_items)
 
-        return GlobalInitResult(self.init_identifier)
+        return InitResult(self.init_identifier)
 
     def process(self) -> OutputGenerator:
         """Generate values by pulling chunks from the work queue."""

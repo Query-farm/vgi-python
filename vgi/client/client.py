@@ -72,7 +72,7 @@ from pyarrow import ipc
 from vgi.function import (
     Arguments,
     FunctionInitInput,
-    GlobalInitResult,
+    InitResult,
     Invocation,
     InvocationType,
 )
@@ -375,7 +375,7 @@ class Client:
         function_type: InvocationType,
         bind_result_callback: Callable[[pa.RecordBatch], None] | None,
         projection_ids: list[int] | None,
-    ) -> tuple[_BindResult, GlobalInitResult, Invocation]:
+    ) -> tuple[_BindResult, InitResult, Invocation]:
         """Perform the common initialization handshake with the primary worker.
 
         Executes the VGI protocol initialization sequence:
@@ -385,7 +385,7 @@ class Client:
         4. Validates protocol version compatibility
         5. Applies CPU/max_workers limits to max_processes
         6. Sends init data (FunctionInitInput or TableFunctionInitInput)
-        7. Reads GlobalInitResult (shared state identifier for parallel workers)
+        7. Reads InitResult (shared state identifier for parallel workers)
         8. Creates an Invocation with global_init_identifier for additional workers
 
         Args:
@@ -406,7 +406,7 @@ class Client:
         Returns:
             A tuple of (bind_result, global_init_result, request_with_init):
                 - bind_result: Parsed _BindResult with output_schema, max_processes
-                - global_init_result: GlobalInitResult containing shared state ID
+                - global_init_result: InitResult containing shared state ID
                 - request_with_init: Invocation with global_init_identifier set,
                   suitable for initializing additional parallel workers
 
@@ -496,7 +496,7 @@ class Client:
         except IPCError as e:
             raise ClientError(str(e)) from e
 
-        global_init_result = GlobalInitResult.deserialize(init_result_batch)
+        global_init_result = InitResult.deserialize(init_result_batch)
         log.debug(
             "init_result_received",
             has_identifier=global_init_result.global_init_identifier is not None,
@@ -835,7 +835,7 @@ class Client:
                 and stdout_buffered handles. The data_writer field will be set
                 if input_schema is not None.
             request_with_init: Invocation containing the global_init_identifier
-                from the primary worker's GlobalInitResult. This ensures all
+                from the primary worker's InitResult. This ensures all
                 workers share the same initialization state.
             input_schema: Schema for the input data stream. If provided, a
                 RecordBatchStreamWriter is created and assigned to worker.data_writer.

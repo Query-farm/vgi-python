@@ -50,7 +50,7 @@ PROTOCOL FLOW (ScalarFunctionGenerator)
 ---------------------------------------
 1. Read Invocation: function name, arguments, input schema
 2. Write OutputSpec: output schema, max_processes, invocation_id
-3. Read/write FunctionInitInput/GlobalInitResult for initialization
+3. Read/write FunctionInitInput/InitResult for initialization
 4. Stream: read input batches -> compute -> write single-column output batches
    (ends when input exhausted, no FINALIZE phase)
 
@@ -58,7 +58,7 @@ PROTOCOL FLOW (TableInOutGeneratorFunction)
 -------------------------------------------
 1. Read Invocation: function name, arguments, input schema
 2. Write OutputSpec: output schema, max_processes, invocation_id
-3. Read/write TableFunctionInitInput/GlobalInitResult for initialization
+3. Read/write TableFunctionInitInput/InitResult for initialization
 4. Stream: read input batches -> process -> write output batches
 5. Finalize: receive FINALIZE signal -> emit final results
 
@@ -66,7 +66,7 @@ PROTOCOL FLOW (TableFunctionGenerator)
 --------------------------------------
 1. Read Invocation: function name, arguments (no input schema)
 2. Write OutputSpec: output schema, max_processes, invocation_id
-3. Read/write TableFunctionInitInput/GlobalInitResult for initialization
+3. Read/write TableFunctionInitInput/InitResult for initialization
 4. Generate: produce output batches until generator exhausted
 
 KEY CLASSES

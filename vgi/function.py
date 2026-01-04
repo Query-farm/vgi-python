@@ -52,7 +52,7 @@ __all__ = [
     "Arguments",
     "Function",
     "InvocationType",
-    "GlobalInitResult",
+    "InitResult",
     "Level",
     "Message",
     "OutputSpec",
@@ -253,11 +253,11 @@ StateT = TypeVar("StateT", bound=Serializable)
 
 
 @dataclass(frozen=True, slots=True)
-class GlobalInitResult:
+class InitResult:
     """Result from the global initialization phase of a function.
 
     When a function supports parallel execution (max_processes > 1), the first
-    worker runs perform_init() which returns a GlobalInitResult. This result
+    worker runs perform_init() which returns a InitResult. This result
     contains an identifier that is passed to all subsequent parallel workers
     via retrieve_init(), allowing them to share state or coordinate processing.
 
@@ -285,7 +285,7 @@ class GlobalInitResult:
         return cls._IDENTIFIER_FIELD_NAME in data.schema.names
 
     def schema(self) -> pa.Schema:
-        """Return Arrow schema used when serializing GlobalInitResult.
+        """Return Arrow schema used when serializing InitResult.
 
         Returns:
             Arrow schema with fields for each serialized attribute.
@@ -298,10 +298,10 @@ class GlobalInitResult:
         )
 
     def serialize(self) -> bytes:
-        """Serialize GlobalInitResult to an Arrow RecordBatch.
+        """Serialize InitResult to an Arrow RecordBatch.
 
         Returns:
-            RecordBatch containing serialized GlobalInitResult fields.
+            RecordBatch containing serialized InitResult fields.
 
         """
         batch = pa.RecordBatch.from_pylist(
@@ -315,20 +315,20 @@ class GlobalInitResult:
         return vgi.ipc_utils.serialize_record_batch(batch)
 
     @classmethod
-    def deserialize(cls, data: pa.RecordBatch) -> "GlobalInitResult":
-        """Deserialize GlobalInitResult from an Arrow RecordBatch.
+    def deserialize(cls, data: pa.RecordBatch) -> "InitResult":
+        """Deserialize InitResult from an Arrow RecordBatch.
 
         Args:
-          data: RecordBatch containing serialized GlobalInitResult fields.
+          data: RecordBatch containing serialized InitResult fields.
 
         Returns:
-          Deserialized GlobalInitResult instance.
+          Deserialized InitResult instance.
 
         """
         first_row = vgi.ipc_utils.validate_single_row_batch(
-            data, "GlobalInitResult", required_fields=[cls._IDENTIFIER_FIELD_NAME]
+            data, "InitResult", required_fields=[cls._IDENTIFIER_FIELD_NAME]
         )
-        return GlobalInitResult(
+        return InitResult(
             global_init_identifier=first_row[cls._IDENTIFIER_FIELD_NAME],
         )
 
@@ -383,13 +383,13 @@ class Invocation:
     # The unique identifier for the call, typically this may be a uuid.
     invocation_id: bytes | None
 
-    global_init_identifier: GlobalInitResult | None = None
+    global_init_identifier: InitResult | None = None
     arguments: Arguments = Arguments()
     client_features: frozenset[str] = frozenset()
     attach_id: bytes | None = None
 
     def with_global_init_identifier(
-        self, global_init_identifier: GlobalInitResult
+        self, global_init_identifier: InitResult
     ) -> "Invocation":
         """Return a new Invocation with the given global_init_identifier."""
         return replace(self, global_init_identifier=global_init_identifier)
@@ -423,7 +423,7 @@ class Invocation:
                     "function_type": self.function_type.value,
                     "invocation_id": self.invocation_id,
                     "correlation_id": self.correlation_id,
-                    GlobalInitResult._IDENTIFIER_FIELD_NAME: (
+                    InitResult._IDENTIFIER_FIELD_NAME: (
                         self.global_init_identifier.global_init_identifier
                         if self.global_init_identifier
                         else None
@@ -441,7 +441,7 @@ class Invocation:
                     pa.field("invocation_id", pa.binary(), nullable=True),
                     pa.field("correlation_id", pa.string(), nullable=False),
                     pa.field(
-                        GlobalInitResult._IDENTIFIER_FIELD_NAME,
+                        InitResult._IDENTIFIER_FIELD_NAME,
                         pa.binary(),
                         nullable=True,
                     ),
@@ -486,13 +486,13 @@ class Invocation:
         # Parse function_type from string value
         function_type = InvocationType(first_row["function_type"])
 
-        # Parse global_init_identifier - only create GlobalInitResult if field exists
+        # Parse global_init_identifier - only create InitResult if field exists
         # and has a non-None value
         global_init_identifier = None
-        if GlobalInitResult._IDENTIFIER_FIELD_NAME in data.schema.names:
-            identifier_value = first_row[GlobalInitResult._IDENTIFIER_FIELD_NAME]
+        if InitResult._IDENTIFIER_FIELD_NAME in data.schema.names:
+            identifier_value = first_row[InitResult._IDENTIFIER_FIELD_NAME]
             if identifier_value is not None:
-                global_init_identifier = GlobalInitResult(identifier_value)
+                global_init_identifier = InitResult(identifier_value)
 
         # Parse client_features - default to empty set for backward compatibility
         client_features: frozenset[str] = frozenset()
@@ -1211,7 +1211,7 @@ class Function[T: FunctionInitInput](MetadataMixin):
             ValueError: If init_identifier has not been set.
 
         Example:
-            def perform_init(self, init_input: pa.RecordBatch) -> GlobalInitResult:
+            def perform_init(self, init_input: pa.RecordBatch) -> InitResult:
                 result = super().perform_init(init_input)
                 # Create work items (e.g., ranges to process)
                 work_items = [struct.pack(">QQ", start, end) for start, end in ranges]
@@ -1314,20 +1314,20 @@ class Function[T: FunctionInitInput](MetadataMixin):
                 context=f"input to {type(self).__name__}",
             )
 
-    def perform_init(self, init_input: pa.RecordBatch) -> GlobalInitResult:
+    def perform_init(self, init_input: pa.RecordBatch) -> InitResult:
         """Perform a new init call and store it in the storage."""
         self.init_data = self.InitDataCls.deserialize(init_input)
         assert self.init_data is not None
         self.init_identifier = self.init_storage.create(self.init_data.serialize())
-        return GlobalInitResult(self.init_identifier)
+        return InitResult(self.init_identifier)
 
-    def retrieve_init(self, init_input: GlobalInitResult) -> None:
+    def retrieve_init(self, init_input: InitResult) -> None:
         """Retrieve and store init data from the storage."""
         if init_input.global_init_identifier is None:
             raise ValueError(
                 "global_init_identifier is required but was None. "
-                "This indicates the GlobalInitResult was not properly initialized. "
-                "Ensure perform_init() returns a GlobalInitResult with a valid "
+                "This indicates the InitResult was not properly initialized. "
+                "Ensure perform_init() returns a InitResult with a valid "
                 "identifier."
             )
         self.init_identifier = init_input.global_init_identifier

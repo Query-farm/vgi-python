@@ -14,7 +14,7 @@ Client                                  Worker
   │◀──── OutputSpec (output schema) ──────│
   │                                       │
   │──── GlobalStateInitInput ────────────▶│
-  │◀──── GlobalInitResult ────────────────│ perform_init()
+  │◀──── InitResult ────────────────│ perform_init()
   │                                       │
   │◀──── Output Batch 1 ──────────────────│ process() yields
   │◀──── Output Batch 2 ──────────────────│
@@ -35,7 +35,7 @@ Client                                  Worker
   │◀──── OutputSpec (output schema) ──────│
   │                                       │
   │──── GlobalStateInitInput ────────────▶│
-  │◀──── GlobalInitResult ────────────────│ perform_init()
+  │◀──── InitResult ────────────────│ perform_init()
   │                                       │
   │──── Input Batch 1 ───────────────────▶│
   │◀──── Output Batch 1 (NEED_MORE_INPUT)─│ transform() / process()

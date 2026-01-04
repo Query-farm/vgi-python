@@ -10,7 +10,7 @@ Understanding when lifecycle methods are called is critical for resource managem
 │    ↓                                                            │
 │  output_schema (property accessed)                              │
 │    ↓                                                            │
-│  perform_init(init_batch) → GlobalInitResult                    │
+│  perform_init(init_batch) → InitResult                    │
 │    ↓                                                            │
 │  setup()  ← Acquire resources here (DB connections, files)      │
 │    ↓                                                            │
