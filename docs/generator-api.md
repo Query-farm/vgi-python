@@ -79,7 +79,7 @@ Use `TableFunctionGenerator` when you need to generate data without receiving in
 ```python
 import pyarrow as pa
 from vgi import TableFunctionGenerator, Output, Arg
-from vgi.table_function import CardinalityInfo
+from vgi.table_function import TableCardinality
 
 class MyTableFunction(TableFunctionGenerator):
     """Generate data without input."""
@@ -95,9 +95,9 @@ class MyTableFunction(TableFunctionGenerator):
     def output_schema(self) -> pa.Schema:
         return pa.schema([("value", pa.int64())])
 
-    def cardinality(self) -> CardinalityInfo:
+    def cardinality(self) -> TableCardinality:
         """Optional: provide row count estimate."""
-        return CardinalityInfo(estimate=self.count, max=self.count)
+        return TableCardinality(estimate=self.count, max=self.count)
 
     def process(self):
         """Generate output batches."""

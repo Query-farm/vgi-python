@@ -9,7 +9,7 @@ import structlog
 from tests.conftest import make_invocation, make_schema
 from vgi.function import Arguments
 from vgi.table_function import (
-    CardinalityInfo,
+    TableCardinality,
     Output,
     OutputGenerator,
     TableFunctionGenerator,
@@ -206,8 +206,8 @@ class TestTableFunctionGeneratorCardinality:
             def output_schema(self) -> pa.Schema:
                 return make_schema([pa.field("x", pa.int64())])
 
-            def cardinality(self) -> CardinalityInfo:
-                return CardinalityInfo(estimate=100, max=1000)
+            def cardinality(self) -> TableCardinality:
+                return TableCardinality(estimate=100, max=1000)
 
         invocation = make_invocation()
         func = CardinalityFunction(invocation=invocation, logger=structlog.get_logger())

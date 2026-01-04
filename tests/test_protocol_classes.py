@@ -19,7 +19,7 @@ from vgi.function import (
 )
 from vgi.log import Level, Message
 from vgi.table_function import (
-    CardinalityInfo,
+    TableCardinality,
     OutputSpec,
     TableFunctionInitInput,
 )
@@ -477,39 +477,39 @@ class TestMessage:
         assert "test message" in repr_str
 
 
-class TestCardinalityInfo:
-    """Tests for CardinalityInfo dataclass."""
+class TestTableCardinality:
+    """Tests for TableCardinality dataclass."""
 
     def test_basic_creation(self) -> None:
-        """CardinalityInfo should store estimate and max values."""
-        info = CardinalityInfo(estimate=100, max=1000)
+        """TableCardinality should store estimate and max values."""
+        info = TableCardinality(estimate=100, max=1000)
         assert info.estimate == 100
         assert info.max == 1000
 
     def test_null_values(self) -> None:
-        """CardinalityInfo should allow null estimate and max."""
-        info = CardinalityInfo(estimate=None, max=None)
+        """TableCardinality should allow null estimate and max."""
+        info = TableCardinality(estimate=None, max=None)
         assert info.estimate is None
         assert info.max is None
 
     def test_partial_values(self) -> None:
-        """CardinalityInfo should allow partial information."""
-        estimate_only = CardinalityInfo(estimate=50, max=None)
+        """TableCardinality should allow partial information."""
+        estimate_only = TableCardinality(estimate=50, max=None)
         assert estimate_only.estimate == 50
         assert estimate_only.max is None
 
-        max_only = CardinalityInfo(estimate=None, max=100)
+        max_only = TableCardinality(estimate=None, max=100)
         assert max_only.estimate is None
         assert max_only.max == 100
 
     def test_exact_cardinality(self) -> None:
-        """CardinalityInfo with equal estimate and max indicates exact count."""
-        exact = CardinalityInfo(estimate=1, max=1)
+        """TableCardinality with equal estimate and max indicates exact count."""
+        exact = TableCardinality(estimate=1, max=1)
         assert exact.estimate == exact.max == 1
 
     def test_frozen(self) -> None:
-        """CardinalityInfo should be immutable (frozen dataclass)."""
-        info = CardinalityInfo(estimate=100, max=1000)
+        """TableCardinality should be immutable (frozen dataclass)."""
+        info = TableCardinality(estimate=100, max=1000)
         with pytest.raises(AttributeError):
             info.estimate = 200  # type: ignore[misc]
 
@@ -573,7 +573,7 @@ class TestTableOutputSpec:
             output_schema=make_schema([pa.field("col1", pa.int64())]),
             max_processes=4,
             invocation_id=b"test-id",
-            cardinality=CardinalityInfo(estimate=100, max=1000),
+            cardinality=TableCardinality(estimate=100, max=1000),
         )
 
         serialized = spec.serialize()
@@ -598,7 +598,7 @@ class TestTableOutputSpec:
             output_schema=make_schema([pa.field("col1", pa.int64())]),
             max_processes=1,
             invocation_id=b"test-id",
-            cardinality=CardinalityInfo(estimate=50, max=100),
+            cardinality=TableCardinality(estimate=50, max=100),
         )
 
         schema = spec.serialize_schema()
@@ -611,7 +611,7 @@ class TestTableOutputSpec:
             output_schema=make_schema([pa.field("col1", pa.int64())]),
             max_processes=1,
             invocation_id=b"test-id",
-            cardinality=CardinalityInfo(estimate=50, max=100),
+            cardinality=TableCardinality(estimate=50, max=100),
         )
 
         data = spec.serialize_dict()

@@ -34,7 +34,7 @@ from vgi.function import Invocation
 from vgi.ipc_utils import RecordBatchState
 from vgi.log import Level, Message
 from vgi.metadata import FunctionExample
-from vgi.table_function import CardinalityInfo
+from vgi.table_function import TableCardinality
 from vgi.table_in_out_function import (
     Output,
     OutputGenerator,
@@ -357,9 +357,9 @@ class SumAllColumnsFunction(TableInOutGeneratorFunction):
 
     data: TableInput = Arg[TableInput](0, doc="Input table with numeric columns")  # type: ignore[assignment]
 
-    def cardinality(self) -> CardinalityInfo | None:
+    def cardinality(self) -> TableCardinality | None:
         """Return cardinality estimate of exactly 1 row."""
-        return CardinalityInfo(estimate=1, max=1)
+        return TableCardinality(estimate=1, max=1)
 
     def __init__(
         self, invocation: Invocation, logger: structlog.stdlib.BoundLogger
@@ -676,9 +676,9 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction):
         super().__init__(invocation=invocation, logger=logger)
         self.sums: dict[str, pa.Scalar[Any]] = {}
 
-    def cardinality(self) -> CardinalityInfo | None:
+    def cardinality(self) -> TableCardinality | None:
         """Return cardinality estimate of exactly 1 row."""
-        return CardinalityInfo(estimate=1, max=1)
+        return TableCardinality(estimate=1, max=1)
 
     @property
     def output_schema(self) -> pa.Schema:

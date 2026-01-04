@@ -107,7 +107,7 @@ ADDITIONAL MODULES
     vgi.client      - Client class for invoking functions on workers
     vgi.log         - Level and Message for function diagnostics
     vgi.ipc_utils   - RecordBatchState for distributed function state
-    vgi.table_function - CardinalityInfo for row count hints
+    vgi.table_function - TableCardinality for row count hints
 
 CLASS HIERARCHY
 ---------------
@@ -148,12 +148,12 @@ from vgi.metadata import (
     functions_to_arrow,
 )
 from vgi.scalar_function import (
+    RowCountMismatchError,
     ScalarFunction,
     ScalarFunctionGenerator,
     ScalarOutputGenerator,
 )
 from vgi.schema_utils import schema, schema_like
-from vgi.table_function import RowCountMismatchError
 from vgi.table_in_out_function import (
     Output,
     OutputGenerator,

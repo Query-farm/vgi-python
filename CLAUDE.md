@@ -23,6 +23,14 @@ uv run coverage html      # Generate HTML report in htmlcov/
 uv run ruff check --fix . && uv run ruff format . && uv run mypy vgi/
 ```
 
+Before running `pytest`, you must run ruff's check and fix commands, otherwise fixing problems
+takes longer:
+
+```bash
+uv run ruff check --fix . && uv run ruff format .
+```
+
+
 ## Project Overview
 
 VGI (Vector Gateway Interface) provides an Apache Arrow-based protocol for connecting DuckDB to external programs. It enables user-defined functions to run in separate processes, communicating via stdin/stdout using Arrow IPC streaming.
@@ -74,7 +82,7 @@ vgi/
   __init__.py              # Package exports
   function.py              # Invocation, OutputSpec, Arguments, FunctionType
   scalar_function.py       # ScalarFunction, ScalarFunctionGenerator
-  table_function.py        # TableFunctionGenerator, CardinalityInfo, Output
+  table_function.py        # TableFunctionGenerator, TableCardinality, Output
   table_in_out_function.py # TableInOutFunction, TableInOutGeneratorFunction
   metadata.py              # Function metadata for introspection
   schema_utils.py          # Schema builder helpers (schema, schema_like)

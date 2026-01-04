@@ -1,12 +1,12 @@
 """Base classes for table functions with cardinality hints and generator support.
 
 This module provides:
-- CardinalityInfo: Row count estimates for query optimization
-- OutputSpec: OutputSpec subclass with cardinality support
-- SchemaValidationError: Exception for schema mismatches
 - Output: Simple output container (batch only, no has_more)
 - OutputGenerator: Generator type alias for simple process() methods
+- OutputSpec: OutputSpec subclass with cardinality support
 - ProtocolOutput: Protocol-level output with optional log messages
+- SchemaValidationError: Exception for schema mismatches
+- TableCardinality: Row count estimates for query optimization
 - TableFunctionBase: Base class with cardinality, schema validation, and lifecycle
 - TableFunctionGenerator: Generator-based base class with simple run() loop
 
@@ -33,102 +33,19 @@ import vgi.ipc_utils
 import vgi.log
 
 __all__ = [
-    "CardinalityInfo",
+    "TableCardinality",
     "TableFunctionInitInput",
     "Output",
     "OutputGenerator",
     "OutputSpec",
     "ProtocolOutput",
-    "RowCountMismatchError",
     "TableFunctionBase",
     "TableFunctionGenerator",
 ]
 
 
-class RowCountMismatchError(Exception):
-    """Raised when scalar function output row count doesn't match input.
-
-    Scalar functions must produce exactly one output row for each input row.
-    This error indicates the compute() method returned an array with the
-    wrong number of elements.
-
-    Attributes:
-        input_rows: Number of rows in the input batch.
-        output_rows: Number of rows in the output batch.
-        function_name: Name of the function that produced the mismatch.
-
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        input_rows: int | None = None,
-        output_rows: int | None = None,
-        function_name: str = "",
-    ) -> None:
-        """Initialize with row count details.
-
-        Args:
-            message: Base error message.
-            input_rows: Number of input rows.
-            output_rows: Number of output rows.
-            function_name: Name of the function class.
-
-        """
-        self.input_rows = input_rows
-        self.output_rows = output_rows
-        self.function_name = function_name
-
-        if input_rows is not None and output_rows is not None:
-            full_message = self._build_detailed_message(
-                message, input_rows, output_rows
-            )
-        else:
-            full_message = message
-
-        super().__init__(full_message)
-
-    def _build_detailed_message(
-        self, base_message: str, input_rows: int, output_rows: int
-    ) -> str:
-        """Build a detailed, helpful error message."""
-        lines = [base_message, ""]
-
-        if self.function_name:
-            lines.append(f"  Function: {self.function_name}")
-
-        lines.append(f"  Input rows:  {input_rows}")
-        lines.append(f"  Output rows: {output_rows}")
-
-        # Provide specific guidance based on the mismatch type
-        lines.append("")
-        if output_rows < input_rows:
-            lines.append("  Problem: Output has fewer rows than input.")
-            lines.append("")
-            lines.append("  Possible causes:")
-            lines.append("    - compute() is filtering rows (not allowed)")
-            lines.append("    - compute() is aggregating (use TableInOutFunction)")
-            lines.append("    - Bug in array construction")
-            lines.append("")
-            lines.append("  If you need to filter or aggregate rows:")
-            lines.append("    Use TableInOutFunction instead of ScalarFunction.")
-        else:
-            lines.append("  Problem: Output has more rows than input.")
-            lines.append("")
-            lines.append("  Possible causes:")
-            lines.append("    - compute() is expanding rows (not allowed)")
-            lines.append("    - compute() is unnesting arrays")
-            lines.append("    - Bug in array construction")
-            lines.append("")
-            lines.append("  If you need to expand rows (1→N mapping):")
-            lines.append("    Use TableInOutFunction instead of ScalarFunction.")
-
-        return "\n".join(lines)
-
-
 @dataclass(frozen=True, slots=True)
-class CardinalityInfo:
+class TableCardinality:
     """Cardinality hints for query optimization.
 
     Provides optional row count estimates that can help query planners make
@@ -140,13 +57,13 @@ class CardinalityInfo:
 
     Example:
         # Function that filters ~10% of rows, with known input size
-        CardinalityInfo(estimate=1000, max=10000)
+        TableCardinality(estimate=1000, max=10000)
 
         # Aggregation that always produces exactly one row
-        CardinalityInfo(estimate=1, max=1)
+        TableCardinality(estimate=1, max=1)
 
         # Unknown output size
-        CardinalityInfo(estimate=None, max=None)
+        TableCardinality(estimate=None, max=None)
 
     """
 
@@ -167,7 +84,7 @@ class OutputSpec(vgi.function.OutputSpec):
 
     """
 
-    cardinality: CardinalityInfo | None = None
+    cardinality: TableCardinality | None = None
 
     def serialize_schema(self) -> pa.Schema:
         """Extend parent schema with cardinality fields."""
@@ -384,14 +301,14 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
         """
         super().__init__(invocation=invocation, logger=logger)
 
-    def cardinality(self) -> CardinalityInfo | None:
+    def cardinality(self) -> TableCardinality | None:
         """Return optional cardinality estimate for the output.
 
         Override to provide row count estimates that help query planners
         make better decisions about join ordering and memory allocation.
 
         Returns:
-            CardinalityInfo with estimate and/or max, or None if unknown.
+            TableCardinality with estimate and/or max, or None if unknown.
 
         """
         return None

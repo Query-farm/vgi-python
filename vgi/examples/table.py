@@ -23,7 +23,7 @@ from vgi.function import InitResult
 from vgi.log import Level, Message
 from vgi.metadata import FunctionExample
 from vgi.table_function import (
-    CardinalityInfo,
+    TableCardinality,
     Output,
     OutputGenerator,
     TableFunctionGenerator,
@@ -90,9 +90,9 @@ class SequenceFunction(TableFunctionGenerator):
         """Return output schema with single integer column."""
         return pa.schema([pa.field("n", pa.int64())])
 
-    def cardinality(self) -> CardinalityInfo:
+    def cardinality(self) -> TableCardinality:
         """Return exact cardinality since we know the count."""
-        return CardinalityInfo(estimate=self.count, max=self.count)
+        return TableCardinality(estimate=self.count, max=self.count)
 
     def process(self) -> OutputGenerator:
         """Generate the sequence in batches."""
@@ -159,13 +159,13 @@ class RangeFunction(TableFunctionGenerator):
         """Return output schema with single integer column."""
         return pa.schema([pa.field("value", pa.int64())])
 
-    def cardinality(self) -> CardinalityInfo:
+    def cardinality(self) -> TableCardinality:
         """Return cardinality based on range parameters."""
         if self.end <= self.start:
             count = 0
         else:
             count = (self.end - self.start + self.step - 1) // self.step
-        return CardinalityInfo(estimate=count, max=count)
+        return TableCardinality(estimate=count, max=count)
 
     def process(self) -> OutputGenerator:
         """Generate the range in batches."""
@@ -232,9 +232,9 @@ class ConstantTableFunction(TableFunctionGenerator):
         """Return output schema with single integer column."""
         return pa.schema([pa.field("value", pa.int64())])
 
-    def cardinality(self) -> CardinalityInfo:
+    def cardinality(self) -> TableCardinality:
         """Return cardinality of exactly one row."""
-        return CardinalityInfo(estimate=1, max=1)
+        return TableCardinality(estimate=1, max=1)
 
     def process(self) -> OutputGenerator:
         """Emit a single batch with one row."""
@@ -298,9 +298,9 @@ class RandomSampleFunction(TableFunctionGenerator):
         ]
         return pa.schema(fields)
 
-    def cardinality(self) -> CardinalityInfo:
+    def cardinality(self) -> TableCardinality:
         """Return cardinality estimate."""
-        return CardinalityInfo(estimate=self.count, max=self.count)
+        return TableCardinality(estimate=self.count, max=self.count)
 
     def setup(self) -> None:
         """Initialize random number generator with seed."""
@@ -465,13 +465,13 @@ class PartitionedRangeFunction(TableFunctionGenerator):
         """Return output schema with single integer column."""
         return pa.schema([pa.field("value", pa.int64())])
 
-    def cardinality(self) -> CardinalityInfo:
+    def cardinality(self) -> TableCardinality:
         """Return cardinality estimate.
 
         Since work is distributed dynamically via queue, we can only provide
         the total count estimate, not per-worker estimates.
         """
-        return CardinalityInfo(estimate=self.count, max=self.count)
+        return TableCardinality(estimate=self.count, max=self.count)
 
     def perform_init(self, init_input: pa.RecordBatch) -> InitResult:
         """Populate the work queue with range chunks."""
@@ -582,9 +582,9 @@ class ProjectedDataFunction(TableFunctionGenerator):
         """Return the projected schema based on init_data."""
         return self.apply_projection(self.FULL_SCHEMA)
 
-    def cardinality(self) -> CardinalityInfo:
+    def cardinality(self) -> TableCardinality:
         """Return exact cardinality since we know the count."""
-        return CardinalityInfo(estimate=self.count, max=self.count)
+        return TableCardinality(estimate=self.count, max=self.count)
 
     def _get_projected_column_indices(self) -> list[int]:
         """Get the column indices to generate.

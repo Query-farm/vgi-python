@@ -1,24 +1,40 @@
-"""Base classes for scalar functions that transform input batches to single-column.
+"""Scalar functions: per-row transforms with single-column output.
 
-Scalar functions transform input batches to single-column output.
+Scalar functions are the simplest function type in VGI. They transform each
+input row into exactly one output value, producing a single column of results.
 
-Scalar functions receive input batches and produce output batches where:
-1. Each Output yield must have row count matching input (1:1 mapping)
-2. Output schema has exactly one column
-3. Message yields (for logging) are exempt from row count validation
+Key characteristics:
+- **1:1 row mapping**: Output has exactly the same number of rows as input
+- **Single column output**: Output schema has exactly one column named "result"
+- **No finalization**: All processing happens in compute(), no finish() phase
 
-This module provides:
-- ScalarFunctionGenerator: Generator-based base class (like TableInOutGeneratorFunction)
-- ScalarFunction: Callback-based API with compute() method (like TableInOutFunction)
+Common use cases:
+- Mathematical operations: multiply, add, abs
+- String transforms: upper, lower, concat, trim
+- Type conversions: cast, parse
+- Field extraction: get nested values, parse JSON fields
 
-Class Hierarchy:
-    Function (vgi.function)
-        └── ScalarFunctionGenerator  (generator protocol, validates row count)
-                └── ScalarFunction   (callback API with compute())
+This module provides two base classes:
 
-ScalarFunctionGenerator is useful for functions that need full generator control
-including yielding log messages. For most use cases, use ScalarFunction with its
-simpler compute() method.
+    ScalarFunction (recommended)
+        Simple callback-based API. Override output_type and compute().
+
+    ScalarFunctionGenerator (advanced)
+        Generator-based API for fine-grained control over logging.
+        Override output_schema and process().
+
+Example::
+
+    class DoubleValue(ScalarFunction):
+        column = Arg[str](0, doc="Column to double")
+
+        @property
+        def output_type(self) -> pa.DataType:
+            return self.input_schema.field(self.column).type
+
+        def compute(self, batch: pa.RecordBatch) -> pa.Array:
+            return pc.multiply(batch.column(self.column), 2)
+
 """
 
 from __future__ import annotations
@@ -34,7 +50,7 @@ import structlog
 import vgi.function
 import vgi.log
 from vgi.function import SchemaValidationError
-from vgi.table_function import Output, ProtocolOutput, RowCountMismatchError
+from vgi.table_function import Output, ProtocolOutput
 
 __all__ = [
     "ScalarFunctionGenerator",
@@ -42,11 +58,94 @@ __all__ = [
     "Output",
     "ScalarOutputGenerator",
     "ProtocolInput",
+    "RowCountMismatchError",
 ]
 
 
-# Scalar functions must always produce output - None is not valid
-# (unlike OutputGenerator which allows None for buffering/aggregation)
+class RowCountMismatchError(Exception):
+    """Raised when scalar function output row count doesn't match input.
+
+    Scalar functions must produce exactly one output row for each input row.
+    This error indicates the compute() method returned an array with the
+    wrong number of elements.
+
+    Attributes:
+        input_rows: Number of rows in the input batch.
+        output_rows: Number of rows in the output batch.
+        function_name: Name of the function that produced the mismatch.
+
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        input_rows: int | None = None,
+        output_rows: int | None = None,
+        function_name: str = "",
+    ) -> None:
+        """Initialize with row count details.
+
+        Args:
+            message: Base error message.
+            input_rows: Number of input rows.
+            output_rows: Number of output rows.
+            function_name: Name of the function class.
+
+        """
+        self.input_rows = input_rows
+        self.output_rows = output_rows
+        self.function_name = function_name
+
+        if input_rows is not None and output_rows is not None:
+            full_message = self._build_detailed_message(
+                message, input_rows, output_rows
+            )
+        else:
+            full_message = message
+
+        super().__init__(full_message)
+
+    def _build_detailed_message(
+        self, base_message: str, input_rows: int, output_rows: int
+    ) -> str:
+        """Build a detailed, helpful error message."""
+        lines = [base_message, ""]
+
+        if self.function_name:
+            lines.append(f"  Function: {self.function_name}")
+
+        lines.append(f"  Input rows:  {input_rows}")
+        lines.append(f"  Output rows: {output_rows}")
+
+        # Provide specific guidance based on the mismatch type
+        lines.append("")
+        if output_rows < input_rows:
+            lines.append("  Problem: Output has fewer rows than input.")
+            lines.append("")
+            lines.append("  Possible causes:")
+            lines.append("    - compute() is filtering rows (not allowed in scalar)")
+            lines.append("    - compute() is aggregating (not allowed in scalar)")
+            lines.append("    - Bug in array construction")
+            lines.append("")
+            lines.append("  Scalar functions require 1:1 row mapping.")
+            lines.append("  For filtering or aggregation, use a table function.")
+        else:
+            lines.append("  Problem: Output has more rows than input.")
+            lines.append("")
+            lines.append("  Possible causes:")
+            lines.append("    - compute() is expanding rows (not allowed in scalar)")
+            lines.append("    - compute() is unnesting arrays")
+            lines.append("    - Bug in array construction")
+            lines.append("")
+            lines.append("  Scalar functions require 1:1 row mapping.")
+            lines.append("  For row expansion (1→N), use a table function.")
+
+        return "\n".join(lines)
+
+
+# Generator type for scalar function output.
+# Must yield Output or Message (never None) since scalars always produce output.
 ScalarOutputGenerator = Generator[vgi.log.Message | Output, pa.RecordBatch | None, None]
 
 
@@ -54,9 +153,8 @@ ScalarOutputGenerator = Generator[vgi.log.Message | Output, pa.RecordBatch | Non
 class ProtocolInput:
     """Input sent to the scalar function generator via send().
 
-    This is a simplified version of table_in_out_function.ProtocolInput
-    without finalization support, since scalar functions don't have a
-    finalize phase.
+    Contains an input batch and optional metadata. The scalar function
+    processes each batch and returns an output batch with the same row count.
 
     Attributes:
         batch: The input RecordBatch to process.
@@ -100,16 +198,17 @@ class _ScalarOutputComplete:
 
 
 class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInput]):
-    """Base class for scalar functions with generator protocol.
+    """Generator-based base class for scalar functions.
 
-    Scalar functions transform input batches to single-column output with
-    1:1 row mapping. Unlike TableInOutGeneratorFunction, scalar functions:
-    - Have no finalize() phase
-    - Must produce exactly one output row per input row
-    - Must have exactly one column in output_schema
+    This is the advanced API for scalar functions. For most use cases,
+    use ScalarFunction instead, which provides a simpler compute() callback.
 
-    Override process() for full generator control. Must yield Output or Message
-    (unlike table-in-out functions, yielding None is not allowed):
+    Scalar functions have these constraints:
+    - **1:1 row mapping**: Output row count must equal input row count
+    - **Single column**: Output schema has exactly one column
+    - **No finalization**: Processing ends when input is exhausted
+
+    Override process() to implement the generator protocol:
 
         def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
             _ = yield Output(self.empty_output_batch)  # Priming yield
@@ -125,20 +224,34 @@ class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInp
                 if batch is None:
                     break
 
-    METHODS TO OVERRIDE
+    Methods to Override
     -------------------
-    output_schema -> pa.Schema (property)
-        Override to define the single-column output schema.
+    output_schema : pa.Schema (property)
+        Define the single-column output schema.
 
-    process(batch: pa.RecordBatch) -> ScalarOutputGenerator
-        Generator that processes input batches. Must yield Output or Message.
+    process(batch) : ScalarOutputGenerator
+        Generator that processes batches. Must yield Output or Message.
 
-    AVAILABLE ATTRIBUTES
+    setup() : None
+        Called before processing. Acquire resources here.
+
+    teardown() : None
+        Called after processing. Release resources here.
+
+    Available Attributes
     --------------------
-    self.invocation: Invocation   - The complete invocation request
-    self.input_schema: pa.Schema  - Input schema (from invocation)
-    self.output_schema: pa.Schema - Property returning the output schema
-    self.empty_output_batch       - Empty batch conforming to output_schema
+    self.invocation : Invocation
+        The complete invocation request with function name and arguments.
+
+    self.input_schema : pa.Schema
+        Schema of input batches (from invocation).
+
+    self.output_schema : pa.Schema
+        Schema of output batches (single column).
+
+    self.empty_output_batch : pa.RecordBatch
+        Empty batch conforming to output_schema, useful for priming yields.
+
     """
 
     InitDataCls = vgi.function.FunctionInitInput
@@ -164,7 +277,7 @@ class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInp
                 f"but output_schema has {len(self.output_schema)} columns.\n\n"
                 f"  Columns found: {cols}\n\n"
                 f"  Scalar functions transform each input row to a single value.\n"
-                f"  If you need multiple output columns, use TableInOutFunction."
+                f"  For multiple output columns, use a table function instead."
             )
 
     # input_schema property and _validate_input_schema inherited from Function
@@ -300,22 +413,30 @@ class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInp
 
 
 class ScalarFunction(ScalarFunctionGenerator):
-    """Simplified base class using compute() callback instead of generators.
+    """Base class for scalar functions using the compute() callback.
 
-    This class provides a simpler API for scalar functions. Instead of
-    implementing process() as a generator, you override compute() as a
-    regular method that returns a single Array.
+    This is the recommended API for scalar functions. Override output_type
+    to define the output column type, and compute() to transform each batch.
 
-    METHODS TO OVERRIDE
+    Scalar functions transform input rows to output values with 1:1 mapping.
+    The output is always a single column named "result".
+
+    Methods to Override
     -------------------
-    output_type -> pa.DataType (property)
+    output_type : pa.DataType (property)
         Return the Arrow type for the output column.
 
-    compute(batch) -> pa.Array
+    compute(batch) : pa.Array
         Transform the input batch to a single output array.
         Must return an array with exactly batch.num_rows elements.
 
-    LOGGING
+    setup() : None
+        Called before processing. Acquire resources here.
+
+    teardown() : None
+        Called after processing. Release resources here.
+
+    Logging
     -------
     Call self.log(level, message) from compute() to emit log messages:
 
@@ -325,6 +446,8 @@ class ScalarFunction(ScalarFunctionGenerator):
 
     Example:
     -------
+    A function that doubles the values in a specified column:
+
         class DoubleColumn(ScalarFunction):
             column = Arg[str](0, doc="Column to double")
 
@@ -335,9 +458,22 @@ class ScalarFunction(ScalarFunctionGenerator):
             def compute(self, batch: pa.RecordBatch) -> pa.Array:
                 return pc.multiply(batch.column(self.column), 2)
 
+    Available Attributes
+    --------------------
+    self.invocation : Invocation
+        The complete invocation request with function name and arguments.
+
+    self.input_schema : pa.Schema
+        Schema of input batches.
+
+    self.output_schema : pa.Schema
+        Schema of output batches (single column named "result").
+
+    self.empty_output_batch : pa.RecordBatch
+        Empty batch conforming to output_schema.
+
     """
 
-    # Message queue for log() method (same pattern as TableInOutFunction)
     _pending_messages: list[vgi.log.Message]
 
     def __init__(
