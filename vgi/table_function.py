@@ -23,7 +23,7 @@ For functions that transform input batches, use TableInOutGeneratorFunction.
 
 from collections.abc import Generator
 from dataclasses import dataclass
-from typing import Any, final
+from typing import Any, Self, final
 
 import pyarrow as pa
 import structlog
@@ -331,14 +331,14 @@ class TableFunctionInitInput(vgi.function.FunctionInitInput):
         return vgi.ipc_utils.serialize_record_batch(batch)
 
     @classmethod
-    def deserialize(cls, batch: pa.RecordBatch) -> "TableFunctionInitInput":
+    def deserialize(cls, batch: pa.RecordBatch) -> Self:  # type: ignore[override]
         """Deserialize TableFunctionInitInput from a RecordBatch."""
         values = batch.to_pylist()[0]
         # Handle backward compatibility: ignore extra fields
         return cls(projection_ids=values.get("projection_ids"))
 
     @classmethod
-    def deserialize_bytes(cls, data: bytes) -> "TableFunctionInitInput":
+    def deserialize_bytes(cls, data: bytes) -> Self:
         """Deserialize TableFunctionInitInput from bytes."""
         batch = vgi.ipc_utils.deserialize_record_batch(data)
         return cls.deserialize(batch)

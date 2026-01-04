@@ -52,7 +52,7 @@ class DoubleColumnFunction(ScalarFunction):
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
         """Double the values in the specified column."""
-        return pc.multiply(batch.column(self.column), 2)
+        return pc.multiply(batch.column(self.column), 2)  # type: ignore[no-matching-overload]
 
 
 class AddColumnsFunction(ScalarFunction):
@@ -109,4 +109,4 @@ class UpperCaseFunction(ScalarFunction):
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
         """Convert the column values to uppercase."""
-        return pc.utf8_upper(batch.column(self.column))
+        return pc.utf8_upper(batch.column(self.column))  # type: ignore[no-matching-overload]
