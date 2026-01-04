@@ -8,7 +8,7 @@ QUICK START
 Use FunctionTestClient to test functions directly without spawning workers:
 
     from vgi.testing import FunctionTestClient
-    from vgi.function import Arguments
+    from vgi.arguments import Arguments
     from my_functions import MyFunction
     import pyarrow as pa
 
@@ -82,7 +82,8 @@ import pyarrow as pa
 import structlog
 import structlog.stdlib
 
-from vgi.function import Arguments, Invocation, InvocationType
+from vgi.arguments import Arguments
+from vgi.invocation import Invocation, InvocationType
 from vgi.log import Level, Message
 from vgi.scalar_function import (
     ProtocolInput as ScalarProtocolInput,

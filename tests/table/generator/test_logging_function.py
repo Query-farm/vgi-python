@@ -2,9 +2,9 @@
 
 import pyarrow as pa
 
+from vgi.arguments import Arguments
 from vgi.client import Client
 from vgi.examples.table import LoggingGeneratorFunction
-from vgi.function import Arguments
 from vgi.log import Level
 from vgi.testing import TableFunctionTestClient
 

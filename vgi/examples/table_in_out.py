@@ -30,7 +30,7 @@ import pyarrow.compute as pc
 import structlog
 
 from vgi.arguments import Arg, TableInput
-from vgi.function import Invocation
+from vgi.invocation import Invocation
 from vgi.ipc_utils import RecordBatchState
 from vgi.log import Level, Message
 from vgi.metadata import FunctionExample

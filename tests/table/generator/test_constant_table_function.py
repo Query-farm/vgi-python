@@ -5,8 +5,8 @@ import pytest
 import structlog
 
 from tests.conftest import make_invocation
+from vgi.arguments import Arguments
 from vgi.examples.table import ConstantTableFunction
-from vgi.function import Arguments
 from vgi.testing import assert_table_function_output, batch
 
 from .conftest import RunnerWithMode

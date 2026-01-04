@@ -8,7 +8,7 @@ QUICK START
 Use Client as a context manager to ensure proper cleanup:
 
     from vgi.client import Client
-    from vgi.function import Arguments
+    from vgi.arguments import Arguments
     import pyarrow as pa
 
     # Create input batches
@@ -46,7 +46,7 @@ client.get_worker_stderr() : Get captured stderr from worker
 See Also
 --------
 vgi.worker.Worker : Base class for workers that Client spawns
-vgi.function.Invocation : Invocation structure sent to workers
+vgi.invocation.Invocation : Invocation structure sent to workers
 vgi.function.Arguments : Container for function arguments
 
 """
@@ -69,13 +69,9 @@ import structlog
 import structlog.stdlib
 from pyarrow import ipc
 
-from vgi.function import (
-    Arguments,
-    FunctionInitInput,
-    InitResult,
-    Invocation,
-    InvocationType,
-)
+from vgi.arguments import Arguments
+from vgi.function import FunctionInitInput
+from vgi.invocation import InitResult, Invocation, InvocationType
 from vgi.ipc_utils import IPCError, read_ipc_batch
 from vgi.table_function import TableFunctionInitInput
 

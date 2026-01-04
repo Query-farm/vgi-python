@@ -188,7 +188,7 @@ class ProtocolOutput:
     log_message: vgi.log.Message | None = None
 
     def metadata(
-        self, invocation: vgi.function.Invocation
+        self, invocation: vgi.invocation.Invocation
     ) -> pa.KeyValueMetadata | None:
         """Create metadata for this output based on the status.
 
@@ -288,7 +288,7 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
     def __init__(
         self,
         *,
-        invocation: vgi.function.Invocation,
+        invocation: vgi.invocation.Invocation,
         logger: structlog.stdlib.BoundLogger,
     ):
         """Initialize the table function with call data.

@@ -6,6 +6,7 @@ import pyarrow as pa
 import pytest
 
 from tests.conftest import make_schema
+from vgi.arguments import Arguments
 from vgi.examples.table_in_out import (
     BufferInputFunction,
     EchoFunction,
@@ -16,7 +17,6 @@ from vgi.examples.table_in_out import (
     SumAllColumnsFunctionWithLogging,
     SumAllColumnsSimpleDistributed,
 )
-from vgi.function import Arguments
 from vgi.log import Level
 from vgi.testing import (
     FunctionTestClient,

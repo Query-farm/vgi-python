@@ -29,8 +29,8 @@ from typing import Any, cast
 
 import pyarrow as pa
 
+from vgi.arguments import Arguments
 from vgi.client.client import Client, ClientError, log
-from vgi.function import Arguments
 
 
 class OutputWriter:

@@ -6,7 +6,8 @@ import pyarrow as pa
 import pytest
 import structlog
 
-from vgi.function import Arguments, Invocation, InvocationType
+from vgi.arguments import Arguments
+from vgi.invocation import Invocation, InvocationType
 
 # =============================================================================
 # Utility Functions (not fixtures, can be imported directly)

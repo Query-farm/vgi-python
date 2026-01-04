@@ -2,8 +2,8 @@
 
 import pyarrow as pa
 
+from vgi.arguments import Arguments
 from vgi.examples.table import ProjectedDataFunction
-from vgi.function import Arguments
 from vgi.testing import run_table_function
 
 
@@ -152,7 +152,7 @@ class TestProjectedDataFunctionInProcess:
         """The output_schema property should reflect the projection."""
         import structlog
 
-        from vgi.function import Invocation, InvocationType
+        from vgi.invocation import Invocation, InvocationType
         from vgi.table_function import TableFunctionInitInput
 
         invocation = Invocation(

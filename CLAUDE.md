@@ -30,6 +30,7 @@ takes longer:
 uv run ruff check --fix . && uv run ruff format .
 ```
 
+When making changes, we don't need to worry about backward compatibility, make the changes and change the import references.
 
 ## Project Overview
 

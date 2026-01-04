@@ -5,8 +5,8 @@ from __future__ import annotations
 import pyarrow as pa
 
 from tests.conftest import make_schema, total_rows
+from vgi.arguments import Arguments
 from vgi.client import Client
-from vgi.function import Arguments
 
 
 class TestRepeatInputsFunction:

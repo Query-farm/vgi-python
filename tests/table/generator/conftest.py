@@ -6,8 +6,8 @@ from typing import Any, Literal
 import pyarrow as pa
 import pytest
 
+from vgi.arguments import Arguments
 from vgi.client import Client, ClientError
-from vgi.function import Arguments
 from vgi.log import Message
 from vgi.table_function import TableFunctionGenerator
 from vgi.testing import FunctionTestClientError, TableFunctionTestClient

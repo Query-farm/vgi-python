@@ -94,12 +94,12 @@ import structlog
 import structlog.stdlib
 from pyarrow import ipc
 
+from vgi.exceptions import SchemaValidationError
 from vgi.function import (
     Function,
-    Invocation,
     OutputSpec,
-    SchemaValidationError,
 )
+from vgi.invocation import Invocation
 from vgi.ipc_utils import read_ipc_batch
 from vgi.scalar_function import ProtocolInput as ScalarProtocolInput
 from vgi.scalar_function import ScalarFunctionGenerator

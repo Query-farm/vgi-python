@@ -267,7 +267,7 @@ class TestSchemaIntegration:
 
         from vgi import TableInOutFunction
         from vgi.arguments import Arguments
-        from vgi.function import Invocation, InvocationType
+        from vgi.invocation import Invocation, InvocationType
 
         class TestFunction(TableInOutFunction):
             @property
@@ -300,7 +300,7 @@ class TestSchemaIntegration:
 
         from vgi import TableInOutFunction
         from vgi.arguments import Arguments
-        from vgi.function import Invocation, InvocationType
+        from vgi.invocation import Invocation, InvocationType
 
         class TestFunction(TableInOutFunction):
             @property

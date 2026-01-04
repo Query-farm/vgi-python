@@ -7,11 +7,11 @@ import pytest
 import structlog
 
 from tests.conftest import make_invocation, make_schema
-from vgi.function import Arguments
+from vgi.arguments import Arguments
 from vgi.table_function import (
-    TableCardinality,
     Output,
     OutputGenerator,
+    TableCardinality,
     TableFunctionGenerator,
 )
 from vgi.testing import FunctionTestClientError, TableFunctionTestClient

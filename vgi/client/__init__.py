@@ -8,7 +8,7 @@ This package provides:
 
 Usage (API):
     from vgi.client import Client, ClientError
-    from vgi.function import Arguments
+    from vgi.arguments import Arguments
 
     with Client("./my_worker.py") as client:
         for batch in client.table_in_out_function(

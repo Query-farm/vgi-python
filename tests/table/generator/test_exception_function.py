@@ -3,9 +3,9 @@
 import pyarrow as pa
 import pytest
 
+from vgi.arguments import Arguments
 from vgi.client import Client, ClientError
 from vgi.examples.table import GeneratorExceptionFunction
-from vgi.function import Arguments
 from vgi.testing import FunctionTestClientError, TableFunctionTestClient
 
 

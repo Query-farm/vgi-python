@@ -69,7 +69,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
-    from vgi.function import Invocation
+    from vgi.invocation import Invocation
 
 __all__ = [
     "Level",

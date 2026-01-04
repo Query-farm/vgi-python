@@ -6,9 +6,9 @@ from typing import Any
 
 import pyarrow as pa
 
+from vgi.arguments import Arguments
 from vgi.client import Client
 from vgi.examples.table import PartitionedRangeFunction
-from vgi.function import Arguments
 from vgi.testing import TableFunctionTestClient
 
 from .conftest import RunnerWithMode

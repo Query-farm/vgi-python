@@ -19,13 +19,13 @@ from typing import ClassVar, cast
 import pyarrow as pa
 
 from vgi.arguments import Arg
-from vgi.function import InitResult
+from vgi.invocation import InitResult
 from vgi.log import Level, Message
 from vgi.metadata import FunctionExample
 from vgi.table_function import (
-    TableCardinality,
     Output,
     OutputGenerator,
+    TableCardinality,
     TableFunctionGenerator,
     TableFunctionInitInput,
 )

@@ -49,16 +49,15 @@ import structlog
 
 import vgi.function
 import vgi.log
-from vgi.function import SchemaValidationError
+from vgi.exceptions import SchemaValidationError
 from vgi.table_function import Output, ProtocolOutput
 
 __all__ = [
-    "ScalarFunctionGenerator",
-    "ScalarFunction",
-    "Output",
-    "ScalarOutputGenerator",
     "ProtocolInput",
     "RowCountMismatchError",
+    "ScalarFunction",
+    "ScalarFunctionGenerator",
+    "ScalarOutputGenerator",
 ]
 
 
@@ -258,7 +257,7 @@ class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInp
 
     def __init__(
         self,
-        invocation: vgi.function.Invocation,
+        invocation: vgi.invocation.Invocation,
         logger: structlog.stdlib.BoundLogger,
     ):
         """Initialize the scalar function with invocation data and logger."""
@@ -478,7 +477,7 @@ class ScalarFunction(ScalarFunctionGenerator):
 
     def __init__(
         self,
-        invocation: vgi.function.Invocation,
+        invocation: vgi.invocation.Invocation,
         logger: structlog.stdlib.BoundLogger,
     ):
         """Initialize the scalar function."""

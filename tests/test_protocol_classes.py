@@ -9,18 +9,12 @@ import pyarrow as pa
 import pytest
 
 from tests.conftest import make_schema
-from vgi.function import (
-    Arg,
-    Arguments,
-    ArgumentValidationError,
-    InitResult,
-    Invocation,
-    InvocationType,
-)
+from vgi.arguments import Arg, Arguments, ArgumentValidationError
+from vgi.invocation import InitResult, Invocation, InvocationType
 from vgi.log import Level, Message
 from vgi.table_function import (
-    TableCardinality,
     OutputSpec,
+    TableCardinality,
     TableFunctionInitInput,
 )
 

@@ -9,16 +9,17 @@ import pytest
 import structlog
 
 from tests.conftest import make_scalar_invocation
-from vgi.arguments import Arg
-from vgi.function import Arguments, Invocation, InvocationType, SchemaValidationError
+from vgi.arguments import Arg, Arguments
+from vgi.exceptions import SchemaValidationError
+from vgi.invocation import Invocation, InvocationType
 from vgi.log import Level, Message
 from vgi.scalar_function import (
-    Output,
     ProtocolInput,
     ScalarFunction,
     ScalarFunctionGenerator,
     ScalarOutputGenerator,
 )
+from vgi.table_function import Output
 
 
 class TestScalarFunctionGenerator:

@@ -5,7 +5,8 @@ import pyarrow.compute as pc
 import structlog
 
 from tests.conftest import make_invocation
-from vgi.function import Arg, Arguments, Invocation
+from vgi.arguments import Arg, Arguments
+from vgi.invocation import Invocation
 from vgi.ipc_utils import RecordBatchState
 from vgi.log import Level
 from vgi.table_in_out_function import TableInOutFunction

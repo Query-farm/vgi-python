@@ -8,9 +8,9 @@ import pyarrow as pa
 import pytest
 
 from tests.conftest import assert_total_rows
+from vgi.arguments import Arguments
 from vgi.client import Client
 from vgi.client.client import ClientError
-from vgi.function import Arguments
 
 
 class TestScalarFunctionClient:

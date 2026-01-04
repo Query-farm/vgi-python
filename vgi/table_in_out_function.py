@@ -158,7 +158,7 @@ class ProtocolOutput:
     log_message: vgi.log.Message | None = None
 
     def metadata(
-        self, invocation: vgi.function.Invocation
+        self, invocation: vgi.invocation.Invocation
     ) -> pa.KeyValueMetadata | None:
         """Create metadata for this output based on the status.
 
@@ -520,7 +520,7 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunctionBase):
     To use a TableInOutGeneratorFunction, the caller must:
 
     1. Create the bind result:
-       invocation = vgi.function.Invocation(
+       invocation = vgi.invocation.Invocation(
            function_name="my_function",
            arguments=vgi.function.Arguments(positional=[], named={}),
            input_schema=input_schema,
@@ -548,7 +548,7 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunctionBase):
 
     def __init__(
         self,
-        invocation: vgi.function.Invocation,
+        invocation: vgi.invocation.Invocation,
         logger: structlog.stdlib.BoundLogger,
     ):
         """Initialize the function with invocation data and logger."""
@@ -896,7 +896,7 @@ class TableInOutFunction(TableInOutGeneratorFunction):
 
     def __init__(
         self,
-        invocation: vgi.function.Invocation,
+        invocation: vgi.invocation.Invocation,
         logger: structlog.stdlib.BoundLogger,
     ) -> None:
         """Initialize the function."""

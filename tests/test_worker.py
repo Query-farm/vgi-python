@@ -5,7 +5,7 @@ import pytest
 
 from vgi import Arg, TableInOutFunction, TableInput
 from vgi.arguments import Arguments
-from vgi.function import Invocation, InvocationType
+from vgi.invocation import Invocation, InvocationType
 from vgi.worker import Worker
 
 

@@ -8,7 +8,8 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import structlog
 
-from vgi.function import Arg, Arguments, Invocation
+from vgi.arguments import Arg, Arguments
+from vgi.invocation import Invocation
 from vgi.log import Level
 from vgi.table_in_out_function_patterns import (
     AggregationFunction,
