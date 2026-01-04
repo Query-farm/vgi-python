@@ -1,8 +1,12 @@
 """Tests for the ConstantTableFunction."""
 
 import pyarrow as pa
+import pytest
+import structlog
 
+from tests.conftest import make_invocation
 from vgi.examples.table import ConstantTableFunction
+from vgi.function import Arguments
 from vgi.testing import assert_table_function_output, batch
 
 from .conftest import RunnerWithMode
@@ -27,16 +31,8 @@ class TestConstantTableFunctionInProcess:
 
     def test_cardinality(self) -> None:
         """Cardinality should always be 1."""
-        import structlog
-
-        from vgi.function import Arguments, Invocation, InvocationType
-
-        invocation = Invocation(
+        invocation = make_invocation(
             function_name="constant_table",
-            input_schema=None,
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
             arguments=Arguments(positional=(pa.scalar(42),)),
         )
         func = ConstantTableFunction(
@@ -52,31 +48,14 @@ class TestConstantTableFunctionInProcess:
 class TestConstantTableFunctionBothModes:
     """Tests that run both in-process and via Client subprocess."""
 
-    def test_returns_constant_value(
-        self, run_table_function_mode: RunnerWithMode
+    @pytest.mark.parametrize("value", [42, -100, 0])
+    def test_returns_value(
+        self, run_table_function_mode: RunnerWithMode, value: int
     ) -> None:
         """Constant table should return a single row with the given value."""
         runner, mode = run_table_function_mode
-        outputs, logs = runner(ConstantTableFunction, (42,))
+        outputs, logs = runner(ConstantTableFunction, (value,))
 
         table = pa.Table.from_batches(outputs)
         assert table.num_rows == 1
-        assert table.column("value").to_pylist() == [42]
-
-    def test_negative_value(self, run_table_function_mode: RunnerWithMode) -> None:
-        """Constant table should handle negative values."""
-        runner, mode = run_table_function_mode
-        outputs, logs = runner(ConstantTableFunction, (-100,))
-
-        table = pa.Table.from_batches(outputs)
-        assert table.num_rows == 1
-        assert table.column("value").to_pylist() == [-100]
-
-    def test_zero_value(self, run_table_function_mode: RunnerWithMode) -> None:
-        """Constant table should handle zero."""
-        runner, mode = run_table_function_mode
-        outputs, logs = runner(ConstantTableFunction, (0,))
-
-        table = pa.Table.from_batches(outputs)
-        assert table.num_rows == 1
-        assert table.column("value").to_pylist() == [0]
+        assert table.column("value").to_pylist() == [value]

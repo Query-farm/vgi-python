@@ -6,8 +6,8 @@ import pyarrow as pa
 import pytest
 import structlog
 
-from tests.utils import make_schema
-from vgi.function import Arguments, Invocation, InvocationType
+from tests.conftest import make_invocation, make_schema
+from vgi.function import Arguments
 from vgi.table_function import (
     CardinalityInfo,
     Output,
@@ -192,19 +192,10 @@ class TestTableFunctionGeneratorCardinality:
             def output_schema(self) -> pa.Schema:
                 return make_schema([pa.field("x", pa.int64())])
 
-        invocation = Invocation(
-            function_name="test",
-            input_schema=None,
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
-            arguments=Arguments(),
-        )
+        invocation = make_invocation()
         func = NoCardinalityFunction(
-            invocation=invocation,
-            logger=structlog.get_logger(),
+            invocation=invocation, logger=structlog.get_logger()
         )
-
         assert func.cardinality() is None
 
     def test_custom_cardinality(self) -> None:
@@ -218,19 +209,8 @@ class TestTableFunctionGeneratorCardinality:
             def cardinality(self) -> CardinalityInfo:
                 return CardinalityInfo(estimate=100, max=1000)
 
-        invocation = Invocation(
-            function_name="test",
-            input_schema=None,
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
-            arguments=Arguments(),
-        )
-        func = CardinalityFunction(
-            invocation=invocation,
-            logger=structlog.get_logger(),
-        )
-
+        invocation = make_invocation()
+        func = CardinalityFunction(invocation=invocation, logger=structlog.get_logger())
         cardinality = func.cardinality()
         assert cardinality is not None
         assert cardinality.estimate == 100
@@ -311,19 +291,8 @@ class TestTableFunctionGeneratorEmptyBatch:
                     ]
                 )
 
-        invocation = Invocation(
-            function_name="test",
-            input_schema=None,
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
-            arguments=Arguments(),
-        )
-        func = TestFunction(
-            invocation=invocation,
-            logger=structlog.get_logger(),
-        )
-
+        invocation = make_invocation()
+        func = TestFunction(invocation=invocation, logger=structlog.get_logger())
         empty = func.empty_output_batch
         assert empty.num_rows == 0
         assert empty.schema == func.output_schema

@@ -2,6 +2,7 @@
 
 import pyarrow as pa
 
+from tests.conftest import filter_non_empty, total_rows
 from vgi.client import Client
 
 
@@ -22,10 +23,7 @@ class TestBufferInputFunction:
 
         # During data phase, buffer returns empty batches
         # During finalize, it returns all buffered batches
-        # So we expect: empty, empty, batch1, batch2
-        total_input_rows = sum(b.num_rows for b in simple_batches)
-        total_output_rows = sum(b.num_rows for b in output_batches)
-        assert total_output_rows == total_input_rows
+        assert total_rows(output_batches) == total_rows(simple_batches)
 
     def test_buffer_preserves_order(
         self, example_worker: str, simple_batches: list[pa.RecordBatch]
@@ -39,8 +37,7 @@ class TestBufferInputFunction:
                 )
             )
 
-        # Filter to non-empty batches (the actual buffered data)
-        non_empty = [b for b in output_batches if b.num_rows > 0]
+        non_empty = filter_non_empty(output_batches)
         assert len(non_empty) == len(simple_batches)
 
         for input_batch, output_batch in zip(simple_batches, non_empty, strict=True):

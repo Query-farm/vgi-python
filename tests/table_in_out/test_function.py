@@ -1,10 +1,13 @@
 """Tests for TableInOutFunction (callback-based API)."""
 
+from typing import Literal, overload
+
 import pyarrow as pa
 import pyarrow.compute as pc
 import structlog
 
-from vgi.function import Arg, Arguments, Invocation, InvocationType
+from tests.conftest import make_invocation
+from vgi.function import Arg, Arguments, Invocation
 from vgi.ipc_utils import RecordBatchState
 from vgi.log import Level
 from vgi.table_in_out_function import (
@@ -14,48 +17,64 @@ from vgi.table_in_out_function import (
 )
 
 
-def make_invocation(input_schema: pa.Schema) -> Invocation:
-    """Create a minimal Invocation for testing."""
-    return Invocation(
-        function_name="test",
-        input_schema=input_schema,
-        function_type=InvocationType.TABLE,
-        correlation_id="test",
-        invocation_id=b"test",
-        arguments=Arguments(),
-    )
-
-
 def make_invocation_with_args(
     input_schema: pa.Schema, positional: list[int]
 ) -> Invocation:
     """Create an Invocation with positional arguments."""
-    return Invocation(
-        function_name="test",
+    return make_invocation(
         input_schema=input_schema,
-        function_type=InvocationType.TABLE,
-        correlation_id="test",
-        invocation_id=b"test",
         arguments=Arguments(positional=tuple(pa.scalar(v) for v in positional)),
     )
+
+
+@overload
+def run_simple_function(
+    func: TableInOutFunction,
+    input_batches: list[pa.RecordBatch],
+    capture_logs: Literal[False] = False,
+) -> list[pa.RecordBatch]: ...
+
+
+@overload
+def run_simple_function(
+    func: TableInOutFunction,
+    input_batches: list[pa.RecordBatch],
+    capture_logs: Literal[True],
+) -> tuple[list[pa.RecordBatch], list[ProtocolOutput]]: ...
 
 
 def run_simple_function(
     func: TableInOutFunction,
     input_batches: list[pa.RecordBatch],
-) -> list[pa.RecordBatch]:
-    """Run a simple function through the protocol and collect outputs."""
+    capture_logs: bool = False,
+) -> list[pa.RecordBatch] | tuple[list[pa.RecordBatch], list[ProtocolOutput]]:
+    """Run a simple function through the protocol and collect outputs.
+
+    Args:
+        func: The function instance to run
+        input_batches: Input batches to process
+        capture_logs: If True, also return all protocol outputs for log inspection
+
+    Returns:
+        If capture_logs is False: list of output batches
+        If capture_logs is True: tuple of (output_batches, all_outputs)
+
+    """
     generator = func.run()
 
     # Prime the generator
     next(generator)
 
-    output_batches = []
+    output_batches: list[pa.RecordBatch] = []
+    all_outputs: list[ProtocolOutput] = []
 
     # Send input batches
     for batch in input_batches:
         protocol_input = ProtocolInput(batch=batch)
         output = generator.send(protocol_input)
+
+        if capture_logs:
+            all_outputs.append(output)
 
         if output.batch is not None and output.batch.num_rows > 0:
             output_batches.append(output.batch)
@@ -63,6 +82,8 @@ def run_simple_function(
         # Handle multiple outputs per input
         while output.status.value == "HAVE_MORE_OUTPUT":
             output = generator.send(protocol_input)
+            if capture_logs:
+                all_outputs.append(output)
             if output.batch is not None and output.batch.num_rows > 0:
                 output_batches.append(output.batch)
 
@@ -74,15 +95,22 @@ def run_simple_function(
     finalize_input = ProtocolInput.create_finalize(empty_batch)
     output = generator.send(finalize_input)
 
+    if capture_logs:
+        all_outputs.append(output)
+
     if output.batch is not None and output.batch.num_rows > 0:
         output_batches.append(output.batch)
 
     # Collect remaining finalize outputs
     while output.status.value == "HAVE_MORE_OUTPUT":
         output = generator.send(finalize_input)
+        if capture_logs:
+            all_outputs.append(output)
         if output.batch is not None and output.batch.num_rows > 0:
             output_batches.append(output.batch)
 
+    if capture_logs:
+        return output_batches, all_outputs
     return output_batches
 
 
@@ -351,57 +379,6 @@ class TestEmptyOutput:
         assert outputs[0].to_pydict() == {"x": [1, 2]}
 
 
-def run_simple_function_with_logs(
-    func: TableInOutFunction,
-    input_batches: list[pa.RecordBatch],
-) -> tuple[list[pa.RecordBatch], list[ProtocolOutput]]:
-    """Run a simple function and collect both outputs and log messages."""
-    generator = func.run()
-
-    # Prime the generator
-    next(generator)
-
-    output_batches: list[pa.RecordBatch] = []
-    all_outputs: list[ProtocolOutput] = []
-
-    # Send input batches
-    for batch in input_batches:
-        protocol_input = ProtocolInput(batch=batch)
-        output = generator.send(protocol_input)
-        all_outputs.append(output)
-
-        if output.batch is not None and output.batch.num_rows > 0:
-            output_batches.append(output.batch)
-
-        # Handle multiple outputs per input (including log messages)
-        while output.status.value == "HAVE_MORE_OUTPUT":
-            output = generator.send(protocol_input)
-            all_outputs.append(output)
-            if output.batch is not None and output.batch.num_rows > 0:
-                output_batches.append(output.batch)
-
-    # Send finalize signal
-    empty_batch = pa.RecordBatch.from_arrays(
-        [pa.array([], type=field.type) for field in func.output_schema],
-        schema=func.output_schema,
-    )
-    finalize_input = ProtocolInput.create_finalize(empty_batch)
-    output = generator.send(finalize_input)
-    all_outputs.append(output)
-
-    if output.batch is not None and output.batch.num_rows > 0:
-        output_batches.append(output.batch)
-
-    # Collect remaining finalize outputs
-    while output.status.value == "HAVE_MORE_OUTPUT":
-        output = generator.send(finalize_input)
-        all_outputs.append(output)
-        if output.batch is not None and output.batch.num_rows > 0:
-            output_batches.append(output.batch)
-
-    return output_batches, all_outputs
-
-
 class TestLogging:
     """Tests for log() method."""
 
@@ -421,7 +398,9 @@ class TestLogging:
             pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=schema),
         ]
 
-        outputs, all_outputs = run_simple_function_with_logs(func, input_batches)
+        outputs, all_outputs = run_simple_function(
+            func, input_batches, capture_logs=True
+        )
 
         # Should have 1 output batch
         assert len(outputs) == 1
@@ -471,7 +450,9 @@ class TestLogging:
             pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=schema),
         ]
 
-        outputs, all_outputs = run_simple_function_with_logs(func, input_batches)
+        outputs, all_outputs = run_simple_function(
+            func, input_batches, capture_logs=True
+        )
 
         # Should have 1 output batch with sum
         assert len(outputs) == 1
@@ -500,7 +481,9 @@ class TestLogging:
             pa.RecordBatch.from_pydict({"x": [1, 2]}, schema=schema),
         ]
 
-        outputs, all_outputs = run_simple_function_with_logs(func, input_batches)
+        outputs, all_outputs = run_simple_function(
+            func, input_batches, capture_logs=True
+        )
 
         # Should have 1 output batch
         assert len(outputs) == 1

@@ -7,6 +7,7 @@ from typing import cast
 import pyarrow as pa
 import pytest
 
+from tests.conftest import assert_total_rows
 from vgi.client import Client
 from vgi.client.client import ClientError
 from vgi.function import Arguments
@@ -88,8 +89,7 @@ class TestScalarFunctionClient:
 
         # Should get 3 output batches (one per input)
         assert len(outputs) == 3
-        total_rows = sum(b.num_rows for b in outputs)
-        assert total_rows == 6
+        assert_total_rows(outputs, 6)
 
         # Verify the values (order may vary in parallel mode, but we're single-worker)
         all_values: list[int] = []
@@ -159,8 +159,7 @@ class TestScalarFunctionClient:
                 )
             )
 
-        total_rows = sum(b.num_rows for b in outputs)
-        assert total_rows == 10000
+        assert_total_rows(outputs, 10000)
 
         # Verify first and last values
         all_values = []
@@ -221,8 +220,7 @@ class TestScalarFunctionParallel:
             )
 
         # Should get all 1000 rows back
-        total_rows = sum(b.num_rows for b in outputs)
-        assert total_rows == 1000
+        assert_total_rows(outputs, 1000)
 
         # Verify all values are correctly doubled
         all_values = set()
@@ -252,8 +250,7 @@ class TestScalarFunctionParallel:
             )
 
         # Should get 60 rows total (20 batches * 3 rows)
-        total_rows = sum(b.num_rows for b in outputs)
-        assert total_rows == 60
+        assert_total_rows(outputs, 60)
 
     def test_parallel_empty_batches_mixed(self, example_worker: str) -> None:
         """Test parallel processing with mix of empty and non-empty batches."""
@@ -276,8 +273,7 @@ class TestScalarFunctionParallel:
             )
 
         # Should get 6 rows total (2 + 0 + 1 + 0 + 3)
-        total_rows = sum(b.num_rows for b in outputs)
-        assert total_rows == 6
+        assert_total_rows(outputs, 6)
 
         # Verify values
         all_values = set()

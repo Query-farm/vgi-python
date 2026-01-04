@@ -8,6 +8,7 @@ import pyarrow as pa
 import pytest
 import structlog
 
+from tests.conftest import make_scalar_invocation
 from vgi.arguments import Arg
 from vgi.function import Arguments, Invocation, InvocationType, SchemaValidationError
 from vgi.log import Level, Message
@@ -18,18 +19,6 @@ from vgi.scalar_function import (
     ScalarFunctionGenerator,
     ScalarOutputGenerator,
 )
-
-
-def create_invocation(input_schema: pa.Schema) -> Invocation:
-    """Create a test invocation with the given input schema."""
-    return Invocation(
-        function_name="test_function",
-        input_schema=input_schema,
-        function_type=InvocationType.SCALAR,
-        correlation_id="test-correlation",
-        invocation_id=b"test-invocation",
-        arguments=Arguments(),
-    )
 
 
 class TestScalarFunctionGenerator:
@@ -58,7 +47,7 @@ class TestScalarFunctionGenerator:
                     batch = received
 
         input_schema = pa.schema([("x", pa.int64())])
-        invocation = create_invocation(input_schema)
+        invocation = make_scalar_invocation(input_schema)
         logger = structlog.get_logger()
 
         func = DoubleColumn(invocation=invocation, logger=logger)
@@ -110,7 +99,7 @@ class TestScalarFunctionGenerator:
                 _ = yield Output(self.empty_output_batch)
 
         input_schema = pa.schema([("x", pa.int64())])
-        invocation = create_invocation(input_schema)
+        invocation = make_scalar_invocation(input_schema)
 
         with pytest.raises(SchemaValidationError, match="exactly 1 output column"):
             TwoColumnOutput(invocation=invocation, logger=structlog.get_logger())
@@ -139,7 +128,7 @@ class TestScalarFunctionGenerator:
                     batch = received
 
         input_schema = pa.schema([("x", pa.int64())])
-        invocation = create_invocation(input_schema)
+        invocation = make_scalar_invocation(input_schema)
         func = LoggingScalar(invocation=invocation, logger=structlog.get_logger())
 
         generator = func.run()
@@ -215,7 +204,7 @@ class TestScalarFunction:
                 return pc.multiply(batch.column("x"), 2)
 
         input_schema = pa.schema([("x", pa.int64())])
-        invocation = create_invocation(input_schema)
+        invocation = make_scalar_invocation(input_schema)
         func = LoggingFunc(invocation=invocation, logger=structlog.get_logger())
 
         generator = func.run()
@@ -247,7 +236,7 @@ class TestScalarFunction:
                 return pa.array([1, 2])
 
         input_schema = pa.schema([("x", pa.int64())])
-        invocation = create_invocation(input_schema)
+        invocation = make_scalar_invocation(input_schema)
         func = WrongRowCount(invocation=invocation, logger=structlog.get_logger())
 
         generator = func.run()
@@ -275,7 +264,7 @@ class TestScalarFunction:
                 return pc.multiply(batch.column("x"), 2)
 
         input_schema = pa.schema([("x", pa.int64())])
-        invocation = create_invocation(input_schema)
+        invocation = make_scalar_invocation(input_schema)
         func = DoubleFunc(invocation=invocation, logger=structlog.get_logger())
 
         generator = func.run()

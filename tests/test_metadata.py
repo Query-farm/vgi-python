@@ -1,6 +1,9 @@
 """Tests for vgi.metadata module and integration with Function classes."""
 
+from __future__ import annotations
+
 import pyarrow as pa
+import structlog
 
 from vgi import (
     Arg,
@@ -208,10 +211,9 @@ class TestExtractParameters:
 class TestMaxWorkersIntegration:
     """Tests for max_workers integration with max_processes()."""
 
-    def test_max_workers_used(self) -> None:
+    def test_max_workers_used(self, test_logger: structlog.stdlib.BoundLogger) -> None:
         """max_processes() returns Meta.max_workers when defined."""
-        from vgi.arguments import Arguments
-        from vgi.function import Invocation, InvocationType
+        from tests.conftest import make_invocation
 
         class LimitedFunction(TableInOutFunction):
             class Meta:
@@ -219,38 +221,21 @@ class TestMaxWorkersIntegration:
 
             data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
 
-        invocation = Invocation(
-            function_name="test",
-            input_schema=pa.schema([]),
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
-            arguments=Arguments(),
-        )
-        import structlog
-
-        func = LimitedFunction(invocation=invocation, logger=structlog.get_logger())
+        invocation = make_invocation(input_schema=pa.schema([]))
+        func = LimitedFunction(invocation=invocation, logger=test_logger)
         assert func.max_processes() == 2
 
-    def test_default_max_workers(self) -> None:
+    def test_default_max_workers(
+        self, test_logger: structlog.stdlib.BoundLogger
+    ) -> None:
         """max_processes() returns default when max_workers not defined."""
-        from vgi.arguments import Arguments
-        from vgi.function import Invocation, InvocationType
+        from tests.conftest import make_invocation
 
         class UnlimitedFunction(TableInOutFunction):
             data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
 
-        invocation = Invocation(
-            function_name="test",
-            input_schema=pa.schema([]),
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
-            arguments=Arguments(),
-        )
-        import structlog
-
-        func = UnlimitedFunction(invocation=invocation, logger=structlog.get_logger())
+        invocation = make_invocation(input_schema=pa.schema([]))
+        func = UnlimitedFunction(invocation=invocation, logger=test_logger)
         assert func.max_processes() == 99999
 
 

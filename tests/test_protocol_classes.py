@@ -8,7 +8,7 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from tests.utils import make_schema
+from tests.conftest import make_schema
 from vgi.function import (
     Arg,
     Arguments,

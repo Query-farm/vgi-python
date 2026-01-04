@@ -2,6 +2,7 @@
 
 import pyarrow as pa
 
+from tests.conftest import filter_non_empty
 from vgi.client import Client
 
 
@@ -26,8 +27,7 @@ class TestEchoFunction:
 
         # Combine input and output (excluding empty finalize batch) into tables
         input_table = pa.Table.from_batches(simple_batches)
-        non_empty_outputs = [b for b in output_batches if b.num_rows > 0]
-        output_table = pa.Table.from_batches(non_empty_outputs)
+        output_table = pa.Table.from_batches(filter_non_empty(output_batches))
 
         # Total rows should match
         assert output_table.num_rows == input_table.num_rows
@@ -52,5 +52,4 @@ class TestEchoFunction:
                 )
             )
 
-        non_empty = [b for b in output_batches if b.num_rows > 0]
-        assert non_empty[0].schema == simple_batches[0].schema
+        assert filter_non_empty(output_batches)[0].schema == simple_batches[0].schema

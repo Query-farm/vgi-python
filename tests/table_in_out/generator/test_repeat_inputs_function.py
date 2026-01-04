@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from tests.utils import make_schema
+from tests.conftest import make_schema, total_rows
 from vgi.client import Client
 from vgi.function import Arguments
 
@@ -26,9 +26,7 @@ class TestRepeatInputsFunction:
                 )
             )
 
-        total_input_rows = sum(b.num_rows for b in simple_batches)
-        total_output_rows = sum(b.num_rows for b in output_batches)
-        assert total_output_rows == total_input_rows * repeat_count
+        assert total_rows(output_batches) == total_rows(simple_batches) * repeat_count
 
     def test_repeat_single_time(
         self, example_worker: str, simple_batches: list[pa.RecordBatch]
@@ -43,9 +41,7 @@ class TestRepeatInputsFunction:
                 )
             )
 
-        total_input_rows = sum(b.num_rows for b in simple_batches)
-        total_output_rows = sum(b.num_rows for b in output_batches)
-        assert total_output_rows == total_input_rows
+        assert total_rows(output_batches) == total_rows(simple_batches)
 
     def test_repeat_distributed_many_batches(self, example_worker: str) -> None:
         """Should correctly repeat across many batches with multiple workers."""
@@ -77,9 +73,7 @@ class TestRepeatInputsFunction:
                 )
             )
 
-        total_input_rows = sum(b.num_rows for b in batches)
-        total_output_rows = sum(b.num_rows for b in output_batches)
-        assert total_output_rows == total_input_rows * repeat_count
+        assert total_rows(output_batches) == total_rows(batches) * repeat_count
 
     def test_repeat_distributed_preserves_data(self, example_worker: str) -> None:
         """Should preserve data correctly when repeated across workers."""

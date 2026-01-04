@@ -7,7 +7,7 @@ import time
 import pyarrow as pa
 import pytest
 
-from tests.utils import make_schema
+from tests.conftest import assert_single_result, assert_total_rows, make_schema
 from vgi.client import Client
 from vgi.client.client import ClientError
 
@@ -76,8 +76,7 @@ class TestEdgeCases:
         # Should complete without error
         assert len(output_batches) >= 1
         # All output should have zero rows
-        total_rows = sum(b.num_rows for b in output_batches)
-        assert total_rows == 0
+        assert_total_rows(output_batches, 0)
 
     def test_empty_batch_with_aggregation(self, example_worker: str) -> None:
         """Aggregation with empty batch should handle zero rows."""
@@ -92,15 +91,8 @@ class TestEdgeCases:
                 )
             )
 
-        # Should complete without error
-        assert len(output_batches) >= 1
         # Aggregation should produce a result (sums of zero elements)
-        non_empty = [b for b in output_batches if b.num_rows > 0]
-        assert len(non_empty) == 1
-        result = non_empty[0].to_pydict()
-        # Sum of empty column should be 0
-        assert result["a"] == [0]
-        assert result["b"] == [0.0]
+        assert_single_result(output_batches, {"a": [0], "b": [0.0]})
 
     def test_single_row_batch(self, example_worker: str) -> None:
         """Single row batch should process correctly."""
@@ -119,9 +111,7 @@ class TestEdgeCases:
                 )
             )
 
-        non_empty = [b for b in output_batches if b.num_rows > 0]
-        assert len(non_empty) == 1
-        assert non_empty[0].to_pydict() == {"id": [1], "value": [100]}
+        assert_single_result(output_batches, {"id": [1], "value": [100]})
 
     def test_large_batch_count(self, example_worker: str) -> None:
         """Many small batches should process correctly."""
@@ -138,8 +128,7 @@ class TestEdgeCases:
                 )
             )
 
-        total_output_rows = sum(b.num_rows for b in output_batches)
-        assert total_output_rows == 50
+        assert_total_rows(output_batches, 50)
 
 
 class TestWorkerStderrCapture:

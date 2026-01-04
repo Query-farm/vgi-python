@@ -1,6 +1,7 @@
 """Tests for the RangeFunction."""
 
 import pyarrow as pa
+import pytest
 
 from vgi.examples.table import RangeFunction
 from vgi.testing import assert_table_function_output, batch
@@ -37,35 +38,27 @@ class TestRangeFunctionInProcess:
 class TestRangeFunctionBothModes:
     """Tests that run both in-process and via Client subprocess."""
 
-    def test_basic_range(self, run_table_function_mode: RunnerWithMode) -> None:
-        """Range should generate integers from start to end."""
-        runner, mode = run_table_function_mode
-        outputs, logs = runner(RangeFunction, (0, 5))
-
-        table = pa.Table.from_batches(outputs)
-        assert table.num_rows == 5
-        values = table.column("value").to_pylist()
-        assert values == [0, 1, 2, 3, 4]
-
-    def test_range_with_step(self, run_table_function_mode: RunnerWithMode) -> None:
-        """Range with step should skip values."""
-        runner, mode = run_table_function_mode
-        outputs, logs = runner(RangeFunction, (0, 10, 2))
-
-        table = pa.Table.from_batches(outputs)
-        values = table.column("value").to_pylist()
-        assert values == [0, 2, 4, 6, 8]
-
-    def test_range_non_zero_start(
-        self, run_table_function_mode: RunnerWithMode
+    @pytest.mark.parametrize(
+        "args,expected",
+        [
+            ((0, 5), [0, 1, 2, 3, 4]),
+            ((0, 10, 2), [0, 2, 4, 6, 8]),
+            ((5, 10), [5, 6, 7, 8, 9]),
+            ((42, 43), [42]),
+        ],
+    )
+    def test_range_values(
+        self,
+        run_table_function_mode: RunnerWithMode,
+        args: tuple[int, ...],
+        expected: list[int],
     ) -> None:
-        """Range with non-zero start."""
+        """Range should generate expected integer values."""
         runner, mode = run_table_function_mode
-        outputs, logs = runner(RangeFunction, (5, 10))
+        outputs, logs = runner(RangeFunction, args)
 
         table = pa.Table.from_batches(outputs)
-        values = table.column("value").to_pylist()
-        assert values == [5, 6, 7, 8, 9]
+        assert table.column("value").to_pylist() == expected
 
     def test_empty_range(self, run_table_function_mode: RunnerWithMode) -> None:
         """Range where end <= start should produce no output."""
@@ -73,24 +66,11 @@ class TestRangeFunctionBothModes:
         outputs, logs = runner(RangeFunction, (10, 5))
         assert len(outputs) == 0
 
-    def test_single_value_range(self, run_table_function_mode: RunnerWithMode) -> None:
-        """Range of length 1."""
-        runner, mode = run_table_function_mode
-        outputs, logs = runner(RangeFunction, (42, 43))
-
-        table = pa.Table.from_batches(outputs)
-        assert table.num_rows == 1
-        assert table.column("value").to_pylist() == [42]
-
     def test_large_range_batches(self, run_table_function_mode: RunnerWithMode) -> None:
         """Large ranges should be split into batches."""
         runner, mode = run_table_function_mode
         outputs, logs = runner(RangeFunction, (0, 2500))
 
-        # Combine all batches
         table = pa.Table.from_batches(outputs)
         assert table.num_rows == 2500
-
-        # Check all values are present
-        values = table.column("value").to_pylist()
-        assert values == list(range(2500))
+        assert table.column("value").to_pylist() == list(range(2500))
