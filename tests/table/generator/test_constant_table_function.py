@@ -29,14 +29,15 @@ class TestConstantTableFunctionInProcess:
         """Cardinality should always be 1."""
         import structlog
 
-        from vgi.function import Arguments, Invocation
+        from vgi.function import Arguments, Invocation, InvocationType
 
         invocation = Invocation(
             function_name="constant_table",
-            arguments=Arguments(positional=(pa.scalar(42),)),
-            in_out_function_input_schema=None,
+            input_schema=None,
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
+            arguments=Arguments(positional=(pa.scalar(42),)),
         )
         func = ConstantTableFunction(
             invocation=invocation,

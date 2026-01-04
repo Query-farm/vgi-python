@@ -30,14 +30,15 @@ class TestSequenceFunctionInProcess:
         """Cardinality should match requested count."""
         import structlog
 
-        from vgi.function import Arguments, Invocation
+        from vgi.function import Arguments, Invocation, InvocationType
 
         invocation = Invocation(
             function_name="sequence",
-            arguments=Arguments(positional=(pa.scalar(100),)),
-            in_out_function_input_schema=None,
+            input_schema=None,
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
+            arguments=Arguments(positional=(pa.scalar(100),)),
         )
         func = SequenceFunction(
             invocation=invocation,

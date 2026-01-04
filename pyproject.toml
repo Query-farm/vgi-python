@@ -42,6 +42,11 @@ warn_unused_ignores = true
 module = "structlog.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+# These files have type: ignore comments for ty that mypy doesn't need
+module = ["vgi.examples.scalar", "vgi.table_function"]
+warn_unused_ignores = false
+
 [tool.ty.environment]
 python-version = "3.12"
 

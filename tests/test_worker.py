@@ -5,7 +5,7 @@ import pytest
 
 from vgi import Arg, TableInOutFunction, TableInput
 from vgi.arguments import Arguments
-from vgi.function import Invocation
+from vgi.function import Invocation, InvocationType
 from vgi.worker import Worker
 
 
@@ -25,10 +25,11 @@ class TestFunctionOverloading:
 
         invocation = Invocation(
             function_name="single",
-            arguments=Arguments(),
-            in_out_function_input_schema=pa.schema([]),
+            input_schema=pa.schema([]),
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
+            arguments=Arguments(),
         )
 
         result = Worker._match_function(invocation, [SingleFunction])
@@ -70,7 +71,8 @@ class TestFunctionOverloading:
         inv0 = Invocation(
             function_name="func",
             arguments=Arguments(positional=()),
-            in_out_function_input_schema=pa.schema([]),
+            input_schema=pa.schema([]),
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
         )
@@ -80,7 +82,8 @@ class TestFunctionOverloading:
         inv1 = Invocation(
             function_name="func",
             arguments=Arguments(positional=(pa.scalar(5),)),
-            in_out_function_input_schema=pa.schema([]),
+            input_schema=pa.schema([]),
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
         )
@@ -90,7 +93,8 @@ class TestFunctionOverloading:
         inv2 = Invocation(
             function_name="func",
             arguments=Arguments(positional=(pa.scalar(5), pa.scalar(10))),
-            in_out_function_input_schema=pa.schema([]),
+            input_schema=pa.schema([]),
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
         )
@@ -121,7 +125,8 @@ class TestFunctionOverloading:
         inv_with = Invocation(
             function_name="func",
             arguments=Arguments(positional=(pa.scalar(5),)),
-            in_out_function_input_schema=pa.schema([]),
+            input_schema=pa.schema([]),
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
         )
@@ -132,7 +137,8 @@ class TestFunctionOverloading:
         inv_without = Invocation(
             function_name="func",
             arguments=Arguments(positional=()),
-            in_out_function_input_schema=pa.schema([]),
+            input_schema=pa.schema([]),
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
         )
@@ -166,7 +172,8 @@ class TestFunctionOverloading:
         inv_format = Invocation(
             function_name="func",
             arguments=Arguments(positional=(), named={"format": pa.scalar("json")}),
-            in_out_function_input_schema=pa.schema([]),
+            input_schema=pa.schema([]),
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
         )
@@ -176,7 +183,8 @@ class TestFunctionOverloading:
         inv_sep = Invocation(
             function_name="func",
             arguments=Arguments(positional=(), named={"separator": pa.scalar(",")}),
-            in_out_function_input_schema=pa.schema([]),
+            input_schema=pa.schema([]),
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
         )
@@ -198,7 +206,8 @@ class TestFunctionOverloading:
         inv = Invocation(
             function_name="func",
             arguments=Arguments(positional=(pa.scalar(1), pa.scalar(2), pa.scalar(3))),
-            in_out_function_input_schema=pa.schema([]),
+            input_schema=pa.schema([]),
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
         )
@@ -230,7 +239,8 @@ class TestFunctionOverloading:
         inv = Invocation(
             function_name="func",
             arguments=Arguments(positional=()),
-            in_out_function_input_schema=pa.schema([]),
+            input_schema=pa.schema([]),
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
         )
@@ -254,7 +264,8 @@ class TestFunctionOverloading:
         inv = Invocation(
             function_name="func",
             arguments=Arguments(positional=(), named={"unknown": pa.scalar("x")}),
-            in_out_function_input_schema=pa.schema([]),
+            input_schema=pa.schema([]),
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
         )
@@ -277,7 +288,8 @@ class TestFunctionOverloading:
         inv = Invocation(
             function_name="func",
             arguments=Arguments(positional=(), named=None),
-            in_out_function_input_schema=pa.schema([]),
+            input_schema=pa.schema([]),
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
         )

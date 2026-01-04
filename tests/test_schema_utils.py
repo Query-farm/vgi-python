@@ -267,7 +267,7 @@ class TestSchemaIntegration:
 
         from vgi import TableInOutFunction
         from vgi.arguments import Arguments
-        from vgi.function import Invocation
+        from vgi.function import Invocation, InvocationType
 
         class TestFunction(TableInOutFunction):
             @property
@@ -277,10 +277,11 @@ class TestSchemaIntegration:
         # Verify the schema is created correctly when function is used
         invocation = Invocation(
             function_name="test",
-            arguments=Arguments(),
-            in_out_function_input_schema=pa.schema([pa.field("x", pa.int64())]),
+            input_schema=pa.schema([pa.field("x", pa.int64())]),
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
+            arguments=Arguments(),
         )
         logger = structlog.get_logger()
         func = TestFunction(invocation=invocation, logger=logger)
@@ -299,7 +300,7 @@ class TestSchemaIntegration:
 
         from vgi import TableInOutFunction
         from vgi.arguments import Arguments
-        from vgi.function import Invocation
+        from vgi.function import Invocation, InvocationType
 
         class TestFunction(TableInOutFunction):
             @property
@@ -318,10 +319,11 @@ class TestSchemaIntegration:
 
         invocation = Invocation(
             function_name="test",
-            arguments=Arguments(),
-            in_out_function_input_schema=input_schema,
+            input_schema=input_schema,
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
+            arguments=Arguments(),
         )
         logger = structlog.get_logger()
         func = TestFunction(invocation=invocation, logger=logger)

@@ -4,7 +4,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import structlog
 
-from vgi.function import Arg, Arguments, Invocation
+from vgi.function import Arg, Arguments, Invocation, InvocationType
 from vgi.ipc_utils import RecordBatchState
 from vgi.log import Level
 from vgi.table_in_out_function import (
@@ -18,7 +18,8 @@ def make_invocation(input_schema: pa.Schema) -> Invocation:
     """Create a minimal Invocation for testing."""
     return Invocation(
         function_name="test",
-        in_out_function_input_schema=input_schema,
+        input_schema=input_schema,
+        function_type=InvocationType.TABLE,
         correlation_id="test",
         invocation_id=b"test",
         arguments=Arguments(),
@@ -31,7 +32,8 @@ def make_invocation_with_args(
     """Create an Invocation with positional arguments."""
     return Invocation(
         function_name="test",
-        in_out_function_input_schema=input_schema,
+        input_schema=input_schema,
+        function_type=InvocationType.TABLE,
         correlation_id="test",
         invocation_id=b"test",
         arguments=Arguments(positional=tuple(pa.scalar(v) for v in positional)),

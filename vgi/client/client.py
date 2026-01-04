@@ -40,6 +40,7 @@ client.start() : Start the worker subprocess
 client.stop() : Stop the worker subprocess
 client.table_in_out_function() : Invoke a TableInOutGeneratorFunction and stream results
 client.table_function() : Invoke a TableFunctionGenerator and stream results
+client.scalar_function() : Invoke a ScalarFunction and stream results
 client.get_worker_stderr() : Get captured stderr from worker
 
 See Also
@@ -70,11 +71,13 @@ from pyarrow import ipc
 
 from vgi.function import (
     Arguments,
+    FunctionInitInput,
     GlobalInitResult,
     Invocation,
+    InvocationType,
 )
 from vgi.ipc_utils import IPCError, read_ipc_batch
-from vgi.table_function import GlobalStateInitInput
+from vgi.table_function import TableFunctionInitInput
 
 # Configure structlog to write to stderr
 structlog.configure(
@@ -369,6 +372,7 @@ class Client:
         function_name: str,
         arguments: Arguments,
         input_schema: pa.Schema | None,
+        function_type: InvocationType,
         bind_result_callback: Callable[[pa.RecordBatch], None] | None,
         projection_ids: list[int] | None,
     ) -> tuple[_BindResult, GlobalInitResult, Invocation]:
@@ -380,7 +384,7 @@ class Client:
         3. Invokes bind_result_callback if provided
         4. Validates protocol version compatibility
         5. Applies CPU/max_workers limits to max_processes
-        6. Sends GlobalStateInitInput (with projection_ids)
+        6. Sends init data (FunctionInitInput or TableFunctionInitInput)
         7. Reads GlobalInitResult (shared state identifier for parallel workers)
         8. Creates an Invocation with global_init_identifier for additional workers
 
@@ -391,10 +395,13 @@ class Client:
                 to pass to the function.
             input_schema: Schema of input batches for table-in-out functions,
                 or None for table functions that generate output without input.
+            function_type: Type of function being invoked (SCALAR or TABLE).
+                Determines what init data format is sent to the worker.
             bind_result_callback: Optional callback invoked with the raw bind
                 result RecordBatch. Called before further processing.
             projection_ids: Optional list of column indices to project in the
-                output. Passed to the worker via GlobalStateInitInput.
+                output. Passed to the worker via TableFunctionInitInput (ignored
+                for scalar functions).
 
         Returns:
             A tuple of (bind_result, global_init_result, request_with_init):
@@ -406,7 +413,7 @@ class Client:
         Raises:
             ClientError: If the worker process is not started, or if reading
                 the bind result or init result fails.
-            OSError: If writing the Invocation or GlobalStateInitInput fails.
+            OSError: If writing the Invocation or init data fails.
             ClientError: If the worker activated unsupported features.
 
         """
@@ -421,10 +428,11 @@ class Client:
 
         initial_request = Invocation(
             function_name=function_name,
-            arguments=arguments,
-            in_out_function_input_schema=input_schema,
+            input_schema=input_schema,
+            function_type=function_type,
             correlation_id=self.correlation_id,
             invocation_id=None,
+            arguments=arguments,
             client_features=client_features,
             attach_id=self._attach_id,
         )
@@ -469,15 +477,17 @@ class Client:
             ),
         )
 
-        # Send global state init input
-        global_state_info_serialized_bytes = GlobalStateInitInput(
-            projection_ids=projection_ids
-        ).serialize()
+        if initial_request.function_type == InvocationType.SCALAR:
+            # Scalar functions use empty init input
+            init_serialized_bytes = FunctionInitInput().serialize()
+        else:
+            # Table functions (generator and table-in-out) use TableFunctionInitInput
+            init_serialized_bytes = TableFunctionInitInput(
+                projection_ids=projection_ids
+            ).serialize()
 
-        if self._stdin_sink.write(global_state_info_serialized_bytes) != len(
-            global_state_info_serialized_bytes
-        ):
-            raise OSError("Failed to write global state init input record batch")
+        if self._stdin_sink.write(init_serialized_bytes) != len(init_serialized_bytes):
+            raise OSError("Failed to write init record batch")
 
         # Read init result
         log.debug("reading_init_result")
@@ -495,11 +505,12 @@ class Client:
         # Create request with init for additional workers
         request_with_init = Invocation(
             function_name=function_name,
-            arguments=arguments,
-            in_out_function_input_schema=input_schema,
+            input_schema=input_schema,
+            function_type=function_type,
             correlation_id=self.correlation_id,
             invocation_id=bind_result.invocation_id,
             global_init_identifier=global_init_result,
+            arguments=arguments,
         )
 
         return bind_result, global_init_result, request_with_init
@@ -579,6 +590,7 @@ class Client:
         function_name: str,
         arguments: Arguments,
         input_schema: pa.Schema | None,
+        function_type: InvocationType,
         bind_result_callback: Callable[[pa.RecordBatch], None] | None,
         projection_ids: list[int] | None,
     ) -> tuple[ipc.RecordBatchStreamWriter | None, ipc.RecordBatchStreamReader | None]:
@@ -602,6 +614,7 @@ class Client:
             arguments: Arguments container with positional and named arguments.
             input_schema: Schema of input batches for table-in-out functions,
                 or None for table functions.
+            function_type: Type of function being invoked (SCALAR or TABLE).
             bind_result_callback: Optional callback invoked with the raw bind
                 result RecordBatch.
             projection_ids: Optional list of column indices to project.
@@ -624,6 +637,7 @@ class Client:
             function_name=function_name,
             arguments=arguments,
             input_schema=input_schema,
+            function_type=function_type,
             bind_result_callback=bind_result_callback,
             projection_ids=projection_ids,
         )
@@ -1072,9 +1086,11 @@ class Client:
 
             output_batches.append(output_batch)
 
+            # status is None for scalar functions (which don't emit status)
+            # and means we're done with this batch
             if status == b"HAVE_MORE_OUTPUT":
                 continue
-            elif status == b"NEED_MORE_INPUT":
+            elif status == b"NEED_MORE_INPUT" or status is None:
                 break
             else:
                 raise ClientError(
@@ -1397,7 +1413,7 @@ class Client:
                 result RecordBatch before processing begins. Useful for inspecting
                 output schema, max_processes, or cardinality hints.
             projection_ids: Optional list of column indices for column projection.
-                Passed to the worker via GlobalStateInitInput.
+                Passed to the worker via TableFunctionInitInput.
 
         Yields:
             Output RecordBatches from the function. In single-worker mode, output
@@ -1442,6 +1458,7 @@ class Client:
                 function_name=function_name,
                 arguments=arguments,
                 input_schema=input_schema,
+                function_type=InvocationType.TABLE,
                 bind_result_callback=bind_result_callback,
                 projection_ids=projection_ids,
             )
@@ -1758,7 +1775,7 @@ class Client:
                 result RecordBatch before processing begins. Useful for inspecting
                 output schema, max_processes, or cardinality hints.
             projection_ids: Optional list of column indices for column projection.
-                Passed to the worker via GlobalStateInitInput.
+                Passed to the worker via TableFunctionInitInput.
 
         Yields:
             Output RecordBatches from the function. In parallel mode
@@ -1793,6 +1810,7 @@ class Client:
             function_name=function_name,
             arguments=arguments,
             input_schema=None,
+            function_type=InvocationType.TABLE,
             bind_result_callback=bind_result_callback,
             projection_ids=projection_ids,
         )
@@ -1804,3 +1822,228 @@ class Client:
         yield from self._table_function_parallel(
             primary_output_reader=output_reader,
         )
+
+    def scalar_function(
+        self,
+        *,
+        function_name: str,
+        input: Iterator[pa.RecordBatch],
+        arguments: Arguments | None = None,
+        bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
+    ) -> Generator[pa.RecordBatch, None, None]:
+        """Invoke a scalar function on the worker and stream results.
+
+        Scalar functions transform input batches to single-column output with
+        1:1 row mapping. Processing ends when input is exhausted.
+
+        Processing flow:
+        1. Reads the first input batch to determine the input schema
+        2. Sends Invocation to worker and receives bind result
+        3. Spawns additional workers if max_processes > 1
+        4. Distributes input batches to workers (round-robin for parallel mode)
+        5. Collects and yields output batches
+
+        For parallel processing (max_processes > 1), input batches are distributed
+        round-robin across workers using dedicated threads. Output order may not
+        match input order in parallel mode.
+
+        Args:
+            function_name: Name of the function to invoke. Must exist in the
+                worker's registry.
+            input: Iterator yielding input RecordBatches. Must yield at least one
+                batch. The first batch's schema is used to initialize the IPC
+                stream. If the iterator is empty, no output is produced.
+            arguments: Optional Arguments container with positional and named
+                arguments to pass to the function. Defaults to empty Arguments().
+            bind_result_callback: Optional callback invoked with the raw bind
+                result RecordBatch before processing begins. Useful for inspecting
+                output schema or max_processes.
+
+        Yields:
+            Output RecordBatches from the function. Each output batch has a single
+            column and the same number of rows as its corresponding input batch.
+            In single-worker mode, output order corresponds to input order.
+            In parallel mode (max_processes > 1), output order is non-deterministic.
+
+        Raises:
+            ClientError: If the client is not started, input iterator yields
+                non-RecordBatch objects, communication with the worker fails,
+                or the worker returns an unexpected status or exception.
+
+        Example:
+            >>> with Client("vgi-example-worker") as client:
+            ...     batches = [pa.RecordBatch.from_pydict({"x": [1, 2, 3]})]
+            ...     for output in client.scalar_function(
+            ...         function_name="double_column",
+            ...         input=iter(batches),
+            ...         arguments=Arguments(positional=[pa.scalar("x")]),
+            ...     ):
+            ...         print(output.to_pydict())
+            {'result': [2, 4, 6]}
+
+        """
+        if arguments is None:
+            arguments = Arguments()
+
+        if (
+            self._proc is None
+            or self._stdin_sink is None
+            or self._stdout_buffered is None
+        ):
+            raise ClientError(
+                "Client not started. Call start() or use context manager."
+            )
+
+        # Get the first batch to determine schema and initialize
+        for input_batch in input:
+            if not isinstance(input_batch, pa.RecordBatch):
+                raise ClientError("Input iterator must yield RecordBatches")
+
+            input_schema = input_batch.schema
+            data_writer, _ = self._initialize_function_stream(
+                function_name=function_name,
+                arguments=arguments,
+                input_schema=input_schema,
+                function_type=InvocationType.SCALAR,
+                bind_result_callback=bind_result_callback,
+                projection_ids=None,  # Scalar functions don't use projection
+            )
+
+            # Use parallel processing for all cases (handles both single and
+            # multi-worker)
+            assert data_writer is not None  # set when input_schema is not None
+            yield from self._scalar_function_parallel(
+                input_batch=input_batch,
+                input_iterator=input,
+                data_writer=data_writer,
+            )
+            return
+
+    def _scalar_function_parallel(
+        self,
+        *,
+        input_batch: pa.RecordBatch,
+        input_iterator: Iterator[pa.RecordBatch],
+        data_writer: ipc.RecordBatchStreamWriter,
+    ) -> Generator[pa.RecordBatch, None, None]:
+        """Process scalar function batches across one or more workers using threads.
+
+        Handles both single-worker and multi-worker cases uniformly.
+
+        Processing flow:
+        1. Creates worker connection objects for primary + additional workers
+        2. Starts one thread per worker running _worker_thread_loop
+        3. Distributes input batches round-robin to worker input queues
+        4. Signals end-of-input to all workers via None sentinel
+        5. Collects all output batches from shared output queue
+        6. Waits for worker threads to complete
+        7. Closes all workers
+
+        Args:
+            input_batch: The first input batch, already consumed from the
+                iterator by scalar_function().
+            input_iterator: Iterator for remaining input batches. May be empty
+                if all input was in the first batch.
+            data_writer: IPC stream writer for the primary worker, already
+                initialized by _initialize_function_stream().
+
+        Yields:
+            Output RecordBatches from processing, in non-deterministic order for
+            multi-worker mode.
+
+        Raises:
+            ClientError: If a worker thread fails with an exception.
+
+        """
+        primary_worker = self._create_primary_worker(data_writer=data_writer)
+        all_workers = [primary_worker] + self._additional_workers
+        num_workers = len(all_workers)
+
+        log.debug("starting_scalar_parallel_processing", num_workers=num_workers)
+
+        # Create queues for each worker
+        input_queues: list[Queue[tuple[int, pa.RecordBatch] | None]] = [
+            Queue() for _ in range(num_workers)
+        ]
+        output_queue: Queue[tuple[int, list[pa.RecordBatch]] | BaseException] = Queue()
+
+        # Start worker threads
+        threads: list[threading.Thread] = []
+        for i, worker in enumerate(all_workers):
+            thread = threading.Thread(
+                target=self._worker_thread_loop,
+                args=(worker, input_queues[i], output_queue),
+                daemon=True,
+            )
+            thread.start()
+            threads.append(thread)
+
+        # Distribute batches round-robin across workers
+        batch_index = 0
+        batches_sent = 0
+
+        # Send first batch
+        worker_idx = batch_index % num_workers
+        input_queues[worker_idx].put((batch_index, input_batch))
+        batches_sent += 1
+        batch_index += 1
+
+        # Send remaining batches
+        for input_batch in input_iterator:
+            worker_idx = batch_index % num_workers
+            input_queues[worker_idx].put((batch_index, input_batch))
+            batches_sent += 1
+            batch_index += 1
+
+        # Signal end of input to all workers
+        for q in input_queues:
+            q.put(None)
+
+        log.debug("scalar_all_batches_distributed", total_batches=batches_sent)
+
+        # Collect outputs from all workers
+        # We expect batches_sent regular outputs + num_workers thread completion signals
+        outputs_expected = batches_sent + num_workers
+        outputs_received = 0
+
+        while outputs_received < outputs_expected:
+            result = output_queue.get()
+
+            # Check for exceptions from worker threads
+            if isinstance(result, BaseException):
+                raise ClientError(f"Worker thread failed: {result}") from result
+
+            batch_idx, output_batches = result
+            outputs_received += 1
+
+            # Combine output batches if needed
+            combined = self._combine_batches(output_batches)
+            if combined is not None:
+                yield combined
+
+            log.debug(
+                "scalar_output_received",
+                batch_index=batch_idx,
+                outputs_received=outputs_received,
+                outputs_expected=outputs_expected,
+            )
+
+        self._join_threads(threads)
+        log.debug("all_scalar_worker_threads_complete")
+
+        # Close data writers to signal EOF to workers
+        for worker in all_workers:
+            if worker.data_writer is not None:
+                worker.data_writer.close()
+
+        # Wait for secondary workers to exit
+        secondary_workers = all_workers[1:]
+        for worker in secondary_workers:
+            worker.proc.wait(timeout=self.PROCESS_WAIT_TIMEOUT)
+            log.debug(
+                "scalar_secondary_worker_exited",
+                worker_index=worker.worker_index,
+                returncode=worker.proc.returncode,
+            )
+
+        log.debug("scalar_parallel_processing_complete")

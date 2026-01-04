@@ -24,10 +24,10 @@ from vgi.log import Level, Message
 from vgi.metadata import FunctionExample
 from vgi.table_function import (
     CardinalityInfo,
-    GlobalStateInitInput,
     Output,
     OutputGenerator,
     TableFunctionGenerator,
+    TableFunctionInitInput,
 )
 
 __all__ = [
@@ -476,7 +476,7 @@ class PartitionedRangeFunction(TableFunctionGenerator):
     def perform_init(self, init_input: pa.RecordBatch) -> GlobalInitResult:
         """Populate the work queue with range chunks."""
         # Parse init data and store in init_storage
-        self.init_data = GlobalStateInitInput.deserialize(init_input)
+        self.init_data = TableFunctionInitInput.deserialize(init_input)
         self.init_identifier = self.init_storage.create(self.init_data.serialize())
 
         # Create work items for each chunk of the range

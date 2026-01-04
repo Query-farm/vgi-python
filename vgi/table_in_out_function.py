@@ -523,7 +523,7 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunctionBase):
        invocation = vgi.function.Invocation(
            function_name="my_function",
            arguments=vgi.function.Arguments(positional=[], named={}),
-           in_out_function_input_schema=input_schema,
+           input_schema=input_schema,
            correlation_id="",
            invocation_id=None,
        )
@@ -553,21 +553,16 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunctionBase):
     ):
         """Initialize the function with invocation data and logger."""
         super().__init__(invocation=invocation, logger=logger)
-        if invocation.in_out_function_input_schema is None:
+        if invocation.input_schema is None:
             raise ValueError(
                 f"{type(self).__name__} requires an input schema, but none was "
                 f"provided. TableInOutGeneratorFunction processes input batches and "
-                f"requires in_out_function_input_schema to be set in the Invocation. "
+                f"requires input_schema to be set in the Invocation. "
                 f"If your function generates output without input, inherit from "
                 f"TableFunctionGenerator instead."
             )
 
-    @property
-    def input_schema(self) -> pa.Schema:
-        """Return the input schema from the invocation."""
-        # Validated as non-None in __init__
-        assert self.invocation.in_out_function_input_schema is not None
-        return self.invocation.in_out_function_input_schema
+    # input_schema property inherited from Function
 
     def teardown(self) -> None:
         """Release resources after processing completes.
@@ -586,14 +581,7 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunctionBase):
         """Return the output schema (default: passthrough input schema)."""
         return self.input_schema
 
-    @final
-    def _validate_input_schema(self, batch: pa.RecordBatch) -> None:
-        """Validate that a batch conforms to the expected input schema."""
-        if batch.schema != self.input_schema:
-            raise vgi.table_function.SchemaValidationError(
-                f"Input batch schema does not match expected input_schema. "
-                f"Expected: {self.input_schema}, got: {batch.schema}"
-            )
+    # _validate_input_schema inherited from Function
 
     @final
     def _process_and_validate(

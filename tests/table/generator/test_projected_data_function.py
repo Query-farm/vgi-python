@@ -152,15 +152,16 @@ class TestProjectedDataFunctionInProcess:
         """The output_schema property should reflect the projection."""
         import structlog
 
-        from vgi.function import Invocation
-        from vgi.table_function import GlobalStateInitInput
+        from vgi.function import Invocation, InvocationType
+        from vgi.table_function import TableFunctionInitInput
 
         invocation = Invocation(
             function_name="projected_data",
-            arguments=Arguments(positional=(pa.scalar(10),)),
-            in_out_function_input_schema=None,
+            input_schema=None,
+            function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test",
+            arguments=Arguments(positional=(pa.scalar(10),)),
         )
         func = ProjectedDataFunction(
             invocation=invocation,
@@ -171,7 +172,7 @@ class TestProjectedDataFunctionInProcess:
         assert func.output_schema == ProjectedDataFunction.FULL_SCHEMA
 
         # After setting init_data with projection, should return projected schema
-        func.init_data = GlobalStateInitInput(projection_ids=[0, 2])
+        func.init_data = TableFunctionInitInput(projection_ids=[0, 2])
         schema = func.output_schema
         assert len(schema) == 2
         assert schema.names == ["id", "value"]
