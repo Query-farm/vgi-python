@@ -18,6 +18,11 @@ from vgi.examples.table_in_out import (
     SumAllColumnsSimpleDistributed,
 )
 from vgi.log import Level
+from vgi.table_in_out_function import (
+    Output,
+    OutputGenerator,
+    TableInOutGenerator,
+)
 from vgi.testing import (
     TableInOutFunctionTestClient,
     TableInOutFunctionTestClientError,
@@ -834,3 +839,66 @@ class TestAssertScalarFunctionOutput:
             args=("x",),
             check_order=False,
         )
+
+
+# =============================================================================
+# Edge Case Tests for Test Client Protocol Handling
+# =============================================================================
+
+
+class _NoFinalizeFunction(TableInOutGenerator):
+    """Function that processes batches but has no finalize output."""
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        return self.input_schema
+
+    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+        _ = yield None  # Priming yield
+        while True:
+            yield Output(batch)
+            next_batch = yield None
+            if next_batch is None:
+                break
+            batch = next_batch
+
+    def finalize(self) -> OutputGenerator | None:
+        # Return None to indicate no finalize generator
+        return None
+
+
+class TestEdgeCaseProtocolHandling:
+    """Tests for edge cases in test client protocol handling."""
+
+    def test_no_finalize_generator(self) -> None:
+        """Test handling of function with finalize() returning None."""
+        with TableInOutFunctionTestClient(_NoFinalizeFunction) as client:
+            test_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
+            outputs = list(client.table_in_out_function(input=iter([test_batch])))
+
+        # Should process batch normally even without finalize
+        assert len(outputs) == 1
+        assert outputs[0].equals(test_batch)
+
+    def test_empty_input_with_finalize(self) -> None:
+        """Test that finalize is called even with empty input."""
+        # BufferInputFunction buffers input and emits on finalize
+        # With empty input, finalize should still be called
+        with TableInOutFunctionTestClient(BufferInputFunction) as client:
+            outputs = list(client.table_in_out_function(input=iter([])))
+
+        # No input means no output from finalize either
+        assert outputs == []
+
+    def test_multiple_empty_batches(self) -> None:
+        """Test handling of multiple calls with empty input."""
+        with TableInOutFunctionTestClient(EchoFunction) as client:
+            # First call with empty input
+            outputs1 = list(client.table_in_out_function(input=iter([])))
+            assert outputs1 == []
+
+            # Second call with actual input
+            test_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
+            outputs2 = list(client.table_in_out_function(input=iter([test_batch])))
+            assert len(outputs2) == 1
+            assert outputs2[0].equals(test_batch)
