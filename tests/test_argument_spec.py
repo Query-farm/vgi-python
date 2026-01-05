@@ -336,11 +336,10 @@ class TestExtractArgumentSpecs:
         """Extract specs from function with basic Arg descriptors."""
 
         class SimpleFunction(TableInOutFunction):
-            count = Arg[int](0)
-            name = Arg[str](1)
+            count: int = Arg[int](0)  # type: ignore[assignment]
+            name: str = Arg[str](1)  # type: ignore[assignment]
 
-        arg_types: dict[str, pa.DataType] = {"count": pa.int64(), "name": pa.utf8()}
-        specs = extract_argument_specs(SimpleFunction, arg_types)
+        specs = extract_argument_specs(SimpleFunction)
 
         assert len(specs) == 2
         assert specs[0].name == "count"
@@ -354,18 +353,16 @@ class TestExtractArgumentSpecs:
         """Extract specs should detect Arg[TableInput]."""
 
         class FunctionWithTable(TableInOutFunction):
-            multiplier = Arg[float](0)
+            multiplier: float = Arg[float](0)  # type: ignore[assignment]
             data: TableInput = Arg[TableInput](1)  # type: ignore[assignment]
 
-        arg_types: dict[str, pa.DataType] = {
-            "multiplier": pa.float64(),
-            "data": pa.null(),
-        }
-        specs = extract_argument_specs(FunctionWithTable, arg_types)
+        specs = extract_argument_specs(FunctionWithTable)
 
         assert len(specs) == 2
+        assert specs[0].arrow_type == pa.float64()
         assert specs[1].name == "data"
         assert specs[1].is_table_input is True
+        assert specs[1].arrow_type == pa.null()
 
     def test_extract_any_arrow(self) -> None:
         """Extract specs should detect Arg[AnyArrow]."""
@@ -373,78 +370,77 @@ class TestExtractArgumentSpecs:
         class FunctionWithAny(TableInOutFunction):
             value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
 
-        arg_types: dict[str, pa.DataType] = {"value": pa.null()}
-        specs = extract_argument_specs(FunctionWithAny, arg_types)
+        specs = extract_argument_specs(FunctionWithAny)
 
         assert len(specs) == 1
         assert specs[0].is_any_type is True
+        assert specs[0].arrow_type == pa.null()
 
     def test_extract_varargs(self) -> None:
         """Extract specs should detect varargs=True."""
 
         class FunctionWithVarargs(TableInOutFunction):
-            columns = Arg[str](0, varargs=True)
+            columns: str = Arg[str](0, varargs=True)  # type: ignore[assignment]
 
-        arg_types: dict[str, pa.DataType] = {"columns": pa.utf8()}
-        specs = extract_argument_specs(FunctionWithVarargs, arg_types)
+        specs = extract_argument_specs(FunctionWithVarargs)
 
         assert len(specs) == 1
         assert specs[0].is_varargs is True
+        assert specs[0].arrow_type == pa.utf8()
 
     def test_extract_named_arguments(self) -> None:
         """Extract specs should handle named arguments."""
 
         class FunctionWithNamed(TableInOutFunction):
-            count = Arg[int](0)
-            format = Arg[str]("format")
+            count: int = Arg[int](0)  # type: ignore[assignment]
+            format: str = Arg[str]("format")  # type: ignore[assignment]
 
-        arg_types: dict[str, pa.DataType] = {"count": pa.int64(), "format": pa.utf8()}
-        specs = extract_argument_specs(FunctionWithNamed, arg_types)
+        specs = extract_argument_specs(FunctionWithNamed)
 
         assert len(specs) == 2
         assert specs[0].position == 0
+        assert specs[0].arrow_type == pa.int64()
         assert specs[1].position == "format"
+        assert specs[1].arrow_type == pa.utf8()
 
     def test_extract_mixed_arguments(self) -> None:
         """Extract specs should handle mixed positional and named args."""
 
         class ComplexFunction(TableInOutFunction):
-            count = Arg[int](0)
+            count: int = Arg[int](0)  # type: ignore[assignment]
             data: TableInput = Arg[TableInput](1)  # type: ignore[assignment]
-            extra = Arg[float](2, varargs=True)
-            format = Arg[str]("format")
+            extra: float = Arg[float](2, varargs=True)  # type: ignore[assignment]
+            format: str = Arg[str]("format")  # type: ignore[assignment]
             threshold: AnyArrow = Arg[AnyArrow]("threshold")  # type: ignore[assignment]
 
-        arg_types: dict[str, pa.DataType] = {
-            "count": pa.int64(),
-            "data": pa.null(),
-            "extra": pa.float64(),
-            "format": pa.utf8(),
-            "threshold": pa.null(),
-        }
-        specs = extract_argument_specs(ComplexFunction, arg_types)
+        specs = extract_argument_specs(ComplexFunction)
 
         assert len(specs) == 5
 
         # Positional first
         assert specs[0].name == "count"
         assert specs[0].position == 0
+        assert specs[0].arrow_type == pa.int64()
 
         assert specs[1].name == "data"
         assert specs[1].position == 1
         assert specs[1].is_table_input is True
+        assert specs[1].arrow_type == pa.null()
 
         assert specs[2].name == "extra"
         assert specs[2].position == 2
         assert specs[2].is_varargs is True
+        assert specs[2].arrow_type == pa.float64()
 
         # Named after
         assert specs[3].name == "format"
         assert specs[3].position == "format"
+        assert specs[3].arrow_type == pa.utf8()
 
         assert specs[4].name == "threshold"
         assert specs[4].position == "threshold"
         assert specs[4].is_any_type is True
+        assert specs[4].arrow_type == pa.null()
 
 
 class TestArgumentSpecToSchemaValidation:
@@ -491,32 +487,54 @@ class TestArgumentSpecToSchemaValidation:
 class TestExtractArgumentSpecsValidation:
     """Test validation in extract_argument_specs."""
 
-    def test_missing_arg_type_warns(self) -> None:
-        """Missing arg_types entry should issue a warning."""
+    def test_missing_type_hint_warns(self) -> None:
+        """Missing type hint and no arrow_type should issue a warning."""
 
         class FunctionWithArg(TableInOutFunction):
-            count = Arg[int](0)
+            count = Arg[int](0)  # No type annotation, no arrow_type
 
-        # Provide empty arg_types - should warn
-        with pytest.warns(UserWarning, match="Missing type for argument 'count'"):
-            specs = extract_argument_specs(FunctionWithArg, {})
+        # Should warn about missing type
+        with pytest.warns(UserWarning, match="Cannot determine Arrow type"):
+            specs = extract_argument_specs(FunctionWithArg)
 
         assert len(specs) == 1
         assert specs[0].arrow_type == pa.null()
 
-    def test_partial_arg_types_warns_for_missing(self) -> None:
-        """Only missing args should trigger warnings."""
+    def test_explicit_arrow_type_no_warning(self) -> None:
+        """Explicit arrow_type should not trigger warning."""
 
-        class FunctionWithTwoArgs(TableInOutFunction):
-            count = Arg[int](0)
-            name = Arg[str](1)
+        class FunctionWithArrowType(TableInOutFunction):
+            count = Arg[int](0, arrow_type=pa.int32())  # Explicit type
 
-        # Provide type for only 'count'
-        with pytest.warns(UserWarning, match="Missing type for argument 'name'"):
-            specs = extract_argument_specs(FunctionWithTwoArgs, {"count": pa.int64()})
+        import warnings as w
+
+        with w.catch_warnings(record=True) as caught:
+            w.simplefilter("always")
+            specs = extract_argument_specs(FunctionWithArrowType)
+            type_warnings = [
+                x for x in caught if "Cannot determine Arrow type" in str(x.message)
+            ]
+            assert len(type_warnings) == 0
+
+        assert specs[0].arrow_type == pa.int32()
+
+    def test_type_hint_no_warning(self) -> None:
+        """Type hint should be used to infer Arrow type without warning."""
+
+        class FunctionWithTypeHint(TableInOutFunction):
+            count: int = Arg[int](0)  # type: ignore[assignment]
+
+        import warnings as w
+
+        with w.catch_warnings(record=True) as caught:
+            w.simplefilter("always")
+            specs = extract_argument_specs(FunctionWithTypeHint)
+            type_warnings = [
+                x for x in caught if "Cannot determine Arrow type" in str(x.message)
+            ]
+            assert len(type_warnings) == 0
 
         assert specs[0].arrow_type == pa.int64()
-        assert specs[1].arrow_type == pa.null()
 
 
 class TestEdgeCases:
