@@ -16,13 +16,13 @@ For most use cases, use TableInOutFunction with callback methods:
             # Transform each batch here
             return batch
 
-For advanced streaming control, use TableInOutGeneratorFunction with the
+For advanced streaming control, use TableInOutGenerator with the
 @streaming decorator:
 
-    from vgi import TableInOutGeneratorFunction, Output, StreamingGenerator, streaming
+    from vgi import TableInOutGenerator, Output, StreamingGenerator, streaming
     import pyarrow as pa
 
-    class MyFunction(TableInOutGeneratorFunction):
+    class MyFunction(TableInOutGenerator):
         @streaming
         def process(self, batch: pa.RecordBatch) -> StreamingGenerator:
             # No priming yield needed!
@@ -31,10 +31,10 @@ For advanced streaming control, use TableInOutGeneratorFunction with the
 
 Or without the decorator (more verbose):
 
-    from vgi import TableInOutGeneratorFunction, Output, OutputGenerator
+    from vgi import TableInOutGenerator, Output, OutputGenerator
     import pyarrow as pa
 
-    class MyFunction(TableInOutGeneratorFunction):
+    class MyFunction(TableInOutGenerator):
         def process(self, batch: pa.RecordBatch) -> OutputGenerator:
             _ = yield None  # Required priming yield
             while True:
@@ -58,7 +58,7 @@ PUBLIC API
 Classes and functions exported from this module:
 
     TableInOutFunction       - Callback-based API (recommended)
-    TableInOutGeneratorFunction - Generator-based API (advanced)
+    TableInOutGenerator - Generator-based API (advanced)
     ScalarFunction           - Scalar function with compute() (single-column output)
     ScalarFunctionGenerator  - Scalar function with generator protocol
     Output                   - Output batch from process()/finalize()
@@ -114,7 +114,7 @@ CLASS HIERARCHY
     vgi.function.Function                - Base (max_processes, invocation_id)
     ├─ vgi.table_function.TableFunctionBase - Adds cardinality hints, projection
     │  ├─ TableFunctionGenerator        - Generate output without input
-    │  └─ TableInOutGeneratorFunction   - Full streaming (process/finalize)
+    │  └─ TableInOutGenerator   - Full streaming (process/finalize)
     │     └─ TableInOutFunction         - Callback API (transform/finish)
     │        ├─ AggregationFunction     - Reduce to summary
     │        ├─ FilterFunction          - Row filtering
@@ -159,7 +159,7 @@ from vgi.table_in_out_function import (
     OutputGenerator,
     StreamingGenerator,
     TableInOutFunction,
-    TableInOutGeneratorFunction,
+    TableInOutGenerator,
     streaming,
 )
 from vgi.table_in_out_function_patterns import (
@@ -195,7 +195,7 @@ __all__ = [
     "ScalarOutputGenerator",
     "StreamingGenerator",
     "TableInOutFunction",
-    "TableInOutGeneratorFunction",
+    "TableInOutGenerator",
     "TableInput",
     "TableInputValidationError",
     "Worker",

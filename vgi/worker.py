@@ -10,7 +10,7 @@ The worker supports three function types, dispatched based on class inheritance:
 1. ScalarFunctionGenerator: Transforms input batches to single-column output
    with 1:1 row mapping. Use for per-row computations like add(), upper(), etc.
 
-2. TableInOutGeneratorFunction: Reads input batches, produces output batches.
+2. TableInOutGenerator: Reads input batches, produces output batches.
    Use for transforming, filtering, or aggregating input data.
 
 3. TableFunctionGenerator: Generates output batches without reading input.
@@ -22,14 +22,14 @@ Create a worker by subclassing Worker and listing your functions:
 
     from vgi.worker import Worker
     from vgi.scalar_function import ScalarFunction
-    from vgi.table_in_out_function import TableInOutGeneratorFunction
+    from vgi.table_in_out_function import TableInOutGenerator
     from vgi.table_function import TableFunctionGenerator
 
     class DoubleColumn(ScalarFunction):
         # Single-column output with 1:1 row mapping
         ...
 
-    class EchoFunction(TableInOutGeneratorFunction):
+    class EchoFunction(TableInOutGenerator):
         # Transforms input batches
         ...
 
@@ -54,7 +54,7 @@ PROTOCOL FLOW (ScalarFunctionGenerator)
 4. Stream: read input batches -> compute -> write single-column output batches
    (ends when input exhausted, no FINALIZE phase)
 
-PROTOCOL FLOW (TableInOutGeneratorFunction)
+PROTOCOL FLOW (TableInOutGenerator)
 -------------------------------------------
 1. Read Invocation: function name, arguments, input schema
 2. Write OutputSpec: output schema, max_processes, invocation_id
@@ -106,7 +106,7 @@ from vgi.scalar_function import ScalarFunctionGenerator
 from vgi.table_function import TableFunctionGenerator
 from vgi.table_in_out_function import (
     ProtocolInput,
-    TableInOutGeneratorFunction,
+    TableInOutGenerator,
 )
 
 
@@ -467,7 +467,7 @@ class Worker:
 
     def _process_batches(
         self,
-        instance: TableInOutGeneratorFunction,
+        instance: TableInOutGenerator,
         invocation: Invocation,
         fn_log: structlog.stdlib.BoundLogger,
     ) -> WorkerStats:
@@ -667,13 +667,13 @@ class Worker:
 
         # Dispatch to appropriate processing method based on function type.
         # ScalarFunctionGenerator processes input batches to single-column output.
-        # TableInOutGeneratorFunction reads input batches and produces output.
+        # TableInOutGenerator reads input batches and produces output.
         # TableFunctionGenerator generates output without input batches.
         # Note: Check ScalarFunctionGenerator first since it doesn't inherit from
-        # TableInOutGeneratorFunction, then TableInOutGeneratorFunction.
+        # TableInOutGenerator, then TableInOutGenerator.
         if isinstance(instance, ScalarFunctionGenerator):
             stats = self._process_scalar_batches(instance, invocation, fn_log)
-        elif isinstance(instance, TableInOutGeneratorFunction):
+        elif isinstance(instance, TableInOutGenerator):
             stats = self._process_batches(instance, invocation, fn_log)
         elif isinstance(instance, TableFunctionGenerator):
             stats = self._generate_batches(instance, invocation, fn_log)
@@ -681,7 +681,7 @@ class Worker:
             raise TypeError(
                 f"Unsupported function type: {type(instance).__name__}. "
                 f"Functions must inherit from ScalarFunctionGenerator (for "
-                f"scalar functions), TableInOutGeneratorFunction (for functions "
+                f"scalar functions), TableInOutGenerator (for functions "
                 f"that process input batches), or TableFunctionGenerator (for "
                 f"functions that generate output without input). "
                 f"See vgi.scalar_function, vgi.table_in_out_function, and "

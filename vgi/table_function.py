@@ -14,11 +14,11 @@ Class Hierarchy:
     Function (vgi.function)
         └── TableFunctionBase
                 └── TableFunctionGenerator  (simple generator, no input via send)
-                └── TableInOutGeneratorFunction (full protocol with input batches)
+                └── TableInOutGenerator (full protocol with input batches)
 
 TableFunctionGenerator is useful for functions that don't need to receive
 input batches via yield - they just produce output batches in a loop until done.
-For functions that transform input batches, use TableInOutGeneratorFunction.
+For functions that transform input batches, use TableInOutGenerator.
 """
 
 from collections.abc import Generator
@@ -230,7 +230,7 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
 
     This class is not meant to be used directly. Subclass either:
     - TableFunctionGenerator: For simple generators that produce output
-    - TableInOutGeneratorFunction: For functions that transform input batches
+    - TableInOutGenerator: For functions that transform input batches
 
     Attributes:
         init_input: TableFunctionInitInput with projection info (set after init)
@@ -238,7 +238,7 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
 
     See Also:
         TableFunctionGenerator: Simple generator base class
-        TableInOutGeneratorFunction: Full streaming with input batches
+        TableInOutGenerator: Full streaming with input batches
 
     """
 
@@ -305,7 +305,7 @@ class TableFunctionGenerator(TableFunctionBase):
     - Produce a fixed sequence of output batches
     - Don't need the full DATA/FINALIZE protocol
 
-    For functions that transform input batches, use TableInOutGeneratorFunction.
+    For functions that transform input batches, use TableInOutGenerator.
 
     LIFECYCLE
     ---------

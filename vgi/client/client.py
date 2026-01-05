@@ -38,7 +38,7 @@ Methods
 -------
 client.start() : Start the worker subprocess
 client.stop() : Stop the worker subprocess
-client.table_in_out_function() : Invoke a TableInOutGeneratorFunction and stream results
+client.table_in_out_function() : Invoke a TableInOutGenerator and stream results
 client.table_function() : Invoke a TableFunctionGenerator and stream results
 client.scalar_function() : Invoke a ScalarFunction and stream results
 client.get_worker_stderr() : Get captured stderr from worker

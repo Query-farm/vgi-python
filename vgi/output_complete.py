@@ -32,7 +32,7 @@ class OutputComplete:
     Attributes:
         batch: Always a valid RecordBatch (never None).
         has_more: If True, generator expects another send() call.
-            Only used by TableInOutGeneratorFunction.
+            Only used by TableInOutGenerator.
         log_message: Present when user yielded Message directly.
 
     """

@@ -1,1 +1,1 @@
-"""Tests for TableInOutGeneratorFunction implementations."""
+"""Tests for TableInOutGenerator implementations."""

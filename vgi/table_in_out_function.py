@@ -10,7 +10,7 @@ Protocol Overview:
     3. FINALIZE: The finalize() generator is called to flush buffered data
 
 Key Components:
-    TableInOutGeneratorFunction: Base class to subclass for custom functions.
+    TableInOutGenerator: Base class to subclass for custom functions.
     Output: Return type for process()/finalize() with batch and has_more flag.
     OutputGenerator: Type alias for the process()/finalize() return type.
     ProtocolInput/ProtocolOutput: Protocol messages for the run() generator.
@@ -19,7 +19,7 @@ Quick Start (Recommended Pattern):
     The process() method uses a generator pattern. Always use this explicit
     loop structure for clarity:
 
-    class MyFunction(TableInOutGeneratorFunction):
+    class MyFunction(TableInOutGenerator):
         def process(self, batch: pa.RecordBatch) -> OutputGenerator:
             # 1. REQUIRED: Priming yield (framework advances past this)
             _ = yield None
@@ -62,7 +62,7 @@ Logging:
                 if batch is None:
                     break
 
-See TableInOutGeneratorFunction docstring for comprehensive documentation and examples.
+See TableInOutGenerator docstring for comprehensive documentation and examples.
 """
 
 from collections.abc import Callable, Generator
@@ -87,7 +87,7 @@ __all__ = [
     "OutputGenerator",
     "StreamingGenerator",
     "streaming",
-    "TableInOutGeneratorFunction",
+    "TableInOutGenerator",
     "TableInOutFunction",
 ]
 
@@ -275,7 +275,7 @@ def streaming[T](
         Using the @streaming decorator (recommended for new code):
 
         ```python
-        class MyFunction(TableInOutGeneratorFunction):
+        class MyFunction(TableInOutGenerator):
             @streaming
             def process(self, batch: pa.RecordBatch) -> StreamingGenerator:
                 # No priming yield needed!
@@ -286,7 +286,7 @@ def streaming[T](
         Equivalent without decorator (more verbose):
 
         ```python
-        class MyFunction(TableInOutGeneratorFunction):
+        class MyFunction(TableInOutGenerator):
             def process(self, batch: pa.RecordBatch) -> OutputGenerator:
                 _ = yield None  # Required priming yield
 
@@ -300,7 +300,7 @@ def streaming[T](
         With logging:
 
         ```python
-        class LoggingFunction(TableInOutGeneratorFunction):
+        class LoggingFunction(TableInOutGenerator):
             @streaming
             def process(self, batch: pa.RecordBatch) -> StreamingGenerator:
                 while batch is not None:
@@ -311,7 +311,7 @@ def streaming[T](
         Aggregation pattern:
 
         ```python
-        class SumFunction(TableInOutGeneratorFunction):
+        class SumFunction(TableInOutGenerator):
             @streaming
             def process(self, batch: pa.RecordBatch) -> StreamingGenerator:
                 while batch is not None:
@@ -354,7 +354,7 @@ def streaming[T](
     return wrapper
 
 
-class TableInOutGeneratorFunction(vgi.table_function.TableFunctionBase):
+class TableInOutGenerator(vgi.table_function.TableFunctionBase):
     """Base class for streaming table functions that transform Arrow RecordBatches.
 
     This class handles functions that receive arguments and a streaming table input,
@@ -453,7 +453,7 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunctionBase):
     -------------------
     Functions can use setup/teardown for resource cleanup:
 
-        class MyDbFunction(TableInOutGeneratorFunction):
+        class MyDbFunction(TableInOutGenerator):
             def setup(self) -> None:
                 self.conn = sqlite3.connect("my.db")
 
@@ -472,7 +472,7 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunctionBase):
 
     CALLER PROTOCOL
     ---------------
-    To use a TableInOutGeneratorFunction, the caller must:
+    To use a TableInOutGenerator, the caller must:
 
     1. Create the bind result:
        invocation = vgi.invocation.Invocation(
@@ -511,7 +511,7 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunctionBase):
         if invocation.input_schema is None:
             raise ValueError(
                 f"{type(self).__name__} requires an input schema, but none was "
-                f"provided. TableInOutGeneratorFunction processes input batches and "
+                f"provided. TableInOutGenerator processes input batches and "
                 f"requires input_schema to be set in the Invocation. "
                 f"If your function generates output without input, inherit from "
                 f"TableFunctionGenerator instead."
@@ -718,7 +718,7 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunctionBase):
             self.teardown()
 
 
-class TableInOutFunction(TableInOutGeneratorFunction):
+class TableInOutFunction(TableInOutGenerator):
     """Simplified base class using callbacks instead of generators.
 
     This class provides a simpler API for common use cases where you don't need
