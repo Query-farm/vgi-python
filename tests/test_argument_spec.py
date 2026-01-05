@@ -588,3 +588,89 @@ class TestEdgeCases:
         assert field.metadata is not None
         assert field.metadata.get(VGI_ARG_KEY) == VGI_ARG_NAMED
         assert field.metadata.get(VGI_TYPE_KEY) == VGI_TYPE_ANY
+
+
+class TestArgArrowType:
+    """Test Arg.arrow_type functionality."""
+
+    def test_explicit_arrow_type_stored(self) -> None:
+        """Verify arrow_type is stored when explicitly set."""
+        arg = Arg[int](0, arrow_type=pa.int32())
+        assert arg.arrow_type == pa.int32()
+
+    def test_default_arrow_type_is_none(self) -> None:
+        """Verify arrow_type defaults to None."""
+        arg = Arg[int](0)
+        assert arg.arrow_type is None
+
+    def test_arrow_type_in_repr(self) -> None:
+        """Verify arrow_type appears in repr when set."""
+        arg = Arg[int](0, arrow_type=pa.int32())
+        repr_str = repr(arg)
+        assert "arrow_type" in repr_str
+        assert "int32" in repr_str
+
+    def test_arrow_type_not_in_repr_when_none(self) -> None:
+        """Verify arrow_type does not appear in repr when None."""
+        arg = Arg[int](0)
+        repr_str = repr(arg)
+        assert "arrow_type" not in repr_str
+
+
+class TestExtractArgumentSpecsAutoInference:
+    """Test automatic Arrow type inference in extract_argument_specs."""
+
+    def test_int_infers_int64(self) -> None:
+        """Type hint int should infer pa.int64()."""
+
+        class FunctionWithInt(TableInOutFunction):
+            count: int = Arg[int](0)  # type: ignore[assignment]
+
+        specs = extract_argument_specs(FunctionWithInt)
+        assert specs[0].arrow_type == pa.int64()
+
+    def test_str_infers_utf8(self) -> None:
+        """Type hint str should infer pa.utf8()."""
+
+        class FunctionWithStr(TableInOutFunction):
+            name: str = Arg[str](0)  # type: ignore[assignment]
+
+        specs = extract_argument_specs(FunctionWithStr)
+        assert specs[0].arrow_type == pa.utf8()
+
+    def test_float_infers_float64(self) -> None:
+        """Type hint float should infer pa.float64()."""
+
+        class FunctionWithFloat(TableInOutFunction):
+            ratio: float = Arg[float](0)  # type: ignore[assignment]
+
+        specs = extract_argument_specs(FunctionWithFloat)
+        assert specs[0].arrow_type == pa.float64()
+
+    def test_bool_infers_bool(self) -> None:
+        """Type hint bool should infer pa.bool_()."""
+
+        class FunctionWithBool(TableInOutFunction):
+            flag: bool = Arg[bool](0)  # type: ignore[assignment]
+
+        specs = extract_argument_specs(FunctionWithBool)
+        assert specs[0].arrow_type == pa.bool_()
+
+    def test_bytes_infers_binary(self) -> None:
+        """Type hint bytes should infer pa.binary()."""
+
+        class FunctionWithBytes(TableInOutFunction):
+            data: bytes = Arg[bytes](0)  # type: ignore[assignment]
+
+        specs = extract_argument_specs(FunctionWithBytes)
+        assert specs[0].arrow_type == pa.binary()
+
+    def test_explicit_overrides_inference(self) -> None:
+        """Explicit arrow_type should override type hint inference."""
+
+        class FunctionWithExplicit(TableInOutFunction):
+            # Type hint says int (would infer int64), but explicit says int32
+            count: int = Arg[int](0, arrow_type=pa.int32())  # type: ignore[assignment]
+
+        specs = extract_argument_specs(FunctionWithExplicit)
+        assert specs[0].arrow_type == pa.int32()
