@@ -34,13 +34,13 @@ Example:
 """
 
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, get_type_hints
 
 import pyarrow as pa
 
-from vgi.arguments import AnyArrow, Arg, TableInput
+from vgi.arguments import PYTHON_TO_ARROW, AnyArrow, Arg, TableInput
 
 __all__ = [
     "ArgumentSpec",
@@ -257,17 +257,17 @@ def schema_to_argument_specs(schema: pa.Schema) -> list[ArgumentSpec]:
 
 def extract_argument_specs(
     cls: type,
-    arg_types: Mapping[str, pa.DataType],
 ) -> list[ArgumentSpec]:
     """Extract ArgumentSpecs from a function class with Arg descriptors.
 
     Walks the class hierarchy to find all Arg descriptors and creates
-    ArgumentSpec objects with the provided Arrow types.
+    ArgumentSpec objects with Arrow types determined by:
+    1. Explicit arrow_type on Arg (highest priority)
+    2. Type annotation with PYTHON_TO_ARROW mapping
+    3. Default to pa.null() with warning for unknown types
 
     Args:
         cls: Function class with Arg descriptors.
-        arg_types: Mapping from argument attribute names to their Arrow types.
-            For TableInput and AnyArrow arguments, use pa.null().
 
     Returns:
         List of ArgumentSpec objects, sorted by position (positional first,
@@ -275,17 +275,16 @@ def extract_argument_specs(
 
     Example:
         class MyFunction(TableInOutFunction):
-            count = Arg[int](0)
-            format = Arg[str]("format")
+            count: int = Arg[int](0, arrow_type=pa.int64())
+            format: str = Arg[str]("format")  # Inferred from type hint
 
-        arg_types = {"count": pa.int64(), "format": pa.utf8()}
-        specs = extract_argument_specs(MyFunction, arg_types)
+        specs = extract_argument_specs(MyFunction)
 
     """
     specs: list[ArgumentSpec] = []
     seen_names: set[str] = set()
 
-    # Get type hints for detecting TableInput/AnyArrow
+    # Get type hints for type inference and detecting TableInput/AnyArrow
     try:
         hints = get_type_hints(cls)
     except (NameError, AttributeError):
@@ -306,22 +305,30 @@ def extract_argument_specs(
                 seen_names.add(attr_name)
                 arg: Arg[Any] = attr_value
 
-                # Get Arrow type from provided mapping
-                arrow_type: pa.DataType
-                if attr_name not in arg_types:
-                    warnings.warn(
-                        f"Missing type for argument '{attr_name}' in arg_types "
-                        f"mapping; defaulting to pa.null(). This may indicate a bug.",
-                        stacklevel=2,
-                    )
-                    arrow_type = pa.null()
-                else:
-                    arrow_type = arg_types[attr_name]
-
                 # Check type hint for special types
                 hint = hints.get(attr_name)
                 is_table_input = hint is TableInput
                 is_any_type = hint is AnyArrow
+
+                # Determine Arrow type using priority order:
+                # 1. Explicit arrow_type on Arg
+                # 2. Type hint with PYTHON_TO_ARROW mapping
+                # 3. Default to pa.null() with warning
+                arrow_type: pa.DataType
+                if arg.arrow_type is not None:
+                    arrow_type = arg.arrow_type
+                elif is_table_input or is_any_type:
+                    arrow_type = pa.null()
+                elif hint is not None and hint in PYTHON_TO_ARROW:
+                    arrow_type = PYTHON_TO_ARROW[hint]
+                else:
+                    warnings.warn(
+                        f"Cannot determine Arrow type for argument '{attr_name}'. "
+                        f"Add explicit arrow_type to Arg or add type annotation. "
+                        f"Defaulting to pa.null().",
+                        stacklevel=2,
+                    )
+                    arrow_type = pa.null()
 
                 # Check varargs flag
                 is_varargs = arg.varargs
