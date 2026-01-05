@@ -196,22 +196,23 @@ class TestTableFunctionGeneratorCardinality:
         func = NoCardinalityFunction(
             invocation=invocation, logger=structlog.get_logger()
         )
-        assert func.cardinality() is None
+        assert func.cardinality is None
 
     def test_custom_cardinality(self) -> None:
-        """Custom cardinality() should be respected."""
+        """Custom cardinality should be respected."""
 
         class CardinalityFunction(TableFunctionGenerator):
             @property
             def output_schema(self) -> pa.Schema:
                 return make_schema([pa.field("x", pa.int64())])
 
+            @property
             def cardinality(self) -> TableCardinality:
                 return TableCardinality(estimate=100, max=1000)
 
         invocation = make_invocation()
         func = CardinalityFunction(invocation=invocation, logger=structlog.get_logger())
-        cardinality = func.cardinality()
+        cardinality = func.cardinality
         assert cardinality is not None
         assert cardinality.estimate == 100
         assert cardinality.max == 1000
