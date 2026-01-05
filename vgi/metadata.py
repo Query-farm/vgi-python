@@ -57,7 +57,7 @@ from typing import TYPE_CHECKING, Any, get_type_hints
 
 import pyarrow as pa
 
-from vgi.arguments import _MISSING, TableInput
+from vgi.arguments import _MISSING, AnyArrow, TableInput
 
 if TYPE_CHECKING:
     from vgi.arguments import Arg
@@ -407,6 +407,10 @@ def _get_arg_type_info(cls: type, attr_name: str) -> tuple[str | None, bool]:
     # Check if it's TableInput
     if hint is TableInput:
         return ("TableInput", True)
+
+    # Check if it's AnyArrow (any Arrow type accepted)
+    if hint is AnyArrow:
+        return ("AnyArrow", False)
 
     # Extract type name
     if hasattr(hint, "__name__"):

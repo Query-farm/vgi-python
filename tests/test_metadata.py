@@ -6,6 +6,7 @@ import pyarrow as pa
 import structlog
 
 from vgi import (
+    AnyArrow,
     Arg,
     FunctionExample,
     FunctionType,
@@ -424,6 +425,44 @@ class TestVarargsMetadata:
         assert columns_param.is_varargs is True
         assert data_param.is_varargs is False
         assert data_param.is_table_input is True
+
+
+class TestAnyArrowMetadata:
+    """Tests for AnyArrow parameter metadata extraction."""
+
+    def test_any_arrow_type_extracted(self) -> None:
+        """AnyArrow type should be extracted as 'AnyArrow' in metadata."""
+
+        class AnyArrowFunction(TableInOutFunction):
+            value: AnyArrow = Arg[AnyArrow](0, doc="Any type value")  # type: ignore[assignment]
+            data: TableInput = Arg[TableInput](1, doc="Input table")  # type: ignore[assignment]
+
+        params = extract_parameters(AnyArrowFunction)
+        value_param = next(p for p in params if p.name == "value")
+
+        assert value_param.type_name == "AnyArrow"
+        assert value_param.is_table_input is False
+
+    def test_any_arrow_arrow_roundtrip(self) -> None:
+        """AnyArrow type survives Arrow serialization."""
+
+        class AnyArrowFunction(TableInOutFunction):
+            """Test AnyArrow serialization."""
+
+            class Meta:
+                name = "any_arrow_test"
+
+            value: AnyArrow = Arg[AnyArrow](0, doc="Any type")  # type: ignore[assignment]
+            data: TableInput = Arg[TableInput](1, doc="Input")  # type: ignore[assignment]
+
+        batch = functions_to_arrow([AnyArrowFunction])
+        restored = arrow_to_functions(batch)
+
+        assert len(restored) == 1
+        meta = restored[0]
+
+        value_param = next(p for p in meta.parameters if p.name == "value")
+        assert value_param.type_name == "AnyArrow"
 
 
 class TestFunctionTypeInference:

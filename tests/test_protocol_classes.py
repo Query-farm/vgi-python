@@ -1387,3 +1387,109 @@ class TestArgumentsGetVarargs:
         args = Arguments(positional=(pa.scalar(1),))
         with pytest.raises(ValueError, match="start must be non-negative"):
             args.get_varargs(-1)
+
+
+class TestAnyArrow:
+    """Tests for AnyArrow sentinel type."""
+
+    def test_any_arrow_accepts_int(self) -> None:
+        """AnyArrow should accept integer values."""
+        from vgi.arguments import AnyArrow
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(42),)))
+            value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
+
+        obj = MyClass()
+        assert obj.value == 42
+
+    def test_any_arrow_accepts_string(self) -> None:
+        """AnyArrow should accept string values."""
+        from vgi.arguments import AnyArrow
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("hello"),)))
+            value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
+
+        obj = MyClass()
+        assert obj.value == "hello"
+
+    def test_any_arrow_accepts_float(self) -> None:
+        """AnyArrow should accept float values."""
+        from vgi.arguments import AnyArrow
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(3.14),)))
+            value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
+
+        obj = MyClass()
+        assert obj.value == 3.14
+
+    def test_any_arrow_accepts_bool(self) -> None:
+        """AnyArrow should accept boolean values."""
+        from vgi.arguments import AnyArrow
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(True),)))
+            value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
+
+        obj = MyClass()
+        assert obj.value is True
+
+    def test_any_arrow_accepts_list(self) -> None:
+        """AnyArrow should accept list values."""
+        from vgi.arguments import AnyArrow
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar([1, 2, 3]),)))
+            value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
+
+        obj = MyClass()
+        assert obj.value == [1, 2, 3]
+
+    def test_any_arrow_mixed_types(self) -> None:
+        """Multiple AnyArrow args can have different types."""
+        from vgi.arguments import AnyArrow
+
+        class MyClass:
+            invocation = _MockInvocation(
+                Arguments(
+                    positional=(
+                        pa.scalar(42),
+                        pa.scalar("text"),
+                        pa.scalar(True),
+                    )
+                )
+            )
+            int_val: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
+            str_val: AnyArrow = Arg[AnyArrow](1)  # type: ignore[assignment]
+            bool_val: AnyArrow = Arg[AnyArrow](2)  # type: ignore[assignment]
+
+        obj = MyClass()
+        assert obj.int_val == 42
+        assert obj.str_val == "text"
+        assert obj.bool_val is True
+
+    def test_any_arrow_with_default(self) -> None:
+        """AnyArrow should support default values."""
+        from vgi.arguments import AnyArrow
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=()))
+            value: AnyArrow = Arg[AnyArrow](0, default="default")  # type: ignore[assignment]
+
+        obj = MyClass()
+        assert obj.value == "default"
+
+    def test_any_arrow_named_argument(self) -> None:
+        """AnyArrow should work with named arguments."""
+        from vgi.arguments import AnyArrow
+
+        class MyClass:
+            invocation = _MockInvocation(
+                Arguments(named={"data": pa.scalar({"key": "value"})})
+            )
+            data: AnyArrow = Arg[AnyArrow]("data")  # type: ignore[assignment]
+
+        obj = MyClass()
+        assert obj.data == {"key": "value"}

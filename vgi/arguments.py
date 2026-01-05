@@ -49,6 +49,7 @@ class _MissingType:
 _MISSING: Final = _MissingType()
 
 __all__ = [
+    "AnyArrow",
     "Arg",
     "ArgumentValidationError",
     "Arguments",
@@ -75,6 +76,34 @@ class TableInput:
 
         # SQL: SELECT * FROM my_function(3, input_table)
         #      repeat_count=3, data receives rows from input_table
+
+    """
+
+    pass
+
+
+class AnyArrow:
+    """Sentinel type for arguments accepting any Arrow type.
+
+    Use this as the type parameter for Arg when an argument should accept
+    any valid Arrow scalar type without enforcing a specific type. The actual
+    value is still converted to Python via `as_py()`.
+
+    This is useful for functions that can operate on any data type, or when
+    the type is determined at runtime based on the input schema.
+
+    Example:
+        class FlexibleFunction(TableInOutFunction):
+            # Accept any Arrow type for these parameters
+            default_value = Arg[AnyArrow](0, doc="Default value (any type)")
+            threshold = Arg[AnyArrow](1, doc="Threshold for comparison")
+
+        # SQL: SELECT * FROM flexible_function(42, 'text')
+        # SQL: SELECT * FROM flexible_function(3.14, true)
+
+    Note:
+        Unlike TableInput, AnyArrow arguments have actual Arrow values -
+        they are just not constrained to a specific Arrow type.
 
     """
 

@@ -134,7 +134,7 @@ See vgi.examples.table_in_out for example functions:
 """
 
 # Re-export commonly used classes for convenient imports
-from vgi.arguments import Arg, Arguments, ArgumentValidationError, TableInput
+from vgi.arguments import AnyArrow, Arg, Arguments, ArgumentValidationError, TableInput
 from vgi.invocation import Invocation
 from vgi.log import Level, Message
 from vgi.metadata import (
@@ -172,6 +172,7 @@ from vgi.worker import Worker
 
 __all__ = [
     "AggregationFunction",
+    "AnyArrow",
     "Arg",
     "ArgumentValidationError",
     "Arguments",
