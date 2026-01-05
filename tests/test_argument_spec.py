@@ -674,3 +674,98 @@ class TestExtractArgumentSpecsAutoInference:
 
         specs = extract_argument_specs(FunctionWithExplicit)
         assert specs[0].arrow_type == pa.int32()
+
+
+class TestExampleFunctionsSerialization:
+    """Test that example functions can be serialized and deserialized."""
+
+    def test_scalar_functions(self) -> None:
+        """Test serialization of scalar example functions."""
+        from vgi.examples.scalar import (
+            AddColumnsFunction,
+            DoubleColumnFunction,
+            UpperCaseFunction,
+        )
+
+        for func_cls in [DoubleColumnFunction, AddColumnsFunction, UpperCaseFunction]:
+            specs = extract_argument_specs(func_cls)
+            assert len(specs) > 0, f"{func_cls.__name__} should have arguments"
+
+            # All specs should have non-null arrow_type
+            for spec in specs:
+                assert spec.arrow_type is not None, (
+                    f"{func_cls.__name__}.{spec.name} has null arrow_type"
+                )
+
+            # Schema roundtrip should work
+            schema = argument_specs_to_schema(specs)
+            restored = schema_to_argument_specs(schema)
+            assert len(restored) == len(specs)
+
+    def test_table_functions(self) -> None:
+        """Test serialization of table example functions."""
+        from vgi.examples.table import (
+            ConstantTableFunction,
+            RangeFunction,
+            SequenceFunction,
+        )
+
+        for func_cls in [SequenceFunction, RangeFunction, ConstantTableFunction]:
+            specs = extract_argument_specs(func_cls)
+            assert len(specs) > 0, f"{func_cls.__name__} should have arguments"
+
+            # All specs should have non-null arrow_type
+            for spec in specs:
+                assert spec.arrow_type is not None, (
+                    f"{func_cls.__name__}.{spec.name} has null arrow_type"
+                )
+
+            # Schema roundtrip should work
+            schema = argument_specs_to_schema(specs)
+            restored = schema_to_argument_specs(schema)
+            assert len(restored) == len(specs)
+
+    def test_table_in_out_functions(self) -> None:
+        """Test serialization of table-in-out example functions."""
+        from vgi.examples.table_in_out import (
+            BufferInputFunction,
+            EchoFunction,
+            RepeatInputsFunction,
+            SumAllColumnsFunction,
+        )
+
+        for func_cls in [
+            EchoFunction,
+            BufferInputFunction,
+            RepeatInputsFunction,
+            SumAllColumnsFunction,
+        ]:
+            specs = extract_argument_specs(func_cls)
+            assert len(specs) > 0, f"{func_cls.__name__} should have arguments"
+
+            # All specs should have non-null arrow_type
+            for spec in specs:
+                assert spec.arrow_type is not None, (
+                    f"{func_cls.__name__}.{spec.name} has null arrow_type"
+                )
+
+            # Schema roundtrip should work
+            schema = argument_specs_to_schema(specs)
+            restored = schema_to_argument_specs(schema)
+            assert len(restored) == len(specs)
+
+    def test_range_function_step_uses_int32(self) -> None:
+        """Verify RangeFunction.step uses explicit int32 arrow_type."""
+        from vgi.examples.table import RangeFunction
+
+        specs = extract_argument_specs(RangeFunction)
+        step_spec = next(s for s in specs if s.name == "step")
+        assert step_spec.arrow_type == pa.int32()
+
+    def test_double_column_uses_explicit_utf8(self) -> None:
+        """Verify DoubleColumnFunction.column uses explicit utf8 arrow_type."""
+        from vgi.examples.scalar import DoubleColumnFunction
+
+        specs = extract_argument_specs(DoubleColumnFunction)
+        column_spec = next(s for s in specs if s.name == "column")
+        assert column_spec.arrow_type == pa.utf8()
