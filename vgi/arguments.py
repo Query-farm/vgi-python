@@ -29,6 +29,15 @@ import pyarrow as pa
 if TYPE_CHECKING:
     from pyarrow import Scalar
 
+# Python type to Arrow type mapping for Arg type hints
+PYTHON_TO_ARROW: dict[type, pa.DataType] = {
+    int: pa.int64(),
+    str: pa.utf8(),
+    float: pa.float64(),
+    bool: pa.bool_(),
+    bytes: pa.binary(),
+}
+
 
 # Sentinel for missing default value - proper type pattern
 class _MissingType:
@@ -53,6 +62,7 @@ __all__ = [
     "Arg",
     "ArgumentValidationError",
     "Arguments",
+    "PYTHON_TO_ARROW",
     "TableInput",
 ]
 
