@@ -135,6 +135,13 @@ See vgi.examples.table_in_out for example functions:
 
 # Re-export commonly used classes for convenient imports
 from vgi.argument_spec import (
+    VGI_ARG_KEY,
+    VGI_ARG_NAMED,
+    VGI_TYPE_ANY,
+    VGI_TYPE_KEY,
+    VGI_TYPE_TABLE,
+    VGI_VARARGS_KEY,
+    VGI_VARARGS_TRUE,
     ArgumentSpec,
     argument_specs_to_schema,
     schema_to_argument_specs,
@@ -184,6 +191,14 @@ __all__ = [
     "Arguments",
     "argument_specs_to_schema",
     "FilterFunction",
+    # Metadata constants for parsing argument spec schemas
+    "VGI_ARG_KEY",
+    "VGI_ARG_NAMED",
+    "VGI_TYPE_KEY",
+    "VGI_TYPE_TABLE",
+    "VGI_TYPE_ANY",
+    "VGI_VARARGS_KEY",
+    "VGI_VARARGS_TRUE",
     "FunctionExample",
     "FunctionStability",
     "TableInOutFunctionTestClient",

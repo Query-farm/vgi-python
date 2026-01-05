@@ -33,6 +33,7 @@ Example:
 
 """
 
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, get_type_hints
@@ -46,6 +47,14 @@ __all__ = [
     "argument_specs_to_schema",
     "extract_argument_specs",
     "schema_to_argument_specs",
+    # Metadata constants for parsing schemas
+    "VGI_ARG_KEY",
+    "VGI_ARG_NAMED",
+    "VGI_TYPE_KEY",
+    "VGI_TYPE_TABLE",
+    "VGI_TYPE_ANY",
+    "VGI_VARARGS_KEY",
+    "VGI_VARARGS_TRUE",
 ]
 
 # =============================================================================
@@ -64,6 +73,13 @@ VGI_TYPE_ANY = b"any"
 # Key indicating varargs (collects remaining positional arguments)
 VGI_VARARGS_KEY = b"vgi_varargs"
 VGI_VARARGS_TRUE = b"true"
+
+
+def _argument_spec_sort_key(spec: "ArgumentSpec") -> tuple[int, int | str]:
+    """Sort key: positional first (by index), then named (alphabetically)."""
+    if isinstance(spec.position, int):
+        return (0, spec.position)
+    return (1, spec.position)
 
 
 # =============================================================================
@@ -134,14 +150,21 @@ def argument_specs_to_schema(specs: Sequence[ArgumentSpec]) -> pa.Schema:
         # schema has fields: count (int64), format (utf8 with vgi_arg=named)
 
     """
+    sorted_specs = sorted(specs, key=_argument_spec_sort_key)
 
-    # Sort: positional first (by index), then named (alphabetically)
-    def sort_key(spec: ArgumentSpec) -> tuple[int, int | str]:
-        if isinstance(spec.position, int):
-            return (0, spec.position)
-        return (1, spec.position)
-
-    sorted_specs = sorted(specs, key=sort_key)
+    # Validate contiguous positional indices
+    positional_indices = [
+        spec.position for spec in sorted_specs if isinstance(spec.position, int)
+    ]
+    if positional_indices:
+        expected = list(range(len(positional_indices)))
+        if positional_indices != expected:
+            warnings.warn(
+                f"Positional argument indices are not contiguous starting from 0. "
+                f"Found: {positional_indices}, expected: {expected}. "
+                f"This may indicate a bug.",
+                stacklevel=2,
+            )
 
     fields: list[pa.Field[Any]] = []
     for spec in sorted_specs:
@@ -284,7 +307,16 @@ def extract_argument_specs(
                 arg: Arg[Any] = attr_value
 
                 # Get Arrow type from provided mapping
-                arrow_type = arg_types.get(attr_name, pa.null())
+                arrow_type: pa.DataType
+                if attr_name not in arg_types:
+                    warnings.warn(
+                        f"Missing type for argument '{attr_name}' in arg_types "
+                        f"mapping; defaulting to pa.null(). This may indicate a bug.",
+                        stacklevel=2,
+                    )
+                    arrow_type = pa.null()
+                else:
+                    arrow_type = arg_types[attr_name]
 
                 # Check type hint for special types
                 hint = hints.get(attr_name)
@@ -305,10 +337,4 @@ def extract_argument_specs(
                     )
                 )
 
-    # Sort: positional first (by index), then named (alphabetically)
-    def sort_key(spec: ArgumentSpec) -> tuple[int, int | str]:
-        if isinstance(spec.position, int):
-            return (0, spec.position)
-        return (1, spec.position)
-
-    return sorted(specs, key=sort_key)
+    return sorted(specs, key=_argument_spec_sort_key)
