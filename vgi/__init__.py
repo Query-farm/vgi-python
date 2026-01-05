@@ -134,6 +134,11 @@ See vgi.examples.table_in_out for example functions:
 """
 
 # Re-export commonly used classes for convenient imports
+from vgi.argument_spec import (
+    ArgumentSpec,
+    argument_specs_to_schema,
+    schema_to_argument_specs,
+)
 from vgi.arguments import AnyArrow, Arg, Arguments, ArgumentValidationError, TableInput
 from vgi.invocation import Invocation
 from vgi.log import Level, Message
@@ -174,8 +179,10 @@ __all__ = [
     "AggregationFunction",
     "AnyArrow",
     "Arg",
+    "ArgumentSpec",
     "ArgumentValidationError",
     "Arguments",
+    "argument_specs_to_schema",
     "FilterFunction",
     "FunctionExample",
     "FunctionStability",
@@ -204,6 +211,7 @@ __all__ = [
     "hello",
     "schema",
     "schema_like",
+    "schema_to_argument_specs",
     "streaming",
 ]
 
