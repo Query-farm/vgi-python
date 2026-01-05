@@ -76,7 +76,7 @@ FEATURES
 
 import uuid
 from collections.abc import Callable, Generator, Iterator
-from typing import Any, Self, cast
+from typing import Any, Self, TypedDict, cast
 
 import pyarrow as pa
 import structlog
@@ -112,6 +112,7 @@ __all__ = [
     "TableInOutFunctionTestClientError",
     "TableFunctionTestClient",
     "ScalarFunctionTestClient",
+    "LogExpectation",
     "batch",
     "assert_function_output",
     "assert_function_logs",
@@ -121,6 +122,29 @@ __all__ = [
     "run_scalar_function",
     "assert_scalar_function_output",
 ]
+
+
+class LogExpectation(TypedDict, total=False):
+    """Type definition for log message expectations in assert_function_logs.
+
+    All fields are optional. Use any combination to match log messages:
+    - level: Match exact log level (Level enum)
+    - message: Match exact message string
+    - message_contains: Match if message contains this substring
+    - message_startswith: Match if message starts with this prefix
+
+    Example:
+        expected_logs: list[LogExpectation] = [
+            {"level": Level.INFO, "message_contains": "Processing"},
+            {"message_startswith": "Completed"},
+        ]
+
+    """
+
+    level: Level
+    message: str
+    message_contains: str
+    message_startswith: str
 
 
 class TableInOutFunctionTestClientError(Exception):
@@ -758,7 +782,7 @@ def assert_function_output(
 def assert_function_logs(
     function: type[TableInOutGenerator] | type[TableInOutFunction],
     input: list[pa.RecordBatch],
-    expected_logs: list[dict[str, Any]],
+    expected_logs: list[LogExpectation],
     args: tuple[Any, ...] | None = None,
     kwargs: dict[str, Any] | None = None,
     msg: str | None = None,
@@ -840,7 +864,7 @@ def assert_function_logs(
     return outputs
 
 
-def _log_matches(log: Message, expectation: dict[str, Any]) -> bool:
+def _log_matches(log: Message, expectation: LogExpectation) -> bool:
     """Check if a log message matches an expectation dict."""
     return not (
         ("level" in expectation and log.level != expectation["level"])
