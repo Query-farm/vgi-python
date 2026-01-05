@@ -583,18 +583,9 @@ class TableInOutGeneratorFunction(vgi.table_function.TableFunctionBase):
         try:
             return self._process_and_validate(generator, batch)
         except Exception as e:
-            return OutputComplete(
-                batch=self.empty_output_batch,
-                log_message=vgi.log.Message.from_exception(e),
-            )
+            return self._create_error_output(e)
 
-    @final
-    def _should_terminate(self, result: OutputComplete) -> bool:
-        """Check if processing should terminate due to an exception."""
-        return (
-            result.log_message is not None
-            and result.log_message.level == vgi.log.Level.EXCEPTION
-        )
+    # _should_terminate inherited from Function
 
     def process(self, batch: pa.RecordBatch) -> OutputGenerator:
         """Process input batches during the DATA phase.
