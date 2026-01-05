@@ -34,7 +34,7 @@ Example:
 """
 
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, get_type_hints
 
@@ -257,7 +257,7 @@ def schema_to_argument_specs(schema: pa.Schema) -> list[ArgumentSpec]:
 
 def extract_argument_specs(
     cls: type,
-    arg_types: dict[str, pa.DataType],
+    arg_types: Mapping[str, pa.DataType],
 ) -> list[ArgumentSpec]:
     """Extract ArgumentSpecs from a function class with Arg descriptors.
 
