@@ -39,7 +39,7 @@ class TestConstantTableFunctionInProcess:
             invocation=invocation,
             logger=structlog.get_logger(),
         )
-        cardinality = func.cardinality()
+        cardinality = func.cardinality
         assert cardinality is not None
         assert cardinality.estimate == 1
         assert cardinality.max == 1

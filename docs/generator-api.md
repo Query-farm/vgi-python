@@ -95,6 +95,7 @@ class MyTableFunction(TableFunctionGenerator):
     def output_schema(self) -> pa.Schema:
         return pa.schema([("value", pa.int64())])
 
+    @property
     def cardinality(self) -> TableCardinality:
         """Optional: provide row count estimate."""
         return TableCardinality(estimate=self.count, max=self.count)

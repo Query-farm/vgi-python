@@ -91,6 +91,7 @@ class SequenceFunction(TableFunctionGenerator):
         """Return output schema with single integer column."""
         return pa.schema([pa.field("n", pa.int64())])
 
+    @property
     def cardinality(self) -> TableCardinality:
         """Return exact cardinality since we know the count."""
         return TableCardinality(estimate=self.count, max=self.count)
@@ -160,6 +161,7 @@ class RangeFunction(TableFunctionGenerator):
         """Return output schema with single integer column."""
         return pa.schema([pa.field("value", pa.int64())])
 
+    @property
     def cardinality(self) -> TableCardinality:
         """Return cardinality based on range parameters."""
         if self.end <= self.start:
@@ -233,6 +235,7 @@ class ConstantTableFunction(TableFunctionGenerator):
         """Return output schema with single integer column."""
         return pa.schema([pa.field("value", pa.int64())])
 
+    @property
     def cardinality(self) -> TableCardinality:
         """Return cardinality of exactly one row."""
         return TableCardinality(estimate=1, max=1)
@@ -299,6 +302,7 @@ class RandomSampleFunction(TableFunctionGenerator):
         ]
         return pa.schema(fields)
 
+    @property
     def cardinality(self) -> TableCardinality:
         """Return cardinality estimate."""
         return TableCardinality(estimate=self.count, max=self.count)
@@ -466,6 +470,7 @@ class PartitionedRangeFunction(TableFunctionGenerator):
         """Return output schema with single integer column."""
         return pa.schema([pa.field("value", pa.int64())])
 
+    @property
     def cardinality(self) -> TableCardinality:
         """Return cardinality estimate.
 
@@ -583,6 +588,7 @@ class ProjectedDataFunction(TableFunctionGenerator):
         """Return the projected schema based on init_input."""
         return self.apply_projection(self.FULL_SCHEMA)
 
+    @property
     def cardinality(self) -> TableCardinality:
         """Return exact cardinality since we know the count."""
         return TableCardinality(estimate=self.count, max=self.count)
@@ -705,6 +711,7 @@ class SettingsAwareFunction(TableFunctionGenerator):
 
         return pa.schema(fields)
 
+    @property
     def cardinality(self) -> TableCardinality:
         """Return exact cardinality since we know the count."""
         return TableCardinality(estimate=self.count, max=self.count)

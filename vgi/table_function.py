@@ -261,8 +261,9 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
         """
         super().__init__(invocation=invocation, logger=logger)
 
+    @property
     def cardinality(self) -> TableCardinality | None:
-        """Return optional cardinality estimate for the output.
+        """Optional cardinality estimate for the output.
 
         Override to provide row count estimates that help query planners
         make better decisions about join ordering and memory allocation.

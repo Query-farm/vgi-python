@@ -40,7 +40,7 @@ class TestSequenceFunctionInProcess:
             invocation=invocation,
             logger=structlog.get_logger(),
         )
-        cardinality = func.cardinality()
+        cardinality = func.cardinality
         assert cardinality is not None
         assert cardinality.estimate == 100
         assert cardinality.max == 100

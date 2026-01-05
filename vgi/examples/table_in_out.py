@@ -357,6 +357,7 @@ class SumAllColumnsFunction(TableInOutGeneratorFunction):
 
     data: TableInput = Arg[TableInput](0, doc="Input table with numeric columns")  # type: ignore[assignment]
 
+    @property
     def cardinality(self) -> TableCardinality | None:
         """Return cardinality estimate of exactly 1 row."""
         return TableCardinality(estimate=1, max=1)
@@ -676,6 +677,7 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction):
         super().__init__(invocation=invocation, logger=logger)
         self.sums: dict[str, pa.Scalar[Any]] = {}
 
+    @property
     def cardinality(self) -> TableCardinality | None:
         """Return cardinality estimate of exactly 1 row."""
         return TableCardinality(estimate=1, max=1)
