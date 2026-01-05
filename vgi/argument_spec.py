@@ -87,7 +87,7 @@ def _argument_spec_sort_key(spec: "ArgumentSpec") -> tuple[int, int | str]:
 # =============================================================================
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ArgumentSpec:
     """Specification for a single function argument.
 
