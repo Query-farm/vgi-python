@@ -715,9 +715,8 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
             )
         self.execution_identifier = init_input.global_execution_identifier
         init_type = self._get_init_input_type()
-        self.init_input = cast(
-            T, init_type.deserialize_bytes(self.storage.global_get(self.execution_identifier))
-        )
+        raw_bytes = self.storage.global_get(self.execution_identifier)
+        self.init_input = cast(T, init_type.deserialize_bytes(raw_bytes))
 
     def setup(self) -> None:
         """Acquire resources before processing starts.

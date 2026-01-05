@@ -16,7 +16,7 @@ from vgi.table_in_out_function_patterns import (
     FilterFunction,
     MapFunction,
 )
-from vgi.testing import FunctionTestClient
+from vgi.testing import TableInOutFunctionTestClient
 
 # =============================================================================
 # AggregationFunction Tests
@@ -99,7 +99,7 @@ class TestAggregationFunction:
         """Sum should work with a single input batch."""
         batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3], "b": [10, 20, 30]})
 
-        with FunctionTestClient(SumAggregation) as client:
+        with TableInOutFunctionTestClient(SumAggregation) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -113,7 +113,7 @@ class TestAggregationFunction:
         batch2 = pa.RecordBatch.from_pydict({"x": [4, 5]})
         batch3 = pa.RecordBatch.from_pydict({"x": [6]})
 
-        with FunctionTestClient(SumAggregation) as client:
+        with TableInOutFunctionTestClient(SumAggregation) as client:
             outputs = list(
                 client.table_in_out_function(input=iter([batch1, batch2, batch3]))
             )
@@ -126,7 +126,7 @@ class TestAggregationFunction:
         """Sum should work with float columns."""
         batch = pa.RecordBatch.from_pydict({"x": [1.5, 2.5, 3.0]})
 
-        with FunctionTestClient(SumAggregation) as client:
+        with TableInOutFunctionTestClient(SumAggregation) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -142,7 +142,7 @@ class TestAggregationFunction:
             }
         )
 
-        with FunctionTestClient(SumAggregation) as client:
+        with TableInOutFunctionTestClient(SumAggregation) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -154,7 +154,7 @@ class TestAggregationFunction:
         """AggregationFunction should log accumulation at DEBUG level."""
         batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
 
-        with FunctionTestClient(SumAggregation) as client:
+        with TableInOutFunctionTestClient(SumAggregation) as client:
             list(client.table_in_out_function(input=iter([batch])))
 
             debug_logs = [log for log in client.logs if log.level == Level.DEBUG]
@@ -196,7 +196,7 @@ class TestFilterFunction:
         """Filter should keep rows that match predicate."""
         batch = pa.RecordBatch.from_pydict({"value": [-1, 0, 1, 2, -3, 4]})
 
-        with FunctionTestClient(PositiveFilter) as client:
+        with TableInOutFunctionTestClient(PositiveFilter) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -207,7 +207,7 @@ class TestFilterFunction:
         """Filter should pass through all rows when all match."""
         batch = pa.RecordBatch.from_pydict({"value": [1, 2, 3, 4, 5]})
 
-        with FunctionTestClient(PositiveFilter) as client:
+        with TableInOutFunctionTestClient(PositiveFilter) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -218,7 +218,7 @@ class TestFilterFunction:
         """Filter should return empty batch when none match."""
         batch = pa.RecordBatch.from_pydict({"value": [-1, -2, -3]})
 
-        with FunctionTestClient(PositiveFilter) as client:
+        with TableInOutFunctionTestClient(PositiveFilter) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         # Empty batches may be filtered out
@@ -230,7 +230,7 @@ class TestFilterFunction:
         batch1 = pa.RecordBatch.from_pydict({"value": [-1, 1, -2, 2]})
         batch2 = pa.RecordBatch.from_pydict({"value": [3, -3, 4]})
 
-        with FunctionTestClient(PositiveFilter) as client:
+        with TableInOutFunctionTestClient(PositiveFilter) as client:
             outputs = list(client.table_in_out_function(input=iter([batch1, batch2])))
 
         # Combine all outputs
@@ -250,7 +250,7 @@ class TestFilterFunction:
             }
         )
 
-        with FunctionTestClient(PositiveFilter) as client:
+        with TableInOutFunctionTestClient(PositiveFilter) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -263,7 +263,7 @@ class TestFilterFunction:
         """Filter should work with Arg descriptors."""
         batch = pa.RecordBatch.from_pydict({"value": [1, 5, 10, 15, 20]})
 
-        with FunctionTestClient(RangeFilter) as client:
+        with TableInOutFunctionTestClient(RangeFilter) as client:
             outputs = list(
                 client.table_in_out_function(
                     input=iter([batch]),
@@ -279,7 +279,7 @@ class TestFilterFunction:
         """FilterFunction should log filtering statistics."""
         batch = pa.RecordBatch.from_pydict({"value": [-1, 1, -2, 2]})
 
-        with FunctionTestClient(PositiveFilter) as client:
+        with TableInOutFunctionTestClient(PositiveFilter) as client:
             list(client.table_in_out_function(input=iter([batch])))
 
             debug_logs = [log for log in client.logs if log.level == Level.DEBUG]
@@ -345,7 +345,7 @@ class TestMapFunction:
         """Map should transform specified column."""
         batch = pa.RecordBatch.from_pydict({"value": [1, 2, 3, 4, 5]})
 
-        with FunctionTestClient(DoubleValues) as client:
+        with TableInOutFunctionTestClient(DoubleValues) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -356,7 +356,7 @@ class TestMapFunction:
         """Map should transform multiple columns."""
         batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3], "b": [10, 20, 30]})
 
-        with FunctionTestClient(MultiColumnMap) as client:
+        with TableInOutFunctionTestClient(MultiColumnMap) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -374,7 +374,7 @@ class TestMapFunction:
             }
         )
 
-        with FunctionTestClient(DoubleValues) as client:
+        with TableInOutFunctionTestClient(DoubleValues) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -387,7 +387,7 @@ class TestMapFunction:
         """Map should work with string transformations."""
         batch = pa.RecordBatch.from_pydict({"name": ["alice", "bob", "charlie"]})
 
-        with FunctionTestClient(UpperCaseMap) as client:
+        with TableInOutFunctionTestClient(UpperCaseMap) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -399,7 +399,7 @@ class TestMapFunction:
         batch1 = pa.RecordBatch.from_pydict({"value": [1, 2]})
         batch2 = pa.RecordBatch.from_pydict({"value": [3, 4, 5]})
 
-        with FunctionTestClient(DoubleValues) as client:
+        with TableInOutFunctionTestClient(DoubleValues) as client:
             outputs = list(client.table_in_out_function(input=iter([batch1, batch2])))
 
         assert len(outputs) == 2
@@ -415,7 +415,7 @@ class TestMapFunction:
             }
         )
 
-        with FunctionTestClient(CastToFloat) as client:
+        with TableInOutFunctionTestClient(CastToFloat) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -434,7 +434,7 @@ class TestPatternEdgeCases:
 
     def test_aggregation_empty_input(self) -> None:
         """Aggregation with no input should not crash."""
-        with FunctionTestClient(SumAggregation) as client:
+        with TableInOutFunctionTestClient(SumAggregation) as client:
             outputs = list(client.table_in_out_function(input=iter([])))
 
         # No input = no output
@@ -447,7 +447,7 @@ class TestPatternEdgeCases:
             schema=pa.schema([pa.field("value", pa.int64())]),
         )
 
-        with FunctionTestClient(PositiveFilter) as client:
+        with TableInOutFunctionTestClient(PositiveFilter) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         # Empty input = empty or no output
@@ -461,7 +461,7 @@ class TestPatternEdgeCases:
             schema=pa.schema([pa.field("value", pa.int64())]),
         )
 
-        with FunctionTestClient(DoubleValues) as client:
+        with TableInOutFunctionTestClient(DoubleValues) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         # Empty input = empty or no output
@@ -472,7 +472,7 @@ class TestPatternEdgeCases:
         """Aggregation with single row should work."""
         batch = pa.RecordBatch.from_pydict({"x": [42]})
 
-        with FunctionTestClient(SumAggregation) as client:
+        with TableInOutFunctionTestClient(SumAggregation) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -482,7 +482,7 @@ class TestPatternEdgeCases:
         """Filter with single matching row should keep it."""
         batch = pa.RecordBatch.from_pydict({"value": [5]})
 
-        with FunctionTestClient(PositiveFilter) as client:
+        with TableInOutFunctionTestClient(PositiveFilter) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -492,7 +492,7 @@ class TestPatternEdgeCases:
         """Filter with single non-matching row should drop it."""
         batch = pa.RecordBatch.from_pydict({"value": [-5]})
 
-        with FunctionTestClient(PositiveFilter) as client:
+        with TableInOutFunctionTestClient(PositiveFilter) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         total_rows = sum(o.num_rows for o in outputs)

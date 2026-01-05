@@ -12,7 +12,7 @@ from vgi import (
     streaming,
 )
 from vgi.log import Level, Message
-from vgi.testing import FunctionTestClient, batch
+from vgi.testing import TableInOutFunctionTestClient, batch
 
 
 class EchoStreamingFunction(TableInOutGenerator):
@@ -97,7 +97,7 @@ class TestStreamingDecorator:
 
     def test_basic_echo(self) -> None:
         """@streaming decorated function should echo batches."""
-        with FunctionTestClient(EchoStreamingFunction) as client:
+        with TableInOutFunctionTestClient(EchoStreamingFunction) as client:
             outputs = list(
                 client.table_in_out_function(input=iter([batch(x=[1, 2, 3])]))
             )
@@ -107,7 +107,7 @@ class TestStreamingDecorator:
 
     def test_multiple_batches(self) -> None:
         """@streaming should handle multiple input batches."""
-        with FunctionTestClient(EchoStreamingFunction) as client:
+        with TableInOutFunctionTestClient(EchoStreamingFunction) as client:
             outputs = list(
                 client.table_in_out_function(
                     input=iter([batch(x=[1]), batch(x=[2]), batch(x=[3])])
@@ -121,14 +121,14 @@ class TestStreamingDecorator:
 
     def test_empty_input(self) -> None:
         """@streaming should handle empty input."""
-        with FunctionTestClient(EchoStreamingFunction) as client:
+        with TableInOutFunctionTestClient(EchoStreamingFunction) as client:
             outputs = list(client.table_in_out_function(input=iter([])))
 
         assert len(outputs) == 0
 
     def test_state_accumulation(self) -> None:
         """@streaming should allow state accumulation."""
-        with FunctionTestClient(CountingStreamingFunction) as client:
+        with TableInOutFunctionTestClient(CountingStreamingFunction) as client:
             outputs = list(
                 client.table_in_out_function(
                     input=iter([batch(x=[1]), batch(x=[2]), batch(x=[3])])
@@ -139,7 +139,7 @@ class TestStreamingDecorator:
 
     def test_accumulation_with_finalize(self) -> None:
         """@streaming should work with finalize() for aggregations."""
-        with FunctionTestClient(AccumulatingStreamingFunction) as client:
+        with TableInOutFunctionTestClient(AccumulatingStreamingFunction) as client:
             outputs = list(
                 client.table_in_out_function(
                     input=iter([batch(x=[1, 2, 3]), batch(x=[4, 5])])
@@ -154,7 +154,7 @@ class TestStreamingDecorator:
 
     def test_logging(self) -> None:
         """@streaming should support yielding log messages."""
-        with FunctionTestClient(LoggingStreamingFunction) as client:
+        with TableInOutFunctionTestClient(LoggingStreamingFunction) as client:
             outputs = list(
                 client.table_in_out_function(input=iter([batch(x=[1, 2, 3])]))
             )
@@ -186,12 +186,12 @@ class TestStreamingDecoratorComparedToManual:
         input_batches_1 = [batch(x=[1, 2]), batch(x=[3, 4])]
         input_batches_2 = [batch(x=[1, 2]), batch(x=[3, 4])]
 
-        with FunctionTestClient(ManualEcho) as client:
+        with TableInOutFunctionTestClient(ManualEcho) as client:
             manual_outputs = list(
                 client.table_in_out_function(input=iter(input_batches_1))
             )
 
-        with FunctionTestClient(EchoStreamingFunction) as client:
+        with TableInOutFunctionTestClient(EchoStreamingFunction) as client:
             streaming_outputs = list(
                 client.table_in_out_function(input=iter(input_batches_2))
             )

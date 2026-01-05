@@ -14,7 +14,7 @@ from vgi.table_function import (
     TableCardinality,
     TableFunctionGenerator,
 )
-from vgi.testing import FunctionTestClientError, TableFunctionTestClient
+from vgi.testing import TableFunctionTestClient, TableInOutFunctionTestClientError
 
 
 class TestTableFunctionGeneratorProtocol:
@@ -127,7 +127,7 @@ class TestTableFunctionGeneratorLifecycle:
 
         with (
             TableFunctionTestClient(ExceptionFunction) as client,
-            pytest.raises(FunctionTestClientError),
+            pytest.raises(TableInOutFunctionTestClientError),
         ):
             list(client.table_function())
 
@@ -173,7 +173,7 @@ class TestTableFunctionGeneratorSchemaValidation:
 
         with (
             TableFunctionTestClient(InvalidSchemaFunction) as client,
-            pytest.raises(FunctionTestClientError) as exc_info,
+            pytest.raises(TableInOutFunctionTestClientError) as exc_info,
         ):
             list(client.table_function())
 

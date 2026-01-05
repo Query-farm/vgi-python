@@ -6,7 +6,7 @@ import pytest
 from vgi.arguments import Arguments
 from vgi.client import Client, ClientError
 from vgi.examples.table import GeneratorExceptionFunction
-from vgi.testing import FunctionTestClientError, TableFunctionTestClient
+from vgi.testing import TableFunctionTestClient, TableInOutFunctionTestClientError
 
 
 class TestGeneratorExceptionFunctionInProcess:
@@ -16,7 +16,7 @@ class TestGeneratorExceptionFunctionInProcess:
         """Function should raise exception after specified batches."""
         with (
             TableFunctionTestClient(GeneratorExceptionFunction) as client,
-            pytest.raises(FunctionTestClientError) as exc_info,
+            pytest.raises(TableInOutFunctionTestClientError) as exc_info,
         ):
             list(client.table_function(arguments=Arguments(positional=(pa.scalar(3),))))
 
@@ -26,7 +26,7 @@ class TestGeneratorExceptionFunctionInProcess:
         """Function with fail_after=0 should raise immediately."""
         with (
             TableFunctionTestClient(GeneratorExceptionFunction) as client,
-            pytest.raises(FunctionTestClientError) as exc_info,
+            pytest.raises(TableInOutFunctionTestClientError) as exc_info,
         ):
             list(client.table_function(arguments=Arguments(positional=(pa.scalar(0),))))
 
@@ -41,7 +41,7 @@ class TestGeneratorExceptionFunctionInProcess:
                     arguments=Arguments(positional=(pa.scalar(3),))
                 ):
                     outputs.append(batch)
-            except FunctionTestClientError:
+            except TableInOutFunctionTestClientError:
                 pass
 
             # Should have 3 batches before failure

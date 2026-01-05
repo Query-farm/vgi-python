@@ -1,13 +1,13 @@
 """Testing utilities for VGI functions.
 
-This module provides FunctionTestClient, a lightweight in-process client for testing
-VGI functions without the overhead of subprocess communication.
+This module provides TableInOutFunctionTestClient, a lightweight in-process client
+for testing VGI functions without the overhead of subprocess communication.
 
 QUICK START
 -----------
-Use FunctionTestClient to test functions directly without spawning workers:
+Use TableInOutFunctionTestClient to test functions directly without spawning workers:
 
-    from vgi.testing import FunctionTestClient
+    from vgi.testing import TableInOutFunctionTestClient
     from vgi.arguments import Arguments
     from my_functions import MyFunction
     import pyarrow as pa
@@ -15,7 +15,7 @@ Use FunctionTestClient to test functions directly without spawning workers:
     # Create input batches
     batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
 
-    with FunctionTestClient(MyFunction) as client:
+    with TableInOutFunctionTestClient(MyFunction) as client:
         outputs = list(client.table_in_out_function(
             input=iter([batch]),
             arguments=Arguments(),
@@ -108,8 +108,8 @@ from vgi.table_in_out_function import (
 )
 
 __all__ = [
-    "FunctionTestClient",
-    "FunctionTestClientError",
+    "TableInOutFunctionTestClient",
+    "TableInOutFunctionTestClientError",
     "TableFunctionTestClient",
     "ScalarFunctionTestClient",
     "batch",
@@ -123,8 +123,8 @@ __all__ = [
 ]
 
 
-class FunctionTestClientError(Exception):
-    """Error raised by FunctionTestClient operations."""
+class TableInOutFunctionTestClientError(Exception):
+    """Error raised by TableInOutFunctionTestClient operations."""
 
 
 # =============================================================================
@@ -296,7 +296,7 @@ class _BaseTestClient:
             True if a log message was captured (caller should continue processing).
 
         Raises:
-            FunctionTestClientError: If the log level is EXCEPTION.
+            TableInOutFunctionTestClientError: If the log level is EXCEPTION.
 
         """
         if log_message is None:
@@ -304,18 +304,18 @@ class _BaseTestClient:
 
         self.logs.append(log_message)
         if log_message.level == Level.EXCEPTION:
-            raise FunctionTestClientError(log_message.message)
+            raise TableInOutFunctionTestClientError(log_message.message)
         return True
 
 
-class FunctionTestClient(_BaseTestClient):
+class TableInOutFunctionTestClient(_BaseTestClient):
     """In-process client for testing VGI functions.
 
     Provides the same interface as Client but runs functions directly in the
     current process without subprocess overhead. Ideal for unit tests.
 
     Example:
-        with FunctionTestClient(MyFunction) as client:
+        with TableInOutFunctionTestClient(MyFunction) as client:
             outputs = list(client.table_in_out_function(
                 input=iter([batch]),
                 arguments=Arguments(),
@@ -361,7 +361,7 @@ class FunctionTestClient(_BaseTestClient):
             Output RecordBatches from the function.
 
         Raises:
-            FunctionTestClientError: If the function raises an exception.
+            TableInOutFunctionTestClientError: If the function raises an exception.
 
         """
         self._clear_logs()
@@ -469,7 +469,9 @@ class FunctionTestClient(_BaseTestClient):
                 # Should not happen during data phase
                 return
             else:
-                raise FunctionTestClientError(f"Unexpected status: {output.status}")
+                raise TableInOutFunctionTestClientError(
+                    f"Unexpected status: {output.status}"
+                )
 
     def _finalize(
         self,
@@ -498,13 +500,13 @@ class FunctionTestClient(_BaseTestClient):
                 return
             else:
                 msg = f"Unexpected finalize status: {output.status}"
-                raise FunctionTestClientError(msg)
+                raise TableInOutFunctionTestClientError(msg)
 
 
 class TableFunctionTestClient(_BaseTestClient):
     """In-process client for testing TableFunctionGenerator functions.
 
-    Unlike FunctionTestClient (for TableInOut functions), this client is for
+    Unlike TableInOutFunctionTestClient (for TableInOut functions), this client is for
     table functions that generate output without receiving input batches.
 
     Example:
@@ -546,7 +548,7 @@ class TableFunctionTestClient(_BaseTestClient):
             Output RecordBatches from the function.
 
         Raises:
-            FunctionTestClientError: If the function raises an exception.
+            TableInOutFunctionTestClientError: If the function raises an exception.
 
         """
         self._clear_logs()
@@ -642,7 +644,7 @@ def run_function(
 ) -> tuple[list[pa.RecordBatch], list[Message]]:
     """Run a function and return outputs and logs.
 
-    A convenience wrapper around FunctionTestClient for simple test cases.
+    A convenience wrapper around TableInOutFunctionTestClient for simple test cases.
 
     Args:
         function: The function class to test.
@@ -665,7 +667,7 @@ def run_function(
     """
     arguments = _build_arguments(args, kwargs)
 
-    with FunctionTestClient(function) as client:
+    with TableInOutFunctionTestClient(function) as client:
         outputs = list(
             client.table_in_out_function(
                 input=iter(input_batches),
@@ -706,7 +708,7 @@ def assert_function_output(
 
     Raises:
         AssertionError: If output doesn't match expected.
-        FunctionTestClientError: If the function raises an exception.
+        TableInOutFunctionTestClientError: If the function raises an exception.
 
     Examples:
         # Simple echo test
@@ -783,7 +785,7 @@ def assert_function_logs(
 
     Raises:
         AssertionError: If logs don't match expectations.
-        FunctionTestClientError: If the function raises an exception.
+        TableInOutFunctionTestClientError: If the function raises an exception.
 
     Examples:
         # Check for specific log level and message
@@ -929,7 +931,7 @@ def assert_table_function_output(
 
     Raises:
         AssertionError: If output doesn't match expected.
-        FunctionTestClientError: If the function raises an exception.
+        TableInOutFunctionTestClientError: If the function raises an exception.
 
     Examples:
         # Sequence test
@@ -1016,7 +1018,7 @@ class ScalarFunctionTestClient(_BaseTestClient):
             Output RecordBatches from the function (single-column).
 
         Raises:
-            FunctionTestClientError: If the function raises an exception.
+            TableInOutFunctionTestClientError: If the function raises an exception.
 
         """
         self._clear_logs()
@@ -1166,7 +1168,7 @@ def assert_scalar_function_output(
 
     Raises:
         AssertionError: If output doesn't match expected.
-        FunctionTestClientError: If the function raises an exception.
+        TableInOutFunctionTestClientError: If the function raises an exception.
 
     Examples:
         # Double column test

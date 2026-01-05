@@ -13,6 +13,9 @@ wheels/
 mypy-reports/
 mypy-html-report/
 
+# Beads
+.beads/
+
 # Coverage artifacts
 .coverage
 .coverage.*

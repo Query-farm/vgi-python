@@ -10,7 +10,7 @@ from vgi.arguments import Arguments
 from vgi.client import Client, ClientError
 from vgi.log import Message
 from vgi.table_function import TableFunctionGenerator
-from vgi.testing import FunctionTestClientError, TableFunctionTestClient
+from vgi.testing import TableFunctionTestClient, TableInOutFunctionTestClientError
 
 # Type alias for the runner function
 TableFunctionRunner = Callable[
@@ -85,5 +85,5 @@ def run_function() -> TableFunctionRunner:
 
 
 # Re-export error types for convenience
-InProcessError = FunctionTestClientError
+InProcessError = TableInOutFunctionTestClientError
 SubprocessError = ClientError

@@ -19,8 +19,8 @@ from vgi.examples.table_in_out import (
 )
 from vgi.log import Level
 from vgi.testing import (
-    FunctionTestClient,
-    FunctionTestClientError,
+    TableInOutFunctionTestClient,
+    TableInOutFunctionTestClientError,
     assert_function_logs,
     assert_function_output,
     batch,
@@ -35,7 +35,7 @@ class TestEchoFunction:
         """Echo function should pass through a single batch unchanged."""
         batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3], "y": ["a", "b", "c"]})
 
-        with FunctionTestClient(EchoFunction) as client:
+        with TableInOutFunctionTestClient(EchoFunction) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -47,7 +47,7 @@ class TestEchoFunction:
         batch2 = pa.RecordBatch.from_pydict({"x": [3, 4]})
         batch3 = pa.RecordBatch.from_pydict({"x": [5, 6]})
 
-        with FunctionTestClient(EchoFunction) as client:
+        with TableInOutFunctionTestClient(EchoFunction) as client:
             outputs = list(
                 client.table_in_out_function(input=iter([batch1, batch2, batch3]))
             )
@@ -59,7 +59,7 @@ class TestEchoFunction:
 
     def test_empty_input(self) -> None:
         """Echo function with no input batches should produce no output."""
-        with FunctionTestClient(EchoFunction) as client:
+        with TableInOutFunctionTestClient(EchoFunction) as client:
             outputs = list(client.table_in_out_function(input=iter([])))
 
         assert len(outputs) == 0
@@ -72,7 +72,7 @@ class TestRepeatInputsFunction:
         """RepeatInputsFunction should duplicate each batch N times."""
         batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
 
-        with FunctionTestClient(RepeatInputsFunction) as client:
+        with TableInOutFunctionTestClient(RepeatInputsFunction) as client:
             outputs = list(
                 client.table_in_out_function(
                     input=iter([batch]),
@@ -89,7 +89,7 @@ class TestRepeatInputsFunction:
         batch1 = pa.RecordBatch.from_pydict({"x": [1]})
         batch2 = pa.RecordBatch.from_pydict({"x": [2]})
 
-        with FunctionTestClient(RepeatInputsFunction) as client:
+        with TableInOutFunctionTestClient(RepeatInputsFunction) as client:
             outputs = list(
                 client.table_in_out_function(
                     input=iter([batch1, batch2]),
@@ -116,7 +116,7 @@ class TestBufferInputFunction:
         batch2 = pa.RecordBatch.from_pydict({"x": [3, 4]})
         batch3 = pa.RecordBatch.from_pydict({"x": [5, 6]})
 
-        with FunctionTestClient(BufferInputFunction) as client:
+        with TableInOutFunctionTestClient(BufferInputFunction) as client:
             outputs = list(
                 client.table_in_out_function(input=iter([batch1, batch2, batch3]))
             )
@@ -136,7 +136,7 @@ class TestSumAllColumnsFunction:
         batch1 = pa.RecordBatch.from_pydict({"a": [1, 2, 3], "b": [10, 20, 30]})
         batch2 = pa.RecordBatch.from_pydict({"a": [4, 5], "b": [40, 50]})
 
-        with FunctionTestClient(SumAllColumnsFunction) as client:
+        with TableInOutFunctionTestClient(SumAllColumnsFunction) as client:
             outputs = list(client.table_in_out_function(input=iter([batch1, batch2])))
 
         assert len(outputs) == 1
@@ -148,7 +148,7 @@ class TestSumAllColumnsFunction:
         """SumAllColumnsFunction should sum float columns."""
         batch = pa.RecordBatch.from_pydict({"x": [1.5, 2.5, 3.0]})
 
-        with FunctionTestClient(SumAllColumnsFunction) as client:
+        with TableInOutFunctionTestClient(SumAllColumnsFunction) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -164,7 +164,7 @@ class TestSumAllColumnsFunction:
             }
         )
 
-        with FunctionTestClient(SumAllColumnsFunction) as client:
+        with TableInOutFunctionTestClient(SumAllColumnsFunction) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
         assert len(outputs) == 1
@@ -181,7 +181,7 @@ class TestSumAllColumnsFunctionWithLogging:
         """FunctionTestClient should capture log messages emitted by the function."""
         batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
 
-        with FunctionTestClient(SumAllColumnsFunctionWithLogging) as client:
+        with TableInOutFunctionTestClient(SumAllColumnsFunctionWithLogging) as client:
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
             # Check that logs were captured
@@ -199,24 +199,28 @@ class TestExceptionHandling:
     """Tests for exception handling."""
 
     def test_process_exception_raises_error(self) -> None:
-        """Exception during process() should raise FunctionTestClientError."""
+        """Exception during process() should raise TableInOutFunctionTestClientError."""
         batch1 = pa.RecordBatch.from_pydict({"x": [1]})
         batch2 = pa.RecordBatch.from_pydict({"x": [2]})
 
         with (
-            FunctionTestClient(ExceptionProcessFunction) as client,
-            pytest.raises(FunctionTestClientError, match="Intentional exception"),
+            TableInOutFunctionTestClient(ExceptionProcessFunction) as client,
+            pytest.raises(
+                TableInOutFunctionTestClientError, match="Intentional exception"
+            ),
         ):
             # Exception occurs on second batch
             list(client.table_in_out_function(input=iter([batch1, batch2])))
 
     def test_finalize_exception_raises_error(self) -> None:
-        """Exception during finalize() should raise FunctionTestClientError."""
+        """Exception during finalize() raises TableInOutFunctionTestClientError."""
         batch = pa.RecordBatch.from_pydict({"x": [1]})
 
         with (
-            FunctionTestClient(ExceptionFinalizeFunction) as client,
-            pytest.raises(FunctionTestClientError, match="Intentional exception"),
+            TableInOutFunctionTestClient(ExceptionFinalizeFunction) as client,
+            pytest.raises(
+                TableInOutFunctionTestClientError, match="Intentional exception"
+            ),
         ):
             list(client.table_in_out_function(input=iter([batch])))
 
@@ -234,7 +238,7 @@ class TestProjectionIds:
             }
         )
 
-        with FunctionTestClient(SumAllColumnsFunction) as client:
+        with TableInOutFunctionTestClient(SumAllColumnsFunction) as client:
             # Only project column 0 (a) and column 2 (c)
             outputs = list(
                 client.table_in_out_function(
@@ -264,7 +268,7 @@ class TestBindResultCallback:
         def callback(bind_batch: pa.RecordBatch) -> None:
             bind_results.append(bind_batch)
 
-        with FunctionTestClient(EchoFunction) as client:
+        with TableInOutFunctionTestClient(EchoFunction) as client:
             list(
                 client.table_in_out_function(
                     input=iter([batch]),
@@ -283,7 +287,7 @@ class TestDistributedStateSupport:
     """Tests for distributed state support (save_state/load_states)."""
 
     def test_simple_distributed_function(self) -> None:
-        """SumAllColumnsSimpleDistributed should work with FunctionTestClient.
+        """SumAllColumnsSimpleDistributed should work with TableInOutFunctionTestClient.
 
         This function uses save_state() and load_states() internally,
         testing that the distributed state framework works in single-process mode.
@@ -291,7 +295,7 @@ class TestDistributedStateSupport:
         batch1 = pa.RecordBatch.from_pydict({"a": [1, 2], "b": [10, 20]})
         batch2 = pa.RecordBatch.from_pydict({"a": [3, 4], "b": [30, 40]})
 
-        with FunctionTestClient(SumAllColumnsSimpleDistributed) as client:
+        with TableInOutFunctionTestClient(SumAllColumnsSimpleDistributed) as client:
             outputs = list(client.table_in_out_function(input=iter([batch1, batch2])))
 
         assert len(outputs) == 1
@@ -307,7 +311,7 @@ class TestArgumentsPassing:
         """Functions should receive positional arguments correctly."""
         batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
 
-        with FunctionTestClient(RepeatInputsFunction) as client:
+        with TableInOutFunctionTestClient(RepeatInputsFunction) as client:
             outputs = list(
                 client.table_in_out_function(
                     input=iter([batch]),
@@ -322,7 +326,7 @@ class TestArgumentsPassing:
         """Functions should use default Arguments when none provided."""
         batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
 
-        with FunctionTestClient(EchoFunction) as client:
+        with TableInOutFunctionTestClient(EchoFunction) as client:
             # No arguments parameter - should use empty Arguments()
             outputs = list(client.table_in_out_function(input=iter([batch])))
 
@@ -336,7 +340,7 @@ class TestLogLevelCapture:
         """Should capture INFO level logs."""
         batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
 
-        with FunctionTestClient(SumAllColumnsFunctionWithLogging) as client:
+        with TableInOutFunctionTestClient(SumAllColumnsFunctionWithLogging) as client:
             list(client.table_in_out_function(input=iter([batch])))
 
             info_logs = [log for log in client.logs if log.level == Level.INFO]
@@ -350,7 +354,7 @@ class TestLogsClearing:
         """Logs should be cleared at start of each table_in_out_function call."""
         test_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
 
-        with FunctionTestClient(SumAllColumnsFunctionWithLogging) as client:
+        with TableInOutFunctionTestClient(SumAllColumnsFunctionWithLogging) as client:
             # First call
             list(client.table_in_out_function(input=iter([test_batch])))
             first_call_log_count = len(client.logs)

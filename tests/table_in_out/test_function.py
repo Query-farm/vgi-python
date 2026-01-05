@@ -10,7 +10,7 @@ from vgi.invocation import Invocation
 from vgi.ipc_utils import RecordBatchState
 from vgi.log import Level
 from vgi.table_in_out_function import TableInOutFunction
-from vgi.testing import FunctionTestClient, batch
+from vgi.testing import TableInOutFunctionTestClient, batch
 
 
 class TestPassthrough:
@@ -22,7 +22,7 @@ class TestPassthrough:
         class PassthroughFunction(TableInOutFunction):
             pass
 
-        with FunctionTestClient(PassthroughFunction) as client:
+        with TableInOutFunctionTestClient(PassthroughFunction) as client:
             outputs = list(
                 client.table_in_out_function(
                     input=iter([batch(x=[1, 2, 3]), batch(x=[4, 5])]),
@@ -48,7 +48,7 @@ class TestTransform:
                 doubled = pc.multiply(batch.column("x"), 2)
                 return pa.RecordBatch.from_arrays([doubled], schema=batch.schema)
 
-        with FunctionTestClient(DoubleFunction) as client:
+        with TableInOutFunctionTestClient(DoubleFunction) as client:
             outputs = list(
                 client.table_in_out_function(input=iter([batch(x=[1, 2, 3])]))
             )
@@ -63,7 +63,7 @@ class TestTransform:
             def transform(self, batch: pa.RecordBatch) -> list[pa.RecordBatch]:
                 return [batch, batch, batch]
 
-        with FunctionTestClient(TripleFunction) as client:
+        with TableInOutFunctionTestClient(TripleFunction) as client:
             outputs = list(client.table_in_out_function(input=iter([batch(x=[1, 2])])))
 
         # Should have 3 outputs from 1 input
@@ -80,7 +80,7 @@ class TestTransform:
             def transform(self, batch: pa.RecordBatch) -> list[pa.RecordBatch]:
                 return [batch] * self.count
 
-        with FunctionTestClient(RepeatFunction) as client:
+        with TableInOutFunctionTestClient(RepeatFunction) as client:
             outputs = list(
                 client.table_in_out_function(
                     input=iter([batch(x=[1])]),
@@ -122,7 +122,7 @@ class TestFinish:
                     )
                 ]
 
-        with FunctionTestClient(SumFunction) as client:
+        with TableInOutFunctionTestClient(SumFunction) as client:
             outputs = list(
                 client.table_in_out_function(
                     input=iter([batch(x=[1, 2, 3]), batch(x=[4, 5])])
@@ -153,7 +153,7 @@ class TestFinish:
             def finish(self) -> list[pa.RecordBatch]:
                 return self.buffer
 
-        with FunctionTestClient(BufferFunction) as client:
+        with TableInOutFunctionTestClient(BufferFunction) as client:
             outputs = list(
                 client.table_in_out_function(
                     input=iter([batch(x=[1, 2]), batch(x=[3, 4])])
@@ -182,7 +182,7 @@ class TestOutputSchema:
                 lengths = pc.utf8_length(batch.column("name"))  # type: ignore[call-overload]
                 return pa.RecordBatch.from_arrays([lengths], schema=self.output_schema)
 
-        with FunctionTestClient(LengthFunction) as client:
+        with TableInOutFunctionTestClient(LengthFunction) as client:
             outputs = list(
                 client.table_in_out_function(
                     input=iter([batch(name=["hello", "world!"])])
@@ -213,7 +213,7 @@ class TestEmptyOutput:
                     return self.empty_output_batch
                 return pa.RecordBatch.from_arrays([filtered], schema=batch.schema)
 
-        with FunctionTestClient(FilterOddFunction) as client:
+        with TableInOutFunctionTestClient(FilterOddFunction) as client:
             outputs = list(
                 client.table_in_out_function(
                     input=iter([batch(x=[1, 3, 5]), batch(x=[2, 4])])  # odd, even
@@ -230,7 +230,7 @@ class TestEmptyOutput:
         class PassthroughFunction(TableInOutFunction):
             pass
 
-        with FunctionTestClient(PassthroughFunction) as client:
+        with TableInOutFunctionTestClient(PassthroughFunction) as client:
             outputs = list(client.table_in_out_function(input=iter([batch(x=[1, 2])])))
 
         # Should only have the transform output, no finalize output
@@ -249,7 +249,7 @@ class TestLogging:
                 self.log(Level.INFO, f"Processing {batch.num_rows} rows")
                 return batch
 
-        with FunctionTestClient(LoggingFunction) as client:
+        with TableInOutFunctionTestClient(LoggingFunction) as client:
             outputs = list(
                 client.table_in_out_function(input=iter([batch(x=[1, 2, 3])]))
             )
@@ -292,7 +292,7 @@ class TestLogging:
                     )
                 ]
 
-        with FunctionTestClient(LoggingAggregateFunction) as client:
+        with TableInOutFunctionTestClient(LoggingAggregateFunction) as client:
             outputs = list(
                 client.table_in_out_function(input=iter([batch(x=[1, 2, 3])]))
             )
@@ -314,7 +314,7 @@ class TestLogging:
                 self.log(Level.INFO, f"Rows: {batch.num_rows}")
                 return batch
 
-        with FunctionTestClient(MultiLogFunction) as client:
+        with TableInOutFunctionTestClient(MultiLogFunction) as client:
             outputs = list(client.table_in_out_function(input=iter([batch(x=[1, 2])])))
 
             # Should have 1 output batch

@@ -71,7 +71,7 @@ Classes and functions exported from this module:
     Worker                   - Base class for worker processes
     Level                    - Log severity enum
     Message                  - Log message for process()
-    FunctionTestClient       - In-process test client
+    TableInOutFunctionTestClient       - In-process test client
     schema                   - Build schemas from keyword arguments
     schema_like              - Derive schemas with modifications
 
@@ -167,7 +167,7 @@ from vgi.table_in_out_function_patterns import (
     FilterFunction,
     MapFunction,
 )
-from vgi.testing import FunctionTestClient
+from vgi.testing import TableInOutFunctionTestClient
 from vgi.worker import Worker
 
 __all__ = [
@@ -178,7 +178,7 @@ __all__ = [
     "FilterFunction",
     "FunctionExample",
     "FunctionStability",
-    "FunctionTestClient",
+    "TableInOutFunctionTestClient",
     "FunctionType",
     "Invocation",
     "Level",
