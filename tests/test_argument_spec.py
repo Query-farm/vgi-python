@@ -447,6 +447,78 @@ class TestExtractArgumentSpecs:
         assert specs[4].is_any_type is True
 
 
+class TestArgumentSpecToSchemaValidation:
+    """Test validation in argument_specs_to_schema."""
+
+    def test_non_contiguous_indices_warns(self) -> None:
+        """Non-contiguous positional indices should issue a warning."""
+        specs = [
+            ArgumentSpec(name="first", position=0, arrow_type=pa.int64()),
+            ArgumentSpec(name="third", position=2, arrow_type=pa.int64()),  # Gap: no 1
+        ]
+        with pytest.warns(UserWarning, match="not contiguous"):
+            argument_specs_to_schema(specs)
+
+    def test_indices_not_starting_at_zero_warns(self) -> None:
+        """Positional indices not starting at 0 should warn."""
+        specs = [
+            ArgumentSpec(name="second", position=1, arrow_type=pa.int64()),
+            ArgumentSpec(name="third", position=2, arrow_type=pa.int64()),
+        ]
+        with pytest.warns(UserWarning, match="not contiguous"):
+            argument_specs_to_schema(specs)
+
+    def test_contiguous_indices_no_warning(self) -> None:
+        """Contiguous positional indices should not warn."""
+        specs = [
+            ArgumentSpec(name="first", position=0, arrow_type=pa.int64()),
+            ArgumentSpec(name="second", position=1, arrow_type=pa.int64()),
+            ArgumentSpec(name="third", position=2, arrow_type=pa.int64()),
+        ]
+        # Should not raise any warnings
+        import warnings as w
+
+        with w.catch_warnings(record=True) as caught:
+            w.simplefilter("always")
+            argument_specs_to_schema(specs)
+            # Filter for our specific warning
+            contiguity_warnings = [
+                x for x in caught if "not contiguous" in str(x.message)
+            ]
+            assert len(contiguity_warnings) == 0
+
+
+class TestExtractArgumentSpecsValidation:
+    """Test validation in extract_argument_specs."""
+
+    def test_missing_arg_type_warns(self) -> None:
+        """Missing arg_types entry should issue a warning."""
+
+        class FunctionWithArg(TableInOutFunction):
+            count = Arg[int](0)
+
+        # Provide empty arg_types - should warn
+        with pytest.warns(UserWarning, match="Missing type for argument 'count'"):
+            specs = extract_argument_specs(FunctionWithArg, {})
+
+        assert len(specs) == 1
+        assert specs[0].arrow_type == pa.null()
+
+    def test_partial_arg_types_warns_for_missing(self) -> None:
+        """Only missing args should trigger warnings."""
+
+        class FunctionWithTwoArgs(TableInOutFunction):
+            count = Arg[int](0)
+            name = Arg[str](1)
+
+        # Provide type for only 'count'
+        with pytest.warns(UserWarning, match="Missing type for argument 'name'"):
+            specs = extract_argument_specs(FunctionWithTwoArgs, {"count": pa.int64()})
+
+        assert specs[0].arrow_type == pa.int64()
+        assert specs[1].arrow_type == pa.null()
+
+
 class TestEdgeCases:
     """Test edge cases and boundary conditions."""
 
