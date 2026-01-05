@@ -43,7 +43,8 @@ class DoubleColumnFunction(ScalarFunction):
         name = "double_column"
         description = "Doubles values in a numeric column"
 
-    column = Arg[str](0, doc="Column name to double")
+    # Explicit arrow_type demonstrates type specification
+    column = Arg[str](0, doc="Column name to double", arrow_type=pa.utf8())
 
     @property
     def output_type(self) -> pa.DataType:
