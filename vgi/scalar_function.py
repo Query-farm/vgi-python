@@ -50,6 +50,7 @@ import structlog
 import vgi.function
 import vgi.log
 from vgi.exceptions import SchemaValidationError
+from vgi.output_complete import OutputComplete
 from vgi.table_function import Output, ProtocolOutput
 
 __all__ = [
@@ -165,37 +166,6 @@ class ProtocolInput:
     metadata: pa.KeyValueMetadata | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class _ScalarOutputComplete:
-    """Internal: Output with guaranteed non-None batch for scalar functions."""
-
-    batch: pa.RecordBatch
-    log_message: vgi.log.Message | None = None
-
-    @classmethod
-    def from_process_result(
-        cls,
-        source: vgi.log.Message | Output,
-        empty_batch: pa.RecordBatch,
-    ) -> _ScalarOutputComplete:
-        """Create from user's yield value.
-
-        Args:
-            source: What the user yielded (Output or Message).
-            empty_batch: Empty batch to substitute when yielding Message.
-
-        Returns:
-            Normalized output with guaranteed non-None batch.
-
-        """
-        if isinstance(source, vgi.log.Message):
-            return cls(batch=empty_batch, log_message=source)
-        # source is Output
-        return cls(
-            batch=source.batch if source.batch is not None else empty_batch,
-        )
-
-
 class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInput]):
     """Generator-based base class for scalar functions.
 
@@ -299,7 +269,7 @@ class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInp
         self,
         generator: ScalarOutputGenerator,
         input_batch: pa.RecordBatch,
-    ) -> _ScalarOutputComplete:
+    ) -> OutputComplete:
         """Process a batch and validate schemas and row count.
 
         Args:
@@ -307,7 +277,7 @@ class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInp
             input_batch: The input RecordBatch to process.
 
         Returns:
-            _ScalarOutputComplete with validated output batch.
+            OutputComplete with validated output batch.
 
         Raises:
             SchemaValidationError: If input or output batch schema doesn't match.
@@ -315,7 +285,7 @@ class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInp
 
         """
         self._validate_input_schema(input_batch)
-        result: _ScalarOutputComplete = _ScalarOutputComplete.from_process_result(
+        result: OutputComplete = OutputComplete.from_process_result(
             generator.send(input_batch),
             self.empty_output_batch,
         )
@@ -330,22 +300,22 @@ class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInp
         self,
         generator: ScalarOutputGenerator,
         input_batch: pa.RecordBatch,
-    ) -> _ScalarOutputComplete:
+    ) -> OutputComplete:
         """Process a batch with exception handling.
 
         Wraps _process_and_validate to catch exceptions and convert them
-        to _ScalarOutputComplete with an error log message.
+        to OutputComplete with an error log message.
         """
         try:
             return self._process_and_validate(generator, input_batch)
         except Exception as e:
-            return _ScalarOutputComplete(
+            return OutputComplete(
                 batch=self.empty_output_batch,
                 log_message=vgi.log.Message.from_exception(e),
             )
 
     @final
-    def _should_terminate(self, result: _ScalarOutputComplete) -> bool:
+    def _should_terminate(self, result: OutputComplete) -> bool:
         """Check if processing should terminate due to an exception."""
         return (
             result.log_message is not None

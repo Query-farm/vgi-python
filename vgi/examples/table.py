@@ -700,7 +700,7 @@ class SettingsAwareFunction(TableFunctionGenerator):
         When vgi_verbose_mode is "true", includes an extra "details" column.
         This demonstrates how settings can affect the bind result.
         """
-        fields: list[pa.Field] = [
+        fields: list[pa.Field[pa.DataType]] = [
             pa.field("id", pa.int64()),
             pa.field("value", pa.float64()),
         ]

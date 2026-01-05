@@ -31,6 +31,7 @@ import structlog
 import vgi.function
 import vgi.ipc_utils
 import vgi.log
+from vgi.output_complete import OutputComplete
 
 __all__ = [
     "TableCardinality",
@@ -134,47 +135,6 @@ OutputGenerator = Generator[vgi.log.Message | Output, None, None]
 
 
 @dataclass(frozen=True, slots=True)
-class _OutputComplete:
-    """Internal: Output with guaranteed non-None batch.
-
-    Used by the framework to normalize generator yields. When the user yields
-    None, Output with None batch, or Message, this class ensures we always
-    have a valid RecordBatch for the protocol.
-
-    Attributes:
-        batch: Always a valid RecordBatch (never None).
-        log_message: Present when user yielded Message directly.
-
-    """
-
-    batch: pa.RecordBatch
-    log_message: vgi.log.Message | None = None
-
-    @classmethod
-    def from_process_result(
-        cls,
-        source: vgi.log.Message | Output,
-        empty_batch: pa.RecordBatch,
-    ) -> "_OutputComplete":
-        """Create from user's yield value.
-
-        Args:
-            source: What the user yielded (Output or Message).
-            empty_batch: Empty batch to substitute when needed.
-
-        Returns:
-            Normalized output with guaranteed non-None batch.
-
-        """
-        if isinstance(source, vgi.log.Message):
-            return cls(batch=empty_batch, log_message=source)
-        # source is Output
-        return cls(
-            batch=source.batch if source.batch is not None else empty_batch,
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class ProtocolOutput:
     """Output yielded by the generator after each send().
 
@@ -210,7 +170,7 @@ class ProtocolOutput:
         )
 
     @classmethod
-    def from_process_result(cls, process_result: "_OutputComplete") -> "ProtocolOutput":
+    def from_process_result(cls, process_result: "OutputComplete") -> "ProtocolOutput":
         """Create a ProtocolOutput from an Output and status.
 
         Args:
@@ -384,7 +344,7 @@ class TableFunctionGenerator(TableFunctionBase):
     """
 
     @final
-    def _process_and_validate(self, generator: OutputGenerator) -> _OutputComplete:
+    def _process_and_validate(self, generator: OutputGenerator) -> OutputComplete:
         """Process a batch and validate the output schema.
 
         Converts the result of the generator to OutputComplete, and
@@ -400,7 +360,7 @@ class TableFunctionGenerator(TableFunctionBase):
             SchemaValidationError: If output batch schema doesn't match.
 
         """
-        result: _OutputComplete = _OutputComplete.from_process_result(
+        result: OutputComplete = OutputComplete.from_process_result(
             generator.send(None),
             self.empty_output_batch,
         )
@@ -411,7 +371,7 @@ class TableFunctionGenerator(TableFunctionBase):
     def _process_with_exception_handling(
         self,
         generator: OutputGenerator,
-    ) -> _OutputComplete:
+    ) -> OutputComplete:
         """Process a batch with exception handling.
 
         Wraps _process_and_validate to catch exceptions and convert them
@@ -425,13 +385,13 @@ class TableFunctionGenerator(TableFunctionBase):
         except StopIteration:
             raise
         except Exception as e:
-            return _OutputComplete(
+            return OutputComplete(
                 batch=self.empty_output_batch,
                 log_message=vgi.log.Message.from_exception(e),
             )
 
     @final
-    def _should_terminate(self, result: _OutputComplete) -> bool:
+    def _should_terminate(self, result: OutputComplete) -> bool:
         """Check if processing should terminate due to an exception."""
         return (
             result.log_message is not None
