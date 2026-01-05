@@ -348,3 +348,70 @@ class TestWorkerRegistry:
         assert len(registry["shared"]) == 2
         assert Func1 in registry["shared"]
         assert Func2 in registry["shared"]
+
+    def test_registry_cached_on_second_call(self) -> None:
+        """Registry is cached after first build (line 161)."""
+
+        class MyWorker(Worker):
+            functions = [
+                type(
+                    "TestFunc",
+                    (TableInOutFunction,),
+                    {
+                        "Meta": type("Meta", (), {"name": "test"}),
+                        "__annotations__": {"data": TableInput},
+                        "data": Arg[TableInput](0, doc="Input"),
+                    },
+                )
+            ]
+
+        # First call builds registry
+        registry1 = MyWorker._build_registry()
+        # Second call returns cached registry (line 161)
+        registry2 = MyWorker._build_registry()
+        # Should be the same object
+        assert registry1 is registry2
+
+
+class TestSuggestSimilarNames:
+    """Tests for Worker._suggest_similar_names()."""
+
+    def test_empty_candidates_returns_empty(self) -> None:
+        """Empty candidates list returns empty (line 310)."""
+        result = Worker._suggest_similar_names("test", [])
+        assert result == []
+
+    def test_exact_prefix_match(self) -> None:
+        """Exact prefix match has highest priority (lines 319-320)."""
+        candidates = ["get_users", "set_users", "getter"]
+        result = Worker._suggest_similar_names("get", candidates)
+        # "get_users" and "getter" start with "get", so they should be first
+        assert "get_users" in result[:2]
+        assert "getter" in result[:2]
+
+    def test_reverse_prefix_match(self) -> None:
+        """Candidate is prefix of name (lines 321-322)."""
+        result = Worker._suggest_similar_names("get_all_users", ["get", "set"])
+        # "get" is prefix of "get_all_users"
+        assert "get" in result
+
+    def test_substring_match(self) -> None:
+        """Substring matching (lines 324-325)."""
+        candidates = ["get_users", "users_list", "admin"]
+        result = Worker._suggest_similar_names("user", candidates)
+        # "user" is substring of "get_users" and "users_list"
+        assert "get_users" in result
+        assert "users_list" in result
+
+    def test_character_overlap_match(self) -> None:
+        """Character overlap for typos (lines 328-333)."""
+        result = Worker._suggest_similar_names("geet", ["get", "set", "put"])
+        # "geet" shares characters with "get" (g, e, t)
+        # Overlap is 3 out of 4 > half of 4
+        assert "get" in result
+
+    def test_no_matches_returns_empty(self) -> None:
+        """No matching candidates returns empty list."""
+        result = Worker._suggest_similar_names("xyz", ["abc", "def"])
+        # "xyz" has no overlap with "abc" or "def"
+        assert result == []

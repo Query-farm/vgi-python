@@ -251,6 +251,35 @@ class TestScalarFunction:
         assert output.log_message.level == Level.EXCEPTION
         assert "same row count" in output.log_message.message.lower()
 
+    def test_row_count_exceeds_input(self) -> None:
+        """Test that output with more rows than input raises error (lines 134-142)."""
+
+        class TooManyRows(ScalarFunction):
+            @property
+            def output_type(self) -> pa.DataType:
+                return pa.int64()
+
+            def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+                # Return MORE rows than input (expanding rows is not allowed)
+                return pa.array([1, 2, 3, 4, 5])
+
+        input_schema = pa.schema([("x", pa.int64())])
+        invocation = make_scalar_invocation(input_schema)
+        func = TooManyRows(invocation=invocation, logger=structlog.get_logger())
+
+        generator = func.run()
+        next(generator)
+
+        # Input has 3 rows, output has 5 rows
+        input_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=input_schema)
+        output = generator.send(ProtocolInput(batch=input_batch))
+
+        # Should have an exception log message
+        assert output.log_message is not None
+        assert output.log_message.level == Level.EXCEPTION
+        # Check that the error message mentions "more rows" (lines 134-142)
+        assert "more rows than input" in output.log_message.message.lower()
+
     def test_empty_batch(self) -> None:
         """Test handling of empty batches."""
 

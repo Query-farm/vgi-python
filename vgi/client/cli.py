@@ -25,12 +25,15 @@ Usage:
 import io
 import json
 import sys
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
 
 from vgi.arguments import Arguments
 from vgi.client.client import Client, ClientError, log
+
+if TYPE_CHECKING:
+    import pyarrow.parquet as pq
 
 
 class OutputWriter:
@@ -50,7 +53,7 @@ class OutputWriter:
         self.output_file = output_file
         self.format = format
         self.schema = schema
-        self._writer: Any = None
+        self._writer: pq.ParquetWriter | None = None
         self._is_stdout = output_file == "-"
         self._first_write = True
 

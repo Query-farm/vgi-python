@@ -22,15 +22,31 @@ Example:
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
 
 import pyarrow as pa
 
 if TYPE_CHECKING:
     from pyarrow import Scalar
 
-# Sentinel for missing default value
-_MISSING: Any = object()
+
+# Sentinel for missing default value - proper type pattern
+class _MissingType:
+    """Sentinel type for missing default values.
+
+    This provides better type safety than using `Any` for the sentinel.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "<MISSING>"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+_MISSING: Final = _MissingType()
 
 __all__ = [
     "Arg",
