@@ -543,6 +543,7 @@ class Arg[ArgT]:
         "choices",
         "pattern",
         "varargs",
+        "arrow_type",
         "_name",
         "_compiled_pattern",
     )
@@ -560,6 +561,7 @@ class Arg[ArgT]:
         choices: Sequence[ArgT] | None = None,
         pattern: str | None = None,
         varargs: bool = False,
+        arrow_type: pa.DataType | None = None,
     ) -> None:
         """Initialize an Arg descriptor with optional validation.
 
@@ -576,6 +578,8 @@ class Arg[ArgT]:
             varargs: If True, collect all remaining positional arguments from this
                 position onwards. Returns tuple[ArgT, ...]. Requires at least 1 value.
                 Must be positional (not named).
+            arrow_type: Explicit Arrow type for this argument. If not provided,
+                type is inferred from the type hint using PYTHON_TO_ARROW.
 
         Raises:
             ValueError: If conflicting constraints are specified (e.g., ge and gt).
@@ -609,6 +613,7 @@ class Arg[ArgT]:
         self.choices = choices
         self.pattern = pattern
         self.varargs = varargs
+        self.arrow_type = arrow_type
         self._name: str | None = None
         self._compiled_pattern: re.Pattern[str] | None = None
 
@@ -943,5 +948,7 @@ class Arg[ArgT]:
             parts.append(f"pattern={self.pattern!r}")
         if self.varargs:
             parts.append("varargs=True")
+        if self.arrow_type is not None:
+            parts.append(f"arrow_type={self.arrow_type!r}")
 
         return f"Arg({', '.join(parts)})"
