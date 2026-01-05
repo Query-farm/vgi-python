@@ -109,6 +109,17 @@ class ArgumentSpec:
         is_varargs: True if this argument collects all remaining positional
             arguments (varargs=True).
 
+    Note:
+        For named arguments, the Python attribute name (``name``) and the SQL
+        key (``position``) are assumed to be identical. This is the standard
+        convention::
+
+            format = Arg[str]("format")  # name="format", position="format"
+
+        If they differ, the ``position`` value will be lost during schema
+        round-trip serialization, as only ``name`` is stored in the Arrow
+        schema field name.
+
     """
 
     name: str

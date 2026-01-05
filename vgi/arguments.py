@@ -520,6 +520,19 @@ class Arg[ArgT]:
                 # Validation happens automatically on first access
                 ...
 
+    Note:
+        For named arguments (string position), the Python attribute name should
+        match the SQL key. This is the standard convention::
+
+            format = Arg[str]("format")  # Recommended: attribute == key
+
+        Avoid using different names::
+
+            output_format = Arg[str]("format")  # Not recommended
+
+        While this works at runtime, it can cause issues with metadata
+        serialization where only one name is preserved.
+
     """
 
     __slots__ = (
