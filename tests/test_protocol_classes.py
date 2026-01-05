@@ -1147,3 +1147,243 @@ class TestArgumentValidationErrorMessages:
         # 16 is closest to 15, then 8
         assert suggestions[0] == 16
         assert suggestions[1] == 8
+
+
+class TestArgVarargs:
+    """Tests for Arg varargs feature."""
+
+    def test_varargs_basic(self) -> None:
+        """Arg with varargs=True should collect multiple values as tuple."""
+
+        class MyClass:
+            invocation = _MockInvocation(
+                Arguments(positional=(pa.scalar(1), pa.scalar(2), pa.scalar(3)))
+            )
+            values = Arg[int](0, varargs=True)
+
+        obj = MyClass()
+        assert obj.values == (1, 2, 3)  # type: ignore[comparison-overlap]
+
+    def test_varargs_single_value(self) -> None:
+        """Varargs should work with exactly one value."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("only"),)))
+            values = Arg[str](0, varargs=True)
+
+        obj = MyClass()
+        assert obj.values == ("only",)  # type: ignore[comparison-overlap]
+
+    def test_varargs_with_preceding_args(self) -> None:
+        """Varargs should work with regular args before it."""
+
+        class MyClass:
+            invocation = _MockInvocation(
+                Arguments(
+                    positional=(
+                        pa.scalar("prefix"),
+                        pa.scalar(10),
+                        pa.scalar(20),
+                        pa.scalar(30),
+                    )
+                )
+            )
+            name = Arg[str](0)
+            numbers = Arg[int](1, varargs=True)
+
+        obj = MyClass()
+        assert obj.name == "prefix"
+        assert obj.numbers == (10, 20, 30)  # type: ignore[comparison-overlap]
+
+    def test_varargs_empty_raises(self) -> None:
+        """Varargs with zero values should raise error."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=()))
+            values = Arg[int](0, varargs=True)
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError, match="requires at least 1 value"):
+            _ = obj.values
+
+    def test_varargs_empty_with_preceding_args(self) -> None:
+        """Varargs with zero values (but preceding args) should raise."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("only"),)))
+            name = Arg[str](0)
+            values = Arg[int](1, varargs=True)
+
+        obj = MyClass()
+        assert obj.name == "only"
+        with pytest.raises(ArgumentValidationError, match="requires at least 1 value"):
+            _ = obj.values
+
+    def test_varargs_with_ge_validation(self) -> None:
+        """Varargs should validate each element with ge constraint."""
+
+        class MyClass:
+            invocation = _MockInvocation(
+                Arguments(positional=(pa.scalar(5), pa.scalar(10), pa.scalar(15)))
+            )
+            values = Arg[int](0, varargs=True, ge=1)
+
+        obj = MyClass()
+        assert obj.values == (5, 10, 15)  # type: ignore[comparison-overlap]
+
+    def test_varargs_with_ge_validation_fail(self) -> None:
+        """Varargs ge validation should fail for any element below threshold."""
+
+        class MyClass:
+            invocation = _MockInvocation(
+                Arguments(positional=(pa.scalar(5), pa.scalar(0), pa.scalar(10)))
+            )
+            values = Arg[int](0, varargs=True, ge=1)
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError, match="'values' element 1"):
+            _ = obj.values
+
+    def test_varargs_with_le_validation_fail(self) -> None:
+        """Varargs le validation should fail for any element above threshold."""
+
+        class MyClass:
+            invocation = _MockInvocation(
+                Arguments(positional=(pa.scalar(5), pa.scalar(10), pa.scalar(150)))
+            )
+            values = Arg[int](0, varargs=True, le=100)
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError, match="'values' element 2"):
+            _ = obj.values
+
+    def test_varargs_with_choices(self) -> None:
+        """Varargs should validate each element against choices."""
+
+        class MyClass:
+            invocation = _MockInvocation(
+                Arguments(positional=(pa.scalar("a"), pa.scalar("b"), pa.scalar("a")))
+            )
+            values = Arg[str](0, varargs=True, choices=["a", "b", "c"])
+
+        obj = MyClass()
+        assert obj.values == ("a", "b", "a")  # type: ignore[comparison-overlap]
+
+    def test_varargs_with_choices_fail(self) -> None:
+        """Varargs choices validation should fail for invalid element."""
+
+        class MyClass:
+            invocation = _MockInvocation(
+                Arguments(positional=(pa.scalar("a"), pa.scalar("invalid")))
+            )
+            values = Arg[str](0, varargs=True, choices=["a", "b", "c"])
+
+        obj = MyClass()
+        with pytest.raises(ArgumentValidationError, match="'values' element 1"):
+            _ = obj.values
+
+    def test_varargs_with_pattern(self) -> None:
+        """Varargs should validate each element against pattern."""
+
+        class MyClass:
+            invocation = _MockInvocation(
+                Arguments(
+                    positional=(pa.scalar("foo"), pa.scalar("bar"), pa.scalar("baz"))
+                )
+            )
+            values = Arg[str](0, varargs=True, pattern=r"^[a-z]+$")
+
+        obj = MyClass()
+        assert obj.values == ("foo", "bar", "baz")  # type: ignore[comparison-overlap]
+
+    def test_varargs_with_pattern_fail(self) -> None:
+        """Varargs pattern validation should fail for invalid element."""
+
+        class MyClass:
+            invocation = _MockInvocation(
+                Arguments(positional=(pa.scalar("foo"), pa.scalar("123")))
+            )
+            values = Arg[str](0, varargs=True, pattern=r"^[a-z]+$")
+
+        obj = MyClass()
+        with pytest.raises(
+            ArgumentValidationError, match="element 1.*does not match pattern"
+        ):
+            _ = obj.values
+
+    def test_varargs_must_be_positional(self) -> None:
+        """Varargs with named argument should raise ValueError at definition."""
+        with pytest.raises(
+            ValueError, match="varargs=True requires a positional argument"
+        ):
+            Arg[int]("named", varargs=True)
+
+    def test_varargs_cannot_have_default(self) -> None:
+        """Varargs with default should raise ValueError at definition."""
+        with pytest.raises(ValueError, match="varargs=True cannot have a default"):
+            Arg[int](0, varargs=True, default=(1, 2, 3))
+
+    def test_varargs_repr(self) -> None:
+        """Arg repr should include varargs=True when set."""
+        arg = Arg[int](0, varargs=True)
+        assert "varargs=True" in repr(arg)
+
+    def test_varargs_is_cached(self) -> None:
+        """Varargs result should be cached like regular Arg."""
+
+        class MyClass:
+            invocation = _MockInvocation(
+                Arguments(positional=(pa.scalar(1), pa.scalar(2)))
+            )
+            values = Arg[int](0, varargs=True)
+
+        obj = MyClass()
+        _ = obj.values
+        assert "values" in obj.__dict__
+        assert obj.__dict__["values"] == (1, 2)
+
+
+class TestArgumentsGetVarargs:
+    """Tests for Arguments.get_varargs() method."""
+
+    def test_get_varargs_basic(self) -> None:
+        """get_varargs should return tuple of values from start position."""
+        args = Arguments(positional=(pa.scalar(1), pa.scalar(2), pa.scalar(3)))
+        result = args.get_varargs(0)
+        assert result == (1, 2, 3)
+
+    def test_get_varargs_with_offset(self) -> None:
+        """get_varargs should start from specified position."""
+        args = Arguments(positional=(pa.scalar("skip"), pa.scalar(10), pa.scalar(20)))
+        result = args.get_varargs(1)
+        assert result == (10, 20)
+
+    def test_get_varargs_empty(self) -> None:
+        """get_varargs should return empty tuple when no args from start."""
+        args = Arguments(positional=(pa.scalar(1),))
+        result = args.get_varargs(1)
+        assert result == ()
+
+    def test_get_varargs_with_type_validation(self) -> None:
+        """get_varargs should validate type of each element."""
+        args = Arguments(positional=(pa.scalar(1), pa.scalar(2)))
+        result = args.get_varargs(0, type=pa.int64())
+        assert result == (1, 2)
+
+    def test_get_varargs_type_mismatch(self) -> None:
+        """get_varargs should raise TypeError on type mismatch."""
+        args = Arguments(positional=(pa.scalar(1), pa.scalar("string")))
+        with pytest.raises(TypeError, match="Argument 1: expected int64"):
+            args.get_varargs(0, type=pa.int64())
+
+    def test_get_varargs_null_value_raises(self) -> None:
+        """get_varargs should raise ValueError for null values."""
+        args = Arguments(positional=(pa.scalar(1), None, pa.scalar(3)))
+        with pytest.raises(ValueError, match="Argument 1: value is null"):
+            args.get_varargs(0)
+
+    def test_get_varargs_negative_start_raises(self) -> None:
+        """get_varargs should raise ValueError for negative start."""
+        args = Arguments(positional=(pa.scalar(1),))
+        with pytest.raises(ValueError, match="start must be non-negative"):
+            args.get_varargs(-1)

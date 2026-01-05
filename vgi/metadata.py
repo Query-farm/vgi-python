@@ -80,6 +80,7 @@ __all__ = [
     # Exceptions
     "FunctionTypeError",
     "TableInputValidationError",
+    "VarargsValidationError",
     # Arrow serialization
     "metadata_to_arrow",
     "metadatas_to_arrow",
@@ -197,6 +198,7 @@ class ParameterInfo:
         default: Default value, or None if required.
         constraints: Validation constraints as dict.
         is_table_input: True if this is the table input parameter.
+        is_varargs: True if this accepts multiple trailing values.
 
     """
 
@@ -208,6 +210,7 @@ class ParameterInfo:
     default: Any = None
     constraints: dict[str, Any] = field(default_factory=dict)
     is_table_input: bool = False
+    is_varargs: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -221,6 +224,7 @@ class ParameterInfo:
             "default": repr(self.default) if self.default is not None else None,
             "constraints": json.dumps(self.constraints) if self.constraints else None,
             "is_table_input": self.is_table_input,
+            "is_varargs": self.is_varargs,
         }
 
     @staticmethod
@@ -247,6 +251,7 @@ class ParameterInfo:
             default=d.get("default"),
             constraints=constraints,
             is_table_input=d.get("is_table_input", False),
+            is_varargs=d.get("is_varargs", False),
         )
 
 
@@ -414,6 +419,10 @@ class TableInputValidationError(ValueError):
     """Raised when TableInput parameter validation fails."""
 
 
+class VarargsValidationError(ValueError):
+    """Raised when varargs parameter validation fails."""
+
+
 def _build_constraints(arg: Arg[Any]) -> dict[str, Any]:
     """Extract validation constraints from an Arg descriptor."""
     constraints: dict[str, Any] = {}
@@ -486,6 +495,7 @@ def extract_parameters(
                         default=None if required else arg.default,
                         constraints=_build_constraints(arg),
                         is_table_input=is_table_input,
+                        is_varargs=arg.varargs,
                     )
                 )
 
@@ -497,9 +507,10 @@ def extract_parameters(
 
     sorted_params = sorted(parameters, key=sort_key)
 
-    # Validate TableInput constraints if any are present
+    # Validate TableInput and varargs constraints
     if validate_table_input:
         _validate_table_input(cls, sorted_params)
+        _validate_varargs(cls, sorted_params)
 
     return sorted_params
 
@@ -541,6 +552,61 @@ def _validate_table_input(cls: type, parameters: list[ParameterInfo]) -> None:
             f"Arg[TableInput]('{table_input.position}') to "
             f"Arg[TableInput](<position_index>)"
         )
+
+
+def _validate_varargs(cls: type, parameters: list[ParameterInfo]) -> None:
+    """Validate varargs parameter constraints.
+
+    If a function has varargs parameters, validates that:
+    - There is at most one varargs parameter
+    - The varargs parameter is positional (not named) - enforced by Arg.__init__
+    - The varargs parameter is the last positional arg (before TableInput if present)
+
+    Args:
+        cls: The function class being validated.
+        parameters: Extracted parameters.
+
+    Raises:
+        VarargsValidationError: If validation fails.
+
+    """
+    varargs_params = [p for p in parameters if p.is_varargs]
+
+    if len(varargs_params) == 0:
+        return  # No varargs parameters, nothing to validate
+
+    if len(varargs_params) > 1:
+        names = [p.name for p in varargs_params]
+        raise VarargsValidationError(
+            f"{cls.__name__}: Functions can have at most one varargs parameter, "
+            f"but found {len(varargs_params)}: {names}"
+        )
+
+    varargs_param = varargs_params[0]
+
+    # Get all positional parameters (excluding TableInput)
+    positional_params = [
+        p for p in parameters if isinstance(p.position, int) and not p.is_table_input
+    ]
+
+    if not positional_params:
+        return  # Should not happen if varargs exists, but be safe
+
+    # Find the maximum position among non-varargs positional params
+    # All positions here are int (filtered above), but mypy doesn't know
+    non_varargs_positional = [p for p in positional_params if not p.is_varargs]
+    if non_varargs_positional:
+        # Extract positions as int (we filtered for isinstance(p.position, int) above)
+        positions = [p.position for p in non_varargs_positional]
+        max_non_varargs_pos = max(pos for pos in positions if isinstance(pos, int))
+        # varargs position must be int (enforced by Arg.__init__)
+        assert isinstance(varargs_param.position, int)
+        if varargs_param.position < max_non_varargs_pos:
+            raise VarargsValidationError(
+                f"{cls.__name__}: Varargs parameter '{varargs_param.name}' at "
+                f"position {varargs_param.position} must be the last positional "
+                f"argument, but there are positional arguments after it"
+            )
 
 
 # =============================================================================
@@ -754,6 +820,7 @@ _PARAMETER_STRUCT = pa.struct(
         pa.field("default", pa.string(), nullable=True),
         pa.field("constraints", pa.string(), nullable=True),  # JSON for flexibility
         pa.field("is_table_input", pa.bool_()),
+        pa.field("is_varargs", pa.bool_()),
     ]
 )
 

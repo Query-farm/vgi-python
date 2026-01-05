@@ -188,6 +188,50 @@ class Arguments:
 
         return scalar.as_py()
 
+    def get_varargs(
+        self,
+        start: int,
+        *,
+        type: pa.DataType | None = None,
+    ) -> tuple[Any, ...]:
+        """Get all positional arguments from start position onwards.
+
+        Args:
+            start: Starting positional index (inclusive).
+            type: Expected Arrow type for all values. Raises TypeError if mismatch.
+
+        Returns:
+            Tuple of argument values as Python objects.
+
+        Examples:
+            # Get all args from position 2 onwards
+            extra_values = args.get_varargs(2)  # Returns tuple
+
+            # With type validation
+            numbers = args.get_varargs(1, type=pa.int64())
+
+        """
+        if start < 0:
+            raise ValueError(f"start must be non-negative, got {start}")
+
+        values: list[Any] = []
+        for i in range(start, len(self.positional)):
+            scalar = self.positional[i]
+
+            # Handle null values - varargs don't support nulls
+            if scalar is None or not scalar.is_valid:
+                raise ValueError(
+                    f"Argument {i}: value is null (varargs cannot contain nulls)"
+                )
+
+            # Type validation (if requested)
+            if type is not None and scalar.type != type:
+                raise TypeError(f"Argument {i}: expected {type}, got {scalar.type}")
+
+            values.append(scalar.as_py())
+
+        return tuple(values)
+
     def encoded_dict(self) -> dict[str, "Scalar[Any] | None"]:
         """Convert arguments to a dictionary suitable for serialization.
 
@@ -459,6 +503,7 @@ class Arg[ArgT]:
         "lt",
         "choices",
         "pattern",
+        "varargs",
         "_name",
         "_compiled_pattern",
     )
@@ -475,6 +520,7 @@ class Arg[ArgT]:
         lt: float | int | None = None,
         choices: Sequence[ArgT] | None = None,
         pattern: str | None = None,
+        varargs: bool = False,
     ) -> None:
         """Initialize an Arg descriptor with optional validation.
 
@@ -488,6 +534,9 @@ class Arg[ArgT]:
             lt: Maximum value (exclusive). Value must be < this.
             choices: Allowed values. Value must be one of these.
             pattern: Regex pattern for string validation.
+            varargs: If True, collect all remaining positional arguments from this
+                position onwards. Returns tuple[ArgT, ...]. Requires at least 1 value.
+                Must be positional (not named).
 
         Raises:
             ValueError: If conflicting constraints are specified (e.g., ge and gt).
@@ -499,6 +548,18 @@ class Arg[ArgT]:
         if le is not None and lt is not None:
             raise ValueError("Cannot specify both 'le' and 'lt'")
 
+        # Validate varargs constraints
+        if varargs:
+            if isinstance(position, str):
+                raise ValueError(
+                    "varargs=True requires a positional argument (int), not named"
+                )
+            if default is not _MISSING:
+                raise ValueError(
+                    "varargs=True cannot have a default value "
+                    "(requires at least 1 value)"
+                )
+
         self.position = position
         self.default = default
         self.doc = doc
@@ -508,6 +569,7 @@ class Arg[ArgT]:
         self.lt = lt
         self.choices = choices
         self.pattern = pattern
+        self.varargs = varargs
         self._name: str | None = None
         self._compiled_pattern: re.Pattern[str] | None = None
 
@@ -556,6 +618,24 @@ class Arg[ArgT]:
                 f"TableInOutFunction, TableFunctionGenerator)."
             )
         arguments = invocation.arguments
+
+        if self.varargs:
+            # Collect all positional arguments from this position onwards
+            # position is guaranteed to be int (validated in __init__)
+            assert isinstance(self.position, int)  # Validated in __init__
+            values = arguments.get_varargs(self.position)
+            if len(values) == 0:
+                raise ArgumentValidationError(
+                    f"Argument '{self._name}' requires at least 1 value.",
+                    arg_name=self._name,
+                    position=self.position,
+                    constraint="varargs requires at least 1 value",
+                    doc=self.doc if self.doc else None,
+                )
+            # Validate each element
+            for i, val in enumerate(values):
+                self._validate_single(val, index=i)
+            return values  # type: ignore[no-any-return]  # varargs returns tuple
 
         if self.default is _MISSING:
             value: ArgT = arguments.get(self.position)
@@ -706,6 +786,102 @@ class Arg[ArgT]:
                     default=self.default,
                 )
 
+    def _validate_single(self, value: Any, *, index: int) -> None:
+        """Validate a single value from varargs against all constraints.
+
+        Args:
+            value: The value to validate.
+            index: Index within the varargs tuple (for error messages).
+
+        Raises:
+            ArgumentValidationError: If any constraint is violated.
+
+        """
+        arg_name = self._name or str(self.position)
+        valid_range = self._describe_valid_range()
+        display_pos = f"{self.position}[{index}]"
+
+        # Numeric range validation
+        if self.ge is not None and value < self.ge:
+            raise ArgumentValidationError(
+                f"Argument '{arg_name}' element {index} is too small.",
+                arg_name=self._name,
+                position=display_pos,
+                value=value,
+                constraint=f"must be >= {self.ge}",
+                doc=self.doc if self.doc else None,
+                valid_range=valid_range,
+            )
+
+        if self.le is not None and value > self.le:
+            raise ArgumentValidationError(
+                f"Argument '{arg_name}' element {index} is too large.",
+                arg_name=self._name,
+                position=display_pos,
+                value=value,
+                constraint=f"must be <= {self.le}",
+                doc=self.doc if self.doc else None,
+                valid_range=valid_range,
+            )
+
+        if self.gt is not None and value <= self.gt:
+            raise ArgumentValidationError(
+                f"Argument '{arg_name}' element {index} is too small.",
+                arg_name=self._name,
+                position=display_pos,
+                value=value,
+                constraint=f"must be > {self.gt}",
+                doc=self.doc if self.doc else None,
+                valid_range=valid_range,
+            )
+
+        if self.lt is not None and value >= self.lt:
+            raise ArgumentValidationError(
+                f"Argument '{arg_name}' element {index} is too large.",
+                arg_name=self._name,
+                position=display_pos,
+                value=value,
+                constraint=f"must be < {self.lt}",
+                doc=self.doc if self.doc else None,
+                valid_range=valid_range,
+            )
+
+        # Choices validation
+        if self.choices is not None and value not in self.choices:
+            raise ArgumentValidationError(
+                f"Argument '{arg_name}' element {index} has an invalid value.",
+                arg_name=self._name,
+                position=display_pos,
+                value=value,
+                constraint="must be one of the allowed choices",
+                doc=self.doc if self.doc else None,
+                valid_range=valid_range,
+                choices=self.choices,
+            )
+
+        # Pattern validation (for strings)
+        if self._compiled_pattern is not None:
+            if not isinstance(value, str):
+                raise ArgumentValidationError(
+                    f"Argument '{arg_name}' element {index} must be a string.",
+                    arg_name=self._name,
+                    position=display_pos,
+                    value=value,
+                    constraint=f"must be a string matching pattern '{self.pattern}'",
+                    doc=self.doc if self.doc else None,
+                    valid_range=valid_range,
+                )
+            if not self._compiled_pattern.match(value):
+                raise ArgumentValidationError(
+                    f"Argument '{arg_name}' element {index} does not match pattern.",
+                    arg_name=self._name,
+                    position=display_pos,
+                    value=value,
+                    constraint=f"must match pattern '{self.pattern}'",
+                    doc=self.doc if self.doc else None,
+                    valid_range=valid_range,
+                )
+
     def __repr__(self) -> str:
         """Return a string representation of this Arg."""
         parts = [repr(self.position)]
@@ -726,5 +902,7 @@ class Arg[ArgT]:
             parts.append(f"choices={self.choices!r}")
         if self.pattern is not None:
             parts.append(f"pattern={self.pattern!r}")
+        if self.varargs:
+            parts.append("varargs=True")
 
         return f"Arg({', '.join(parts)})"

@@ -337,6 +337,95 @@ class TestDescribeMethod:
         assert result["categories"] == ["test"]
 
 
+class TestVarargsMetadata:
+    """Tests for varargs parameter metadata extraction and validation."""
+
+    def test_varargs_is_extracted(self) -> None:
+        """Varargs parameter should have is_varargs=True in ParameterInfo."""
+
+        class VarargsFunction(TableInOutFunction):
+            name = Arg[str](0, doc="Function name")
+            values = Arg[int](1, varargs=True, doc="One or more values")
+
+        params = extract_parameters(VarargsFunction, validate_table_input=False)
+        name_param = next(p for p in params if p.name == "name")
+        values_param = next(p for p in params if p.name == "values")
+
+        assert name_param.is_varargs is False
+        assert values_param.is_varargs is True
+
+    def test_multiple_varargs_raises(self) -> None:
+        """Multiple varargs parameters should raise VarargsValidationError."""
+        import pytest
+
+        from vgi.metadata import VarargsValidationError
+
+        class BadFunction(TableInOutFunction):
+            values1 = Arg[int](0, varargs=True)
+            values2 = Arg[str](1, varargs=True)
+            data: TableInput = Arg[TableInput](2, doc="Input")  # type: ignore[assignment]
+
+        with pytest.raises(VarargsValidationError, match="at most one varargs"):
+            extract_parameters(BadFunction)
+
+    def test_varargs_not_last_raises(self) -> None:
+        """Varargs not at last positional position should raise."""
+        import pytest
+
+        from vgi.metadata import VarargsValidationError
+
+        class BadFunction(TableInOutFunction):
+            values = Arg[int](0, varargs=True)
+            after = Arg[str](1)  # Regular arg after varargs
+            data: TableInput = Arg[TableInput](2, doc="Input")  # type: ignore[assignment]
+
+        with pytest.raises(VarargsValidationError, match="must be the last positional"):
+            extract_parameters(BadFunction)
+
+    def test_varargs_before_table_input_ok(self) -> None:
+        """Varargs can be before TableInput (TableInput is always last)."""
+
+        class GoodFunction(TableInOutFunction):
+            name = Arg[str](0, doc="Name")
+            columns = Arg[str](1, varargs=True, doc="Column names")
+            data: TableInput = Arg[TableInput](2, doc="Input table")  # type: ignore[assignment]
+
+        # Should not raise
+        params = extract_parameters(GoodFunction)
+        assert len(params) == 3
+
+        columns_param = next(p for p in params if p.name == "columns")
+        data_param = next(p for p in params if p.name == "data")
+
+        assert columns_param.is_varargs is True
+        assert data_param.is_table_input is True
+
+    def test_varargs_arrow_roundtrip(self) -> None:
+        """Varargs is_varargs survives Arrow serialization."""
+
+        class VarargsFunction(TableInOutFunction):
+            """Test varargs serialization."""
+
+            class Meta:
+                name = "varargs_test"
+
+            columns = Arg[str](0, varargs=True, doc="Column names")
+            data: TableInput = Arg[TableInput](1, doc="Input table")  # type: ignore[assignment]
+
+        batch = functions_to_arrow([VarargsFunction])
+        restored = arrow_to_functions(batch)
+
+        assert len(restored) == 1
+        meta = restored[0]
+
+        columns_param = next(p for p in meta.parameters if p.name == "columns")
+        data_param = next(p for p in meta.parameters if p.name == "data")
+
+        assert columns_param.is_varargs is True
+        assert data_param.is_varargs is False
+        assert data_param.is_table_input is True
+
+
 class TestFunctionTypeInference:
     """Tests for function type inference from class hierarchy."""
 
