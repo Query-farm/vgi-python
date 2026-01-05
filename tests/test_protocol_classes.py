@@ -1401,7 +1401,7 @@ class TestAnyArrow:
             value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.value == 42
+        assert obj.value == 42  # type: ignore[comparison-overlap]
 
     def test_any_arrow_accepts_string(self) -> None:
         """AnyArrow should accept string values."""
@@ -1412,7 +1412,7 @@ class TestAnyArrow:
             value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.value == "hello"
+        assert obj.value == "hello"  # type: ignore[comparison-overlap]
 
     def test_any_arrow_accepts_float(self) -> None:
         """AnyArrow should accept float values."""
@@ -1423,7 +1423,7 @@ class TestAnyArrow:
             value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.value == 3.14
+        assert obj.value == 3.14  # type: ignore[comparison-overlap]
 
     def test_any_arrow_accepts_bool(self) -> None:
         """AnyArrow should accept boolean values."""
@@ -1434,7 +1434,7 @@ class TestAnyArrow:
             value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.value is True
+        assert obj.value is True  # type: ignore[comparison-overlap]
 
     def test_any_arrow_accepts_list(self) -> None:
         """AnyArrow should accept list values."""
@@ -1445,7 +1445,7 @@ class TestAnyArrow:
             value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.value == [1, 2, 3]
+        assert obj.value == [1, 2, 3]  # type: ignore[comparison-overlap]
 
     def test_any_arrow_mixed_types(self) -> None:
         """Multiple AnyArrow args can have different types."""
@@ -1466,9 +1466,9 @@ class TestAnyArrow:
             bool_val: AnyArrow = Arg[AnyArrow](2)  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.int_val == 42
-        assert obj.str_val == "text"
-        assert obj.bool_val is True
+        assert obj.int_val == 42  # type: ignore[comparison-overlap]
+        assert obj.str_val == "text"  # type: ignore[comparison-overlap]
+        assert obj.bool_val is True  # type: ignore[comparison-overlap]
 
     def test_any_arrow_with_default(self) -> None:
         """AnyArrow should support default values."""
@@ -1479,7 +1479,7 @@ class TestAnyArrow:
             value: AnyArrow = Arg[AnyArrow](0, default="default")  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.value == "default"
+        assert obj.value == "default"  # type: ignore[comparison-overlap]
 
     def test_any_arrow_named_argument(self) -> None:
         """AnyArrow should work with named arguments."""
@@ -1492,4 +1492,4 @@ class TestAnyArrow:
             data: AnyArrow = Arg[AnyArrow]("data")  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.data == {"key": "value"}
+        assert obj.data == {"key": "value"}  # type: ignore[comparison-overlap]
