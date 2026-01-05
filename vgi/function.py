@@ -26,6 +26,7 @@ See Also:
 import os
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from typing import (
@@ -407,10 +408,12 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
         return [state_class.deserialize(data) for data in state_bytes_list]
 
     def enqueue_work(self, work_items: list[bytes]) -> int:
-        """Add work items to the queue for this invocation.
+        """Add work items to the queue for this invocation (low-level bytes API).
 
         Call this during initialization (initialize_global_state or setup) to populate
         the work queue that workers will pull from during process().
+
+        For a typed alternative, see enqueue_work_items().
 
         Args:
             work_items: List of opaque bytes representing work items.
@@ -421,7 +424,7 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
             Number of items enqueued.
 
         Raises:
-            ValueError: If execution_identifier has not been set.
+            ExecutionIdentifierError: If execution_identifier has not been set.
 
         Example:
             def initialize_global_state(self, init_input: pa.RecordBatch) -> InitResult:
@@ -439,8 +442,45 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
             )
         return self.storage.queue_push(self.execution_identifier, work_items)
 
+    def enqueue_work_items(self, work_items: Sequence[Serializable]) -> int:
+        """Add typed work items to the queue for this invocation.
+
+        This is a typed convenience method that handles serialization automatically.
+        Work items must implement the Serializable protocol.
+
+        Args:
+            work_items: List of Serializable objects to enqueue.
+
+        Returns:
+            Number of items enqueued.
+
+        Raises:
+            ExecutionIdentifierError: If execution_identifier has not been set.
+
+        Example:
+            @dataclass
+            class FileRange:
+                path: str
+                start: int
+                end: int
+
+                def serialize(self) -> bytes:
+                    return pickle.dumps((self.path, self.start, self.end))
+
+                @classmethod
+                def deserialize(cls, data: bytes) -> Self:
+                    path, start, end = pickle.loads(data)
+                    return cls(path, start, end)
+
+            def setup(self):
+                ranges = [FileRange("a.csv", 0, 1000), FileRange("b.csv", 0, 500)]
+                self.enqueue_work_items(ranges)
+
+        """
+        return self.enqueue_work([item.serialize() for item in work_items])
+
     def dequeue_work(self) -> bytes | None:
-        """Claim and return the next work item from the queue.
+        """Claim and return the next work item from the queue (low-level bytes API).
 
         Each call atomically claims one item from the queue. Returns None
         when the queue is empty (all work has been claimed).
@@ -448,11 +488,13 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
         Multiple workers can safely call this concurrently - each item
         will be returned to exactly one worker.
 
+        For a typed alternative, see dequeue_work_item().
+
         Returns:
             Opaque bytes representing a work item, or None if queue is empty.
 
         Raises:
-            ValueError: If execution_identifier has not been set.
+            ExecutionIdentifierError: If execution_identifier has not been set.
 
         Example:
             def process(self) -> OutputGenerator:
@@ -471,6 +513,55 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
                 "Call initialize_global_state() or load_global_state() first."
             )
         return self.storage.queue_pop(self.execution_identifier)
+
+    def dequeue_work_item(self, item_class: type[StateT]) -> StateT | None:
+        """Claim and deserialize the next work item from the queue.
+
+        This is a typed convenience method that handles deserialization automatically.
+        The item_class must implement the Serializable protocol (have a deserialize
+        classmethod).
+
+        Each call atomically claims one item from the queue. Returns None
+        when the queue is empty (all work has been claimed).
+
+        Multiple workers can safely call this concurrently - each item
+        will be returned to exactly one worker.
+
+        Args:
+            item_class: The class to use for deserializing the work item.
+                Must have a deserialize(bytes) classmethod.
+
+        Returns:
+            Deserialized work item, or None if queue is empty.
+
+        Raises:
+            ExecutionIdentifierError: If execution_identifier has not been set.
+
+        Example:
+            @dataclass
+            class FileRange:
+                path: str
+                start: int
+                end: int
+
+                def serialize(self) -> bytes:
+                    return pickle.dumps((self.path, self.start, self.end))
+
+                @classmethod
+                def deserialize(cls, data: bytes) -> Self:
+                    path, start, end = pickle.loads(data)
+                    return cls(path, start, end)
+
+            def process(self) -> OutputGenerator:
+                while item := self.dequeue_work_item(FileRange):
+                    # item is FileRange, fully typed
+                    yield Output(self.process_range(item.path, item.start, item.end))
+
+        """
+        data = self.dequeue_work()
+        if data is None:
+            return None
+        return item_class.deserialize(data)
 
     @final
     @cached_property
