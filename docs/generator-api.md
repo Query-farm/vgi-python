@@ -170,7 +170,7 @@ def process(self):
 
 ## Table-In-Out Generator Function (Advanced)
 
-For advanced streaming control with input data, use `TableInOutGeneratorFunction`. Most users should prefer `TableInOutFunction` instead.
+For advanced streaming control with input data, use `TableInOutGenerator`. Most users should prefer `TableInOutFunction` instead.
 
 ### When to Use Generator API
 
@@ -182,9 +182,9 @@ For advanced streaming control with input data, use `TableInOutGeneratorFunction
 
 ```python
 import pyarrow as pa
-from vgi import TableInOutGeneratorFunction, Output, OutputGenerator, Arg
+from vgi import TableInOutGenerator, Output, OutputGenerator, Arg
 
-class MyFunction(TableInOutGeneratorFunction):
+class MyFunction(TableInOutGenerator):
     """One-line description."""
 
     @property
@@ -208,13 +208,13 @@ class MyFunction(TableInOutGeneratorFunction):
 
 **Passthrough (Echo):**
 ```python
-class EchoFunction(TableInOutGeneratorFunction):
+class EchoFunction(TableInOutGenerator):
     pass  # Default process() passes input unchanged
 ```
 
 **Aggregation (emit on finalize):**
 ```python
-class SumFunction(TableInOutGeneratorFunction):
+class SumFunction(TableInOutGenerator):
     @property
     def output_schema(self):
         return pa.schema([pa.field("sum", pa.int64())])
@@ -270,7 +270,7 @@ def process(self, batch: pa.RecordBatch) -> OutputGenerator:
 
 ## Common Mistakes
 
-### 1. Forgetting the priming yield (TableInOutGeneratorFunction only)
+### 1. Forgetting the priming yield (TableInOutGenerator only)
 
 ```python
 # ❌ WRONG - will raise TypeError on first send()
