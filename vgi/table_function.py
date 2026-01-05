@@ -242,7 +242,7 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
 
     """
 
-    InitInputType = TableFunctionInitInput
+    # InitInputType inferred from generic parameter Function[TableFunctionInitInput]
     init_input: TableFunctionInitInput | None = None
 
     def __init__(
