@@ -293,23 +293,23 @@ class TestInvocation:
         with pytest.raises(ValueError, match="single-row"):
             Invocation.deserialize(multi_row_batch)
 
-    def test_with_global_init_identifier(self) -> None:
-        """Test that with_global_init_identifier creates a new Invocation."""
+    def test_with_global_execution_identifier(self) -> None:
+        """Test that with_global_execution_identifier creates a new Invocation."""
         original = Invocation(
             function_name="test",
             input_schema=None,
             function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=None,
-            global_init_identifier=None,
+            global_execution_identifier=None,
         )
 
-        init_result = InitResult(global_init_identifier=b"init-data")
-        updated = original.with_global_init_identifier(init_result)
+        init_result = InitResult(global_execution_identifier=b"init-data")
+        updated = original.with_global_execution_identifier(init_result)
 
         assert updated.function_name == original.function_name
-        assert updated.global_init_identifier == init_result
-        assert original.global_init_identifier is None  # Original unchanged
+        assert updated.global_execution_identifier == init_result
+        assert original.global_execution_identifier is None  # Original unchanged
 
 
 class TestInitResult:
@@ -317,7 +317,7 @@ class TestInitResult:
 
     def test_basic_round_trip(self) -> None:
         """InitResult should serialize and deserialize correctly."""
-        original = InitResult(global_init_identifier=b"test-init-id")
+        original = InitResult(global_execution_identifier=b"test-init-id")
 
         serialized = original.serialize()
         assert isinstance(serialized, bytes)
@@ -328,11 +328,11 @@ class TestInitResult:
         batch = reader.read_next_batch()
         deserialized = InitResult.deserialize(batch)
 
-        assert deserialized.global_init_identifier == b"test-init-id"
+        assert deserialized.global_execution_identifier == b"test-init-id"
 
     def test_null_identifier(self) -> None:
         """InitResult with null identifier should round-trip correctly."""
-        original = InitResult(global_init_identifier=None)
+        original = InitResult(global_execution_identifier=None)
 
         serialized = original.serialize()
         from pyarrow import ipc
@@ -341,14 +341,14 @@ class TestInitResult:
         batch = reader.read_next_batch()
         deserialized = InitResult.deserialize(batch)
 
-        assert deserialized.global_init_identifier is None
+        assert deserialized.global_execution_identifier is None
 
     def test_has_identifier_true(self) -> None:
         """has_identifier should return True when field exists."""
         batch = pa.RecordBatch.from_pylist(
-            [{"global_init_identifier": b"some-id"}],
+            [{"global_execution_identifier": b"some-id"}],
             schema=pa.schema(
-                [pa.field("global_init_identifier", pa.binary(), nullable=True)]
+                [pa.field("global_execution_identifier", pa.binary(), nullable=True)]
             ),
         )
         assert InitResult.has_identifier(batch) is True
@@ -366,7 +366,7 @@ class TestInitResult:
         empty_batch = pa.RecordBatch.from_pylist(
             [],
             schema=pa.schema(
-                [pa.field("global_init_identifier", pa.binary(), nullable=True)]
+                [pa.field("global_execution_identifier", pa.binary(), nullable=True)]
             ),
         )
 
@@ -377,11 +377,11 @@ class TestInitResult:
         """Deserializing multi-row batch should raise ValueError."""
         multi_row_batch = pa.RecordBatch.from_pylist(
             [
-                {"global_init_identifier": b"id1"},
-                {"global_init_identifier": b"id2"},
+                {"global_execution_identifier": b"id1"},
+                {"global_execution_identifier": b"id2"},
             ],
             schema=pa.schema(
-                [pa.field("global_init_identifier", pa.binary(), nullable=True)]
+                [pa.field("global_execution_identifier", pa.binary(), nullable=True)]
             ),
         )
 
@@ -390,12 +390,12 @@ class TestInitResult:
 
     def test_schema(self) -> None:
         """schema() should return correct Arrow schema."""
-        result = InitResult(global_init_identifier=b"test")
+        result = InitResult(global_execution_identifier=b"test")
         schema = result.schema()
 
         assert len(schema) == 1
-        assert schema.field("global_init_identifier").type == pa.binary()
-        assert schema.field("global_init_identifier").nullable is True
+        assert schema.field("global_execution_identifier").type == pa.binary()
+        assert schema.field("global_execution_identifier").nullable is True
 
 
 class TestMessage:

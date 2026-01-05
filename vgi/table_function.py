@@ -273,7 +273,7 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
     - TableInOutGeneratorFunction: For functions that transform input batches
 
     Attributes:
-        init_data: TableFunctionInitInput with projection info (set after init)
+        init_input: TableFunctionInitInput with projection info (set after init)
         empty_output_batch: Cached empty batch conforming to output_schema
 
     See Also:
@@ -282,8 +282,8 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
 
     """
 
-    InitDataCls = TableFunctionInitInput
-    init_data: TableFunctionInitInput | None = None
+    InitInputType = TableFunctionInitInput
+    init_input: TableFunctionInitInput | None = None
 
     def __init__(
         self,
@@ -323,9 +323,9 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
             Projected schema according to init data, or original if no projection.
 
         """
-        if self.init_data and self.init_data.projection_ids is not None:
+        if self.init_input and self.init_input.projection_ids is not None:
             projected_fields = []
-            for proj_id in self.init_data.projection_ids:
+            for proj_id in self.init_input.projection_ids:
                 field = schema.field(proj_id)
                 projected_fields.append(field)
             return pa.schema(projected_fields)

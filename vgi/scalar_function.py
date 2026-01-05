@@ -253,7 +253,7 @@ class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInp
 
     """
 
-    InitDataCls = vgi.function.FunctionInitInput
+    InitInputType = vgi.function.FunctionInitInput
 
     def __init__(
         self,

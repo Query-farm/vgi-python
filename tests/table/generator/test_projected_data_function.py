@@ -168,11 +168,11 @@ class TestProjectedDataFunctionInProcess:
             logger=structlog.get_logger(),
         )
 
-        # Without init_data, should return full schema
+        # Without init_input, should return full schema
         assert func.output_schema == ProjectedDataFunction.FULL_SCHEMA
 
-        # After setting init_data with projection, should return projected schema
-        func.init_data = TableFunctionInitInput(projection_ids=[0, 2])
+        # After setting init_input with projection, should return projected schema
+        func.init_input = TableFunctionInitInput(projection_ids=[0, 2])
         schema = func.output_schema
         assert len(schema) == 2
         assert schema.names == ["id", "value"]

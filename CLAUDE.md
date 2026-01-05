@@ -209,13 +209,13 @@ class SequenceFunction(TableFunctionGenerator):
 
 ## Using DuckDB Settings
 
-Functions can declare required DuckDB settings via `Meta.required_settings` and
+Functions can declare required settings via `Meta.required_settings` and
 access them via `self.settings` or `self.get_setting()`. Settings are available
 during the bind phase, allowing output schema to depend on setting values.
 
 ```python
 class SettingsAwareFunction(TableFunctionGenerator):
-    """Function that uses DuckDB settings to determine output."""
+    """Function that uses settings to determine output."""
 
     class Meta:
         required_settings = ["vgi_verbose_mode"]  # Declare required settings
@@ -249,7 +249,7 @@ with Client("vgi-example-worker") as client:
     for batch in client.table_function(
         function_name="settings_aware",
         arguments=Arguments(positional=(pa.scalar(10),)),
-        duckdb_settings={"vgi_verbose_mode": "true"},
+        settings={"vgi_verbose_mode": "true"},
     ):
         process(batch)
 ```
@@ -336,7 +336,7 @@ output_schema = schema_like(self.input_schema, rename={"old": "new"})
 
 | Property/Method | Description |
 |-----------------|-------------|
-| `settings` | Dict of DuckDB settings passed to function |
+| `settings` | Dict of settings passed to function |
 | `get_setting(name, default)` | Get specific setting value |
 
 ### Pattern Decision Tree

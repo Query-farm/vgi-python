@@ -109,7 +109,7 @@ def read_ipc_batch(
         stream: Stream to read from (must support binary reads, e.g., stdin pipe,
             BufferedReader). Type is Any to accommodate runtime reassignment
             of stdin/stdout to binary mode.
-        context: Description for error messages (e.g., "invocation", "init_data").
+        context: Description for error messages (e.g., "invocation", "init_input").
 
     Returns:
         The deserialized RecordBatch.

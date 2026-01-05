@@ -264,13 +264,13 @@ class Worker:
     ) -> None:
         """Validate that all required settings are present in invocation.
 
-        Functions can declare required DuckDB settings via Meta.required_settings.
+        Functions can declare required settings via Meta.required_settings.
         This method checks that all required settings are provided in the
-        invocation.duckdb_settings dictionary.
+        invocation.settings dictionary.
 
         Args:
             func_cls: The function class to validate settings for.
-            invocation: The invocation containing duckdb_settings.
+            invocation: The invocation containing settings.
 
         Raises:
             ValueError: If required settings are missing from the invocation.
@@ -282,16 +282,12 @@ class Worker:
         if not required:
             return  # No settings required
 
-        provided = (
-            set(invocation.duckdb_settings.keys())
-            if invocation.duckdb_settings
-            else set()
-        )
+        provided = set(invocation.settings.keys()) if invocation.settings else set()
         missing = required - provided
 
         if missing:
             raise ValueError(
-                f"Function '{meta.name}' requires DuckDB settings {sorted(missing)} "
+                f"Function '{meta.name}' requires settings {sorted(missing)} "
                 f"but they were not provided. Provided settings: {sorted(provided)}"
             )
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-VGI functions need access to DuckDB settings/pragmas to:
+VGI functions need access to settings/pragmas to:
 1. Determine output schema during bind phase (e.g., timezone affects datetime output)
 2. Influence processing behavior (e.g., thread limits, memory settings)
 3. Maintain consistency with DuckDB's execution environment
@@ -44,22 +44,22 @@ Settings are passed as a dict in the `Invocation`:
 @dataclass(frozen=True, slots=True)
 class Invocation:
     # ... existing fields ...
-    duckdb_settings: dict[str, str] | None = None  # New field
+    settings: dict[str, str] | None = None  # New field
 ```
 
 **Changes to `vgi/invocation.py`:**
-- Add `duckdb_settings: dict[str, str] | None = None` field
+- Add `settings: dict[str, str] | None = None` field
 - Serialize as `pa.map_(pa.utf8(), pa.utf8())` type in Arrow IPC
 - Deserialize with backward compatibility (None if field missing)
 
 **Serialization Format:**
 ```python
 # In serialize():
-pa.field("duckdb_settings", pa.map_(pa.utf8(), pa.utf8()), nullable=True)
+pa.field("settings", pa.map_(pa.utf8(), pa.utf8()), nullable=True)
 
 # Value encoding:
-"duckdb_settings": (
-    list(self.duckdb_settings.items()) if self.duckdb_settings else None
+"settings": (
+    list(self.settings.items()) if self.settings else None
 )
 ```
 
@@ -71,8 +71,8 @@ Functions access settings via the `Function` base class:
 class Function:
     @property
     def settings(self) -> dict[str, str]:
-        """All DuckDB settings passed to this function."""
-        return dict(self.invocation.duckdb_settings or {})
+        """All settings passed to this function."""
+        return dict(self.invocation.settings or {})
 
     def get_setting(self, name: str, default: str | None = None) -> str | None:
         """Get a specific DuckDB setting value.
@@ -84,9 +84,9 @@ class Function:
         Returns:
             Setting value or default
         """
-        if self.invocation.duckdb_settings is None:
+        if self.invocation.settings is None:
             return default
-        return self.invocation.duckdb_settings.get(name, default)
+        return self.invocation.settings.get(name, default)
 ```
 
 **Changes to `vgi/function.py`:**
@@ -111,7 +111,7 @@ def _validate_required_settings(
     if not required:
         return  # No settings required
 
-    provided = set(invocation.duckdb_settings.keys()) if invocation.duckdb_settings else set()
+    provided = set(invocation.settings.keys()) if invocation.settings else set()
     missing = required - provided
 
     if missing:
@@ -135,12 +135,12 @@ def invoke(
     self,
     function_name: str,
     ...,
-    duckdb_settings: dict[str, str] | None = None,  # New parameter
+    settings: dict[str, str] | None = None,  # New parameter
 ) -> ...:
 ```
 
 **Changes to `vgi/client/client.py`:**
-- Add `duckdb_settings` parameter to `_initialize_stream_common()` and related methods
+- Add `settings` parameter to `_initialize_stream_common()` and related methods
 - Include in `Invocation` creation
 
 ## Protocol Flow
@@ -152,7 +152,7 @@ Client                                    Worker
   │  ├─ function_name: "timezone_func"      │
   │  ├─ arguments: {...}                    │
   │  ├─ input_schema: {...}                 │
-  │  └─ duckdb_settings: {                  │
+  │  └─ settings: {                  │
   │       "TimeZone": "America/New_York",   │
   │       "threads": "4"                    │
   │     }                                   │
@@ -209,10 +209,10 @@ class DebugOutputFunction(TableInOutFunction):
 | File | Changes |
 |------|---------|
 | `vgi/metadata.py` | Add `required_settings` to Meta, ResolvedMetadata, Arrow schema |
-| `vgi/invocation.py` | Add `duckdb_settings` field, serialization |
+| `vgi/invocation.py` | Add `settings` field, serialization |
 | `vgi/function.py` | Add `settings` property, `get_setting()` method |
 | `vgi/worker.py` | Add settings validation during bind |
-| `vgi/client/client.py` | Add `duckdb_settings` parameter |
+| `vgi/client/client.py` | Add `settings` parameter |
 | `docs/protocol.md` | Document settings in protocol |
 | `docs/metadata.md` | Document `required_settings` |
 | `CLAUDE.md` | Add settings usage example |
@@ -230,7 +230,7 @@ class DebugOutputFunction(TableInOutFunction):
 ## Implementation Order
 
 1. `vgi/metadata.py` - Add required_settings to Meta
-2. `vgi/invocation.py` - Add duckdb_settings field
+2. `vgi/invocation.py` - Add settings field
 3. `vgi/function.py` - Add settings accessor
 4. `vgi/worker.py` - Add validation
 5. `vgi/client/client.py` - Add settings parameter

@@ -1,4 +1,4 @@
-"""Tests for the DuckDB settings feature."""
+"""Tests for the settings feature."""
 
 import pyarrow as pa
 import pytest
@@ -35,7 +35,7 @@ class TestSettingsInProcess:
         invocation = make_invocation(
             function_name="settings_aware",
             arguments=Arguments(positional=(pa.scalar(3),)),
-            duckdb_settings={"vgi_verbose_mode": "true", "other": "value"},
+            settings={"vgi_verbose_mode": "true", "other": "value"},
         )
         func = SettingsAwareFunction(
             invocation=invocation,
@@ -61,7 +61,7 @@ class TestSettingsInProcess:
         invocation = make_invocation(
             function_name="settings_aware",
             arguments=Arguments(positional=(pa.scalar(3),)),
-            duckdb_settings={"vgi_verbose_mode": "true"},
+            settings={"vgi_verbose_mode": "true"},
         )
         func = SettingsAwareFunction(
             invocation=invocation,
@@ -74,7 +74,7 @@ class TestSettingsInProcess:
         invocation = make_invocation(
             function_name="settings_aware",
             arguments=Arguments(positional=(pa.scalar(3),)),
-            duckdb_settings={"vgi_verbose_mode": "false"},
+            settings={"vgi_verbose_mode": "false"},
         )
         func = SettingsAwareFunction(
             invocation=invocation,
@@ -88,7 +88,7 @@ class TestSettingsInProcess:
         invocation = make_invocation(
             function_name="settings_aware",
             arguments=Arguments(positional=(pa.scalar(3),)),
-            duckdb_settings={"vgi_verbose_mode": "true"},
+            settings={"vgi_verbose_mode": "true"},
         )
         func = SettingsAwareFunction(
             invocation=invocation,
@@ -108,7 +108,7 @@ class TestSettingsViaClient:
                 client.table_function(
                     function_name="settings_aware",
                     arguments=Arguments(positional=(pa.scalar(3),)),
-                    duckdb_settings={"vgi_verbose_mode": "false"},
+                    settings={"vgi_verbose_mode": "false"},
                 )
             )
 
@@ -125,7 +125,7 @@ class TestSettingsViaClient:
                 client.table_function(
                     function_name="settings_aware",
                     arguments=Arguments(positional=(pa.scalar(3),)),
-                    duckdb_settings={"vgi_verbose_mode": "true"},
+                    settings={"vgi_verbose_mode": "true"},
                 )
             )
 
@@ -145,7 +145,7 @@ class TestSettingsViaClient:
                     client.table_function(
                         function_name="settings_aware",
                         arguments=Arguments(positional=(pa.scalar(3),)),
-                        # No duckdb_settings provided
+                        # No settings provided
                     )
                 )
 
@@ -167,14 +167,14 @@ class TestInvocationSerialization:
             function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test-id",
-            duckdb_settings={"TimeZone": "UTC", "threads": "4"},
+            settings={"TimeZone": "UTC", "threads": "4"},
         )
 
         serialized = original.serialize()
         batch = pa.ipc.open_stream(pa.py_buffer(serialized)).read_all().to_batches()[0]
         deserialized = Invocation.deserialize(batch)
 
-        assert deserialized.duckdb_settings == {"TimeZone": "UTC", "threads": "4"}
+        assert deserialized.settings == {"TimeZone": "UTC", "threads": "4"}
 
     def test_none_settings_roundtrip(self) -> None:
         """None settings should survive serialization."""
@@ -186,14 +186,14 @@ class TestInvocationSerialization:
             function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test-id",
-            duckdb_settings=None,
+            settings=None,
         )
 
         serialized = original.serialize()
         batch = pa.ipc.open_stream(pa.py_buffer(serialized)).read_all().to_batches()[0]
         deserialized = Invocation.deserialize(batch)
 
-        assert deserialized.duckdb_settings is None
+        assert deserialized.settings is None
 
 
 class TestMetadataSerialization:

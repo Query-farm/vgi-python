@@ -307,7 +307,7 @@ class ResolvedMetadata:
     stability: FunctionStability = FunctionStability.CONSISTENT
     null_handling: NullHandling = NullHandling.DEFAULT
 
-    # DuckDB settings required by the function
+    # settings required by the function
     required_settings: list[str] = field(default_factory=list)
 
     # Table function specific
@@ -577,7 +577,7 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         "categories",
         "stability",
         "null_handling",
-        "required_settings",  # DuckDB settings/pragmas required by function
+        "required_settings",  # settings/pragmas required by function
         # Table function specific
         "projection_pushdown",
         "filter_pushdown",

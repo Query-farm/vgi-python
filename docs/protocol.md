@@ -99,11 +99,11 @@ The Invocation message contains the following fields:
 | `global_execution_identifier` | binary | Shared state ID for parallel workers |
 | `client_features` | list\<string\> | Feature flags from client |
 | `attach_id` | binary | DuckDB attachment identifier (nullable) |
-| `duckdb_settings` | map\<string, string\> | DuckDB settings/pragmas (nullable) |
+| `settings` | map\<string, string\> | settings/pragmas (nullable) |
 
 ## DuckDB Settings
 
-Functions can declare required DuckDB settings via `Meta.required_settings`. These
+Functions can declare required settings via `Meta.required_settings`. These
 settings are passed from client to worker in the Invocation during the bind phase.
 
 ```python

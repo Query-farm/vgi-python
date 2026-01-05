@@ -639,11 +639,11 @@ class ProjectedDataFunction(TableFunctionGenerator):
 
 
 class SettingsAwareFunction(TableFunctionGenerator):
-    """Generates data with output schema determined by DuckDB settings.
+    """Generates data with output schema determined by settings.
 
     USE CASE
     --------
-    Demonstrates how functions can declare required DuckDB settings via
+    Demonstrates how functions can declare required settings via
     Meta.required_settings and access them via self.settings or
     self.get_setting(). The output schema is determined at bind time based
     on the provided settings.
@@ -662,10 +662,10 @@ class SettingsAwareFunction(TableFunctionGenerator):
 
     Example:
     -------
-    With duckdb_settings={"vgi_verbose_mode": "true"}:
+    With settings={"vgi_verbose_mode": "true"}:
     Returns: [{"id": 0, "value": 0.0, "details": "row_0"}, ...]
 
-    With duckdb_settings={"vgi_verbose_mode": "false"}:
+    With settings={"vgi_verbose_mode": "false"}:
     Returns: [{"id": 0, "value": 0.0}, ...]
 
     """
@@ -674,7 +674,7 @@ class SettingsAwareFunction(TableFunctionGenerator):
         """Metadata for SettingsAwareFunction."""
 
         name = "settings_aware"
-        description = "Generates data with schema determined by DuckDB settings"
+        description = "Generates data with schema determined by settings"
         categories = ["generator", "settings"]
         max_workers = 1
         required_settings = ["vgi_verbose_mode"]

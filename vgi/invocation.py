@@ -163,7 +163,7 @@ class Invocation:
         attach_id: Optional unique identifier for the DuckDB database attachment.
             When VGI is used from an attached database, this allows tracing calls
             back to that specific attachment. None when not using attached databases.
-        duckdb_settings: Optional dictionary of DuckDB settings/pragmas to pass
+        settings: Optional dictionary of settings/pragmas to pass
             to the function. Functions can declare required settings via
             Meta.required_settings and access them via self.settings or
             self.get_setting(). Settings are available during bind phase,
@@ -193,7 +193,7 @@ class Invocation:
     arguments: Arguments = Arguments()
     client_features: frozenset[str] = frozenset()
     attach_id: bytes | None = None
-    duckdb_settings: dict[str, str] | None = None
+    settings: dict[str, str] | None = None
 
     def with_global_execution_identifier(
         self, global_execution_identifier: InitResult
@@ -237,10 +237,8 @@ class Invocation:
                     ),
                     "client_features": list(self.client_features),
                     "attach_id": self.attach_id,
-                    "duckdb_settings": (
-                        list(self.duckdb_settings.items())
-                        if self.duckdb_settings
-                        else None
+                    "settings": (
+                        list(self.settings.items()) if self.settings else None
                     ),
                 }
             ],
@@ -260,7 +258,7 @@ class Invocation:
                     pa.field("client_features", pa.list_(pa.utf8()), nullable=False),
                     pa.field("attach_id", pa.binary(), nullable=True),
                     pa.field(
-                        "duckdb_settings",
+                        "settings",
                         pa.map_(pa.utf8(), pa.utf8()),
                         nullable=True,
                     ),
@@ -323,13 +321,13 @@ class Invocation:
         if "attach_id" in data.schema.names:
             attach_id = first_row.get("attach_id")
 
-        # Parse duckdb_settings - optional field for DuckDB settings/pragmas
-        duckdb_settings: dict[str, str] | None = None
-        if "duckdb_settings" in data.schema.names:
-            settings_value = first_row.get("duckdb_settings")
+        # Parse settings - optional field for settings/pragmas
+        settings: dict[str, str] | None = None
+        if "settings" in data.schema.names:
+            settings_value = first_row.get("settings")
             if settings_value is not None:
                 # Map type deserializes as list of (key, value) tuples
-                duckdb_settings = dict(settings_value)
+                settings = dict(settings_value)
 
         return Invocation(
             function_name=first_row["function_name"],
@@ -341,7 +339,7 @@ class Invocation:
             global_execution_identifier=global_execution_identifier,
             client_features=client_features,
             attach_id=attach_id,
-            duckdb_settings=duckdb_settings,
+            settings=settings,
         )
 
     @staticmethod

@@ -371,7 +371,7 @@ class Client:
         function_type: InvocationType,
         bind_result_callback: Callable[[pa.RecordBatch], None] | None,
         projection_ids: list[int] | None,
-        duckdb_settings: dict[str, str] | None = None,
+        settings: dict[str, str] | None = None,
     ) -> tuple[_BindResult, InitResult, Invocation]:
         """Perform the common initialization handshake with the primary worker.
 
@@ -399,7 +399,7 @@ class Client:
             projection_ids: Optional list of column indices to project in the
                 output. Passed to the worker via TableFunctionInitInput (ignored
                 for scalar functions).
-            duckdb_settings: Optional dictionary of DuckDB settings/pragmas to
+            settings: Optional dictionary of settings/pragmas to
                 pass to the function. Functions that declare required_settings
                 in their Meta class will validate these are present.
 
@@ -435,7 +435,7 @@ class Client:
             arguments=arguments,
             client_features=client_features,
             attach_id=self._attach_id,
-            duckdb_settings=duckdb_settings,
+            settings=settings,
         )
         call_parameters_batch_bytes = initial_request.serialize()
 
@@ -594,7 +594,7 @@ class Client:
         function_type: InvocationType,
         bind_result_callback: Callable[[pa.RecordBatch], None] | None,
         projection_ids: list[int] | None,
-        duckdb_settings: dict[str, str] | None = None,
+        settings: dict[str, str] | None = None,
     ) -> tuple[ipc.RecordBatchStreamWriter | None, ipc.RecordBatchStreamReader | None]:
         """Initialize the VGI protocol stream and prepare for data transfer.
 
@@ -620,7 +620,7 @@ class Client:
             bind_result_callback: Optional callback invoked with the raw bind
                 result RecordBatch.
             projection_ids: Optional list of column indices to project.
-            duckdb_settings: Optional dictionary of DuckDB settings/pragmas.
+            settings: Optional dictionary of settings/pragmas.
 
         Returns:
             A tuple of (data_writer, output_reader):
@@ -643,7 +643,7 @@ class Client:
             function_type=function_type,
             bind_result_callback=bind_result_callback,
             projection_ids=projection_ids,
-            duckdb_settings=duckdb_settings,
+            settings=settings,
         )
 
         # Spawn additional workers if needed
@@ -1388,7 +1388,7 @@ class Client:
         arguments: Arguments | None = None,
         bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
         projection_ids: list[int] | None = None,
-        duckdb_settings: dict[str, str] | None = None,
+        settings: dict[str, str] | None = None,
     ) -> Generator[pa.RecordBatch, None, None]:
         """Invoke a table-in-out function on the worker and stream results.
 
@@ -1419,7 +1419,7 @@ class Client:
                 output schema, max_processes, or cardinality hints.
             projection_ids: Optional list of column indices for column projection.
                 Passed to the worker via TableFunctionInitInput.
-            duckdb_settings: Optional dictionary of DuckDB settings/pragmas to
+            settings: Optional dictionary of settings/pragmas to
                 pass to the function. Functions that declare required_settings
                 in their Meta class will validate these are present.
 
@@ -1469,7 +1469,7 @@ class Client:
                 function_type=InvocationType.TABLE,
                 bind_result_callback=bind_result_callback,
                 projection_ids=projection_ids,
-                duckdb_settings=duckdb_settings,
+                settings=settings,
             )
 
             # Use parallel processing for all cases (handles both single and
@@ -1757,7 +1757,7 @@ class Client:
         arguments: Arguments | None = None,
         bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
         projection_ids: list[int] | None = None,
-        duckdb_settings: dict[str, str] | None = None,
+        settings: dict[str, str] | None = None,
     ) -> Generator[pa.RecordBatch, None, None]:
         """Invoke a table function (source function) and stream output batches.
 
@@ -1786,7 +1786,7 @@ class Client:
                 output schema, max_processes, or cardinality hints.
             projection_ids: Optional list of column indices for column projection.
                 Passed to the worker via TableFunctionInitInput.
-            duckdb_settings: Optional dictionary of DuckDB settings/pragmas to
+            settings: Optional dictionary of settings/pragmas to
                 pass to the function. Functions that declare required_settings
                 in their Meta class will validate these are present.
 
@@ -1826,7 +1826,7 @@ class Client:
             function_type=InvocationType.TABLE,
             bind_result_callback=bind_result_callback,
             projection_ids=projection_ids,
-            duckdb_settings=duckdb_settings,
+            settings=settings,
         )
 
         if output_reader is None:
@@ -1844,7 +1844,7 @@ class Client:
         input: Iterator[pa.RecordBatch],
         arguments: Arguments | None = None,
         bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
-        duckdb_settings: dict[str, str] | None = None,
+        settings: dict[str, str] | None = None,
     ) -> Generator[pa.RecordBatch, None, None]:
         """Invoke a scalar function on the worker and stream results.
 
@@ -1873,7 +1873,7 @@ class Client:
             bind_result_callback: Optional callback invoked with the raw bind
                 result RecordBatch before processing begins. Useful for inspecting
                 output schema or max_processes.
-            duckdb_settings: Optional dictionary of DuckDB settings/pragmas to
+            settings: Optional dictionary of settings/pragmas to
                 pass to the function. Functions that declare required_settings
                 in their Meta class will validate these are present.
 
@@ -1925,7 +1925,7 @@ class Client:
                 function_type=InvocationType.SCALAR,
                 bind_result_callback=bind_result_callback,
                 projection_ids=None,  # Scalar functions don't use projection
-                duckdb_settings=duckdb_settings,
+                settings=settings,
             )
 
             # Use parallel processing for all cases (handles both single and

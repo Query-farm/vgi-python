@@ -120,8 +120,8 @@ class MyTableFunction(TableFunctionGenerator):
 | `cardinality()` | Provide row count estimates | Returns None |
 | `setup()` | Acquire resources | No-op |
 | `teardown()` | Release resources | No-op |
-| `perform_init()` | Distributed init (primary) | Default impl |
-| `retrieve_init()` | Distributed init (secondary) | Default impl |
+| `initialize_global_state()` | Distributed init (primary) | Default impl |
+| `load_global_state()` | Distributed init (secondary) | Default impl |
 
 ### Table Function Patterns
 
@@ -149,11 +149,11 @@ def process(self):
 
 **Parallel generation with work queue:**
 ```python
-def perform_init(self, init_input):
+def initialize_global_state(self, init_input):
     # Primary worker: populate work queue
     work_items = [chunk.serialize() for chunk in self.create_chunks()]
     self.enqueue_work(work_items)
-    return InitResult(self.init_identifier)
+    return InitResult(self.execution_identifier)
 
 def process(self):
     # All workers: pull from queue until empty
