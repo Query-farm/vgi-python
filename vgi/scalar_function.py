@@ -41,7 +41,6 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Generator
-from dataclasses import dataclass
 from typing import Any, final
 
 import pyarrow as pa
@@ -51,6 +50,7 @@ import vgi.function
 import vgi.log
 from vgi.exceptions import SchemaValidationError
 from vgi.output_complete import OutputComplete
+from vgi.protocol_types import ProtocolInput
 from vgi.table_function import Output, ProtocolOutput
 
 __all__ = [
@@ -149,21 +149,7 @@ class RowCountMismatchError(Exception):
 ScalarOutputGenerator = Generator[vgi.log.Message | Output, pa.RecordBatch | None, None]
 
 
-@dataclass(frozen=True, slots=True)
-class ProtocolInput:
-    """Input sent to the scalar function generator via send().
-
-    Contains an input batch and optional metadata. The scalar function
-    processes each batch and returns an output batch with the same row count.
-
-    Attributes:
-        batch: The input RecordBatch to process.
-        metadata: Optional metadata from the IPC stream.
-
-    """
-
-    batch: pa.RecordBatch
-    metadata: pa.KeyValueMetadata | None = None
+# ProtocolInput imported from vgi.protocol_types
 
 
 class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInput]):

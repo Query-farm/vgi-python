@@ -79,6 +79,7 @@ import vgi.ipc_utils
 import vgi.log
 import vgi.table_function
 from vgi.output_complete import OutputComplete
+from vgi.protocol_types import ProtocolInput as ProtocolInputBase
 
 __all__ = [
     "ProtocolInput",
@@ -107,9 +108,12 @@ class _OutputStatus(Enum):
     FINISHED = "FINISHED"
 
 
-@dataclass(frozen=True, slots=True)
-class ProtocolInput:
+@dataclass(frozen=True)
+class ProtocolInput(ProtocolInputBase):
     """Input sent to the generator via send().
+
+    Extends ProtocolInputBase with finalize phase signaling for table-in-out
+    functions.
 
     Attributes:
         batch: The input RecordBatch to process.
@@ -119,9 +123,6 @@ class ProtocolInput:
 
     # pa.KeyValueMetadata uses bytes so we define signals as bytes
     _FINALIZE_SIGNAL: ClassVar[bytes] = b"FINALIZE"
-
-    batch: pa.RecordBatch
-    metadata: pa.KeyValueMetadata | None = None
 
     @property
     def is_finalize(self) -> bool:
