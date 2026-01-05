@@ -588,3 +588,57 @@ class TestEdgeCases:
         assert field.metadata is not None
         assert field.metadata.get(VGI_ARG_KEY) == VGI_ARG_NAMED
         assert field.metadata.get(VGI_TYPE_KEY) == VGI_TYPE_ANY
+
+
+class TestArgumentSpecRepr:
+    """Test ArgumentSpec __repr__ method."""
+
+    def test_positional_argument_repr(self) -> None:
+        """Positional argument should show integer position."""
+        spec = ArgumentSpec(name="count", position=0, arrow_type=pa.int64())
+        result = repr(spec)
+        assert 'name="count"' in result
+        assert "pos=0" in result
+        assert "int64" in result
+        assert "flags=" not in result  # No flags when all False
+
+    def test_named_argument_repr(self) -> None:
+        """Named argument should show quoted string position."""
+        spec = ArgumentSpec(name="format", position="format", arrow_type=pa.utf8())
+        result = repr(spec)
+        assert 'name="format"' in result
+        assert 'pos="format"' in result
+        assert "string" in result or "utf8" in result
+
+    def test_flags_shown_when_true(self) -> None:
+        """Flags should only appear when True."""
+        spec = ArgumentSpec(
+            name="data",
+            position=0,
+            arrow_type=pa.null(),
+            is_table_input=True,
+        )
+        result = repr(spec)
+        assert "flags=[table_input]" in result
+
+    def test_multiple_flags(self) -> None:
+        """Multiple flags should all be shown."""
+        spec = ArgumentSpec(
+            name="cols",
+            position=0,
+            arrow_type=pa.utf8(),
+            is_varargs=True,
+        )
+        result = repr(spec)
+        assert "varargs" in result
+
+    def test_any_type_flag(self) -> None:
+        """any_type flag should be shown."""
+        spec = ArgumentSpec(
+            name="value",
+            position=0,
+            arrow_type=pa.null(),
+            is_any_type=True,
+        )
+        result = repr(spec)
+        assert "any_type" in result
