@@ -118,6 +118,27 @@ class ArgumentSpec:
     is_any_type: bool = False
     is_varargs: bool = False
 
+    def __repr__(self) -> str:
+        """Return concise repr showing key attributes."""
+        # Build position display: integer or quoted string
+        pos = self.position if isinstance(self.position, int) else f'"{self.position}"'
+
+        # Build flags list (only show if True)
+        flags = []
+        if self.is_table_input:
+            flags.append("table_input")
+        if self.is_any_type:
+            flags.append("any_type")
+        if self.is_varargs:
+            flags.append("varargs")
+
+        flags_str = f", flags=[{', '.join(flags)}]" if flags else ""
+
+        return (
+            f'ArgumentSpec(name="{self.name}", pos={pos}, '
+            f"type={self.arrow_type}{flags_str})"
+        )
+
 
 # =============================================================================
 # Serialization Functions
