@@ -152,7 +152,10 @@ class RangeFunction(TableFunctionGenerator):
 
     start: int = Arg[int](0, doc="Start of range (inclusive)")  # type: ignore[assignment]
     end: int = Arg[int](1, doc="End of range (exclusive)")  # type: ignore[assignment]
-    step: int = Arg[int](2, default=1, doc="Step between values", ge=1)  # type: ignore[assignment]
+    # Explicit arrow_type to use int32 instead of inferred int64
+    step: int = Arg[int](  # type: ignore[assignment]
+        2, default=1, doc="Step between values", ge=1, arrow_type=pa.int32()
+    )
 
     BATCH_SIZE: ClassVar[int] = 1000
 
