@@ -84,7 +84,7 @@ vgi/
   function.py              # Invocation, OutputSpec, Arguments, FunctionType
   scalar_function.py       # ScalarFunction, ScalarFunctionGenerator
   table_function.py        # TableFunctionGenerator, TableCardinality, Output
-  table_in_out_function.py # TableInOutFunction, TableInOutGeneratorFunction
+  table_in_out_function.py # TableInOutFunction, TableInOutGenerator
   metadata.py              # Function metadata for introspection
   schema_utils.py          # Schema builder helpers (schema, schema_like)
   worker.py                # Worker base class

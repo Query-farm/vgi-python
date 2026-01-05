@@ -103,7 +103,7 @@ from vgi.table_in_out_function import (
     ProtocolInput,
     ProtocolOutput,
     TableInOutFunction,
-    TableInOutGeneratorFunction,
+    TableInOutGenerator,
     _OutputStatus,
 )
 
@@ -328,7 +328,7 @@ class FunctionTestClient(_BaseTestClient):
 
     def __init__(
         self,
-        function_class: type[TableInOutGeneratorFunction] | type[TableInOutFunction],
+        function_class: type[TableInOutGenerator] | type[TableInOutFunction],
     ) -> None:
         """Initialize the TestClient.
 
@@ -634,7 +634,7 @@ def batch(__schema: pa.Schema | None = None, **columns: list[Any]) -> pa.RecordB
 
 
 def run_function(
-    function: type[TableInOutGeneratorFunction] | type[TableInOutFunction],
+    function: type[TableInOutGenerator] | type[TableInOutFunction],
     input_batches: list[pa.RecordBatch],
     args: tuple[Any, ...] | None = None,
     kwargs: dict[str, Any] | None = None,
@@ -677,7 +677,7 @@ def run_function(
 
 
 def assert_function_output(
-    function: type[TableInOutGeneratorFunction] | type[TableInOutFunction],
+    function: type[TableInOutGenerator] | type[TableInOutFunction],
     input: list[pa.RecordBatch],
     expected: list[pa.RecordBatch],
     args: tuple[Any, ...] | None = None,
@@ -754,7 +754,7 @@ def assert_function_output(
 
 
 def assert_function_logs(
-    function: type[TableInOutGeneratorFunction] | type[TableInOutFunction],
+    function: type[TableInOutGenerator] | type[TableInOutFunction],
     input: list[pa.RecordBatch],
     expected_logs: list[dict[str, Any]],
     args: tuple[Any, ...] | None = None,

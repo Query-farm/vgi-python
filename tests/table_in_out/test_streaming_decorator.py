@@ -8,14 +8,14 @@ from vgi import (
     Output,
     OutputGenerator,
     StreamingGenerator,
-    TableInOutGeneratorFunction,
+    TableInOutGenerator,
     streaming,
 )
 from vgi.log import Level, Message
 from vgi.testing import FunctionTestClient, batch
 
 
-class EchoStreamingFunction(TableInOutGeneratorFunction):
+class EchoStreamingFunction(TableInOutGenerator):
     """Simple echo function using the @streaming decorator."""
 
     @streaming
@@ -26,7 +26,7 @@ class EchoStreamingFunction(TableInOutGeneratorFunction):
             current = yield Output(current)
 
 
-class CountingStreamingFunction(TableInOutGeneratorFunction):
+class CountingStreamingFunction(TableInOutGenerator):
     """Function that counts batches using @streaming."""
 
     def __init__(
@@ -45,7 +45,7 @@ class CountingStreamingFunction(TableInOutGeneratorFunction):
             current = yield Output(current)
 
 
-class AccumulatingStreamingFunction(TableInOutGeneratorFunction):
+class AccumulatingStreamingFunction(TableInOutGenerator):
     """Function that accumulates and outputs empty batches during process."""
 
     def __init__(
@@ -80,7 +80,7 @@ class AccumulatingStreamingFunction(TableInOutGeneratorFunction):
         )
 
 
-class LoggingStreamingFunction(TableInOutGeneratorFunction):
+class LoggingStreamingFunction(TableInOutGenerator):
     """Function that logs using the @streaming decorator."""
 
     @streaming
@@ -171,7 +171,7 @@ class TestStreamingDecoratorComparedToManual:
     def test_equivalent_output(self) -> None:
         """@streaming decorated function should produce same output as manual."""
 
-        class ManualEcho(TableInOutGeneratorFunction):
+        class ManualEcho(TableInOutGenerator):
             def process(self, b: pa.RecordBatch) -> OutputGenerator:
                 """Manual process without decorator."""
                 _ = yield None

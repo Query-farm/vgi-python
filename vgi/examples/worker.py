@@ -5,7 +5,7 @@ and listing function classes. Function names are derived from
 each class's metadata (Meta.name or snake_case of class name).
 
 The worker supports:
-- TableInOutGeneratorFunction: Transforms input batches to output batches
+- TableInOutGenerator: Transforms input batches to output batches
 - TableFunctionGenerator: Generates output batches without input
 - ScalarFunctionGenerator: Transforms input to single-column output (1:1 rows)
 
@@ -47,7 +47,7 @@ class ExampleWorker(Worker):
     """Example worker with built-in test functions."""
 
     functions = [
-        # TableInOutGeneratorFunction - transform input batches
+        # TableInOutGenerator - transform input batches
         EchoFunction,
         BufferInputFunction,
         RepeatInputsFunction,
