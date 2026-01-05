@@ -35,17 +35,22 @@ from typing import (
     Protocol,
     Self,
     TypeVar,
+    cast,
     final,
+    get_args,
+    get_origin,
 )
 
 import pyarrow as pa
 import structlog
 
 import vgi.ipc_utils
+import vgi.log
 from vgi.exceptions import ExecutionIdentifierError, SchemaValidationError
 from vgi.function_storage import FunctionStorage, FunctionStorageSqlite
 from vgi.invocation import InitResult, Invocation
 from vgi.metadata import MetadataMixin, ResolvedMetadata
+from vgi.output_complete import OutputComplete
 
 __all__ = [
     "Function",
@@ -273,8 +278,36 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
     execution_identifier: bytes | None = None
 
     # This is the init data that may be been read.
-    InitInputType: type[T]
+    # Type inferred from generic parameter via _get_init_input_type()
     init_input: T | None = None
+
+    # Cache for _get_init_input_type per class
+    _init_input_type_cache: ClassVar[dict[type, type["FunctionInitInput"]]] = {}
+
+    @classmethod
+    def _get_init_input_type(cls) -> type["FunctionInitInput"]:
+        """Get the InitInput type from the generic parameter.
+
+        Walks the MRO to find Function[T] and extracts T.
+        Result is cached per class.
+        """
+        if cls in cls._init_input_type_cache:
+            return cls._init_input_type_cache[cls]
+
+        for base in cls.__mro__:
+            if hasattr(base, "__orig_bases__"):
+                for orig_base in base.__orig_bases__:
+                    origin = get_origin(orig_base)
+                    if origin is not None and origin.__name__ == "Function":
+                        args = get_args(orig_base)
+                        if args:
+                            init_type = cast(type["FunctionInitInput"], args[0])
+                            cls._init_input_type_cache[cls] = init_type
+                            return init_type
+
+        # Fallback to base type if not found
+        cls._init_input_type_cache[cls] = FunctionInitInput
+        return FunctionInitInput
 
     def __init__(
         self,
@@ -584,6 +617,22 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
                 context=f"output from {type(self).__name__}",
             )
 
+    @final
+    def _should_terminate(self, result: OutputComplete) -> bool:
+        """Check if processing should terminate due to an exception."""
+        return (
+            result.log_message is not None
+            and result.log_message.level == vgi.log.Level.EXCEPTION
+        )
+
+    @final
+    def _create_error_output(self, exception: Exception) -> OutputComplete:
+        """Create an OutputComplete with error message from exception."""
+        return OutputComplete(
+            batch=self.empty_output_batch,
+            log_message=vgi.log.Message.from_exception(exception),
+        )
+
     @property
     def input_schema(self) -> pa.Schema:
         """Return the input schema from the invocation.
@@ -651,7 +700,8 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
 
     def initialize_global_state(self, init_input: pa.RecordBatch) -> InitResult:
         """Perform a new init call and store it in the storage."""
-        self.init_input = self.InitInputType.deserialize(init_input)
+        init_type = self._get_init_input_type()
+        self.init_input = cast(T, init_type.deserialize(init_input))
         assert self.init_input is not None
         self.execution_identifier = self.storage.global_put(self.init_input.serialize())
         return InitResult(self.execution_identifier)
@@ -664,8 +714,9 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
                 "Ensure initialize_global_state() returns a valid InitResult."
             )
         self.execution_identifier = init_input.global_execution_identifier
-        self.init_input = self.InitInputType.deserialize_bytes(
-            self.storage.global_get(self.execution_identifier)
+        init_type = self._get_init_input_type()
+        self.init_input = cast(
+            T, init_type.deserialize_bytes(self.storage.global_get(self.execution_identifier))
         )
 
     def setup(self) -> None:

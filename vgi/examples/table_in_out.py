@@ -39,7 +39,7 @@ from vgi.table_in_out_function import (
     Output,
     OutputGenerator,
     TableInOutFunction,
-    TableInOutGeneratorFunction,
+    TableInOutGenerator,
 )
 
 __all__ = [
@@ -55,7 +55,7 @@ __all__ = [
 ]
 
 
-class EchoFunction(TableInOutGeneratorFunction):
+class EchoFunction(TableInOutGenerator):
     """Passthrough function that emits each input batch unchanged.
 
     USE CASE
@@ -90,7 +90,7 @@ class EchoFunction(TableInOutGeneratorFunction):
     data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
 
 
-class BufferInputFunction(TableInOutGeneratorFunction):
+class BufferInputFunction(TableInOutGenerator):
     """Buffering function that collects all input and emits during finalization.
 
     USE CASE
@@ -166,7 +166,7 @@ class BufferInputFunction(TableInOutGeneratorFunction):
             yield Output(b, has_more)
 
 
-class RepeatInputsFunction(TableInOutGeneratorFunction):
+class RepeatInputsFunction(TableInOutGenerator):
     """Explosion function that duplicates each input batch N times.
 
     USE CASE
@@ -262,7 +262,7 @@ class RepeatInputsFunction(TableInOutGeneratorFunction):
             batch = received
 
 
-class SumAllColumnsFunction(TableInOutGeneratorFunction):
+class SumAllColumnsFunction(TableInOutGenerator):
     """Aggregation function that computes column-wise sums across all batches.
 
     USE CASE

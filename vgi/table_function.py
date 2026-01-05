@@ -14,11 +14,11 @@ Class Hierarchy:
     Function (vgi.function)
         └── TableFunctionBase
                 └── TableFunctionGenerator  (simple generator, no input via send)
-                └── TableInOutGeneratorFunction (full protocol with input batches)
+                └── TableInOutGenerator (full protocol with input batches)
 
 TableFunctionGenerator is useful for functions that don't need to receive
 input batches via yield - they just produce output batches in a loop until done.
-For functions that transform input batches, use TableInOutGeneratorFunction.
+For functions that transform input batches, use TableInOutGenerator.
 """
 
 from collections.abc import Generator
@@ -230,7 +230,7 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
 
     This class is not meant to be used directly. Subclass either:
     - TableFunctionGenerator: For simple generators that produce output
-    - TableInOutGeneratorFunction: For functions that transform input batches
+    - TableInOutGenerator: For functions that transform input batches
 
     Attributes:
         init_input: TableFunctionInitInput with projection info (set after init)
@@ -238,11 +238,11 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
 
     See Also:
         TableFunctionGenerator: Simple generator base class
-        TableInOutGeneratorFunction: Full streaming with input batches
+        TableInOutGenerator: Full streaming with input batches
 
     """
 
-    InitInputType = TableFunctionInitInput
+    # InitInputType inferred from generic parameter Function[TableFunctionInitInput]
     init_input: TableFunctionInitInput | None = None
 
     def __init__(
@@ -305,7 +305,7 @@ class TableFunctionGenerator(TableFunctionBase):
     - Produce a fixed sequence of output batches
     - Don't need the full DATA/FINALIZE protocol
 
-    For functions that transform input batches, use TableInOutGeneratorFunction.
+    For functions that transform input batches, use TableInOutGenerator.
 
     LIFECYCLE
     ---------
@@ -385,18 +385,9 @@ class TableFunctionGenerator(TableFunctionBase):
         except StopIteration:
             raise
         except Exception as e:
-            return OutputComplete(
-                batch=self.empty_output_batch,
-                log_message=vgi.log.Message.from_exception(e),
-            )
+            return self._create_error_output(e)
 
-    @final
-    def _should_terminate(self, result: OutputComplete) -> bool:
-        """Check if processing should terminate due to an exception."""
-        return (
-            result.log_message is not None
-            and result.log_message.level == vgi.log.Level.EXCEPTION
-        )
+    # _should_terminate inherited from Function
 
     def process(self) -> OutputGenerator:
         """Process batches during the DATA phase.
