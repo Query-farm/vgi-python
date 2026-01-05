@@ -223,7 +223,7 @@ class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInp
 
     """
 
-    InitInputType = vgi.function.FunctionInitInput
+    # InitInputType inferred from generic parameter Function[FunctionInitInput]
 
     def __init__(
         self,
