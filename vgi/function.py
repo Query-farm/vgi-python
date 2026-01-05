@@ -42,10 +42,12 @@ import pyarrow as pa
 import structlog
 
 import vgi.ipc_utils
+import vgi.log
 from vgi.exceptions import ExecutionIdentifierError, SchemaValidationError
 from vgi.function_storage import FunctionStorage, FunctionStorageSqlite
 from vgi.invocation import InitResult, Invocation
 from vgi.metadata import MetadataMixin, ResolvedMetadata
+from vgi.output_complete import OutputComplete
 
 __all__ = [
     "Function",
@@ -583,6 +585,22 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
                 actual=batch.schema,
                 context=f"output from {type(self).__name__}",
             )
+
+    @final
+    def _should_terminate(self, result: OutputComplete) -> bool:
+        """Check if processing should terminate due to an exception."""
+        return (
+            result.log_message is not None
+            and result.log_message.level == vgi.log.Level.EXCEPTION
+        )
+
+    @final
+    def _create_error_output(self, exception: Exception) -> OutputComplete:
+        """Create an OutputComplete with error message from exception."""
+        return OutputComplete(
+            batch=self.empty_output_batch,
+            log_message=vgi.log.Message.from_exception(exception),
+        )
 
     @property
     def input_schema(self) -> pa.Schema:
