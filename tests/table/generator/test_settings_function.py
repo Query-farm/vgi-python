@@ -6,7 +6,7 @@ import structlog
 
 from tests.conftest import make_invocation
 from vgi.arguments import Arguments
-from vgi.client.client import Client
+from vgi.client.client import Client, ClientError
 from vgi.examples.table import SettingsAwareFunction
 
 
@@ -138,9 +138,8 @@ class TestSettingsViaClient:
     def test_missing_required_setting_fails(self) -> None:
         """Missing required setting should raise error."""
         with Client("vgi-example-worker") as client:
-            with pytest.raises(EOFError):
-                # Call without required settings - worker should fail
-                # and client receives EOFError when worker crashes
+            with pytest.raises(ClientError) as exc_info:
+                # Call without required settings - worker should send bind error
                 list(
                     client.table_function(
                         function_name="settings_aware",
@@ -149,9 +148,8 @@ class TestSettingsViaClient:
                     )
                 )
 
-            # The worker stderr should contain the error message
-            stderr = client.get_worker_stderr()
-            assert "vgi_verbose_mode" in stderr
+            # The error message should indicate the missing setting
+            assert "vgi_verbose_mode" in str(exc_info.value)
 
 
 class TestInvocationSerialization:

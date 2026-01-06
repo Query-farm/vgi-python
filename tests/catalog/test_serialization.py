@@ -6,6 +6,7 @@ from vgi import schema
 from vgi.catalog import (
     AttachId,
     CatalogAttachResult,
+    ExtensionOption,
     FunctionInfo,
     FunctionType,
     ScanFunctionResult,
@@ -70,6 +71,44 @@ class TestCatalogAttachResultSerialization:
         assert restored.supports_transactions is True
         assert restored.supports_time_travel is True
         assert restored.catalog_version_frozen is True
+
+    def test_with_settings(self) -> None:
+        """Test with settings list."""
+        # Create some serialized ExtensionOption bytes
+        option_bytes_1 = b"serialized_option_1"
+        option_bytes_2 = b"serialized_option_2"
+
+        original = CatalogAttachResult(
+            attach_id=AttachId(b"\x01\x02"),
+            supports_transactions=True,
+            supports_time_travel=False,
+            catalog_version_frozen=False,
+            catalog_version=1,
+            settings=[option_bytes_1, option_bytes_2],
+        )
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = CatalogAttachResult.deserialize(batch)
+
+        assert len(restored.settings) == 2
+        assert restored.settings[0] == option_bytes_1
+        assert restored.settings[1] == option_bytes_2
+
+    def test_with_empty_settings(self) -> None:
+        """Test with empty settings list."""
+        original = CatalogAttachResult(
+            attach_id=AttachId(b"\x01\x02"),
+            supports_transactions=True,
+            supports_time_travel=False,
+            catalog_version_frozen=False,
+            catalog_version=1,
+            settings=[],
+        )
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = CatalogAttachResult.deserialize(batch)
+
+        assert restored.settings == []
 
 
 class TestSchemaInfoSerialization:
@@ -307,6 +346,140 @@ class TestFunctionInfoSerialization:
 
         assert restored.function_type == FunctionType.TABLE
 
+    def test_examples_with_descriptions(self) -> None:
+        """Test structured examples with descriptions."""
+        from vgi.catalog import CatalogExample
+
+        args_schema = schema(value=pa.int64())
+        output_schema = schema(result=pa.int64())
+
+        original = FunctionInfo(
+            name="double",
+            schema_name="main",
+            function_type=FunctionType.SCALAR,
+            arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
+            output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
+            comment="Double the input",
+            tags={},
+            examples=[
+                CatalogExample(
+                    sql="SELECT double(5)",
+                    description="Double the number 5",
+                    expected_output="10",
+                ),
+                CatalogExample(
+                    sql="SELECT double(-3)",
+                    description="Double a negative number",
+                    expected_output=None,
+                ),
+            ],
+        )
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = FunctionInfo.deserialize(batch)
+
+        assert len(restored.examples) == 2
+        ex0 = restored.examples[0]
+        ex1 = restored.examples[1]
+        assert isinstance(ex0, CatalogExample)
+        assert isinstance(ex1, CatalogExample)
+        assert ex0.sql == "SELECT double(5)"
+        assert ex0.description == "Double the number 5"
+        assert ex0.expected_output == "10"
+        assert ex1.sql == "SELECT double(-3)"
+        assert ex1.description == "Double a negative number"
+        assert ex1.expected_output is None
+
+    def test_examples_empty_descriptions(self) -> None:
+        """Test examples with empty descriptions."""
+        from vgi.catalog import CatalogExample
+
+        args_schema = schema(value=pa.int64())
+        output_schema = schema(result=pa.int64())
+
+        original = FunctionInfo(
+            name="echo",
+            schema_name="main",
+            function_type=FunctionType.SCALAR,
+            arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
+            output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
+            comment=None,
+            tags={},
+            examples=[
+                CatalogExample(sql="SELECT echo('hi')", description=""),
+            ],
+        )
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = FunctionInfo.deserialize(batch)
+
+        assert len(restored.examples) == 1
+        ex = restored.examples[0]
+        assert isinstance(ex, CatalogExample)
+        assert ex.sql == "SELECT echo('hi')"
+        assert ex.description == ""
+
+    def test_examples_empty_list(self) -> None:
+        """Test with no examples."""
+        args_schema = schema(value=pa.int64())
+        output_schema = schema(result=pa.int64())
+
+        original = FunctionInfo(
+            name="test_func",
+            schema_name="main",
+            function_type=FunctionType.SCALAR,
+            arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
+            output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
+            comment=None,
+            tags={},
+            examples=[],
+        )
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = FunctionInfo.deserialize(batch)
+
+        assert restored.examples == []
+
+    def test_tags_dict_serialization(self) -> None:
+        """Test tags dict serialization and deserialization."""
+        args_schema = schema(value=pa.int64())
+        output_schema = schema(result=pa.int64())
+
+        original = FunctionInfo(
+            name="tagged_func",
+            schema_name="main",
+            function_type=FunctionType.SCALAR,
+            arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
+            output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
+            comment=None,
+            tags={"category": "math", "type": "scalar", "version": "1.0"},
+        )
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = FunctionInfo.deserialize(batch)
+
+        assert restored.tags == {"category": "math", "type": "scalar", "version": "1.0"}
+
+    def test_empty_tags_dict(self) -> None:
+        """Test with empty tags dict."""
+        args_schema = schema(value=pa.int64())
+        output_schema = schema(result=pa.int64())
+
+        original = FunctionInfo(
+            name="no_tags_func",
+            schema_name="main",
+            function_type=FunctionType.SCALAR,
+            arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
+            output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
+            comment=None,
+            tags={},
+        )
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = FunctionInfo.deserialize(batch)
+
+        assert restored.tags == {}
+
 
 class TestScanFunctionResultSerialization:
     """Test ScanFunctionResult serialization round-trip."""
@@ -340,19 +513,150 @@ class TestScanFunctionResultSerialization:
         assert restored.invocation_id is None
 
 
+class TestExtensionOptionSerialization:
+    """Test ExtensionOption serialization round-trip."""
+
+    def test_basic_round_trip(self) -> None:
+        """Test basic serialization and deserialization."""
+        type_schema = pa.schema([pa.field("value", pa.bool_())])
+        original = ExtensionOption(
+            name="vgi_verbose_mode",
+            description="Enable verbose output",
+            type=SerializedSchema(type_schema.serialize().to_pybytes()),
+            default_value=None,
+        )
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = ExtensionOption.deserialize(batch)
+
+        assert restored.name == original.name
+        assert restored.description == original.description
+        assert restored.type == original.type
+        assert restored.default_value is None
+
+    def test_with_default_value(self) -> None:
+        """Test with a default value."""
+        type_schema = pa.schema([pa.field("value", pa.string())])
+        # Create a default value batch
+        default_batch = pa.RecordBatch.from_pydict(
+            {"value": ["default"]}, schema=type_schema
+        )
+        from vgi.ipc_utils import serialize_record_batch
+
+        default_bytes = serialize_record_batch(default_batch)
+
+        original = ExtensionOption(
+            name="vgi_log_level",
+            description="Logging level",
+            type=SerializedSchema(type_schema.serialize().to_pybytes()),
+            default_value=default_bytes,
+        )
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = ExtensionOption.deserialize(batch)
+
+        assert restored.name == original.name
+        assert restored.description == original.description
+        assert restored.default_value == default_bytes
+
+    def test_integer_type(self) -> None:
+        """Test with integer type."""
+        type_schema = pa.schema([pa.field("value", pa.int64())])
+        original = ExtensionOption(
+            name="vgi_max_workers",
+            description="Maximum worker count",
+            type=SerializedSchema(type_schema.serialize().to_pybytes()),
+        )
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = ExtensionOption.deserialize(batch)
+
+        # Verify the type can be deserialized back
+        restored_type = pa.ipc.read_schema(pa.py_buffer(restored.type))
+        assert restored_type.field("value").type == pa.int64()
+
+
+class TestFunctionInfoRequiredSettings:
+    """Test FunctionInfo with required_settings field."""
+
+    def test_empty_required_settings(self) -> None:
+        """Test with no required settings."""
+        args_schema = schema(value=pa.int64())
+        output_schema = schema(result=pa.int64())
+
+        original = FunctionInfo(
+            name="echo",
+            schema_name="main",
+            function_type=FunctionType.SCALAR,
+            arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
+            output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
+            comment=None,
+            tags={},
+            required_settings=[],
+        )
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = FunctionInfo.deserialize(batch)
+
+        assert restored.required_settings == []
+
+    def test_single_required_setting(self) -> None:
+        """Test with a single required setting."""
+        args_schema = schema(count=pa.int64())
+        output_schema = schema(result=pa.string())
+
+        original = FunctionInfo(
+            name="settings_aware",
+            schema_name="main",
+            function_type=FunctionType.TABLE,
+            arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
+            output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
+            comment=None,
+            tags={},
+            required_settings=["vgi_verbose_mode"],
+        )
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = FunctionInfo.deserialize(batch)
+
+        assert restored.required_settings == ["vgi_verbose_mode"]
+
+    def test_multiple_required_settings(self) -> None:
+        """Test with multiple required settings."""
+        args_schema = schema(value=pa.int64())
+        output_schema = schema(result=pa.int64())
+
+        original = FunctionInfo(
+            name="logging_function",
+            schema_name="main",
+            function_type=FunctionType.TABLE,
+            arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
+            output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
+            comment=None,
+            tags={},
+            required_settings=["vgi_log_level", "vgi_log_format"],
+        )
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = FunctionInfo.deserialize(batch)
+
+        assert restored.required_settings == ["vgi_log_level", "vgi_log_format"]
+
+
 class TestArrowSchemaCorrectness:
     """Test that Arrow schemas are correct for each type."""
 
     def test_catalog_attach_result_schema(self) -> None:
         """Verify CatalogAttachResult Arrow schema."""
         schema = CatalogAttachResult.ARROW_SCHEMA
-        assert len(schema) == 6
+        assert len(schema) == 7
         assert schema.field("attach_id").type == pa.binary()
         assert schema.field("supports_transactions").type == pa.bool_()
         assert schema.field("supports_time_travel").type == pa.bool_()
         assert schema.field("catalog_version_frozen").type == pa.bool_()
         assert schema.field("catalog_version").type == pa.int64()
         assert schema.field("attach_id_required").type == pa.bool_()
+        assert schema.field("settings").type == pa.list_(pa.binary())
 
     def test_schema_info_schema(self) -> None:
         """Verify SchemaInfo Arrow schema."""

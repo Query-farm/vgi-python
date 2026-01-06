@@ -80,6 +80,9 @@ class CatalogAttachResult:
     # True: Catalog is stateful; attach_id represents a session
     # False: Catalog is stateless; CLI can auto-attach on each command
     attach_id_required: bool = True
+    # Extension options (settings) exposed by this catalog/worker.
+    # Each ExtensionOption is serialized as bytes for Arrow compatibility.
+    settings: list[bytes] = field(default_factory=list)
 
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
@@ -89,6 +92,7 @@ class CatalogAttachResult:
             pa.field("catalog_version_frozen", pa.bool_(), nullable=False),
             pa.field("catalog_version", pa.int64(), nullable=False),
             pa.field("attach_id_required", pa.bool_(), nullable=False),
+            pa.field("settings", pa.list_(pa.binary()), nullable=False),
         ]  # type: ignore[arg-type]
     )
 
@@ -103,6 +107,7 @@ class CatalogAttachResult:
                     "catalog_version_frozen": self.catalog_version_frozen,
                     "catalog_version": self.catalog_version,
                     "attach_id_required": self.attach_id_required,
+                    "settings": self.settings,
                 }
             ],
             schema=self.ARROW_SCHEMA,
@@ -131,6 +136,7 @@ class CatalogAttachResult:
             catalog_version_frozen=row["catalog_version_frozen"],
             catalog_version=row["catalog_version"],
             attach_id_required=row["attach_id_required"],
+            settings=list(row.get("settings") or []),
         )
 
 

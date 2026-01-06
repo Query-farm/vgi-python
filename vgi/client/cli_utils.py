@@ -350,6 +350,7 @@ def catalog_attach_result_to_dict(result: Any) -> dict[str, Any]:
         "catalog_version_frozen": result.catalog_version_frozen,
         "catalog_version": result.catalog_version,
         "attach_id_required": result.attach_id_required,
+        "settings": [bytes_to_hex(s) for s in result.settings],
     }
 
 

@@ -828,30 +828,39 @@ class Worker:
             raise ValueError("\n".join(msg_lines))
 
         candidates = registry[invocation.function_name]
-        func_cls = self._match_function(invocation, candidates)
 
-        # Validate required settings before instantiation
-        self._validate_required_settings(func_cls, invocation)
+        # Wrap bind phase in try-except to catch and report bind-time errors
+        try:
+            func_cls = self._match_function(invocation, candidates)
 
-        # Instantiate the function
-        instance = func_cls(invocation=invocation, logger=fn_log)
+            # Validate required settings before instantiation
+            self._validate_required_settings(func_cls, invocation)
 
-        # Determine active features from client features
-        # Worker can define supported features; active = intersection
-        worker_features: frozenset[str] = frozenset()  # No features supported yet
-        active_features = invocation.client_features & worker_features
-        fn_log.debug(
-            "features_negotiated",
-            client_features=invocation.client_features,
-            active_features=active_features,
-        )
+            # Instantiate the function
+            instance = func_cls(invocation=invocation, logger=fn_log)
 
-        bind_result_bytes = OutputSpec(
-            output_schema=instance.output_schema,
-            max_processes=instance.max_processes,
-            invocation_id=instance.create_invocation_id(),
-            active_features=active_features,
-        ).serialize()
+            # Determine active features from client features
+            # Worker can define supported features; active = intersection
+            worker_features: frozenset[str] = frozenset()  # No features supported yet
+            active_features = invocation.client_features & worker_features
+            fn_log.debug(
+                "features_negotiated",
+                client_features=invocation.client_features,
+                active_features=active_features,
+            )
+
+            bind_result_bytes = OutputSpec(
+                output_schema=instance.output_schema,
+                max_processes=instance.max_processes,
+                invocation_id=instance.create_invocation_id(),
+                active_features=active_features,
+            ).serialize()
+        except Exception as e:
+            fn_log.exception("bind_failed", error=str(e))
+            error_batch_bytes = self._create_bind_error_batch(e, invocation)
+            sys.stdout.write(error_batch_bytes)
+            sys.stdout.flush()
+            return  # Exit cleanly after sending error
 
         if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):
             raise OSError("Failed to write bind result record batch")
