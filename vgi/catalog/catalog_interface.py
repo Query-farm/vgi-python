@@ -6,7 +6,7 @@ catalog interfaces in VGI workers, enabling DuckDB ATTACH support.
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, ClassVar, NewType, Self
 
@@ -347,6 +347,27 @@ class FunctionInfo(CatalogSchemaObject):
     # schema.serialize().to_pybytes()
     output_schema: SerializedSchema
 
+    # Behavior fields
+    stability: FunctionStability = FunctionStability.CONSISTENT
+    null_handling: NullHandling = NullHandling.DEFAULT
+
+    # Documentation fields
+    examples: list[str] = field(default_factory=list)
+    categories: list[str] = field(default_factory=list)
+
+    # Table function capabilities
+    projection_pushdown: bool = True
+    filter_pushdown: bool = False
+    order_preservation: OrderPreservation = OrderPreservation.PRESERVES_ORDER
+    max_workers: int | None = None
+
+    # Aggregate function fields (future)
+    order_dependent: OrderDependence = OrderDependence.NOT_ORDER_DEPENDENT
+    distinct_dependent: DistinctDependence = DistinctDependence.NOT_DISTINCT_DEPENDENT
+
+    # Settings required by the function
+    required_settings: list[str] = field(default_factory=list)
+
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
             pa.field("name", pa.string(), nullable=False),
@@ -356,6 +377,22 @@ class FunctionInfo(CatalogSchemaObject):
             pa.field("output_schema", pa.binary(), nullable=False),
             pa.field("comment", pa.string(), nullable=True),
             pa.field("tags", pa.map_(pa.string(), pa.string()), nullable=False),
+            # Behavior fields (enum values serialized as strings)
+            pa.field("stability", pa.string(), nullable=False),
+            pa.field("null_handling", pa.string(), nullable=False),
+            # Documentation fields
+            pa.field("examples", pa.list_(pa.string()), nullable=False),
+            pa.field("categories", pa.list_(pa.string()), nullable=False),
+            # Table function capabilities
+            pa.field("projection_pushdown", pa.bool_(), nullable=False),
+            pa.field("filter_pushdown", pa.bool_(), nullable=False),
+            pa.field("order_preservation", pa.string(), nullable=False),
+            pa.field("max_workers", pa.int32(), nullable=True),
+            # Aggregate function fields
+            pa.field("order_dependent", pa.string(), nullable=False),
+            pa.field("distinct_dependent", pa.string(), nullable=False),
+            # Settings
+            pa.field("required_settings", pa.list_(pa.string()), nullable=False),
         ]  # type: ignore[arg-type]
     )
 
@@ -371,6 +408,22 @@ class FunctionInfo(CatalogSchemaObject):
                     "output_schema": self.output_schema,
                     "comment": self.comment,
                     "tags": self.tags,
+                    # Behavior fields (enums serialized as name strings)
+                    "stability": self.stability.name,
+                    "null_handling": self.null_handling.name,
+                    # Documentation fields
+                    "examples": self.examples,
+                    "categories": self.categories,
+                    # Table function capabilities
+                    "projection_pushdown": self.projection_pushdown,
+                    "filter_pushdown": self.filter_pushdown,
+                    "order_preservation": self.order_preservation.name,
+                    "max_workers": self.max_workers,
+                    # Aggregate function fields
+                    "order_dependent": self.order_dependent.name,
+                    "distinct_dependent": self.distinct_dependent.name,
+                    # Settings
+                    "required_settings": self.required_settings,
                 }
             ],
             schema=self.ARROW_SCHEMA,
@@ -379,7 +432,11 @@ class FunctionInfo(CatalogSchemaObject):
 
     @classmethod
     def deserialize(cls, batch: pa.RecordBatch) -> Self:
-        """Deserialize from Arrow RecordBatch."""
+        """Deserialize from Arrow RecordBatch.
+
+        Supports backward compatibility with data serialized before new fields
+        were added by using sensible defaults for missing fields.
+        """
         row = vgi.ipc_utils.validate_single_row_batch(
             batch,
             cls.__name__,
@@ -400,6 +457,28 @@ class FunctionInfo(CatalogSchemaObject):
             output_schema=SerializedSchema(row["output_schema"]),
             comment=row.get("comment"),
             tags=dict(row["tags"]) if row["tags"] else {},
+            # Behavior fields (with backward-compatible defaults)
+            stability=FunctionStability[row.get("stability", "CONSISTENT")],
+            null_handling=NullHandling[row.get("null_handling", "DEFAULT")],
+            # Documentation fields
+            examples=list(row.get("examples") or []),
+            categories=list(row.get("categories") or []),
+            # Table function capabilities
+            projection_pushdown=row.get("projection_pushdown", True),
+            filter_pushdown=row.get("filter_pushdown", False),
+            order_preservation=OrderPreservation[
+                row.get("order_preservation", "PRESERVES_ORDER")
+            ],
+            max_workers=row.get("max_workers"),
+            # Aggregate function fields
+            order_dependent=OrderDependence[
+                row.get("order_dependent", "NOT_ORDER_DEPENDENT")
+            ],
+            distinct_dependent=DistinctDependence[
+                row.get("distinct_dependent", "NOT_DISTINCT_DEPENDENT")
+            ],
+            # Settings
+            required_settings=list(row.get("required_settings") or []),
         )
 
 
@@ -1050,10 +1129,12 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         meta = resolve_metadata(func_cls)
 
         # Map metadata function type to catalog function type
-        if meta.function_type == MetadataFunctionType.SCALAR:
-            func_type = FunctionType.SCALAR
-        else:
-            func_type = FunctionType.TABLE
+        func_type_map = {
+            MetadataFunctionType.SCALAR: FunctionType.SCALAR,
+            MetadataFunctionType.TABLE: FunctionType.TABLE,
+            MetadataFunctionType.AGGREGATE: FunctionType.AGGREGATE,
+        }
+        func_type = func_type_map.get(meta.function_type, FunctionType.TABLE)
 
         # Extract argument specs with proper Arrow types
         arg_specs = extract_argument_specs(func_cls)
@@ -1076,6 +1157,22 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             output_schema=output_bytes,
             comment=meta.description or None,
             tags={},
+            # Behavior fields
+            stability=meta.stability,
+            null_handling=meta.null_handling,
+            # Documentation fields
+            examples=[ex.sql for ex in meta.examples],
+            categories=meta.categories,
+            # Table function capabilities
+            projection_pushdown=meta.projection_pushdown,
+            filter_pushdown=meta.filter_pushdown,
+            order_preservation=meta.preserves_order,
+            max_workers=meta.max_workers,
+            # Aggregate function fields
+            order_dependent=meta.order_dependent,
+            distinct_dependent=meta.distinct_dependent,
+            # Settings
+            required_settings=meta.required_settings,
         )
 
     # ========== Catalog DDL (not supported) ==========

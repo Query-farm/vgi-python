@@ -9,6 +9,7 @@ from vgi.catalog import (
     AttachId,
     CatalogAttachResult,
     CatalogInterface,
+    FunctionInfo,
     OnConflict,
     SchemaInfo,
     SerializedSchema,
@@ -423,3 +424,333 @@ class TestReadOnlyCatalogInterface:
         """ReadOnlyCatalogInterface has correct class attributes."""
         assert ReadOnlyCatalogInterface.supports_transactions is False
         assert ReadOnlyCatalogInterface.catalog_version_frozen is True
+
+
+class TestFunctionInfoNewFields:
+    """Test FunctionInfo new metadata fields and serialization."""
+
+    def _get_empty_schema_bytes(self) -> SerializedSchema:
+        """Create empty serialized schema for tests."""
+        import pyarrow as pa
+
+        empty_schema = pa.schema([])
+        return SerializedSchema(empty_schema.serialize().to_pybytes())
+
+    def test_default_values(self) -> None:
+        """Create FunctionInfo with only required fields, verify defaults."""
+        from vgi.catalog import FunctionType
+        from vgi.catalog.catalog_interface import (
+            DistinctDependence,
+            FunctionStability,
+            NullHandling,
+            OrderDependence,
+            OrderPreservation,
+        )
+
+        schema_bytes = self._get_empty_schema_bytes()
+        info = FunctionInfo(
+            name="test_func",
+            schema_name="main",
+            function_type=FunctionType.SCALAR,
+            arguments=schema_bytes,
+            output_schema=schema_bytes,
+            comment=None,
+            tags={},
+        )
+
+        # Behavior fields
+        assert info.stability == FunctionStability.CONSISTENT
+        assert info.null_handling == NullHandling.DEFAULT
+
+        # Documentation fields
+        assert info.examples == []
+        assert info.categories == []
+
+        # Table function capabilities
+        assert info.projection_pushdown is True
+        assert info.filter_pushdown is False
+        assert info.order_preservation == OrderPreservation.PRESERVES_ORDER
+        assert info.max_workers is None
+
+        # Aggregate function fields
+        assert info.order_dependent == OrderDependence.NOT_ORDER_DEPENDENT
+        assert info.distinct_dependent == DistinctDependence.NOT_DISTINCT_DEPENDENT
+
+        # Settings
+        assert info.required_settings == []
+
+    def test_serialization_roundtrip_with_all_fields(self) -> None:
+        """Serialize and deserialize FunctionInfo with all new fields set."""
+        from vgi.catalog import FunctionType
+        from vgi.catalog.catalog_interface import (
+            DistinctDependence,
+            FunctionStability,
+            NullHandling,
+            OrderDependence,
+            OrderPreservation,
+        )
+        from vgi.ipc_utils import deserialize_record_batch
+
+        schema_bytes = self._get_empty_schema_bytes()
+        info = FunctionInfo(
+            name="test_func",
+            schema_name="main",
+            function_type=FunctionType.SCALAR,
+            arguments=schema_bytes,
+            output_schema=schema_bytes,
+            comment=None,
+            tags={},
+            stability=FunctionStability.VOLATILE,
+            null_handling=NullHandling.SPECIAL,
+            examples=["SELECT test_func(1)", "SELECT test_func(2)"],
+            categories=["math", "utility"],
+            projection_pushdown=False,
+            filter_pushdown=True,
+            order_preservation=OrderPreservation.NO_ORDER_GUARANTEE,
+            max_workers=4,
+            order_dependent=OrderDependence.ORDER_DEPENDENT,
+            distinct_dependent=DistinctDependence.DISTINCT_DEPENDENT,
+            required_settings=["vgi_debug", "vgi_verbose"],
+        )
+
+        # Serialize
+        serialized = info.serialize()
+        assert isinstance(serialized, bytes)
+
+        # Deserialize
+        batch = deserialize_record_batch(serialized)
+        restored = FunctionInfo.deserialize(batch)
+
+        # Verify all fields match
+        assert restored.name == info.name
+        assert restored.schema_name == info.schema_name
+        assert restored.function_type == info.function_type
+        assert restored.arguments == info.arguments
+        assert restored.output_schema == info.output_schema
+        assert restored.comment == info.comment
+        assert restored.tags == info.tags
+
+        # New fields
+        assert restored.stability == info.stability
+        assert restored.null_handling == info.null_handling
+        assert restored.examples == info.examples
+        assert restored.categories == info.categories
+        assert restored.projection_pushdown == info.projection_pushdown
+        assert restored.filter_pushdown == info.filter_pushdown
+        assert restored.order_preservation == info.order_preservation
+        assert restored.max_workers == info.max_workers
+        assert restored.order_dependent == info.order_dependent
+        assert restored.distinct_dependent == info.distinct_dependent
+        assert restored.required_settings == info.required_settings
+
+    def test_enum_serialization(self) -> None:
+        """Verify enums serialize to strings and deserialize back correctly."""
+        from vgi.catalog import FunctionType
+        from vgi.catalog.catalog_interface import (
+            DistinctDependence,
+            FunctionStability,
+            NullHandling,
+            OrderDependence,
+            OrderPreservation,
+        )
+        from vgi.ipc_utils import deserialize_record_batch
+
+        schema_bytes = self._get_empty_schema_bytes()
+        info = FunctionInfo(
+            name="test_func",
+            schema_name="main",
+            function_type=FunctionType.SCALAR,
+            arguments=schema_bytes,
+            output_schema=schema_bytes,
+            comment=None,
+            tags={},
+            stability=FunctionStability.CONSISTENT_WITHIN_QUERY,
+            null_handling=NullHandling.SPECIAL,
+            order_preservation=OrderPreservation.NO_ORDER_GUARANTEE,
+            order_dependent=OrderDependence.ORDER_DEPENDENT,
+            distinct_dependent=DistinctDependence.DISTINCT_DEPENDENT,
+        )
+
+        # Serialize and inspect the Arrow data
+        serialized = info.serialize()
+        batch = deserialize_record_batch(serialized)
+
+        # Verify enums were serialized as strings
+        row = batch.to_pydict()
+        assert row["stability"][0] == "CONSISTENT_WITHIN_QUERY"
+        assert row["null_handling"][0] == "SPECIAL"
+        assert row["order_preservation"][0] == "NO_ORDER_GUARANTEE"
+        assert row["order_dependent"][0] == "ORDER_DEPENDENT"
+        assert row["distinct_dependent"][0] == "DISTINCT_DEPENDENT"
+
+        # Verify deserialization produces correct enum values
+        restored = FunctionInfo.deserialize(batch)
+        assert restored.stability == FunctionStability.CONSISTENT_WITHIN_QUERY
+        assert restored.null_handling == NullHandling.SPECIAL
+        assert restored.order_preservation == OrderPreservation.NO_ORDER_GUARANTEE
+        assert restored.order_dependent == OrderDependence.ORDER_DEPENDENT
+        assert restored.distinct_dependent == DistinctDependence.DISTINCT_DEPENDENT
+
+    def test_backward_compatibility_without_new_fields(self) -> None:
+        """Deserialize data that was serialized without new fields (legacy data)."""
+        import pyarrow as pa
+
+        from vgi.catalog import FunctionInfo, FunctionType
+        from vgi.catalog.catalog_interface import (
+            DistinctDependence,
+            FunctionStability,
+            NullHandling,
+            OrderDependence,
+            OrderPreservation,
+        )
+
+        # Create legacy schema without new fields
+        empty_schema = pa.schema([])
+        empty_schema_bytes = empty_schema.serialize().to_pybytes()
+
+        legacy_fields: list[pa.Field[pa.DataType]] = [
+            pa.field("name", pa.string(), nullable=False),
+            pa.field("schema_name", pa.string(), nullable=False),
+            pa.field("function_type", pa.string(), nullable=False),
+            pa.field("arguments", pa.binary(), nullable=False),
+            pa.field("output_schema", pa.binary(), nullable=False),
+            pa.field("comment", pa.string(), nullable=True),
+            pa.field("tags", pa.map_(pa.string(), pa.string()), nullable=False),
+        ]
+        legacy_schema = pa.schema(legacy_fields)
+
+        # Create legacy batch (without new fields)
+        legacy_batch = pa.RecordBatch.from_pylist(
+            [
+                {
+                    "name": "legacy_func",
+                    "schema_name": "main",
+                    "function_type": "scalar",
+                    "arguments": empty_schema_bytes,
+                    "output_schema": empty_schema_bytes,
+                    "comment": "A legacy function",
+                    "tags": {"version": "1.0"},
+                }
+            ],
+            schema=legacy_schema,
+        )
+
+        # Deserialize - should use defaults for missing fields
+        restored = FunctionInfo.deserialize(legacy_batch)
+
+        # Core fields should be preserved
+        assert restored.name == "legacy_func"
+        assert restored.schema_name == "main"
+        assert restored.function_type == FunctionType.SCALAR
+        assert restored.comment == "A legacy function"
+        assert restored.tags == {"version": "1.0"}
+
+        # New fields should have defaults
+        assert restored.stability == FunctionStability.CONSISTENT
+        assert restored.null_handling == NullHandling.DEFAULT
+        assert restored.examples == []
+        assert restored.categories == []
+        assert restored.projection_pushdown is True
+        assert restored.filter_pushdown is False
+        assert restored.order_preservation == OrderPreservation.PRESERVES_ORDER
+        assert restored.max_workers is None
+        assert restored.order_dependent == OrderDependence.NOT_ORDER_DEPENDENT
+        assert restored.distinct_dependent == DistinctDependence.NOT_DISTINCT_DEPENDENT
+        assert restored.required_settings == []
+
+    def test_max_workers_nullable(self) -> None:
+        """Verify max_workers can be None or an integer."""
+        from vgi.catalog import FunctionType
+        from vgi.ipc_utils import deserialize_record_batch
+
+        schema_bytes = self._get_empty_schema_bytes()
+
+        # Test with None
+        info_none = FunctionInfo(
+            name="test_func",
+            schema_name="main",
+            function_type=FunctionType.SCALAR,
+            arguments=schema_bytes,
+            output_schema=schema_bytes,
+            comment=None,
+            tags={},
+            max_workers=None,
+        )
+        assert info_none.max_workers is None
+
+        serialized = info_none.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = FunctionInfo.deserialize(batch)
+        assert restored.max_workers is None
+
+        # Test with integer
+        info_int = FunctionInfo(
+            name="test_func",
+            schema_name="main",
+            function_type=FunctionType.SCALAR,
+            arguments=schema_bytes,
+            output_schema=schema_bytes,
+            comment=None,
+            tags={},
+            max_workers=8,
+        )
+        assert info_int.max_workers == 8
+
+        serialized = info_int.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = FunctionInfo.deserialize(batch)
+        assert restored.max_workers == 8
+
+    def test_list_fields_serialization(self) -> None:
+        """Verify list fields serialize and deserialize correctly."""
+        from vgi.catalog import FunctionType
+        from vgi.ipc_utils import deserialize_record_batch
+
+        schema_bytes = self._get_empty_schema_bytes()
+        info = FunctionInfo(
+            name="test_func",
+            schema_name="main",
+            function_type=FunctionType.SCALAR,
+            arguments=schema_bytes,
+            output_schema=schema_bytes,
+            comment=None,
+            tags={},
+            examples=["SELECT f(1)", "SELECT f(2)", "SELECT f(3)"],
+            categories=["a", "b"],
+            required_settings=["setting1"],
+        )
+
+        serialized = info.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = FunctionInfo.deserialize(batch)
+
+        assert restored.examples == ["SELECT f(1)", "SELECT f(2)", "SELECT f(3)"]
+        assert restored.categories == ["a", "b"]
+        assert restored.required_settings == ["setting1"]
+
+    def test_empty_list_fields(self) -> None:
+        """Verify empty list fields serialize and deserialize correctly."""
+        from vgi.catalog import FunctionType
+        from vgi.ipc_utils import deserialize_record_batch
+
+        schema_bytes = self._get_empty_schema_bytes()
+        info = FunctionInfo(
+            name="test_func",
+            schema_name="main",
+            function_type=FunctionType.SCALAR,
+            arguments=schema_bytes,
+            output_schema=schema_bytes,
+            comment=None,
+            tags={},
+            examples=[],
+            categories=[],
+            required_settings=[],
+        )
+
+        serialized = info.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = FunctionInfo.deserialize(batch)
+
+        assert restored.examples == []
+        assert restored.categories == []
+        assert restored.required_settings == []
