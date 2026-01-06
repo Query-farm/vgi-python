@@ -8,7 +8,7 @@ catalog
 ├── detach <attach_id>      # Detach from a catalog
 ├── create <name>           # Create a new catalog
 ├── drop <name>             # Drop a catalog
-├── version <attach_id>     # Get catalog version
+├── version                 # Get catalog version (--attach-id or --catalog)
 ├── schema                  # Schema operations
 │   ├── list/get/create/drop/contents
 ├── table                   # Table operations
@@ -29,7 +29,9 @@ from vgi.client.cli_schema import schema
 from vgi.client.cli_table import table
 from vgi.client.cli_transaction import transaction
 from vgi.client.cli_utils import (
+    bytes_to_hex,
     catalog_attach_result_to_dict,
+    get_attach_id_from_options,
     hex_to_attach_id,
     hex_to_transaction_id,
     output_json,
@@ -124,23 +126,37 @@ def catalog_drop(name: str, server: str) -> None:
 
 
 @catalog.command("version")
-@click.argument("attach_id")
+@click.option("--attach-id", help="Hex-encoded attach ID")
+@click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
+@click.option("--attach-options", default="{}", help="Attach options as JSON")
 @click.option("--server", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
-def catalog_version(attach_id: str, server: str, transaction_id: str | None) -> None:
-    """Get the current catalog version.
-
-    ATTACH_ID is the hex-encoded attach ID from catalog attach.
-
-    """
+def catalog_version(
+    attach_id: str | None,
+    catalog_name: str | None,
+    attach_options: str,
+    server: str,
+    transaction_id: str | None,
+) -> None:
+    """Get the current catalog version."""
     client = Client(server)
+    opts = parse_json_option(attach_options, "--attach-options")
+    resolved_attach_id, is_stateful = get_attach_id_from_options(
+        client, attach_id, catalog_name, opts
+    )
+    if is_stateful and catalog_name:
+        click.echo(
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-id for session persistence.",
+            err=True,
+        )
     version = client.catalog_version(
-        attach_id=hex_to_attach_id(attach_id),
+        attach_id=resolved_attach_id,
         transaction_id=(
             hex_to_transaction_id(transaction_id) if transaction_id else None
         ),
     )
-    output_json({"version": version, "attach_id": attach_id})
+    output_json({"version": version, "attach_id": bytes_to_hex(resolved_attach_id)})
 
 
 # Add nested subcommand groups

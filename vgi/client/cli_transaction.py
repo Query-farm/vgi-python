@@ -26,12 +26,10 @@ def transaction() -> None:
 
 
 @transaction.command("begin")
-@click.argument("attach_id")
+@click.option("--attach-id", required=True, help="Hex-encoded attach ID")
 @click.option("--server", required=True, help="VGI worker command")
 def transaction_begin(attach_id: str, server: str) -> None:
     """Begin a new transaction.
-
-    ATTACH_ID is the hex-encoded attach ID from catalog attach.
 
     Returns a transaction_id that can be used with other catalog operations.
 
@@ -47,13 +45,12 @@ def transaction_begin(attach_id: str, server: str) -> None:
 
 
 @transaction.command("commit")
-@click.argument("attach_id")
 @click.argument("transaction_id")
+@click.option("--attach-id", required=True, help="Hex-encoded attach ID")
 @click.option("--server", required=True, help="VGI worker command")
-def transaction_commit(attach_id: str, transaction_id: str, server: str) -> None:
+def transaction_commit(transaction_id: str, attach_id: str, server: str) -> None:
     """Commit a transaction.
 
-    ATTACH_ID is the hex-encoded attach ID from catalog attach.
     TRANSACTION_ID is the hex-encoded transaction ID from transaction begin.
 
     """
@@ -72,13 +69,12 @@ def transaction_commit(attach_id: str, transaction_id: str, server: str) -> None
 
 
 @transaction.command("rollback")
-@click.argument("attach_id")
 @click.argument("transaction_id")
+@click.option("--attach-id", required=True, help="Hex-encoded attach ID")
 @click.option("--server", required=True, help="VGI worker command")
-def transaction_rollback(attach_id: str, transaction_id: str, server: str) -> None:
+def transaction_rollback(transaction_id: str, attach_id: str, server: str) -> None:
     """Rollback a transaction.
 
-    ATTACH_ID is the hex-encoded attach ID from catalog attach.
     TRANSACTION_ID is the hex-encoded transaction ID from transaction begin.
 
     """

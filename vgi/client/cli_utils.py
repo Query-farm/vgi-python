@@ -305,6 +305,7 @@ def catalog_attach_result_to_dict(result: Any) -> dict[str, Any]:
         "supports_time_travel": result.supports_time_travel,
         "catalog_version_frozen": result.catalog_version_frozen,
         "catalog_version": result.catalog_version,
+        "attach_id_required": result.attach_id_required,
     }
 
 
@@ -325,3 +326,56 @@ def scan_function_result_to_dict(result: Any) -> dict[str, Any]:
             bytes_to_hex(result.invocation_id) if result.invocation_id else None
         ),
     }
+
+
+def get_attach_id_from_options(
+    client: Any,
+    attach_id: str | None,
+    catalog: str | None,
+    attach_options: dict[str, Any] | None,
+) -> tuple[AttachId, bool]:
+    """Get attach_id from either explicit --attach-id or auto-attach via --catalog.
+
+    This helper supports two workflows:
+    1. Explicit attach_id: Use a pre-obtained attach_id (for stateful catalogs)
+    2. Auto-attach: Attach to catalog on-the-fly (for stateless catalogs)
+
+    Args:
+        client: VGI Client instance
+        attach_id: Hex-encoded attach ID (from --attach-id option)
+        catalog: Catalog name (from --catalog option)
+        attach_options: Options for catalog attach (from --attach-options option)
+
+    Returns:
+        Tuple of (attach_id, is_stateful) where is_stateful indicates if
+        a warning should be shown for stateful catalogs using auto-attach.
+
+    Raises:
+        click.ClickException: If neither attach_id nor catalog is provided,
+            or if both are provided.
+
+    """
+    if attach_id and catalog:
+        raise click.ClickException(
+            "Cannot specify both --attach-id and --catalog. "
+            "Use --attach-id for stateful catalogs or --catalog for auto-attach."
+        )
+
+    if not attach_id and not catalog:
+        raise click.ClickException(
+            "Must specify either --attach-id or --catalog. "
+            "Use --attach-id with a previously attached catalog, "
+            "or --catalog to auto-attach."
+        )
+
+    if attach_id:
+        return hex_to_attach_id(attach_id), False
+
+    # Auto-attach via --catalog
+    options = attach_options or {}
+    result = client.catalog_attach(name=catalog, options=options)
+
+    # Return the attach_id and whether this is a stateful catalog
+    # (is_stateful=True means caller should warn about using --catalog
+    # with a stateful catalog)
+    return result.attach_id, result.attach_id_required

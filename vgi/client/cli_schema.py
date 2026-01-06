@@ -16,7 +16,7 @@ import click
 from vgi.catalog import FunctionInfo, TableInfo, ViewInfo
 from vgi.client.cli_utils import (
     function_info_to_dict,
-    hex_to_attach_id,
+    get_attach_id_from_options,
     hex_to_transaction_id,
     output_json,
     parse_json_option,
@@ -33,18 +33,32 @@ def schema() -> None:
 
 
 @schema.command("list")
-@click.argument("attach_id")
+@click.option("--attach-id", help="Hex-encoded attach ID")
+@click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
+@click.option("--attach-options", default="{}", help="Attach options as JSON")
 @click.option("--server", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
-def schema_list(attach_id: str, server: str, transaction_id: str | None) -> None:
-    """List schemas in a catalog.
-
-    ATTACH_ID is the hex-encoded attach ID from catalog attach.
-
-    """
+def schema_list(
+    attach_id: str | None,
+    catalog_name: str | None,
+    attach_options: str,
+    server: str,
+    transaction_id: str | None,
+) -> None:
+    """List schemas in a catalog."""
     client = Client(server)
+    opts = parse_json_option(attach_options, "--attach-options")
+    resolved_attach_id, is_stateful = get_attach_id_from_options(
+        client, attach_id, catalog_name, opts
+    )
+    if is_stateful and catalog_name:
+        click.echo(
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-id for session persistence.",
+            err=True,
+        )
     for schema_info in client.schemas(
-        attach_id=hex_to_attach_id(attach_id),
+        attach_id=resolved_attach_id,
         transaction_id=(
             hex_to_transaction_id(transaction_id) if transaction_id else None
         ),
@@ -53,22 +67,38 @@ def schema_list(attach_id: str, server: str, transaction_id: str | None) -> None
 
 
 @schema.command("get")
-@click.argument("attach_id")
 @click.argument("name")
+@click.option("--attach-id", help="Hex-encoded attach ID")
+@click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
+@click.option("--attach-options", default="{}", help="Attach options as JSON")
 @click.option("--server", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
 def schema_get(
-    attach_id: str, name: str, server: str, transaction_id: str | None
+    name: str,
+    attach_id: str | None,
+    catalog_name: str | None,
+    attach_options: str,
+    server: str,
+    transaction_id: str | None,
 ) -> None:
     """Get information about a schema.
 
-    ATTACH_ID is the hex-encoded attach ID from catalog attach.
     NAME is the schema name.
 
     """
     client = Client(server)
+    opts = parse_json_option(attach_options, "--attach-options")
+    resolved_attach_id, is_stateful = get_attach_id_from_options(
+        client, attach_id, catalog_name, opts
+    )
+    if is_stateful and catalog_name:
+        click.echo(
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-id for session persistence.",
+            err=True,
+        )
     schema_info = client.schema_get(
-        attach_id=hex_to_attach_id(attach_id),
+        attach_id=resolved_attach_id,
         transaction_id=(
             hex_to_transaction_id(transaction_id) if transaction_id else None
         ),
@@ -81,15 +111,19 @@ def schema_get(
 
 
 @schema.command("create")
-@click.argument("attach_id")
 @click.argument("name")
+@click.option("--attach-id", help="Hex-encoded attach ID")
+@click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
+@click.option("--attach-options", default="{}", help="Attach options as JSON")
 @click.option("--server", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--comment", help="Description of the schema")
 @click.option("--tags", default="{}", help="Metadata tags as JSON object")
 def schema_create(
-    attach_id: str,
     name: str,
+    attach_id: str | None,
+    catalog_name: str | None,
+    attach_options: str,
     server: str,
     transaction_id: str | None,
     comment: str | None,
@@ -97,14 +131,23 @@ def schema_create(
 ) -> None:
     """Create a new schema.
 
-    ATTACH_ID is the hex-encoded attach ID from catalog attach.
     NAME is the name for the new schema.
 
     """
-    tags_dict = parse_json_option(tags, "--tags")
     client = Client(server)
+    opts = parse_json_option(attach_options, "--attach-options")
+    resolved_attach_id, is_stateful = get_attach_id_from_options(
+        client, attach_id, catalog_name, opts
+    )
+    if is_stateful and catalog_name:
+        click.echo(
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-id for session persistence.",
+            err=True,
+        )
+    tags_dict = parse_json_option(tags, "--tags")
     client.schema_create(
-        attach_id=hex_to_attach_id(attach_id),
+        attach_id=resolved_attach_id,
         transaction_id=(
             hex_to_transaction_id(transaction_id) if transaction_id else None
         ),
@@ -116,15 +159,19 @@ def schema_create(
 
 
 @schema.command("drop")
-@click.argument("attach_id")
 @click.argument("name")
+@click.option("--attach-id", help="Hex-encoded attach ID")
+@click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
+@click.option("--attach-options", default="{}", help="Attach options as JSON")
 @click.option("--server", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if not found")
 @click.option("--cascade", is_flag=True, help="Drop contained tables and views")
 def schema_drop(
-    attach_id: str,
     name: str,
+    attach_id: str | None,
+    catalog_name: str | None,
+    attach_options: str,
     server: str,
     transaction_id: str | None,
     ignore_not_found: bool,
@@ -132,13 +179,22 @@ def schema_drop(
 ) -> None:
     """Drop a schema.
 
-    ATTACH_ID is the hex-encoded attach ID from catalog attach.
     NAME is the name of the schema to drop.
 
     """
     client = Client(server)
+    opts = parse_json_option(attach_options, "--attach-options")
+    resolved_attach_id, is_stateful = get_attach_id_from_options(
+        client, attach_id, catalog_name, opts
+    )
+    if is_stateful and catalog_name:
+        click.echo(
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-id for session persistence.",
+            err=True,
+        )
     client.schema_drop(
-        attach_id=hex_to_attach_id(attach_id),
+        attach_id=resolved_attach_id,
         transaction_id=(
             hex_to_transaction_id(transaction_id) if transaction_id else None
         ),
@@ -150,22 +206,38 @@ def schema_drop(
 
 
 @schema.command("contents")
-@click.argument("attach_id")
 @click.argument("name")
+@click.option("--attach-id", help="Hex-encoded attach ID")
+@click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
+@click.option("--attach-options", default="{}", help="Attach options as JSON")
 @click.option("--server", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
 def schema_contents(
-    attach_id: str, name: str, server: str, transaction_id: str | None
+    name: str,
+    attach_id: str | None,
+    catalog_name: str | None,
+    attach_options: str,
+    server: str,
+    transaction_id: str | None,
 ) -> None:
     """List contents of a schema (tables, views, functions).
 
-    ATTACH_ID is the hex-encoded attach ID from catalog attach.
     NAME is the schema name.
 
     """
     client = Client(server)
+    opts = parse_json_option(attach_options, "--attach-options")
+    resolved_attach_id, is_stateful = get_attach_id_from_options(
+        client, attach_id, catalog_name, opts
+    )
+    if is_stateful and catalog_name:
+        click.echo(
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-id for session persistence.",
+            err=True,
+        )
     for item in client.schema_contents(
-        attach_id=hex_to_attach_id(attach_id),
+        attach_id=resolved_attach_id,
         transaction_id=(
             hex_to_transaction_id(transaction_id) if transaction_id else None
         ),

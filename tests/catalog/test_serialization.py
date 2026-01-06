@@ -346,12 +346,13 @@ class TestArrowSchemaCorrectness:
     def test_catalog_attach_result_schema(self) -> None:
         """Verify CatalogAttachResult Arrow schema."""
         schema = CatalogAttachResult.ARROW_SCHEMA
-        assert len(schema) == 5
+        assert len(schema) == 6
         assert schema.field("attach_id").type == pa.binary()
         assert schema.field("supports_transactions").type == pa.bool_()
         assert schema.field("supports_time_travel").type == pa.bool_()
         assert schema.field("catalog_version_frozen").type == pa.bool_()
         assert schema.field("catalog_version").type == pa.int64()
+        assert schema.field("attach_id_required").type == pa.bool_()
 
     def test_schema_info_schema(self) -> None:
         """Verify SchemaInfo Arrow schema."""

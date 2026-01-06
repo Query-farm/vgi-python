@@ -40,6 +40,10 @@ class CatalogAttachResult:
     # The initial catalog version, it increments when schemas, tables
     # or other objects change.
     catalog_version: int
+    # Indicate if the attach_id must be persisted across commands.
+    # True: Catalog is stateful; attach_id represents a session
+    # False: Catalog is stateless; CLI can auto-attach on each command
+    attach_id_required: bool = True
 
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
@@ -48,6 +52,7 @@ class CatalogAttachResult:
             pa.field("supports_time_travel", pa.bool_(), nullable=False),
             pa.field("catalog_version_frozen", pa.bool_(), nullable=False),
             pa.field("catalog_version", pa.int64(), nullable=False),
+            pa.field("attach_id_required", pa.bool_(), nullable=False),
         ]  # type: ignore[arg-type]
     )
 
@@ -61,6 +66,7 @@ class CatalogAttachResult:
                     "supports_time_travel": self.supports_time_travel,
                     "catalog_version_frozen": self.catalog_version_frozen,
                     "catalog_version": self.catalog_version,
+                    "attach_id_required": self.attach_id_required,
                 }
             ],
             schema=self.ARROW_SCHEMA,
@@ -79,6 +85,7 @@ class CatalogAttachResult:
                 "supports_time_travel",
                 "catalog_version_frozen",
                 "catalog_version",
+                "attach_id_required",
             ],
         )
         return cls(
@@ -87,6 +94,7 @@ class CatalogAttachResult:
             supports_time_travel=row["supports_time_travel"],
             catalog_version_frozen=row["catalog_version_frozen"],
             catalog_version=row["catalog_version"],
+            attach_id_required=row["attach_id_required"],
         )
 
 
@@ -959,6 +967,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             supports_time_travel=False,
             catalog_version_frozen=True,
             catalog_version=1,
+            attach_id_required=False,
         )
 
     def schema_get(

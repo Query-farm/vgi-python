@@ -54,6 +54,8 @@ class TestCLICatalogAttach:
         assert len(attach_result["attach_id"]) > 0
         assert attach_result["supports_transactions"] is False
         assert attach_result["catalog_version_frozen"] is True
+        # ReadOnlyCatalogInterface returns attach_id_required=False
+        assert attach_result["attach_id_required"] is False
 
 
 class TestCLISchemaContents:
@@ -72,15 +74,47 @@ class TestCLISchemaContents:
         attach_data = json.loads(attach_result.output)
         attach_id = attach_data["attach_id"]
 
-        # List schema contents (now nested under catalog)
+        # List schema contents using --attach-id option
         contents_result = runner.invoke(
             cli,
             [
                 "catalog",
                 "schema",
                 "contents",
-                attach_id,
                 "main",
+                "--attach-id",
+                attach_id,
+                "--server",
+                example_worker,
+            ],
+        )
+        assert contents_result.exit_code == 0
+
+        # Parse all output lines as JSON
+        lines = contents_result.output.strip().split("\n")
+        items = [json.loads(line) for line in lines if line.strip()]
+
+        # Should have items
+        assert len(items) > 0
+
+        # All items should be functions
+        for item in items:
+            assert item["type"] == "function"
+
+    def test_schema_contents_with_catalog_option(self, example_worker: str) -> None:
+        """Schema contents works with --catalog option for auto-attach."""
+        runner = CliRunner()
+
+        # List schema contents using --catalog option (auto-attach)
+        contents_result = runner.invoke(
+            cli,
+            [
+                "catalog",
+                "schema",
+                "contents",
+                "main",
+                "--catalog",
+                "example",
                 "--server",
                 example_worker,
             ],
@@ -110,15 +144,16 @@ class TestCLISchemaContents:
         assert attach_result.exit_code == 0
         attach_id = json.loads(attach_result.output)["attach_id"]
 
-        # Get schema contents (now nested under catalog)
+        # Get schema contents using --attach-id option
         contents_result = runner.invoke(
             cli,
             [
                 "catalog",
                 "schema",
                 "contents",
-                attach_id,
                 "main",
+                "--attach-id",
+                attach_id,
                 "--server",
                 example_worker,
             ],
@@ -158,8 +193,9 @@ class TestCLISchemaContents:
                 "catalog",
                 "schema",
                 "contents",
-                attach_id,
                 "main",
+                "--attach-id",
+                attach_id,
                 "--server",
                 example_worker,
             ],
@@ -195,8 +231,9 @@ class TestCLISchemaContents:
                 "catalog",
                 "schema",
                 "contents",
-                attach_id,
                 "main",
+                "--attach-id",
+                attach_id,
                 "--server",
                 example_worker,
             ],
@@ -229,8 +266,9 @@ class TestCLISchemaContents:
                 "catalog",
                 "schema",
                 "contents",
-                attach_id,
                 "main",
+                "--attach-id",
+                attach_id,
                 "--server",
                 example_worker,
             ],
@@ -262,10 +300,18 @@ class TestCLISchemaList:
         )
         attach_id = json.loads(attach_result.output)["attach_id"]
 
-        # List schemas (now nested under catalog)
+        # List schemas using --attach-id option
         list_result = runner.invoke(
             cli,
-            ["catalog", "schema", "list", attach_id, "--server", example_worker],
+            [
+                "catalog",
+                "schema",
+                "list",
+                "--attach-id",
+                attach_id,
+                "--server",
+                example_worker,
+            ],
         )
         assert list_result.exit_code == 0
 
@@ -273,3 +319,77 @@ class TestCLISchemaList:
         schema_info = json.loads(list_result.output)
         assert schema_info["name"] == "main"
         assert schema_info["is_default"] is True
+
+    def test_schema_list_with_catalog_option(self, example_worker: str) -> None:
+        """Schema list works with --catalog option."""
+        runner = CliRunner()
+
+        # List schemas using --catalog option (auto-attach)
+        list_result = runner.invoke(
+            cli,
+            [
+                "catalog",
+                "schema",
+                "list",
+                "--catalog",
+                "example",
+                "--server",
+                example_worker,
+            ],
+        )
+        assert list_result.exit_code == 0
+
+        # Parse schema info
+        schema_info = json.loads(list_result.output)
+        assert schema_info["name"] == "main"
+        assert schema_info["is_default"] is True
+
+
+class TestCLIAttachIdCatalogOptions:
+    """Tests for --attach-id and --catalog option validation."""
+
+    def test_mutual_exclusivity(self, example_worker: str) -> None:
+        """Error when both --attach-id and --catalog are specified."""
+        runner = CliRunner()
+
+        # First get an attach_id
+        attach_result = runner.invoke(
+            cli,
+            ["catalog", "attach", "example", "--server", example_worker],
+        )
+        attach_id = json.loads(attach_result.output)["attach_id"]
+
+        # Try to use both options
+        result = runner.invoke(
+            cli,
+            [
+                "catalog",
+                "schema",
+                "list",
+                "--attach-id",
+                attach_id,
+                "--catalog",
+                "example",
+                "--server",
+                example_worker,
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Cannot specify both" in result.output
+
+    def test_requires_attach_id_or_catalog(self, example_worker: str) -> None:
+        """Error when neither --attach-id nor --catalog is specified."""
+        runner = CliRunner()
+
+        result = runner.invoke(
+            cli,
+            [
+                "catalog",
+                "schema",
+                "list",
+                "--server",
+                example_worker,
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Must specify either" in result.output
