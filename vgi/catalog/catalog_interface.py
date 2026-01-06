@@ -1,11 +1,18 @@
+"""VGI Catalog Interface for exposing catalogs, schemas, tables, and views.
+
+This module provides the abstract base class and data types for implementing
+catalog interfaces in VGI workers, enabling DuckDB ATTACH support.
+"""
+
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, NewType
 from enum import Enum
+from typing import Any, ClassVar, NewType, Self
 
 import pyarrow as pa
 
+import vgi.ipc_utils
 
 # Type aliases for improved code clarity and type checking.
 # At runtime, these are equivalent to their underlying types.
@@ -17,6 +24,8 @@ SqlExpression = NewType("SqlExpression", str)
 
 @dataclass(frozen=True)
 class CatalogAttachResult:
+    """Result from attaching to a catalog."""
+
     # The unique id for the attached catalog.
     attach_id: AttachId
     # Indicate if the worker supports transactions or not.
@@ -31,6 +40,54 @@ class CatalogAttachResult:
     # The initial catalog version, it increments when schemas, tables
     # or other objects change.
     catalog_version: int
+
+    ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        [
+            pa.field("attach_id", pa.binary(), nullable=False),
+            pa.field("supports_transactions", pa.bool_(), nullable=False),
+            pa.field("supports_time_travel", pa.bool_(), nullable=False),
+            pa.field("catalog_version_frozen", pa.bool_(), nullable=False),
+            pa.field("catalog_version", pa.int64(), nullable=False),
+        ]  # type: ignore[arg-type]
+    )
+
+    def serialize(self) -> bytes:
+        """Serialize to Arrow IPC bytes."""
+        batch = pa.RecordBatch.from_pylist(
+            [
+                {
+                    "attach_id": self.attach_id,
+                    "supports_transactions": self.supports_transactions,
+                    "supports_time_travel": self.supports_time_travel,
+                    "catalog_version_frozen": self.catalog_version_frozen,
+                    "catalog_version": self.catalog_version,
+                }
+            ],
+            schema=self.ARROW_SCHEMA,
+        )
+        return vgi.ipc_utils.serialize_record_batch(batch)
+
+    @classmethod
+    def deserialize(cls, batch: pa.RecordBatch) -> Self:
+        """Deserialize from Arrow RecordBatch."""
+        row = vgi.ipc_utils.validate_single_row_batch(
+            batch,
+            cls.__name__,
+            required_fields=[
+                "attach_id",
+                "supports_transactions",
+                "supports_time_travel",
+                "catalog_version_frozen",
+                "catalog_version",
+            ],
+        )
+        return cls(
+            attach_id=AttachId(row["attach_id"]),
+            supports_transactions=row["supports_transactions"],
+            supports_time_travel=row["supports_time_travel"],
+            catalog_version_frozen=row["catalog_version_frozen"],
+            catalog_version=row["catalog_version"],
+        )
 
 
 @dataclass(frozen=True)
@@ -63,6 +120,48 @@ class SchemaInfo(CatalogObject):
     # Is this the default schema of the catalog
     is_default: bool
 
+    ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        [
+            pa.field("attach_id", pa.binary(), nullable=False),
+            pa.field("name", pa.string(), nullable=False),
+            pa.field("is_default", pa.bool_(), nullable=False),
+            pa.field("comment", pa.string(), nullable=True),
+            pa.field("tags", pa.map_(pa.string(), pa.string()), nullable=False),
+        ]  # type: ignore[arg-type]
+    )
+
+    def serialize(self) -> bytes:
+        """Serialize to Arrow IPC bytes."""
+        batch = pa.RecordBatch.from_pylist(
+            [
+                {
+                    "attach_id": self.attach_id,
+                    "name": self.name,
+                    "is_default": self.is_default,
+                    "comment": self.comment,
+                    "tags": self.tags,
+                }
+            ],
+            schema=self.ARROW_SCHEMA,
+        )
+        return vgi.ipc_utils.serialize_record_batch(batch)
+
+    @classmethod
+    def deserialize(cls, batch: pa.RecordBatch) -> Self:
+        """Deserialize from Arrow RecordBatch."""
+        row = vgi.ipc_utils.validate_single_row_batch(
+            batch,
+            cls.__name__,
+            required_fields=["attach_id", "name", "is_default", "tags"],
+        )
+        return cls(
+            attach_id=AttachId(row["attach_id"]),
+            name=row["name"],
+            is_default=row["is_default"],
+            comment=row.get("comment"),
+            tags=dict(row["tags"]) if row["tags"] else {},
+        )
+
 
 @dataclass(frozen=True)
 class TableInfo(CatalogSchemaObject):
@@ -76,6 +175,67 @@ class TableInfo(CatalogSchemaObject):
     unique_constraints: list[list[int]]
     check_constraints: list[str]
 
+    ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        [
+            pa.field("name", pa.string(), nullable=False),
+            pa.field("schema_name", pa.string(), nullable=False),
+            pa.field("columns", pa.binary(), nullable=False),
+            pa.field("not_null_constraints", pa.list_(pa.int32()), nullable=False),
+            pa.field(
+                "unique_constraints", pa.list_(pa.list_(pa.int32())), nullable=False
+            ),
+            pa.field("check_constraints", pa.list_(pa.string()), nullable=False),
+            pa.field("comment", pa.string(), nullable=True),
+            pa.field("tags", pa.map_(pa.string(), pa.string()), nullable=False),
+        ]  # type: ignore[arg-type]
+    )
+
+    def serialize(self) -> bytes:
+        """Serialize to Arrow IPC bytes."""
+        batch = pa.RecordBatch.from_pylist(
+            [
+                {
+                    "name": self.name,
+                    "schema_name": self.schema_name,
+                    "columns": self.columns,
+                    "not_null_constraints": self.not_null_constraints,
+                    "unique_constraints": self.unique_constraints,
+                    "check_constraints": self.check_constraints,
+                    "comment": self.comment,
+                    "tags": self.tags,
+                }
+            ],
+            schema=self.ARROW_SCHEMA,
+        )
+        return vgi.ipc_utils.serialize_record_batch(batch)
+
+    @classmethod
+    def deserialize(cls, batch: pa.RecordBatch) -> Self:
+        """Deserialize from Arrow RecordBatch."""
+        row = vgi.ipc_utils.validate_single_row_batch(
+            batch,
+            cls.__name__,
+            required_fields=[
+                "name",
+                "schema_name",
+                "columns",
+                "not_null_constraints",
+                "unique_constraints",
+                "check_constraints",
+                "tags",
+            ],
+        )
+        return cls(
+            name=row["name"],
+            schema_name=row["schema_name"],
+            columns=SerializedSchema(row["columns"]),
+            not_null_constraints=list(row["not_null_constraints"]),
+            unique_constraints=[list(c) for c in row["unique_constraints"]],
+            check_constraints=list(row["check_constraints"]),
+            comment=row.get("comment"),
+            tags=dict(row["tags"]) if row["tags"] else {},
+        )
+
 
 @dataclass(frozen=True)
 class ViewInfo(CatalogSchemaObject):
@@ -83,6 +243,48 @@ class ViewInfo(CatalogSchemaObject):
 
     # The definition of the view which is a SQL query string.
     definition: str
+
+    ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        [
+            pa.field("name", pa.string(), nullable=False),
+            pa.field("schema_name", pa.string(), nullable=False),
+            pa.field("definition", pa.string(), nullable=False),
+            pa.field("comment", pa.string(), nullable=True),
+            pa.field("tags", pa.map_(pa.string(), pa.string()), nullable=False),
+        ]
+    )
+
+    def serialize(self) -> bytes:
+        """Serialize to Arrow IPC bytes."""
+        batch = pa.RecordBatch.from_pylist(
+            [
+                {
+                    "name": self.name,
+                    "schema_name": self.schema_name,
+                    "definition": self.definition,
+                    "comment": self.comment,
+                    "tags": self.tags,
+                }
+            ],
+            schema=self.ARROW_SCHEMA,
+        )
+        return vgi.ipc_utils.serialize_record_batch(batch)
+
+    @classmethod
+    def deserialize(cls, batch: pa.RecordBatch) -> Self:
+        """Deserialize from Arrow RecordBatch."""
+        row = vgi.ipc_utils.validate_single_row_batch(
+            batch,
+            cls.__name__,
+            required_fields=["name", "schema_name", "definition", "tags"],
+        )
+        return cls(
+            name=row["name"],
+            schema_name=row["schema_name"],
+            definition=row["definition"],
+            comment=row.get("comment"),
+            tags=dict(row["tags"]) if row["tags"] else {},
+        )
 
 
 class FunctionType(Enum):
@@ -120,9 +322,66 @@ class FunctionInfo(CatalogSchemaObject):
     # schema.serialize().to_pybytes()
     output_schema: SerializedSchema
 
+    ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        [
+            pa.field("name", pa.string(), nullable=False),
+            pa.field("schema_name", pa.string(), nullable=False),
+            pa.field("function_type", pa.string(), nullable=False),
+            pa.field("arguments", pa.binary(), nullable=False),
+            pa.field("output_schema", pa.binary(), nullable=False),
+            pa.field("comment", pa.string(), nullable=True),
+            pa.field("tags", pa.map_(pa.string(), pa.string()), nullable=False),
+        ]  # type: ignore[arg-type]
+    )
+
+    def serialize(self) -> bytes:
+        """Serialize to Arrow IPC bytes."""
+        batch = pa.RecordBatch.from_pylist(
+            [
+                {
+                    "name": self.name,
+                    "schema_name": self.schema_name,
+                    "function_type": self.function_type.value,
+                    "arguments": self.arguments,
+                    "output_schema": self.output_schema,
+                    "comment": self.comment,
+                    "tags": self.tags,
+                }
+            ],
+            schema=self.ARROW_SCHEMA,
+        )
+        return vgi.ipc_utils.serialize_record_batch(batch)
+
+    @classmethod
+    def deserialize(cls, batch: pa.RecordBatch) -> Self:
+        """Deserialize from Arrow RecordBatch."""
+        row = vgi.ipc_utils.validate_single_row_batch(
+            batch,
+            cls.__name__,
+            required_fields=[
+                "name",
+                "schema_name",
+                "function_type",
+                "arguments",
+                "output_schema",
+                "tags",
+            ],
+        )
+        return cls(
+            name=row["name"],
+            schema_name=row["schema_name"],
+            function_type=FunctionType(row["function_type"]),
+            arguments=SerializedSchema(row["arguments"]),
+            output_schema=SerializedSchema(row["output_schema"]),
+            comment=row.get("comment"),
+            tags=dict(row["tags"]) if row["tags"] else {},
+        )
+
 
 @dataclass(frozen=True)
 class ScanFunctionResult:
+    """Result from getting a table scan function."""
+
     # The name of the VGI table function to call to scan data from the table,
     # when duckdb attempts to scan a table it will change that call into a
     # call to VGI to call this named table function.
@@ -134,6 +393,42 @@ class ScanFunctionResult:
     # data from the table, it just starts at the init phase and not the bind
     # phase again.
     invocation_id: bytes | None
+
+    ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        [
+            pa.field("function_name", pa.string(), nullable=False),
+            pa.field("max_processes", pa.int32(), nullable=False),
+            pa.field("invocation_id", pa.binary(), nullable=True),
+        ]  # type: ignore[arg-type]
+    )
+
+    def serialize(self) -> bytes:
+        """Serialize to Arrow IPC bytes."""
+        batch = pa.RecordBatch.from_pylist(
+            [
+                {
+                    "function_name": self.function_name,
+                    "max_processes": self.max_processes,
+                    "invocation_id": self.invocation_id,
+                }
+            ],
+            schema=self.ARROW_SCHEMA,
+        )
+        return vgi.ipc_utils.serialize_record_batch(batch)
+
+    @classmethod
+    def deserialize(cls, batch: pa.RecordBatch) -> Self:
+        """Deserialize from Arrow RecordBatch."""
+        row = vgi.ipc_utils.validate_single_row_batch(
+            batch,
+            cls.__name__,
+            required_fields=["function_name", "max_processes"],
+        )
+        return cls(
+            function_name=row["function_name"],
+            max_processes=row["max_processes"],
+            invocation_id=row.get("invocation_id"),
+        )
 
 
 class CatalogInterface(ABC):
@@ -149,8 +444,8 @@ class CatalogInterface(ABC):
     API limitations:
         - Functions are not able to be created or dropped.
         - Tags are not able to be updated on catalog objects.
-        - Comments and tags are not able to be updated or created on schemas (SchemaInfo).
-        - Constraints are not able to be added or dropped on tables (with the exception of not null constraints).
+        - Comments and tags are not updatable on schemas (SchemaInfo).
+        - Constraints cannot be added/dropped (except NOT NULL).
 
     A VGI worker will offer a single implementation of this interface to clients
     to manage their catalogs.
@@ -158,9 +453,9 @@ class CatalogInterface(ABC):
 
     @property
     def interface_feature_flags(self) -> set[str]:
-        """Get the set of feature flags supported by this CatalogInterface implementation.
+        """Get the feature flags supported by this CatalogInterface.
 
-        Feature flags are used to indicate optional capabilities of the implementation.
+        Feature flags indicate optional capabilities of the implementation.
         The default implementation returns an empty set.
         """
         return set()
@@ -207,7 +502,7 @@ class CatalogInterface(ABC):
     def catalog_transaction_commit(
         self, *, attach_id: AttachId, transaction_id: TransactionId
     ) -> None:
-        """Commit the transaction with the given transaction_id for the given attachment.
+        """Commit the transaction for the given attachment.
 
         If the transaction cannot be committed, an exception should be raised.
         """
@@ -216,7 +511,7 @@ class CatalogInterface(ABC):
     def catalog_transaction_rollback(
         self, *, attach_id: AttachId, transaction_id: TransactionId
     ) -> None:
-        """Rollback the transaction with the given transaction_id for the given attachment.
+        """Rollback the transaction for the given attachment.
 
         If the transaction cannot be rolled back, an exception should be raised.
         """
@@ -236,10 +531,9 @@ class CatalogInterface(ABC):
         """Detach from the catalog with the given attach_id.
 
         Any open transactions should be rolled back.
-
         The default implementation does nothing.
         """
-        pass
+        return  # Default no-op
 
     def catalog_version(
         self, *, attach_id: AttachId, transaction_id: TransactionId | None
@@ -260,7 +554,7 @@ class CatalogInterface(ABC):
     ) -> Iterable[SchemaInfo]:
         """Get a list of schemas for the given attach_id and transaction_id.
 
-        The default implementation returns a schema called "main" with no comment or tags.
+        The default returns a schema called "main" with no comment or tags.
         """
         return iter(
             [
@@ -304,10 +598,8 @@ class CatalogInterface(ABC):
         """Get the contents of the schema with the given name.
 
         Schemas can contain tables, views, and various types of functions.
-
-        The default implementation returns everything registered to the Worker.
         """
-        # FIXME: write this implementation for the worker.
+        raise NotImplementedError("Schema contents not implemented.")
 
     @abstractmethod
     def schema_get(
@@ -398,8 +690,6 @@ class CatalogInterface(ABC):
         """Rename the table with the given name to the new name."""
         raise NotImplementedError("Table rename not implemented.")
 
-    # Add a column to a table, the name is serialized, but the column_type is the Arrow data type
-    # of the column to add.
     def table_column_add(
         self,
         *,
@@ -407,10 +697,8 @@ class CatalogInterface(ABC):
         transaction_id: TransactionId | None,
         schema_name: str,
         name: str,
-        # column should be Arrow schema with a single field representing the column to add.
-        # the name and type are taken from that field. it is serialized as bytes using:
-        # schema.serialize().to_pybytes()
-        # the schema can only have one field, if it has more than one field an error should be raised.
+        # Arrow schema with single field for column to add.
+        # Serialized via schema.serialize().to_pybytes()
         column_definition: SerializedSchema,
         ignore_not_found: bool,
         if_column_not_exists: bool,
@@ -458,7 +746,7 @@ class CatalogInterface(ABC):
         expression: SqlExpression,
         ignore_not_found: bool,
     ) -> None:
-        """Set the default expression for the column in the table with the given name."""
+        """Set the default expression for the column."""
         raise NotImplementedError("Table column default set not implemented.")
 
     def table_column_default_drop(
@@ -471,7 +759,7 @@ class CatalogInterface(ABC):
         column_name: str,
         ignore_not_found: bool,
     ) -> None:
-        """Drop the default expression for the column in the table with the given name."""
+        """Drop the default expression for the column."""
         raise NotImplementedError("Table column default drop not implemented.")
 
     def table_column_type_change(
@@ -481,11 +769,8 @@ class CatalogInterface(ABC):
         transaction_id: TransactionId | None,
         schema_name: str,
         name: str,
-        # This is an Arrow schema with a single field representing the column to change
-        # the type of.  The new type is taken from the single field in this schema.
-        # it is serialized as bytes using:
-        # schema.serialize().to_pybytes()
-        # The schema can only have one field
+        # Arrow schema with single field for the new column type.
+        # Serialized via schema.serialize().to_pybytes()
         column_definition: SerializedSchema,
         expression: SqlExpression | None,
         ignore_not_found: bool,
@@ -506,7 +791,7 @@ class CatalogInterface(ABC):
         column_name: str,
         ignore_not_found: bool,
     ) -> None:
-        """Drop the NOT NULL constraint from the column in the table with the given name."""
+        """Drop the NOT NULL constraint from the column."""
         raise NotImplementedError("Table NOT NULL drop not implemented.")
 
     def table_not_null_set(
@@ -519,7 +804,7 @@ class CatalogInterface(ABC):
         column_name: str,
         ignore_not_found: bool,
     ) -> None:
-        """Set the NOT NULL constraint on the column in the table with the given name."""
+        """Set the NOT NULL constraint on the column."""
         raise NotImplementedError("Table NOT NULL set not implemented.")
 
     def table_scan_function_get(
@@ -529,20 +814,14 @@ class CatalogInterface(ABC):
         transaction_id: TransactionId | None,
         schema_name: str,
         name: str,
-        # These fields are used for iceberg style time travel.
-        # provided later on.
+        # Time travel fields (iceberg style)
         at_unit: str | None,
         at_value: str | None,
     ) -> ScanFunctionResult:
-        """Get the ScanFunctionResult for scanning the table with the given name.
+        """Get the ScanFunctionResult for scanning the table.
 
-        Get the ScanFunctionResult of the table function to call to read data from a particular table.
-        This is necessary since this method may yield the bind data identifier for the scan function.
-
-        The at_unit and at_value will be passed by DuckDB, basically there is a bind function called
-        in the duckdb process and the additional parameters will be sent to the CatalogInterface,
-        the projection pushdown and (later on predicate pushdown) will be done in the init phase of the call
-        to the actual VGI function to scan the table.
+        Returns information about the VGI table function to call when scanning
+        this table. The at_unit and at_value support time travel queries.
         """
         raise NotImplementedError("Table scan function get not implemented.")
 
@@ -613,5 +892,11 @@ class CatalogInterface(ABC):
 
 
 class ReadOnlyCatalogInterface(CatalogInterface):
+    """A read-only catalog interface that does not support DDL operations.
+
+    This is a convenience base class for catalogs that only support reading
+    metadata and data, not creating or modifying objects.
+    """
+
     supports_transactions = False
     catalog_version_frozen = True
