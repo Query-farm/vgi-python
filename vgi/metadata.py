@@ -311,7 +311,7 @@ class ResolvedMetadata:
     description: str = ""
     examples: list[FunctionExample] = field(default_factory=list)
     categories: list[str] = field(default_factory=list)
-    tags: set[str] = field(default_factory=set)
+    tags: dict[str, str] = field(default_factory=dict)
     parameters: list[ParameterInfo] = field(default_factory=list)
 
     # Behavior (all functions)
@@ -343,7 +343,7 @@ class ResolvedMetadata:
             "description": self.description,
             "examples": [ex.to_dict() for ex in self.examples],
             "categories": self.categories,
-            "tags": list(self.tags),
+            "tags": self.tags,
             "parameters": [p.to_dict() for p in self.parameters],
             "stability": self.stability.name,
             "null_handling": self.null_handling.name,
@@ -367,7 +367,7 @@ class ResolvedMetadata:
             description=d.get("description", ""),
             examples=[FunctionExample.from_dict(ex) for ex in d.get("examples", [])],
             categories=d.get("categories", []),
-            tags=set(d.get("tags", [])),
+            tags=dict(d.get("tags", {})),
             parameters=[ParameterInfo.from_dict(p) for p in d.get("parameters", [])],
             stability=FunctionStability[d.get("stability", "CONSISTENT")],
             null_handling=NullHandling[d.get("null_handling", "DEFAULT")],
@@ -790,7 +790,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         description=description,
         examples=examples,
         categories=attrs.get("categories", []),
-        tags=set(attrs.get("tags", set())),
+        tags=dict(attrs.get("tags", {})),
         parameters=parameters,
         stability=attrs.get("stability", FunctionStability.CONSISTENT),
         null_handling=attrs.get("null_handling", NullHandling.DEFAULT),
@@ -847,7 +847,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("description", pa.string()),
         pa.field("examples", pa.list_(_EXAMPLE_STRUCT)),
         pa.field("categories", pa.list_(pa.string())),
-        pa.field("tags", pa.list_(pa.string())),
+        pa.field("tags", pa.map_(pa.string(), pa.string())),
         pa.field("parameters", pa.list_(_PARAMETER_STRUCT)),
         pa.field("stability", pa.string()),
         pa.field("null_handling", pa.string()),
@@ -864,19 +864,32 @@ _METADATA_SCHEMA = pa.schema(
 
 # Fields that contain lists and need None -> [] conversion during deserialization
 _LIST_FIELDS: frozenset[str] = frozenset(
-    {"examples", "categories", "tags", "parameters", "required_settings"}
+    {"examples", "categories", "parameters", "required_settings"}
 )
+
+# Fields that contain maps and need None -> {} conversion during deserialization
+_MAP_FIELDS: frozenset[str] = frozenset({"tags"})
 
 
 def _extract_arrow_row(columns: dict[str, list[Any]], index: int) -> dict[str, Any]:
     """Extract a single row from Arrow columnar data as a dict.
 
-    Handles None values for list fields (converts None to []).
+    Handles None values for list fields (converts None to [])
+    and map fields (converts None to {}).
     """
-    return {
-        field: (values[index] or [] if field in _LIST_FIELDS else values[index])
-        for field, values in columns.items()
-    }
+    result: dict[str, Any] = {}
+    for field_name, values in columns.items():
+        value = values[index]
+        if value is None:
+            if field_name in _LIST_FIELDS:
+                result[field_name] = []
+            elif field_name in _MAP_FIELDS:
+                result[field_name] = {}
+            else:
+                result[field_name] = value
+        else:
+            result[field_name] = value
+    return result
 
 
 def metadata_to_arrow(metadata: ResolvedMetadata) -> pa.RecordBatch:

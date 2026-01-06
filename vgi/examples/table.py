@@ -73,7 +73,7 @@ class SequenceFunction(TableFunctionGenerator):
         name = "sequence"
         description = "Generates a sequence of integers from 0 to n-1"
         categories = ["generator", "utility"]
-        tags = {"generator", "utility"}
+        tags = {"category": "generator", "type": "utility"}
         max_workers = 1
         examples = [
             FunctionExample(
@@ -357,7 +357,7 @@ class GeneratorExceptionFunction(TableFunctionGenerator):
         name = "generator_exception"
         description = "Raises an exception after N batches for testing"
         categories = ["testing"]
-        tags = {"testing", "error-handling"}
+        tags = {"category": "testing", "type": "error-handling"}
         max_workers = 1
 
     fail_after: int = Arg[int](0, doc="Number of batches before failure", ge=0)  # type: ignore[assignment]

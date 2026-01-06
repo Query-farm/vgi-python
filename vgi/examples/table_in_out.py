@@ -80,7 +80,7 @@ class EchoFunction(TableInOutGenerator):
         name = "echo"
         description = "Passthrough function that emits each input batch unchanged"
         categories = ["utility", "debug"]
-        tags = {"debug", "passthrough"}
+        tags = {"category": "debug", "type": "passthrough"}
         examples = [
             FunctionExample(
                 sql="SELECT * FROM echo((SELECT * FROM input_table))",

@@ -82,7 +82,7 @@ class TestSchemaInfoSerialization:
             name="main",
             is_default=True,
             comment="Test schema",
-            tags={"env", "test", "owner", "alice"},
+            tags={"env": "test", "owner": "alice"},
         )
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
@@ -101,7 +101,7 @@ class TestSchemaInfoSerialization:
             name="schema1",
             is_default=False,
             comment=None,
-            tags=set(),
+            tags={},
         )
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
@@ -116,13 +116,13 @@ class TestSchemaInfoSerialization:
             name="schema1",
             is_default=False,
             comment="Comment",
-            tags=set(),
+            tags={},
         )
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
         restored = SchemaInfo.deserialize(batch)
 
-        assert restored.tags == set()
+        assert restored.tags == {}
 
     def test_empty_string_name(self) -> None:
         """Test with empty string name."""
@@ -131,7 +131,7 @@ class TestSchemaInfoSerialization:
             name="",
             is_default=False,
             comment=None,
-            tags=set(),
+            tags={},
         )
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
@@ -156,7 +156,7 @@ class TestTableInfoSerialization:
             unique_constraints=[[0]],
             check_constraints=["id > 0"],
             comment="Users table",
-            tags={"category", "core"},
+            tags={"category": "core"},
         )
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
@@ -184,7 +184,7 @@ class TestTableInfoSerialization:
             unique_constraints=[],
             check_constraints=[],
             comment=None,
-            tags=set(),
+            tags={},
         )
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
@@ -207,7 +207,7 @@ class TestTableInfoSerialization:
             unique_constraints=[[0], [1, 2]],
             check_constraints=["a > 0", "b < 100"],
             comment=None,
-            tags=set(),
+            tags={},
         )
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
@@ -226,7 +226,7 @@ class TestViewInfoSerialization:
             schema_name="main",
             definition="SELECT id, name FROM users",
             comment="Summary view",
-            tags={"type", "summary"},
+            tags={"type": "summary"},
         )
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
@@ -252,7 +252,7 @@ class TestViewInfoSerialization:
                 HAVING COUNT(o.id) > 0
             """,
             comment=None,
-            tags=set(),
+            tags={},
         )
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
@@ -276,7 +276,7 @@ class TestFunctionInfoSerialization:
             arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
             output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
             comment="Double the input",
-            tags={"category", "math"},
+            tags={"category": "math"},
         )
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
@@ -299,7 +299,7 @@ class TestFunctionInfoSerialization:
             arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
             output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
             comment=None,
-            tags=set(),
+            tags={},
         )
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
@@ -363,7 +363,7 @@ class TestArrowSchemaCorrectness:
         assert schema.field("is_default").type == pa.bool_()
         assert schema.field("comment").type == pa.string()
         assert schema.field("comment").nullable is True
-        assert schema.field("tags").type == pa.list_(pa.string())
+        assert schema.field("tags").type == pa.map_(pa.string(), pa.string())
 
     def test_table_info_schema(self) -> None:
         """Verify TableInfo Arrow schema."""

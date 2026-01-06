@@ -88,7 +88,7 @@ class InMemoryCatalog(CatalogInterface):
                 name="main",
                 is_default=True,
                 comment=None,
-                tags=set(),
+                tags={},
             )
         )
         self._catalogs["memory"] = catalog
@@ -237,7 +237,7 @@ class InMemoryCatalog(CatalogInterface):
                 name="main",
                 is_default=True,
                 comment=None,
-                tags=set(),
+                tags={},
             )
         )
         self._catalogs[name] = catalog
@@ -279,7 +279,7 @@ class InMemoryCatalog(CatalogInterface):
         transaction_id: TransactionId | None,
         name: str,
         comment: str | None,
-        tags: set[str],
+        tags: dict[str, str],
     ) -> None:
         """Create a new schema."""
         catalog = self._get_catalog(attach_id)
@@ -364,7 +364,7 @@ class InMemoryCatalog(CatalogInterface):
                 unique_constraints=unique_constraints,
                 check_constraints=check_constraints,
                 comment=None,
-                tags=set(),
+                tags={},
             )
         )
         self._increment_version(attach_id)
@@ -485,7 +485,7 @@ class InMemoryCatalog(CatalogInterface):
                 schema_name=schema_name,
                 definition=definition,
                 comment=None,
-                tags=set(),
+                tags={},
             )
         )
         self._increment_version(attach_id)
