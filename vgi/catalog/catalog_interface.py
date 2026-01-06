@@ -14,6 +14,7 @@ import pyarrow as pa
 
 import vgi.ipc_utils
 from vgi.metadata import (
+    DEFAULT_MAX_WORKERS,
     DistinctDependence,
     FunctionStability,
     NullHandling,
@@ -1185,7 +1186,15 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             projection_pushdown=None if is_scalar else meta.projection_pushdown,
             filter_pushdown=None if is_scalar else meta.filter_pushdown,
             order_preservation=None if is_scalar else meta.preserves_order,
-            max_workers=None if is_scalar else meta.max_workers,
+            max_workers=(
+                None
+                if is_scalar
+                else (
+                    meta.max_workers
+                    if meta.max_workers is not None
+                    else DEFAULT_MAX_WORKERS
+                )
+            ),
             # Aggregate function fields
             order_dependent=meta.order_dependent,
             distinct_dependent=meta.distinct_dependent,

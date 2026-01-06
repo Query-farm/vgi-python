@@ -62,7 +62,12 @@ from vgi.arguments import _MISSING, AnyArrow, TableInput
 if TYPE_CHECKING:
     from vgi.arguments import Arg
 
+# Default max_workers when not explicitly specified (effectively unlimited)
+DEFAULT_MAX_WORKERS = 99999
+
 __all__ = [
+    # Constants
+    "DEFAULT_MAX_WORKERS",
     # Enums
     "FunctionStability",
     "FunctionType",

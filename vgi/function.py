@@ -49,7 +49,7 @@ import vgi.log
 from vgi.exceptions import ExecutionIdentifierError, SchemaValidationError
 from vgi.function_storage import FunctionStorage, FunctionStorageSqlite
 from vgi.invocation import InitResult, Invocation
-from vgi.metadata import MetadataMixin, ResolvedMetadata
+from vgi.metadata import DEFAULT_MAX_WORKERS, MetadataMixin, ResolvedMetadata
 from vgi.output_complete import OutputComplete
 
 __all__ = [
@@ -346,7 +346,7 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
         meta = self.get_metadata()
         if meta.max_workers is not None:
             return meta.max_workers
-        return 99999
+        return DEFAULT_MAX_WORKERS
 
     def create_invocation_id(self) -> bytes:
         """Return unique identifier for this function invocation.
