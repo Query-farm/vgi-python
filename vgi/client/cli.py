@@ -1,6 +1,7 @@
 r"""Command-line interface for the VGI client.
 
-This module provides the CLI entry point for invoking VGI functions.
+This module provides the CLI entry point for invoking VGI functions and
+managing catalogs.
 
 Usage:
     # Table-in-out functions (with input):
@@ -19,6 +20,12 @@ Usage:
     # Specify table input position (for functions where TableInput isn't first):
     vgi-client --input data.parquet --function transform --args '["prefix"]' \
         --table-input-position 1
+
+    # Catalog operations:
+    vgi-client catalog list --server vgi-example-catalog-worker
+    vgi-client catalog attach memory --server vgi-example-catalog-worker
+    vgi-client schema list $ATTACH_ID --server vgi-example-catalog-worker
+    vgi-client table get $ATTACH_ID main users --server vgi-example-catalog-worker
 
 """
 
@@ -121,11 +128,17 @@ class OutputWriter:
 
 
 def _create_cli() -> Any:
-    """Create the CLI command. Separated for testability."""
+    """Create the CLI command group. Separated for testability."""
     import click
     import pyarrow.parquet as pq
 
-    @click.command()
+    from vgi.client.cli_catalog import catalog
+    from vgi.client.cli_schema import schema
+    from vgi.client.cli_table import table
+    from vgi.client.cli_transaction import transaction
+    from vgi.client.cli_view import view
+
+    @click.group(invoke_without_command=True)
     @click.option(
         "--input",
         "input_file",
@@ -150,7 +163,7 @@ def _create_cli() -> Any:
     @click.option(
         "--function",
         "function_name",
-        required=True,
+        required=False,
         type=str,
         help="Name of the function to run (e.g., echo, sum_all_columns, repeat_inputs)",
     )
@@ -221,11 +234,13 @@ def _create_cli() -> Any:
             "otherwise table. Use 'scalar' for scalar functions."
         ),
     )
+    @click.pass_context
     def cli(
+        ctx: click.Context,
         input_file: str | None,
         output_file: str | None,
         output_format: str,
-        function_name: str,
+        function_name: str | None,
         arguments: str,
         server_path: str,
         worker_stderr: bool,
@@ -235,7 +250,21 @@ def _create_cli() -> Any:
         attach_id: str | None,
         function_type: str,
     ) -> None:
-        """Invoke a VGI function and display results."""
+        """VGI client for function invocation and catalog management.
+
+        When called without a subcommand and with --function, invokes a VGI function.
+        Use subcommands (catalog, schema, table, view, transaction) for catalog ops.
+
+        """
+        # If a subcommand is being invoked, skip function invocation
+        if ctx.invoked_subcommand is not None:
+            return
+
+        # Legacy function invocation mode - requires --function
+        if function_name is None:
+            click.echo(ctx.get_help())
+            return
+
         try:
             args_list = json.loads(arguments)
             if not isinstance(args_list, list):
@@ -360,6 +389,13 @@ def _create_cli() -> Any:
         finally:
             if output_writer is not None:
                 output_writer.close()
+
+    # Add catalog subcommand groups
+    cli.add_command(catalog)
+    cli.add_command(schema)
+    cli.add_command(table)
+    cli.add_command(view)
+    cli.add_command(transaction)
 
     return cli
 

@@ -633,18 +633,20 @@ class Worker:
         method = getattr(catalog, method_name)
 
         # Read arguments from input batch (1 row with columns matching parameters)
+        # For methods with no arguments, accept 0 rows (empty batch)
         args_batch = self._read_ipc_batch("catalog_args")
-        if args_batch.num_rows != 1:
+        if args_batch.num_rows == 0:
+            # No arguments - kwargs is empty
+            kwargs: dict[str, Any] = {}
+        elif args_batch.num_rows == 1:
+            # Convert batch columns to kwargs
+            row = args_batch.to_pylist()[0]
+            kwargs = {name: value for name, value in row.items()}
+        else:
             raise ValueError(
-                f"Catalog invocation expects exactly 1 row in argument batch, "
+                f"Catalog invocation expects 0 or 1 rows in argument batch, "
                 f"got {args_batch.num_rows}"
             )
-
-        # Convert batch columns to kwargs
-        kwargs: dict[str, Any] = {}
-        row = args_batch.to_pylist()[0]
-        for name, value in row.items():
-            kwargs[name] = value
 
         fn_log.debug("catalog_method_call", method=method_name, kwargs=kwargs)
 
@@ -656,34 +658,47 @@ class Worker:
         # Serialize and stream result
         # Result types:
         # - None → empty batch (0 rows, 0 columns)
+        # - list of primitives → convert to single-column batch (e.g., catalogs())
         # - Dataclass with serialize() → serialize to bytes, write
-        # - Iterable → stream multiple serialized items
-        with ipc.new_stream(cast(IOBase, sys.stdout), pa.schema([])) as writer:
-            if result is None:
-                # Write empty batch to signal completion
-                writer.write_batch(pa.RecordBatch.from_pydict({}))
-            elif hasattr(result, "serialize"):
-                # Single dataclass result - write serialized bytes directly
-                result_bytes = result.serialize()
-                sys.stdout.write(result_bytes)
-            else:
-                # Try to iterate (for schema_contents, schemas, etc.)
-                try:
-                    for item in result:
-                        if hasattr(item, "serialize"):
-                            item_bytes = item.serialize()
-                            sys.stdout.write(item_bytes)
-                        else:
-                            raise TypeError(
-                                f"Catalog result item has no serialize method: "
-                                f"{type(item).__name__}"
-                            )
-                except TypeError:
-                    raise TypeError(
-                        f"Catalog method returned unsupported type: "
-                        f"{type(result).__name__}. Expected None, a dataclass "
-                        f"with serialize(), or an iterable of such dataclasses."
-                    ) from None
+        # - Iterable of dataclasses → stream multiple serialized items
+        if result is None:
+            # Write empty batch to signal no result
+            batch = pa.RecordBatch.from_pydict({})
+            sys.stdout.write(batch.schema.serialize().to_pybytes())
+            sys.stdout.write(batch.serialize().to_pybytes())
+        elif isinstance(result, list) and (
+            not result or not hasattr(result[0], "serialize")
+        ):
+            # List of primitives (e.g., strings from catalogs())
+            batch = pa.RecordBatch.from_pydict({"value": result})
+            sys.stdout.write(batch.schema.serialize().to_pybytes())
+            sys.stdout.write(batch.serialize().to_pybytes())
+        elif hasattr(result, "serialize"):
+            # Single dataclass result - write serialized bytes directly
+            result_bytes = result.serialize()
+            sys.stdout.write(result_bytes)
+        else:
+            # Try to iterate (for schema_contents, schemas, etc.)
+            try:
+                for item in result:
+                    if hasattr(item, "serialize"):
+                        item_bytes = item.serialize()
+                        sys.stdout.write(item_bytes)
+                    else:
+                        raise TypeError(
+                            f"Catalog result item has no serialize method: "
+                            f"{type(item).__name__}"
+                        )
+                # Write empty batch to signal end of stream
+                batch = pa.RecordBatch.from_pydict({})
+                sys.stdout.write(batch.schema.serialize().to_pybytes())
+                sys.stdout.write(batch.serialize().to_pybytes())
+            except TypeError:
+                raise TypeError(
+                    f"Catalog method returned unsupported type: "
+                    f"{type(result).__name__}. Expected None, a dataclass "
+                    f"with serialize(), or an iterable of such dataclasses."
+                ) from None
 
         fn_log.info("catalog_invocation_complete", method=method_name)
 

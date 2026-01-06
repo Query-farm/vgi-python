@@ -70,6 +70,7 @@ import structlog.stdlib
 from pyarrow import ipc
 
 from vgi.arguments import Arguments
+from vgi.client.catalog_mixin import CatalogClientMixin
 from vgi.function import FunctionInitInput
 from vgi.invocation import InitResult, Invocation, InvocationType
 from vgi.ipc_utils import IPCError, read_ipc_batch
@@ -120,11 +121,14 @@ class _BindResult:
     raw_batch: pa.RecordBatch
 
 
-class Client:
+class Client(CatalogClientMixin):
     """Client for communicating with VGI workers.
 
     Manages the subprocess lifecycle and Arrow IPC communication with a VGI
     worker process. Use as a context manager to ensure proper cleanup.
+
+    Also provides catalog operations via CatalogClientMixin - these methods
+    spawn ephemeral workers and don't require start()/stop().
 
     Example:
         with Client("./my_worker.py") as client:

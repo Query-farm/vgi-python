@@ -259,11 +259,13 @@ class TestCLIValidation:
         assert result.exit_code != 0
         assert "valid hex string" in result.output
 
-    def test_missing_required_function(self) -> None:
-        """--function is required."""
+    def test_missing_function_shows_help(self) -> None:
+        """Calling CLI with no arguments shows help (group behavior)."""
         runner = CliRunner()
         result = runner.invoke(cli, [])
-        assert result.exit_code != 0
+        # With Click group, no subcommand and no --function shows help
+        assert result.exit_code == 0
+        assert "Usage:" in result.output
 
 
 class TestCLITableFunction:
