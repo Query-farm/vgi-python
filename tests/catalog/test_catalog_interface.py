@@ -54,7 +54,7 @@ class MinimalCatalog(CatalogInterface):
                 name="main",
                 is_default=True,
                 comment=None,
-                tags={},
+                tags=set(),
             )
         return None
 
@@ -108,7 +108,7 @@ class TestCatalogInterfaceDefaults:
         assert schemas[0].name == "main"
         assert schemas[0].is_default is True
         assert schemas[0].comment is None
-        assert schemas[0].tags == {}
+        assert schemas[0].tags == set()
 
     def test_catalog_version_returns_zero(self) -> None:
         """Default catalog_version() returns 0."""
@@ -184,7 +184,7 @@ class TestCatalogInterfaceNotImplemented:
                 transaction_id=None,
                 name="new_schema",
                 comment=None,
-                tags={},
+                tags=set(),
             )
 
     def test_schema_drop_not_implemented(self) -> None:
@@ -339,7 +339,7 @@ class TestReadOnlyCatalogInterface:
                 transaction_id=None,
                 name="new",
                 comment=None,
-                tags={},
+                tags=set(),
             )
 
     def test_schema_drop_raises_readonly_error(self) -> None:
@@ -452,7 +452,7 @@ class TestFunctionInfoNewFields:
             arguments=schema_bytes,
             output_schema=schema_bytes,
             comment=None,
-            tags={},
+            tags=set(),
         )
 
         # Scalar behavior fields default to None (set by _function_to_info)
@@ -496,7 +496,7 @@ class TestFunctionInfoNewFields:
             arguments=schema_bytes,
             output_schema=schema_bytes,
             comment=None,
-            tags={},
+            tags=set(),
             stability=FunctionStability.VOLATILE,
             null_handling=NullHandling.SPECIAL,
             examples=["SELECT test_func(1)", "SELECT test_func(2)"],
@@ -560,7 +560,7 @@ class TestFunctionInfoNewFields:
             arguments=schema_bytes,
             output_schema=schema_bytes,
             comment=None,
-            tags={},
+            tags=set(),
             stability=FunctionStability.CONSISTENT_WITHIN_QUERY,
             null_handling=NullHandling.SPECIAL,
             order_preservation=OrderPreservation.NO_ORDER_GUARANTEE,
@@ -609,7 +609,7 @@ class TestFunctionInfoNewFields:
             pa.field("arguments", pa.binary(), nullable=False),
             pa.field("output_schema", pa.binary(), nullable=False),
             pa.field("comment", pa.string(), nullable=True),
-            pa.field("tags", pa.map_(pa.string(), pa.string()), nullable=False),
+            pa.field("tags", pa.list_(pa.string()), nullable=False),
         ]
         legacy_schema = pa.schema(legacy_fields)
 
@@ -623,7 +623,7 @@ class TestFunctionInfoNewFields:
                     "arguments": empty_schema_bytes,
                     "output_schema": empty_schema_bytes,
                     "comment": "A legacy function",
-                    "tags": {"version": "1.0"},
+                    "tags": ["version", "1.0"],
                 }
             ],
             schema=legacy_schema,
@@ -637,7 +637,7 @@ class TestFunctionInfoNewFields:
         assert restored.schema_name == "main"
         assert restored.function_type == FunctionType.SCALAR
         assert restored.comment == "A legacy function"
-        assert restored.tags == {"version": "1.0"}
+        assert restored.tags == {"version", "1.0"}
 
         # Optional fields should be None when not in legacy data
         assert restored.stability is None
@@ -667,7 +667,7 @@ class TestFunctionInfoNewFields:
             arguments=schema_bytes,
             output_schema=schema_bytes,
             comment=None,
-            tags={},
+            tags=set(),
             max_workers=None,
         )
         assert info_none.max_workers is None
@@ -685,7 +685,7 @@ class TestFunctionInfoNewFields:
             arguments=schema_bytes,
             output_schema=schema_bytes,
             comment=None,
-            tags={},
+            tags=set(),
             max_workers=8,
         )
         assert info_int.max_workers == 8
@@ -708,7 +708,7 @@ class TestFunctionInfoNewFields:
             arguments=schema_bytes,
             output_schema=schema_bytes,
             comment=None,
-            tags={},
+            tags=set(),
             examples=["SELECT f(1)", "SELECT f(2)", "SELECT f(3)"],
             categories=["a", "b"],
             required_settings=["setting1"],
@@ -735,7 +735,7 @@ class TestFunctionInfoNewFields:
             arguments=schema_bytes,
             output_schema=schema_bytes,
             comment=None,
-            tags={},
+            tags=set(),
             examples=[],
             categories=[],
             required_settings=[],

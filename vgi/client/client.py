@@ -376,6 +376,7 @@ class Client(CatalogClientMixin):
         bind_result_callback: Callable[[pa.RecordBatch], None] | None,
         projection_ids: list[int] | None,
         settings: dict[str, str] | None = None,
+        transaction_id: bytes | None = None,
     ) -> tuple[_BindResult, InitResult, Invocation]:
         """Perform the common initialization handshake with the primary worker.
 
@@ -406,6 +407,9 @@ class Client(CatalogClientMixin):
             settings: Optional dictionary of settings/pragmas to
                 pass to the function. Functions that declare required_settings
                 in their Meta class will validate these are present.
+            transaction_id: Optional unique identifier for the DuckDB transaction.
+                When provided, allows functions to participate in transactional
+                semantics and correlate calls within the same transaction.
 
         Returns:
             A tuple of (bind_result, global_init_result, request_with_init):
@@ -440,6 +444,7 @@ class Client(CatalogClientMixin):
             client_features=client_features,
             attach_id=self._attach_id,
             settings=settings,
+            transaction_id=transaction_id,
         )
         call_parameters_batch_bytes = initial_request.serialize()
 
@@ -516,6 +521,7 @@ class Client(CatalogClientMixin):
             invocation_id=bind_result.invocation_id,
             global_execution_identifier=global_init_result,
             arguments=arguments,
+            transaction_id=transaction_id,
         )
 
         return bind_result, global_init_result, request_with_init
@@ -599,6 +605,7 @@ class Client(CatalogClientMixin):
         bind_result_callback: Callable[[pa.RecordBatch], None] | None,
         projection_ids: list[int] | None,
         settings: dict[str, str] | None = None,
+        transaction_id: bytes | None = None,
     ) -> tuple[ipc.RecordBatchStreamWriter | None, ipc.RecordBatchStreamReader | None]:
         """Initialize the VGI protocol stream and prepare for data transfer.
 
@@ -625,6 +632,7 @@ class Client(CatalogClientMixin):
                 result RecordBatch.
             projection_ids: Optional list of column indices to project.
             settings: Optional dictionary of settings/pragmas.
+            transaction_id: Optional unique identifier for the DuckDB transaction.
 
         Returns:
             A tuple of (data_writer, output_reader):
@@ -648,6 +656,7 @@ class Client(CatalogClientMixin):
             bind_result_callback=bind_result_callback,
             projection_ids=projection_ids,
             settings=settings,
+            transaction_id=transaction_id,
         )
 
         # Spawn additional workers if needed
@@ -1393,6 +1402,7 @@ class Client(CatalogClientMixin):
         bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
         projection_ids: list[int] | None = None,
         settings: dict[str, str] | None = None,
+        transaction_id: bytes | None = None,
     ) -> Generator[pa.RecordBatch, None, None]:
         """Invoke a table-in-out function on the worker and stream results.
 
@@ -1426,6 +1436,9 @@ class Client(CatalogClientMixin):
             settings: Optional dictionary of settings/pragmas to
                 pass to the function. Functions that declare required_settings
                 in their Meta class will validate these are present.
+            transaction_id: Optional unique identifier for the DuckDB transaction.
+                When provided, allows functions to participate in transactional
+                semantics and correlate calls within the same transaction.
 
         Yields:
             Output RecordBatches from the function. In single-worker mode, output
@@ -1474,6 +1487,7 @@ class Client(CatalogClientMixin):
                 bind_result_callback=bind_result_callback,
                 projection_ids=projection_ids,
                 settings=settings,
+                transaction_id=transaction_id,
             )
 
             # Use parallel processing for all cases (handles both single and
@@ -1762,6 +1776,7 @@ class Client(CatalogClientMixin):
         bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
         projection_ids: list[int] | None = None,
         settings: dict[str, str] | None = None,
+        transaction_id: bytes | None = None,
     ) -> Generator[pa.RecordBatch, None, None]:
         """Invoke a table function (source function) and stream output batches.
 
@@ -1793,6 +1808,9 @@ class Client(CatalogClientMixin):
             settings: Optional dictionary of settings/pragmas to
                 pass to the function. Functions that declare required_settings
                 in their Meta class will validate these are present.
+            transaction_id: Optional unique identifier for the DuckDB transaction.
+                When provided, allows functions to participate in transactional
+                semantics and correlate calls within the same transaction.
 
         Yields:
             Output RecordBatches from the function. In parallel mode
@@ -1831,6 +1849,7 @@ class Client(CatalogClientMixin):
             bind_result_callback=bind_result_callback,
             projection_ids=projection_ids,
             settings=settings,
+            transaction_id=transaction_id,
         )
 
         if output_reader is None:
@@ -1849,6 +1868,7 @@ class Client(CatalogClientMixin):
         arguments: Arguments | None = None,
         bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
         settings: dict[str, str] | None = None,
+        transaction_id: bytes | None = None,
     ) -> Generator[pa.RecordBatch, None, None]:
         """Invoke a scalar function on the worker and stream results.
 
@@ -1880,6 +1900,9 @@ class Client(CatalogClientMixin):
             settings: Optional dictionary of settings/pragmas to
                 pass to the function. Functions that declare required_settings
                 in their Meta class will validate these are present.
+            transaction_id: Optional unique identifier for the DuckDB transaction.
+                When provided, allows functions to participate in transactional
+                semantics and correlate calls within the same transaction.
 
         Yields:
             Output RecordBatches from the function. Each output batch has a single
@@ -1930,6 +1953,7 @@ class Client(CatalogClientMixin):
                 bind_result_callback=bind_result_callback,
                 projection_ids=None,  # Scalar functions don't use projection
                 settings=settings,
+                transaction_id=transaction_id,
             )
 
             # Use parallel processing for all cases (handles both single and

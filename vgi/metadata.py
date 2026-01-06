@@ -311,6 +311,7 @@ class ResolvedMetadata:
     description: str = ""
     examples: list[FunctionExample] = field(default_factory=list)
     categories: list[str] = field(default_factory=list)
+    tags: set[str] = field(default_factory=set)
     parameters: list[ParameterInfo] = field(default_factory=list)
 
     # Behavior (all functions)
@@ -342,6 +343,7 @@ class ResolvedMetadata:
             "description": self.description,
             "examples": [ex.to_dict() for ex in self.examples],
             "categories": self.categories,
+            "tags": list(self.tags),
             "parameters": [p.to_dict() for p in self.parameters],
             "stability": self.stability.name,
             "null_handling": self.null_handling.name,
@@ -365,6 +367,7 @@ class ResolvedMetadata:
             description=d.get("description", ""),
             examples=[FunctionExample.from_dict(ex) for ex in d.get("examples", [])],
             categories=d.get("categories", []),
+            tags=set(d.get("tags", [])),
             parameters=[ParameterInfo.from_dict(p) for p in d.get("parameters", [])],
             stability=FunctionStability[d.get("stability", "CONSISTENT")],
             null_handling=NullHandling[d.get("null_handling", "DEFAULT")],
@@ -650,6 +653,7 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         "description",
         "examples",
         "categories",
+        "tags",
         "stability",
         "null_handling",
         "required_settings",  # settings/pragmas required by function
@@ -786,6 +790,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         description=description,
         examples=examples,
         categories=attrs.get("categories", []),
+        tags=set(attrs.get("tags", set())),
         parameters=parameters,
         stability=attrs.get("stability", FunctionStability.CONSISTENT),
         null_handling=attrs.get("null_handling", NullHandling.DEFAULT),
@@ -842,6 +847,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("description", pa.string()),
         pa.field("examples", pa.list_(_EXAMPLE_STRUCT)),
         pa.field("categories", pa.list_(pa.string())),
+        pa.field("tags", pa.list_(pa.string())),
         pa.field("parameters", pa.list_(_PARAMETER_STRUCT)),
         pa.field("stability", pa.string()),
         pa.field("null_handling", pa.string()),
@@ -858,7 +864,7 @@ _METADATA_SCHEMA = pa.schema(
 
 # Fields that contain lists and need None -> [] conversion during deserialization
 _LIST_FIELDS: frozenset[str] = frozenset(
-    {"examples", "categories", "parameters", "required_settings"}
+    {"examples", "categories", "tags", "parameters", "required_settings"}
 )
 
 

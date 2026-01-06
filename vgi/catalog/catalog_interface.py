@@ -121,8 +121,8 @@ class CatalogObject:
 
     # This is a generic comment about the object
     comment: str | None
-    # These are tags associated with the object
-    tags: dict[str, str]
+    # These are tags associated with the object (simple string labels)
+    tags: set[str]
 
 
 @dataclass(frozen=True)
@@ -151,7 +151,7 @@ class SchemaInfo(CatalogObject):
             pa.field("name", pa.string(), nullable=False),
             pa.field("is_default", pa.bool_(), nullable=False),
             pa.field("comment", pa.string(), nullable=True),
-            pa.field("tags", pa.map_(pa.string(), pa.string()), nullable=False),
+            pa.field("tags", pa.list_(pa.string()), nullable=False),
         ]  # type: ignore[arg-type]
     )
 
@@ -164,7 +164,7 @@ class SchemaInfo(CatalogObject):
                     "name": self.name,
                     "is_default": self.is_default,
                     "comment": self.comment,
-                    "tags": self.tags,
+                    "tags": list(self.tags),
                 }
             ],
             schema=self.ARROW_SCHEMA,
@@ -184,7 +184,7 @@ class SchemaInfo(CatalogObject):
             name=row["name"],
             is_default=row["is_default"],
             comment=row.get("comment"),
-            tags=dict(row["tags"]) if row["tags"] else {},
+            tags=set(row["tags"]) if row["tags"] else set(),
         )
 
 
@@ -211,7 +211,7 @@ class TableInfo(CatalogSchemaObject):
             ),
             pa.field("check_constraints", pa.list_(pa.string()), nullable=False),
             pa.field("comment", pa.string(), nullable=True),
-            pa.field("tags", pa.map_(pa.string(), pa.string()), nullable=False),
+            pa.field("tags", pa.list_(pa.string()), nullable=False),
         ]  # type: ignore[arg-type]
     )
 
@@ -227,7 +227,7 @@ class TableInfo(CatalogSchemaObject):
                     "unique_constraints": self.unique_constraints,
                     "check_constraints": self.check_constraints,
                     "comment": self.comment,
-                    "tags": self.tags,
+                    "tags": list(self.tags),
                 }
             ],
             schema=self.ARROW_SCHEMA,
@@ -258,7 +258,7 @@ class TableInfo(CatalogSchemaObject):
             unique_constraints=[list(c) for c in row["unique_constraints"]],
             check_constraints=list(row["check_constraints"]),
             comment=row.get("comment"),
-            tags=dict(row["tags"]) if row["tags"] else {},
+            tags=set(row["tags"]) if row["tags"] else set(),
         )
 
 
@@ -275,7 +275,7 @@ class ViewInfo(CatalogSchemaObject):
             pa.field("schema_name", pa.string(), nullable=False),
             pa.field("definition", pa.string(), nullable=False),
             pa.field("comment", pa.string(), nullable=True),
-            pa.field("tags", pa.map_(pa.string(), pa.string()), nullable=False),
+            pa.field("tags", pa.list_(pa.string()), nullable=False),
         ]
     )
 
@@ -288,7 +288,7 @@ class ViewInfo(CatalogSchemaObject):
                     "schema_name": self.schema_name,
                     "definition": self.definition,
                     "comment": self.comment,
-                    "tags": self.tags,
+                    "tags": list(self.tags),
                 }
             ],
             schema=self.ARROW_SCHEMA,
@@ -308,7 +308,7 @@ class ViewInfo(CatalogSchemaObject):
             schema_name=row["schema_name"],
             definition=row["definition"],
             comment=row.get("comment"),
-            tags=dict(row["tags"]) if row["tags"] else {},
+            tags=set(row["tags"]) if row["tags"] else set(),
         )
 
 
@@ -377,7 +377,7 @@ class FunctionInfo(CatalogSchemaObject):
             pa.field("arguments", pa.binary(), nullable=False),
             pa.field("output_schema", pa.binary(), nullable=False),
             pa.field("comment", pa.string(), nullable=True),
-            pa.field("tags", pa.map_(pa.string(), pa.string()), nullable=False),
+            pa.field("tags", pa.list_(pa.string()), nullable=False),
             # Scalar function behavior fields (nullable for non-scalar functions)
             pa.field("stability", pa.string(), nullable=True),
             pa.field("null_handling", pa.string(), nullable=True),
@@ -408,7 +408,7 @@ class FunctionInfo(CatalogSchemaObject):
                     "arguments": self.arguments,
                     "output_schema": self.output_schema,
                     "comment": self.comment,
-                    "tags": self.tags,
+                    "tags": list(self.tags),
                     # Scalar function behavior fields (None for non-scalar)
                     "stability": self.stability.name if self.stability else None,
                     "null_handling": (
@@ -463,7 +463,7 @@ class FunctionInfo(CatalogSchemaObject):
             arguments=SerializedSchema(row["arguments"]),
             output_schema=SerializedSchema(row["output_schema"]),
             comment=row.get("comment"),
-            tags=dict(row["tags"]) if row["tags"] else {},
+            tags=set(row["tags"]) if row["tags"] else set(),
             # Scalar function behavior fields (None for non-scalar functions)
             stability=(
                 FunctionStability[row["stability"]]
@@ -683,7 +683,7 @@ class CatalogInterface(ABC):
                     attach_id=attach_id,
                     name="main",
                     comment=None,
-                    tags={},
+                    tags=set(),
                     is_default=True,
                 )
             ]
@@ -696,7 +696,7 @@ class CatalogInterface(ABC):
         transaction_id: TransactionId | None,
         name: str,
         comment: str | None,
-        tags: dict[str, str],
+        tags: set[str],
     ) -> None:
         """Create a new schema with the given name, comment, and tags."""
         raise NotImplementedError("Schema create not implemented.")
@@ -1098,7 +1098,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             name="main",
             is_default=True,
             comment=None,
-            tags={},
+            tags=set(),
         )
 
     def table_get(
@@ -1175,7 +1175,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             arguments=args_bytes,
             output_schema=output_bytes,
             comment=meta.description or None,
-            tags={},
+            tags=meta.tags,
             # Scalar function behavior fields (None for non-scalar)
             stability=meta.stability if is_scalar else None,
             null_handling=meta.null_handling if is_scalar else None,
@@ -1260,7 +1260,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         transaction_id: TransactionId | None,
         name: str,
         comment: str | None,
-        tags: dict[str, str],
+        tags: set[str],
     ) -> None:
         """Not supported - raises CatalogReadOnlyError."""
         from vgi.exceptions import CatalogReadOnlyError

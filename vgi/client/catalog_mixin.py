@@ -480,7 +480,7 @@ class CatalogClientMixin:
         transaction_id: TransactionId | None = None,
         name: str,
         comment: str | None = None,
-        tags: dict[str, str] | None = None,
+        tags: set[str] | None = None,
     ) -> None:
         """Create a new schema.
 
@@ -489,7 +489,7 @@ class CatalogClientMixin:
             transaction_id: Optional transaction ID.
             name: The name for the new schema.
             comment: Optional description of the schema.
-            tags: Optional key-value metadata tags.
+            tags: Optional string tags for the schema.
 
         """
         self._catalog_invoke(
@@ -498,7 +498,7 @@ class CatalogClientMixin:
             transaction_id=transaction_id,
             name=name,
             comment=comment,
-            tags=tags or {},
+            tags=tags or set(),
         )
 
     def schema_drop(

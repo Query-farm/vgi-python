@@ -86,7 +86,7 @@ class TestInMemoryCatalogSchemas:
             transaction_id=None,
             name="analytics",
             comment="Analytics schema",
-            tags={"team": "data"},
+            tags={"team", "data"},
         )
 
         schemas = list(catalog.schemas(attach_id=result.attach_id, transaction_id=None))
@@ -98,7 +98,7 @@ class TestInMemoryCatalogSchemas:
         )
         assert schema is not None
         assert schema.comment == "Analytics schema"
-        assert schema.tags == {"team": "data"}
+        assert schema.tags == {"team", "data"}
 
     def test_schema_create_duplicate_raises(self) -> None:
         """Creating duplicate schema raises error."""
@@ -111,7 +111,7 @@ class TestInMemoryCatalogSchemas:
                 transaction_id=None,
                 name="main",  # Already exists
                 comment=None,
-                tags={},
+                tags=set(),
             )
 
     def test_schema_drop(self) -> None:
@@ -124,7 +124,7 @@ class TestInMemoryCatalogSchemas:
             transaction_id=None,
             name="to_drop",
             comment=None,
-            tags={},
+            tags=set(),
         )
 
         catalog.schema_drop(
@@ -435,7 +435,7 @@ class TestInMemoryCatalogVersioning:
             transaction_id=None,
             name="new_schema",
             comment=None,
-            tags={},
+            tags=set(),
         )
 
         version2 = catalog.catalog_version(

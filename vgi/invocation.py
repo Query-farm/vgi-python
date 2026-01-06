@@ -174,6 +174,9 @@ class Invocation:
             Meta.required_settings and access them via self.settings or
             self.get_setting(). Settings are available during bind phase,
             allowing output schema to depend on settings.
+        transaction_id: Optional unique identifier for the DuckDB transaction.
+            When provided, allows functions to participate in transactional
+            semantics and correlate calls within the same transaction.
 
     Example:
         invocation = Invocation(
@@ -200,6 +203,7 @@ class Invocation:
     client_features: frozenset[str] = frozenset()
     attach_id: bytes | None = None
     settings: dict[str, str] | None = None
+    transaction_id: bytes | None = None
 
     def with_global_execution_identifier(
         self, global_execution_identifier: InitResult
@@ -246,6 +250,7 @@ class Invocation:
                     "settings": (
                         list(self.settings.items()) if self.settings else None
                     ),
+                    "transaction_id": self.transaction_id,
                 }
             ],
             schema=pa.schema(
@@ -268,6 +273,7 @@ class Invocation:
                         pa.map_(pa.utf8(), pa.utf8()),
                         nullable=True,
                     ),
+                    pa.field("transaction_id", pa.binary(), nullable=True),
                 ]
             ),
         )
@@ -335,6 +341,11 @@ class Invocation:
                 # Map type deserializes as list of (key, value) tuples
                 settings = dict(settings_value)
 
+        # Parse transaction_id - optional field for transaction tracking
+        transaction_id: bytes | None = None
+        if "transaction_id" in data.schema.names:
+            transaction_id = first_row.get("transaction_id")
+
         return Invocation(
             function_name=first_row["function_name"],
             input_schema=input_schema,
@@ -346,6 +357,7 @@ class Invocation:
             client_features=client_features,
             attach_id=attach_id,
             settings=settings,
+            transaction_id=transaction_id,
         )
 
     @staticmethod

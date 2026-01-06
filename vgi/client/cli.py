@@ -232,6 +232,16 @@ def _create_cli() -> Any:
             "otherwise table. Use 'scalar' for scalar functions."
         ),
     )
+    @click.option(
+        "--transaction-id",
+        "transaction_id",
+        type=str,
+        default=None,
+        help=(
+            "Unique identifier for the DuckDB transaction as a hex string. "
+            "Allows functions to participate in transactional semantics."
+        ),
+    )
     @click.pass_context
     def cli(
         ctx: click.Context,
@@ -247,6 +257,7 @@ def _create_cli() -> Any:
         table_input_position: int | None,
         attach_id: str | None,
         function_type: str,
+        transaction_id: str | None,
     ) -> None:
         """VGI client for function invocation and catalog management.
 
@@ -300,6 +311,16 @@ def _create_cli() -> Any:
                     f"Invalid --attach-id: must be a valid hex string: {e}"
                 ) from e
 
+        # Parse transaction_id from hex string if provided
+        transaction_id_bytes: bytes | None = None
+        if transaction_id is not None:
+            try:
+                transaction_id_bytes = bytes.fromhex(transaction_id)
+            except ValueError as e:
+                raise click.ClickException(
+                    f"Invalid --transaction-id: must be a valid hex string: {e}"
+                ) from e
+
         log.info("starting_server", function=function_name, server_path=server_path)
 
         # Validate function_type requirements
@@ -335,6 +356,7 @@ def _create_cli() -> Any:
                         function_name=function_name,
                         arguments=Arguments(positional=positional_args, named={}),
                         projection_ids=list(projection_ids) if projection_ids else None,
+                        transaction_id=transaction_id_bytes,
                     )
                 elif effective_type == "scalar":
                     # Scalar function (with input, single-column output)
@@ -347,6 +369,7 @@ def _create_cli() -> Any:
                         function_name=function_name,
                         arguments=Arguments(positional=positional_args, named={}),
                         input=pf.iter_batches(),
+                        transaction_id=transaction_id_bytes,
                     )
                 else:
                     # Table-in-out function (with input)
@@ -372,6 +395,7 @@ def _create_cli() -> Any:
                         arguments=Arguments(positional=positional_args, named={}),
                         input=pf.iter_batches(),
                         projection_ids=list(projection_ids) if projection_ids else None,
+                        transaction_id=transaction_id_bytes,
                     )
 
                 for output_batch in output_iterator:
