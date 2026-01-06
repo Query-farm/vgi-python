@@ -1,10 +1,10 @@
 """VGI client package for communicating with VGI workers.
 
 This package provides:
-- Client: A class for programmatic interaction with VGI workers
-- ClientError: Exception raised by Client operations
-- CatalogClient: A class for catalog operations on VGI workers
-- CatalogClientError: Exception raised by CatalogClient operations
+- Client: A class for programmatic interaction with VGI workers, including
+  both function invocation and catalog operations
+- ClientError: Exception raised by Client function operations
+- CatalogClientMixin: Mixin class providing catalog operations
 - OutputWriter: Helper for writing output in various formats
 - main: CLI entry point
 
@@ -21,9 +21,9 @@ Usage (API):
             process(batch)
 
 Usage (Catalog API):
-    from vgi.client import CatalogClient
+    from vgi.client import Client
 
-    client = CatalogClient("./my_worker")
+    client = Client("./my_worker")
     result = client.catalog_attach(name="my_catalog", options={})
 
 Usage (CLI):
@@ -32,13 +32,12 @@ Usage (CLI):
 
 """
 
-from vgi.client.catalog_client import CatalogClient, CatalogClientError
+from vgi.client.catalog_mixin import CatalogClientMixin
 from vgi.client.cli import OutputWriter, main
 from vgi.client.client import Client, ClientError
 
 __all__ = [
-    "CatalogClient",
-    "CatalogClientError",
+    "CatalogClientMixin",
     "Client",
     "ClientError",
     "OutputWriter",
