@@ -809,28 +809,29 @@ class Worker:
             self._handle_catalog_invocation(invocation, fn_log)
             return
 
-        registry = self._build_registry()
-        if invocation.function_name not in registry:
-            available = sorted(registry.keys())
-            suggestions = self._suggest_similar_names(
-                invocation.function_name, available
-            )
-            msg_lines = [
-                f"Unknown function: '{invocation.function_name}'",
-                "",
-            ]
-            if suggestions:
-                msg_lines.append("  Did you mean:")
-                for suggestion in suggestions[:3]:
-                    msg_lines.append(f"    - {suggestion}")
-                msg_lines.append("")
-            msg_lines.append(f"  Available functions: {available}")
-            raise ValueError("\n".join(msg_lines))
-
-        candidates = registry[invocation.function_name]
-
-        # Wrap bind phase in try-except to catch and report bind-time errors
+        # Wrap bind phase in try-except to catch and report bind-time errors.
+        # This covers: unknown function, argument matching, settings validation,
+        # function instantiation, and output_schema generation.
         try:
+            registry = self._build_registry()
+            if invocation.function_name not in registry:
+                available = sorted(registry.keys())
+                suggestions = self._suggest_similar_names(
+                    invocation.function_name, available
+                )
+                msg_lines = [
+                    f"Unknown function: '{invocation.function_name}'",
+                    "",
+                ]
+                if suggestions:
+                    msg_lines.append("  Did you mean:")
+                    for suggestion in suggestions[:3]:
+                        msg_lines.append(f"    - {suggestion}")
+                    msg_lines.append("")
+                msg_lines.append(f"  Available functions: {available}")
+                raise ValueError("\n".join(msg_lines))
+
+            candidates = registry[invocation.function_name]
             func_cls = self._match_function(invocation, candidates)
 
             # Validate required settings before instantiation
@@ -855,6 +856,8 @@ class Worker:
                 invocation_id=instance.create_invocation_id(),
                 active_features=active_features,
             ).serialize()
+        except (KeyboardInterrupt, SystemExit):
+            raise  # Let these propagate normally
         except Exception as e:
             fn_log.exception("bind_failed", error=str(e))
             error_batch_bytes = self._create_bind_error_batch(e, invocation)

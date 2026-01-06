@@ -61,16 +61,10 @@ class TestBindExceptionHandling:
             error_message = str(exc_info.value)
             assert "Worker Exception" in error_message
 
-    def test_unknown_function_raises_error(self) -> None:
-        """Calling unknown function should raise error.
-
-        Note: Unknown function errors happen before the bind phase try-except,
-        so they result in worker exit rather than a ClientError with traceback.
-        The error appears in worker stderr.
-        """
+    def test_unknown_function_raises_client_error(self) -> None:
+        """Calling unknown function should raise ClientError with helpful message."""
         with Client("vgi-example-worker") as client:
-            with pytest.raises((EOFError, pa.ArrowInvalid)):
-                # Unknown function causes worker to exit with error
+            with pytest.raises(ClientError) as exc_info:
                 list(
                     client.table_function(
                         function_name="nonexistent_function",
@@ -78,9 +72,13 @@ class TestBindExceptionHandling:
                     )
                 )
 
-            # The worker stderr should contain the error about unknown function
-            stderr = client.get_worker_stderr()
-            assert "nonexistent_function" in stderr
+            error_message = str(exc_info.value)
+            # Should contain the function name
+            assert "nonexistent_function" in error_message
+            # Should indicate it's unknown
+            assert "Unknown function" in error_message
+            # Should be a worker exception
+            assert "Worker Exception" in error_message
 
     def test_argument_mismatch_raises_error(self) -> None:
         """Wrong number of arguments should raise error during bind."""
@@ -95,7 +93,11 @@ class TestBindExceptionHandling:
                 )
 
             error_message = str(exc_info.value)
-            # Should indicate argument matching failed
-            is_worker_exception = "Worker Exception" in error_message
-            mentions_argument = "argument" in error_message.lower()
-            assert is_worker_exception or mentions_argument
+            # Must be a worker exception with argument-related error
+            assert "Worker Exception" in error_message
+            # Should mention missing/required argument or matching failure
+            error_lower = error_message.lower()
+            assert any(
+                term in error_lower
+                for term in ["argument", "required", "missing", "match"]
+            ), f"Expected argument-related error, got: {error_message}"
