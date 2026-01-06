@@ -1,4 +1,4 @@
-"""VGI Worker base class for hosting user-defined functions.
+"""VGI Worker base class for hosting user-defined functions and catalogs.
 
 A worker is a subprocess that communicates via stdin/stdout using Arrow IPC.
 Workers are spawned by Client for each function invocation.
@@ -94,12 +94,13 @@ import structlog
 import structlog.stdlib
 from pyarrow import ipc
 
+from vgi.catalog import CatalogInterface
 from vgi.exceptions import SchemaValidationError
 from vgi.function import (
     Function,
     OutputSpec,
 )
-from vgi.invocation import Invocation
+from vgi.invocation import Invocation, InvocationType
 from vgi.ipc_utils import read_ipc_batch
 from vgi.scalar_function import ProtocolInput as ScalarProtocolInput
 from vgi.scalar_function import ScalarFunctionGenerator
@@ -148,6 +149,7 @@ class Worker:
     """
 
     functions: Sequence[type[Function[Any]]] = []
+    catalog_interface: type[CatalogInterface] | None = None
     _registry: dict[str, list[type[Function[Any]]]] | None = None
 
     @classmethod
@@ -592,6 +594,99 @@ class Worker:
             total_output_rows=total_output_rows,
         )
 
+    def _handle_catalog_invocation(
+        self,
+        invocation: Invocation,
+        fn_log: structlog.stdlib.BoundLogger,
+    ) -> None:
+        """Handle a CatalogInterface method invocation.
+
+        Catalog invocations use a simplified protocol without bind→init→stream
+        phases. The function_name field contains the method name to call, and
+        the input batch (read from stdin) contains method parameters as columns.
+
+        Args:
+            invocation: The catalog invocation with method name and parameters.
+            fn_log: Logger bound to the function context.
+
+        Raises:
+            ValueError: If catalog_interface is not configured.
+
+        """
+        if self.catalog_interface is None:
+            raise ValueError(
+                "CatalogInterface invocation received but Worker.catalog_interface "
+                "is not configured. Set catalog_interface class attribute to a "
+                "CatalogInterface subclass."
+            )
+
+        # Instantiate the catalog interface
+        catalog = self.catalog_interface()
+        method_name = invocation.function_name
+
+        # Get the method
+        if not hasattr(catalog, method_name):
+            raise ValueError(
+                f"Unknown catalog method: '{method_name}'. "
+                f"CatalogInterface does not have a method named '{method_name}'."
+            )
+        method = getattr(catalog, method_name)
+
+        # Read arguments from input batch (1 row with columns matching parameters)
+        args_batch = self._read_ipc_batch("catalog_args")
+        if args_batch.num_rows != 1:
+            raise ValueError(
+                f"Catalog invocation expects exactly 1 row in argument batch, "
+                f"got {args_batch.num_rows}"
+            )
+
+        # Convert batch columns to kwargs
+        kwargs: dict[str, Any] = {}
+        row = args_batch.to_pylist()[0]
+        for name, value in row.items():
+            kwargs[name] = value
+
+        fn_log.debug("catalog_method_call", method=method_name, kwargs=kwargs)
+
+        # Call the method
+        result = method(**kwargs)
+
+        fn_log.debug("catalog_method_result", result=result)
+
+        # Serialize and stream result
+        # Result types:
+        # - None → empty batch (0 rows, 0 columns)
+        # - Dataclass with serialize() → serialize to bytes, write
+        # - Iterable → stream multiple serialized items
+        with ipc.new_stream(cast(IOBase, sys.stdout), pa.schema([])) as writer:
+            if result is None:
+                # Write empty batch to signal completion
+                writer.write_batch(pa.RecordBatch.from_pydict({}))
+            elif hasattr(result, "serialize"):
+                # Single dataclass result - write serialized bytes directly
+                result_bytes = result.serialize()
+                sys.stdout.write(result_bytes)
+            else:
+                # Try to iterate (for schema_contents, schemas, etc.)
+                try:
+                    for item in result:
+                        if hasattr(item, "serialize"):
+                            item_bytes = item.serialize()
+                            sys.stdout.write(item_bytes)
+                        else:
+                            raise TypeError(
+                                f"Catalog result item has no serialize method: "
+                                f"{type(item).__name__}"
+                            )
+                except TypeError:
+                    raise TypeError(
+                        f"Catalog method returned unsupported type: "
+                        f"{type(result).__name__}. Expected None, a dataclass "
+                        f"with serialize(), or an iterable of such dataclasses."
+                    ) from None
+
+        fn_log.info("catalog_invocation_complete", method=method_name)
+
     def run(self) -> None:
         """Run the worker, reading from stdin and writing to stdout."""
         self.log.info("worker_starting")
@@ -603,6 +698,11 @@ class Worker:
         fn_log = self.log.bind(function=invocation.function_name)
         fn_log.info("init_received", arguments=invocation.arguments)
         fn_log.debug("input_schema_parsed", schema=str(invocation.input_schema))
+
+        # Dispatch catalog invocations separately (simplified protocol)
+        if invocation.function_type == InvocationType.CATALOG:
+            self._handle_catalog_invocation(invocation, fn_log)
+            return
 
         registry = self._build_registry()
         if invocation.function_name not in registry:
