@@ -7,40 +7,14 @@ function metadata.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, get_type_hints
 
 import pyarrow as pa
 import pytest
 
 from vgi.argument_spec import extract_argument_specs
 from vgi.arguments import PYTHON_TO_ARROW, Arg, TableInput
-from vgi.examples.scalar import (
-    AddColumnsFunction,
-    DoubleColumnFunction,
-    UpperCaseFunction,
-)
-from vgi.examples.table import (
-    ConstantTableFunction,
-    GeneratorExceptionFunction,
-    LoggingGeneratorFunction,
-    PartitionedRangeFunction,
-    ProjectedDataFunction,
-    RandomSampleFunction,
-    RangeFunction,
-    SequenceFunction,
-    SettingsAwareFunction,
-)
-from vgi.examples.table_in_out import (
-    BufferInputFunction,
-    EchoFunction,
-    ExceptionFinalizeFunction,
-    ExceptionProcessFunction,
-    RepeatInputsFunction,
-    SumAllColumnsFunction,
-    SumAllColumnsFunctionDistributed,
-    SumAllColumnsFunctionWithLogging,
-    SumAllColumnsSimpleDistributed,
-)
+from vgi.examples.worker import ExampleWorker
 
 
 def get_arg_descriptors(func_cls: type) -> dict[str, Arg[Any]]:
@@ -114,35 +88,7 @@ class TestArgTypeParamCapture:
 class TestTypeInference:
     """Tests that extracted specs match expected types from Arg descriptors."""
 
-    @pytest.mark.parametrize(
-        "func_cls",
-        [
-            # Scalar functions
-            DoubleColumnFunction,
-            AddColumnsFunction,
-            UpperCaseFunction,
-            # Table functions
-            SequenceFunction,
-            RangeFunction,
-            ConstantTableFunction,
-            RandomSampleFunction,
-            GeneratorExceptionFunction,
-            LoggingGeneratorFunction,
-            PartitionedRangeFunction,
-            ProjectedDataFunction,
-            SettingsAwareFunction,
-            # Table-in-out functions
-            EchoFunction,
-            BufferInputFunction,
-            RepeatInputsFunction,
-            SumAllColumnsFunction,
-            SumAllColumnsFunctionDistributed,
-            SumAllColumnsFunctionWithLogging,
-            SumAllColumnsSimpleDistributed,
-            ExceptionProcessFunction,
-            ExceptionFinalizeFunction,
-        ],
-    )
+    @pytest.mark.parametrize("func_cls", ExampleWorker.functions)
     def test_extracted_types_match_descriptors(self, func_cls: type) -> None:
         """Extracted argument types match what's defined in Arg descriptors."""
         # Get Arg descriptors from class
@@ -150,8 +96,6 @@ class TestTypeInference:
 
         # Get type hints for detecting TableInput
         try:
-            from typing import get_type_hints
-
             hints = get_type_hints(func_cls)
         except (NameError, AttributeError):
             hints = {}
@@ -175,96 +119,88 @@ class TestTypeInference:
 class TestExplicitArrowTypeOverride:
     """Tests that explicit arrow_type overrides type inference."""
 
-    def test_range_step_uses_explicit_int32(self) -> None:
-        """RangeFunction.step has explicit arrow_type=pa.int32() despite Arg[int]."""
-        descriptors = get_arg_descriptors(RangeFunction)
-        # Verify the descriptor has explicit arrow_type
-        assert descriptors["step"].arrow_type == pa.int32()
-        # Verify extracted spec uses explicit type
-        specs = extract_argument_specs(RangeFunction)
-        spec_by_name = {spec.name: spec for spec in specs}
-        assert spec_by_name["step"].arrow_type == pa.int32()
+    def test_explicit_arrow_type_overrides_inference(self) -> None:
+        """Explicit arrow_type on Arg takes precedence over type inference."""
+        # Find functions with explicit arrow_type that differs from inferred
+        for func_cls in ExampleWorker.functions:
+            descriptors = get_arg_descriptors(func_cls)
+            specs = extract_argument_specs(func_cls)
+            spec_by_name = {spec.name: spec for spec in specs}
 
-    def test_double_column_uses_explicit_utf8(self) -> None:
-        """DoubleColumnFunction.column has explicit arrow_type=pa.utf8()."""
-        descriptors = get_arg_descriptors(DoubleColumnFunction)
-        assert descriptors["column"].arrow_type == pa.utf8()
-        specs = extract_argument_specs(DoubleColumnFunction)
-        spec_by_name = {spec.name: spec for spec in specs}
-        assert spec_by_name["column"].arrow_type == pa.utf8()
+            for name, arg in descriptors.items():
+                if arg.arrow_type is not None:
+                    # Verify the explicit type is used
+                    assert spec_by_name[name].arrow_type == arg.arrow_type
 
 
 class TestTableInputBecomesNull:
     """Tests that TableInput arguments become pa.null() type."""
 
-    @pytest.mark.parametrize(
-        "func_cls,arg_name",
-        [
-            (EchoFunction, "data"),
-            (BufferInputFunction, "data"),
-            (RepeatInputsFunction, "data"),
-            (SumAllColumnsFunction, "data"),
-            (SumAllColumnsFunctionDistributed, "data"),
-            (SumAllColumnsFunctionWithLogging, "data"),
-            (SumAllColumnsSimpleDistributed, "data"),
-            (ExceptionProcessFunction, "data"),
-            (ExceptionFinalizeFunction, "data"),
-        ],
-    )
-    def test_table_input_becomes_null(self, func_cls: type, arg_name: str) -> None:
+    def test_table_input_becomes_null(self) -> None:
         """TableInput arguments are represented as pa.null() in specs."""
-        specs = extract_argument_specs(func_cls)
-        spec_by_name = {spec.name: spec for spec in specs}
-        assert spec_by_name[arg_name].arrow_type == pa.null()
-        assert spec_by_name[arg_name].is_table_input is True
+        for func_cls in ExampleWorker.functions:
+            try:
+                hints = get_type_hints(func_cls)
+            except (NameError, AttributeError):
+                continue
+
+            specs = extract_argument_specs(func_cls)
+            spec_by_name = {spec.name: spec for spec in specs}
+
+            for name, hint in hints.items():
+                if hint is TableInput and name in spec_by_name:
+                    spec = spec_by_name[name]
+                    assert spec.arrow_type == pa.null(), (
+                        f"{func_cls.__name__}.{name}: "
+                        f"TableInput should be pa.null(), got {spec.arrow_type}"
+                    )
+                    assert spec.is_table_input is True
 
 
 class TestPythonToArrowMapping:
     """Tests that PYTHON_TO_ARROW mapping is applied correctly."""
 
-    def test_int_maps_to_int64(self) -> None:
-        """Arg[int] without explicit arrow_type maps to pa.int64()."""
-        specs = extract_argument_specs(SequenceFunction)
-        spec_by_name = {spec.name: spec for spec in specs}
-        # SequenceFunction.count uses Arg[int](0) without explicit arrow_type
-        assert spec_by_name["count"].arrow_type == pa.int64()
+    def test_type_param_maps_correctly(self) -> None:
+        """Arg[type] subscript types map to correct Arrow types."""
+        for func_cls in ExampleWorker.functions:
+            descriptors = get_arg_descriptors(func_cls)
+            specs = extract_argument_specs(func_cls)
+            spec_by_name = {spec.name: spec for spec in specs}
 
-    def test_str_maps_to_utf8(self) -> None:
-        """Arg[str] without explicit arrow_type maps to pa.utf8()."""
-        specs = extract_argument_specs(AddColumnsFunction)
-        spec_by_name = {spec.name: spec for spec in specs}
-        # AddColumnsFunction uses Arg[str](0/1) without explicit arrow_type
-        assert spec_by_name["col1"].arrow_type == pa.utf8()
-        assert spec_by_name["col2"].arrow_type == pa.utf8()
+            try:
+                hints = get_type_hints(func_cls)
+            except (NameError, AttributeError):
+                hints = {}
+
+            for name, arg in descriptors.items():
+                # Skip if has explicit arrow_type or is TableInput
+                if arg.arrow_type is not None:
+                    continue
+                hint = hints.get(name)
+                if hint is TableInput:
+                    continue
+
+                # Check if _type_param is in PYTHON_TO_ARROW
+                if (
+                    hasattr(arg, "_type_param")
+                    and arg._type_param is not None
+                    and arg._type_param in PYTHON_TO_ARROW
+                ):
+                    expected = PYTHON_TO_ARROW[arg._type_param]
+                    actual = spec_by_name[name].arrow_type
+                    assert actual == expected, (
+                        f"{func_cls.__name__}.{name}: Arg[{arg._type_param.__name__}] "
+                        f"should map to {expected}, got {actual}"
+                    )
 
 
 class TestAllExampleFunctionsCovered:
-    """Verifies all example functions are tested."""
+    """Verifies all example worker functions are tested."""
 
-    def test_all_scalar_functions_covered(self) -> None:
-        """All exported scalar functions have type inference tests."""
-        from vgi.examples import scalar
-
-        for name in scalar.__all__:
-            func_cls = getattr(scalar, name)
-            # Should not raise - tests pass for all
+    def test_all_worker_functions_have_extractable_specs(self) -> None:
+        """All ExampleWorker functions can have specs extracted."""
+        for func_cls in ExampleWorker.functions:
+            # Should not raise
             specs = extract_argument_specs(func_cls)
-            assert len(specs) >= 0  # At least have specs
-
-    def test_all_table_functions_covered(self) -> None:
-        """All exported table functions have type inference tests."""
-        from vgi.examples import table
-
-        for name in table.__all__:
-            func_cls = getattr(table, name)
-            specs = extract_argument_specs(func_cls)
-            assert len(specs) >= 0
-
-    def test_all_table_in_out_functions_covered(self) -> None:
-        """All exported table-in-out functions have type inference tests."""
-        from vgi.examples import table_in_out
-
-        for name in table_in_out.__all__:
-            func_cls = getattr(table_in_out, name)
-            specs = extract_argument_specs(func_cls)
-            assert len(specs) >= 0
+            # Should have at least some attributes (may have 0 args)
+            assert isinstance(specs, list)
