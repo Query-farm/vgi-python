@@ -51,7 +51,7 @@ class TransactionBeginResult:
     transaction_id: TransactionId
 
     @staticmethod
-    def deserialize(batch: pa.RecordBatch) -> "TransactionBeginResult":
+    def deserialize(batch: pa.RecordBatch) -> TransactionBeginResult:
         """Deserialize from an Arrow record batch."""
         row = batch.to_pydict()
         return TransactionBeginResult(

@@ -282,6 +282,8 @@ def function_info_to_dict(function_info: Any) -> dict[str, Any]:
     return {
         "name": function_info.name,
         "schema_name": function_info.schema_name,
+        "function_type": function_info.function_type.value,
+        "arguments": arrow_schema_to_json(function_info.arguments),
         "comment": function_info.comment,
         "tags": function_info.tags,
     }

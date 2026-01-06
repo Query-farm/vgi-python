@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import click
 
-from vgi.client.client import Client
 from vgi.client.cli_utils import (
     bytes_to_hex,
     hex_to_attach_id,
     hex_to_transaction_id,
     output_json,
 )
+from vgi.client.client import Client
 
 
 @click.group()

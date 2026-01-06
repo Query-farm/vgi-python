@@ -87,7 +87,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from io import IOBase
-from typing import Any, cast
+from typing import IO, Any, cast
 
 import pyarrow as pa
 import structlog
@@ -139,6 +139,16 @@ class Worker:
     signatures (function overloading). The worker will select the appropriate
     function based on the invocation's arguments.
 
+    Catalog Interface:
+        If `catalog_interface` is not set but `functions` is non-empty, a default
+        read-only catalog interface is created automatically. This exposes the
+        worker's functions via the catalog protocol, allowing clients to discover
+        available functions.
+
+        To customize the catalog, set `catalog_interface` to a CatalogInterface
+        subclass. To disable the catalog entirely, set `catalog_interface = None`
+        and `catalog_name = None`.
+
     Example:
         class MyWorker(Worker):
             functions = [EchoFunction, TransformFunction]
@@ -150,7 +160,9 @@ class Worker:
 
     functions: Sequence[type[Function[Any]]] = []
     catalog_interface: type[CatalogInterface] | None = None
+    catalog_name: str | None = "functions"  # Set to None to disable default catalog
     _registry: dict[str, list[type[Function[Any]]]] | None = None
+    _default_catalog_interface: type[CatalogInterface] | None = None
 
     @classmethod
     def _build_registry(cls) -> dict[str, list[type[Function[Any]]]]:
@@ -171,6 +183,42 @@ class Worker:
 
         cls._registry = registry
         return registry
+
+    @classmethod
+    def _get_catalog_interface(cls) -> type[CatalogInterface] | None:
+        """Get the catalog interface to use for this worker.
+
+        Returns the explicitly set catalog_interface if present. Otherwise,
+        if functions are defined and catalog_name is set, creates a default
+        ReadOnlyCatalogInterface that exposes the worker's functions.
+
+        Returns:
+            CatalogInterface class to instantiate, or None if no catalog.
+
+        """
+        # Use explicit catalog_interface if set
+        if cls.catalog_interface is not None:
+            return cls.catalog_interface
+
+        # No default catalog if catalog_name is None or no functions
+        if cls.catalog_name is None or not cls.functions:
+            return None
+
+        # Create default catalog interface if not already created
+        if cls._default_catalog_interface is None:
+            from vgi.catalog import ReadOnlyCatalogInterface
+
+            # Create a dynamic subclass with the worker's functions
+            cls._default_catalog_interface = type(
+                f"{cls.__name__}Catalog",
+                (ReadOnlyCatalogInterface,),
+                {
+                    "catalog_name": cls.catalog_name,
+                    "functions": list(cls.functions),
+                },
+            )
+
+        return cls._default_catalog_interface
 
     @staticmethod
     def _match_function(
@@ -613,16 +661,20 @@ class Worker:
             ValueError: If catalog_interface is not configured.
 
         """
-        if self.catalog_interface is None:
+        catalog_class = self._get_catalog_interface()
+        if catalog_class is None:
             raise ValueError(
-                "CatalogInterface invocation received but Worker.catalog_interface "
-                "is not configured. Set catalog_interface class attribute to a "
-                "CatalogInterface subclass."
+                "CatalogInterface invocation received but no catalog is available. "
+                "Either set catalog_interface class attribute to a CatalogInterface "
+                "subclass, or ensure functions are defined and catalog_name is set."
             )
 
         # Instantiate the catalog interface
-        catalog = self.catalog_interface()
+        catalog = catalog_class()
         method_name = invocation.function_name
+
+        # Cast stdout to binary IO (reassigned in run() to binary mode)
+        stdout = cast(IO[bytes], sys.stdout)
 
         # Get the method
         if not hasattr(catalog, method_name):
@@ -664,26 +716,26 @@ class Worker:
         if result is None:
             # Write empty batch to signal no result
             batch = pa.RecordBatch.from_pydict({})
-            sys.stdout.write(batch.schema.serialize().to_pybytes())
-            sys.stdout.write(batch.serialize().to_pybytes())
+            stdout.write(batch.schema.serialize().to_pybytes())
+            stdout.write(batch.serialize().to_pybytes())
         elif isinstance(result, list) and (
             not result or not hasattr(result[0], "serialize")
         ):
             # List of primitives (e.g., strings from catalogs())
             batch = pa.RecordBatch.from_pydict({"value": result})
-            sys.stdout.write(batch.schema.serialize().to_pybytes())
-            sys.stdout.write(batch.serialize().to_pybytes())
+            stdout.write(batch.schema.serialize().to_pybytes())
+            stdout.write(batch.serialize().to_pybytes())
         elif hasattr(result, "serialize"):
             # Single dataclass result - write serialized bytes directly
             result_bytes = result.serialize()
-            sys.stdout.write(result_bytes)
+            stdout.write(result_bytes)
         else:
             # Try to iterate (for schema_contents, schemas, etc.)
             try:
                 for item in result:
                     if hasattr(item, "serialize"):
                         item_bytes = item.serialize()
-                        sys.stdout.write(item_bytes)
+                        stdout.write(item_bytes)
                     else:
                         raise TypeError(
                             f"Catalog result item has no serialize method: "
@@ -691,8 +743,8 @@ class Worker:
                         )
                 # Write empty batch to signal end of stream
                 batch = pa.RecordBatch.from_pydict({})
-                sys.stdout.write(batch.schema.serialize().to_pybytes())
-                sys.stdout.write(batch.serialize().to_pybytes())
+                stdout.write(batch.schema.serialize().to_pybytes())
+                stdout.write(batch.serialize().to_pybytes())
             except TypeError:
                 raise TypeError(
                     f"Catalog method returned unsupported type: "

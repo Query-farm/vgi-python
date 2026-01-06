@@ -21,11 +21,13 @@ Usage:
     vgi-client --input data.parquet --function transform --args '["prefix"]' \
         --table-input-position 1
 
-    # Catalog operations:
-    vgi-client catalog list --server vgi-example-catalog-worker
-    vgi-client catalog attach memory --server vgi-example-catalog-worker
-    vgi-client schema list $ATTACH_ID --server vgi-example-catalog-worker
-    vgi-client table get $ATTACH_ID main users --server vgi-example-catalog-worker
+    # Catalog operations (all nested under 'catalog'):
+    vgi-client catalog list --server vgi-example-worker
+    vgi-client catalog attach example --server vgi-example-worker
+    vgi-client catalog schema list $ATTACH_ID --server vgi-example-worker
+    vgi-client catalog schema contents $ATTACH_ID main --server vgi-example-worker
+    vgi-client catalog table get $ATTACH_ID main users --server vgi-example-worker
+    vgi-client catalog transaction begin $ATTACH_ID --server vgi-example-worker
 
 """
 
@@ -133,10 +135,6 @@ def _create_cli() -> Any:
     import pyarrow.parquet as pq
 
     from vgi.client.cli_catalog import catalog
-    from vgi.client.cli_schema import schema
-    from vgi.client.cli_table import table
-    from vgi.client.cli_transaction import transaction
-    from vgi.client.cli_view import view
 
     @click.group(invoke_without_command=True)
     @click.option(
@@ -390,12 +388,8 @@ def _create_cli() -> Any:
             if output_writer is not None:
                 output_writer.close()
 
-    # Add catalog subcommand groups
+    # Add catalog subcommand group (schema/table/view/transaction nested under it)
     cli.add_command(catalog)
-    cli.add_command(schema)
-    cli.add_command(table)
-    cli.add_command(view)
-    cli.add_command(transaction)
 
     return cli
 

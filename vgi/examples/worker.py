@@ -44,7 +44,13 @@ from vgi.worker import Worker
 
 
 class ExampleWorker(Worker):
-    """Example worker with built-in test functions."""
+    """Example worker with built-in test functions.
+
+    This worker exposes all example functions via the catalog interface,
+    allowing clients to discover available functions via the "example" catalog.
+    """
+
+    catalog_name = "example"
 
     functions = [
         # TableInOutGenerator - transform input batches

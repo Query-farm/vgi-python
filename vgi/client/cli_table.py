@@ -16,7 +16,6 @@ from __future__ import annotations
 import click
 
 from vgi.catalog import OnConflict, SerializedSchema, SqlExpression
-from vgi.client.client import Client
 from vgi.client.cli_utils import (
     hex_to_attach_id,
     hex_to_transaction_id,
@@ -26,6 +25,7 @@ from vgi.client.cli_utils import (
     scan_function_result_to_dict,
     table_info_to_dict,
 )
+from vgi.client.client import Client
 
 
 @click.group()

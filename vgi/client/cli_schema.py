@@ -14,7 +14,6 @@ from __future__ import annotations
 import click
 
 from vgi.catalog import FunctionInfo, TableInfo, ViewInfo
-from vgi.client.client import Client
 from vgi.client.cli_utils import (
     function_info_to_dict,
     hex_to_attach_id,
@@ -25,6 +24,7 @@ from vgi.client.cli_utils import (
     table_info_to_dict,
     view_info_to_dict,
 )
+from vgi.client.client import Client
 
 
 @click.group()

@@ -14,13 +14,13 @@ from __future__ import annotations
 import click
 
 from vgi.catalog import OnConflict
-from vgi.client.client import Client
 from vgi.client.cli_utils import (
     hex_to_attach_id,
     hex_to_transaction_id,
     output_json,
     view_info_to_dict,
 )
+from vgi.client.client import Client
 
 
 @click.group()

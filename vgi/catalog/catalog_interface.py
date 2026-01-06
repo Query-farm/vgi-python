@@ -897,12 +897,22 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     This is a convenience base class for catalogs that only support reading
     metadata and data, not creating or modifying objects.
 
-    Subclasses must implement:
-    - catalogs() - List available catalogs
-    - catalog_attach() - Attach to a catalog
-    - schema_get() - Get schema information
-    - table_get() - Get table information
-    - view_get() - Get view information
+    There are two ways to use this class:
+
+    1. Subclass and implement abstract methods:
+       - catalogs() - List available catalogs
+       - catalog_attach() - Attach to a catalog
+       - schema_get() - Get schema information
+       - table_get() - Get table information (return None for function-only catalogs)
+       - view_get() - Get view information (return None for function-only catalogs)
+
+    2. Use with functions list (simpler for function-only catalogs):
+       Set the `functions` class attribute to expose VGI functions:
+       - catalog_name - Name of the catalog (default: "functions")
+       - functions - List of function classes to expose in the "main" schema
+
+       This provides automatic implementations of catalogs(), catalog_attach(),
+       schema_get(), table_get(), view_get(), and schema_contents().
 
     Optional methods that can be overridden:
     - catalog_detach() - Custom detach logic
@@ -912,10 +922,131 @@ class ReadOnlyCatalogInterface(CatalogInterface):
 
     All DDL operations (create, drop, rename, modify) will raise
     CatalogReadOnlyError.
+
+    Example:
+        class MyFunctionCatalog(ReadOnlyCatalogInterface):
+            catalog_name = "my_catalog"
+            functions = [MyFunction, OtherFunction]
+
     """
 
     supports_transactions = False
     catalog_version_frozen = True
+
+    # Class attributes for function-based catalogs
+    catalog_name: str = "functions"
+    functions: list[type] = []
+
+    # Fixed attach_id for read-only catalogs (no need for unique IDs)
+    _FIXED_ATTACH_ID: AttachId = AttachId(b"readonly-catalog-")
+
+    def catalogs(self) -> Iterable[str]:
+        """Return the list of available catalogs."""
+        return [self.catalog_name]
+
+    def catalog_attach(
+        self, *, name: str, options: dict[str, Any]
+    ) -> CatalogAttachResult:
+        """Attach to the catalog."""
+        if name != self.catalog_name:
+            raise ValueError(
+                f"Unknown catalog: {name!r}. Available: {self.catalog_name}"
+            )
+
+        return CatalogAttachResult(
+            attach_id=self._FIXED_ATTACH_ID,
+            supports_transactions=False,
+            supports_time_travel=False,
+            catalog_version_frozen=True,
+            catalog_version=1,
+        )
+
+    def schema_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+    ) -> SchemaInfo | None:
+        """Get information about a schema."""
+        if name != "main":
+            return None
+        return SchemaInfo(
+            attach_id=attach_id,
+            name="main",
+            is_default=True,
+            comment=None,
+            tags={},
+        )
+
+    def table_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> TableInfo | None:
+        """Get information about a table (none in function-only catalogs)."""
+        return None
+
+    def view_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> ViewInfo | None:
+        """Get information about a view (none in function-only catalogs)."""
+        return None
+
+    def schema_contents(
+        self, *, attach_id: AttachId, transaction_id: TransactionId | None, name: str
+    ) -> Iterable[TableInfo | ViewInfo | FunctionInfo]:
+        """List all functions in the schema."""
+        if name != "main" or not self.functions:
+            return
+
+        for func_cls in self.functions:
+            yield self._function_to_info(func_cls, name)
+
+    def _function_to_info(self, func_cls: type, schema_name: str) -> FunctionInfo:
+        """Convert a function class to FunctionInfo."""
+        # Import here to avoid circular imports
+        from vgi.argument_spec import (
+            argument_specs_to_schema,
+            extract_argument_specs,
+        )
+        from vgi.metadata import FunctionType as MetadataFunctionType
+        from vgi.metadata import resolve_metadata
+
+        meta = resolve_metadata(func_cls)
+
+        # Map metadata function type to catalog function type
+        if meta.function_type == MetadataFunctionType.SCALAR:
+            func_type = FunctionType.SCALAR
+        else:
+            func_type = FunctionType.TABLE
+
+        # Extract argument specs with proper Arrow types
+        arg_specs = extract_argument_specs(func_cls)
+        args_schema = argument_specs_to_schema(arg_specs)
+        args_bytes = SerializedSchema(args_schema.serialize().to_pybytes())
+
+        # Output schema placeholder (not available without instantiation)
+        output_schema = pa.schema([])
+        output_bytes = SerializedSchema(output_schema.serialize().to_pybytes())
+
+        return FunctionInfo(
+            name=meta.name,
+            schema_name=schema_name,
+            function_type=func_type,
+            arguments=args_bytes,
+            output_schema=output_bytes,
+            comment=meta.description or None,
+            tags={},
+        )
 
     # ========== Catalog DDL (not supported) ==========
 

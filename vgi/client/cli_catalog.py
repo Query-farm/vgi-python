@@ -1,12 +1,22 @@
 """Catalog CLI commands for VGI.
 
-This module provides CLI commands for catalog operations:
-- list: List available catalogs
-- attach: Attach to a catalog
-- detach: Detach from a catalog
-- create: Create a new catalog
-- drop: Drop a catalog
-- version: Get catalog version
+This module provides CLI commands for catalog operations, organized hierarchically:
+
+catalog
+├── list                    # List available catalogs
+├── attach <name>           # Attach to a catalog
+├── detach <attach_id>      # Detach from a catalog
+├── create <name>           # Create a new catalog
+├── drop <name>             # Drop a catalog
+├── version <attach_id>     # Get catalog version
+├── schema                  # Schema operations
+│   ├── list/get/create/drop/contents
+├── table                   # Table operations
+│   ├── get/create/drop/rename/...
+├── view                    # View operations
+│   ├── get/create/drop/rename/...
+└── transaction             # Transaction operations
+    ├── begin/commit/rollback
 
 """
 
@@ -15,7 +25,9 @@ from __future__ import annotations
 import click
 
 from vgi.catalog import OnConflict
-from vgi.client.client import Client
+from vgi.client.cli_schema import schema
+from vgi.client.cli_table import table
+from vgi.client.cli_transaction import transaction
 from vgi.client.cli_utils import (
     catalog_attach_result_to_dict,
     hex_to_attach_id,
@@ -23,11 +35,13 @@ from vgi.client.cli_utils import (
     output_json,
     parse_json_option,
 )
+from vgi.client.cli_view import view
+from vgi.client.client import Client
 
 
 @click.group()
 def catalog() -> None:
-    """Manage catalogs."""
+    """Manage catalogs, schemas, tables, views, and transactions."""
 
 
 @catalog.command("list")
@@ -127,3 +141,10 @@ def catalog_version(attach_id: str, server: str, transaction_id: str | None) -> 
         ),
     )
     output_json({"version": version, "attach_id": attach_id})
+
+
+# Add nested subcommand groups
+catalog.add_command(schema)
+catalog.add_command(table)
+catalog.add_command(view)
+catalog.add_command(transaction)
