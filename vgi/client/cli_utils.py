@@ -299,6 +299,22 @@ def function_info_to_dict(function_info: Any) -> dict[str, Any]:
         "arguments": arrow_schema_to_json(function_info.arguments),
         "comment": function_info.comment,
         "tags": function_info.tags,
+        # Behavior fields
+        "stability": function_info.stability.name,
+        "null_handling": function_info.null_handling.name,
+        # Documentation fields
+        "examples": function_info.examples,
+        "categories": function_info.categories,
+        # Table function capabilities
+        "projection_pushdown": function_info.projection_pushdown,
+        "filter_pushdown": function_info.filter_pushdown,
+        "order_preservation": function_info.order_preservation.name,
+        "max_workers": function_info.max_workers,
+        # Aggregate function fields
+        "order_dependent": function_info.order_dependent.name,
+        "distinct_dependent": function_info.distinct_dependent.name,
+        # Settings
+        "required_settings": function_info.required_settings,
     }
     # Only include output_schema for scalar functions
     if function_info.function_type.value == "scalar":
