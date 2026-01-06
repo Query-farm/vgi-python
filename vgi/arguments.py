@@ -486,6 +486,73 @@ class ArgumentValidationError(ValueError):
 ArgT = TypeVar("ArgT")
 
 
+class _ArgFactory:
+    """Factory returned by Arg[type] to capture the type parameter.
+
+    This allows Arg[str](0) to create an Arg instance with _type_param=str,
+    which can be used by extract_argument_specs to infer the Arrow type.
+    """
+
+    __slots__ = ("_type_param",)
+
+    def __init__(self, type_param: type) -> None:
+        self._type_param = type_param
+
+    def __call__(
+        self,
+        position: int | str,
+        *,
+        default: Any = _MISSING,
+        doc: str = "",
+        ge: float | int | None = None,
+        le: float | int | None = None,
+        gt: float | int | None = None,
+        lt: float | int | None = None,
+        choices: Sequence[Any] | None = None,
+        pattern: str | None = None,
+        varargs: bool = False,
+        arrow_type: pa.DataType | None = None,
+    ) -> "Arg[Any]":
+        """Create an Arg instance with the captured type parameter."""
+        arg: Arg[Any] = Arg.__new__(Arg)
+        # Manually call __init__ logic since we're using __new__
+        # Validate constraint combinations
+        if ge is not None and gt is not None:
+            raise ValueError("Cannot specify both 'ge' and 'gt'")
+        if le is not None and lt is not None:
+            raise ValueError("Cannot specify both 'le' and 'lt'")
+        if varargs:
+            if isinstance(position, str):
+                raise ValueError(
+                    "varargs=True requires a positional argument (int), not named"
+                )
+            if default is not _MISSING:
+                raise ValueError(
+                    "varargs=True cannot have a default value "
+                    "(requires at least 1 value)"
+                )
+
+        arg.position = position
+        arg.default = default
+        arg.doc = doc
+        arg.ge = ge
+        arg.le = le
+        arg.gt = gt
+        arg.lt = lt
+        arg.choices = choices
+        arg.pattern = pattern
+        arg.varargs = varargs
+        arg.arrow_type = arrow_type
+        arg._name = None
+        arg._compiled_pattern = None
+        arg._type_param = self._type_param
+
+        if pattern is not None:
+            arg._compiled_pattern = re.compile(pattern)
+
+        return arg
+
+
 class Arg[ArgT]:
     """Descriptor for declarative argument parsing with optional validation.
 
@@ -559,6 +626,7 @@ class Arg[ArgT]:
         "arrow_type",
         "_name",
         "_compiled_pattern",
+        "_type_param",
     )
 
     def __init__(
@@ -629,10 +697,20 @@ class Arg[ArgT]:
         self.arrow_type = arrow_type
         self._name: str | None = None
         self._compiled_pattern: re.Pattern[str] | None = None
+        self._type_param: type | None = None
 
         # Pre-compile pattern for efficiency
         if pattern is not None:
             self._compiled_pattern = re.compile(pattern)
+
+    def __class_getitem__(cls, item: type) -> "_ArgFactory":
+        """Support Arg[type] syntax to capture the type parameter at runtime.
+
+        When you write Arg[str](0), this method is called first with item=str,
+        and returns an _ArgFactory that will create Arg instances with
+        _type_param set to str.
+        """
+        return _ArgFactory(item)
 
     def __set_name__(self, owner: type, name: str) -> None:
         """Store the attribute name when assigned to a class."""

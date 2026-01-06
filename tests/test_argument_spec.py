@@ -490,10 +490,14 @@ class TestExtractArgumentSpecsValidation:
     def test_missing_type_hint_warns(self) -> None:
         """Missing type hint and no arrow_type should issue a warning."""
 
-        class FunctionWithArg(TableInOutFunction):
-            count = Arg[int](0)  # No type annotation, no arrow_type
+        # Use a custom class not in PYTHON_TO_ARROW to trigger warning
+        class CustomType:
+            pass
 
-        # Should warn about missing type
+        class FunctionWithArg(TableInOutFunction):
+            count = Arg[CustomType](0)  # Type not in PYTHON_TO_ARROW
+
+        # Should warn about missing type (CustomType is not in PYTHON_TO_ARROW)
         with pytest.warns(UserWarning, match="Cannot determine Arrow type"):
             specs = extract_argument_specs(FunctionWithArg)
 

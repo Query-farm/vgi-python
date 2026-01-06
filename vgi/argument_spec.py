@@ -344,13 +344,21 @@ def extract_argument_specs(
 
                 # Determine Arrow type using priority order:
                 # 1. Explicit arrow_type on Arg
-                # 2. Type hint with PYTHON_TO_ARROW mapping
-                # 3. Default to pa.null() with warning
+                # 2. Type parameter from Arg[type] subscript (e.g., Arg[str])
+                # 3. Type hint with PYTHON_TO_ARROW mapping
+                # 4. Default to pa.null() with warning
                 arrow_type: pa.DataType
                 if arg.arrow_type is not None:
                     arrow_type = arg.arrow_type
                 elif is_table_input or is_any_type:
                     arrow_type = pa.null()
+                elif (
+                    hasattr(arg, "_type_param")
+                    and arg._type_param is not None
+                    and arg._type_param in PYTHON_TO_ARROW
+                ):
+                    # Use type from Arg[type] subscript
+                    arrow_type = PYTHON_TO_ARROW[arg._type_param]
                 elif hint is not None and hint in PYTHON_TO_ARROW:
                     arrow_type = PYTHON_TO_ARROW[hint]
                 else:
