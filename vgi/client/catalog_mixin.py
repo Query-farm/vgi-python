@@ -18,6 +18,7 @@ from __future__ import annotations
 import io
 import subprocess
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
@@ -41,6 +42,21 @@ from vgi.ipc_utils import read_ipc_batch
 
 if TYPE_CHECKING:
     import structlog.stdlib
+
+
+@dataclass
+class TransactionBeginResult:
+    """Result of beginning a transaction."""
+
+    transaction_id: TransactionId
+
+    @staticmethod
+    def deserialize(batch: pa.RecordBatch) -> "TransactionBeginResult":
+        """Deserialize from an Arrow record batch."""
+        row = batch.to_pydict()
+        return TransactionBeginResult(
+            transaction_id=TransactionId(bytes(row["transaction_id"][0])),
+        )
 
 
 class CatalogClientError(Exception):
@@ -1167,4 +1183,68 @@ class CatalogClientMixin:
             name=name,
             comment=comment,
             ignore_not_found=ignore_not_found,
+        )
+
+    # =========================================================================
+    # Transaction Methods
+    # =========================================================================
+
+    def transaction_begin(
+        self,
+        *,
+        attach_id: AttachId,
+    ) -> TransactionBeginResult:
+        """Begin a new transaction.
+
+        Args:
+            attach_id: The attachment ID from catalog_attach.
+
+        Returns:
+            TransactionBeginResult containing the transaction_id.
+
+        """
+        result = self._catalog_invoke(
+            "catalog_transaction_begin",
+            attach_id=attach_id,
+        )
+        if result is None:
+            raise CatalogClientError("transaction_begin returned no result")
+        return TransactionBeginResult.deserialize(result)
+
+    def transaction_commit(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId,
+    ) -> None:
+        """Commit a transaction.
+
+        Args:
+            attach_id: The attachment ID from catalog_attach.
+            transaction_id: The transaction ID from transaction_begin.
+
+        """
+        self._catalog_invoke(
+            "catalog_transaction_commit",
+            attach_id=attach_id,
+            transaction_id=transaction_id,
+        )
+
+    def transaction_rollback(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId,
+    ) -> None:
+        """Rollback a transaction.
+
+        Args:
+            attach_id: The attachment ID from catalog_attach.
+            transaction_id: The transaction ID from transaction_begin.
+
+        """
+        self._catalog_invoke(
+            "catalog_transaction_rollback",
+            attach_id=attach_id,
+            transaction_id=transaction_id,
         )
