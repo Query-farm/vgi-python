@@ -16,9 +16,28 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
 __all__ = [
+    "CatalogReadOnlyError",
     "ExecutionIdentifierError",
     "SchemaValidationError",
 ]
+
+
+class CatalogReadOnlyError(Exception):
+    """Raised when a DDL operation is attempted on a read-only catalog.
+
+    This exception is raised by ReadOnlyCatalogInterface when any
+    create, drop, rename, or modify operation is attempted.
+
+    Read-only catalogs only support:
+    - catalogs() - list catalogs
+    - catalog_attach/detach - attach to/detach from catalogs
+    - schemas() - list schemas
+    - schema_get() - get schema info
+    - schema_contents() - list schema contents
+    - table_get(), view_get() - get table/view info
+    - table_scan_function_get() - get scan function for tables
+
+    """
 
 
 class ExecutionIdentifierError(ValueError):
