@@ -347,18 +347,18 @@ class FunctionInfo(CatalogSchemaObject):
     # schema.serialize().to_pybytes()
     output_schema: SerializedSchema
 
-    # Behavior fields
-    stability: FunctionStability = FunctionStability.CONSISTENT
-    null_handling: NullHandling = NullHandling.DEFAULT
+    # Scalar function behavior fields (None for non-scalar functions)
+    stability: FunctionStability | None = None
+    null_handling: NullHandling | None = None
 
     # Documentation fields
     examples: list[str] = field(default_factory=list)
     categories: list[str] = field(default_factory=list)
 
-    # Table function capabilities
-    projection_pushdown: bool = True
-    filter_pushdown: bool = False
-    order_preservation: OrderPreservation = OrderPreservation.PRESERVES_ORDER
+    # Table function capabilities (None for scalar functions)
+    projection_pushdown: bool | None = None
+    filter_pushdown: bool | None = None
+    order_preservation: OrderPreservation | None = None
     max_workers: int | None = None
 
     # Aggregate function fields (future)
@@ -377,16 +377,16 @@ class FunctionInfo(CatalogSchemaObject):
             pa.field("output_schema", pa.binary(), nullable=False),
             pa.field("comment", pa.string(), nullable=True),
             pa.field("tags", pa.map_(pa.string(), pa.string()), nullable=False),
-            # Behavior fields (enum values serialized as strings)
-            pa.field("stability", pa.string(), nullable=False),
-            pa.field("null_handling", pa.string(), nullable=False),
+            # Scalar function behavior fields (nullable for non-scalar functions)
+            pa.field("stability", pa.string(), nullable=True),
+            pa.field("null_handling", pa.string(), nullable=True),
             # Documentation fields
             pa.field("examples", pa.list_(pa.string()), nullable=False),
             pa.field("categories", pa.list_(pa.string()), nullable=False),
-            # Table function capabilities
-            pa.field("projection_pushdown", pa.bool_(), nullable=False),
-            pa.field("filter_pushdown", pa.bool_(), nullable=False),
-            pa.field("order_preservation", pa.string(), nullable=False),
+            # Table function capabilities (nullable for scalar functions)
+            pa.field("projection_pushdown", pa.bool_(), nullable=True),
+            pa.field("filter_pushdown", pa.bool_(), nullable=True),
+            pa.field("order_preservation", pa.string(), nullable=True),
             pa.field("max_workers", pa.int32(), nullable=True),
             # Aggregate function fields
             pa.field("order_dependent", pa.string(), nullable=False),
@@ -408,16 +408,22 @@ class FunctionInfo(CatalogSchemaObject):
                     "output_schema": self.output_schema,
                     "comment": self.comment,
                     "tags": self.tags,
-                    # Behavior fields (enums serialized as name strings)
-                    "stability": self.stability.name,
-                    "null_handling": self.null_handling.name,
+                    # Scalar function behavior fields (None for non-scalar)
+                    "stability": self.stability.name if self.stability else None,
+                    "null_handling": (
+                        self.null_handling.name if self.null_handling else None
+                    ),
                     # Documentation fields
                     "examples": self.examples,
                     "categories": self.categories,
-                    # Table function capabilities
+                    # Table function capabilities (None for scalar)
                     "projection_pushdown": self.projection_pushdown,
                     "filter_pushdown": self.filter_pushdown,
-                    "order_preservation": self.order_preservation.name,
+                    "order_preservation": (
+                        self.order_preservation.name
+                        if self.order_preservation
+                        else None
+                    ),
                     "max_workers": self.max_workers,
                     # Aggregate function fields
                     "order_dependent": self.order_dependent.name,
@@ -457,18 +463,28 @@ class FunctionInfo(CatalogSchemaObject):
             output_schema=SerializedSchema(row["output_schema"]),
             comment=row.get("comment"),
             tags=dict(row["tags"]) if row["tags"] else {},
-            # Behavior fields (with backward-compatible defaults)
-            stability=FunctionStability[row.get("stability", "CONSISTENT")],
-            null_handling=NullHandling[row.get("null_handling", "DEFAULT")],
+            # Scalar function behavior fields (None for non-scalar functions)
+            stability=(
+                FunctionStability[row["stability"]]
+                if row.get("stability") is not None
+                else None
+            ),
+            null_handling=(
+                NullHandling[row["null_handling"]]
+                if row.get("null_handling") is not None
+                else None
+            ),
             # Documentation fields
             examples=list(row.get("examples") or []),
             categories=list(row.get("categories") or []),
-            # Table function capabilities
-            projection_pushdown=row.get("projection_pushdown", True),
-            filter_pushdown=row.get("filter_pushdown", False),
-            order_preservation=OrderPreservation[
-                row.get("order_preservation", "PRESERVES_ORDER")
-            ],
+            # Table function capabilities (None for scalar functions)
+            projection_pushdown=row.get("projection_pushdown"),
+            filter_pushdown=row.get("filter_pushdown"),
+            order_preservation=(
+                OrderPreservation[row["order_preservation"]]
+                if row.get("order_preservation") is not None
+                else None
+            ),
             max_workers=row.get("max_workers"),
             # Aggregate function fields
             order_dependent=OrderDependence[
@@ -1149,6 +1165,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             output_schema = func_cls.catalog_output_schema()  # type: ignore[attr-defined]
         output_bytes = SerializedSchema(output_schema.serialize().to_pybytes())
 
+        is_scalar = func_type == FunctionType.SCALAR
+
         return FunctionInfo(
             name=meta.name,
             schema_name=schema_name,
@@ -1157,17 +1175,17 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             output_schema=output_bytes,
             comment=meta.description or None,
             tags={},
-            # Behavior fields
-            stability=meta.stability,
-            null_handling=meta.null_handling,
+            # Scalar function behavior fields (None for non-scalar)
+            stability=meta.stability if is_scalar else None,
+            null_handling=meta.null_handling if is_scalar else None,
             # Documentation fields
             examples=[ex.sql for ex in meta.examples],
             categories=meta.categories,
-            # Table function capabilities
-            projection_pushdown=meta.projection_pushdown,
-            filter_pushdown=meta.filter_pushdown,
-            order_preservation=meta.preserves_order,
-            max_workers=meta.max_workers,
+            # Table function capabilities (None for scalar)
+            projection_pushdown=None if is_scalar else meta.projection_pushdown,
+            filter_pushdown=None if is_scalar else meta.filter_pushdown,
+            order_preservation=None if is_scalar else meta.preserves_order,
+            max_workers=None if is_scalar else meta.max_workers,
             # Aggregate function fields
             order_dependent=meta.order_dependent,
             distinct_dependent=meta.distinct_dependent,

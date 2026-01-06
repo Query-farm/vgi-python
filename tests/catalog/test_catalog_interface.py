@@ -441,10 +441,7 @@ class TestFunctionInfoNewFields:
         from vgi.catalog import FunctionType
         from vgi.catalog.catalog_interface import (
             DistinctDependence,
-            FunctionStability,
-            NullHandling,
             OrderDependence,
-            OrderPreservation,
         )
 
         schema_bytes = self._get_empty_schema_bytes()
@@ -458,18 +455,18 @@ class TestFunctionInfoNewFields:
             tags={},
         )
 
-        # Behavior fields
-        assert info.stability == FunctionStability.CONSISTENT
-        assert info.null_handling == NullHandling.DEFAULT
+        # Scalar behavior fields default to None (set by _function_to_info)
+        assert info.stability is None
+        assert info.null_handling is None
 
         # Documentation fields
         assert info.examples == []
         assert info.categories == []
 
-        # Table function capabilities
-        assert info.projection_pushdown is True
-        assert info.filter_pushdown is False
-        assert info.order_preservation == OrderPreservation.PRESERVES_ORDER
+        # Table function capabilities default to None (set by _function_to_info)
+        assert info.projection_pushdown is None
+        assert info.filter_pushdown is None
+        assert info.order_preservation is None
         assert info.max_workers is None
 
         # Aggregate function fields
@@ -598,10 +595,7 @@ class TestFunctionInfoNewFields:
         from vgi.catalog import FunctionInfo, FunctionType
         from vgi.catalog.catalog_interface import (
             DistinctDependence,
-            FunctionStability,
-            NullHandling,
             OrderDependence,
-            OrderPreservation,
         )
 
         # Create legacy schema without new fields
@@ -645,14 +639,14 @@ class TestFunctionInfoNewFields:
         assert restored.comment == "A legacy function"
         assert restored.tags == {"version": "1.0"}
 
-        # New fields should have defaults
-        assert restored.stability == FunctionStability.CONSISTENT
-        assert restored.null_handling == NullHandling.DEFAULT
+        # Optional fields should be None when not in legacy data
+        assert restored.stability is None
+        assert restored.null_handling is None
         assert restored.examples == []
         assert restored.categories == []
-        assert restored.projection_pushdown is True
-        assert restored.filter_pushdown is False
-        assert restored.order_preservation == OrderPreservation.PRESERVES_ORDER
+        assert restored.projection_pushdown is None
+        assert restored.filter_pushdown is None
+        assert restored.order_preservation is None
         assert restored.max_workers is None
         assert restored.order_dependent == OrderDependence.NOT_ORDER_DEPENDENT
         assert restored.distinct_dependent == DistinctDependence.NOT_DISTINCT_DEPENDENT
