@@ -460,6 +460,16 @@ class Client(CatalogClientMixin):
         except IPCError as e:
             raise ClientError(str(e)) from e
 
+        # Check for bind-time exception (error metadata is in schema metadata)
+        bind_metadata = bind_result_batch.schema.metadata
+        if bind_metadata is not None and bind_result_batch.num_rows == 0:
+            # Convert dict metadata to KeyValueMetadata for _handle_log_message
+            kv_metadata = pa.KeyValueMetadata(bind_metadata)
+            if self._handle_log_message(bind_result_batch, kv_metadata):
+                # _handle_log_message raises ClientError for exceptions
+                # If it returns True (non-exception log), unexpected for bind
+                raise ClientError("Unexpected log message during bind")
+
         if bind_result_callback is not None:
             bind_result_callback(bind_result_batch)
 

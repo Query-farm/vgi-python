@@ -25,9 +25,11 @@ Example:
 from vgi.catalog.catalog_interface import (
     AttachId,
     CatalogAttachResult,
+    CatalogExample,
     CatalogInterface,
     CatalogObject,
     CatalogSchemaObject,
+    ExtensionOption,
     FunctionInfo,
     FunctionType,
     OnConflict,
@@ -53,8 +55,10 @@ __all__ = [
     "OnConflict",
     # Data classes
     "CatalogAttachResult",
+    "CatalogExample",
     "CatalogObject",
     "CatalogSchemaObject",
+    "ExtensionOption",
     "SchemaInfo",
     "TableInfo",
     "ViewInfo",

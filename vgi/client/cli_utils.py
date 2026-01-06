@@ -237,7 +237,7 @@ def schema_info_to_dict(schema_info: Any) -> dict[str, Any]:
         "name": schema_info.name,
         "is_default": schema_info.is_default,
         "comment": schema_info.comment,
-        "tags": list(schema_info.tags),
+        "tags": dict(schema_info.tags),
     }
 
 
@@ -259,7 +259,7 @@ def table_info_to_dict(table_info: Any) -> dict[str, Any]:
         "unique_constraints": table_info.unique_constraints,
         "check_constraints": table_info.check_constraints,
         "comment": table_info.comment,
-        "tags": list(table_info.tags),
+        "tags": dict(table_info.tags),
     }
 
 
@@ -278,7 +278,7 @@ def view_info_to_dict(view_info: Any) -> dict[str, Any]:
         "schema_name": view_info.schema_name,
         "definition": view_info.definition,
         "comment": view_info.comment,
-        "tags": list(view_info.tags),
+        "tags": dict(view_info.tags),
     }
 
 
@@ -298,7 +298,7 @@ def function_info_to_dict(function_info: Any) -> dict[str, Any]:
         "function_type": function_info.function_type.value,
         "arguments": arrow_schema_to_json(function_info.arguments),
         "comment": function_info.comment,
-        "tags": list(function_info.tags),
+        "tags": dict(function_info.tags),
         # Scalar function behavior fields (None for non-scalar)
         "stability": (
             function_info.stability.name if function_info.stability else None
@@ -306,8 +306,11 @@ def function_info_to_dict(function_info: Any) -> dict[str, Any]:
         "null_handling": (
             function_info.null_handling.name if function_info.null_handling else None
         ),
-        # Documentation fields
-        "examples": function_info.examples,
+        # Documentation fields (convert CatalogExample to dict for JSON)
+        "examples": [
+            {"sql": ex.sql, "description": ex.description} if hasattr(ex, "sql") else ex
+            for ex in function_info.examples
+        ],
         "categories": function_info.categories,
         # Table function capabilities (None for scalar)
         "projection_pushdown": function_info.projection_pushdown,

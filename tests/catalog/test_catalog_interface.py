@@ -530,7 +530,10 @@ class TestFunctionInfoNewFields:
         # New fields
         assert restored.stability == info.stability
         assert restored.null_handling == info.null_handling
-        assert restored.examples == info.examples
+        # Examples are deserialized to CatalogExample objects
+        assert [
+            ex.sql for ex in restored.examples if hasattr(ex, "sql")
+        ] == info.examples
         assert restored.categories == info.categories
         assert restored.projection_pushdown == info.projection_pushdown
         assert restored.filter_pushdown == info.filter_pushdown
@@ -718,7 +721,12 @@ class TestFunctionInfoNewFields:
         batch = deserialize_record_batch(serialized)
         restored = FunctionInfo.deserialize(batch)
 
-        assert restored.examples == ["SELECT f(1)", "SELECT f(2)", "SELECT f(3)"]
+        # Examples are deserialized to CatalogExample objects
+        assert [ex.sql for ex in restored.examples if hasattr(ex, "sql")] == [
+            "SELECT f(1)",
+            "SELECT f(2)",
+            "SELECT f(3)",
+        ]
         assert restored.categories == ["a", "b"]
         assert restored.required_settings == ["setting1"]
 

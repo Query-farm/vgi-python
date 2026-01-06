@@ -8,9 +8,19 @@ import pyarrow as pa
 
 from vgi.catalog import FunctionInfo, FunctionType, TableInfo, ViewInfo
 from vgi.client import Client
+from vgi.examples.worker import ExampleWorker
 
 # Worker command for catalog tests
 EXAMPLE_WORKER = "vgi-example-worker"
+
+
+def _get_expected_function_names() -> set[str]:
+    """Get all function names from ExampleWorker dynamically."""
+    names = set()
+    for func_cls in ExampleWorker.functions:
+        meta = func_cls.get_metadata()
+        names.add(meta.name)
+    return names
 
 
 def _get_functions(
@@ -69,27 +79,16 @@ class TestExampleWorkerCatalog:
         # Get function names
         function_names = {item.name for item in contents}
 
-        # Check for known example functions
-        expected_functions = {
-            # TableInOutGenerator functions
-            "echo",
-            "buffer_input",
-            "repeat_inputs",
-            "sum_all_columns",
-            # TableFunctionGenerator functions
-            "sequence",
-            "range",
-            "constant_table",
-            "random_sample",
-            # ScalarFunctionGenerator functions
-            "double_column",
-            "add_columns",
-            "upper_case",
-        }
+        # Get expected functions from ExampleWorker dynamically
+        expected_functions = _get_expected_function_names()
 
         # All expected functions should be present
         missing = expected_functions - function_names
         assert not missing, f"Missing functions: {missing}"
+
+        # No extra functions should be present
+        extra = function_names - expected_functions
+        assert not extra, f"Unexpected functions: {extra}"
 
     def test_function_info_has_correct_types(self) -> None:
         """FunctionInfo has correct function types."""

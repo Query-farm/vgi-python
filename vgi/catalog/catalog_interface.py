@@ -135,6 +135,63 @@ class CatalogAttachResult:
 
 
 @dataclass(frozen=True)
+class ExtensionOption:
+    """Configuration option exposed by a VGI worker.
+
+    Extension options can be configured via DuckDB's SET command
+    and are passed to VGI functions via the settings parameter.
+    """
+
+    # Option name (e.g., "vgi_verbose_mode")
+    name: str
+    # Human-readable description
+    description: str
+    # Arrow schema with single field representing the type (serialized)
+    type: SerializedSchema
+    # Serialized default value as Arrow IPC (None if no default)
+    default_value: bytes | None = None
+
+    ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        [
+            pa.field("name", pa.string(), nullable=False),
+            pa.field("description", pa.string(), nullable=False),
+            pa.field("type", pa.binary(), nullable=False),
+            pa.field("default_value", pa.binary(), nullable=True),
+        ]  # type: ignore[arg-type]
+    )
+
+    def serialize(self) -> bytes:
+        """Serialize to Arrow IPC bytes."""
+        batch = pa.RecordBatch.from_pylist(
+            [
+                {
+                    "name": self.name,
+                    "description": self.description,
+                    "type": self.type,
+                    "default_value": self.default_value,
+                }
+            ],
+            schema=self.ARROW_SCHEMA,
+        )
+        return vgi.ipc_utils.serialize_record_batch(batch)
+
+    @classmethod
+    def deserialize(cls, batch: pa.RecordBatch) -> Self:
+        """Deserialize from Arrow RecordBatch."""
+        row = vgi.ipc_utils.validate_single_row_batch(
+            batch,
+            cls.__name__,
+            required_fields=["name", "description", "type"],
+        )
+        return cls(
+            name=row["name"],
+            description=row["description"],
+            type=SerializedSchema(row["type"]),
+            default_value=row["default_value"],
+        )
+
+
+@dataclass(frozen=True)
 class CatalogObject:
     """All objects have the following common properties."""
 
@@ -371,8 +428,8 @@ class FunctionInfo(CatalogSchemaObject):
     stability: FunctionStability | None = None
     null_handling: NullHandling | None = None
 
-    # Documentation fields
-    examples: list[str] = field(default_factory=list)
+    # Documentation fields (accepts strings for backward compatibility)
+    examples: list[CatalogExample | str] = field(default_factory=list)
     categories: list[str] = field(default_factory=list)
 
     # Table function capabilities (None for scalar functions)
@@ -401,7 +458,19 @@ class FunctionInfo(CatalogSchemaObject):
             pa.field("stability", pa.string(), nullable=True),
             pa.field("null_handling", pa.string(), nullable=True),
             # Documentation fields
-            pa.field("examples", pa.list_(pa.string()), nullable=False),
+            pa.field(
+                "examples",
+                pa.list_(
+                    pa.struct(
+                        [
+                            pa.field("sql", pa.string(), nullable=False),
+                            pa.field("description", pa.string(), nullable=False),
+                            pa.field("expected_output", pa.string(), nullable=True),
+                        ]
+                    )
+                ),
+                nullable=False,
+            ),
             pa.field("categories", pa.list_(pa.string()), nullable=False),
             # Table function capabilities (nullable for scalar functions)
             pa.field("projection_pushdown", pa.bool_(), nullable=True),
@@ -434,7 +503,18 @@ class FunctionInfo(CatalogSchemaObject):
                         self.null_handling.name if self.null_handling else None
                     ),
                     # Documentation fields
-                    "examples": self.examples,
+                    "examples": [
+                        (
+                            {
+                                "sql": ex.sql,
+                                "description": ex.description,
+                                "expected_output": ex.expected_output,
+                            }
+                            if isinstance(ex, CatalogExample)
+                            else {"sql": ex, "description": "", "expected_output": None}
+                        )
+                        for ex in self.examples
+                    ],
                     "categories": self.categories,
                     # Table function capabilities (None for scalar)
                     "projection_pushdown": self.projection_pushdown,
@@ -495,7 +575,14 @@ class FunctionInfo(CatalogSchemaObject):
                 else None
             ),
             # Documentation fields
-            examples=list(row.get("examples") or []),
+            examples=[
+                CatalogExample(
+                    sql=ex["sql"],
+                    description=ex.get("description", ""),
+                    expected_output=ex.get("expected_output"),
+                )
+                for ex in (row.get("examples") or [])
+            ],
             categories=list(row.get("categories") or []),
             # Table function capabilities (None for scalar functions)
             projection_pushdown=row.get("projection_pushdown"),
@@ -1199,7 +1286,14 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             stability=meta.stability if is_scalar else None,
             null_handling=meta.null_handling if is_scalar else None,
             # Documentation fields
-            examples=[ex.sql for ex in meta.examples],
+            examples=[
+                CatalogExample(
+                    sql=ex.sql,
+                    description=ex.description,
+                    expected_output=ex.expected_output,
+                )
+                for ex in meta.examples
+            ],
             categories=meta.categories,
             # Table function capabilities (None for scalar)
             projection_pushdown=None if is_scalar else meta.projection_pushdown,

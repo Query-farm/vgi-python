@@ -110,6 +110,9 @@ from vgi.table_in_out_function import (
     TableInOutGenerator,
 )
 
+# Schema for bind-time error batches (zero rows with error metadata)
+_BIND_ERROR_SCHEMA = pa.schema([("_error", pa.null())])
+
 
 @dataclass(frozen=True, slots=True)
 class WorkerStats:
@@ -423,6 +426,41 @@ class Worker:
     def _read_init_input(self) -> pa.RecordBatch:
         """Read and parse the init data from stdin."""
         return self._read_ipc_batch("init_input")
+
+    def _create_bind_error_batch(
+        self,
+        exception: Exception,
+        invocation: Invocation,
+    ) -> bytes:
+        """Create a serialized error batch for bind-time exceptions.
+
+        Args:
+            exception: The exception that occurred during bind.
+            invocation: The invocation being processed.
+
+        Returns:
+            Serialized Arrow IPC bytes containing error metadata.
+
+        """
+        import vgi.ipc_utils
+        import vgi.log
+
+        error_message = vgi.log.Message.from_exception(exception)
+
+        # Create zero-row batch with minimal schema
+        batch = pa.RecordBatch.from_pydict(
+            {"_error": pa.nulls(0)},
+            schema=_BIND_ERROR_SCHEMA,
+        )
+
+        # Add error metadata
+        metadata = error_message.add_to_metadata(invocation)
+        batch = batch.replace_schema_metadata(
+            {k.encode(): v.encode() for k, v in metadata.items()}
+        )
+
+        # Serialize as IPC
+        return vgi.ipc_utils.serialize_record_batch(batch)
 
     def _process_scalar_batches(
         self,
