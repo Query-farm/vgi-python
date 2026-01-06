@@ -4,7 +4,7 @@ This module defines the classes used for function invocation requests
 in the VGI protocol.
 
 Classes:
-    InvocationType: Enum distinguishing scalar vs table invocation types.
+    InvocationType: Enum distinguishing scalar, table, and catalog invocation types.
     InitResult: Result from global initialization phase.
     Invocation: Complete function invocation request.
 
@@ -46,11 +46,17 @@ class InvocationType(Enum):
         SCALAR: Scalar function that transforms input batches to single-column output.
         TABLE: Table function (either generator or table-in-out) that produces
             multi-column output.
+        CATALOG: Catalog interface method invocation. The function_name field
+            contains the CatalogInterface method name (e.g., 'catalog_attach',
+            'schemas', 'table_get'). Uses simplified protocol: invoke → stream
+            (no bind→init→stream phases). Input batch has exactly 1 row with
+            column names matching method parameters.
 
     """
 
     SCALAR = "scalar"
     TABLE = "table"
+    CATALOG = "catalog"
 
 
 @dataclass(frozen=True, slots=True)
