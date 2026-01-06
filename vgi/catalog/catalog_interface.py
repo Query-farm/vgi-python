@@ -896,7 +896,357 @@ class ReadOnlyCatalogInterface(CatalogInterface):
 
     This is a convenience base class for catalogs that only support reading
     metadata and data, not creating or modifying objects.
+
+    Subclasses must implement:
+    - catalogs() - List available catalogs
+    - catalog_attach() - Attach to a catalog
+    - schema_get() - Get schema information
+    - table_get() - Get table information
+    - view_get() - Get view information
+
+    Optional methods that can be overridden:
+    - catalog_detach() - Custom detach logic
+    - schemas() - Custom schema listing (default returns 'main')
+    - schema_contents() - List schema contents
+    - table_scan_function_get() - Get scan function for tables
+
+    All DDL operations (create, drop, rename, modify) will raise
+    CatalogReadOnlyError.
     """
 
     supports_transactions = False
     catalog_version_frozen = True
+
+    # ========== Catalog DDL (not supported) ==========
+
+    def catalog_create(
+        self, *, name: str, on_conflict: OnConflict, options: dict[str, Any]
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot create catalog: catalog is read-only")
+
+    def catalog_drop(self, *, name: str) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot drop catalog: catalog is read-only")
+
+    # ========== Transaction methods (not supported) ==========
+
+    def catalog_transaction_begin(self, *, attach_id: AttachId) -> TransactionId | None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError(
+            "Cannot begin transaction: catalog is read-only and does not support "
+            "transactions"
+        )
+
+    def catalog_transaction_commit(
+        self, *, attach_id: AttachId, transaction_id: TransactionId
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError(
+            "Cannot commit transaction: catalog is read-only and does not support "
+            "transactions"
+        )
+
+    def catalog_transaction_rollback(
+        self, *, attach_id: AttachId, transaction_id: TransactionId
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError(
+            "Cannot rollback transaction: catalog is read-only and does not support "
+            "transactions"
+        )
+
+    # ========== Schema DDL (not supported) ==========
+
+    def schema_create(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        comment: str | None,
+        tags: dict[str, str],
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot create schema: catalog is read-only")
+
+    def schema_drop(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        ignore_not_found: bool,
+        cascade: bool,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot drop schema: catalog is read-only")
+
+    # ========== Table DDL (not supported) ==========
+
+    def table_create(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        columns: SerializedSchema,
+        on_conflict: OnConflict,
+        not_null_constraints: list[int],
+        unique_constraints: list[list[int]],
+        check_constraints: list[str],
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot create table: catalog is read-only")
+
+    def table_drop(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        ignore_not_found: bool,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot drop table: catalog is read-only")
+
+    def table_comment_set(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        comment: str | None,
+        ignore_not_found: bool,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot set table comment: catalog is read-only")
+
+    def table_rename(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        new_name: str,
+        ignore_not_found: bool,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot rename table: catalog is read-only")
+
+    def table_column_add(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        column_definition: SerializedSchema,
+        ignore_not_found: bool,
+        if_column_not_exists: bool,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot add column: catalog is read-only")
+
+    def table_column_drop(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        column_name: str,
+        ignore_not_found: bool,
+        if_column_exists: bool,
+        cascade: bool,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot drop column: catalog is read-only")
+
+    def table_column_rename(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        column_name: str,
+        new_column_name: str,
+        ignore_not_found: bool,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot rename column: catalog is read-only")
+
+    def table_column_default_set(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        column_name: str,
+        expression: SqlExpression,
+        ignore_not_found: bool,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot set column default: catalog is read-only")
+
+    def table_column_default_drop(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        column_name: str,
+        ignore_not_found: bool,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot drop column default: catalog is read-only")
+
+    def table_column_type_change(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        column_definition: SerializedSchema,
+        expression: SqlExpression | None,
+        ignore_not_found: bool,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot change column type: catalog is read-only")
+
+    def table_not_null_drop(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        column_name: str,
+        ignore_not_found: bool,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError(
+            "Cannot drop NOT NULL constraint: catalog is read-only"
+        )
+
+    def table_not_null_set(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        column_name: str,
+        ignore_not_found: bool,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError(
+            "Cannot set NOT NULL constraint: catalog is read-only"
+        )
+
+    # ========== View DDL (not supported) ==========
+
+    def view_create(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        definition: str,
+        on_conflict: OnConflict,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot create view: catalog is read-only")
+
+    def view_drop(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        ignore_not_found: bool,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot drop view: catalog is read-only")
+
+    def view_rename(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        new_name: str,
+        ignore_not_found: bool,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot rename view: catalog is read-only")
+
+    def view_comment_set(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        comment: str | None,
+        ignore_not_found: bool,
+    ) -> None:
+        """Not supported - raises CatalogReadOnlyError."""
+        from vgi.exceptions import CatalogReadOnlyError
+
+        raise CatalogReadOnlyError("Cannot set view comment: catalog is read-only")
