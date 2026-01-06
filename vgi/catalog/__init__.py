@@ -40,6 +40,7 @@ from vgi.catalog.catalog_interface import (
     TransactionId,
     ViewInfo,
 )
+from vgi.catalog.storage import CatalogStorage, CatalogStorageSqlite
 
 __all__ = [
     # Type aliases
@@ -62,4 +63,7 @@ __all__ = [
     # Interfaces
     "CatalogInterface",
     "ReadOnlyCatalogInterface",
+    # Storage
+    "CatalogStorage",
+    "CatalogStorageSqlite",
 ]
