@@ -13,6 +13,22 @@ from typing import Any, ClassVar, NewType, Self
 import pyarrow as pa
 
 import vgi.ipc_utils
+from vgi.metadata import (
+    DistinctDependence,
+    FunctionStability,
+    NullHandling,
+    OrderDependence,
+    OrderPreservation,
+)
+
+__all__ = [
+    # Re-exported from vgi.metadata
+    "DistinctDependence",
+    "FunctionStability",
+    "NullHandling",
+    "OrderDependence",
+    "OrderPreservation",
+]
 
 # Type aliases for improved code clarity and type checking.
 # At runtime, these are equivalent to their underlying types.
@@ -300,6 +316,7 @@ class FunctionType(Enum):
 
     SCALAR = "scalar"
     TABLE = "table"
+    AGGREGATE = "aggregate"
 
 
 class OnConflict(Enum):
