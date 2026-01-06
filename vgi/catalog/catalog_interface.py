@@ -1043,8 +1043,12 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         args_schema = argument_specs_to_schema(arg_specs)
         args_bytes = SerializedSchema(args_schema.serialize().to_pybytes())
 
-        # Output schema placeholder (not available without instantiation)
-        output_schema = pa.schema([])
+        # Get output schema from catalog introspection methods if available
+        output_schema: pa.Schema = pa.schema([])
+        has_catalog_schema = hasattr(func_cls, "catalog_output_schema")
+        if func_type == FunctionType.SCALAR and has_catalog_schema:
+            # ScalarFunction has catalog_output_schema() classmethod
+            output_schema = func_cls.catalog_output_schema()  # type: ignore[attr-defined]
         output_bytes = SerializedSchema(output_schema.serialize().to_pybytes())
 
         return FunctionInfo(

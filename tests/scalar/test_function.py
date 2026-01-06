@@ -9,7 +9,7 @@ import pytest
 import structlog
 
 from tests.conftest import make_scalar_invocation
-from vgi.arguments import Arg, Arguments
+from vgi.arguments import AnyArrow, Arg, Arguments
 from vgi.exceptions import SchemaValidationError
 from vgi.invocation import Invocation, InvocationType
 from vgi.log import Level, Message
@@ -158,8 +158,8 @@ class TestScalarFunction:
         class DoubleColumn(ScalarFunction):
             column = Arg[str](0)
 
-            @property
-            def output_type(self) -> pa.DataType:
+            @classmethod
+            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
                 return pa.int64()
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
@@ -194,8 +194,8 @@ class TestScalarFunction:
         """Test self.log() method."""
 
         class LoggingFunc(ScalarFunction):
-            @property
-            def output_type(self) -> pa.DataType:
+            @classmethod
+            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
                 return pa.int64()
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
@@ -228,8 +228,8 @@ class TestScalarFunction:
         """Test that row count mismatch raises error."""
 
         class WrongRowCount(ScalarFunction):
-            @property
-            def output_type(self) -> pa.DataType:
+            @classmethod
+            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
                 return pa.int64()
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
@@ -255,8 +255,8 @@ class TestScalarFunction:
         """Test that output with more rows than input raises error (lines 134-142)."""
 
         class TooManyRows(ScalarFunction):
-            @property
-            def output_type(self) -> pa.DataType:
+            @classmethod
+            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
                 return pa.int64()
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
@@ -284,8 +284,8 @@ class TestScalarFunction:
         """Test handling of empty batches."""
 
         class DoubleFunc(ScalarFunction):
-            @property
-            def output_type(self) -> pa.DataType:
+            @classmethod
+            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
                 return pa.int64()
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:

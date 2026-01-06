@@ -169,3 +169,68 @@ class TestExampleWorkerCatalog:
         # All functions should be in 'main' schema
         for item in contents:
             assert item.schema_name == "main"
+
+    def test_scalar_function_has_output_schema(self) -> None:
+        """Scalar functions with static output types have output_schema populated."""
+        client = Client(EXAMPLE_WORKER)
+
+        attach_result = client.catalog_attach(name="example", options={})
+        contents = list(
+            client.schema_contents(attach_id=attach_result.attach_id, name="main")
+        )
+        functions = _get_functions(contents)
+
+        # Create lookup by name
+        by_name = {fn.name: fn for fn in functions}
+
+        # upper_case has static output type (string)
+        upper_info = by_name["upper_case"]
+        output_schema = pa.ipc.read_schema(pa.py_buffer(upper_info.output_schema))
+
+        # Should have a single column named "result" with string type
+        assert len(output_schema) == 1
+        assert output_schema.field(0).name == "result"
+        assert output_schema.field(0).type == pa.string()
+
+    def test_scalar_function_with_dynamic_output_has_any_type(self) -> None:
+        """Scalar functions with AnyArrow output type have 'any' output_schema."""
+        client = Client(EXAMPLE_WORKER)
+
+        attach_result = client.catalog_attach(name="example", options={})
+        contents = list(
+            client.schema_contents(attach_id=attach_result.attach_id, name="main")
+        )
+        functions = _get_functions(contents)
+
+        # Create lookup by name
+        by_name = {fn.name: fn for fn in functions}
+
+        # double_column returns AnyArrow (output depends on input)
+        double_info = by_name["double_column"]
+        output_schema = pa.ipc.read_schema(pa.py_buffer(double_info.output_schema))
+
+        # Should have a single "result" field with null type and vgi:any metadata
+        assert len(output_schema) == 1
+        assert output_schema.field(0).name == "result"
+        assert output_schema.field(0).type == pa.null()
+        assert output_schema.field(0).metadata == {b"vgi:any": b"true"}
+
+    def test_table_function_has_empty_output_schema(self) -> None:
+        """Table functions have empty output_schema (can't determine without input)."""
+        client = Client(EXAMPLE_WORKER)
+
+        attach_result = client.catalog_attach(name="example", options={})
+        contents = list(
+            client.schema_contents(attach_id=attach_result.attach_id, name="main")
+        )
+        functions = _get_functions(contents)
+
+        # Create lookup by name
+        by_name = {fn.name: fn for fn in functions}
+
+        # echo is a table function
+        echo_info = by_name["echo"]
+        output_schema = pa.ipc.read_schema(pa.py_buffer(echo_info.output_schema))
+
+        # Table functions don't have catalog_output_schema, so it's empty
+        assert len(output_schema) == 0

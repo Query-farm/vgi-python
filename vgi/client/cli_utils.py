@@ -177,7 +177,20 @@ def arrow_schema_to_json(serialized: bytes) -> list[dict[str, str]]:
     """
     reader = pa.BufferReader(serialized)
     schema = pa.ipc.read_schema(reader)  # type: ignore[arg-type]
-    return [{"name": f.name, "type": str(f.type)} for f in schema]
+    result = []
+    for f in schema:
+        type_str = str(f.type)
+        if f.metadata:
+            # Check for vgi:any metadata (output schema)
+            if f.metadata.get(b"vgi:any") == b"true":
+                type_str = "any"
+            # Check for vgi_type metadata (argument schema)
+            elif f.metadata.get(b"vgi_type") == b"table":
+                type_str = "table"
+            elif f.metadata.get(b"vgi_type") == b"any":
+                type_str = "any"
+        result.append({"name": f.name, "type": type_str})
+    return result
 
 
 def output_json(data: Any) -> None:
@@ -279,7 +292,7 @@ def function_info_to_dict(function_info: Any) -> dict[str, Any]:
         Dictionary representation
 
     """
-    return {
+    result: dict[str, Any] = {
         "name": function_info.name,
         "schema_name": function_info.schema_name,
         "function_type": function_info.function_type.value,
@@ -287,6 +300,10 @@ def function_info_to_dict(function_info: Any) -> dict[str, Any]:
         "comment": function_info.comment,
         "tags": function_info.tags,
     }
+    # Only include output_schema for scalar functions
+    if function_info.function_type.value == "scalar":
+        result["output_schema"] = arrow_schema_to_json(function_info.output_schema)
+    return result
 
 
 def catalog_attach_result_to_dict(result: Any) -> dict[str, Any]:

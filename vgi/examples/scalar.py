@@ -17,7 +17,7 @@ from typing import Any, cast
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from vgi.arguments import Arg
+from vgi.arguments import AnyArrow, Arg
 from vgi.scalar_function import ScalarFunction
 
 __all__ = [
@@ -45,6 +45,11 @@ class DoubleColumnFunction(ScalarFunction):
 
     # Explicit arrow_type demonstrates type specification
     column = Arg[str](0, doc="Column name to double", arrow_type=pa.utf8())
+
+    @classmethod
+    def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
+        """Output type depends on input column type."""
+        return AnyArrow
 
     @property
     def output_type(self) -> pa.DataType:
@@ -75,6 +80,11 @@ class AddColumnsFunction(ScalarFunction):
     col1 = Arg[str](0, doc="First column name")
     col2 = Arg[str](1, doc="Second column name")
 
+    @classmethod
+    def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
+        """Output type depends on input column type."""
+        return AnyArrow
+
     @property
     def output_type(self) -> pa.DataType:
         """Return the type of the first column."""
@@ -103,10 +113,12 @@ class UpperCaseFunction(ScalarFunction):
 
     column = Arg[str](0, doc="Column name to uppercase")
 
-    @property
-    def output_type(self) -> pa.DataType:
-        """Return string type."""
+    @classmethod
+    def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
+        """Return string type (static output)."""
         return pa.string()
+
+    # Note: No need to override output_type - default uses catalog_output_type()
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
         """Convert the column values to uppercase."""

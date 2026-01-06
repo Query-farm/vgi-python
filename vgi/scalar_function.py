@@ -17,16 +17,33 @@ Common use cases:
 This module provides two base classes:
 
     ScalarFunction (recommended)
-        Simple callback-based API. Override output_type and compute().
+        Simple callback-based API. Override catalog_output_type() and compute().
+        Override output_type only if output depends on input schema.
 
     ScalarFunctionGenerator (advanced)
         Generator-based API for fine-grained control over logging.
         Override output_schema and process().
 
-Example::
+Example (static output type)::
+
+    class UpperCase(ScalarFunction):
+        column = Arg[str](0, doc="Column to uppercase")
+
+        @classmethod
+        def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
+            return pa.string()  # Always returns string
+
+        def compute(self, batch: pa.RecordBatch) -> pa.Array:
+            return pc.utf8_upper(batch.column(self.column))
+
+Example (dynamic output type - depends on input)::
 
     class DoubleValue(ScalarFunction):
         column = Arg[str](0, doc="Column to double")
+
+        @classmethod
+        def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
+            return AnyArrow  # Output type matches input column type
 
         @property
         def output_type(self) -> pa.DataType:
@@ -48,6 +65,7 @@ import structlog
 
 import vgi.function
 import vgi.log
+from vgi.arguments import AnyArrow
 from vgi.exceptions import SchemaValidationError
 from vgi.output_complete import OutputComplete
 from vgi.protocol_types import ProtocolInput
@@ -361,20 +379,26 @@ class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInp
 class ScalarFunction(ScalarFunctionGenerator):
     """Base class for scalar functions using the compute() callback.
 
-    This is the recommended API for scalar functions. Override output_type
-    to define the output column type, and compute() to transform each batch.
+    This is the recommended API for scalar functions. Override catalog_output_type()
+    to declare the output type, and compute() to transform each batch.
 
     Scalar functions transform input rows to output values with 1:1 mapping.
     The output is always a single column named "result".
 
     Methods to Override
     -------------------
-    output_type : pa.DataType (property)
-        Return the Arrow type for the output column.
+    catalog_output_type() : pa.DataType | type[AnyArrow] (classmethod)
+        Declare the output type for catalog introspection.
+        Return a pa.DataType for static output, or AnyArrow if output
+        type depends on input schema.
 
     compute(batch) : pa.Array
         Transform the input batch to a single output array.
         Must return an array with exactly batch.num_rows elements.
+
+    output_type : pa.DataType (property, optional)
+        Override only if catalog_output_type() returns AnyArrow.
+        Default implementation uses catalog_output_type().
 
     setup() : None
         Called before processing. Acquire resources here.
@@ -390,12 +414,30 @@ class ScalarFunction(ScalarFunctionGenerator):
             self.log(Level.INFO, f"Processing {batch.num_rows} rows")
             return pc.multiply(batch.column("x"), 2)
 
-    Example:
-    -------
-    A function that doubles the values in a specified column:
+    Example (static output type):
+    -----------------------------
+    A function that converts a column to uppercase:
+
+        class UpperCase(ScalarFunction):
+            column = Arg[str](0, doc="Column to uppercase")
+
+            @classmethod
+            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
+                return pa.string()
+
+            def compute(self, batch: pa.RecordBatch) -> pa.Array:
+                return pc.utf8_upper(batch.column(self.column))
+
+    Example (dynamic output type):
+    ------------------------------
+    A function that doubles values, preserving input type:
 
         class DoubleColumn(ScalarFunction):
             column = Arg[str](0, doc="Column to double")
+
+            @classmethod
+            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
+                return AnyArrow  # Output type depends on input
 
             @property
             def output_type(self) -> pa.DataType:
@@ -450,25 +492,71 @@ class ScalarFunction(ScalarFunctionGenerator):
         """
         self._pending_messages.append(vgi.log.Message(level=level, message=message))
 
-    @property
+    @classmethod
     @abstractmethod
+    def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
+        """Declare the output type for catalog introspection.
+
+        Override this classmethod to specify the output column type.
+
+        Returns:
+            pa.DataType: For functions with static output type.
+            AnyArrow: For functions where output type depends on input.
+
+        Example (static):
+            @classmethod
+            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
+                return pa.string()
+
+        Example (dynamic):
+            @classmethod
+            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
+                return AnyArrow
+
+        """
+        ...
+
+    @classmethod
+    @final
+    def catalog_output_schema(cls) -> pa.Schema:
+        """Return output schema for catalog introspection.
+
+        Returns the output schema with a single "result" field. If
+        catalog_output_type() returns AnyArrow, the field has type null()
+        with metadata indicating it's a dynamic "any" type.
+        """
+        output_type = cls.catalog_output_type()
+        if output_type is AnyArrow:
+            # Use null type with metadata to indicate "any" type
+            field = pa.field("result", pa.null(), metadata={b"vgi:any": b"true"})
+            return pa.schema([field])
+        # Type is narrowed to pa.DataType after AnyArrow check
+        assert isinstance(output_type, pa.DataType)
+        return pa.schema([pa.field("result", output_type)])
+
+    @property
     def output_type(self) -> pa.DataType:
         """Return the Arrow type for the output column.
 
-        Override this property to specify the output column type.
+        Default implementation uses catalog_output_type(). Override only
+        if catalog_output_type() returns AnyArrow and you need to compute
+        the type from input schema at runtime.
 
         Example:
-            @property
-            def output_type(self) -> pa.DataType:
-                return pa.int64()
-
-            # Or derive from input:
             @property
             def output_type(self) -> pa.DataType:
                 return self.input_schema.field(self.column).type
 
         """
-        ...
+        result = self.catalog_output_type()
+        if result is AnyArrow:
+            raise NotImplementedError(
+                f"{type(self).__name__}.output_type must be overridden when "
+                f"catalog_output_type() returns AnyArrow"
+            )
+        # Type is narrowed to pa.DataType after AnyArrow check
+        assert isinstance(result, pa.DataType)
+        return result
 
     @property
     @final
