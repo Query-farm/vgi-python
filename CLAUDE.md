@@ -82,21 +82,29 @@ VGI (Vector Gateway Interface) provides an Apache Arrow-based protocol for conne
 
 ```
 vgi/
-  __init__.py              # Package exports
-  function.py              # Invocation, OutputSpec, Arguments, FunctionType
-  scalar_function.py       # ScalarFunction, ScalarFunctionGenerator
-  table_function.py        # TableFunctionGenerator, TableCardinality, Output
-  table_in_out_function.py # TableInOutFunction, TableInOutGenerator
-  metadata.py              # Function metadata for introspection
-  schema_utils.py          # Schema builder helpers (schema, schema_like)
-  worker.py                # Worker base class
+  __init__.py                      # Package exports
+  function.py                      # Function base class, OutputSpec, FunctionInitInput
+  scalar_function.py               # ScalarFunction, ScalarFunctionGenerator
+  table_function.py                # TableFunctionGenerator, TableCardinality, Output
+  table_in_out_function.py         # TableInOutFunction, TableInOutGenerator
+  table_in_out_function_patterns.py # AggregationFunction, FilterFunction, MapFunction
+  metadata.py                      # Function metadata for introspection
+  schema_utils.py                  # Schema builder helpers (schema, schema_like)
+  arguments.py                     # Arg descriptor, Arguments, AnyArrow, TableInput
+  invocation.py                    # Invocation structure
+  worker.py                        # Worker base class
+  testing.py                       # TableInOutFunctionTestClient for in-process testing
   client/
-    client.py              # Client class
+    client.py                      # Client class
+    cli.py                         # CLI command-line interface
+  catalog/
+    catalog_interface.py           # CatalogInterface for DuckDB integration
+    storage.py                     # Catalog storage implementation
   examples/
-    scalar.py              # Example scalar functions
-    table.py               # Example table functions
-    table_in_out.py        # Example table-in-out functions
-    worker.py              # ExampleWorker with registry
+    scalar.py                      # Example scalar functions
+    table.py                       # Example table functions
+    table_in_out.py                # Example table-in-out functions
+    worker.py                      # ExampleWorker with registry
 ```
 
 ## CLI Commands
@@ -181,6 +189,77 @@ class SumFunction(TableInOutFunction):
 
     def finish(self) -> list[pa.RecordBatch]:
         return [pa.RecordBatch.from_pydict({"sum": [self.total]}, schema=self.output_schema)]
+```
+
+## Specialized Pattern Classes
+
+For common use cases, VGI provides specialized base classes that handle boilerplate:
+
+### AggregationFunction (Reduce Pattern)
+
+Use when reducing all input to a summary (sum, count, mean):
+
+```python
+import pyarrow as pa
+import pyarrow.compute as pc
+from vgi import AggregationFunction
+
+class SumColumns(AggregationFunction):
+    """Sum all numeric columns."""
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        return pa.schema([("total", pa.int64())])
+
+    @property
+    def state_schema(self) -> pa.Schema:
+        return self.output_schema  # Same for this simple case
+
+    def accumulate(self, batch: pa.RecordBatch) -> None:
+        self._total = getattr(self, '_total', 0) + pc.sum(batch.column(0)).as_py()
+
+    def get_accumulated_state(self) -> pa.RecordBatch:
+        return pa.RecordBatch.from_pydict({"total": [self._total]}, schema=self.state_schema)
+
+    def merge_accumulated_states(self, states: pa.Table) -> None:
+        self._total = pc.sum(states.column("total")).as_py()
+
+    def compute_result(self) -> pa.RecordBatch:
+        return pa.RecordBatch.from_pydict({"total": [self._total]}, schema=self.output_schema)
+```
+
+### FilterFunction (Row Filtering)
+
+Use when filtering rows by a boolean predicate:
+
+```python
+import pyarrow as pa
+import pyarrow.compute as pc
+from vgi import FilterFunction, Arg
+
+class PositiveFilter(FilterFunction):
+    """Keep only rows where value is positive."""
+
+    column = Arg[str](0, doc="Column to filter on")
+
+    def predicate(self, batch: pa.RecordBatch) -> pa.Array:
+        return pc.greater(batch.column(self.column), 0)
+```
+
+### MapFunction (Column Transform)
+
+Use when transforming columns independently per row:
+
+```python
+import pyarrow as pa
+import pyarrow.compute as pc
+from vgi import MapFunction
+
+class DoubleValues(MapFunction):
+    """Double all values in a column."""
+
+    def map_columns(self, batch: pa.RecordBatch) -> dict[str, pa.Array]:
+        return {"value": pc.multiply(batch.column("value"), 2)}
 ```
 
 ## Creating a Table Function (No Input)
@@ -282,8 +361,14 @@ from vgi import TableFunctionGenerator, Output, Arg, Worker
 # Table-In-Out Functions (transform input)
 from vgi import TableInOutFunction, Arg, Worker
 
+# Specialized Pattern Classes
+from vgi import AggregationFunction, FilterFunction, MapFunction
+
 # Schema helpers
 from vgi import schema, schema_like
+
+# Testing
+from vgi import TableInOutFunctionTestClient
 
 # Logging
 from vgi.log import Level

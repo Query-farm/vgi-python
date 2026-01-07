@@ -17,9 +17,8 @@ class SumColumnsFunction(TableInOutFunction):
         description = "Sum all numeric columns and return a single row"
         categories = ["aggregation", "numeric"]
         max_workers = 1  # Single-threaded (used by max_processes property)
-        supports_distributed = True
 
-    columns = Arg[list]("columns", default=None, doc="Columns to sum")
+    column_name = Arg[str]("column", default=None, doc="Column to sum (optional)")
 
     def transform(self, batch):
         ...
@@ -27,6 +26,7 @@ class SumColumnsFunction(TableInOutFunction):
 
 ```python
 from vgi import ScalarFunction, Arg
+from vgi.arguments import AnyArrow
 import pyarrow as pa
 import pyarrow.compute as pc
 
@@ -35,6 +35,7 @@ class DoubleValues(ScalarFunction):
 
     class Meta:
         name = "double"
+        output_type = AnyArrow  # Dynamic type - depends on input
         categories = ["numeric", "transform"]
 
     col_name = Arg[str](0, doc="Name of the column to double")
@@ -54,7 +55,7 @@ class DoubleValues(ScalarFunction):
 meta = SumColumnsFunction.get_metadata()
 print(meta.name)        # "sum_columns"
 print(meta.max_workers) # 1
-print(meta.parameters)  # [ParameterInfo(name='columns', ...)]
+print(meta.parameters)  # [ParameterInfo(name='column_name', ...)]
 
 # Get as JSON-serializable dict
 info = SumColumnsFunction.describe()
@@ -67,14 +68,18 @@ info = SumColumnsFunction.describe()
 | `name` | `str` | Class name → snake_case | Function registration name |
 | `description` | `str` | First docstring line | Human-readable description |
 | `categories` | `list[str]` | `[]` | Classification tags |
+| `tags` | `dict[str, str]` | `{}` | Custom key-value tags |
 | `examples` | `list` | `[]` | SQL examples (str or FunctionExample) |
 | `max_workers` | `int\|None` | `None` (unlimited) | Max parallel workers |
 | `stability` | `FunctionStability` | `CONSISTENT` | Output determinism |
+| `null_handling` | `NullHandling` | `DEFAULT` | NULL input behavior |
+| `required_settings` | `list[str]` | `[]` | Required DuckDB settings |
 | `projection_pushdown` | `bool` | `True` | Enable column pruning |
 | `filter_pushdown` | `bool` | `False` | Enable filter pushdown |
 | `preserves_order` | `OrderPreservation` | `PRESERVES_ORDER` | Row order guarantee |
-| `supports_distributed` | `bool` | `False` | Enable distributed execution |
-| `internal` | `bool` | `False` | Mark as internal function |
+| `order_dependent` | `OrderDependence` | `NOT_ORDER_DEPENDENT` | Aggregate order sensitivity |
+| `distinct_dependent` | `DistinctDependence` | `NOT_DISTINCT_DEPENDENT` | Aggregate DISTINCT sensitivity |
+| `output_type` | `pa.DataType\|AnyArrow` | Required for ScalarFunction | Scalar output type |
 
 ## Metadata Inheritance
 
