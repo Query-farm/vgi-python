@@ -19,7 +19,7 @@ from vgi.log import Level, Message
 class MyScalarFunction(ScalarFunctionGenerator):
     """Transform each row to a single output value."""
 
-    column = Arg[str](0, doc="Column to transform")
+    col_name = Arg[str](0, doc="Name of the column to transform")
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -35,7 +35,7 @@ class MyScalarFunction(ScalarFunctionGenerator):
             yield Message(Level.INFO, f"Processing {batch.num_rows} rows")
 
             # Compute result - must have same row count as input
-            result = pc.multiply(batch.column(self.column), 2)
+            result = pc.multiply(batch.column(self.col_name), 2)
             output = pa.RecordBatch.from_arrays([result], schema=self.output_schema)
 
             batch = yield Output(output)

@@ -115,21 +115,17 @@ import pyarrow.compute as pc
 from vgi import ScalarFunction, Arg
 from vgi.arguments import AnyArrow
 
-class DoubleColumn(ScalarFunction):
-    """Double the value in a specified column."""
+class AddColumns(ScalarFunction):
+    """Add two integer columns together."""
 
     class Meta:
-        output_type = AnyArrow  # Output type depends on input column
+        output_type = pa.int64()
 
-    column = Arg[str](0, doc="Column to double")
-
-    @property
-    def output_type(self) -> pa.DataType:
-        # Output type matches input column type
-        return self.input_schema.field(self.column).type
+    left = Arg[AnyArrow](0, type_bound=pa.types.is_integer, doc="First column")
+    right = Arg[AnyArrow](1, type_bound=pa.types.is_integer, doc="Second column")
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array:
-        return pc.multiply(batch.column(self.column), 2)
+        return pc.add(batch.column(self.left.value), batch.column(self.right.value))
 ```
 
 ### Key Constraints for Scalar Functions:
@@ -299,7 +295,7 @@ from vgi.log import Level
 class MyFunction(TableInOutFunction):
     count = Arg[int](0)                        # Required positional
     multiplier = Arg[int](1, default=1)        # Optional positional
-    column = Arg[str]("column")                # Required named
+    target = Arg[str]("target")                # Required named
     format = Arg[str]("format", default="json") # Optional named
 ```
 
@@ -336,19 +332,19 @@ class AddColumns(ScalarFunction):
     class Meta:
         output_type = AnyArrow  # Output type depends on input columns
 
-    col1 = Arg[AnyArrow](0, type_bound=pa.types.is_numeric)
-    col2 = Arg[AnyArrow](1, type_bound=pa.types.is_numeric)
+    left = Arg[AnyArrow](0, type_bound=[pa.types.is_integer, pa.types.is_floating])
+    right = Arg[AnyArrow](1, type_bound=[pa.types.is_integer, pa.types.is_floating])
 
     def bind(self) -> None:
         """Compute output type from input columns."""
-        self._output_type = self.input_schema.field(self.col1.value).type
+        self._output_type = self.input_schema.field(self.left.value).type
 
     @property
     def output_type(self) -> pa.DataType:
         return self._output_type
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array:
-        return pc.add(batch.column(self.col1.value), batch.column(self.col2.value))
+        return pc.add(batch.column(self.left.value), batch.column(self.right.value))
 ```
 
 ### Parallel Execution and bind() State

@@ -30,21 +30,21 @@ from vgi import ScalarFunction, Arg
 import pyarrow as pa
 import pyarrow.compute as pc
 
-class DoubleColumn(ScalarFunction):
+class DoubleValues(ScalarFunction):
     """Double the values in a numeric column."""
 
     class Meta:
         name = "double"
         categories = ["numeric", "transform"]
 
-    column = Arg[str](0, doc="Column to double")
+    col_name = Arg[str](0, doc="Name of the column to double")
 
     @property
     def output_type(self) -> pa.DataType:
-        return self.input_schema.field(self.column).type
+        return self.input_schema.field(self.col_name).type
 
     def compute(self, batch):
-        return pc.multiply(batch.column(self.column), 2)
+        return pc.multiply(batch.column(self.col_name), 2)
 ```
 
 ## Accessing Metadata
