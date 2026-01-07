@@ -1393,63 +1393,70 @@ class TestAnyArrow:
     """Tests for AnyArrow sentinel type."""
 
     def test_any_arrow_accepts_int(self) -> None:
-        """AnyArrow should accept integer values."""
-        from vgi.arguments import AnyArrow
+        """AnyArrow should accept integer values and return AnyArrowValue."""
+        from vgi.arguments import AnyArrow, AnyArrowValue
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar(42),)))
             value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.value == 42  # type: ignore[comparison-overlap]
+        assert isinstance(obj.value, AnyArrowValue)
+        assert obj.value.value == 42
+        assert obj.value.position == 0
+        assert obj.value.name == "value"
 
     def test_any_arrow_accepts_string(self) -> None:
-        """AnyArrow should accept string values."""
-        from vgi.arguments import AnyArrow
+        """AnyArrow should accept string values and return AnyArrowValue."""
+        from vgi.arguments import AnyArrow, AnyArrowValue
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar("hello"),)))
             value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.value == "hello"  # type: ignore[comparison-overlap]
+        assert isinstance(obj.value, AnyArrowValue)
+        assert obj.value.value == "hello"
 
     def test_any_arrow_accepts_float(self) -> None:
-        """AnyArrow should accept float values."""
-        from vgi.arguments import AnyArrow
+        """AnyArrow should accept float values and return AnyArrowValue."""
+        from vgi.arguments import AnyArrow, AnyArrowValue
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar(3.14),)))
             value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.value == 3.14  # type: ignore[comparison-overlap]
+        assert isinstance(obj.value, AnyArrowValue)
+        assert obj.value.value == 3.14
 
     def test_any_arrow_accepts_bool(self) -> None:
-        """AnyArrow should accept boolean values."""
-        from vgi.arguments import AnyArrow
+        """AnyArrow should accept boolean values and return AnyArrowValue."""
+        from vgi.arguments import AnyArrow, AnyArrowValue
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar(True),)))
             value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.value is True  # type: ignore[comparison-overlap]
+        assert isinstance(obj.value, AnyArrowValue)
+        assert obj.value.value is True
 
     def test_any_arrow_accepts_list(self) -> None:
-        """AnyArrow should accept list values."""
-        from vgi.arguments import AnyArrow
+        """AnyArrow should accept list values and return AnyArrowValue."""
+        from vgi.arguments import AnyArrow, AnyArrowValue
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar([1, 2, 3]),)))
             value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.value == [1, 2, 3]  # type: ignore[comparison-overlap]
+        assert isinstance(obj.value, AnyArrowValue)
+        assert obj.value.value == [1, 2, 3]
 
     def test_any_arrow_mixed_types(self) -> None:
         """Multiple AnyArrow args can have different types."""
-        from vgi.arguments import AnyArrow
+        from vgi.arguments import AnyArrow, AnyArrowValue
 
         class MyClass:
             invocation = _MockInvocation(
@@ -1466,24 +1473,26 @@ class TestAnyArrow:
             bool_val: AnyArrow = Arg[AnyArrow](2)  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.int_val == 42  # type: ignore[comparison-overlap]
-        assert obj.str_val == "text"  # type: ignore[comparison-overlap]
-        assert obj.bool_val is True  # type: ignore[comparison-overlap]
+        assert isinstance(obj.int_val, AnyArrowValue)
+        assert obj.int_val.value == 42
+        assert obj.str_val.value == "text"
+        assert obj.bool_val.value is True
 
     def test_any_arrow_with_default(self) -> None:
-        """AnyArrow should support default values."""
-        from vgi.arguments import AnyArrow
+        """AnyArrow should support default values and return AnyArrowValue."""
+        from vgi.arguments import AnyArrow, AnyArrowValue
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=()))
             value: AnyArrow = Arg[AnyArrow](0, default="default")  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.value == "default"  # type: ignore[comparison-overlap]
+        assert isinstance(obj.value, AnyArrowValue)
+        assert obj.value.value == "default"
 
     def test_any_arrow_named_argument(self) -> None:
-        """AnyArrow should work with named arguments."""
-        from vgi.arguments import AnyArrow
+        """AnyArrow should work with named arguments and return AnyArrowValue."""
+        from vgi.arguments import AnyArrow, AnyArrowValue
 
         class MyClass:
             invocation = _MockInvocation(
@@ -1492,4 +1501,7 @@ class TestAnyArrow:
             data: AnyArrow = Arg[AnyArrow]("data")  # type: ignore[assignment]
 
         obj = MyClass()
-        assert obj.data == {"key": "value"}  # type: ignore[comparison-overlap]
+        assert isinstance(obj.data, AnyArrowValue)
+        assert obj.data.value == {"key": "value"}
+        assert obj.data.position == "data"
+        assert obj.data.name == "data"

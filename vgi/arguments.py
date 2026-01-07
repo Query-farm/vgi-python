@@ -59,6 +59,7 @@ _MISSING: Final = _MissingType()
 
 __all__ = [
     "AnyArrow",
+    "AnyArrowValue",
     "Arg",
     "ArgumentValidationError",
     "Arguments",
@@ -92,12 +93,44 @@ class TableInput:
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class AnyArrowValue:
+    """Wrapper for AnyArrow argument values with metadata.
+
+    When an Arg is declared with type AnyArrow, accessing the attribute returns
+    an AnyArrowValue instead of just the raw value. This provides access to
+    both the value and the argument's position/name for schema lookups.
+
+    Attributes:
+        value: The Python value (from scalar.as_py()).
+        position: The positional index from the Arg definition (int for positional,
+            str for named arguments).
+        name: The Python attribute name of the Arg.
+
+    Example:
+        class MyFunction(ScalarFunction):
+            col1 = Arg[AnyArrow](0, doc="First column")
+
+            def __init__(self, ...):
+                super().__init__(...)
+                # self.col1 is an AnyArrowValue
+                field = self.input_schema.field(self.col1.position)
+                # Or access the value directly
+                print(self.col1.value)
+
+    """
+
+    value: Any
+    position: int | str
+    name: str
+
+
 class AnyArrow:
     """Sentinel type for arguments accepting any Arrow type.
 
     Use this as the type parameter for Arg when an argument should accept
-    any valid Arrow scalar type without enforcing a specific type. The actual
-    value is still converted to Python via `as_py()`.
+    any valid Arrow scalar type without enforcing a specific type. When accessed,
+    returns an AnyArrowValue containing the value plus metadata (position and name).
 
     This is useful for functions that can operate on any data type, or when
     the type is determined at runtime based on the input schema.
@@ -111,13 +144,22 @@ class AnyArrow:
         # SQL: SELECT * FROM flexible_function(42, 'text')
         # SQL: SELECT * FROM flexible_function(3.14, true)
 
+        def transform(self, batch):
+            # Access the value
+            val = self.default_value.value
+            # Or look up field by position
+            field = self.input_schema.field(self.default_value.position)
+
     Note:
         Unlike TableInput, AnyArrow arguments have actual Arrow values -
         they are just not constrained to a specific Arrow type.
 
     """
 
-    pass
+    # Type stubs for static analysis - at runtime, Arg[AnyArrow] returns AnyArrowValue
+    value: Any
+    position: int | str
+    name: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -780,6 +822,11 @@ class Arg[ArgT]:
         # Apply validation
         self._validate(value)
 
+        # Wrap AnyArrow values with metadata for schema lookups
+        if self._type_param is AnyArrow:
+            assert self._name is not None  # Set by __set_name__
+            return AnyArrowValue(value, self.position, self._name)  # type: ignore[return-value]
+
         return value
 
     def _describe_valid_range(self) -> str | None:
@@ -1016,6 +1063,33 @@ class Arg[ArgT]:
                     doc=self.doc if self.doc else None,
                     valid_range=valid_range,
                 )
+
+    def format_error(self, message: str) -> str:
+        """Format an error message with argument context.
+
+        Use this method when performing custom validation to produce
+        error messages that include the argument's position and name.
+
+        Args:
+            message: The error message describing what went wrong.
+
+        Returns:
+            Formatted error message prefixed with argument context.
+
+        Example:
+            col_arg = type(self).column  # Get the Arg descriptor
+            if not is_valid(self.column):
+                raise SchemaValidationError(
+                    col_arg.format_error("must be numeric")
+                )
+
+            # Output for positional: "Argument 'col1': must be numeric"
+            # Output for named:      "Argument 'column': must be numeric"
+
+        """
+        # Use the attribute name if available
+        name = self._name or str(self.position)
+        return f"Argument '{name}': {message}"
 
     def __repr__(self) -> str:
         """Return a string representation of this Arg."""

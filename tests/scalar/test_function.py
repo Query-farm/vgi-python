@@ -10,7 +10,6 @@ import structlog
 
 from tests.conftest import make_scalar_invocation
 from vgi.arguments import AnyArrow, Arg, Arguments
-from vgi.exceptions import SchemaValidationError
 from vgi.invocation import Invocation, InvocationType
 from vgi.log import Level, Message
 from vgi.scalar_function import (
@@ -87,23 +86,6 @@ class TestScalarFunctionGenerator:
 
         with pytest.raises(ValueError, match="requires an input schema"):
             TestFunc(invocation=invocation, logger=structlog.get_logger())
-
-    def test_requires_single_column_output(self) -> None:
-        """Test that output schema must have exactly one column."""
-
-        class TwoColumnOutput(ScalarFunctionGenerator):
-            @property
-            def output_schema(self) -> pa.Schema:
-                return pa.schema([("a", pa.int64()), ("b", pa.int64())])
-
-            def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
-                _ = yield Output(self.empty_output_batch)
-
-        input_schema = pa.schema([("x", pa.int64())])
-        invocation = make_scalar_invocation(input_schema)
-
-        with pytest.raises(SchemaValidationError, match="exactly 1 output column"):
-            TwoColumnOutput(invocation=invocation, logger=structlog.get_logger())
 
     def test_log_message_support(self) -> None:
         """Test that log messages can be yielded."""

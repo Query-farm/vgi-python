@@ -14,7 +14,7 @@ Usage:
 """
 
 from vgi.examples.scalar import (
-    AddColumnsFunction,
+    AddNumericColumnsFunction,
     DoubleColumnFunction,
     UpperCaseFunction,
 )
@@ -75,7 +75,7 @@ class ExampleWorker(Worker):
         SettingsAwareFunction,
         # ScalarFunctionGenerator - transform to single-column output
         DoubleColumnFunction,
-        AddColumnsFunction,
+        AddNumericColumnsFunction,
         UpperCaseFunction,
     ]
 

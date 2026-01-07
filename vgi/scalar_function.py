@@ -66,7 +66,6 @@ import structlog
 import vgi.function
 import vgi.log
 from vgi.arguments import AnyArrow
-from vgi.exceptions import SchemaValidationError
 from vgi.output_complete import OutputComplete
 from vgi.protocol_types import ProtocolInput
 from vgi.table_function import Output, ProtocolOutput
@@ -241,16 +240,6 @@ class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInp
                 f"{type(self).__name__} requires an input schema, but none was "
                 f"provided. ScalarFunction processes input batches and requires "
                 f"input_schema to be set in the Invocation."
-            )
-        # Validate single-column output at construction
-        if len(self.output_schema) != 1:
-            cols = [f.name for f in self.output_schema]
-            raise SchemaValidationError(
-                f"ScalarFunction must have exactly 1 output column, "
-                f"but output_schema has {len(self.output_schema)} columns.\n\n"
-                f"  Columns found: {cols}\n\n"
-                f"  Scalar functions transform each input row to a single value.\n"
-                f"  For multiple output columns, use a table function instead."
             )
 
     # input_schema property and _validate_input_schema inherited from Function

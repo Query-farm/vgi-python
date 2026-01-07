@@ -196,6 +196,44 @@ class TestScalarFunctionClient:
         assert "output_schema" in bind_result.schema.names
         assert "max_processes" in bind_result.schema.names
 
+    def test_add_columns_accepts_float_columns(self, example_worker: str) -> None:
+        """Test that add_columns accepts float columns."""
+        schema = pa.schema([("a", pa.float64()), ("b", pa.float64())])
+        batch = pa.RecordBatch.from_pydict(
+            {"a": [1.5, 2.5], "b": [0.5, 0.5]}, schema=schema
+        )
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="add_columns",
+                    input=iter([batch]),
+                    arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
+                )
+            )
+
+        assert len(outputs) == 1
+        assert outputs[0].to_pydict() == {"result": [2.0, 3.0]}
+
+    def test_add_columns_accepts_mixed_int_types(self, example_worker: str) -> None:
+        """Test that add_columns accepts mixed integer types and promotes correctly."""
+        schema = pa.schema([("a", pa.int32()), ("b", pa.int64())])
+        batch = pa.RecordBatch.from_pydict({"a": [1, 2], "b": [10, 20]}, schema=schema)
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="add_columns",
+                    input=iter([batch]),
+                    arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
+                )
+            )
+
+        assert len(outputs) == 1
+        assert outputs[0].to_pydict() == {"result": [11, 22]}
+        # Output should be int64 (promoted from int64 common type)
+        assert outputs[0].schema.field("result").type == pa.int64()
+
 
 class TestScalarFunctionParallel:
     """Tests for scalar functions with parallel processing."""
