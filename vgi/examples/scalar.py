@@ -25,8 +25,9 @@ from vgi.metadata import FunctionExample
 from vgi.scalar_function import ScalarFunction
 
 __all__ = [
-    "DoubleColumnFunction",
     "AddNumericColumnsFunction",
+    "DoubleColumnFunction",
+    "SumColumnsFunction",
     "UpperCaseFunction",
 ]
 
@@ -225,3 +226,65 @@ class UpperCaseFunction(ScalarFunction):
     def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
         """Convert the column values to uppercase."""
         return pc.utf8_upper(batch.column(self.column))  # type: ignore[no-matching-overload]
+
+
+class SumColumnsFunction(ScalarFunction):
+    """Sums values from multiple numeric columns.
+
+    Uses varargs with type_bound to accept any number of numeric columns
+    and validates that all columns are addable types at bind time.
+
+    Example:
+        Input:  a=[1, 2], b=[10, 20], c=[100, 200]
+        Args:   columns=('a', 'b', 'c')
+        Output: result=[111, 222]
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "sum_columns"
+        description = "Sum values from multiple numeric columns"
+        examples = [
+            FunctionExample(
+                sql="SELECT sum_columns(price, tax, shipping) FROM orders",
+                description="Calculate total cost from multiple columns",
+            ),
+        ]
+
+    # Varargs with type_bound validates all columns are numeric
+    columns = Arg[AnyArrow](
+        0,
+        varargs=True,
+        type_bound=_is_addable_type,
+        doc="Columns to sum (must be numeric)",
+    )
+
+    _output_type: pa.DataType
+
+    def bind(self) -> None:
+        """Compute output type from first column, promoted for overflow safety."""
+        # With varargs=True, self.columns is a tuple of column names
+        first_col = self.columns[0]  # type: ignore[index]
+        first_type = self.input_schema.field(first_col).type
+        self._output_type = _promote_for_addition(first_type)
+
+    @classmethod
+    def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
+        """Output type depends on input column types."""
+        return AnyArrow
+
+    @property
+    def output_type(self) -> pa.DataType:
+        """Return the computed output type based on first column."""
+        return self._output_type
+
+    def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+        """Sum values from all specified columns."""
+        # With varargs=True, self.columns is a tuple of column names at runtime
+        columns: tuple[str, ...] = self.columns  # type: ignore[assignment]
+        result = batch.column(columns[0])
+        for col_name in columns[1:]:
+            result = pc.add(result, batch.column(col_name))
+        return result

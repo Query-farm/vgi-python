@@ -285,6 +285,53 @@ class TestCLISchemaContents:
         assert by_name["range"]["function_type"] == "table"
         assert by_name["sum_all_columns"]["function_type"] == "table"
 
+    def test_varargs_function_shows_varargs_in_arguments(
+        self, example_worker: str
+    ) -> None:
+        """Varargs functions show varargs indicator in arguments."""
+        runner = CliRunner()
+
+        # Attach and get contents
+        attach_result = runner.invoke(
+            cli,
+            ["catalog", "attach", "example", "--server", example_worker],
+        )
+        attach_id = json.loads(attach_result.output)["attach_id"]
+
+        contents_result = runner.invoke(
+            cli,
+            [
+                "catalog",
+                "schema",
+                "contents",
+                "main",
+                "--attach-id",
+                attach_id,
+                "--server",
+                example_worker,
+            ],
+        )
+        assert contents_result.exit_code == 0
+
+        # Parse and find sum_columns function
+        lines = contents_result.output.strip().split("\n")
+        items = [json.loads(line) for line in lines if line.strip()]
+        by_name = {item["name"]: item for item in items}
+
+        # Verify sum_columns function exists
+        assert "sum_columns" in by_name, "sum_columns function not found"
+
+        sum_func = by_name["sum_columns"]
+
+        # Verify arguments include varargs indicator
+        arguments = sum_func.get("arguments", [])
+        columns_arg = next(
+            (a for a in arguments if a.get("name") == "columns"),
+            None,
+        )
+        assert columns_arg is not None, "columns argument not found"
+        assert columns_arg.get("varargs") is True, "varargs indicator missing"
+
 
 class TestCLISchemaList:
     """Tests for listing schemas via CLI."""

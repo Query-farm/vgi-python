@@ -16,6 +16,7 @@ Usage:
 from vgi.examples.scalar import (
     AddNumericColumnsFunction,
     DoubleColumnFunction,
+    SumColumnsFunction,
     UpperCaseFunction,
 )
 from vgi.examples.table import (
@@ -74,8 +75,9 @@ class ExampleWorker(Worker):
         ProjectedDataFunction,
         SettingsAwareFunction,
         # ScalarFunctionGenerator - transform to single-column output
-        DoubleColumnFunction,
         AddNumericColumnsFunction,
+        DoubleColumnFunction,
+        SumColumnsFunction,
         UpperCaseFunction,
     ]
 
