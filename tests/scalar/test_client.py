@@ -8,6 +8,7 @@ import pyarrow as pa
 import pytest
 
 from tests.conftest import assert_total_rows
+from vgi import schema
 from vgi.arguments import Arguments
 from vgi.client import Client
 from vgi.client.client import ClientError
@@ -18,8 +19,8 @@ class TestScalarFunctionClient:
 
     def test_double_column_basic(self, example_worker: str) -> None:
         """Test basic scalar function via Client."""
-        schema = pa.schema([("x", pa.int64())])
-        batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=schema)
+        s = schema(x=pa.int64())
+        batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
@@ -35,9 +36,9 @@ class TestScalarFunctionClient:
 
     def test_add_columns(self, example_worker: str) -> None:
         """Test add_columns scalar function."""
-        schema = pa.schema([("a", pa.int64()), ("b", pa.int64())])
+        s = schema(a=pa.int64(), b=pa.int64())
         batch = pa.RecordBatch.from_pydict(
-            {"a": [1, 2, 3], "b": [10, 20, 30]}, schema=schema
+            {"a": [1, 2, 3], "b": [10, 20, 30]}, schema=s
         )
 
         with Client(example_worker) as client:
@@ -54,9 +55,9 @@ class TestScalarFunctionClient:
 
     def test_upper_case(self, example_worker: str) -> None:
         """Test upper_case scalar function."""
-        schema = pa.schema([("name", pa.string())])
+        s = schema(name=pa.string())
         batch = pa.RecordBatch.from_pydict(
-            {"name": ["alice", "bob", "charlie"]}, schema=schema
+            {"name": ["alice", "bob", "charlie"]}, schema=s
         )
 
         with Client(example_worker) as client:
@@ -73,10 +74,10 @@ class TestScalarFunctionClient:
 
     def test_multiple_batches(self, example_worker: str) -> None:
         """Test scalar function with multiple input batches."""
-        schema = pa.schema([("x", pa.int64())])
-        batch1 = pa.RecordBatch.from_pydict({"x": [1, 2]}, schema=schema)
-        batch2 = pa.RecordBatch.from_pydict({"x": [3, 4, 5]}, schema=schema)
-        batch3 = pa.RecordBatch.from_pydict({"x": [6]}, schema=schema)
+        s = schema(x=pa.int64())
+        batch1 = pa.RecordBatch.from_pydict({"x": [1, 2]}, schema=s)
+        batch2 = pa.RecordBatch.from_pydict({"x": [3, 4, 5]}, schema=s)
+        batch3 = pa.RecordBatch.from_pydict({"x": [6]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
@@ -99,8 +100,8 @@ class TestScalarFunctionClient:
 
     def test_empty_batch(self, example_worker: str) -> None:
         """Test scalar function with empty batch."""
-        schema = pa.schema([("x", pa.int64())])
-        empty_batch = pa.RecordBatch.from_pydict({"x": []}, schema=schema)
+        s = schema(x=pa.int64())
+        empty_batch = pa.RecordBatch.from_pydict({"x": []}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
@@ -132,8 +133,8 @@ class TestScalarFunctionClient:
     def test_scalar_function_not_started_raises(self, example_worker: str) -> None:
         """Calling scalar_function before start should raise ClientError."""
         client = Client(example_worker)
-        schema = pa.schema([("x", pa.int64())])
-        batch = pa.RecordBatch.from_pydict({"x": [1]}, schema=schema)
+        s = schema(x=pa.int64())
+        batch = pa.RecordBatch.from_pydict({"x": [1]}, schema=s)
 
         with pytest.raises(ClientError, match="not started"):
             list(
@@ -146,9 +147,9 @@ class TestScalarFunctionClient:
 
     def test_large_batch(self, example_worker: str) -> None:
         """Test scalar function with a large batch."""
-        schema = pa.schema([("x", pa.int64())])
+        s = schema(x=pa.int64())
         large_data = list(range(10000))
-        batch = pa.RecordBatch.from_pydict({"x": large_data}, schema=schema)
+        batch = pa.RecordBatch.from_pydict({"x": large_data}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
@@ -170,8 +171,8 @@ class TestScalarFunctionClient:
 
     def test_bind_result_callback(self, example_worker: str) -> None:
         """Test that bind_result_callback is invoked."""
-        schema = pa.schema([("x", pa.int64())])
-        batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=schema)
+        s = schema(x=pa.int64())
+        batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=s)
 
         bind_results: list[pa.RecordBatch] = []
 
@@ -198,10 +199,8 @@ class TestScalarFunctionClient:
 
     def test_add_columns_accepts_float_columns(self, example_worker: str) -> None:
         """Test that add_columns accepts float columns."""
-        schema = pa.schema([("a", pa.float64()), ("b", pa.float64())])
-        batch = pa.RecordBatch.from_pydict(
-            {"a": [1.5, 2.5], "b": [0.5, 0.5]}, schema=schema
-        )
+        s = schema(a=pa.float64(), b=pa.float64())
+        batch = pa.RecordBatch.from_pydict({"a": [1.5, 2.5], "b": [0.5, 0.5]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
@@ -217,8 +216,8 @@ class TestScalarFunctionClient:
 
     def test_add_columns_accepts_mixed_int_types(self, example_worker: str) -> None:
         """Test that add_columns accepts mixed integer types and promotes correctly."""
-        schema = pa.schema([("a", pa.int32()), ("b", pa.int64())])
-        batch = pa.RecordBatch.from_pydict({"a": [1, 2], "b": [10, 20]}, schema=schema)
+        s = schema(a=pa.int32(), b=pa.int64())
+        batch = pa.RecordBatch.from_pydict({"a": [1, 2], "b": [10, 20]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
@@ -240,9 +239,9 @@ class TestSumColumns:
 
     def test_sum_two_columns(self, example_worker: str) -> None:
         """Sum of two columns."""
-        schema = pa.schema([("a", pa.int64()), ("b", pa.int64())])
+        s = schema(a=pa.int64(), b=pa.int64())
         batch = pa.RecordBatch.from_pydict(
-            {"a": [1, 2, 3], "b": [10, 20, 30]}, schema=schema
+            {"a": [1, 2, 3], "b": [10, 20, 30]}, schema=s
         )
 
         with Client(example_worker) as client:
@@ -259,9 +258,9 @@ class TestSumColumns:
 
     def test_sum_three_columns(self, example_worker: str) -> None:
         """Sum of three columns using varargs."""
-        schema = pa.schema([("a", pa.int64()), ("b", pa.int64()), ("c", pa.int64())])
+        s = schema(a=pa.int64(), b=pa.int64(), c=pa.int64())
         batch = pa.RecordBatch.from_pydict(
-            {"a": [1, 2], "b": [10, 20], "c": [100, 200]}, schema=schema
+            {"a": [1, 2], "b": [10, 20], "c": [100, 200]}, schema=s
         )
 
         with Client(example_worker) as client:
@@ -280,8 +279,8 @@ class TestSumColumns:
 
     def test_sum_with_type_promotion(self, example_worker: str) -> None:
         """Different int types promote correctly."""
-        schema = pa.schema([("a", pa.int32()), ("b", pa.int64())])
-        batch = pa.RecordBatch.from_pydict({"a": [1, 2], "b": [10, 20]}, schema=schema)
+        s = schema(a=pa.int32(), b=pa.int64())
+        batch = pa.RecordBatch.from_pydict({"a": [1, 2], "b": [10, 20]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
@@ -299,10 +298,8 @@ class TestSumColumns:
 
     def test_sum_rejects_string_column(self, example_worker: str) -> None:
         """Type bound rejects non-numeric columns."""
-        schema = pa.schema([("a", pa.int64()), ("b", pa.string())])  # type: ignore[arg-type]
-        batch = pa.RecordBatch.from_pydict(
-            {"a": [1, 2], "b": ["x", "y"]}, schema=schema
-        )
+        s = schema(a=pa.int64(), b=pa.string())
+        batch = pa.RecordBatch.from_pydict({"a": [1, 2], "b": ["x", "y"]}, schema=s)
 
         with (
             Client(example_worker) as client,
@@ -318,9 +315,9 @@ class TestSumColumns:
 
     def test_sum_multiple_batches(self, example_worker: str) -> None:
         """Multiple input batches processed correctly."""
-        schema = pa.schema([("a", pa.int64()), ("b", pa.int64())])
-        batch1 = pa.RecordBatch.from_pydict({"a": [1, 2], "b": [10, 20]}, schema=schema)
-        batch2 = pa.RecordBatch.from_pydict({"a": [3, 4], "b": [30, 40]}, schema=schema)
+        s = schema(a=pa.int64(), b=pa.int64())
+        batch1 = pa.RecordBatch.from_pydict({"a": [1, 2], "b": [10, 20]}, schema=s)
+        batch2 = pa.RecordBatch.from_pydict({"a": [3, 4], "b": [30, 40]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
@@ -339,8 +336,8 @@ class TestSumColumns:
 
     def test_sum_empty_batch(self, example_worker: str) -> None:
         """Empty batch returns empty output."""
-        schema = pa.schema([("a", pa.int64()), ("b", pa.int64())])
-        empty_batch = pa.RecordBatch.from_pydict({"a": [], "b": []}, schema=schema)
+        s = schema(a=pa.int64(), b=pa.int64())
+        empty_batch = pa.RecordBatch.from_pydict({"a": [], "b": []}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
@@ -356,10 +353,8 @@ class TestSumColumns:
 
     def test_sum_float_columns(self, example_worker: str) -> None:
         """Sum of float columns."""
-        schema = pa.schema([("a", pa.float64()), ("b", pa.float64())])
-        batch = pa.RecordBatch.from_pydict(
-            {"a": [1.5, 2.5], "b": [0.5, 0.5]}, schema=schema
-        )
+        s = schema(a=pa.float64(), b=pa.float64())
+        batch = pa.RecordBatch.from_pydict({"a": [1.5, 2.5], "b": [0.5, 0.5]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
@@ -379,10 +374,10 @@ class TestScalarFunctionParallel:
 
     def test_parallel_double_column(self, example_worker: str) -> None:
         """Test scalar function with multiple workers."""
-        schema = pa.schema([("x", pa.int64())])
+        s = schema(x=pa.int64())
         batches = [
             pa.RecordBatch.from_pydict(
-                {"x": list(range(i * 100, (i + 1) * 100))}, schema=schema
+                {"x": list(range(i * 100, (i + 1) * 100))}, schema=s
             )
             for i in range(10)
         ]
@@ -409,10 +404,10 @@ class TestScalarFunctionParallel:
 
     def test_parallel_add_columns(self, example_worker: str) -> None:
         """Test add_columns with multiple workers."""
-        schema = pa.schema([("a", pa.int64()), ("b", pa.int64())])
+        s = schema(a=pa.int64(), b=pa.int64())
         batches = [
             pa.RecordBatch.from_pydict(
-                {"a": [i, i + 1, i + 2], "b": [100, 200, 300]}, schema=schema
+                {"a": [i, i + 1, i + 2], "b": [100, 200, 300]}, schema=s
             )
             for i in range(20)
         ]
@@ -431,13 +426,13 @@ class TestScalarFunctionParallel:
 
     def test_parallel_empty_batches_mixed(self, example_worker: str) -> None:
         """Test parallel processing with mix of empty and non-empty batches."""
-        schema = pa.schema([("x", pa.int64())])
+        s = schema(x=pa.int64())
         batches = [
-            pa.RecordBatch.from_pydict({"x": [1, 2]}, schema=schema),
-            pa.RecordBatch.from_pydict({"x": []}, schema=schema),  # Empty
-            pa.RecordBatch.from_pydict({"x": [3]}, schema=schema),
-            pa.RecordBatch.from_pydict({"x": []}, schema=schema),  # Empty
-            pa.RecordBatch.from_pydict({"x": [4, 5, 6]}, schema=schema),
+            pa.RecordBatch.from_pydict({"x": [1, 2]}, schema=s),
+            pa.RecordBatch.from_pydict({"x": []}, schema=s),  # Empty
+            pa.RecordBatch.from_pydict({"x": [3]}, schema=s),
+            pa.RecordBatch.from_pydict({"x": []}, schema=s),  # Empty
+            pa.RecordBatch.from_pydict({"x": [4, 5, 6]}, schema=s),
         ]
 
         with Client(example_worker, max_workers=2) as client:
@@ -460,8 +455,8 @@ class TestScalarFunctionParallel:
 
     def test_parallel_single_batch(self, example_worker: str) -> None:
         """Test parallel mode with just one batch (should still work)."""
-        schema = pa.schema([("x", pa.int64())])
-        batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=schema)
+        s = schema(x=pa.int64())
+        batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=s)
 
         with Client(example_worker, max_workers=4) as client:
             outputs = list(

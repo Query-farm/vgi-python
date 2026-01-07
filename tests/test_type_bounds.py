@@ -9,6 +9,7 @@ import pyarrow.types
 import pytest
 import structlog
 
+from vgi import schema
 from vgi.arguments import AnyArrow, Arg, Arguments
 from vgi.exceptions import SchemaValidationError
 from vgi.invocation import Invocation, InvocationType
@@ -46,7 +47,7 @@ class TestTypeBoundValidation:
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 return batch.column(self.col.value)
 
-        input_schema = pa.schema([("x", pa.int64())])
+        input_schema = schema(x=pa.int64())
         invocation = make_invocation(input_schema, (pa.scalar("x"),))
 
         # Should not raise
@@ -67,7 +68,7 @@ class TestTypeBoundValidation:
                 return batch.column(self.col.value)
 
         # String column, not integer
-        input_schema = pa.schema([("x", pa.string())])
+        input_schema = schema(x=pa.string())
         invocation = make_invocation(input_schema, (pa.scalar("x"),))
 
         with pytest.raises(SchemaValidationError, match="does not match any of"):
@@ -89,7 +90,7 @@ class TestTypeBoundValidation:
                 return batch.column(self.col.value)
 
         # Float column - should pass since is_floating matches
-        input_schema = pa.schema([("x", pa.float64())])
+        input_schema = schema(x=pa.float64())
         invocation = make_invocation(input_schema, (pa.scalar("x"),))
 
         func = TestFunc(invocation=invocation, logger=structlog.get_logger())
@@ -111,7 +112,7 @@ class TestTypeBoundValidation:
                 return batch.column(self.col.value)
 
         # String column - neither is_integer nor is_floating match
-        input_schema = pa.schema([("x", pa.string())])
+        input_schema = schema(x=pa.string())
         invocation = make_invocation(input_schema, (pa.scalar("x"),))
 
         with pytest.raises(SchemaValidationError, match="does not match any of"):
@@ -146,7 +147,7 @@ class TestTypeBoundValidation:
 
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([("result", pa.int64())])
+                return schema(result=pa.int64())
 
             def process(self) -> Generator[Output, None, None]:
                 yield Output(
@@ -182,7 +183,7 @@ class TestTypeBoundValidation:
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 return batch.column(self.my_column.value)
 
-        input_schema = pa.schema([("x", pa.string())])
+        input_schema = schema(x=pa.string())
         invocation = make_invocation(input_schema, (pa.scalar("x"),))
 
         with pytest.raises(SchemaValidationError) as exc_info:
@@ -214,13 +215,13 @@ class TestTypeBoundValidation:
                 return batch.column(self.col.value)
 
         # int64 should pass
-        input_schema = pa.schema([("x", pa.int64())])
+        input_schema = schema(x=pa.int64())
         invocation = make_invocation(input_schema, (pa.scalar("x"),))
         func = TestFunc(invocation=invocation, logger=structlog.get_logger())
         assert func.col.value == "x"
 
         # int32 should fail
-        input_schema_small = pa.schema([("x", pa.int32())])
+        input_schema_small = schema(x=pa.int32())
         invocation_small = make_invocation(input_schema_small, (pa.scalar("x"),))
         with pytest.raises(SchemaValidationError, match="is_large_int"):
             TestFunc(invocation=invocation_small, logger=structlog.get_logger())
@@ -239,7 +240,7 @@ class TestTypeBoundValidation:
                 return batch.column(self.col.value)
 
         # Integer should pass
-        input_schema = pa.schema([("x", pa.int64())])
+        input_schema = schema(x=pa.int64())
         invocation = make_invocation(input_schema, (pa.scalar("x"),))
         func = TestFunc(invocation=invocation, logger=structlog.get_logger())
         assert func.col.value == "x"
@@ -274,9 +275,7 @@ class TestTypeBoundValidation:
                 return result
 
         # All columns are integers
-        input_schema = pa.schema(
-            [("a", pa.int64()), ("b", pa.int32()), ("c", pa.int16())]
-        )
+        input_schema = schema(a=pa.int64(), b=pa.int32(), c=pa.int16())
         invocation = make_invocation(
             input_schema, (pa.scalar("a"), pa.scalar("b"), pa.scalar("c"))
         )
@@ -302,13 +301,7 @@ class TestTypeBoundValidation:
                 return result
 
         # Third column is a string, not integer
-        input_schema = pa.schema(
-            [  # type: ignore[arg-type]
-                ("a", pa.int64()),
-                ("b", pa.int32()),
-                ("c", pa.string()),
-            ]
-        )
+        input_schema = schema(a=pa.int64(), b=pa.int32(), c=pa.string())
         invocation = make_invocation(
             input_schema, (pa.scalar("a"), pa.scalar("b"), pa.scalar("c"))
         )
@@ -332,13 +325,7 @@ class TestTypeBoundValidation:
                 return batch.column(self.columns[0])  # type: ignore[index]
 
         # Mix of integer and float columns - should all pass
-        input_schema = pa.schema(
-            [  # type: ignore[arg-type]
-                ("a", pa.int64()),
-                ("b", pa.float32()),
-                ("c", pa.int16()),
-            ]
-        )
+        input_schema = schema(a=pa.int64(), b=pa.float32(), c=pa.int16())
         invocation = make_invocation(
             input_schema, (pa.scalar("a"), pa.scalar("b"), pa.scalar("c"))
         )

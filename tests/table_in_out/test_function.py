@@ -5,6 +5,7 @@ import pyarrow.compute as pc
 import structlog
 
 from tests.conftest import make_invocation
+from vgi import schema
 from vgi.arguments import Arg, Arguments
 from vgi.invocation import Invocation
 from vgi.ipc_utils import RecordBatchState
@@ -109,7 +110,7 @@ class TestFinish:
 
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([("sum", pa.int64())])
+                return schema(sum=pa.int64())
 
             def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
                 self.total += pc.sum(batch.column("x")).as_py()
@@ -175,7 +176,7 @@ class TestOutputSchema:
         class LengthFunction(TableInOutFunction):
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([("length", pa.int64())])
+                return schema(length=pa.int64())
 
             def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
                 # Type ignore: stubs don't properly type cast result as StringArray
@@ -190,7 +191,7 @@ class TestOutputSchema:
             )
 
         assert len(outputs) == 1
-        assert outputs[0].schema == pa.schema([("length", pa.int64())])
+        assert outputs[0].schema == schema(length=pa.int64())
         assert outputs[0].to_pydict() == {"length": [5, 6]}
 
 
@@ -278,7 +279,7 @@ class TestLogging:
 
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([("sum", pa.int64())])
+                return schema(sum=pa.int64())
 
             def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
                 self.total += pc.sum(batch.column("x")).as_py()
@@ -335,8 +336,8 @@ class TestDistributedState:
         class SimpleFunction(TableInOutFunction):
             pass
 
-        schema = pa.schema([("x", pa.int64())])
-        invocation = make_invocation(schema)
+        s = schema(x=pa.int64())
+        invocation = make_invocation(s)
         func = SimpleFunction(invocation, structlog.get_logger())
 
         assert func.save_state() is None
@@ -359,12 +360,12 @@ class TestDistributedState:
                 return RecordBatchState(
                     batch=pa.RecordBatch.from_pydict(
                         {"count": [self.count]},
-                        schema=pa.schema([("count", pa.int64())]),
+                        schema=schema(count=pa.int64()),
                     )
                 )
 
-        schema = pa.schema([("x", pa.int64())])
-        invocation = make_invocation(schema)
+        s = schema(x=pa.int64())
+        invocation = make_invocation(s)
         func = StatefulFunction(invocation, structlog.get_logger())
 
         # Simulate processing
@@ -386,7 +387,7 @@ class TestDistributedState:
 
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([("sum", pa.int64())])
+                return schema(sum=pa.int64())
 
             def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
                 self.total += pc.sum(batch.column("x")).as_py()
@@ -396,7 +397,7 @@ class TestDistributedState:
                 return RecordBatchState(
                     batch=pa.RecordBatch.from_pydict(
                         {"partial_sum": [self.total]},
-                        schema=pa.schema([("partial_sum", pa.int64())]),
+                        schema=schema(partial_sum=pa.int64()),
                     )
                 )
 
@@ -411,19 +412,19 @@ class TestDistributedState:
                     )
                 ]
 
-        schema = pa.schema([("x", pa.int64())])
-        invocation = make_invocation(schema)
+        s = schema(x=pa.int64())
+        invocation = make_invocation(s)
         func = DistributedSumFunction(invocation, structlog.get_logger())
 
         # Simulate receiving states from multiple workers
         state1 = RecordBatchState(
             batch=pa.RecordBatch.from_pydict(
-                {"partial_sum": [10]}, schema=pa.schema([("partial_sum", pa.int64())])
+                {"partial_sum": [10]}, schema=schema(partial_sum=pa.int64())
             )
         )
         state2 = RecordBatchState(
             batch=pa.RecordBatch.from_pydict(
-                {"partial_sum": [25]}, schema=pa.schema([("partial_sum", pa.int64())])
+                {"partial_sum": [25]}, schema=schema(partial_sum=pa.int64())
             )
         )
 

@@ -9,6 +9,7 @@ import pytest
 import structlog
 
 from tests.conftest import make_scalar_invocation
+from vgi import schema
 from vgi.arguments import AnyArrow, Arg, Arguments
 from vgi.invocation import Invocation, InvocationType
 from vgi.log import Level, Message
@@ -30,7 +31,7 @@ class TestScalarFunctionGenerator:
         class DoubleColumn(ScalarFunctionGenerator):
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([("result", pa.int64())])
+                return schema(result=pa.int64())
 
             def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
                 _ = yield Output(self.empty_output_batch)  # Priming yield
@@ -46,7 +47,7 @@ class TestScalarFunctionGenerator:
                         break
                     batch = received
 
-        input_schema = pa.schema([("x", pa.int64())])
+        input_schema = schema(x=pa.int64())
         invocation = make_scalar_invocation(input_schema)
         logger = structlog.get_logger()
 
@@ -70,7 +71,7 @@ class TestScalarFunctionGenerator:
         class TestFunc(ScalarFunctionGenerator):
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([("result", pa.int64())])
+                return schema(result=pa.int64())
 
             def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
                 _ = yield Output(self.empty_output_batch)
@@ -93,7 +94,7 @@ class TestScalarFunctionGenerator:
         class LoggingScalar(ScalarFunctionGenerator):
             @property
             def output_schema(self) -> pa.Schema:
-                return pa.schema([("result", pa.int64())])
+                return schema(result=pa.int64())
 
             def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
                 _ = yield Output(self.empty_output_batch)  # Priming yield
@@ -110,7 +111,7 @@ class TestScalarFunctionGenerator:
                         break
                     batch = received
 
-        input_schema = pa.schema([("x", pa.int64())])
+        input_schema = schema(x=pa.int64())
         invocation = make_scalar_invocation(input_schema)
         func = LoggingScalar(invocation=invocation, logger=structlog.get_logger())
 
@@ -149,7 +150,7 @@ class TestScalarFunction:
 
                 return pc.multiply(batch.column(self.column), 2)
 
-        input_schema = pa.schema([("x", pa.int64())])
+        input_schema = schema(x=pa.int64())
         invocation = Invocation(
             function_name="test",
             input_schema=input_schema,
@@ -186,7 +187,7 @@ class TestScalarFunction:
                 self.log(Level.INFO, f"Processing {batch.num_rows} rows")
                 return pc.multiply(batch.column("x"), 2)
 
-        input_schema = pa.schema([("x", pa.int64())])
+        input_schema = schema(x=pa.int64())
         invocation = make_scalar_invocation(input_schema)
         func = LoggingFunc(invocation=invocation, logger=structlog.get_logger())
 
@@ -218,7 +219,7 @@ class TestScalarFunction:
                 # Return wrong number of rows
                 return pa.array([1, 2])
 
-        input_schema = pa.schema([("x", pa.int64())])
+        input_schema = schema(x=pa.int64())
         invocation = make_scalar_invocation(input_schema)
         func = WrongRowCount(invocation=invocation, logger=structlog.get_logger())
 
@@ -245,7 +246,7 @@ class TestScalarFunction:
                 # Return MORE rows than input (expanding rows is not allowed)
                 return pa.array([1, 2, 3, 4, 5])
 
-        input_schema = pa.schema([("x", pa.int64())])
+        input_schema = schema(x=pa.int64())
         invocation = make_scalar_invocation(input_schema)
         func = TooManyRows(invocation=invocation, logger=structlog.get_logger())
 
@@ -275,7 +276,7 @@ class TestScalarFunction:
 
                 return pc.multiply(batch.column("x"), 2)
 
-        input_schema = pa.schema([("x", pa.int64())])
+        input_schema = schema(x=pa.int64())
         invocation = make_scalar_invocation(input_schema)
         func = DoubleFunc(invocation=invocation, logger=structlog.get_logger())
 
