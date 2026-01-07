@@ -6,17 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 uv sync --all-extras      # Install dependencies
-uv run pytest             # Run tests
+uv run pytest -n auto     # Run tests using pytest-xdist in parallel.
 uv run ruff check .       # Lint
 uv run ruff format .      # Format
 uv run mypy vgi/          # Type check
 
 # Run tests with coverage (includes subprocess/worker coverage)
-uv run coverage run -m pytest --no-cov
+uv run coverage run -m pytest --no-cov -n auto
 uv run coverage combine   # Merge subprocess coverage data
 uv run coverage report    # Show coverage report
 uv run coverage html      # Generate HTML report in htmlcov/
 ```
+
+When you run pytest I prefer that you include "-n auto" to run tests in parallel. This allows the tests to complete faster.
 
 **Before committing**, always run lint and format checks:
 ```bash
