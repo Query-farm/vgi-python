@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Apache Arrow-based protocol for extending DuckDB with any language</strong><br/>
-  <strong>No C++/C/Zig/Rust or compilation and linking required (unless you want to).</strong>
+  <strong>No C++/C/Zig/Rust or compilation/linking required (unless you want to).</strong>
 </p>
 
 <p align="center">
