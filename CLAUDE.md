@@ -113,9 +113,13 @@ vgi-client --input data.parquet --function sum_all_columns --server vgi-example-
 import pyarrow as pa
 import pyarrow.compute as pc
 from vgi import ScalarFunction, Arg
+from vgi.arguments import AnyArrow
 
 class DoubleColumn(ScalarFunction):
     """Double the value in a specified column."""
+
+    class Meta:
+        output_type = AnyArrow  # Output type depends on input column
 
     column = Arg[str](0, doc="Column to double")
 
@@ -329,16 +333,15 @@ At bind time:
 class AddColumns(ScalarFunction):
     """Add two numeric columns with dynamic output type."""
 
+    class Meta:
+        output_type = AnyArrow  # Output type depends on input columns
+
     col1 = Arg[AnyArrow](0, type_bound=pa.types.is_numeric)
     col2 = Arg[AnyArrow](1, type_bound=pa.types.is_numeric)
 
     def bind(self) -> None:
         """Compute output type from input columns."""
         self._output_type = self.input_schema.field(self.col1.value).type
-
-    @classmethod
-    def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-        return AnyArrow
 
     @property
     def output_type(self) -> pa.DataType:
@@ -375,10 +378,11 @@ For advanced distributed aggregations with `max_workers > 1`, use `store_state()
 
 **ScalarFunction:**
 
-| Method | When to Override | Default |
-|--------|------------------|---------|
+| Method/Attribute | When to Override | Default |
+|------------------|------------------|---------|
+| `Meta.output_type` | Always required (pa.DataType or AnyArrow) | Required |
 | `bind()` | Process input schema, compute dynamic output type | No-op |
-| `output_type` | Define output column type | Required |
+| `output_type` | Override if Meta.output_type is AnyArrow | Uses Meta.output_type |
 | `compute(batch)` | Transform batch to single array | Required |
 | `setup()` | Acquire resources | No-op |
 | `teardown()` | Release resources | No-op |
@@ -409,7 +413,7 @@ How will your function be used in SQL?
 
 1. SELECT my_func(col1, col2) FROM table
    → SCALAR FUNCTION: Returns one value per input row
-   → Use ScalarFunction, override output_type and compute()
+   → Use ScalarFunction, define Meta.output_type and compute()
    → Example: upper(), abs(), concat()
 
 2. SELECT * FROM my_func(args)

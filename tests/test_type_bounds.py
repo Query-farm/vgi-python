@@ -38,11 +38,10 @@ class TestTypeBoundValidation:
         """Type bound validation should pass when predicate returns True."""
 
         class TestFunc(ScalarFunction):
-            col = Arg[AnyArrow](0, type_bound=pa.types.is_integer)
+            class Meta:
+                output_type = pa.int64()
 
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType:
-                return pa.int64()
+            col = Arg[AnyArrow](0, type_bound=pa.types.is_integer)
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 return batch.column(self.col.value)
@@ -58,11 +57,10 @@ class TestTypeBoundValidation:
         """Type bound validation should raise when predicate returns False."""
 
         class TestFunc(ScalarFunction):
-            col = Arg[AnyArrow](0, type_bound=pa.types.is_integer)
+            class Meta:
+                output_type = pa.int64()
 
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType:
-                return pa.int64()
+            col = Arg[AnyArrow](0, type_bound=pa.types.is_integer)
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 return batch.column(self.col.value)
@@ -78,13 +76,12 @@ class TestTypeBoundValidation:
         """When multiple predicates are given, any match should pass (OR logic)."""
 
         class TestFunc(ScalarFunction):
+            class Meta:
+                output_type = pa.float64()
+
             col = Arg[AnyArrow](
                 0, type_bound=[pa.types.is_integer, pa.types.is_floating]
             )
-
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType:
-                return pa.float64()
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 return batch.column(self.col.value)
@@ -100,13 +97,12 @@ class TestTypeBoundValidation:
         """When multiple predicates fail, validation should raise."""
 
         class TestFunc(ScalarFunction):
+            class Meta:
+                output_type = pa.float64()
+
             col = Arg[AnyArrow](
                 0, type_bound=[pa.types.is_integer, pa.types.is_floating]
             )
-
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType:
-                return pa.float64()
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 return batch.column(self.col.value)
@@ -123,11 +119,10 @@ class TestTypeBoundValidation:
         with pytest.warns(UserWarning, match="only meaningful for Arg\\[AnyArrow\\]"):
 
             class TestFunc(ScalarFunction):
-                col = Arg[str](0, type_bound=pa.types.is_integer)
+                class Meta:
+                    output_type = pa.string()
 
-                @classmethod
-                def catalog_output_type(cls) -> pa.DataType:
-                    return pa.string()
+                col = Arg[str](0, type_bound=pa.types.is_integer)
 
                 def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                     return batch.column(self.col)
@@ -174,11 +169,10 @@ class TestTypeBoundValidation:
         """Error messages should include argument name and predicate names."""
 
         class TestFunc(ScalarFunction):
-            my_column = Arg[AnyArrow](0, type_bound=pa.types.is_integer)
+            class Meta:
+                output_type = pa.int64()
 
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType:
-                return pa.int64()
+            my_column = Arg[AnyArrow](0, type_bound=pa.types.is_integer)
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 return batch.column(self.my_column.value)
@@ -205,11 +199,10 @@ class TestTypeBoundValidation:
             return dtype in (pa.int64(), pa.uint64())
 
         class TestFunc(ScalarFunction):
-            col = Arg[AnyArrow](0, type_bound=is_large_int)
+            class Meta:
+                output_type = pa.int64()
 
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType:
-                return pa.int64()
+            col = Arg[AnyArrow](0, type_bound=is_large_int)
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 return batch.column(self.col.value)
@@ -230,11 +223,10 @@ class TestTypeBoundValidation:
         """Lambda predicates should work and show in error messages."""
 
         class TestFunc(ScalarFunction):
-            col = Arg[AnyArrow](0, type_bound=lambda t: pa.types.is_integer(t))
+            class Meta:
+                output_type = pa.int64()
 
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType:
-                return pa.int64()
+            col = Arg[AnyArrow](0, type_bound=lambda t: pa.types.is_integer(t))
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 return batch.column(self.col.value)
@@ -261,11 +253,10 @@ class TestTypeBoundValidation:
         """Type bound validation passes when all varargs elements are valid."""
 
         class TestFunc(ScalarFunction):
-            columns = Arg[AnyArrow](0, varargs=True, type_bound=pa.types.is_integer)
+            class Meta:
+                output_type = pa.int64()
 
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType:
-                return pa.int64()
+            columns = Arg[AnyArrow](0, varargs=True, type_bound=pa.types.is_integer)
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 # Sum all integer columns (varargs returns tuple at runtime)
@@ -288,11 +279,10 @@ class TestTypeBoundValidation:
         """Type bound validation should fail if any varargs element has invalid type."""
 
         class TestFunc(ScalarFunction):
-            columns = Arg[AnyArrow](0, varargs=True, type_bound=pa.types.is_integer)
+            class Meta:
+                output_type = pa.int64()
 
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType:
-                return pa.int64()
+            columns = Arg[AnyArrow](0, varargs=True, type_bound=pa.types.is_integer)
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 result = batch.column(self.columns[0])  # type: ignore[index]
@@ -313,13 +303,12 @@ class TestTypeBoundValidation:
         """Varargs with multiple type bounds should use OR logic per element."""
 
         class TestFunc(ScalarFunction):
+            class Meta:
+                output_type = pa.float64()
+
             columns = Arg[AnyArrow](
                 0, varargs=True, type_bound=[pa.types.is_integer, pa.types.is_floating]
             )
-
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType:
-                return pa.float64()
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 return batch.column(self.columns[0])  # type: ignore[index]

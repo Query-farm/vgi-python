@@ -45,6 +45,7 @@ class DoubleColumnFunction(ScalarFunction):
 
         name = "double_column"
         description = "Doubles values in a numeric column"
+        output_type = AnyArrow  # Output type depends on input column type
         examples = [
             FunctionExample(
                 sql="SELECT double_column(price) FROM products",
@@ -58,11 +59,6 @@ class DoubleColumnFunction(ScalarFunction):
 
     # Explicit arrow_type demonstrates type specification
     column = Arg[str](0, doc="Column name to double", arrow_type=pa.utf8())
-
-    @classmethod
-    def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-        """Output type depends on input column type."""
-        return AnyArrow
 
     @property
     def output_type(self) -> pa.DataType:
@@ -134,6 +130,7 @@ class AddNumericColumnsFunction(ScalarFunction):
 
         name = "add_columns"
         description = "Adds two numeric columns"
+        output_type = AnyArrow  # Output type depends on input column types
         examples = [
             FunctionExample(
                 sql="SELECT add_columns(price, tax) FROM orders",
@@ -165,11 +162,6 @@ class AddNumericColumnsFunction(ScalarFunction):
         ).type
         self._output_type = _promote_for_addition(common_type)
 
-    @classmethod
-    def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-        """Output type depends on input column types."""
-        return AnyArrow
-
     @property
     def output_type(self) -> pa.DataType:
         """Return the computed output type based on input column types."""
@@ -195,6 +187,7 @@ class UpperCaseFunction(ScalarFunction):
 
         name = "upper_case"
         description = "Converts string column to uppercase"
+        output_type = pa.string()  # Static output type
         examples = [
             FunctionExample(
                 sql="SELECT upper_case(name) FROM users",
@@ -208,12 +201,7 @@ class UpperCaseFunction(ScalarFunction):
 
     column = Arg[str](0, doc="Column name to uppercase")
 
-    @classmethod
-    def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-        """Return string type (static output)."""
-        return pa.string()
-
-    # Note: No need to override output_type - default uses catalog_output_type()
+    # Note: No need to override output_type - default uses Meta.output_type
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
         """Convert the column values to uppercase."""
@@ -238,6 +226,7 @@ class SumColumnsFunction(ScalarFunction):
 
         name = "sum_columns"
         description = "Sum values from multiple numeric columns"
+        output_type = AnyArrow  # Output type depends on input column types
         examples = [
             FunctionExample(
                 sql="SELECT sum_columns(price, tax, shipping) FROM orders",
@@ -261,11 +250,6 @@ class SumColumnsFunction(ScalarFunction):
         first_col = self.columns[0]  # type: ignore[index]
         first_type = self.input_schema.field(first_col).type
         self._output_type = _promote_for_addition(first_type)
-
-    @classmethod
-    def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-        """Output type depends on input column types."""
-        return AnyArrow
 
     @property
     def output_type(self) -> pa.DataType:

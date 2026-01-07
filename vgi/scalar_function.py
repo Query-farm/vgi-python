@@ -17,8 +17,8 @@ Common use cases:
 This module provides two base classes:
 
     ScalarFunction (recommended)
-        Simple callback-based API. Override catalog_output_type() and compute().
-        Override output_type only if output depends on input schema.
+        Simple callback-based API. Define Meta.output_type and compute().
+        Override output_type property only if output depends on input schema.
 
     ScalarFunctionGenerator (advanced)
         Generator-based API for fine-grained control over logging.
@@ -27,11 +27,10 @@ This module provides two base classes:
 Example (static output type)::
 
     class UpperCase(ScalarFunction):
-        column = Arg[str](0, doc="Column to uppercase")
+        class Meta:
+            output_type = pa.string()  # Always returns string
 
-        @classmethod
-        def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-            return pa.string()  # Always returns string
+        column = Arg[str](0, doc="Column to uppercase")
 
         def compute(self, batch: pa.RecordBatch) -> pa.Array:
             return pc.utf8_upper(batch.column(self.column))
@@ -39,11 +38,10 @@ Example (static output type)::
 Example (dynamic output type - depends on input)::
 
     class DoubleValue(ScalarFunction):
-        column = Arg[str](0, doc="Column to double")
+        class Meta:
+            output_type = AnyArrow  # Output type depends on input
 
-        @classmethod
-        def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-            return AnyArrow  # Output type matches input column type
+        column = Arg[str](0, doc="Column to double")
 
         @property
         def output_type(self) -> pa.DataType:
@@ -76,7 +74,13 @@ __all__ = [
     "ScalarFunction",
     "ScalarFunctionGenerator",
     "ScalarOutputGenerator",
+    "ScalarOutputType",
 ]
+
+# Type alias for scalar function output type declarations.
+# Use pa.DataType for static output types, or AnyArrow for dynamic types
+# that depend on input schema.
+ScalarOutputType = pa.DataType | type[AnyArrow]
 
 
 class RowCountMismatchError(Exception):
@@ -371,17 +375,17 @@ class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInp
 class ScalarFunction(ScalarFunctionGenerator):
     """Base class for scalar functions using the compute() callback.
 
-    This is the recommended API for scalar functions. Override catalog_output_type()
+    This is the recommended API for scalar functions. Define Meta.output_type
     to declare the output type, and compute() to transform each batch.
 
     Scalar functions transform input rows to output values with 1:1 mapping.
     The output is always a single column named "result".
 
-    Methods to Override
-    -------------------
-    catalog_output_type() : pa.DataType | type[AnyArrow] (classmethod)
+    Methods/Attributes to Override
+    ------------------------------
+    Meta.output_type : pa.DataType | type[AnyArrow] (required)
         Declare the output type for catalog introspection.
-        Return a pa.DataType for static output, or AnyArrow if output
+        Use a pa.DataType for static output, or AnyArrow if output
         type depends on input schema.
 
     compute(batch) : pa.Array
@@ -389,8 +393,8 @@ class ScalarFunction(ScalarFunctionGenerator):
         Must return an array with exactly batch.num_rows elements.
 
     output_type : pa.DataType (property, optional)
-        Override only if catalog_output_type() returns AnyArrow.
-        Default implementation uses catalog_output_type().
+        Override only if Meta.output_type is AnyArrow.
+        Default implementation uses Meta.output_type.
 
     setup() : None
         Called before processing. Acquire resources here.
@@ -411,11 +415,10 @@ class ScalarFunction(ScalarFunctionGenerator):
     A function that converts a column to uppercase:
 
         class UpperCase(ScalarFunction):
-            column = Arg[str](0, doc="Column to uppercase")
+            class Meta:
+                output_type = pa.string()
 
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-                return pa.string()
+            column = Arg[str](0, doc="Column to uppercase")
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array:
                 return pc.utf8_upper(batch.column(self.column))
@@ -425,11 +428,10 @@ class ScalarFunction(ScalarFunctionGenerator):
     A function that doubles values, preserving input type:
 
         class DoubleColumn(ScalarFunction):
-            column = Arg[str](0, doc="Column to double")
+            class Meta:
+                output_type = AnyArrow  # Output type depends on input
 
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-                return AnyArrow  # Output type depends on input
+            column = Arg[str](0, doc="Column to double")
 
             @property
             def output_type(self) -> pa.DataType:
@@ -485,28 +487,27 @@ class ScalarFunction(ScalarFunctionGenerator):
         self._pending_messages.append(vgi.log.Message(level=level, message=message))
 
     @classmethod
-    @abstractmethod
-    def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-        """Declare the output type for catalog introspection.
+    def _get_meta_output_type(cls) -> ScalarOutputType:
+        """Get output_type from Meta class.
 
-        Override this classmethod to specify the output column type.
+        Walks the MRO to find a Meta class with output_type defined.
 
         Returns:
-            pa.DataType: For functions with static output type.
-            AnyArrow: For functions where output type depends on input.
+            The output_type value from Meta (pa.DataType or AnyArrow).
 
-        Example (static):
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-                return pa.string()
-
-        Example (dynamic):
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-                return AnyArrow
+        Raises:
+            TypeError: If Meta.output_type is not defined in the class hierarchy.
 
         """
-        ...
+        for klass in cls.__mro__:
+            if "Meta" in klass.__dict__:
+                meta = klass.__dict__["Meta"]
+                if hasattr(meta, "output_type"):
+                    return meta.output_type  # type: ignore[no-any-return]
+        raise TypeError(
+            f"{cls.__name__} must define Meta.output_type "
+            f"(pa.DataType for static type, or AnyArrow for dynamic)"
+        )
 
     @classmethod
     @final
@@ -514,10 +515,10 @@ class ScalarFunction(ScalarFunctionGenerator):
         """Return output schema for catalog introspection.
 
         Returns the output schema with a single "result" field. If
-        catalog_output_type() returns AnyArrow, the field has type null()
-        with metadata indicating it's a dynamic "any" type.
+        Meta.output_type is AnyArrow, the field has type null() with
+        metadata indicating it's a dynamic "any" type.
         """
-        output_type = cls.catalog_output_type()
+        output_type = cls._get_meta_output_type()
         if output_type is AnyArrow:
             # Use null type with metadata to indicate "any" type
             field = pa.field("result", pa.null(), metadata={b"vgi:any": b"true"})
@@ -530,9 +531,9 @@ class ScalarFunction(ScalarFunctionGenerator):
     def output_type(self) -> pa.DataType:
         """Return the Arrow type for the output column.
 
-        Default implementation uses catalog_output_type(). Override only
-        if catalog_output_type() returns AnyArrow and you need to compute
-        the type from input schema at runtime.
+        Default implementation uses Meta.output_type. Override only if
+        Meta.output_type is AnyArrow and you need to compute the type
+        from input schema at runtime.
 
         Example:
             @property
@@ -540,11 +541,11 @@ class ScalarFunction(ScalarFunctionGenerator):
                 return self.input_schema.field(self.column).type
 
         """
-        result = self.catalog_output_type()
+        result = self._get_meta_output_type()
         if result is AnyArrow:
             raise NotImplementedError(
                 f"{type(self).__name__}.output_type must be overridden when "
-                f"catalog_output_type() returns AnyArrow"
+                f"Meta.output_type is AnyArrow"
             )
         # Type is narrowed to pa.DataType after AnyArrow check
         assert isinstance(result, pa.DataType)

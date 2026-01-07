@@ -10,7 +10,7 @@ import structlog
 
 from tests.conftest import make_scalar_invocation
 from vgi import schema
-from vgi.arguments import AnyArrow, Arg, Arguments
+from vgi.arguments import Arg, Arguments
 from vgi.invocation import Invocation, InvocationType
 from vgi.log import Level, Message
 from vgi.scalar_function import (
@@ -139,11 +139,10 @@ class TestScalarFunction:
         """Test basic compute() method."""
 
         class DoubleColumn(ScalarFunction):
-            column = Arg[str](0)
+            class Meta:
+                output_type = pa.int64()
 
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-                return pa.int64()
+            column = Arg[str](0)
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 import pyarrow.compute as pc
@@ -177,9 +176,8 @@ class TestScalarFunction:
         """Test self.log() method."""
 
         class LoggingFunc(ScalarFunction):
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-                return pa.int64()
+            class Meta:
+                output_type = pa.int64()
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 import pyarrow.compute as pc
@@ -211,9 +209,8 @@ class TestScalarFunction:
         """Test that row count mismatch raises error."""
 
         class WrongRowCount(ScalarFunction):
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-                return pa.int64()
+            class Meta:
+                output_type = pa.int64()
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 # Return wrong number of rows
@@ -238,9 +235,8 @@ class TestScalarFunction:
         """Test that output with more rows than input raises error (lines 134-142)."""
 
         class TooManyRows(ScalarFunction):
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-                return pa.int64()
+            class Meta:
+                output_type = pa.int64()
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 # Return MORE rows than input (expanding rows is not allowed)
@@ -267,9 +263,8 @@ class TestScalarFunction:
         """Test handling of empty batches."""
 
         class DoubleFunc(ScalarFunction):
-            @classmethod
-            def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
-                return pa.int64()
+            class Meta:
+                output_type = pa.int64()
 
             def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
                 import pyarrow.compute as pc

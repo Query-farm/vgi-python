@@ -667,6 +667,7 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         "distinct_dependent",
         # Scalar function specific
         "return_type",
+        "output_type",  # pa.DataType | type[AnyArrow] for scalar functions
     }
 )
 
