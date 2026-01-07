@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://query.farm"><h3>Query.Farm</h3></a>
+  Created by <a href="https://query.farm">Query.Farm</a>
 </p>
 
 ---
@@ -42,12 +42,19 @@ if __name__ == "__main__":
 ```
 
 ```sql
+-- First time only.
+INSTALL vgi FROM COMMUNITY;
+LOAD vgi;
 ATTACH 'my_worker' (TYPE 'vgi', LOCATION './my_worker.py');
 
 SELECT greeting(name) FROM users;
 -- "Hello, Alice!"
 -- "Hello, Bob!"
 ```
+
+Or you can launch the DuckDB CLI with
+
+`duckdb vgi:my_worker.py` to start a new session with the functions you just added.
 
 That's it. No C++ compilation, no extension versioning, no complex build process. Just a Python script that DuckDB can call.
 
@@ -85,6 +92,7 @@ VGI lets you extend DuckDB with Python functions that run in separate processes,
 - Process data with Python libraries (pandas, numpy)
 - Build custom ETL transforms
 - Create domain-specific functions for your team
+- Expose external data sources as queryable tables and views
 
 ---
 
@@ -270,6 +278,34 @@ class Sum(TableInOutFunction):
 ```sql
 SELECT * FROM sum('amount', (SELECT * FROM orders));
 ```
+
+---
+
+## Beyond Functions: Full Catalog Support
+
+VGI workers can expose more than just functions. A worker can provide a complete database catalog with:
+
+- **Schemas** - Organize objects into namespaces
+- **Tables** - Expose external data as queryable tables
+- **Views** - Define SQL views over your data
+- **Functions** - Scalar, table, and table-in-out functions
+
+```sql
+ATTACH 'external_db' (TYPE 'vgi', LOCATION './my_catalog_worker.py');
+
+-- Query tables from the attached catalog
+SELECT * FROM external_db.main.users;
+
+-- Use views
+SELECT * FROM external_db.analytics.daily_summary;
+
+-- Call functions
+SELECT external_db.main.transform(col) FROM my_table;
+```
+
+This enables VGI workers to act as bridges to external systems—databases, APIs, file systems—presenting them as native DuckDB catalogs.
+
+See [Catalog Interface](docs/catalog-interface.md) for implementation details.
 
 ---
 
