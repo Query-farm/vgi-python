@@ -325,6 +325,40 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
         """
         self.invocation = invocation
         self.logger = logger
+        self._validate_type_bounds()
+
+    def _validate_type_bounds(self) -> None:
+        """Validate type bounds for Arg[AnyArrow] arguments.
+
+        Iterates over all Arg descriptors in the class hierarchy and validates
+        that any Arg[AnyArrow] with type_bound specified has a column type that
+        satisfies the predicate(s).
+
+        Only applies to Arg[AnyArrow] with type_bound specified.
+        Skips validation if no input_schema (e.g., table generators).
+        """
+        if self.invocation.input_schema is None:
+            return
+
+        from vgi.arguments import AnyArrow, Arg
+
+        for klass in type(self).__mro__:
+            for name, attr in vars(klass).items():
+                if not isinstance(attr, Arg):
+                    continue
+                # Only validate AnyArrow arguments with type_bound
+                if getattr(attr, "_type_param", None) is not AnyArrow:
+                    continue
+                if attr.type_bound is None:
+                    continue
+
+                # Get column name from resolved argument
+                value = getattr(self, name)
+                column_name = value.value if hasattr(value, "value") else value
+
+                # Look up field and validate against type_bound
+                field = self.invocation.input_schema.field(column_name)
+                attr.validate_type_bound(field.type)
 
     @property
     def max_processes(self) -> int:

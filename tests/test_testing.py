@@ -564,13 +564,13 @@ class TestScalarFunctionTestClient:
         assert outputs[0].to_pydict() == {"result": [2, 4, 6]}
 
     def test_add_columns(self) -> None:
-        """ScalarFunctionTestClient should work with AddColumnsFunction."""
-        from vgi.examples.scalar import AddColumnsFunction
+        """ScalarFunctionTestClient should work with AddNumericColumnsFunction."""
+        from vgi.examples.scalar import AddNumericColumnsFunction
         from vgi.testing import ScalarFunctionTestClient
 
         input_batch = batch(a=[1, 2, 3], b=[10, 20, 30])
 
-        with ScalarFunctionTestClient(AddColumnsFunction) as client:
+        with ScalarFunctionTestClient(AddNumericColumnsFunction) as client:
             outputs = list(
                 client.scalar_function(
                     input=iter([input_batch]),
@@ -789,12 +789,12 @@ class TestAssertScalarFunctionOutput:
             )
 
     def test_add_columns_function(self) -> None:
-        """assert_scalar_function_output() should work with AddColumnsFunction."""
-        from vgi.examples.scalar import AddColumnsFunction
+        """assert_scalar_function_output() works with AddNumericColumnsFunction."""
+        from vgi.examples.scalar import AddNumericColumnsFunction
         from vgi.testing import assert_scalar_function_output
 
         assert_scalar_function_output(
-            AddColumnsFunction,
+            AddNumericColumnsFunction,
             input=[batch(a=[1, 2], b=[10, 20])],
             expected=[batch(result=[11, 22])],
             args=("a", "b"),

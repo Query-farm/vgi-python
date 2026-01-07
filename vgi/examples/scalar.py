@@ -5,9 +5,9 @@ to single-column output with 1:1 row mapping.
 
 AVAILABLE FUNCTIONS
 -------------------
-DoubleColumnFunction    - Doubles values in a numeric column
-AddColumnsFunction      - Adds two numeric columns
-UpperCaseFunction       - Converts string column to uppercase
+DoubleColumnFunction        - Doubles values in a numeric column
+AddNumericColumnsFunction   - Adds two numeric columns
+UpperCaseFunction           - Converts string column to uppercase
 """
 
 from __future__ import annotations
@@ -146,31 +146,22 @@ class AddNumericColumnsFunction(ScalarFunction):
             ),
         ]
 
-    col1 = Arg[AnyArrow](0, doc="First column name")
-    col2 = Arg[AnyArrow](1, doc="Second column name")
+    # type_bound validates column types at bind time (automatic via Function.__init__)
+    col1 = Arg[AnyArrow](0, doc="First column name", type_bound=_is_addable_type)
+    col2 = Arg[AnyArrow](1, doc="Second column name", type_bound=_is_addable_type)
 
     def __init__(
         self,
         invocation: vgi.invocation.Invocation,
         logger: structlog.stdlib.BoundLogger,
     ):
-        """Initialize and validate that input columns are numeric."""
+        """Initialize and compute output type based on input column types."""
         super().__init__(invocation, logger)
         assert invocation.input_schema is not None  # Required for scalar functions
 
+        # Type validation is automatic via type_bound - we just compute output type
         field1 = invocation.input_schema.field(self.col1.value)
         field2 = invocation.input_schema.field(self.col2.value)
-
-        if not _is_addable_type(field1.type):
-            col1_arg = type(self).col1
-            raise SchemaValidationError(
-                col1_arg.format_error(f"must be numeric, got {field1.type}")
-            )
-        if not _is_addable_type(field2.type):
-            col2_arg = type(self).col2
-            raise SchemaValidationError(
-                col2_arg.format_error(f"must be numeric, got {field2.type}")
-            )
 
         # Compute the output type by promoting to the wider of the two types,
         # then promoting again to reduce overflow risk.

@@ -20,7 +20,8 @@ Example:
 """
 
 import re
-from collections.abc import Sequence
+import warnings
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
 
@@ -65,6 +66,7 @@ __all__ = [
     "Arguments",
     "PYTHON_TO_ARROW",
     "TableInput",
+    "TypeBoundPredicate",
 ]
 
 
@@ -527,6 +529,9 @@ class ArgumentValidationError(ValueError):
 # TypeVar for Arg generic type
 ArgT = TypeVar("ArgT")
 
+# Type alias for type bound predicates (e.g., pa.types.is_integer)
+TypeBoundPredicate = Callable[[pa.DataType], bool]
+
 
 class _ArgFactory:
     """Factory returned by Arg[type] to capture the type parameter.
@@ -554,6 +559,7 @@ class _ArgFactory:
         pattern: str | None = None,
         varargs: bool = False,
         arrow_type: pa.DataType | None = None,
+        type_bound: "TypeBoundPredicate | Sequence[TypeBoundPredicate] | None" = None,
     ) -> "Arg[Any]":
         """Create an Arg instance with the captured type parameter."""
         arg: Arg[Any] = Arg.__new__(Arg)
@@ -574,6 +580,16 @@ class _ArgFactory:
                     "(requires at least 1 value)"
                 )
 
+        # Warn if type_bound is used with non-AnyArrow type
+        if type_bound is not None and self._type_param is not AnyArrow:
+            type_name = getattr(self._type_param, "__name__", str(self._type_param))
+            warnings.warn(
+                f"type_bound is only meaningful for Arg[AnyArrow], "
+                f"but was specified for Arg[{type_name}]",
+                UserWarning,
+                stacklevel=2,
+            )
+
         arg.position = position
         arg.default = default
         arg.doc = doc
@@ -585,6 +601,7 @@ class _ArgFactory:
         arg.pattern = pattern
         arg.varargs = varargs
         arg.arrow_type = arrow_type
+        arg.type_bound = type_bound
         arg._name = None
         arg._compiled_pattern = None
         arg._type_param = self._type_param
@@ -666,6 +683,7 @@ class Arg[ArgT]:
         "pattern",
         "varargs",
         "arrow_type",
+        "type_bound",
         "_name",
         "_compiled_pattern",
         "_type_param",
@@ -685,6 +703,7 @@ class Arg[ArgT]:
         pattern: str | None = None,
         varargs: bool = False,
         arrow_type: pa.DataType | None = None,
+        type_bound: "TypeBoundPredicate | Sequence[TypeBoundPredicate] | None" = None,
     ) -> None:
         """Initialize an Arg descriptor with optional validation.
 
@@ -703,6 +722,10 @@ class Arg[ArgT]:
                 Must be positional (not named).
             arrow_type: Explicit Arrow type for this argument. If not provided,
                 type is inferred from the type hint using PYTHON_TO_ARROW.
+            type_bound: Type predicate(s) for Arg[AnyArrow] column type validation.
+                Accepts a single predicate (e.g., pa.types.is_integer) or a sequence
+                of predicates where any match is valid (OR logic). Only meaningful
+                for Arg[AnyArrow] arguments; issues a warning if used with other types.
 
         Raises:
             ValueError: If conflicting constraints are specified (e.g., ge and gt).
@@ -737,6 +760,7 @@ class Arg[ArgT]:
         self.pattern = pattern
         self.varargs = varargs
         self.arrow_type = arrow_type
+        self.type_bound = type_bound
         self._name: str | None = None
         self._compiled_pattern: re.Pattern[str] | None = None
         self._type_param: type | None = None
@@ -1091,6 +1115,41 @@ class Arg[ArgT]:
         name = self._name or str(self.position)
         return f"Argument '{name}': {message}"
 
+    def validate_type_bound(self, field_type: pa.DataType) -> None:
+        """Validate that the field type satisfies the type bound predicate(s).
+
+        This method is called during function initialization for Arg[AnyArrow]
+        arguments that have type_bound specified.
+
+        If multiple predicates are provided, uses OR logic (any match is valid).
+
+        Args:
+            field_type: The Arrow type of the column to validate.
+
+        Raises:
+            SchemaValidationError: If the type bound is not satisfied.
+
+        """
+        from vgi.exceptions import SchemaValidationError
+
+        if self.type_bound is None:
+            return
+
+        # Normalize to sequence
+        predicates: list[TypeBoundPredicate] = (
+            [self.type_bound] if callable(self.type_bound) else list(self.type_bound)
+        )
+
+        # OR logic: at least one predicate must pass
+        if not any(predicate(field_type) for predicate in predicates):
+            predicate_names = [getattr(p, "__name__", str(p)) for p in predicates]
+            raise SchemaValidationError(
+                self.format_error(
+                    f"column type {field_type} does not match any of: "
+                    f"{', '.join(predicate_names)}"
+                )
+            )
+
     def __repr__(self) -> str:
         """Return a string representation of this Arg."""
         parts = [repr(self.position)]
@@ -1115,5 +1174,12 @@ class Arg[ArgT]:
             parts.append("varargs=True")
         if self.arrow_type is not None:
             parts.append(f"arrow_type={self.arrow_type!r}")
+        if self.type_bound is not None:
+            if callable(self.type_bound):
+                name = getattr(self.type_bound, "__name__", str(self.type_bound))
+                parts.append(f"type_bound={name}")
+            else:
+                names = [getattr(p, "__name__", str(p)) for p in self.type_bound]
+                parts.append(f"type_bound=[{', '.join(names)}]")
 
         return f"Arg({', '.join(parts)})"
