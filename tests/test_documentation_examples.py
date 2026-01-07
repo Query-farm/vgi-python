@@ -109,6 +109,7 @@ DOC_FILES = [
     "docs/protocol.md",
     "docs/lifecycle.md",
     "docs/metadata.md",
+    "docs/cli.md",
 ]
 
 
