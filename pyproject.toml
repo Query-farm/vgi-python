@@ -7,7 +7,7 @@ requires-python = ">=3.12.4"
 dependencies = ["click", "pyarrow", "structlog", "platformdirs"]
 
 [project.optional-dependencies]
-dev = ["mypy", "pyarrow-stubs", "pytest", "pytest-cov", "pytest-mypy", "pytest-ruff", "pytest-xdist", "ruff"]
+dev = ["mypy", "pyarrow-stubs", "pytest", "pytest-cov", "pytest-examples", "pytest-mypy", "pytest-ruff", "pytest-xdist", "ruff"]
 
 [project.scripts]
 vgi-client = "vgi.client.cli:main"

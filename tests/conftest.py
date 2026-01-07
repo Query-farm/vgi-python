@@ -150,3 +150,48 @@ def numeric_batches() -> list[pa.RecordBatch]:
         schema=s,
     )
     return [batch1, batch2]
+
+
+# =============================================================================
+# pytest-examples configuration
+# =============================================================================
+
+
+@pytest.fixture
+def eval_example(eval_example):  # type: ignore[no-untyped-def]
+    """Configure pytest-examples for documentation examples.
+
+    This fixture wraps the default eval_example fixture to configure
+    linting rules appropriate for documentation code blocks:
+    - Ignore missing docstrings (D100, D101, D102, D103, D104, D105, D106, D107)
+    - Ignore import sorting (I001) - docs show imports in readable order
+    - Use double quotes to match project style
+    - Target Python 3.12
+    """
+    eval_example.set_config(
+        target_version="py310",
+        quotes="double",
+        ruff_ignore=[
+            # Missing docstrings - docs examples don't need module/class/function docs
+            "D100",  # Missing docstring in public module
+            "D101",  # Missing docstring in public class
+            "D102",  # Missing docstring in public method
+            "D103",  # Missing docstring in public function
+            "D104",  # Missing docstring in public package
+            "D105",  # Missing docstring in magic method
+            "D106",  # Missing docstring in public nested class
+            "D107",  # Missing docstring in __init__
+            "D413",  # Missing blank line after last section (docstring)
+            # Import organization - docs show imports in logical order for readers
+            "I001",  # Import block is un-sorted or un-formatted
+            # Undefined names - docs show partial snippets without all imports
+            "F821",  # Undefined name
+            # Unused imports - docs show import sections that may not use everything
+            "F401",  # Imported but unused
+            # Redefinition - docs may show multiple import examples in one block
+            "F811",  # Redefinition of unused name
+            # Import order - docs show imports where they're needed for clarity
+            "E402",  # Module level import not at top of file
+        ],
+    )
+    return eval_example

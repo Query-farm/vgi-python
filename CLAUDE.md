@@ -16,6 +16,9 @@ uv run coverage run -m pytest --no-cov -n auto
 uv run coverage combine   # Merge subprocess coverage data
 uv run coverage report    # Show coverage report
 uv run coverage html      # Generate HTML report in htmlcov/
+
+# Test documentation examples (validates Python code blocks in markdown)
+uv run pytest tests/test_documentation_examples.py -v
 ```
 
 When you run pytest I prefer that you include "-n auto" to run tests in parallel. This allows the tests to complete faster.
