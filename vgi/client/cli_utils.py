@@ -165,21 +165,22 @@ def json_to_arrow_schema(columns: list[dict[str, Any]]) -> pa.Schema:
     return pa.schema(fields)
 
 
-def arrow_schema_to_json(serialized: bytes) -> list[dict[str, str]]:
+def arrow_schema_to_json(serialized: bytes) -> list[dict[str, Any]]:
     """Convert serialized Arrow schema to JSON for display.
 
     Args:
         serialized: Serialized Arrow schema bytes
 
     Returns:
-        List of column definitions with name and type
+        List of column definitions with name, type, and optional varargs flag
 
     """
     reader = pa.BufferReader(serialized)
     schema = pa.ipc.read_schema(reader)  # type: ignore[arg-type]
-    result = []
+    result: list[dict[str, Any]] = []
     for f in schema:
         type_str = str(f.type)
+        is_varargs = False
         if f.metadata:
             # Check for vgi:any metadata (output schema)
             if f.metadata.get(b"vgi:any") == b"true":
@@ -189,7 +190,14 @@ def arrow_schema_to_json(serialized: bytes) -> list[dict[str, str]]:
                 type_str = "table"
             elif f.metadata.get(b"vgi_type") == b"any":
                 type_str = "any"
-        result.append({"name": f.name, "type": type_str})
+            # Check for varargs metadata
+            if f.metadata.get(b"vgi_varargs") == b"true":
+                is_varargs = True
+
+        entry: dict[str, Any] = {"name": f.name, "type": type_str}
+        if is_varargs:
+            entry["varargs"] = True
+        result.append(entry)
     return result
 
 

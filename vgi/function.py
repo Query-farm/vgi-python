@@ -326,6 +326,8 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
         self.invocation = invocation
         self.logger = logger
         self._validate_type_bounds()
+        self._validate_input_schema_requirement()
+        self.bind()
 
     def _validate_type_bounds(self) -> None:
         """Validate type bounds for Arg[AnyArrow] arguments.
@@ -352,13 +354,52 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
                 if attr.type_bound is None:
                     continue
 
-                # Get column name from resolved argument
+                # Get column name(s) from resolved argument
                 value = getattr(self, name)
-                column_name = value.value if hasattr(value, "value") else value
 
-                # Look up field and validate against type_bound
-                field = self.invocation.input_schema.field(column_name)
-                attr.validate_type_bound(field.type)
+                if attr.varargs:
+                    # Handle varargs (tuple of values) - validate each element
+                    for item in value:
+                        column_name = item.value if hasattr(item, "value") else item
+                        field = self.invocation.input_schema.field(column_name)
+                        attr.validate_type_bound(field.type)
+                else:
+                    # Single value - may be AnyArrowValue or raw value
+                    column_name = value.value if hasattr(value, "value") else value
+                    field = self.invocation.input_schema.field(column_name)
+                    attr.validate_type_bound(field.type)
+
+    def _validate_input_schema_requirement(self) -> None:
+        """Validate input_schema requirement for this function type.
+
+        Override in subclasses that require input_schema (ScalarFunction,
+        TableInOutFunction) to raise ValueError if input_schema is None.
+
+        Called before bind() to ensure input_schema is available.
+        """
+        pass  # Default: no requirement
+
+    def bind(self) -> None:
+        """Override to process input schema and configure the function.
+
+        Called automatically after __init__ and type bound validation.
+        At this point:
+        - self.input_schema is available (if function receives input)
+        - All Arg values are resolved and accessible
+        - Type bounds have been validated
+
+        Use this method to:
+        - Compute dynamic output types from input schema
+        - Initialize instance state that depends on schema
+        - Perform additional validation
+
+        Example:
+            def bind(self) -> None:
+                field = self.input_schema.field(self.column)
+                self._output_type = field.type
+
+        """
+        pass
 
     @property
     def max_processes(self) -> int:

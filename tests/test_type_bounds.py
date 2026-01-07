@@ -255,3 +255,94 @@ class TestTypeBoundValidation:
         arg = Arg[AnyArrow](0, type_bound=[pa.types.is_integer, pa.types.is_floating])
         repr_str = repr(arg)
         assert "type_bound=[is_integer, is_floating]" in repr_str
+
+    def test_varargs_type_bound_passes_for_all_valid_types(self) -> None:
+        """Type bound validation passes when all varargs elements are valid."""
+
+        class TestFunc(ScalarFunction):
+            columns = Arg[AnyArrow](0, varargs=True, type_bound=pa.types.is_integer)
+
+            @classmethod
+            def catalog_output_type(cls) -> pa.DataType:
+                return pa.int64()
+
+            def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+                # Sum all integer columns (varargs returns tuple at runtime)
+                result = batch.column(self.columns[0])  # type: ignore[index]
+                for col_name in self.columns[1:]:  # type: ignore[index]
+                    result = pa.compute.add(result, batch.column(col_name))
+                return result
+
+        # All columns are integers
+        input_schema = pa.schema(
+            [("a", pa.int64()), ("b", pa.int32()), ("c", pa.int16())]
+        )
+        invocation = make_invocation(
+            input_schema, (pa.scalar("a"), pa.scalar("b"), pa.scalar("c"))
+        )
+
+        # Should not raise
+        func = TestFunc(invocation=invocation, logger=structlog.get_logger())
+        assert func.columns == ("a", "b", "c")  # type: ignore[comparison-overlap]
+
+    def test_varargs_type_bound_fails_when_any_element_invalid(self) -> None:
+        """Type bound validation should fail if any varargs element has invalid type."""
+
+        class TestFunc(ScalarFunction):
+            columns = Arg[AnyArrow](0, varargs=True, type_bound=pa.types.is_integer)
+
+            @classmethod
+            def catalog_output_type(cls) -> pa.DataType:
+                return pa.int64()
+
+            def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+                result = batch.column(self.columns[0])  # type: ignore[index]
+                for col_name in self.columns[1:]:  # type: ignore[index]
+                    result = pa.compute.add(result, batch.column(col_name))
+                return result
+
+        # Third column is a string, not integer
+        input_schema = pa.schema(
+            [  # type: ignore[arg-type]
+                ("a", pa.int64()),
+                ("b", pa.int32()),
+                ("c", pa.string()),
+            ]
+        )
+        invocation = make_invocation(
+            input_schema, (pa.scalar("a"), pa.scalar("b"), pa.scalar("c"))
+        )
+
+        with pytest.raises(SchemaValidationError, match="does not match any of"):
+            TestFunc(invocation=invocation, logger=structlog.get_logger())
+
+    def test_varargs_type_bound_with_multiple_predicates(self) -> None:
+        """Varargs with multiple type bounds should use OR logic per element."""
+
+        class TestFunc(ScalarFunction):
+            columns = Arg[AnyArrow](
+                0, varargs=True, type_bound=[pa.types.is_integer, pa.types.is_floating]
+            )
+
+            @classmethod
+            def catalog_output_type(cls) -> pa.DataType:
+                return pa.float64()
+
+            def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+                return batch.column(self.columns[0])  # type: ignore[index]
+
+        # Mix of integer and float columns - should all pass
+        input_schema = pa.schema(
+            [  # type: ignore[arg-type]
+                ("a", pa.int64()),
+                ("b", pa.float32()),
+                ("c", pa.int16()),
+            ]
+        )
+        invocation = make_invocation(
+            input_schema, (pa.scalar("a"), pa.scalar("b"), pa.scalar("c"))
+        )
+
+        # Should not raise
+        func = TestFunc(invocation=invocation, logger=structlog.get_logger())
+        assert func.columns == ("a", "b", "c")  # type: ignore[comparison-overlap]
