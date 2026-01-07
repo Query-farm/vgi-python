@@ -337,10 +337,12 @@ def extract_argument_specs(
                 seen_names.add(attr_name)
                 arg: Arg[Any] = attr_value
 
-                # Check type hint for special types
+                # Check for special types (AnyArrow, TableInput)
+                # Priority: Arg subscript type (Arg[AnyArrow]) > class type hint
                 hint = hints.get(attr_name)
-                is_table_input = hint is TableInput
-                is_any_type = hint is AnyArrow
+                type_param = getattr(arg, "_type_param", None)
+                is_table_input = type_param is TableInput or hint is TableInput
+                is_any_type = type_param is AnyArrow or hint is AnyArrow
 
                 # Determine Arrow type using priority order:
                 # 1. Explicit arrow_type on Arg
