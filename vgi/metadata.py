@@ -331,9 +331,6 @@ class ResolvedMetadata:
     order_dependent: OrderDependence = OrderDependence.NOT_ORDER_DEPENDENT
     distinct_dependent: DistinctDependence = DistinctDependence.NOT_DISTINCT_DEPENDENT
 
-    # Scalar function specific
-    return_type: str | None = None
-
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -354,7 +351,6 @@ class ResolvedMetadata:
             "max_workers": self.max_workers,
             "order_dependent": self.order_dependent.name,
             "distinct_dependent": self.distinct_dependent.name,
-            "return_type": self.return_type,
         }
 
     @staticmethod
@@ -384,7 +380,6 @@ class ResolvedMetadata:
             distinct_dependent=DistinctDependence[
                 d.get("distinct_dependent", "NOT_DISTINCT_DEPENDENT")
             ],
-            return_type=d.get("return_type"),
         )
 
 
@@ -666,7 +661,6 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         "order_dependent",
         "distinct_dependent",
         # Scalar function specific
-        "return_type",
         "output_type",  # pa.DataType | type[AnyArrow] for scalar functions
     }
 )
@@ -806,7 +800,6 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         distinct_dependent=attrs.get(
             "distinct_dependent", DistinctDependence.NOT_DISTINCT_DEPENDENT
         ),
-        return_type=attrs.get("return_type"),
     )
 
 
@@ -859,7 +852,6 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("max_workers", pa.int32(), nullable=True),
         pa.field("order_dependent", pa.string()),
         pa.field("distinct_dependent", pa.string()),
-        pa.field("return_type", pa.string(), nullable=True),
     ]
 )
 
