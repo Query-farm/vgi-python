@@ -348,6 +348,29 @@ class AddColumns(ScalarFunction):
         return pc.add(batch.column(self.col1.value), batch.column(self.col2.value))
 ```
 
+### Parallel Execution and bind() State
+
+When `max_workers > 1`, each worker runs in a **separate process**. The `bind()` method is called independently on each worker, so **state set in bind() is NOT shared** across workers.
+
+| State Type | Example | Safe with max_workers > 1? |
+|------------|---------|---------------------------|
+| Computed from schema | `self._output_type = ...` | Yes (deterministic, same on all workers) |
+| Accumulators | `self.total = 0` | No - use `max_workers = 1` |
+| Mutable collections | `self.buffer = []` | No - use `max_workers = 1` |
+
+For aggregations that need to accumulate state across batches, **always set `max_workers = 1`** in Meta:
+
+```python
+class SumFunction(TableInOutFunction):
+    class Meta:
+        max_workers = 1  # Required for aggregations
+
+    def bind(self) -> None:
+        self.total = 0  # Safe because max_workers = 1
+```
+
+For advanced distributed aggregations with `max_workers > 1`, use `store_state()`/`collect_states()` to coordinate state across workers (see `docs/generator-api.md`).
+
 ### Method Override Summary
 
 **ScalarFunction:**

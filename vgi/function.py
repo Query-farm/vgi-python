@@ -398,6 +398,23 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
                 field = self.input_schema.field(self.column)
                 self._output_type = field.type
 
+        Warning:
+            **Worker Isolation**: When ``max_workers > 1``, each worker runs
+            in a separate process. ``bind()`` is called independently on each
+            worker, so **state set in bind() is NOT shared** across workers.
+
+            Safe in bind():
+                - Computing output types from schema (deterministic, same result
+                  on all workers)
+                - Setting ``self._output_type`` based on input columns
+
+            Unsafe in bind() with max_workers > 1:
+                - Initializing accumulators: ``self.total = 0``
+                - Mutable collections: ``self.buffer = []``
+
+            For aggregations, either set ``max_workers = 1`` in Meta, or use
+            ``store_state()``/``collect_states()`` for distributed coordination.
+
         """
         pass
 
