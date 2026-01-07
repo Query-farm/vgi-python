@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://query.farm">Query.Farm</a>
+  <a href="https://query.farm"><h3>Query.Farm</h3></a>
 </p>
 
 ---
