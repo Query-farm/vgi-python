@@ -235,6 +235,145 @@ class TestScalarFunctionClient:
         assert outputs[0].schema.field("result").type == pa.int64()
 
 
+class TestSumColumns:
+    """Tests for SumColumnsFunction via Client."""
+
+    def test_sum_two_columns(self, example_worker: str) -> None:
+        """Sum of two columns."""
+        schema = pa.schema([("a", pa.int64()), ("b", pa.int64())])
+        batch = pa.RecordBatch.from_pydict(
+            {"a": [1, 2, 3], "b": [10, 20, 30]}, schema=schema
+        )
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="sum_columns",
+                    input=iter([batch]),
+                    arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
+                )
+            )
+
+        assert len(outputs) == 1
+        assert outputs[0].to_pydict() == {"result": [11, 22, 33]}
+
+    def test_sum_three_columns(self, example_worker: str) -> None:
+        """Sum of three columns using varargs."""
+        schema = pa.schema([("a", pa.int64()), ("b", pa.int64()), ("c", pa.int64())])
+        batch = pa.RecordBatch.from_pydict(
+            {"a": [1, 2], "b": [10, 20], "c": [100, 200]}, schema=schema
+        )
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="sum_columns",
+                    input=iter([batch]),
+                    arguments=Arguments(
+                        positional=(pa.scalar("a"), pa.scalar("b"), pa.scalar("c"))
+                    ),
+                )
+            )
+
+        assert len(outputs) == 1
+        assert outputs[0].to_pydict() == {"result": [111, 222]}
+
+    def test_sum_with_type_promotion(self, example_worker: str) -> None:
+        """Different int types promote correctly."""
+        schema = pa.schema([("a", pa.int32()), ("b", pa.int64())])
+        batch = pa.RecordBatch.from_pydict({"a": [1, 2], "b": [10, 20]}, schema=schema)
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="sum_columns",
+                    input=iter([batch]),
+                    arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
+                )
+            )
+
+        assert len(outputs) == 1
+        assert outputs[0].to_pydict() == {"result": [11, 22]}
+        # Output should be int64 (promoted from int32)
+        assert outputs[0].schema.field("result").type == pa.int64()
+
+    def test_sum_rejects_string_column(self, example_worker: str) -> None:
+        """Type bound rejects non-numeric columns."""
+        schema = pa.schema([("a", pa.int64()), ("b", pa.string())])  # type: ignore[arg-type]
+        batch = pa.RecordBatch.from_pydict(
+            {"a": [1, 2], "b": ["x", "y"]}, schema=schema
+        )
+
+        with (
+            Client(example_worker) as client,
+            pytest.raises(Exception, match="does not match any of"),
+        ):
+            list(
+                client.scalar_function(
+                    function_name="sum_columns",
+                    input=iter([batch]),
+                    arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
+                )
+            )
+
+    def test_sum_multiple_batches(self, example_worker: str) -> None:
+        """Multiple input batches processed correctly."""
+        schema = pa.schema([("a", pa.int64()), ("b", pa.int64())])
+        batch1 = pa.RecordBatch.from_pydict({"a": [1, 2], "b": [10, 20]}, schema=schema)
+        batch2 = pa.RecordBatch.from_pydict({"a": [3, 4], "b": [30, 40]}, schema=schema)
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="sum_columns",
+                    input=iter([batch1, batch2]),
+                    arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
+                )
+            )
+
+        assert_total_rows(outputs, 4)
+        all_values: list[int] = []
+        for batch in outputs:
+            all_values.extend(cast(list[int], batch.column("result").to_pylist()))
+        assert sorted(all_values) == [11, 22, 33, 44]
+
+    def test_sum_empty_batch(self, example_worker: str) -> None:
+        """Empty batch returns empty output."""
+        schema = pa.schema([("a", pa.int64()), ("b", pa.int64())])
+        empty_batch = pa.RecordBatch.from_pydict({"a": [], "b": []}, schema=schema)
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="sum_columns",
+                    input=iter([empty_batch]),
+                    arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
+                )
+            )
+
+        assert len(outputs) == 1
+        assert outputs[0].num_rows == 0
+
+    def test_sum_float_columns(self, example_worker: str) -> None:
+        """Sum of float columns."""
+        schema = pa.schema([("a", pa.float64()), ("b", pa.float64())])
+        batch = pa.RecordBatch.from_pydict(
+            {"a": [1.5, 2.5], "b": [0.5, 0.5]}, schema=schema
+        )
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="sum_columns",
+                    input=iter([batch]),
+                    arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
+                )
+            )
+
+        assert len(outputs) == 1
+        assert outputs[0].to_pydict() == {"result": [2.0, 3.0]}
+
+
 class TestScalarFunctionParallel:
     """Tests for scalar functions with parallel processing."""
 

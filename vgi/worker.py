@@ -263,11 +263,18 @@ class Worker:
 
             # Check positional arguments
             required_positional = [p for p in positional_params if p.required]
-            max_positional = len(positional_params)
+            has_varargs = any(p.is_varargs for p in positional_params)
             min_positional = len(required_positional)
 
-            if not (min_positional <= num_positional <= max_positional):
-                continue  # Wrong number of positional arguments
+            if has_varargs:
+                # Varargs: allow any number >= min_positional
+                if num_positional < min_positional:
+                    continue  # Too few positional arguments
+            else:
+                # Fixed positional: must be within [min, max]
+                max_positional = len(positional_params)
+                if not (min_positional <= num_positional <= max_positional):
+                    continue  # Wrong number of positional arguments
 
             # Check named arguments
             valid_named_keys = {p.position for p in named_params}

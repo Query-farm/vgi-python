@@ -16,9 +16,7 @@ from typing import Any, cast
 
 import pyarrow as pa
 import pyarrow.compute as pc
-import structlog
 
-import vgi.invocation
 from vgi.arguments import AnyArrow, Arg
 from vgi.exceptions import SchemaValidationError
 from vgi.metadata import FunctionExample
@@ -151,18 +149,12 @@ class AddNumericColumnsFunction(ScalarFunction):
     col1 = Arg[AnyArrow](0, doc="First column name", type_bound=_is_addable_type)
     col2 = Arg[AnyArrow](1, doc="Second column name", type_bound=_is_addable_type)
 
-    def __init__(
-        self,
-        invocation: vgi.invocation.Invocation,
-        logger: structlog.stdlib.BoundLogger,
-    ):
-        """Initialize and compute output type based on input column types."""
-        super().__init__(invocation, logger)
-        assert invocation.input_schema is not None  # Required for scalar functions
+    _output_type: pa.DataType
 
-        # Type validation is automatic via type_bound - we just compute output type
-        field1 = invocation.input_schema.field(self.col1.value)
-        field2 = invocation.input_schema.field(self.col2.value)
+    def bind(self) -> None:
+        """Compute output type from input column types."""
+        field1 = self.input_schema.field(self.col1.value)
+        field2 = self.input_schema.field(self.col2.value)
 
         # Compute the output type by promoting to the wider of the two types,
         # then promoting again to reduce overflow risk.

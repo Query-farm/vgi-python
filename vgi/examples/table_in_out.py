@@ -27,10 +27,8 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
-import structlog
 
 from vgi.arguments import Arg, TableInput
-from vgi.invocation import Invocation
 from vgi.ipc_utils import RecordBatchState
 from vgi.log import Level, Message
 from vgi.metadata import FunctionExample
@@ -239,13 +237,8 @@ class RepeatInputsFunction(TableInOutGenerator):
     repeat_count = Arg[int](0, doc="Number of times to repeat each input batch")
     data: TableInput = Arg[TableInput](1, doc="Input table to repeat")  # type: ignore[assignment]
 
-    def __init__(
-        self, invocation: Invocation, logger: structlog.stdlib.BoundLogger
-    ) -> None:
-        """Initialize and validate repeat count argument."""
-        super().__init__(invocation=invocation, logger=logger)
-
-        # Access to trigger validation early
+    def bind(self) -> None:
+        """Validate repeat count argument."""
         if self.repeat_count < 1:
             raise ValueError("Repeat count must be at least 1")
 
@@ -363,11 +356,8 @@ class SumAllColumnsFunction(TableInOutGenerator):
         """Return cardinality estimate of exactly 1 row."""
         return TableCardinality(estimate=1, max=1)
 
-    def __init__(
-        self, invocation: Invocation, logger: structlog.stdlib.BoundLogger
-    ) -> None:
+    def bind(self) -> None:
         """Initialize the sum accumulator."""
-        super().__init__(invocation=invocation, logger=logger)
         self.sums: dict[str, pa.Scalar[Any]] = {}
 
     @property
@@ -671,11 +661,8 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction):
 
     data: TableInput = Arg[TableInput](0, doc="Input table with numeric columns")  # type: ignore[assignment]
 
-    def __init__(
-        self, invocation: Invocation, logger: structlog.stdlib.BoundLogger
-    ) -> None:
+    def bind(self) -> None:
         """Initialize with empty sums dict."""
-        super().__init__(invocation=invocation, logger=logger)
         self.sums: dict[str, pa.Scalar[Any]] = {}
 
     @property
