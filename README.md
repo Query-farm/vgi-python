@@ -2,10 +2,25 @@
 
 **Apache Arrow-based protocol for connecting DuckDB to external programs**
 
-VGI enables user-defined functions to run in separate processes, communicating via stdin/stdout using Arrow IPC streaming. Functions receive batches of data, process them, and return results - all with zero-copy efficiency through Apache Arrow.
+VGI enables user-defined functions to run in separate processes, communicating via stdin/stdout using Arrow IPC streaming. DuckDB attaches to VGI workers as external catalogs, letting you call Python functions directly from SQL.
+
+## Why VGI?
+
+The goal of VGI is to create a generic Arrow IPC-based interface so that extensions for DuckDB—and other Arrow-compatible databases—can be built in a way that scales, is easy to distribute, and can be easily created by LLMs.
+
+**How VGI achieves this:**
+
+- **Generic Arrow IPC protocol**: Functions communicate via Arrow IPC over stdin/stdout. Any language that can read/write Arrow can implement workers, and any database that speaks Arrow can be a client.
+
+- **Scalable by design**: Workers run as separate processes with configurable parallelism (`max_workers`). Data streams batch-by-batch without loading entire datasets into memory.
+
+- **Easy to distribute**: Workers are standalone executables. No compilation, no database-specific plugin APIs, no version coupling. Ship a Python script or a binary—if it speaks the protocol, it works.
+
+- **LLM-friendly**: Functions are simple Python classes with declarative arguments (`Arg[int](0)`), typed schemas, and minimal boilerplate. The patterns are consistent and well-documented, making them straightforward for LLMs to generate.
 
 ## Features
 
+- **DuckDB integration**: Attach workers as catalogs and call functions from SQL
 - **Process isolation**: Functions run in separate worker processes for safety and resource management
 - **Streaming data**: Process large datasets batch-by-batch without loading everything into memory
 - **Parallel execution**: Distribute work across multiple workers for CPU-bound tasks
@@ -24,88 +39,41 @@ Or with [uv](https://github.com/astral-sh/uv):
 uv add vgi
 ```
 
-### Development Installation
+## How It Works
 
-```bash
-git clone https://github.com/your-org/vgi-python
-cd vgi-python
-uv sync --all-extras
-```
+VGI has two components:
+
+- **Worker**: A Python process that hosts your functions. You define functions by subclassing `ScalarFunction`, `TableFunctionGenerator`, or `TableInOutFunction`, then register them in a `Worker`.
+
+- **Client**: Spawns worker processes and invokes functions. DuckDB is the primary client (via `ATTACH`), but VGI also provides a Python client and CLI client for testing and development.
+
+The wire protocol varies by function type—scalar functions stream input batches and return single-column results, table functions generate output without input, and table-in-out functions support both streaming transforms and finalization for aggregations.
+
+Beyond functions, VGI includes a **Catalog Interface** that exposes database-like metadata (schemas, tables, views, functions) to DuckDB. This enables `ATTACH` to discover available functions and, for more advanced use cases, expose virtual tables backed by external data sources. See [Catalog Interface](docs/catalog-interface.md) for details.
 
 ## Quick Start
 
-### 1. Create a Function
+### 1. Create a Worker with Functions
 
 ```python
-# my_functions.py
+#!/usr/bin/env python
+# my_worker.py
 import pyarrow as pa
 import pyarrow.compute as pc
-from vgi import ScalarFunction, Arg
+from vgi import ScalarFunction, Arg, Worker
+
 
 class DoubleColumn(ScalarFunction):
     """Double values in a numeric column."""
 
     class Meta:
-        output_type = pa.int64()  # Output type
+        output_type = pa.int64()
 
     column = Arg[str](0, doc="Column to double")
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array:
         return pc.multiply(batch.column(self.column), 2)
-```
 
-### 2. Create a Worker
-
-```python
-# worker.py
-from vgi import Worker
-from my_functions import DoubleColumn
-
-class MyWorker(Worker):
-    functions = [DoubleColumn]
-
-if __name__ == "__main__":
-    MyWorker().run()
-```
-
-### 3. Use the Client
-
-```python
-from vgi.client import Client
-from vgi import Arguments
-import pyarrow as pa
-
-# Create input data
-batch = pa.RecordBatch.from_pydict({"value": [1, 2, 3, 4, 5]})
-
-with Client("python worker.py") as client:
-    for output in client.scalar_function(
-        function_name="double_column",
-        input=iter([batch]),
-        arguments=Arguments(positional=[pa.scalar("value")]),
-    ):
-        print(output.to_pydict())
-# Output: {'result': [2, 4, 6, 8, 10]}
-```
-
-## Function Types
-
-VGI provides three function types for different use cases:
-
-| Type | Base Class | Input | Output | Use Case |
-|------|------------|-------|--------|----------|
-| **Scalar** | `ScalarFunction` | Batches | Single column (1:1 rows) | `upper()`, `abs()`, per-row transforms |
-| **Table** | `TableFunctionGenerator` | None | Multi-column batches | `range()`, `read_csv()`, data generation |
-| **Table-In-Out** | `TableInOutFunction` | Batches | Multi-column batches | Filtering, aggregation, enrichment |
-
-### Scalar Function Example
-
-Per-row transformations that return a single column:
-
-```python
-from vgi import ScalarFunction, Arg
-import pyarrow as pa
-import pyarrow.compute as pc
 
 class UpperCase(ScalarFunction):
     """Convert string column to uppercase."""
@@ -117,23 +85,94 @@ class UpperCase(ScalarFunction):
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array:
         return pc.utf8_upper(batch.column(self.column))
+
+
+class MyWorker(Worker):
+    catalog_name = "my_funcs"
+    functions = [DoubleColumn, UpperCase]
+
+
+if __name__ == "__main__":
+    MyWorker().run()
 ```
 
-### Table Function Example
+### 2. Use from DuckDB
+
+```sql
+-- Attach the VGI worker as a catalog
+ATTACH 'my_funcs' (TYPE 'vgi', LOCATION './my_worker.py');
+
+-- Call scalar functions from SQL
+SELECT double_column(price) FROM products;
+SELECT upper_case(name) FROM users;
+
+-- Use in complex queries
+SELECT
+    id,
+    double_column(quantity) as doubled_qty,
+    upper_case(status) as status_upper
+FROM orders
+WHERE quantity > 10;
+```
+
+### Alternative: Python Client
+
+For testing or Python-only workflows:
+
+```python
+from vgi.client import Client
+from vgi import Arguments
+import pyarrow as pa
+
+batch = pa.RecordBatch.from_pydict({"value": [1, 2, 3, 4, 5]})
+
+with Client("./my_worker.py") as client:
+    for output in client.scalar_function(
+        function_name="double_column",
+        input=iter([batch]),
+        arguments=Arguments(positional=[pa.scalar("value")]),
+    ):
+        print(output.to_pydict())
+# Output: {'result': [2, 4, 6, 8, 10]}
+```
+
+## Function Types
+
+| Type | Base Class | SQL Pattern | Use Case |
+|------|------------|-------------|----------|
+| **Scalar** | `ScalarFunction` | `SELECT func(col) FROM t` | Per-row transforms (1:1) |
+| **Table** | `TableFunctionGenerator` | `SELECT * FROM func(args)` | Data generation |
+| **Table-In-Out** | `TableInOutFunction` | `SELECT * FROM func((SELECT ...))` | Aggregation, filtering |
+
+### Scalar Function
+
+Per-row transformations returning a single column:
+
+```python
+class UpperCase(ScalarFunction):
+    class Meta:
+        output_type = pa.string()
+
+    column = Arg[str](0)
+
+    def compute(self, batch: pa.RecordBatch) -> pa.Array:
+        return pc.utf8_upper(batch.column(self.column))
+```
+
+```sql
+SELECT upper_case(name) FROM users;
+```
+
+### Table Function
 
 Generate data without input:
 
 ```python
-from vgi import TableFunctionGenerator, Output, Arg
-import pyarrow as pa
-
 class Sequence(TableFunctionGenerator):
-    """Generate a sequence of integers."""
-
     class Meta:
         max_workers = 1
 
-    count = Arg[int](0, doc="Number of integers")
+    count = Arg[int](0)
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -141,30 +180,26 @@ class Sequence(TableFunctionGenerator):
 
     def process(self):
         for i in range(0, self.count, 1000):
-            batch_end = min(i + 1000, self.count)
             yield Output(pa.RecordBatch.from_pydict(
-                {"n": list(range(i, batch_end))},
+                {"n": list(range(i, min(i + 1000, self.count)))},
                 schema=self.output_schema
             ))
 ```
 
-### Table-In-Out Function Example
+```sql
+SELECT * FROM sequence(1000);
+```
 
-Transform input data with optional aggregation:
+### Table-In-Out Function
+
+Transform or aggregate input data:
 
 ```python
-from vgi import TableInOutFunction, Arg, TableInput
-import pyarrow as pa
-import pyarrow.compute as pc
-
 class SumColumn(TableInOutFunction):
-    """Sum values in a column."""
-
     class Meta:
         max_workers = 1  # Aggregations need single worker
 
-    data = Arg[TableInput](0, doc="Input table")
-    column = Arg[str](1, doc="Column to sum")
+    column = Arg[str](0)
 
     def bind(self) -> None:
         self.total = 0
@@ -179,9 +214,12 @@ class SumColumn(TableInOutFunction):
 
     def finish(self) -> list[pa.RecordBatch]:
         return [pa.RecordBatch.from_pydict(
-            {"sum": [self.total]},
-            schema=self.output_schema
+            {"sum": [self.total]}, schema=self.output_schema
         )]
+```
+
+```sql
+SELECT * FROM sum_column('amount', (SELECT * FROM orders));
 ```
 
 ## Declaring Arguments
@@ -203,23 +241,6 @@ class MyFunction(TableInOutFunction):
 
     # Table input (for table-in-out functions)
     data = Arg[TableInput](3, doc="Input data")
-```
-
-## Schema Helpers
-
-Build output schemas easily:
-
-```python
-from vgi import schema, schema_like
-import pyarrow as pa
-
-# Build from scratch
-output = schema(id=pa.int64(), name=pa.string(), value=pa.float64())
-
-# Derive from input schema
-output = schema_like(self.input_schema, add={"total": pa.int64()})
-output = schema_like(self.input_schema, remove=["temp_col"])
-output = schema_like(self.input_schema, rename={"old_name": "new_name"})
 ```
 
 ## Function Metadata
@@ -250,38 +271,16 @@ class ParallelTransform(TableInOutFunction):
         return batch
 ```
 
-For aggregations that need to combine results:
+For aggregations, use `max_workers = 1` or implement state sharing (see [Generator API](docs/generator-api.md)).
 
-```python
-from vgi.ipc_utils import RecordBatchState
-
-class DistributedSum(TableInOutFunction):
-    """Parallel aggregation with state sharing."""
-
-    def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
-        self.partial_sum += pc.sum(batch.column(0)).as_py()
-        return self.empty_output_batch
-
-    def save_state(self) -> RecordBatchState:
-        """Save partial state for collection."""
-        return RecordBatchState(batch=pa.RecordBatch.from_pydict(
-            {"sum": [self.partial_sum]},
-            schema=self.output_schema
-        ))
-
-    def load_states(self, states: list[RecordBatchState]) -> None:
-        """Merge states from all workers."""
-        self.total = sum(s.batch.column(0)[0].as_py() for s in states)
-```
-
-## CLI Tools
+## CLI
 
 ```bash
-# Run the example worker
-vgi-example-worker
-
-# Invoke a function via CLI
+# Invoke a function via CLI client (starts worker automatically)
 vgi-client --function echo --server vgi-example-worker --input data.parquet
+
+# Use your own worker
+vgi-client --function double_column --server ./my_worker.py --input data.parquet
 ```
 
 ## Architecture
@@ -337,10 +336,15 @@ Client                              Worker
 - [Function Lifecycle](docs/lifecycle.md) - Setup, bind, process, teardown
 - [Metadata API](docs/metadata.md) - Function introspection
 - [Generator API](docs/generator-api.md) - Advanced streaming patterns
+- [Catalog Interface](docs/catalog-interface.md) - DuckDB ATTACH integration
 
 ## Development
 
 ```bash
+# Clone the repository
+git clone https://github.com/your-org/vgi-python
+cd vgi-python
+
 # Install dev dependencies
 uv sync --all-extras
 
@@ -369,3 +373,5 @@ uv run coverage combine && uv run coverage report
 ## License
 
 This code is currently restrictively licensed right now, you shouldn't use it.
+
+Copyright 2025-2026 Query.Farm LLC.  All Rights Reserved.
