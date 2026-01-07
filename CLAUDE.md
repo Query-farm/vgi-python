@@ -164,12 +164,12 @@ class MyFunction(TableInOutFunction):
 class SumFunction(TableInOutFunction):
     """Sum all values, emit single result."""
 
-    def __init__(self, invocation, logger):
-        super().__init__(invocation, logger)
-        self.total = 0
-
     class Meta:
         max_workers = 1  # Aggregations must be single-process
+
+    def bind(self) -> None:
+        """Initialize accumulator after schema is available."""
+        self.total = 0
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -313,12 +313,48 @@ output_schema = schema_like(self.input_schema, remove=["temp"])
 output_schema = schema_like(self.input_schema, rename={"old": "new"})
 ```
 
+### Using bind() for Schema Processing
+
+The `bind()` method is called automatically after initialization. Use it to:
+- Compute dynamic output types from input schema
+- Initialize instance state that depends on schema
+- Perform additional validation
+
+At bind time:
+- `self.input_schema` is available (for functions that receive input)
+- All `Arg` values are resolved and accessible
+- Type bounds have been validated
+
+```python
+class AddColumns(ScalarFunction):
+    """Add two numeric columns with dynamic output type."""
+
+    col1 = Arg[AnyArrow](0, type_bound=pa.types.is_numeric)
+    col2 = Arg[AnyArrow](1, type_bound=pa.types.is_numeric)
+
+    def bind(self) -> None:
+        """Compute output type from input columns."""
+        self._output_type = self.input_schema.field(self.col1.value).type
+
+    @classmethod
+    def catalog_output_type(cls) -> pa.DataType | type[AnyArrow]:
+        return AnyArrow
+
+    @property
+    def output_type(self) -> pa.DataType:
+        return self._output_type
+
+    def compute(self, batch: pa.RecordBatch) -> pa.Array:
+        return pc.add(batch.column(self.col1.value), batch.column(self.col2.value))
+```
+
 ### Method Override Summary
 
 **ScalarFunction:**
 
 | Method | When to Override | Default |
 |--------|------------------|---------|
+| `bind()` | Process input schema, compute dynamic output type | No-op |
 | `output_type` | Define output column type | Required |
 | `compute(batch)` | Transform batch to single array | Required |
 | `setup()` | Acquire resources | No-op |
@@ -328,6 +364,7 @@ output_schema = schema_like(self.input_schema, rename={"old": "new"})
 
 | Method | When to Override | Default |
 |--------|------------------|---------|
+| `bind()` | Process input schema, initialize state | No-op |
 | `output_schema` | Change output columns | Returns input_schema |
 | `transform(batch)` | Per-batch processing | Returns batch unchanged |
 | `finish()` | Final output after all input | Returns empty list |
@@ -338,6 +375,7 @@ output_schema = schema_like(self.input_schema, rename={"old": "new"})
 
 | Property/Method | Description |
 |-----------------|-------------|
+| `bind()` | Called after init; use for schema processing |
 | `settings` | Dict of settings passed to function |
 | `get_setting(name, default)` | Get specific setting value |
 
