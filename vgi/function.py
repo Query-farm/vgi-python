@@ -295,8 +295,9 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
             return cls._init_input_type_cache[cls]
 
         for base in cls.__mro__:
-            if hasattr(base, "__orig_bases__"):
-                for orig_base in base.__orig_bases__:
+            orig_bases = getattr(base, "__orig_bases__", None)
+            if orig_bases is not None:
+                for orig_base in orig_bases:
                     origin = get_origin(orig_base)
                     if origin is not None and origin.__name__ == "Function":
                         args = get_args(orig_base)

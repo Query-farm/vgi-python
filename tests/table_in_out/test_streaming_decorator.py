@@ -172,10 +172,10 @@ class TestStreamingDecoratorComparedToManual:
         """@streaming decorated function should produce same output as manual."""
 
         class ManualEcho(TableInOutGenerator):
-            def process(self, b: pa.RecordBatch) -> OutputGenerator:
+            def process(self, batch: pa.RecordBatch) -> OutputGenerator:
                 """Manual process without decorator."""
                 _ = yield None
-                current: pa.RecordBatch | None = b
+                current: pa.RecordBatch | None = batch
                 while True:
                     # Combined yield-and-receive (correct pattern)
                     current = yield Output(current)

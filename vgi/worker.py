@@ -212,13 +212,16 @@ class Worker:
             from vgi.catalog import ReadOnlyCatalogInterface
 
             # Create a dynamic subclass with the worker's functions
-            cls._default_catalog_interface = type(
-                f"{cls.__name__}Catalog",
-                (ReadOnlyCatalogInterface,),
-                {
-                    "catalog_name": cls.catalog_name,
-                    "functions": list(cls.functions),
-                },
+            cls._default_catalog_interface = cast(
+                type[CatalogInterface],
+                type(
+                    f"{cls.__name__}Catalog",
+                    (ReadOnlyCatalogInterface,),
+                    {
+                        "catalog_name": cls.catalog_name,
+                        "functions": list(cls.functions),
+                    },
+                ),
             )
 
         return cls._default_catalog_interface

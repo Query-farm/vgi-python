@@ -1136,9 +1136,10 @@ class Arg[ArgT]:
             return
 
         # Normalize to sequence
-        predicates: list[TypeBoundPredicate] = (
-            [self.type_bound] if callable(self.type_bound) else list(self.type_bound)
-        )
+        if callable(self.type_bound):
+            predicates: list[TypeBoundPredicate] = [self.type_bound]
+        else:
+            predicates = list(self.type_bound)
 
         # OR logic: at least one predicate must pass
         if not any(predicate(field_type) for predicate in predicates):
