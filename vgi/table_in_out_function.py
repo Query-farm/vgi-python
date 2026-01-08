@@ -172,7 +172,7 @@ class ProtocolOutput:
             KeyValueMetadata containing status and optional log message fields.
 
         """
-        metadata_dict: dict[str, str] = {"status": self.status.value}
+        metadata_dict: dict[str, str] = {"vgi.status": self.status.value}
 
         if self.log_message is not None:
             metadata_dict = self.log_message.add_to_metadata(invocation, metadata_dict)

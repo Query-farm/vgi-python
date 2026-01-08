@@ -1110,7 +1110,7 @@ class Client(CatalogClientMixin):
             output_batch, output_metadata = (
                 worker.output_reader.read_next_batch_with_custom_metadata()
             )
-            status = output_metadata.get(b"status") if output_metadata else None
+            status = output_metadata.get(b"vgi.status") if output_metadata else None
 
             log.debug(
                 "received_output_from_worker",
@@ -1182,7 +1182,7 @@ class Client(CatalogClientMixin):
             output_batch, output_metadata = (
                 worker.output_reader.read_next_batch_with_custom_metadata()
             )
-            status = output_metadata.get(b"status") if output_metadata else None
+            status = output_metadata.get(b"vgi.status") if output_metadata else None
             log.debug(
                 "received_finalize_from_worker",
                 worker_index=worker.worker_index,
