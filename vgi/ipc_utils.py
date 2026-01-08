@@ -52,12 +52,57 @@ vgi.function.Function.collect_states : Collect states from all workers
 
 """
 
+import os
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Any, Self
 
 import pyarrow as pa
+import structlog
 from pyarrow import ipc
+
+# IPC debug logging - enable with VGI_IPC_DEBUG=1
+_IPC_DEBUG = os.environ.get("VGI_IPC_DEBUG", "").lower() in ("1", "true", "yes")
+_ipc_log: structlog.stdlib.BoundLogger | None = None
+
+
+def _get_ipc_log() -> structlog.stdlib.BoundLogger:
+    """Get or create the IPC debug logger, configured to write to stderr."""
+    global _ipc_log
+    if _ipc_log is None:
+        import sys
+
+        # Configure structlog to write to stderr for IPC debugging
+        structlog.configure(
+            processors=[
+                structlog.processors.add_log_level,
+                structlog.processors.TimeStamper(fmt="iso"),
+                structlog.dev.ConsoleRenderer(),
+            ],
+            wrapper_class=structlog.make_filtering_bound_logger(0),
+            logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
+        )
+        _ipc_log = structlog.get_logger().bind(component="ipc")
+    return _ipc_log
+
+
+def _schema_to_dict(schema: pa.Schema) -> dict[str, str]:
+    """Convert Arrow schema to dict of {name: type} for logging."""
+    return {field.name: str(field.type) for field in schema}
+
+
+def _metadata_to_dict(
+    metadata: pa.KeyValueMetadata | None,
+) -> dict[str, str] | None:
+    """Convert Arrow metadata to string dict for logging."""
+    if metadata is None:
+        return None
+    return {
+        k.decode() if isinstance(k, bytes) else k: v.decode()
+        if isinstance(v, bytes)
+        else v
+        for k, v in metadata.items()
+    }
 
 
 class IPCError(Exception):
@@ -83,7 +128,18 @@ def serialize_record_batch(
     buffer = BytesIO()
     with ipc.RecordBatchStreamWriter(buffer, batch.schema) as writer:
         writer.write_batch(batch, custom_metadata=custom_metadata)
-    return buffer.getvalue()
+    result = buffer.getvalue()
+
+    if _IPC_DEBUG:
+        _get_ipc_log().debug(
+            "ipc_write",
+            num_rows=batch.num_rows,
+            schema=_schema_to_dict(batch.schema),
+            metadata=_metadata_to_dict(custom_metadata),
+            nbytes=len(result),
+        )
+
+    return result
 
 
 def deserialize_record_batch(data: bytes) -> pa.RecordBatch:
@@ -101,6 +157,13 @@ def deserialize_record_batch(data: bytes) -> pa.RecordBatch:
     """
     with ipc.open_stream(pa.BufferReader(data)) as reader:
         for batch in reader:
+            if _IPC_DEBUG:
+                _get_ipc_log().debug(
+                    "ipc_read",
+                    num_rows=batch.num_rows,
+                    schema=_schema_to_dict(batch.schema),
+                    nbytes=len(data),
+                )
             return batch
     raise IPCError("No RecordBatch found in provided data")
 
@@ -134,6 +197,14 @@ def read_single_record_batch(
         try:
             reader.read_next_batch()
         except StopIteration:
+            if _IPC_DEBUG:
+                _get_ipc_log().debug(
+                    "ipc_read",
+                    context=context,
+                    num_rows=batch.num_rows,
+                    schema=_schema_to_dict(batch.schema),
+                    metadata=_metadata_to_dict(custom_metadata),
+                )
             return batch, custom_metadata
 
         raise IPCError(

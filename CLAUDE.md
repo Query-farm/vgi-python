@@ -118,6 +118,39 @@ vgi-client --input data.parquet --function echo --server vgi-example-worker
 vgi-client --input data.parquet --function sum_all_columns --server vgi-example-worker
 ```
 
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `VGI_IPC_DEBUG=1` | Enable Arrow IPC debug logging (see below) |
+| `VGI_QUIET=1` | Suppress worker startup logging |
+
+### IPC Debug Logging
+
+Enable `VGI_IPC_DEBUG=1` to trace Arrow record batches read and written during client-worker communication. Useful for debugging protocol issues and client integration.
+
+```bash
+VGI_IPC_DEBUG=1 vgi-example-worker
+VGI_IPC_DEBUG=1 vgi-client --input data.parquet --function echo --server vgi-example-worker
+```
+
+**Output format:**
+```
+ipc_write  num_rows=100 schema={'id': 'int64', 'value': 'string'} metadata=None nbytes=4096
+ipc_read   context=bind_result num_rows=1 schema={'output_schema': 'binary', ...} metadata=None
+ipc_write  num_rows=0 schema={'id': 'int64'} metadata={'type': 'FINALIZE'} nbytes=512
+ipc_read   num_rows=1 schema={'sum': 'int64'} metadata={'vgi.status': 'FINISHED'} nbytes=256
+```
+
+**Fields logged:**
+- `context` - Protocol phase (invocation, bind_result, init_result, data)
+- `num_rows` - Row count in the batch
+- `schema` - Column names and types as `{name: type}` dict
+- `metadata` - Custom metadata dict (shows protocol state like `vgi.status`)
+- `nbytes` - Serialized byte size
+
+**Performance:** Zero overhead when disabled (just a boolean check).
+
 ## Creating a Scalar Function (Per-Row Transform)
 
 ```python
