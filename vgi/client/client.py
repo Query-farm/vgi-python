@@ -73,7 +73,7 @@ from vgi.arguments import Arguments
 from vgi.client.catalog_mixin import CatalogClientMixin
 from vgi.function import FunctionInitInput
 from vgi.invocation import InitResult, Invocation, InvocationType
-from vgi.ipc_utils import IPCError, read_ipc_batch
+from vgi.ipc_utils import IPCError, read_single_record_batch
 from vgi.table_function import TableFunctionInitInput
 
 # Configure structlog to write to stderr
@@ -456,7 +456,9 @@ class Client(CatalogClientMixin):
         # Read and parse bind result
         log.debug("reading_bind_result")
         try:
-            bind_result_batch = read_ipc_batch(self._stdout_buffered, "bind_result")
+            bind_result_batch = read_single_record_batch(
+                self._stdout_buffered, "bind_result"
+            )
         except IPCError as e:
             raise ClientError(str(e)) from e
 
@@ -512,7 +514,9 @@ class Client(CatalogClientMixin):
         # Read init result
         log.debug("reading_init_result")
         try:
-            init_result_batch = read_ipc_batch(self._stdout_buffered, "init_result")
+            init_result_batch = read_single_record_batch(
+                self._stdout_buffered, "init_result"
+            )
         except IPCError as e:
             raise ClientError(str(e)) from e
 
@@ -885,7 +889,9 @@ class Client(CatalogClientMixin):
 
         # Read the bind result (we already have output schema from first worker)
         try:
-            _bind_result = read_ipc_batch(worker.stdout_buffered, "bind_result")
+            _bind_result = read_single_record_batch(
+                worker.stdout_buffered, "bind_result"
+            )
         except IPCError as e:
             raise ClientError(str(e)) from e
 

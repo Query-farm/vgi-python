@@ -5,18 +5,40 @@ Tests cover Invocation, Arguments, InitResult, and table_function classes.
 
 from __future__ import annotations
 
+from typing import TypeVar
+
 import pyarrow as pa
 import pytest
 
 from tests.conftest import make_schema
 from vgi.arguments import Arg, Arguments, ArgumentValidationError
 from vgi.invocation import InitResult, Invocation, InvocationType
+from vgi.ipc_utils import deserialize_record_batch
 from vgi.log import Level, Message
 from vgi.table_function import (
     OutputSpec,
     TableCardinality,
     TableFunctionInitInput,
 )
+
+T = TypeVar("T")
+
+
+def ipc_round_trip(obj: T, cls: type[T]) -> T:
+    """Serialize an object and deserialize via IPC stream."""
+    batch = deserialize_record_batch(obj.serialize())  # type: ignore[attr-defined]
+    return cls.deserialize(batch)  # type: ignore[attr-defined, no-any-return]
+
+
+def encode_arguments_to_struct(args: Arguments) -> pa.StructScalar:
+    """Encode Arguments to a struct scalar via RecordBatch round-trip."""
+    encoded = args.encoded_dict()
+    batch = pa.RecordBatch.from_pylist([encoded])
+    struct_array = pa.StructArray.from_arrays(
+        [batch.column(name) for name in batch.schema.names],
+        names=batch.schema.names,
+    )
+    return struct_array[0]
 
 
 class TestArguments:
@@ -46,13 +68,7 @@ class TestArguments:
         assert "positional_1" in encoded
         assert "positional_2" in encoded
 
-        # Round-trip via RecordBatch
-        batch = pa.RecordBatch.from_pylist([encoded])
-        struct_array = pa.StructArray.from_arrays(
-            [batch.column(name) for name in batch.schema.names],
-            names=batch.schema.names,
-        )
-        decoded = Arguments.decode(struct_array[0])
+        decoded = Arguments.decode(encode_arguments_to_struct(args))
 
         assert len(decoded.positional) == 3
         assert decoded.positional[0] is not None
@@ -76,13 +92,7 @@ class TestArguments:
         assert "named_count" in encoded
         assert "named_name" in encoded
 
-        # Round-trip via RecordBatch
-        batch = pa.RecordBatch.from_pylist([encoded])
-        struct_array = pa.StructArray.from_arrays(
-            [batch.column(name) for name in batch.schema.names],
-            names=batch.schema.names,
-        )
-        decoded = Arguments.decode(struct_array[0])
+        decoded = Arguments.decode(encode_arguments_to_struct(args))
 
         assert decoded.positional == ()
         assert decoded.named is not None
@@ -101,12 +111,7 @@ class TestArguments:
         assert "positional_1" in encoded
         assert "named_key" in encoded
 
-        batch = pa.RecordBatch.from_pylist([encoded])
-        struct_array = pa.StructArray.from_arrays(
-            [batch.column(name) for name in batch.schema.names],
-            names=batch.schema.names,
-        )
-        decoded = Arguments.decode(struct_array[0])
+        decoded = Arguments.decode(encode_arguments_to_struct(args))
 
         assert len(decoded.positional) == 2
         assert decoded.positional[0] is not None
@@ -182,16 +187,7 @@ class TestInvocation:
             arguments=Arguments(positional=(pa.scalar(42),), named={}),
         )
 
-        serialized = original.serialize()
-        assert isinstance(serialized, bytes)
-        assert len(serialized) > 0
-
-        # Deserialize
-        from pyarrow import ipc
-
-        reader = ipc.open_stream(serialized)
-        batch = reader.read_next_batch()
-        deserialized = Invocation.deserialize(batch)
+        deserialized = ipc_round_trip(original, Invocation)
 
         assert deserialized.function_name == original.function_name
         assert deserialized.correlation_id == original.correlation_id
@@ -211,12 +207,7 @@ class TestInvocation:
             invocation_id=None,
         )
 
-        serialized = original.serialize()
-        from pyarrow import ipc
-
-        reader = ipc.open_stream(serialized)
-        batch = reader.read_next_batch()
-        deserialized = Invocation.deserialize(batch)
+        deserialized = ipc_round_trip(original, Invocation)
 
         assert deserialized.function_name == "scalar_function"
         assert deserialized.input_schema is None
@@ -242,12 +233,7 @@ class TestInvocation:
             invocation_id=b"complex-bind",
         )
 
-        serialized = original.serialize()
-        from pyarrow import ipc
-
-        reader = ipc.open_stream(serialized)
-        batch = reader.read_next_batch()
-        deserialized = Invocation.deserialize(batch)
+        deserialized = ipc_round_trip(original, Invocation)
 
         assert deserialized.input_schema == complex_schema
 
@@ -318,29 +304,13 @@ class TestInitResult:
     def test_basic_round_trip(self) -> None:
         """InitResult should serialize and deserialize correctly."""
         original = InitResult(global_execution_identifier=b"test-init-id")
-
-        serialized = original.serialize()
-        assert isinstance(serialized, bytes)
-
-        from pyarrow import ipc
-
-        reader = ipc.open_stream(serialized)
-        batch = reader.read_next_batch()
-        deserialized = InitResult.deserialize(batch)
-
+        deserialized = ipc_round_trip(original, InitResult)
         assert deserialized.global_execution_identifier == b"test-init-id"
 
     def test_null_identifier(self) -> None:
         """InitResult with null identifier should round-trip correctly."""
         original = InitResult(global_execution_identifier=None)
-
-        serialized = original.serialize()
-        from pyarrow import ipc
-
-        reader = ipc.open_stream(serialized)
-        batch = reader.read_next_batch()
-        deserialized = InitResult.deserialize(batch)
-
+        deserialized = ipc_round_trip(original, InitResult)
         assert deserialized.global_execution_identifier is None
 
     def test_has_identifier_true(self) -> None:
@@ -401,45 +371,31 @@ class TestInitResult:
 class TestMessage:
     """Tests for Message convenience methods."""
 
-    def test_exception_method(self) -> None:
-        """Message.exception() should create EXCEPTION level message."""
-        msg = Message.exception("Something failed", code=500)
-        assert msg.level == Level.EXCEPTION
-        assert msg.message == "Something failed"
-        assert msg.extra == {"code": 500}
-
-    def test_error_method(self) -> None:
-        """Message.error() should create ERROR level message."""
-        msg = Message.error("An error occurred")
-        assert msg.level == Level.ERROR
-        assert msg.message == "An error occurred"
-        assert msg.extra is None
-
-    def test_warn_method(self) -> None:
-        """Message.warn() should create WARN level message."""
-        msg = Message.warn("Warning message", count=5)
-        assert msg.level == Level.WARN
-        assert msg.message == "Warning message"
-        assert msg.extra == {"count": 5}
-
-    def test_info_method(self) -> None:
-        """Message.info() should create INFO level message."""
-        msg = Message.info("Info message")
-        assert msg.level == Level.INFO
-        assert msg.message == "Info message"
-
-    def test_debug_method(self) -> None:
-        """Message.debug() should create DEBUG level message."""
-        msg = Message.debug("Debug details", var="value")
-        assert msg.level == Level.DEBUG
-        assert msg.message == "Debug details"
-        assert msg.extra == {"var": "value"}
-
-    def test_trace_method(self) -> None:
-        """Message.trace() should create TRACE level message."""
-        msg = Message.trace("Trace info")
-        assert msg.level == Level.TRACE
-        assert msg.message == "Trace info"
+    @pytest.mark.parametrize(
+        ("method", "level", "text", "kwargs", "expected_extra"),
+        [
+            ("exception", Level.EXCEPTION, "Failed", {"code": 500}, {"code": 500}),
+            ("error", Level.ERROR, "An error", {}, None),
+            ("warn", Level.WARN, "Warning", {"count": 5}, {"count": 5}),
+            ("info", Level.INFO, "Info msg", {}, None),
+            ("debug", Level.DEBUG, "Debug", {"var": "value"}, {"var": "value"}),
+            ("trace", Level.TRACE, "Trace", {}, None),
+        ],
+    )
+    def test_factory_methods(
+        self,
+        method: str,
+        level: Level,
+        text: str,
+        kwargs: dict[str, object],
+        expected_extra: dict[str, object] | None,
+    ) -> None:
+        """Message factory methods should create correct level messages."""
+        factory = getattr(Message, method)
+        msg = factory(text, **kwargs)
+        assert msg.level == level
+        assert msg.message == text
+        assert msg.extra == expected_extra
 
     def test_from_exception(self) -> None:
         """Message.from_exception() should capture exception details."""
@@ -511,46 +467,16 @@ class TestTableCardinality:
 class TestGlobalStateInitInput:
     """Tests for GlobalStateInitInput serialization."""
 
-    def test_basic_round_trip(self) -> None:
+    @pytest.mark.parametrize(
+        "projection_ids",
+        [[0, 2, 4], None, []],
+        ids=["with_ids", "null", "empty"],
+    )
+    def test_round_trip(self, projection_ids: list[int] | None) -> None:
         """GlobalStateInitInput should serialize and deserialize correctly."""
-        original = TableFunctionInitInput(projection_ids=[0, 2, 4])
-
-        serialized = original.serialize()
-        assert isinstance(serialized, bytes)
-
-        from pyarrow import ipc
-
-        reader = ipc.open_stream(serialized)
-        batch = reader.read_next_batch()
-        deserialized = TableFunctionInitInput.deserialize(batch)
-
-        assert deserialized.projection_ids == [0, 2, 4]
-
-    def test_null_projection_ids(self) -> None:
-        """GlobalStateInitInput with null projection_ids should round-trip."""
-        original = TableFunctionInitInput(projection_ids=None)
-
-        serialized = original.serialize()
-        from pyarrow import ipc
-
-        reader = ipc.open_stream(serialized)
-        batch = reader.read_next_batch()
-        deserialized = TableFunctionInitInput.deserialize(batch)
-
-        assert deserialized.projection_ids is None
-
-    def test_empty_projection_ids(self) -> None:
-        """GlobalStateInitInput with empty list should round-trip."""
-        original = TableFunctionInitInput(projection_ids=[])
-
-        serialized = original.serialize()
-        from pyarrow import ipc
-
-        reader = ipc.open_stream(serialized)
-        batch = reader.read_next_batch()
-        deserialized = TableFunctionInitInput.deserialize(batch)
-
-        assert deserialized.projection_ids == []
+        original = TableFunctionInitInput(projection_ids=projection_ids)
+        deserialized = ipc_round_trip(original, TableFunctionInitInput)
+        assert deserialized.projection_ids == projection_ids
 
     def test_default_value(self) -> None:
         """GlobalStateInitInput default should have None projection_ids."""

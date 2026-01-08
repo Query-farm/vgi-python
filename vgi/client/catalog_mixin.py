@@ -38,7 +38,7 @@ from vgi.catalog import (
     ViewInfo,
 )
 from vgi.invocation import Invocation, InvocationType
-from vgi.ipc_utils import read_ipc_batch
+from vgi.ipc_utils import read_single_record_batch
 
 if TYPE_CHECKING:
     import structlog.stdlib
@@ -158,7 +158,9 @@ class CatalogClientMixin:
 
             # Read result
             try:
-                result_batch = read_ipc_batch(stdout_buffered, "catalog_result")
+                result_batch = read_single_record_batch(
+                    stdout_buffered, "catalog_result"
+                )
                 log.debug(
                     "catalog_result",
                     method=method_name,
@@ -244,7 +246,9 @@ class CatalogClientMixin:
             # Stream results - read batches until EOF signal
             while True:
                 try:
-                    result_batch = read_ipc_batch(stdout_buffered, "catalog_result")
+                    result_batch = read_single_record_batch(
+                        stdout_buffered, "catalog_result"
+                    )
                     # Empty batch (0 rows, 0 columns) signals end of stream
                     if result_batch.num_rows == 0 and result_batch.num_columns == 0:
                         break

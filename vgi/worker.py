@@ -101,7 +101,7 @@ from vgi.function import (
     OutputSpec,
 )
 from vgi.invocation import Invocation, InvocationType
-from vgi.ipc_utils import read_ipc_batch
+from vgi.ipc_utils import read_single_record_batch
 from vgi.scalar_function import ProtocolInput as ScalarProtocolInput
 from vgi.scalar_function import ScalarFunctionGenerator
 from vgi.table_function import TableFunctionGenerator
@@ -413,7 +413,7 @@ class Worker:
             component="worker"
         )
 
-    def _read_ipc_batch(self, context: str) -> pa.RecordBatch:
+    def _read_single_record_batch(self, context: str) -> pa.RecordBatch:
         """Read a schema + record batch pair from stdin.
 
         Args:
@@ -427,15 +427,15 @@ class Worker:
 
         """
         self.log.debug(f"{context}_reading")
-        return read_ipc_batch(sys.stdin, context)
+        return read_single_record_batch(sys.stdin, context)
 
     def _read_invocation(self) -> Invocation:
         """Read and parse the call data from stdin."""
-        return Invocation.deserialize(self._read_ipc_batch("invocation"))
+        return Invocation.deserialize(self._read_single_record_batch("invocation"))
 
     def _read_init_input(self) -> pa.RecordBatch:
         """Read and parse the init data from stdin."""
-        return self._read_ipc_batch("init_input")
+        return self._read_single_record_batch("init_input")
 
     def _create_bind_error_batch(
         self,
@@ -734,7 +734,7 @@ class Worker:
 
         # Read arguments from input batch (1 row with columns matching parameters)
         # For methods with no arguments, accept 0 rows (empty batch)
-        args_batch = self._read_ipc_batch("catalog_args")
+        args_batch = self._read_single_record_batch("catalog_args")
         if args_batch.num_rows == 0:
             # No arguments - kwargs is empty
             kwargs: dict[str, Any] = {}

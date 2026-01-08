@@ -7,7 +7,7 @@ KEY FUNCTIONS
 -------------
 serialize_record_batch(batch) : Serialize RecordBatch to bytes
 deserialize_record_batch(data) : Deserialize bytes to RecordBatch
-read_ipc_batch(stream, context) : Read schema + batch from stream
+read_single_record_batch(stream, context) : Read schema + batch from stream
 validate_single_row_batch(batch, class_name, required_fields)
     : Validate batch has exactly one row and return as dict
 
@@ -53,6 +53,7 @@ vgi.function.Function.collect_states : Collect states from all workers
 """
 
 from dataclasses import dataclass
+from io import BytesIO
 from typing import Any, Self
 
 import pyarrow as pa
@@ -64,22 +65,22 @@ class IPCError(Exception):
 
 
 def serialize_record_batch(batch: pa.RecordBatch) -> bytes:
-    """Serialize a RecordBatch to bytes (schema message + batch message).
+    """Serialize a RecordBatch to bytes in Arrow IPC stream format.
 
-    This format is compatible with both ipc.open_stream() for reading
-    and manual message reading via ipc.read_message().
+    Uses RecordBatchStreamWriter to produce a complete IPC stream with
+    schema, batch, and end-of-stream marker.
 
     Args:
         batch: The RecordBatch to serialize.
 
     Returns:
-        Concatenated schema and batch bytes for IPC transmission.
+        Complete Arrow IPC stream bytes including EOS marker.
 
     """
-    result: bytes = (
-        batch.schema.serialize().to_pybytes() + batch.serialize().to_pybytes()
-    )
-    return result
+    buffer = BytesIO()
+    with ipc.RecordBatchStreamWriter(buffer, batch.schema) as writer:
+        writer.write_batch(batch)
+    return buffer.getvalue()
 
 
 def deserialize_record_batch(data: bytes) -> pa.RecordBatch:
@@ -91,19 +92,21 @@ def deserialize_record_batch(data: bytes) -> pa.RecordBatch:
     Returns:
         The deserialized RecordBatch.
 
+    Raises:
+        IPCError: If more than a single batch is found, or no batches are found.
+
     """
-    reader = ipc.open_stream(pa.BufferReader(data))
-    return reader.read_next_batch()
+    with ipc.open_stream(pa.BufferReader(data)) as reader:
+        for batch in reader:
+            return batch
+    raise IPCError("No RecordBatch found in provided data")
 
 
-def read_ipc_batch(
+def read_single_record_batch(
     stream: Any,
     context: str = "batch",
 ) -> pa.RecordBatch:
-    """Read a schema + record batch pair from a stream.
-
-    Reads IPC messages manually (not via ipc.open_stream) to avoid PyArrow
-    closing the underlying pipe when the stream context exits.
+    """Read a single record batch from a stream.
 
     Args:
         stream: Stream to read from (must support binary reads, e.g., stdin pipe,
@@ -115,18 +118,24 @@ def read_ipc_batch(
         The deserialized RecordBatch.
 
     Raises:
-        IPCError: If unexpected message types are received.
+        IPCError: If more than a single batch is found, or no batches are found.
 
     """
-    msg = ipc.read_message(stream)
-    if msg.type != "schema":
-        raise IPCError(f"Expected schema message for {context}, got {msg.type}")
-    schema = ipc.read_schema(msg)
+    with ipc.open_stream(stream) as reader:
+        try:
+            batch = reader.read_next_batch()
+        except StopIteration:
+            raise IPCError(f"No record batch found in {context} stream") from None
 
-    msg = ipc.read_message(stream)
-    if msg.type != "record batch":
-        raise IPCError(f"Expected record batch for {context}, got {msg.type}")
-    return ipc.read_record_batch(msg, schema)
+        try:
+            reader.read_next_batch()
+        except StopIteration:
+            return batch
+
+        raise IPCError(
+            f"Expected single record batch in {context} stream, "
+            f"but found multiple batches"
+        )
 
 
 def validate_single_row_batch(

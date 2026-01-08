@@ -8,6 +8,8 @@ from tests.conftest import make_invocation
 from vgi.arguments import Arguments
 from vgi.client.client import Client, ClientError
 from vgi.examples.table import SettingsAwareFunction
+from vgi.invocation import Invocation, InvocationType
+from vgi.ipc_utils import deserialize_record_batch
 
 
 class TestSettingsInProcess:
@@ -155,43 +157,26 @@ class TestSettingsViaClient:
 class TestInvocationSerialization:
     """Tests for Invocation serialization with settings."""
 
-    def test_settings_roundtrip(self) -> None:
+    @pytest.mark.parametrize(
+        "settings",
+        [{"TimeZone": "UTC", "threads": "4"}, None],
+        ids=["with_settings", "none_settings"],
+    )
+    def test_settings_roundtrip(self, settings: dict[str, str] | None) -> None:
         """Settings should survive serialization/deserialization."""
-        from vgi.invocation import Invocation, InvocationType
-
         original = Invocation(
             function_name="test",
             input_schema=None,
             function_type=InvocationType.TABLE,
             correlation_id="test",
             invocation_id=b"test-id",
-            settings={"TimeZone": "UTC", "threads": "4"},
+            settings=settings,
         )
 
-        serialized = original.serialize()
-        batch = pa.ipc.open_stream(pa.py_buffer(serialized)).read_all().to_batches()[0]
+        batch = deserialize_record_batch(original.serialize())
         deserialized = Invocation.deserialize(batch)
 
-        assert deserialized.settings == {"TimeZone": "UTC", "threads": "4"}
-
-    def test_none_settings_roundtrip(self) -> None:
-        """None settings should survive serialization."""
-        from vgi.invocation import Invocation, InvocationType
-
-        original = Invocation(
-            function_name="test",
-            input_schema=None,
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test-id",
-            settings=None,
-        )
-
-        serialized = original.serialize()
-        batch = pa.ipc.open_stream(pa.py_buffer(serialized)).read_all().to_batches()[0]
-        deserialized = Invocation.deserialize(batch)
-
-        assert deserialized.settings is None
+        assert deserialized.settings == settings
 
 
 class TestMetadataSerialization:

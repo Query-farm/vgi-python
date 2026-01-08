@@ -1,8 +1,9 @@
 """Tests for CatalogInterface ABC and default implementations."""
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
+import pyarrow as pa
 import pytest
 
 from vgi.catalog import (
@@ -10,6 +11,7 @@ from vgi.catalog import (
     CatalogAttachResult,
     CatalogInterface,
     FunctionInfo,
+    FunctionType,
     OnConflict,
     SchemaInfo,
     SerializedSchema,
@@ -17,8 +19,42 @@ from vgi.catalog import (
     TransactionId,
     ViewInfo,
 )
-from vgi.catalog.catalog_interface import ReadOnlyCatalogInterface
+from vgi.catalog.catalog_interface import (
+    DistinctDependence,
+    FunctionStability,
+    NullHandling,
+    OrderDependence,
+    OrderPreservation,
+    ReadOnlyCatalogInterface,
+)
 from vgi.exceptions import CatalogReadOnlyError
+from vgi.ipc_utils import deserialize_record_batch
+
+# Common test data
+TEST_ATTACH_ID = AttachId(b"test")
+TEST_TRANSACTION_ID = TransactionId(b"tx")
+
+
+def empty_schema_bytes() -> SerializedSchema:
+    """Create empty serialized schema for tests."""
+    return SerializedSchema(pa.schema([]).serialize().to_pybytes())
+
+
+def function_info_round_trip(info: FunctionInfo) -> FunctionInfo:
+    """Serialize and deserialize FunctionInfo."""
+    return FunctionInfo.deserialize(deserialize_record_batch(info.serialize()))
+
+
+@pytest.fixture
+def catalog() -> "MinimalCatalog":
+    """Create a MinimalCatalog instance."""
+    return MinimalCatalog()
+
+
+@pytest.fixture
+def readonly_catalog() -> "MinimalReadOnlyCatalog":
+    """Create a MinimalReadOnlyCatalog instance."""
+    return MinimalReadOnlyCatalog()
 
 
 class MinimalCatalog(CatalogInterface):
@@ -130,91 +166,76 @@ class TestCatalogInterfaceDefaults:
         assert catalog.interface_feature_flags == set()
 
 
-class TestCatalogInterfaceNotImplemented:
-    """Test that optional methods raise NotImplementedError by default."""
-
-    def test_catalog_create_not_implemented(self) -> None:
-        """catalog_create raises NotImplementedError."""
-        catalog = MinimalCatalog()
-        with pytest.raises(NotImplementedError, match="Catalog create not implemented"):
-            catalog.catalog_create(
+def _not_implemented_test_cases() -> list[
+    tuple[str, str, Callable[[MinimalCatalog], Any]]
+]:
+    """Return test cases for NotImplementedError tests."""
+    return [
+        (
+            "catalog_create",
+            "Catalog create not implemented",
+            lambda c: c.catalog_create(
                 name="test", on_conflict=OnConflict.ERROR, options={}
-            )
-
-    def test_catalog_drop_not_implemented(self) -> None:
-        """catalog_drop raises NotImplementedError."""
-        catalog = MinimalCatalog()
-        with pytest.raises(NotImplementedError, match="Catalog drop not implemented"):
-            catalog.catalog_drop(name="test")
-
-    def test_transaction_begin_not_implemented(self) -> None:
-        """catalog_transaction_begin raises NotImplementedError."""
-        catalog = MinimalCatalog()
-        with pytest.raises(
-            NotImplementedError, match="Catalog transactions not implemented"
-        ):
-            catalog.catalog_transaction_begin(attach_id=AttachId(b"test"))
-
-    def test_transaction_commit_not_implemented(self) -> None:
-        """catalog_transaction_commit raises NotImplementedError."""
-        catalog = MinimalCatalog()
-        with pytest.raises(
-            NotImplementedError, match="Catalog transactions not implemented"
-        ):
-            catalog.catalog_transaction_commit(
-                attach_id=AttachId(b"test"), transaction_id=TransactionId(b"tx")
-            )
-
-    def test_transaction_rollback_not_implemented(self) -> None:
-        """catalog_transaction_rollback raises NotImplementedError."""
-        catalog = MinimalCatalog()
-        with pytest.raises(
-            NotImplementedError, match="Catalog transactions not implemented"
-        ):
-            catalog.catalog_transaction_rollback(
-                attach_id=AttachId(b"test"), transaction_id=TransactionId(b"tx")
-            )
-
-    def test_schema_create_not_implemented(self) -> None:
-        """schema_create raises NotImplementedError."""
-        catalog = MinimalCatalog()
-        with pytest.raises(NotImplementedError, match="Schema create not implemented"):
-            catalog.schema_create(
-                attach_id=AttachId(b"test"),
+            ),
+        ),
+        (
+            "catalog_drop",
+            "Catalog drop not implemented",
+            lambda c: c.catalog_drop(name="test"),
+        ),
+        (
+            "transaction_begin",
+            "Catalog transactions not implemented",
+            lambda c: c.catalog_transaction_begin(attach_id=TEST_ATTACH_ID),
+        ),
+        (
+            "transaction_commit",
+            "Catalog transactions not implemented",
+            lambda c: c.catalog_transaction_commit(
+                attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID
+            ),
+        ),
+        (
+            "transaction_rollback",
+            "Catalog transactions not implemented",
+            lambda c: c.catalog_transaction_rollback(
+                attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID
+            ),
+        ),
+        (
+            "schema_create",
+            "Schema create not implemented",
+            lambda c: c.schema_create(
+                attach_id=TEST_ATTACH_ID,
                 transaction_id=None,
                 name="new_schema",
                 comment=None,
                 tags={},
-            )
-
-    def test_schema_drop_not_implemented(self) -> None:
-        """schema_drop raises NotImplementedError."""
-        catalog = MinimalCatalog()
-        with pytest.raises(NotImplementedError, match="Schema drop not implemented"):
-            catalog.schema_drop(
-                attach_id=AttachId(b"test"),
+            ),
+        ),
+        (
+            "schema_drop",
+            "Schema drop not implemented",
+            lambda c: c.schema_drop(
+                attach_id=TEST_ATTACH_ID,
                 transaction_id=None,
                 name="schema",
                 ignore_not_found=False,
                 cascade=False,
-            )
-
-    def test_schema_contents_not_implemented(self) -> None:
-        """schema_contents raises NotImplementedError."""
-        catalog = MinimalCatalog()
-        with pytest.raises(
-            NotImplementedError, match="Schema contents not implemented"
-        ):
-            catalog.schema_contents(
-                attach_id=AttachId(b"test"), transaction_id=None, name="main"
-            )
-
-    def test_table_create_not_implemented(self) -> None:
-        """table_create raises NotImplementedError."""
-        catalog = MinimalCatalog()
-        with pytest.raises(NotImplementedError, match="Table create not implemented"):
-            catalog.table_create(
-                attach_id=AttachId(b"test"),
+            ),
+        ),
+        (
+            "schema_contents",
+            "Schema contents not implemented",
+            lambda c: c.schema_contents(
+                attach_id=TEST_ATTACH_ID, transaction_id=None, name="main"
+            ),
+        ),
+        (
+            "table_create",
+            "Table create not implemented",
+            lambda c: c.table_create(
+                attach_id=TEST_ATTACH_ID,
                 transaction_id=None,
                 schema_name="main",
                 name="table",
@@ -223,20 +244,41 @@ class TestCatalogInterfaceNotImplemented:
                 not_null_constraints=[],
                 unique_constraints=[],
                 check_constraints=[],
-            )
-
-    def test_view_create_not_implemented(self) -> None:
-        """view_create raises NotImplementedError."""
-        catalog = MinimalCatalog()
-        with pytest.raises(NotImplementedError, match="View create not implemented"):
-            catalog.view_create(
-                attach_id=AttachId(b"test"),
+            ),
+        ),
+        (
+            "view_create",
+            "View create not implemented",
+            lambda c: c.view_create(
+                attach_id=TEST_ATTACH_ID,
                 transaction_id=None,
                 schema_name="main",
                 name="view",
                 definition="SELECT 1",
                 on_conflict=OnConflict.ERROR,
-            )
+            ),
+        ),
+    ]
+
+
+class TestCatalogInterfaceNotImplemented:
+    """Test that optional methods raise NotImplementedError by default."""
+
+    @pytest.mark.parametrize(
+        ("method", "error_match", "call_fn"),
+        _not_implemented_test_cases(),
+        ids=[t[0] for t in _not_implemented_test_cases()],
+    )
+    def test_not_implemented(
+        self,
+        catalog: MinimalCatalog,
+        method: str,
+        error_match: str,
+        call_fn: Callable[[MinimalCatalog], Any],
+    ) -> None:
+        """Optional methods raise NotImplementedError by default."""
+        with pytest.raises(NotImplementedError, match=error_match):
+            call_fn(catalog)
 
 
 class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
@@ -291,75 +333,56 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
         return None
 
 
-class TestReadOnlyCatalogInterface:
-    """Test ReadOnlyCatalogInterface DDL rejection."""
-
-    def test_catalog_create_raises_readonly_error(self) -> None:
-        """catalog_create raises CatalogReadOnlyError."""
-        catalog = MinimalReadOnlyCatalog()
-        with pytest.raises(CatalogReadOnlyError, match="read-only"):
-            catalog.catalog_create(
+def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog], Any]]]:
+    """Return test cases for ReadOnly tests."""
+    return [
+        (
+            "catalog_create",
+            lambda c: c.catalog_create(
                 name="test", on_conflict=OnConflict.ERROR, options={}
-            )
-
-    def test_catalog_drop_raises_readonly_error(self) -> None:
-        """catalog_drop raises CatalogReadOnlyError."""
-        catalog = MinimalReadOnlyCatalog()
-        with pytest.raises(CatalogReadOnlyError, match="read-only"):
-            catalog.catalog_drop(name="test")
-
-    def test_transaction_begin_raises_readonly_error(self) -> None:
-        """catalog_transaction_begin raises CatalogReadOnlyError."""
-        catalog = MinimalReadOnlyCatalog()
-        with pytest.raises(CatalogReadOnlyError, match="read-only"):
-            catalog.catalog_transaction_begin(attach_id=AttachId(b"test"))
-
-    def test_transaction_commit_raises_readonly_error(self) -> None:
-        """catalog_transaction_commit raises CatalogReadOnlyError."""
-        catalog = MinimalReadOnlyCatalog()
-        with pytest.raises(CatalogReadOnlyError, match="read-only"):
-            catalog.catalog_transaction_commit(
-                attach_id=AttachId(b"test"), transaction_id=TransactionId(b"tx")
-            )
-
-    def test_transaction_rollback_raises_readonly_error(self) -> None:
-        """catalog_transaction_rollback raises CatalogReadOnlyError."""
-        catalog = MinimalReadOnlyCatalog()
-        with pytest.raises(CatalogReadOnlyError, match="read-only"):
-            catalog.catalog_transaction_rollback(
-                attach_id=AttachId(b"test"), transaction_id=TransactionId(b"tx")
-            )
-
-    def test_schema_create_raises_readonly_error(self) -> None:
-        """schema_create raises CatalogReadOnlyError."""
-        catalog = MinimalReadOnlyCatalog()
-        with pytest.raises(CatalogReadOnlyError, match="read-only"):
-            catalog.schema_create(
-                attach_id=AttachId(b"test"),
+            ),
+        ),
+        ("catalog_drop", lambda c: c.catalog_drop(name="test")),
+        (
+            "transaction_begin",
+            lambda c: c.catalog_transaction_begin(attach_id=TEST_ATTACH_ID),
+        ),
+        (
+            "transaction_commit",
+            lambda c: c.catalog_transaction_commit(
+                attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID
+            ),
+        ),
+        (
+            "transaction_rollback",
+            lambda c: c.catalog_transaction_rollback(
+                attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID
+            ),
+        ),
+        (
+            "schema_create",
+            lambda c: c.schema_create(
+                attach_id=TEST_ATTACH_ID,
                 transaction_id=None,
                 name="new",
                 comment=None,
                 tags={},
-            )
-
-    def test_schema_drop_raises_readonly_error(self) -> None:
-        """schema_drop raises CatalogReadOnlyError."""
-        catalog = MinimalReadOnlyCatalog()
-        with pytest.raises(CatalogReadOnlyError, match="read-only"):
-            catalog.schema_drop(
-                attach_id=AttachId(b"test"),
+            ),
+        ),
+        (
+            "schema_drop",
+            lambda c: c.schema_drop(
+                attach_id=TEST_ATTACH_ID,
                 transaction_id=None,
                 name="main",
                 ignore_not_found=False,
                 cascade=False,
-            )
-
-    def test_table_create_raises_readonly_error(self) -> None:
-        """table_create raises CatalogReadOnlyError."""
-        catalog = MinimalReadOnlyCatalog()
-        with pytest.raises(CatalogReadOnlyError, match="read-only"):
-            catalog.table_create(
-                attach_id=AttachId(b"test"),
+            ),
+        ),
+        (
+            "table_create",
+            lambda c: c.table_create(
+                attach_id=TEST_ATTACH_ID,
                 transaction_id=None,
                 schema_name="main",
                 name="table",
@@ -368,57 +391,70 @@ class TestReadOnlyCatalogInterface:
                 not_null_constraints=[],
                 unique_constraints=[],
                 check_constraints=[],
-            )
-
-    def test_table_drop_raises_readonly_error(self) -> None:
-        """table_drop raises CatalogReadOnlyError."""
-        catalog = MinimalReadOnlyCatalog()
-        with pytest.raises(CatalogReadOnlyError, match="read-only"):
-            catalog.table_drop(
-                attach_id=AttachId(b"test"),
+            ),
+        ),
+        (
+            "table_drop",
+            lambda c: c.table_drop(
+                attach_id=TEST_ATTACH_ID,
                 transaction_id=None,
                 schema_name="main",
                 name="table",
                 ignore_not_found=False,
-            )
-
-    def test_table_rename_raises_readonly_error(self) -> None:
-        """table_rename raises CatalogReadOnlyError."""
-        catalog = MinimalReadOnlyCatalog()
-        with pytest.raises(CatalogReadOnlyError, match="read-only"):
-            catalog.table_rename(
-                attach_id=AttachId(b"test"),
+            ),
+        ),
+        (
+            "table_rename",
+            lambda c: c.table_rename(
+                attach_id=TEST_ATTACH_ID,
                 transaction_id=None,
                 schema_name="main",
                 name="old",
                 new_name="new",
                 ignore_not_found=False,
-            )
-
-    def test_view_create_raises_readonly_error(self) -> None:
-        """view_create raises CatalogReadOnlyError."""
-        catalog = MinimalReadOnlyCatalog()
-        with pytest.raises(CatalogReadOnlyError, match="read-only"):
-            catalog.view_create(
-                attach_id=AttachId(b"test"),
+            ),
+        ),
+        (
+            "view_create",
+            lambda c: c.view_create(
+                attach_id=TEST_ATTACH_ID,
                 transaction_id=None,
                 schema_name="main",
                 name="view",
                 definition="SELECT 1",
                 on_conflict=OnConflict.ERROR,
-            )
-
-    def test_view_drop_raises_readonly_error(self) -> None:
-        """view_drop raises CatalogReadOnlyError."""
-        catalog = MinimalReadOnlyCatalog()
-        with pytest.raises(CatalogReadOnlyError, match="read-only"):
-            catalog.view_drop(
-                attach_id=AttachId(b"test"),
+            ),
+        ),
+        (
+            "view_drop",
+            lambda c: c.view_drop(
+                attach_id=TEST_ATTACH_ID,
                 transaction_id=None,
                 schema_name="main",
                 name="view",
                 ignore_not_found=False,
-            )
+            ),
+        ),
+    ]
+
+
+class TestReadOnlyCatalogInterface:
+    """Test ReadOnlyCatalogInterface DDL rejection."""
+
+    @pytest.mark.parametrize(
+        ("method", "call_fn"),
+        _readonly_test_cases(),
+        ids=[t[0] for t in _readonly_test_cases()],
+    )
+    def test_readonly_raises_error(
+        self,
+        readonly_catalog: MinimalReadOnlyCatalog,
+        method: str,
+        call_fn: Callable[[MinimalReadOnlyCatalog], Any],
+    ) -> None:
+        """DDL methods raise CatalogReadOnlyError."""
+        with pytest.raises(CatalogReadOnlyError, match="read-only"):
+            call_fn(readonly_catalog)
 
     def test_class_attributes(self) -> None:
         """ReadOnlyCatalogInterface has correct class attributes."""
@@ -429,22 +465,9 @@ class TestReadOnlyCatalogInterface:
 class TestFunctionInfoNewFields:
     """Test FunctionInfo new metadata fields and serialization."""
 
-    def _get_empty_schema_bytes(self) -> SerializedSchema:
-        """Create empty serialized schema for tests."""
-        import pyarrow as pa
-
-        empty_schema = pa.schema([])
-        return SerializedSchema(empty_schema.serialize().to_pybytes())
-
     def test_default_values(self) -> None:
         """Create FunctionInfo with only required fields, verify defaults."""
-        from vgi.catalog import FunctionType
-        from vgi.catalog.catalog_interface import (
-            DistinctDependence,
-            OrderDependence,
-        )
-
-        schema_bytes = self._get_empty_schema_bytes()
+        schema_bytes = empty_schema_bytes()
         info = FunctionInfo(
             name="test_func",
             schema_name="main",
@@ -478,17 +501,7 @@ class TestFunctionInfoNewFields:
 
     def test_serialization_roundtrip_with_all_fields(self) -> None:
         """Serialize and deserialize FunctionInfo with all new fields set."""
-        from vgi.catalog import FunctionType
-        from vgi.catalog.catalog_interface import (
-            DistinctDependence,
-            FunctionStability,
-            NullHandling,
-            OrderDependence,
-            OrderPreservation,
-        )
-        from vgi.ipc_utils import deserialize_record_batch
-
-        schema_bytes = self._get_empty_schema_bytes()
+        schema_bytes = empty_schema_bytes()
         info = FunctionInfo(
             name="test_func",
             schema_name="main",
@@ -510,13 +523,7 @@ class TestFunctionInfoNewFields:
             required_settings=["vgi_debug", "vgi_verbose"],
         )
 
-        # Serialize
-        serialized = info.serialize()
-        assert isinstance(serialized, bytes)
-
-        # Deserialize
-        batch = deserialize_record_batch(serialized)
-        restored = FunctionInfo.deserialize(batch)
+        restored = function_info_round_trip(info)
 
         # Verify all fields match
         assert restored.name == info.name
@@ -545,17 +552,7 @@ class TestFunctionInfoNewFields:
 
     def test_enum_serialization(self) -> None:
         """Verify enums serialize to strings and deserialize back correctly."""
-        from vgi.catalog import FunctionType
-        from vgi.catalog.catalog_interface import (
-            DistinctDependence,
-            FunctionStability,
-            NullHandling,
-            OrderDependence,
-            OrderPreservation,
-        )
-        from vgi.ipc_utils import deserialize_record_batch
-
-        schema_bytes = self._get_empty_schema_bytes()
+        schema_bytes = empty_schema_bytes()
         info = FunctionInfo(
             name="test_func",
             schema_name="main",
@@ -572,8 +569,7 @@ class TestFunctionInfoNewFields:
         )
 
         # Serialize and inspect the Arrow data
-        serialized = info.serialize()
-        batch = deserialize_record_batch(serialized)
+        batch = deserialize_record_batch(info.serialize())
 
         # Verify enums were serialized as strings
         row = batch.to_pydict()
@@ -593,17 +589,8 @@ class TestFunctionInfoNewFields:
 
     def test_backward_compatibility_without_new_fields(self) -> None:
         """Deserialize data that was serialized without new fields (legacy data)."""
-        import pyarrow as pa
-
-        from vgi.catalog import FunctionInfo, FunctionType
-        from vgi.catalog.catalog_interface import (
-            DistinctDependence,
-            OrderDependence,
-        )
-
         # Create legacy schema without new fields
-        empty_schema = pa.schema([])
-        empty_schema_bytes = empty_schema.serialize().to_pybytes()
+        legacy_schema_bytes = pa.schema([]).serialize().to_pybytes()
 
         legacy_fields: list[pa.Field[pa.DataType]] = [
             pa.field("name", pa.string(), nullable=False),
@@ -623,8 +610,8 @@ class TestFunctionInfoNewFields:
                     "name": "legacy_func",
                     "schema_name": "main",
                     "function_type": "scalar",
-                    "arguments": empty_schema_bytes,
-                    "output_schema": empty_schema_bytes,
+                    "arguments": legacy_schema_bytes,
+                    "output_schema": legacy_schema_bytes,
                     "comment": "A legacy function",
                     "tags": [("version", "1.0")],
                 }
@@ -655,15 +642,11 @@ class TestFunctionInfoNewFields:
         assert restored.distinct_dependent == DistinctDependence.NOT_DISTINCT_DEPENDENT
         assert restored.required_settings == []
 
-    def test_max_workers_nullable(self) -> None:
+    @pytest.mark.parametrize("max_workers", [None, 8])
+    def test_max_workers_nullable(self, max_workers: int | None) -> None:
         """Verify max_workers can be None or an integer."""
-        from vgi.catalog import FunctionType
-        from vgi.ipc_utils import deserialize_record_batch
-
-        schema_bytes = self._get_empty_schema_bytes()
-
-        # Test with None
-        info_none = FunctionInfo(
+        schema_bytes = empty_schema_bytes()
+        info = FunctionInfo(
             name="test_func",
             schema_name="main",
             function_type=FunctionType.SCALAR,
@@ -671,39 +654,16 @@ class TestFunctionInfoNewFields:
             output_schema=schema_bytes,
             comment=None,
             tags={},
-            max_workers=None,
+            max_workers=max_workers,
         )
-        assert info_none.max_workers is None
+        assert info.max_workers == max_workers
 
-        serialized = info_none.serialize()
-        batch = deserialize_record_batch(serialized)
-        restored = FunctionInfo.deserialize(batch)
-        assert restored.max_workers is None
-
-        # Test with integer
-        info_int = FunctionInfo(
-            name="test_func",
-            schema_name="main",
-            function_type=FunctionType.SCALAR,
-            arguments=schema_bytes,
-            output_schema=schema_bytes,
-            comment=None,
-            tags={},
-            max_workers=8,
-        )
-        assert info_int.max_workers == 8
-
-        serialized = info_int.serialize()
-        batch = deserialize_record_batch(serialized)
-        restored = FunctionInfo.deserialize(batch)
-        assert restored.max_workers == 8
+        restored = function_info_round_trip(info)
+        assert restored.max_workers == max_workers
 
     def test_list_fields_serialization(self) -> None:
         """Verify list fields serialize and deserialize correctly."""
-        from vgi.catalog import FunctionType
-        from vgi.ipc_utils import deserialize_record_batch
-
-        schema_bytes = self._get_empty_schema_bytes()
+        schema_bytes = empty_schema_bytes()
         info = FunctionInfo(
             name="test_func",
             schema_name="main",
@@ -717,9 +677,7 @@ class TestFunctionInfoNewFields:
             required_settings=["setting1"],
         )
 
-        serialized = info.serialize()
-        batch = deserialize_record_batch(serialized)
-        restored = FunctionInfo.deserialize(batch)
+        restored = function_info_round_trip(info)
 
         # Examples are deserialized to CatalogExample objects
         assert [ex.sql for ex in restored.examples if hasattr(ex, "sql")] == [
@@ -732,10 +690,7 @@ class TestFunctionInfoNewFields:
 
     def test_empty_list_fields(self) -> None:
         """Verify empty list fields serialize and deserialize correctly."""
-        from vgi.catalog import FunctionType
-        from vgi.ipc_utils import deserialize_record_batch
-
-        schema_bytes = self._get_empty_schema_bytes()
+        schema_bytes = empty_schema_bytes()
         info = FunctionInfo(
             name="test_func",
             schema_name="main",
@@ -749,9 +704,7 @@ class TestFunctionInfoNewFields:
             required_settings=[],
         )
 
-        serialized = info.serialize()
-        batch = deserialize_record_batch(serialized)
-        restored = FunctionInfo.deserialize(batch)
+        restored = function_info_round_trip(info)
 
         assert restored.examples == []
         assert restored.categories == []
