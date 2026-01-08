@@ -850,6 +850,22 @@ class Worker:
 
     def run(self) -> None:
         """Run the worker, reading from stdin and writing to stdout."""
+        # Warn if stdin is a terminal - user likely ran worker directly
+        if sys.stdin.isatty() and not self._quiet:
+            sys.stderr.write(
+                "\n"
+                "Warning: This worker expects Arrow IPC binary data on stdin.\n"
+                "It is not meant to be run interactively in a terminal.\n"
+                "\n"
+                "Usage:\n"
+                "  - Use vgi-client to invoke functions\n"
+                "  - Use DuckDB with VGI extension\n"
+                "\n"
+                "To suppress this warning: --quiet or VGI_QUIET=1\n"
+                "\n"
+            )
+            sys.stderr.flush()
+
         self.log.info("worker_starting")
         sys.stdin = os.fdopen(0, "rb")
         sys.stdout = os.fdopen(1, "wb", buffering=0)
