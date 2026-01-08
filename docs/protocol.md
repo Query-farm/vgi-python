@@ -18,6 +18,88 @@ VGI uses Apache Arrow IPC streaming over stdin/stdout for communication:
 
 ---
 
+## IPC Stream Structure
+
+**IMPORTANT FOR IMPLEMENTORS:** The protocol uses multiple distinct Arrow IPC streams. Each stream is a complete IPC message containing: schema → batch(es) → end-of-stream marker.
+
+### Stream Boundaries
+
+The protocol has two phases with different stream patterns:
+
+#### Phase 1: Handshake (4 separate single-batch streams)
+
+During handshake, each message is its own **complete IPC stream** containing exactly one batch:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ HANDSHAKE PHASE - Each arrow is a separate IPC stream                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   Client                                              Worker                │
+│     │                                                   │                   │
+│     │─── Stream 1: Invocation ──────────────────────▶  │                   │
+│     │    [schema + 1 batch + EOS]                       │                   │
+│     │                                                   │                   │
+│     │◀── Stream 2: OutputSpec ─────────────────────────│                   │
+│     │    [schema + 1 batch + EOS]                       │                   │
+│     │                                                   │                   │
+│     │─── Stream 3: InitInput ───────────────────────▶  │                   │
+│     │    [schema + 1 batch + EOS]                       │                   │
+│     │                                                   │                   │
+│     │◀── Stream 4: InitResult ─────────────────────────│                   │
+│     │    [schema + 1 batch + EOS]                       │                   │
+│     │                                                   │                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Phase 2: Data Transfer (2 long-lived multi-batch streams)
+
+During data transfer, each direction uses a **single long-lived IPC stream** containing multiple batches:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ DATA PHASE - Two persistent streams (one per direction)                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   Client                                              Worker                │
+│     │                                                   │                   │
+│     │═══ Stream 5: Input Data Stream ══════════════▶   │                   │
+│     │    [schema]                                       │                   │
+│     │         ├── batch 1 ──────────────────────────▶  │                   │
+│     │         ├── batch 2 ──────────────────────────▶  │                   │
+│     │         ├── ...                                   │                   │
+│     │         ├── batch N ──────────────────────────▶  │                   │
+│     │    [EOS - close stream]                           │                   │
+│     │                                                   │                   │
+│     │◀══ Stream 6: Output Data Stream ═════════════════│                   │
+│     │                                       [schema]    │                   │
+│     │   ◀── batch 1 (+ vgi.status metadata) ───────────│                   │
+│     │   ◀── batch 2 (+ vgi.status metadata) ───────────│                   │
+│     │   ◀── ...                                         │                   │
+│     │   ◀── batch N (vgi.status="FINISHED") ───────────│                   │
+│     │                                [EOS - close stream]                   │
+│     │                                                   │                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Stream Summary Table
+
+| Stream | Direction | Phase | Content | Batches |
+|--------|-----------|-------|---------|---------|
+| 1 | Client → Worker | Handshake | Invocation | 1 |
+| 2 | Worker → Client | Handshake | OutputSpec (bind result) | 1 |
+| 3 | Client → Worker | Handshake | InitInput | 1 |
+| 4 | Worker → Client | Handshake | InitResult | 1 |
+| 5 | Client → Worker | Data | Input batches | 0..N |
+| 6 | Worker → Client | Data | Output batches with status | 1..N |
+
+**Notes:**
+- Stream 5 is absent for Table functions (no input)
+- Handshake streams use `serialize_record_batch()` → complete IPC stream bytes
+- Data streams use `ipc.new_stream()` / `ipc.open_stream()` for streaming multiple batches
+
+---
+
 ## Function Types Overview
 
 | Type | Base Class | Input | Output | Use Case |
@@ -30,6 +112,8 @@ VGI uses Apache Arrow IPC streaming over stdin/stdout for communication:
 
 ## Message Flow Diagrams
 
+These diagrams show the logical message flow. See [IPC Stream Structure](#ipc-stream-structure) above for the underlying stream boundaries.
+
 ### Scalar Function Protocol
 
 Scalar functions transform input batches to single-column output with 1:1 row mapping.
@@ -38,16 +122,27 @@ Scalar functions transform input batches to single-column output with 1:1 row ma
 Client                                  Worker
   │                                       │
   │──── Invocation ───────────────────▶  │ deserialize, lookup function
+  │      (Stream 1)                       │
   │                                       │
   │◀──── OutputSpec ──────────────────   │ single-column schema
+  │      (Stream 2)                       │
+  │                                       │
+  │──── InitInput ────────────────────▶  │
+  │      (Stream 3)                       │
+  │◀──── InitResult ──────────────────   │ initialize_global_state()
+  │      (Stream 4)                       │
+  │                                       │
+  │══════════════════════════════════════│ Data phase begins
   │                                       │
   │──── Input Batch 1 ────────────────▶  │
+  │      (Stream 5)                       │
   │◀──── Output Batch 1 ──────────────   │ compute() → Array (same row count)
+  │      (Stream 6)                       │
   │                                       │
   │──── Input Batch N ────────────────▶  │
   │◀──── Output Batch N ──────────────   │
   │                                       │
-  │──── (close generator) ────────────▶  │ teardown()
+  │──── (close Stream 5) ─────────────▶  │ teardown()
   └───────────────────────────────────────┘
 ```
 
@@ -59,19 +154,26 @@ Client                                  Worker
 
 ### Table Function Protocol
 
-Table functions generate data without receiving input batches.
+Table functions generate data without receiving input batches. **No Stream 5** (no input).
 
 ```
 Client                                  Worker
   │                                       │
   │──── Invocation ───────────────────▶  │ deserialize, lookup function
+  │      (Stream 1)                       │
   │                                       │
   │◀──── OutputSpec ──────────────────   │ output schema + cardinality
+  │      (Stream 2)                       │
   │                                       │
-  │──── GlobalStateInitInput ─────────▶  │ (empty batch with projection info)
+  │──── InitInput ────────────────────▶  │ (empty batch with projection info)
+  │      (Stream 3)                       │
   │◀──── InitResult ──────────────────   │ initialize_global_state()
+  │      (Stream 4)                       │
+  │                                       │
+  │══════════════════════════════════════│ Data phase begins (output only)
   │                                       │
   │◀──── Output Batch 1 ──────────────   │ process() yields Output(batch)
+  │      (Stream 6)                       │
   │◀──── Output Batch 2 ──────────────   │
   │◀──── ... ─────────────────────────   │
   │◀──── Output (FINISHED) ───────────   │ generator exhausted
@@ -87,19 +189,27 @@ Table-in-out functions transform input batches with an optional finalize phase.
 Client                                  Worker
   │                                       │
   │──── Invocation ───────────────────▶  │ deserialize, lookup function
+  │      (Stream 1)                       │
   │                                       │
   │◀──── OutputSpec ──────────────────   │ output schema
+  │      (Stream 2)                       │
   │                                       │
-  │──── GlobalStateInitInput ─────────▶  │ (empty batch with projection)
+  │──── InitInput ────────────────────▶  │ (empty batch with projection)
+  │      (Stream 3)                       │
   │◀──── InitResult ──────────────────   │ initialize_global_state()
+  │      (Stream 4)                       │
+  │                                       │
+  │══════════════════════════════════════│ Data phase begins
   │                                       │
   │──── Input Batch 1 ────────────────▶  │
+  │      (Stream 5)                       │
   │◀──── Output (NEED_MORE_INPUT) ────   │ transform() → batch
+  │      (Stream 6)                       │
   │                                       │
   │──── Input Batch N ────────────────▶  │
   │◀──── Output (NEED_MORE_INPUT) ────   │
   │                                       │
-  │──── FINALIZE (empty batch) ───────▶  │ signals end of input
+  │──── (close Stream 5) ─────────────▶  │ signals end of input
   │◀──── Output Batch ────────────────   │ finish() → final batches
   │◀──── Output (FINISHED) ───────────   │
   │                                       │ teardown()
@@ -259,12 +369,31 @@ Settings are passed in the Invocation and available during bind:
 ## Wire Format Details
 
 **Serialization:** Apache Arrow IPC streaming format
-- Each message is a complete IPC stream (schema + batch)
-- Uses `pa.ipc.new_stream()` / `pa.ipc.RecordBatchStreamReader`
+
+Each IPC stream consists of:
+1. **Schema message** - Arrow schema with field types and metadata
+2. **RecordBatch message(s)** - Data batches conforming to schema
+3. **End-of-stream marker** - Signals stream completion
+
+**Handshake streams (Streams 1-4):**
+- Serialized via `serialize_record_batch()` which produces complete IPC stream bytes
+- Each contains exactly 1 batch
+- Written/read atomically (full stream bytes at once)
+
+**Data streams (Streams 5-6):**
+- Created via `pa.ipc.new_stream(sink, schema)` / `pa.ipc.open_stream(source)`
+- Schema written once at stream start
+- Multiple batches written via `writer.write_batch(batch, custom_metadata=...)`
+- Stream closed by closing the writer or reaching end-of-stream
+
+**Custom Metadata:**
+- Attached per-batch via `write_batch(batch, custom_metadata=pa.KeyValueMetadata({...}))`
+- Read via `reader.read_next_batch_with_custom_metadata()` → `(batch, metadata)`
+- Keys are bytes in metadata dict (e.g., `b"vgi.status"`)
 
 **Transport:** stdin/stdout of worker subprocess
-- Client writes to worker's stdin
-- Client reads from worker's stdout
+- Client writes to worker's stdin (Streams 1, 3, 5)
+- Client reads from worker's stdout (Streams 2, 4, 6)
 - Worker stderr is captured for diagnostics
 
 **Byte order:** Native endianness (Arrow handles cross-platform)
