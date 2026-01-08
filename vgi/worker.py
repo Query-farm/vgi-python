@@ -82,6 +82,7 @@ vgi.examples.worker : Example worker with built-in functions
 
 """
 
+import argparse
 import os
 import sys
 from collections.abc import Sequence
@@ -225,6 +226,42 @@ class Worker:
             )
 
         return cls._default_catalog_interface
+
+    @classmethod
+    def create_argument_parser(cls) -> argparse.ArgumentParser:
+        """Create an argument parser with standard worker options.
+
+        Returns an ArgumentParser configured with common worker flags.
+        Subclasses can extend the returned parser with additional arguments.
+
+        The parser includes:
+            --quiet, -q: Suppress startup logging output
+
+        Example:
+            class MyWorker(Worker):
+                functions = [MyFunction]
+
+            if __name__ == "__main__":
+                parser = MyWorker.create_argument_parser()
+                parser.add_argument("--config", help="Config file path")
+                args = parser.parse_args()
+                MyWorker(quiet=args.quiet).run()
+
+        Returns:
+            Configured ArgumentParser instance.
+
+        """
+        parser = argparse.ArgumentParser(
+            description=cls.__doc__,
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        parser.add_argument(
+            "-q",
+            "--quiet",
+            action="store_true",
+            help="Suppress startup logging output",
+        )
+        return parser
 
     @staticmethod
     def _match_function(
@@ -398,8 +435,15 @@ class Worker:
         scored.sort(key=lambda x: (x[0], x[1]))
         return [candidate for _, candidate in scored]
 
-    def __init__(self) -> None:
-        """Initialize the worker with structured logging."""
+    def __init__(self, *, quiet: bool = False) -> None:
+        """Initialize the worker with structured logging.
+
+        Args:
+            quiet: If True, suppress startup logging output. Can also be enabled
+                by setting the VGI_QUIET=1 environment variable.
+
+        """
+        self._quiet = quiet or os.environ.get("VGI_QUIET") == "1"
         structlog.configure(
             processors=[
                 structlog.processors.add_log_level,

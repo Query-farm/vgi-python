@@ -94,6 +94,7 @@ directory = "htmlcov"
 [dependency-groups]
 dev = [
     "lxml>=6.0.2",
+    "polars>=1.0.0",
     "pytest-timeout>=2.4.0",
     "ty>=0.0.8",
 ]
