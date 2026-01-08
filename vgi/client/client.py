@@ -456,21 +456,21 @@ class Client(CatalogClientMixin):
         # Read and parse bind result
         log.debug("reading_bind_result")
         try:
-            bind_result_batch = read_single_record_batch(
+            bind_result_batch, bind_custom_metadata = read_single_record_batch(
                 self._stdout_buffered, "bind_result"
             )
         except IPCError as e:
             raise ClientError(str(e)) from e
 
-        # Check for bind-time exception (error metadata is in schema metadata)
-        bind_metadata = bind_result_batch.schema.metadata
-        if bind_metadata is not None and bind_result_batch.num_rows == 0:
-            # Convert dict metadata to KeyValueMetadata for _handle_log_message
-            kv_metadata = pa.KeyValueMetadata(bind_metadata)
-            if self._handle_log_message(bind_result_batch, kv_metadata):
-                # _handle_log_message raises ClientError for exceptions
-                # If it returns True (non-exception log), unexpected for bind
-                raise ClientError("Unexpected log message during bind")
+        # Check for bind-time exception (error metadata is in custom_metadata)
+        if (
+            bind_custom_metadata is not None
+            and bind_result_batch.num_rows == 0
+            and self._handle_log_message(bind_result_batch, bind_custom_metadata)
+        ):
+            # _handle_log_message raises ClientError for exceptions
+            # If it returns True (non-exception log), unexpected for bind
+            raise ClientError("Unexpected log message during bind")
 
         if bind_result_callback is not None:
             bind_result_callback(bind_result_batch)
@@ -514,7 +514,7 @@ class Client(CatalogClientMixin):
         # Read init result
         log.debug("reading_init_result")
         try:
-            init_result_batch = read_single_record_batch(
+            init_result_batch, _ = read_single_record_batch(
                 self._stdout_buffered, "init_result"
             )
         except IPCError as e:
@@ -889,7 +889,7 @@ class Client(CatalogClientMixin):
 
         # Read the bind result (we already have output schema from first worker)
         try:
-            _bind_result = read_single_record_batch(
+            _bind_result, _ = read_single_record_batch(
                 worker.stdout_buffered, "bind_result"
             )
         except IPCError as e:

@@ -101,7 +101,6 @@ DOC_EXAMPLE_GLOBALS: dict[str, Any] = {
 DOC_FILES = [
     "CLAUDE.md",
     "README.md",
-    "README2.md",
     "docs/generator-api.md",
     "docs/catalog-interface.md",
     "docs/argument-serialization.md",

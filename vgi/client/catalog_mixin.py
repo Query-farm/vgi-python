@@ -158,7 +158,7 @@ class CatalogClientMixin:
 
             # Read result
             try:
-                result_batch = read_single_record_batch(
+                result_batch, _ = read_single_record_batch(
                     stdout_buffered, "catalog_result"
                 )
                 log.debug(
@@ -246,7 +246,7 @@ class CatalogClientMixin:
             # Stream results - read batches until EOF signal
             while True:
                 try:
-                    result_batch = read_single_record_batch(
+                    result_batch, _ = read_single_record_batch(
                         stdout_buffered, "catalog_result"
                     )
                     # Empty batch (0 rows, 0 columns) signals end of stream

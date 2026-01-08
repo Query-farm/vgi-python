@@ -64,7 +64,9 @@ class IPCError(Exception):
     """Error during IPC message reading or writing."""
 
 
-def serialize_record_batch(batch: pa.RecordBatch) -> bytes:
+def serialize_record_batch(
+    batch: pa.RecordBatch, custom_metadata: pa.KeyValueMetadata | None = None
+) -> bytes:
     """Serialize a RecordBatch to bytes in Arrow IPC stream format.
 
     Uses RecordBatchStreamWriter to produce a complete IPC stream with
@@ -72,6 +74,7 @@ def serialize_record_batch(batch: pa.RecordBatch) -> bytes:
 
     Args:
         batch: The RecordBatch to serialize.
+        custom_metadata: Optional custom metadata to include in the stream schema.
 
     Returns:
         Complete Arrow IPC stream bytes including EOS marker.
@@ -79,7 +82,7 @@ def serialize_record_batch(batch: pa.RecordBatch) -> bytes:
     """
     buffer = BytesIO()
     with ipc.RecordBatchStreamWriter(buffer, batch.schema) as writer:
-        writer.write_batch(batch)
+        writer.write_batch(batch, custom_metadata=custom_metadata)
     return buffer.getvalue()
 
 
@@ -105,7 +108,7 @@ def deserialize_record_batch(data: bytes) -> pa.RecordBatch:
 def read_single_record_batch(
     stream: Any,
     context: str = "batch",
-) -> pa.RecordBatch:
+) -> tuple[pa.RecordBatch, pa.KeyValueMetadata | None]:
     """Read a single record batch from a stream.
 
     Args:
@@ -115,7 +118,8 @@ def read_single_record_batch(
         context: Description for error messages (e.g., "invocation", "init_input").
 
     Returns:
-        The deserialized RecordBatch.
+        Tuple of (RecordBatch, custom_metadata). The custom_metadata may be None
+        if no custom metadata was attached to the batch.
 
     Raises:
         IPCError: If more than a single batch is found, or no batches are found.
@@ -123,14 +127,14 @@ def read_single_record_batch(
     """
     with ipc.open_stream(stream) as reader:
         try:
-            batch = reader.read_next_batch()
+            batch, custom_metadata = reader.read_next_batch_with_custom_metadata()
         except StopIteration:
             raise IPCError(f"No record batch found in {context} stream") from None
 
         try:
             reader.read_next_batch()
         except StopIteration:
-            return batch
+            return batch, custom_metadata
 
         raise IPCError(
             f"Expected single record batch in {context} stream, "

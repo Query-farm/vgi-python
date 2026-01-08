@@ -427,7 +427,8 @@ class Worker:
 
         """
         self.log.debug(f"{context}_reading")
-        return read_single_record_batch(sys.stdin, context)
+        batch, _ = read_single_record_batch(sys.stdin, context)
+        return batch
 
     def _read_invocation(self) -> Invocation:
         """Read and parse the call data from stdin."""
@@ -465,12 +466,13 @@ class Worker:
 
         # Add error metadata
         metadata = error_message.add_to_metadata(invocation)
-        batch = batch.replace_schema_metadata(
+
+        custom_metadata = pa.KeyValueMetadata(
             {k.encode(): v.encode() for k, v in metadata.items()}
         )
 
         # Serialize as IPC
-        return vgi.ipc_utils.serialize_record_batch(batch)
+        return vgi.ipc_utils.serialize_record_batch(batch, custom_metadata)
 
     def _process_scalar_batches(
         self,
