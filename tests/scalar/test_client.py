@@ -116,19 +116,19 @@ class TestScalarFunctionClient:
         assert len(outputs) == 1
         assert outputs[0].num_rows == 0
 
-    def test_empty_iterator(self, example_worker: str) -> None:
-        """Test scalar function with no input batches."""
-        with Client(example_worker) as client:
-            outputs = list(
+    def test_empty_iterator_raises(self, example_worker: str) -> None:
+        """Test scalar function with no input batches raises error."""
+        with (
+            Client(example_worker) as client,
+            pytest.raises(ClientError, match="requires at least one input batch"),
+        ):
+            list(
                 client.scalar_function(
                     function_name="double_column",
                     input=iter([]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
             )
-
-        # No input means no output
-        assert len(outputs) == 0
 
     def test_scalar_function_not_started_raises(self, example_worker: str) -> None:
         """Calling scalar_function before start should raise ClientError."""

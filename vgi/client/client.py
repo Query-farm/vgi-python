@@ -1446,7 +1446,7 @@ class Client(CatalogClientMixin):
                 worker's registry.
             input: Iterator yielding input RecordBatches. Must yield at least one
                 batch. The first batch's schema is used to initialize the IPC
-                stream. If the iterator is empty, no output is produced.
+                stream. Raises ClientError if the iterator is empty.
             arguments: Optional Arguments container with positional and named
                 arguments to pass to the function. Defaults to empty Arguments().
             bind_result_callback: Optional callback invoked with the raw bind
@@ -1468,9 +1468,10 @@ class Client(CatalogClientMixin):
             Final output from finalize() is always yielded last.
 
         Raises:
-            ClientError: If the client is not started, input iterator yields
-                non-RecordBatch objects, communication with the worker fails,
-                or the worker returns an unexpected status or exception.
+            ClientError: If the client is not started, input iterator is empty,
+                input iterator yields non-RecordBatch objects, communication
+                with the worker fails, or the worker returns an unexpected
+                status or exception.
 
         Example:
             >>> with Client("vgi-example-worker") as client:
@@ -1521,6 +1522,13 @@ class Client(CatalogClientMixin):
                 data_writer=data_writer,
             )
             return
+
+        # Input iterator was empty - table-in-out functions require input
+        raise ClientError(
+            f"table_in_out_function requires at least one input batch. "
+            f"The input iterator for function '{function_name}' was empty. "
+            f"Use table_function() for functions that generate data without input."
+        )
 
     def _table_in_out_function_parallel(
         self,
@@ -1912,7 +1920,7 @@ class Client(CatalogClientMixin):
                 worker's registry.
             input: Iterator yielding input RecordBatches. Must yield at least one
                 batch. The first batch's schema is used to initialize the IPC
-                stream. If the iterator is empty, no output is produced.
+                stream. Raises ClientError if the iterator is empty.
             arguments: Optional Arguments container with positional and named
                 arguments to pass to the function. Defaults to empty Arguments().
             bind_result_callback: Optional callback invoked with the raw bind
@@ -1932,9 +1940,10 @@ class Client(CatalogClientMixin):
             In parallel mode (max_processes > 1), output order is non-deterministic.
 
         Raises:
-            ClientError: If the client is not started, input iterator yields
-                non-RecordBatch objects, communication with the worker fails,
-                or the worker returns an unexpected status or exception.
+            ClientError: If the client is not started, input iterator is empty,
+                input iterator yields non-RecordBatch objects, communication
+                with the worker fails, or the worker returns an unexpected
+                status or exception.
 
         Example:
             >>> with Client("vgi-example-worker") as client:
@@ -1986,6 +1995,13 @@ class Client(CatalogClientMixin):
                 data_writer=data_writer,
             )
             return
+
+        # Input iterator was empty - scalar functions require input
+        raise ClientError(
+            f"scalar_function requires at least one input batch. "
+            f"The input iterator for function '{function_name}' was empty. "
+            f"Use table_function() for functions that generate data without input."
+        )
 
     def _scalar_function_parallel(
         self,

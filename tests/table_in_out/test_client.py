@@ -58,6 +58,19 @@ class TestClientLifecycle:
 class TestEdgeCases:
     """Tests for edge cases and boundary conditions."""
 
+    def test_empty_iterator_raises(self, example_worker: str) -> None:
+        """Empty iterator (no batches) should raise ClientError."""
+        with (
+            Client(example_worker) as client,
+            pytest.raises(ClientError, match="requires at least one input batch"),
+        ):
+            list(
+                client.table_in_out_function(
+                    function_name="echo",
+                    input=iter([]),
+                )
+            )
+
     def test_empty_batch(self, example_worker: str) -> None:
         """Empty batch (zero rows) should process correctly."""
         schema = make_schema(
