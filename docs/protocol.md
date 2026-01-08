@@ -194,6 +194,7 @@ Input and output data are standard Arrow RecordBatches matching the declared sch
 - `vgi.status`: One of `NEED_MORE_INPUT`, `HAVE_MORE_OUTPUT`, `FINISHED`
 - `vgi.log_level`: Log level if log message present (optional)
 - `vgi.log_message`: Log message text (optional)
+- `vgi.log_extra`: JSON-encoded additional context (optional)
 
 ---
 

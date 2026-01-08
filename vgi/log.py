@@ -203,14 +203,14 @@ class Message:
 
         Returns:
             New dict containing original entries plus:
-            - log_level: The Level value (e.g., "INFO", "EXCEPTION")
-            - log_message: The human-readable message text
-            - log_extra: JSON string with {correlation_id, invocation_id,
+            - vgi.log_level: The Level value (e.g., "INFO", "EXCEPTION")
+            - vgi.log_message: The human-readable message text
+            - vgi.log_extra: JSON string with {correlation_id, invocation_id,
                 pid, ...extra kwargs}
 
         """
         result = dict(metadata) if metadata else {}
-        result["log_level"] = self.level.value
+        result["vgi.log_level"] = self.level.value
         log_data: dict[str, Any] = {
             "correlation_id": invocation.correlation_id,
             "invocation_id": invocation.invocation_id.hex()
@@ -220,8 +220,8 @@ class Message:
         }
         if self.extra:
             log_data.update(self.extra)
-        result["log_message"] = self.message
-        result["log_extra"] = json.dumps(log_data)
+        result["vgi.log_message"] = self.message
+        result["vgi.log_extra"] = json.dumps(log_data)
         return result
 
     @classmethod

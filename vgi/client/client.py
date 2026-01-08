@@ -180,18 +180,18 @@ class Client(CatalogClientMixin):
     ) -> bool:
         """Handle a log message from the worker if present.
 
-        Detects log messages by checking for zero-row batches with log_level and
-        log_message metadata keys. When detected, logs the message using structlog
-        at the appropriate level. If the log level is "exception", raises a
-        ClientError with the message and traceback.
+        Detects log messages by checking for zero-row batches with vgi.log_level
+        and vgi.log_message metadata keys. When detected, logs the message using
+        structlog at the appropriate level. If the log level is "exception",
+        raises a ClientError with the message and traceback.
 
         Args:
             output_batch: The output batch from the worker. A log message is
                 detected when this has zero rows.
             output_metadata: Custom metadata dictionary from the batch. Must
-                contain b"log_level" and b"log_message" keys for the batch
-                to be treated as a log message. May optionally contain
-                b"log_extra" with JSON-encoded additional context.
+                contain b"vgi.log_level" and b"vgi.log_message" keys for the
+                batch to be treated as a log message. May optionally contain
+                b"vgi.log_extra" with JSON-encoded additional context.
 
         Returns:
             True if this was a log message and the caller should continue to
@@ -207,31 +207,31 @@ class Client(CatalogClientMixin):
 
         if not (
             output_batch.num_rows == 0
-            and output_metadata.get(b"log_level") is not None
-            and output_metadata.get(b"log_message") is not None
+            and output_metadata.get(b"vgi.log_level") is not None
+            and output_metadata.get(b"vgi.log_message") is not None
         ):
             return False
 
         extra: dict[str, Any] = {}
-        if output_metadata.get(b"log_extra") is not None:
+        if output_metadata.get(b"vgi.log_extra") is not None:
             try:
-                extra = json.loads(output_metadata[b"log_extra"].decode())
+                extra = json.loads(output_metadata[b"vgi.log_extra"].decode())
             except json.JSONDecodeError as e:
                 log.error(
                     "failed_to_decode_log_extra",
                     error=str(e),
-                    raw=output_metadata[b"log_extra"],
+                    raw=output_metadata[b"vgi.log_extra"],
                 )
 
-        level_name = output_metadata[b"log_level"].decode().lower()
+        level_name = output_metadata[b"vgi.log_level"].decode().lower()
         worker_log._proxy_to_logger(
             level_name,
-            output_metadata[b"log_message"].decode(),
+            output_metadata[b"vgi.log_message"].decode(),
             **extra,
         )
 
         if level_name == "exception":
-            message = output_metadata[b"log_message"].decode()
+            message = output_metadata[b"vgi.log_message"].decode()
             traceback = extra.get("traceback", "")
             full_message = f"Worker Exception: {message}\n{traceback}"
             raise ClientError(full_message)
@@ -261,6 +261,11 @@ class Client(CatalogClientMixin):
                 - raw_batch: The original RecordBatch for reference
 
         """
+        if batch.num_rows != 1:
+            raise ClientError(
+                "Expected single-row RecordBatch for bind result,"
+                f" got {batch.num_rows} rows"
+            )
         max_processes_array = batch.column(
             batch.schema.get_field_index("max_processes")
         )
