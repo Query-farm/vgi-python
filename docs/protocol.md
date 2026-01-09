@@ -15,6 +15,7 @@ VGI uses Apache Arrow IPC streaming over stdin/stdout for communication:
 - All messages are Arrow RecordBatches serialized to IPC streaming format
 - Status is communicated via custom metadata on output batches
 - Three function types: Scalar (1:1 transform), Table (generator), Table-In-Out (transform with finalize)
+- Workers support multiple invocations per process (loop until stdin EOF)
 
 ---
 
@@ -400,6 +401,49 @@ Each IPC stream consists of:
 
 ---
 
+## Worker Lifecycle
+
+Workers support multiple invocations within a single process. After completing one invocation (all 6 streams), the worker loops back to wait for another invocation on stdin.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ WORKER LIFECYCLE - Multiple invocations per process                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   Worker Process                                                            │
+│     │                                                                       │
+│     ├──▶ Wait for Invocation on stdin                                       │
+│     │         │                                                             │
+│     │         ├── EOF detected ──────────────▶ Exit cleanly                 │
+│     │         │                                                             │
+│     │         ▼                                                             │
+│     │    Process Invocation (Streams 1-6)                                   │
+│     │         │                                                             │
+│     │         ├── Handshake: Invocation → OutputSpec → Init                 │
+│     │         ├── Data: Input batches → Output batches                      │
+│     │         ├── Finalize (if applicable)                                  │
+│     │         │                                                             │
+│     │         ▼                                                             │
+│     └──── Loop back to wait for next invocation                             │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Worker exit conditions:**
+- **EOF on stdin:** When the client closes stdin, the worker detects EOF while waiting for the next invocation and exits cleanly
+- **Fatal error:** Unrecoverable errors cause immediate exit with non-zero status
+
+**Client responsibilities for worker shutdown:**
+- After closing the IPC data stream (`data_writer.close()`), the client must also close `proc.stdin` to send EOF
+- Closing only the IPC stream does not close the underlying pipe - the worker would block forever waiting for the next invocation
+
+**Benefits of multi-invocation:**
+- Reduced process spawn overhead for repeated calls
+- Potential for connection pooling / worker reuse (future)
+- Warm JIT / cached state between invocations
+
+---
+
 ## Implementation Notes
 
 **Framework guarantees:**
@@ -412,10 +456,11 @@ Each IPC stream consists of:
 - Spawn worker subprocess with correct command
 - Send Invocation as first message
 - Handle all status values correctly
-- Close connection gracefully
+- Close stdin (not just IPC stream) to signal worker shutdown
 
 **Worker responsibilities:**
 - Parse Invocation and lookup function
 - Validate arguments against function signature
 - Send OutputSpec with correct schema
 - Handle GeneratorExit for cleanup
+- Loop to handle multiple invocations until EOF on stdin
