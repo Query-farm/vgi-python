@@ -165,6 +165,10 @@ from vgi.scalar_function import (
     ScalarFunctionGenerator,
     ScalarOutputGenerator,
 )
+from vgi.scalar_function_polars import (
+    AnyPolars,
+    PolarsScalarFunction,
+)
 from vgi.schema_utils import schema, schema_like
 from vgi.table_in_out_function import (
     Output,
@@ -185,6 +189,7 @@ from vgi.worker import Worker
 __all__ = [
     "AggregationFunction",
     "AnyArrow",
+    "AnyPolars",
     "Arg",
     "ArgumentSpec",
     "ArgumentValidationError",
@@ -211,6 +216,7 @@ __all__ = [
     "Output",
     "OutputGenerator",
     "ParameterInfo",
+    "PolarsScalarFunction",
     "ResolvedMetadata",
     "RowCountMismatchError",
     "ScalarFunction",

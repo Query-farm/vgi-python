@@ -469,3 +469,86 @@ class TestScalarFunctionParallel:
 
         assert len(outputs) == 1
         assert outputs[0].to_pydict() == {"result": [2, 4, 6]}
+
+
+class TestScalarMultiWorkerEdgeCases:
+    """Tests for edge cases with multiple workers for scalar functions.
+
+    These tests expose timeout/hang bugs when:
+    - Processing parquet with one batch of zero rows
+    - Additional workers spawned but don't receive batches
+    """
+
+    def test_zero_row_batch_single_worker(self, example_worker: str) -> None:
+        """Baseline: zero-row batch with max_workers=1 should complete quickly."""
+        s = schema(x=pa.int64())
+        zero_row_batch = pa.RecordBatch.from_pydict({"x": []}, schema=s)
+
+        with Client(example_worker, max_workers=1) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="double_column",
+                    input=iter([zero_row_batch]),
+                    arguments=Arguments(positional=(pa.scalar("x"),)),
+                )
+            )
+
+        # Should complete without hanging
+        assert len(outputs) == 1
+        assert outputs[0].num_rows == 0
+
+    def test_zero_row_batch_forced_multiple_workers(self, example_worker: str) -> None:
+        """Zero-row batch with max_workers=4 should complete without hanging."""
+        s = schema(x=pa.int64())
+        zero_row_batch = pa.RecordBatch.from_pydict({"x": []}, schema=s)
+
+        # Force 4 workers even though there's only one batch with zero rows
+        with Client(example_worker, max_workers=4) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="double_column",
+                    input=iter([zero_row_batch]),
+                    arguments=Arguments(positional=(pa.scalar("x"),)),
+                )
+            )
+
+        # Should complete without hanging
+        assert len(outputs) == 1
+        assert outputs[0].num_rows == 0
+
+    def test_single_batch_multiple_workers(self, example_worker: str) -> None:
+        """Single normal batch with max_workers=4 should complete without hanging."""
+        s = schema(x=pa.int64())
+        single_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=s)
+
+        # Force 4 workers even though there's only 1 batch
+        with Client(example_worker, max_workers=4) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="double_column",
+                    input=iter([single_batch]),
+                    arguments=Arguments(positional=(pa.scalar("x"),)),
+                )
+            )
+
+        # Should complete without hanging and return correct data
+        assert_total_rows(outputs, 3)
+
+    def test_fewer_batches_than_workers(self, example_worker: str) -> None:
+        """2 batches with max_workers=4 should complete without hanging."""
+        s = schema(x=pa.int64())
+        batch1 = pa.RecordBatch.from_pydict({"x": [1, 2]}, schema=s)
+        batch2 = pa.RecordBatch.from_pydict({"x": [3, 4, 5]}, schema=s)
+
+        # Force 4 workers even though there are only 2 batches
+        with Client(example_worker, max_workers=4) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="double_column",
+                    input=iter([batch1, batch2]),
+                    arguments=Arguments(positional=(pa.scalar("x"),)),
+                )
+            )
+
+        # Should complete without hanging and return correct data (5 rows total)
+        assert_total_rows(outputs, 5)

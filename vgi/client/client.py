@@ -605,8 +605,10 @@ class Client(CatalogClientMixin):
             t.join()
 
         if init_errors:
+            error_msgs = [str(e) for e in init_errors]
             raise ClientError(
-                f"Failed to initialize workers: {init_errors[0]}"
+                f"Failed to initialize {len(init_errors)} worker(s):\n"
+                + "\n".join(f"  - {msg}" for msg in error_msgs)
             ) from init_errors[0]
 
         log.debug(
@@ -894,11 +896,21 @@ class Client(CatalogClientMixin):
 
         # Read the bind result (we already have output schema from first worker)
         try:
-            _bind_result, _ = read_single_record_batch(
+            bind_result_batch, bind_custom_metadata = read_single_record_batch(
                 worker.stdout_buffered, "bind_result"
             )
         except IPCError as e:
             raise ClientError(str(e)) from e
+
+        # Check for bind-time exception (same as primary worker)
+        if (
+            bind_custom_metadata is not None
+            and bind_result_batch.num_rows == 0
+            and self._handle_log_message(bind_result_batch, bind_custom_metadata)
+        ):
+            # _handle_log_message raises ClientError for exceptions
+            # If it returns True (non-exception log), unexpected for bind
+            raise ClientError("Unexpected log message during additional worker bind")
 
         # Create data writer for this worker (only for table-in-out functions)
         if input_schema is not None:
@@ -1643,7 +1655,14 @@ class Client(CatalogClientMixin):
 
             # Check for exceptions from worker threads
             if isinstance(result, BaseException):
-                raise ClientError(f"Worker thread failed: {result}") from result
+                import traceback
+
+                tb = "".join(
+                    traceback.format_exception(
+                        type(result), result, result.__traceback__
+                    )
+                )
+                raise ClientError(f"Worker thread failed: {result}\n{tb}") from result
 
             batch_idx, output_batches = result
             outputs_received += 1
@@ -1776,7 +1795,14 @@ class Client(CatalogClientMixin):
 
             # Check for exceptions from worker threads
             if isinstance(result, BaseException):
-                raise ClientError(f"Worker thread failed: {result}") from result
+                import traceback
+
+                tb = "".join(
+                    traceback.format_exception(
+                        type(result), result, result.__traceback__
+                    )
+                )
+                raise ClientError(f"Worker thread failed: {result}\n{tb}") from result
 
             # None signals a worker finished
             if result is None:
@@ -2095,7 +2121,14 @@ class Client(CatalogClientMixin):
 
             # Check for exceptions from worker threads
             if isinstance(result, BaseException):
-                raise ClientError(f"Worker thread failed: {result}") from result
+                import traceback
+
+                tb = "".join(
+                    traceback.format_exception(
+                        type(result), result, result.__traceback__
+                    )
+                )
+                raise ClientError(f"Worker thread failed: {result}\n{tb}") from result
 
             batch_idx, output_batches = result
             outputs_received += 1

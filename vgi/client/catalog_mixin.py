@@ -41,6 +41,7 @@ from vgi.invocation import Invocation, InvocationType
 from vgi.ipc_utils import read_single_record_batch
 
 if TYPE_CHECKING:
+    import pyarrow as pa_typing
     import structlog.stdlib
 
 
@@ -92,6 +93,49 @@ class CatalogClientMixin:
             "structlog.stdlib.BoundLogger",
             structlog.get_logger().bind(component="catalog_mixin"),
         )
+
+    def _check_catalog_error(
+        self,
+        result_batch: pa.RecordBatch,
+        result_metadata: pa_typing.KeyValueMetadata | None,
+    ) -> None:
+        """Check for error metadata in a catalog result and raise if found.
+
+        Worker exceptions are signaled via empty batches (0 rows) with
+        vgi.log_level metadata set to "exception".
+
+        Args:
+            result_batch: The result batch from the catalog call.
+            result_metadata: Custom metadata from the batch.
+
+        Raises:
+            CatalogClientError: If the batch contains an exception message.
+
+        """
+        if result_metadata is None:
+            return
+
+        if not (
+            result_batch.num_rows == 0
+            and result_metadata.get(b"vgi.log_level") is not None
+        ):
+            return
+
+        level_name = result_metadata[b"vgi.log_level"].decode().lower()
+        if level_name != "exception":
+            return
+
+        import contextlib
+        import json
+
+        message = result_metadata.get(b"vgi.log_message", b"").decode()
+        extra: dict[str, Any] = {}
+        if result_metadata.get(b"vgi.log_extra") is not None:
+            with contextlib.suppress(json.JSONDecodeError):
+                extra = json.loads(result_metadata[b"vgi.log_extra"].decode())
+
+        traceback_str = extra.get("traceback", "")
+        raise CatalogClientError(f"Worker Exception: {message}\n{traceback_str}")
 
     def _catalog_invoke(
         self,
@@ -158,9 +202,13 @@ class CatalogClientMixin:
 
             # Read result
             try:
-                result_batch, _ = read_single_record_batch(
+                result_batch, result_metadata = read_single_record_batch(
                     stdout_buffered, "catalog_result"
                 )
+
+                # Check for error metadata from worker
+                self._check_catalog_error(result_batch, result_metadata)
+
                 log.debug(
                     "catalog_result",
                     method=method_name,
@@ -246,15 +294,22 @@ class CatalogClientMixin:
             # Stream results - read batches until EOF signal
             while True:
                 try:
-                    result_batch, _ = read_single_record_batch(
+                    result_batch, result_metadata = read_single_record_batch(
                         stdout_buffered, "catalog_result"
                     )
+
+                    # Check for error metadata from worker
+                    self._check_catalog_error(result_batch, result_metadata)
+
                     # Empty batch (0 rows, 0 columns) signals end of stream
                     if result_batch.num_rows == 0 and result_batch.num_columns == 0:
                         break
                     yield result_batch
+                except CatalogClientError:
+                    # Re-raise catalog errors
+                    raise
                 except Exception:
-                    # EOF or error - stop iteration
+                    # EOF or other error - stop iteration
                     break
 
         finally:

@@ -144,6 +144,103 @@ class TestEdgeCases:
         assert_total_rows(output_batches, 50)
 
 
+class TestMultiWorkerEdgeCases:
+    """Tests for edge cases with multiple workers.
+
+    These tests expose timeout/hang bugs when:
+    - Processing parquet with one batch of zero rows
+    - Additional workers spawned but don't receive batches
+    """
+
+    def test_zero_row_batch_single_worker(self, example_worker: str) -> None:
+        """Baseline: zero-row batch with max_workers=1 should complete quickly."""
+        schema = make_schema(
+            [pa.field("id", pa.int64()), pa.field("value", pa.int64())]
+        )
+        zero_row_batch = pa.RecordBatch.from_pydict(
+            {"id": [], "value": []}, schema=schema
+        )
+
+        with Client(example_worker, max_workers=1) as client:
+            output_batches = list(
+                client.table_in_out_function(
+                    function_name="echo",
+                    input=iter([zero_row_batch]),
+                )
+            )
+
+        # Should complete without hanging
+        assert len(output_batches) >= 1
+        assert_total_rows(output_batches, 0)
+
+    def test_zero_row_batch_forced_multiple_workers(self, example_worker: str) -> None:
+        """Zero-row batch with max_workers=4 should complete without hanging."""
+        schema = make_schema(
+            [pa.field("id", pa.int64()), pa.field("value", pa.int64())]
+        )
+        zero_row_batch = pa.RecordBatch.from_pydict(
+            {"id": [], "value": []}, schema=schema
+        )
+
+        # Force 4 workers even though there's only one batch with zero rows
+        with Client(example_worker, max_workers=4) as client:
+            output_batches = list(
+                client.table_in_out_function(
+                    function_name="echo",
+                    input=iter([zero_row_batch]),
+                )
+            )
+
+        # Should complete without hanging
+        assert len(output_batches) >= 1
+        assert_total_rows(output_batches, 0)
+
+    def test_single_batch_multiple_workers(self, example_worker: str) -> None:
+        """Single normal batch with max_workers=4 should complete without hanging."""
+        schema = make_schema(
+            [pa.field("id", pa.int64()), pa.field("value", pa.int64())]
+        )
+        single_batch = pa.RecordBatch.from_pydict(
+            {"id": [1, 2, 3], "value": [10, 20, 30]}, schema=schema
+        )
+
+        # Force 4 workers even though there's only 1 batch
+        with Client(example_worker, max_workers=4) as client:
+            output_batches = list(
+                client.table_in_out_function(
+                    function_name="echo",
+                    input=iter([single_batch]),
+                )
+            )
+
+        # Should complete without hanging and return correct data
+        assert_total_rows(output_batches, 3)
+
+    def test_fewer_batches_than_workers(self, example_worker: str) -> None:
+        """2 batches with max_workers=4 should complete without hanging."""
+        schema = make_schema(
+            [pa.field("id", pa.int64()), pa.field("value", pa.int64())]
+        )
+        batch1 = pa.RecordBatch.from_pydict(
+            {"id": [1, 2], "value": [10, 20]}, schema=schema
+        )
+        batch2 = pa.RecordBatch.from_pydict(
+            {"id": [3, 4, 5], "value": [30, 40, 50]}, schema=schema
+        )
+
+        # Force 4 workers even though there are only 2 batches
+        with Client(example_worker, max_workers=4) as client:
+            output_batches = list(
+                client.table_in_out_function(
+                    function_name="echo",
+                    input=iter([batch1, batch2]),
+                )
+            )
+
+        # Should complete without hanging and return correct data (5 rows total)
+        assert_total_rows(output_batches, 5)
+
+
 class TestWorkerStderrCapture:
     """Tests for capturing worker stderr output."""
 

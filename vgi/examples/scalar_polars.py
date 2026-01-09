@@ -1,21 +1,21 @@
 """Example Polars scalar function implementations.
 
 This module provides example scalar functions that use Polars for data
-processing, demonstrating the zero-copy integration pattern between
-Arrow and Polars.
+processing, demonstrating the PolarsScalarFunction base class which
+handles zero-copy Arrow-Polars conversion automatically.
 
-ZERO-COPY PATTERN
------------------
-Polars can work directly with Arrow data without copying:
+POLARS SCALAR FUNCTIONS
+-----------------------
+PolarsScalarFunction handles the Arrow <-> Polars conversion automatically:
 
-    # Convert Arrow batch to Polars DataFrame (zero-copy)
-    df = pl.from_arrow(batch)
+    class MyFunction(PolarsScalarFunction):
+        class Meta:
+            output_type = pl.Utf8  # Polars type, not Arrow
 
-    # Perform Polars operations
-    result_df = df.select(pl.col("column").str.to_uppercase().alias("result"))
+        column = Arg[str](0, doc="Column name")
 
-    # Convert back to Arrow array (zero-copy)
-    result_array = result_df.to_arrow()["result"].combine_chunks()
+        def compute_polars(self, df: pl.DataFrame) -> pl.Series:
+            return df[self.column].str.to_uppercase()
 
 AVAILABLE FUNCTIONS
 -------------------
@@ -26,14 +26,11 @@ PolarsNormalizeFunction     - Z-score normalization using Polars
 
 from __future__ import annotations
 
-from typing import Any
-
 import polars as pl
-import pyarrow as pa
 
 from vgi.arguments import Arg
 from vgi.metadata import FunctionExample
-from vgi.scalar_function import ScalarFunction
+from vgi.scalar_function_polars import PolarsScalarFunction
 
 __all__ = [
     "PolarsNormalizeFunction",
@@ -42,11 +39,11 @@ __all__ = [
 ]
 
 
-class PolarsUpperCaseFunction(ScalarFunction):
+class PolarsUpperCaseFunction(PolarsScalarFunction):
     """Converts a string column to uppercase using Polars.
 
-    Demonstrates zero-copy Arrow-to-Polars-to-Arrow conversion for string
-    operations.
+    Demonstrates PolarsScalarFunction which handles zero-copy Arrow-to-Polars
+    conversion automatically.
 
     Example:
         Input:  name=["alice", "bob", "charlie"]
@@ -60,7 +57,7 @@ class PolarsUpperCaseFunction(ScalarFunction):
 
         name = "polars_upper_case"
         description = "Converts string column to uppercase using Polars"
-        output_type = pa.string()
+        output_type = pl.Utf8
         examples = [
             FunctionExample(
                 sql="SELECT polars_upper_case(name) FROM users",
@@ -70,23 +67,16 @@ class PolarsUpperCaseFunction(ScalarFunction):
 
     column = Arg[str](0, doc="Column name to uppercase")
 
-    def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+    def compute_polars(self, df: pl.DataFrame) -> pl.Series:
         """Convert the column values to uppercase using Polars."""
-        # Zero-copy conversion to Polars DataFrame
-        df = pl.from_arrow(batch)
-
-        # Polars string operation
-        result_df = df.select(pl.col(self.column).str.to_uppercase().alias("result"))
-
-        # Zero-copy conversion back to Arrow
-        return result_df.to_arrow()["result"].combine_chunks()
+        return df[self.column].str.to_uppercase()
 
 
-class PolarsStringLengthFunction(ScalarFunction):
+class PolarsStringLengthFunction(PolarsScalarFunction):
     """Computes string lengths using Polars.
 
-    Demonstrates using Polars string length computation with zero-copy
-    Arrow integration.
+    Demonstrates using Polars string length computation with
+    PolarsScalarFunction for automatic Arrow integration.
 
     Example:
         Input:  text=["hello", "hi", "goodbye"]
@@ -100,7 +90,7 @@ class PolarsStringLengthFunction(ScalarFunction):
 
         name = "polars_string_length"
         description = "Computes string lengths using Polars"
-        output_type = pa.uint32()
+        output_type = pl.UInt32
         examples = [
             FunctionExample(
                 sql="SELECT polars_string_length(description) FROM products",
@@ -110,23 +100,16 @@ class PolarsStringLengthFunction(ScalarFunction):
 
     column = Arg[str](0, doc="Column name to compute length of")
 
-    def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+    def compute_polars(self, df: pl.DataFrame) -> pl.Series:
         """Compute string lengths using Polars."""
-        # Zero-copy conversion to Polars DataFrame
-        df = pl.from_arrow(batch)
-
-        # Polars string length operation
-        result_df = df.select(pl.col(self.column).str.len_chars().alias("result"))
-
-        # Zero-copy conversion back to Arrow
-        return result_df.to_arrow()["result"].combine_chunks()
+        return df[self.column].str.len_chars()
 
 
-class PolarsNormalizeFunction(ScalarFunction):
+class PolarsNormalizeFunction(PolarsScalarFunction):
     """Z-score normalization using Polars.
 
     Computes (value - mean) / std for a numeric column, demonstrating
-    Polars aggregation and arithmetic operations with Arrow integration.
+    Polars aggregation and arithmetic operations with PolarsScalarFunction.
 
     Example:
         Input:  value=[10, 20, 30, 40, 50]
@@ -140,7 +123,7 @@ class PolarsNormalizeFunction(ScalarFunction):
 
         name = "polars_normalize"
         description = "Z-score normalization using Polars"
-        output_type = pa.float64()
+        output_type = pl.Float64
         examples = [
             FunctionExample(
                 sql="SELECT polars_normalize(score) FROM exam_results",
@@ -150,17 +133,7 @@ class PolarsNormalizeFunction(ScalarFunction):
 
     column = Arg[str](0, doc="Column name to normalize")
 
-    def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+    def compute_polars(self, df: pl.DataFrame) -> pl.Series:
         """Normalize the column using z-score (value - mean) / std."""
-        # Zero-copy conversion to Polars DataFrame
-        df = pl.from_arrow(batch)
-
-        col = pl.col(self.column)
-
-        # Z-score normalization: (x - mean) / std
-        result_df = df.select(
-            ((col - col.mean()) / col.std()).alias("result"),
-        )
-
-        # Zero-copy conversion back to Arrow
-        return result_df.to_arrow()["result"].combine_chunks()
+        col = df[self.column]
+        return (col - col.mean()) / col.std()

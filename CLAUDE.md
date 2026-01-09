@@ -177,6 +177,57 @@ class AddColumns(ScalarFunction):
 - **Single column output**: Output schema has exactly one column named "result"
 - **No finalize phase**: All processing happens in compute()
 
+## Creating a Polars Scalar Function
+
+For scalar functions that use Polars, use `PolarsScalarFunction` which handles
+zero-copy Arrow <-> Polars conversion automatically:
+
+```python
+import polars as pl
+from vgi import PolarsScalarFunction, Arg
+
+class UpperCase(PolarsScalarFunction):
+    """Convert string column to uppercase using Polars."""
+
+    class Meta:
+        output_type = pl.Utf8  # Polars type, not Arrow
+
+    column = Arg[str](0, doc="Column to uppercase")
+
+    def compute_polars(self, df: pl.DataFrame) -> pl.Series:
+        return df[self.column].str.to_uppercase()
+```
+
+### Dynamic Output Type with AnyPolars
+
+Use `AnyPolars` when output type depends on input:
+
+```python
+from vgi import PolarsScalarFunction, Arg, AnyPolars
+import polars as pl
+
+class PreserveType(PolarsScalarFunction):
+    """Double values, preserving input type."""
+
+    class Meta:
+        output_type = AnyPolars
+
+    column = Arg[str](0, doc="Column to double")
+
+    @property
+    def output_polars_type(self) -> pl.DataType:
+        return self.polars_schema[self.column]
+
+    def compute_polars(self, df: pl.DataFrame) -> pl.Series:
+        return df[self.column] * 2
+```
+
+### Key Differences from ScalarFunction:
+- **Meta.output_type**: Use Polars types (`pl.Utf8`, `pl.Int64`) instead of Arrow types
+- **compute_polars()**: Takes `pl.DataFrame`, returns `pl.Series` (not Arrow batch/array)
+- **polars_schema**: Property providing input schema as Polars types
+- **Zero-copy**: Automatic conversion between Arrow and Polars without data copying
+
 ## Creating a Table-In-Out Function (Recommended)
 
 ```python

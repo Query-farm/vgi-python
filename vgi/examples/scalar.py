@@ -12,7 +12,7 @@ UpperCaseFunction           - Converts string column to uppercase
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -28,46 +28,6 @@ __all__ = [
     "SumColumnsFunction",
     "UpperCaseFunction",
 ]
-
-
-class DoubleColumnFunction(ScalarFunction):
-    """Doubles values in a numeric column.
-
-    Example:
-        Input:  x=[1, 2, 3]
-        Args:   column="x"
-        Output: result=[2, 4, 6]
-
-    """
-
-    class Meta:
-        """Function metadata."""
-
-        name = "double_column"
-        description = "Doubles values in a numeric column"
-        output_type = AnyArrow  # Output type depends on input column type
-        examples = [
-            FunctionExample(
-                sql="SELECT double_column(price) FROM products",
-                description="Double the price column",
-            ),
-            FunctionExample(
-                sql="SELECT double_column(quantity) FROM inventory",
-                description="Double inventory quantities",
-            ),
-        ]
-
-    # Explicit arrow_type demonstrates type specification
-    column = Arg[str](0, doc="Column name to double", arrow_type=pa.utf8())
-
-    @property
-    def output_type(self) -> pa.DataType:
-        """Return the type of the doubled column."""
-        return cast(pa.DataType, self.input_schema.field(self.column).type)
-
-    def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
-        """Double the values in the specified column."""
-        return pc.multiply(batch.column(self.column), 2)  # type: ignore[no-matching-overload]
 
 
 def _is_addable_type(dtype: pa.DataType) -> bool:
@@ -107,6 +67,57 @@ def _promote_for_addition(dtype: pa.DataType) -> pa.DataType:
     if pa.types.is_decimal(dtype):
         return dtype
     raise SchemaValidationError(f"Unsupported numeric type for addition: {dtype}")
+
+
+class DoubleColumnFunction(ScalarFunction):
+    """Doubles values in a numeric column.
+
+    Example:
+        Input:  x=[1, 2, 3]
+        Args:   column="x"
+        Output: result=[2, 4, 6]
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "double_column"
+        description = "Doubles values in a numeric column"
+        output_type = AnyArrow  # Output type depends on input column type
+        examples = [
+            FunctionExample(
+                sql="SELECT double_column(price) FROM products",
+                description="Double the price column",
+            ),
+            FunctionExample(
+                sql="SELECT double_column(quantity) FROM inventory",
+                description="Double inventory quantities",
+            ),
+        ]
+
+    # Explicit arrow_type demonstrates type specification
+    column = Arg[AnyArrow](
+        0,
+        doc="Value to double",
+        type_bound=_is_addable_type,
+    )
+
+    def bind(self) -> None:
+        """Compute output type from input column types."""
+        field1 = self.input_schema.field(self.column.value)
+
+        # Since we're going to be multiplying by 2, promote to a wider type
+        self._output_type = _promote_for_addition(field1.type)
+
+    @property
+    def output_type(self) -> pa.DataType:
+        """Return the type of the doubled column."""
+        return self._output_type
+
+    def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+        """Double the values in the specified column."""
+        return pc.multiply(batch.column(self.column.value), 2)
 
 
 class AddNumericColumnsFunction(ScalarFunction):
@@ -199,7 +210,7 @@ class UpperCaseFunction(ScalarFunction):
             ),
         ]
 
-    column = Arg[str](0, doc="Column name to uppercase")
+    column = Arg[str](0, doc="Value")
 
     # Note: No need to override output_type - default uses Meta.output_type
 

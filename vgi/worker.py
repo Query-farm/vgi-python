@@ -518,6 +518,46 @@ class Worker:
         # Serialize as IPC
         return vgi.ipc_utils.serialize_record_batch(batch, custom_metadata)
 
+    def _write_error_to_stream(
+        self,
+        writer: ipc.RecordBatchStreamWriter,
+        output_schema: pa.Schema,
+        exception: Exception,
+        invocation: Invocation,
+    ) -> None:
+        """Write an exception as an error batch to an open IPC stream.
+
+        This helper is used by processing methods to send errors through their
+        own IPC streams. The batch uses the function's output schema so it's
+        compatible with the already-open stream.
+
+        Args:
+            writer: The open IPC stream writer.
+            output_schema: The function's output schema.
+            exception: The exception that occurred.
+            invocation: The invocation being processed.
+
+        """
+        import vgi.log
+
+        error_message = vgi.log.Message.from_exception(exception)
+
+        # Create zero-row batch with function's output schema
+        empty_batch = pa.RecordBatch.from_arrays(
+            [pa.array([], type=field.type) for field in output_schema],
+            schema=output_schema,
+        )
+
+        # Add error metadata with FINISHED status
+        metadata = error_message.add_to_metadata(invocation)
+        metadata["vgi.status"] = "FINISHED"
+
+        custom_metadata = pa.KeyValueMetadata(
+            {k.encode(): v.encode() for k, v in metadata.items()}
+        )
+
+        writer.write_batch(empty_batch, custom_metadata=custom_metadata)
+
     def _process_scalar_batches(
         self,
         instance: ScalarFunctionGenerator,
@@ -547,62 +587,73 @@ class Worker:
             ipc.new_stream(cast(IOBase, sys.stdout), instance.output_schema) as writer,
             ipc.open_stream(cast(IOBase, sys.stdin)) as data_reader,
         ):
-            # Validate data stream schema matches expected input schema
-            if data_reader.schema != invocation.input_schema:
-                raise SchemaValidationError(
-                    "Data stream schema does not match expected input schema.",
-                    expected=invocation.input_schema,
-                    actual=data_reader.schema,
-                    context="input stream to scalar function",
-                )
+            try:
+                # Validate data stream schema matches expected input schema
+                if data_reader.schema != invocation.input_schema:
+                    raise SchemaValidationError(
+                        "Data stream schema does not match expected input schema.",
+                        expected=invocation.input_schema,
+                        actual=data_reader.schema,
+                        context="input stream to scalar function",
+                    )
 
-            batch_count = 0
-            total_input_rows = 0
-            total_output_rows = 0
-            while True:
-                fn_log.debug("batch_waiting")
+                batch_count = 0
+                total_input_rows = 0
+                total_output_rows = 0
+                while True:
+                    fn_log.debug("batch_waiting")
 
-                try:
-                    batch, metadata = data_reader.read_next_batch_with_custom_metadata()
-                except StopIteration:
-                    fn_log.debug("input_stream_ended")
-                    # Close the generator - no FINALIZE for scalar functions
-                    generator.close()
-                    break
+                    try:
+                        batch, metadata = (
+                            data_reader.read_next_batch_with_custom_metadata()
+                        )
+                    except StopIteration:
+                        fn_log.debug("input_stream_ended")
+                        # Close the generator - no FINALIZE for scalar functions
+                        generator.close()
+                        break
 
-                batch_count += 1
-                total_input_rows += batch.num_rows
-                fn_log.debug(
-                    "batch_received",
-                    batch_index=batch_count,
-                    input_rows=batch.num_rows,
-                )
+                    batch_count += 1
+                    total_input_rows += batch.num_rows
+                    fn_log.debug(
+                        "batch_received",
+                        batch_index=batch_count,
+                        input_rows=batch.num_rows,
+                    )
 
-                protocol_input = ScalarProtocolInput(batch=batch, metadata=metadata)
-                output = generator.send(protocol_input)
+                    protocol_input = ScalarProtocolInput(batch=batch, metadata=metadata)
+                    output = generator.send(protocol_input)
 
-                # Handle log messages (indicated by log_message being set)
-                while output.log_message is not None:
-                    fn_log.debug("log_message_received", output=output)
+                    # Handle log messages (indicated by log_message being set)
+                    while output.log_message is not None:
+                        fn_log.debug("log_message_received", output=output)
+                        assert output.batch is not None
+                        writer.write_batch(
+                            output.batch, custom_metadata=output.metadata(invocation)
+                        )
+                        # Re-send same input to continue
+                        output = generator.send(protocol_input)
+
+                    fn_log.debug("batch_processed", output=output)
                     assert output.batch is not None
+                    output_rows = output.batch.num_rows
+                    total_output_rows += output_rows
                     writer.write_batch(
                         output.batch, custom_metadata=output.metadata(invocation)
                     )
-                    # Re-send same input to continue
-                    output = generator.send(protocol_input)
-
-                fn_log.debug("batch_processed", output=output)
-                assert output.batch is not None
-                output_rows = output.batch.num_rows
-                total_output_rows += output_rows
-                writer.write_batch(
-                    output.batch, custom_metadata=output.metadata(invocation)
+                    fn_log.debug(
+                        "batch_written",
+                        batch_index=batch_count,
+                        output_rows=output_rows,
+                    )
+            except (KeyboardInterrupt, SystemExit):
+                raise  # Let these propagate normally
+            except Exception as e:
+                fn_log.exception("processing_failed", error=str(e))
+                self._write_error_to_stream(
+                    writer, instance.output_schema, e, invocation
                 )
-                fn_log.debug(
-                    "batch_written",
-                    batch_index=batch_count,
-                    output_rows=output_rows,
-                )
+                raise  # Re-raise so worker exits with error state
         return WorkerStats(
             batch_count=batch_count,
             total_input_rows=total_input_rows,
@@ -638,55 +689,68 @@ class Worker:
             ipc.new_stream(cast(IOBase, sys.stdout), instance.output_schema) as writer,
             ipc.open_stream(cast(IOBase, sys.stdin)) as data_reader,
         ):
-            # Validate data stream schema matches expected input schema
-            if data_reader.schema != invocation.input_schema:
-                raise SchemaValidationError(
-                    "Data stream schema does not match expected input schema.",
-                    expected=invocation.input_schema,
-                    actual=data_reader.schema,
-                    context="input stream to table-in-out function",
-                )
+            try:
+                # Validate data stream schema matches expected input schema
+                if data_reader.schema != invocation.input_schema:
+                    raise SchemaValidationError(
+                        "Data stream schema does not match expected input schema.",
+                        expected=invocation.input_schema,
+                        actual=data_reader.schema,
+                        context="input stream to table-in-out function",
+                    )
 
-            batch_count = 0
-            total_input_rows = 0
-            total_output_rows = 0
-            while True:
-                fn_log.debug("batch_waiting")
+                batch_count = 0
+                total_input_rows = 0
+                total_output_rows = 0
+                while True:
+                    fn_log.debug("batch_waiting")
 
-                # The client drives the protocol: it handles HAVE_MORE_OUTPUT by
-                # re-sending batches, and sends FINALIZE when done.
-                try:
-                    batch, metadata = data_reader.read_next_batch_with_custom_metadata()
-                except StopIteration:
-                    fn_log.debug("input_stream_ended")
-                    # Close the generator to signal that no more input will arrive.
-                    # This allows functions to perform cleanup (e.g., saving state)
-                    # by catching GeneratorExit.
-                    generator.close()
-                    break
+                    # The client drives the protocol: it handles HAVE_MORE_OUTPUT by
+                    # re-sending batches, and sends FINALIZE when done.
+                    try:
+                        batch, metadata = (
+                            data_reader.read_next_batch_with_custom_metadata()
+                        )
+                    except StopIteration:
+                        fn_log.debug("input_stream_ended")
+                        # Close the generator to signal that no more input will arrive.
+                        # This allows functions to perform cleanup (e.g., saving state)
+                        # by catching GeneratorExit.
+                        generator.close()
+                        break
 
-                batch_count += 1
-                total_input_rows += batch.num_rows
-                fn_log.debug(
-                    "batch_received",
-                    batch_index=batch_count,
-                    input_rows=batch.num_rows,
-                )
+                    batch_count += 1
+                    total_input_rows += batch.num_rows
+                    fn_log.debug(
+                        "batch_received",
+                        batch_index=batch_count,
+                        input_rows=batch.num_rows,
+                    )
 
-                output = generator.send(ProtocolInput(batch=batch, metadata=metadata))
-                fn_log.debug("batch_processed", output=output)
-                # After initial priming, batch is always set by the protocol
-                assert output.batch is not None
-                output_rows = output.batch.num_rows
-                total_output_rows += output_rows
-                writer.write_batch(
-                    output.batch, custom_metadata=output.metadata(invocation)
+                    output = generator.send(
+                        ProtocolInput(batch=batch, metadata=metadata)
+                    )
+                    fn_log.debug("batch_processed", output=output)
+                    # After initial priming, batch is always set by the protocol
+                    assert output.batch is not None
+                    output_rows = output.batch.num_rows
+                    total_output_rows += output_rows
+                    writer.write_batch(
+                        output.batch, custom_metadata=output.metadata(invocation)
+                    )
+                    fn_log.debug(
+                        "batch_written",
+                        batch_index=batch_count,
+                        output_rows=output_rows,
+                    )
+            except (KeyboardInterrupt, SystemExit):
+                raise  # Let these propagate normally
+            except Exception as e:
+                fn_log.exception("processing_failed", error=str(e))
+                self._write_error_to_stream(
+                    writer, instance.output_schema, e, invocation
                 )
-                fn_log.debug(
-                    "batch_written",
-                    batch_index=batch_count,
-                    output_rows=output_rows,
-                )
+                raise  # Re-raise so worker exits with error state
         return WorkerStats(
             batch_count=batch_count,
             total_input_rows=total_input_rows,
@@ -711,24 +775,33 @@ class Worker:
         generator = instance.run()
 
         with ipc.new_stream(cast(IOBase, sys.stdout), instance.output_schema) as writer:
-            batch_count = 0
-            total_output_rows = 0
+            try:
+                batch_count = 0
+                total_output_rows = 0
 
-            for output in generator:
-                batch_count += 1
-                # Table function generator always produces a batch
-                assert output.batch is not None
-                output_rows = output.batch.num_rows
-                total_output_rows += output_rows
+                for output in generator:
+                    batch_count += 1
+                    # Table function generator always produces a batch
+                    assert output.batch is not None
+                    output_rows = output.batch.num_rows
+                    total_output_rows += output_rows
 
-                writer.write_batch(
-                    output.batch, custom_metadata=output.metadata(invocation)
+                    writer.write_batch(
+                        output.batch, custom_metadata=output.metadata(invocation)
+                    )
+                    fn_log.debug(
+                        "batch_written",
+                        batch_index=batch_count,
+                        output_rows=output_rows,
+                    )
+            except (KeyboardInterrupt, SystemExit):
+                raise  # Let these propagate normally
+            except Exception as e:
+                fn_log.exception("processing_failed", error=str(e))
+                self._write_error_to_stream(
+                    writer, instance.output_schema, e, invocation
                 )
-                fn_log.debug(
-                    "batch_written",
-                    batch_index=batch_count,
-                    output_rows=output_rows,
-                )
+                raise  # Re-raise so worker exits with error state
 
         return WorkerStats(
             batch_count=batch_count,
@@ -878,7 +951,15 @@ class Worker:
 
         # Dispatch catalog invocations separately (simplified protocol)
         if invocation.function_type == InvocationType.CATALOG:
-            self._handle_catalog_invocation(invocation, fn_log)
+            try:
+                self._handle_catalog_invocation(invocation, fn_log)
+            except (KeyboardInterrupt, SystemExit):
+                raise  # Let these propagate normally
+            except Exception as e:
+                fn_log.exception("catalog_invocation_failed", error=str(e))
+                error_batch_bytes = self._create_bind_error_batch(e, invocation)
+                sys.stdout.write(error_batch_bytes)
+                sys.stdout.flush()
             return
 
         # Wrap bind phase in try-except to catch and report bind-time errors.
@@ -940,19 +1021,29 @@ class Worker:
         if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):
             raise OSError("Failed to write bind result record batch")
 
-        if invocation.global_execution_identifier is None:
-            # Primary worker: perform init and store in storage
-            fn_log.info("processing_init")
-            init_result = instance.initialize_global_state(self._read_init_input())
-            init_result_bytes = init_result.serialize()
-            if sys.stdout.write(init_result_bytes) != len(init_result_bytes):
-                raise OSError("Failed to write init result record batch")
-            fn_log.info("processing_init_complete", init_result=init_result)
-            invocation = invocation.with_global_execution_identifier(init_result)
-        else:
-            # Secondary worker: retrieve shared init from storage
-            fn_log.info("retrieving_init")
-            instance.load_global_state(invocation.global_execution_identifier)
+        # Init phase: initialize or load global state
+        try:
+            if invocation.global_execution_identifier is None:
+                # Primary worker: perform init and store in storage
+                fn_log.info("processing_init")
+                init_result = instance.initialize_global_state(self._read_init_input())
+                init_result_bytes = init_result.serialize()
+                if sys.stdout.write(init_result_bytes) != len(init_result_bytes):
+                    raise OSError("Failed to write init result record batch")
+                fn_log.info("processing_init_complete", init_result=init_result)
+                invocation = invocation.with_global_execution_identifier(init_result)
+            else:
+                # Secondary worker: retrieve shared init from storage
+                fn_log.info("retrieving_init")
+                instance.load_global_state(invocation.global_execution_identifier)
+        except (KeyboardInterrupt, SystemExit):
+            raise  # Let these propagate normally
+        except Exception as e:
+            fn_log.exception("init_failed", error=str(e))
+            error_batch_bytes = self._create_bind_error_batch(e, invocation)
+            sys.stdout.write(error_batch_bytes)
+            sys.stdout.flush()
+            return  # Exit cleanly after sending error
 
         # Dispatch to appropriate processing method based on function type.
         # ScalarFunctionGenerator processes input batches to single-column output.
