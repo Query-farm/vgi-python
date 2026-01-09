@@ -168,6 +168,57 @@ class OutputWriter:
             self._output_file_handle.close()
 
 
+_CLI_EPILOG = """
+\b
+EXAMPLES:
+  # Table function (generates data, no input)
+  vgi-client --function sequence --args '[10]'
+\b
+  # Table-in-out function (transforms input)
+  vgi-client --input data.parquet --function echo
+\b
+  # Scalar function (per-row, single output column)
+  vgi-client --input in.parquet --function upper_case -t scalar
+\b
+  # Output to file with format
+  vgi-client --function sequence --args '[5]' -o out.json
+  vgi-client --function sequence --args '[5]' -o out.parquet -f parquet
+  vgi-client --function sequence --args '[5]' -o - -f arrow-ipc
+\b
+  # Catalog operations
+  vgi-client catalog list -s vgi-example-worker
+  vgi-client catalog attach mydb -s vgi-example-worker
+
+\b
+FUNCTION TYPES:
+  table         No input, generates data (sequence, range)
+  table-in-out  Transforms input (echo, filter) - default with --input
+  scalar        Per-row transform, single column output (upper_case)
+  auto          Default: table-in-out if --input, else table
+
+\b
+ARGUMENT FORMAT (--args as JSON array):
+  '[]'              No arguments
+  '[10]'            Single integer
+  '["name"]'        Single string (column name)
+  '[0, 100, 5]'     Multiple integers
+  '[true, 3.14]'    Mixed types
+
+\b
+OUTPUT FORMATS (-f/--format):
+  json       JSON Lines, one object per row (default)
+  csv        CSV with header row
+  parquet    Apache Parquet columnar format
+  arrow-ipc  Arrow IPC stream (for debugging/piping)
+
+\b
+ENVIRONMENT VARIABLES:
+  VGI_IPC_DEBUG=1   Trace IPC read/write (protocol debug)
+  VGI_IPC_STATS=1   Log IPC statistics per invocation
+  VGI_QUIET=1       Suppress worker startup logging
+"""
+
+
 def _create_cli() -> Any:
     """Create the CLI command group. Separated for testability."""
     import click
@@ -175,73 +226,84 @@ def _create_cli() -> Any:
 
     from vgi.client.cli_catalog import catalog
 
-    @click.group(invoke_without_command=True)
+    @click.group(invoke_without_command=True, epilog=_CLI_EPILOG)
     @click.option(
         "--input",
         "input_file",
         required=False,
-        # This validates the that file exists.
         type=click.Path(exists=True),
-        help="Path to input parquet file (omit for table functions without input)",
+        help=(
+            "Input parquet file path. Required for table-in-out and scalar functions. "
+            "Omit for table functions (generators)."
+        ),
     )
     @click.option(
         "--output",
+        "-o",
         "output_file",
         type=str,
-        help="Path to output file (use - for stdout)",
+        help="Output file path. Use '-' for stdout. If omitted, outputs to log.",
     )
     @click.option(
         "--format",
+        "-f",
         "output_format",
         type=click.Choice(["json", "csv", "parquet", "arrow-ipc"]),
         default="json",
-        help=(
-            "Output format (default: json). Use 'arrow-ipc' for Apache Arrow IPC "
-            "streaming format, which is useful for debugging or piping to other "
-            "Arrow-aware tools."
-        ),
+        help="Output format: json (default), csv, parquet, or arrow-ipc.",
     )
     @click.option(
         "--function",
         "function_name",
         required=False,
         type=str,
-        help="Name of the function to run (e.g., echo, sum_all_columns, repeat_inputs)",
+        help="Function name to invoke (e.g., sequence, echo, upper_case).",
     )
     @click.option(
         "--args",
         "arguments",
         default="[]",
         type=str,
-        help="JSON array of arguments to pass to the function (default: [])",
+        help="JSON array of positional arguments. Example: '[10]' or '[\"col\"]'.",
     )
     @click.option(
         "--server",
+        "-s",
         "server_path",
         default="vgi-example-worker",
         type=str,
-        help="Path to the VGI worker",
+        help="VGI worker command or path. Default: vgi-example-worker.",
+    )
+    @click.option(
+        "--type",
+        "-t",
+        "function_type",
+        type=click.Choice(["auto", "table", "table-in-out", "scalar"]),
+        default="auto",
+        help=(
+            "Function type: auto (default), table, table-in-out, or scalar. "
+            "'auto' uses table-in-out if --input provided, otherwise table."
+        ),
     )
     @click.option(
         "--worker-stderr",
-        "worker_stderr",
         is_flag=True,
         default=False,
-        help="Pass worker stderr through to CLI stderr",
-    )
-    @click.option(
-        "--projection-id",
-        "projection_ids",
-        multiple=True,
-        type=int,
-        help="Projection column ID (can be specified multiple times)",
+        help="Pass worker stderr through to CLI stderr (for debugging).",
     )
     @click.option(
         "--max-workers",
         "max_workers",
         type=int,
         default=None,
-        help="Maximum number of worker processes (clamps function's max_processes)",
+        help="Max worker processes. Clamps function's max_processes setting.",
+    )
+    @click.option(
+        "--projection-id",
+        "projection_ids",
+        multiple=True,
+        type=int,
+        help="Column ID for projection pushdown. Can be repeated.",
     )
     @click.option(
         "--table-input-position",
@@ -249,10 +311,8 @@ def _create_cli() -> Any:
         type=int,
         default=None,
         help=(
-            "Position in positional arguments where table input should be inserted "
-            "(0-indexed). If not specified, table input is not included in positional "
-            "args. E.g., --args '[\"prefix\"]' --table-input-position 1 inserts "
-            'table input at position 1, resulting in ("prefix", TABLE_INPUT).'
+            "Position (0-indexed) to insert table input in positional args. "
+            "Example: --args '[\"prefix\"]' --table-input-position 1"
         ),
     )
     @click.option(
@@ -260,30 +320,14 @@ def _create_cli() -> Any:
         "attach_id",
         type=str,
         default=None,
-        help=(
-            "Unique identifier for the DuckDB database attachment as a hex string. "
-            "Used to trace calls back to a specific attachment."
-        ),
-    )
-    @click.option(
-        "--type",
-        "function_type",
-        type=click.Choice(["auto", "table", "table-in-out", "scalar"]),
-        default="auto",
-        help=(
-            "Function type. 'auto' (default) uses table-in-out if --input is provided, "
-            "otherwise table. Use 'scalar' for scalar functions."
-        ),
+        help="DuckDB attachment ID (hex string) for catalog context.",
     )
     @click.option(
         "--transaction-id",
         "transaction_id",
         type=str,
         default=None,
-        help=(
-            "Unique identifier for the DuckDB transaction as a hex string. "
-            "Allows functions to participate in transactional semantics."
-        ),
+        help="DuckDB transaction ID (hex string) for transactional operations.",
     )
     @click.pass_context
     def cli(
@@ -302,11 +346,10 @@ def _create_cli() -> Any:
         function_type: str,
         transaction_id: str | None,
     ) -> None:
-        """VGI client for function invocation and catalog management.
+        """VGI client - invoke functions and manage catalogs.
 
-        When called without a subcommand and with --function, invokes a VGI function.
-        Use subcommands (catalog, schema, table, view, transaction) for catalog ops.
-
+        QUICK START: Use --function to invoke a VGI function, or use the
+        'catalog' subcommand for catalog operations. See examples below.
         """
         # If a subcommand is being invoked, skip function invocation
         if ctx.invoked_subcommand is not None:
