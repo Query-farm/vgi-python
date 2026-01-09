@@ -102,7 +102,7 @@ from vgi.function import (
     OutputSpec,
 )
 from vgi.invocation import Invocation, InvocationType
-from vgi.ipc_utils import read_single_record_batch
+from vgi.ipc_utils import IPCError, read_single_record_batch
 from vgi.scalar_function import ProtocolInput as ScalarProtocolInput
 from vgi.scalar_function import ScalarFunctionGenerator
 from vgi.table_function import TableFunctionGenerator
@@ -943,132 +943,143 @@ class Worker:
         sys.stdin = os.fdopen(0, "rb")
         sys.stdout = os.fdopen(1, "wb", buffering=0)
 
-        invocation = self._read_invocation()
-
-        fn_log = self.log.bind(function=invocation.function_name)
-        fn_log.info("init_received", arguments=invocation.arguments)
-        fn_log.debug("input_schema_parsed", schema=str(invocation.input_schema))
-
-        # Dispatch catalog invocations separately (simplified protocol)
-        if invocation.function_type == InvocationType.CATALOG:
+        while True:
+            self.log.info("waiting_for_invocation")
             try:
-                self._handle_catalog_invocation(invocation, fn_log)
+                invocation = self._read_invocation()
+            except IPCError:
+                break
+
+            fn_log = self.log.bind(function=invocation.function_name)
+            fn_log.info("init_received", arguments=invocation.arguments)
+            fn_log.debug("input_schema_parsed", schema=str(invocation.input_schema))
+
+            # Dispatch catalog invocations separately (simplified protocol)
+            if invocation.function_type == InvocationType.CATALOG:
+                try:
+                    self._handle_catalog_invocation(invocation, fn_log)
+                except (KeyboardInterrupt, SystemExit):
+                    raise  # Let these propagate normally
+                except Exception as e:
+                    fn_log.exception("catalog_invocation_failed", error=str(e))
+                    error_batch_bytes = self._create_bind_error_batch(e, invocation)
+                    sys.stdout.write(error_batch_bytes)
+                    sys.stdout.flush()
+                return
+
+            # Wrap bind phase in try-except to catch and report bind-time errors.
+            # This covers: unknown function, argument matching, settings validation,
+            # function instantiation, and output_schema generation.
+            try:
+                registry = self._build_registry()
+                if invocation.function_name not in registry:
+                    available = sorted(registry.keys())
+                    suggestions = self._suggest_similar_names(
+                        invocation.function_name, available
+                    )
+                    msg_lines = [
+                        f"Unknown function: '{invocation.function_name}'",
+                        "",
+                    ]
+                    if suggestions:
+                        msg_lines.append("  Did you mean:")
+                        for suggestion in suggestions[:3]:
+                            msg_lines.append(f"    - {suggestion}")
+                        msg_lines.append("")
+                    msg_lines.append(f"  Available functions: {available}")
+                    raise ValueError("\n".join(msg_lines))
+
+                candidates = registry[invocation.function_name]
+                func_cls = self._match_function(invocation, candidates)
+
+                # Validate required settings before instantiation
+                self._validate_required_settings(func_cls, invocation)
+
+                # Instantiate the function
+                instance = func_cls(invocation=invocation, logger=fn_log)
+
+                # Determine active features from client features
+                # Worker can define supported features; active = intersection
+                worker_features: frozenset[str] = (
+                    frozenset()
+                )  # No features supported yet
+                active_features = invocation.client_features & worker_features
+                fn_log.debug(
+                    "features_negotiated",
+                    client_features=invocation.client_features,
+                    active_features=active_features,
+                )
+
+                bind_result_bytes = OutputSpec(
+                    output_schema=instance.output_schema,
+                    max_processes=instance.max_processes,
+                    invocation_id=instance.create_invocation_id(),
+                    active_features=active_features,
+                ).serialize()
             except (KeyboardInterrupt, SystemExit):
                 raise  # Let these propagate normally
             except Exception as e:
-                fn_log.exception("catalog_invocation_failed", error=str(e))
+                fn_log.exception("bind_failed", error=str(e))
                 error_batch_bytes = self._create_bind_error_batch(e, invocation)
                 sys.stdout.write(error_batch_bytes)
                 sys.stdout.flush()
-            return
+                return  # Exit cleanly after sending error
 
-        # Wrap bind phase in try-except to catch and report bind-time errors.
-        # This covers: unknown function, argument matching, settings validation,
-        # function instantiation, and output_schema generation.
-        try:
-            registry = self._build_registry()
-            if invocation.function_name not in registry:
-                available = sorted(registry.keys())
-                suggestions = self._suggest_similar_names(
-                    invocation.function_name, available
-                )
-                msg_lines = [
-                    f"Unknown function: '{invocation.function_name}'",
-                    "",
-                ]
-                if suggestions:
-                    msg_lines.append("  Did you mean:")
-                    for suggestion in suggestions[:3]:
-                        msg_lines.append(f"    - {suggestion}")
-                    msg_lines.append("")
-                msg_lines.append(f"  Available functions: {available}")
-                raise ValueError("\n".join(msg_lines))
+            if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):
+                raise OSError("Failed to write bind result record batch")
 
-            candidates = registry[invocation.function_name]
-            func_cls = self._match_function(invocation, candidates)
+            # Init phase: initialize or load global state
+            try:
+                if invocation.global_execution_identifier is None:
+                    # Primary worker: perform init and store in storage
+                    fn_log.info("processing_init")
+                    init_result = instance.initialize_global_state(
+                        self._read_init_input()
+                    )
+                    init_result_bytes = init_result.serialize()
+                    if sys.stdout.write(init_result_bytes) != len(init_result_bytes):
+                        raise OSError("Failed to write init result record batch")
+                    fn_log.info("processing_init_complete", init_result=init_result)
+                    invocation = invocation.with_global_execution_identifier(
+                        init_result
+                    )
+                else:
+                    # Secondary worker: retrieve shared init from storage
+                    fn_log.info("retrieving_init")
+                    instance.load_global_state(invocation.global_execution_identifier)
+            except (KeyboardInterrupt, SystemExit):
+                raise  # Let these propagate normally
+            except Exception as e:
+                fn_log.exception("init_failed", error=str(e))
+                error_batch_bytes = self._create_bind_error_batch(e, invocation)
+                sys.stdout.write(error_batch_bytes)
+                sys.stdout.flush()
+                return  # Exit cleanly after sending error
 
-            # Validate required settings before instantiation
-            self._validate_required_settings(func_cls, invocation)
-
-            # Instantiate the function
-            instance = func_cls(invocation=invocation, logger=fn_log)
-
-            # Determine active features from client features
-            # Worker can define supported features; active = intersection
-            worker_features: frozenset[str] = frozenset()  # No features supported yet
-            active_features = invocation.client_features & worker_features
-            fn_log.debug(
-                "features_negotiated",
-                client_features=invocation.client_features,
-                active_features=active_features,
-            )
-
-            bind_result_bytes = OutputSpec(
-                output_schema=instance.output_schema,
-                max_processes=instance.max_processes,
-                invocation_id=instance.create_invocation_id(),
-                active_features=active_features,
-            ).serialize()
-        except (KeyboardInterrupt, SystemExit):
-            raise  # Let these propagate normally
-        except Exception as e:
-            fn_log.exception("bind_failed", error=str(e))
-            error_batch_bytes = self._create_bind_error_batch(e, invocation)
-            sys.stdout.write(error_batch_bytes)
-            sys.stdout.flush()
-            return  # Exit cleanly after sending error
-
-        if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):
-            raise OSError("Failed to write bind result record batch")
-
-        # Init phase: initialize or load global state
-        try:
-            if invocation.global_execution_identifier is None:
-                # Primary worker: perform init and store in storage
-                fn_log.info("processing_init")
-                init_result = instance.initialize_global_state(self._read_init_input())
-                init_result_bytes = init_result.serialize()
-                if sys.stdout.write(init_result_bytes) != len(init_result_bytes):
-                    raise OSError("Failed to write init result record batch")
-                fn_log.info("processing_init_complete", init_result=init_result)
-                invocation = invocation.with_global_execution_identifier(init_result)
+            # Dispatch to appropriate processing method based on function type.
+            # ScalarFunctionGenerator processes input batches to single-column output.
+            # TableInOutGenerator reads input batches and produces output.
+            # TableFunctionGenerator generates output without input batches.
+            # Note: Check ScalarFunctionGenerator first since it doesn't inherit from
+            # TableInOutGenerator, then TableInOutGenerator.
+            if isinstance(instance, ScalarFunctionGenerator):
+                stats = self._process_scalar_batches(instance, invocation, fn_log)
+            elif isinstance(instance, TableInOutGenerator):
+                stats = self._process_batches(instance, invocation, fn_log)
+            elif isinstance(instance, TableFunctionGenerator):
+                stats = self._generate_batches(instance, invocation, fn_log)
             else:
-                # Secondary worker: retrieve shared init from storage
-                fn_log.info("retrieving_init")
-                instance.load_global_state(invocation.global_execution_identifier)
-        except (KeyboardInterrupt, SystemExit):
-            raise  # Let these propagate normally
-        except Exception as e:
-            fn_log.exception("init_failed", error=str(e))
-            error_batch_bytes = self._create_bind_error_batch(e, invocation)
-            sys.stdout.write(error_batch_bytes)
-            sys.stdout.flush()
-            return  # Exit cleanly after sending error
+                raise TypeError(
+                    f"Unsupported function type: {type(instance).__name__}. "
+                    f"Functions must inherit from ScalarFunctionGenerator (for "
+                    f"scalar functions), TableInOutGenerator (for functions "
+                    f"that process input batches), or TableFunctionGenerator (for "
+                    f"functions that generate output without input). "
+                    f"See vgi.scalar_function, vgi.table_in_out_function, and "
+                    f"vgi.table_function modules."
+                )
 
-        # Dispatch to appropriate processing method based on function type.
-        # ScalarFunctionGenerator processes input batches to single-column output.
-        # TableInOutGenerator reads input batches and produces output.
-        # TableFunctionGenerator generates output without input batches.
-        # Note: Check ScalarFunctionGenerator first since it doesn't inherit from
-        # TableInOutGenerator, then TableInOutGenerator.
-        if isinstance(instance, ScalarFunctionGenerator):
-            stats = self._process_scalar_batches(instance, invocation, fn_log)
-        elif isinstance(instance, TableInOutGenerator):
-            stats = self._process_batches(instance, invocation, fn_log)
-        elif isinstance(instance, TableFunctionGenerator):
-            stats = self._generate_batches(instance, invocation, fn_log)
-        else:
-            raise TypeError(
-                f"Unsupported function type: {type(instance).__name__}. "
-                f"Functions must inherit from ScalarFunctionGenerator (for "
-                f"scalar functions), TableInOutGenerator (for functions "
-                f"that process input batches), or TableFunctionGenerator (for "
-                f"functions that generate output without input). "
-                f"See vgi.scalar_function, vgi.table_in_out_function, and "
-                f"vgi.table_function modules."
+            fn_log.info(
+                "worker_call_complete",
+                stats=stats,
             )
-
-        fn_log.info(
-            "worker_complete",
-            stats=stats,
-        )

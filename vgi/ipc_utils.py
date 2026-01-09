@@ -188,29 +188,42 @@ def read_single_record_batch(
         IPCError: If more than a single batch is found, or no batches are found.
 
     """
-    with ipc.open_stream(stream) as reader:
-        try:
-            batch, custom_metadata = reader.read_next_batch_with_custom_metadata()
-        except StopIteration:
-            raise IPCError(f"No record batch found in {context} stream") from None
+    try:
+        with ipc.open_stream(stream) as reader:
+            try:
+                batch, custom_metadata = reader.read_next_batch_with_custom_metadata()
+            except StopIteration:
+                if _IPC_DEBUG:
+                    _get_ipc_log().error(
+                        "ipc_read: No record batch found in stream",
+                        context=context,
+                    )
+                raise IPCError(f"No record batch found in {context} stream") from None
 
-        try:
-            reader.read_next_batch()
-        except StopIteration:
+            try:
+                reader.read_next_batch()
+            except StopIteration:
+                if _IPC_DEBUG:
+                    _get_ipc_log().debug(
+                        "ipc_read",
+                        context=context,
+                        num_rows=batch.num_rows,
+                        schema=_schema_to_dict(batch.schema),
+                        metadata=_metadata_to_dict(custom_metadata),
+                    )
+                return batch, custom_metadata
+
             if _IPC_DEBUG:
-                _get_ipc_log().debug(
-                    "ipc_read",
+                _get_ipc_log().error(
+                    "ipc_read: Multiple batches found in stream",
                     context=context,
-                    num_rows=batch.num_rows,
-                    schema=_schema_to_dict(batch.schema),
-                    metadata=_metadata_to_dict(custom_metadata),
                 )
-            return batch, custom_metadata
-
-        raise IPCError(
-            f"Expected single record batch in {context} stream, "
-            f"but found multiple batches"
-        )
+            raise IPCError(
+                f"Expected single record batch in {context} stream, "
+                f"but found multiple batches"
+            )
+    except Exception as e:
+        raise IPCError(f"Error reading record batch from {context} stream: {e}") from e
 
 
 def validate_single_row_batch(

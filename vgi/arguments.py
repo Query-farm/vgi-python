@@ -128,29 +128,52 @@ class AnyArrowValue:
 
 
 class AnyArrow:
-    """Sentinel type for arguments accepting any Arrow type.
+    """Sentinel type for arguments accepting multiple Arrow types.
 
     Use this as the type parameter for Arg when an argument should accept
-    any valid Arrow scalar type without enforcing a specific type. When accessed,
-    returns an AnyArrowValue containing the value plus metadata (position and name).
+    multiple valid Arrow types, validated via the ``type_bound`` parameter.
+    When accessed, returns an AnyArrowValue containing the value plus metadata
+    (position and name).
 
-    This is useful for functions that can operate on any data type, or when
-    the type is determined at runtime based on the input schema.
+    Choosing Between Specific Types and AnyArrow
+    --------------------------------------------
+    - **Single required type**: Use a specific type like ``Arg[str]``, ``Arg[int]``,
+      or ``Arg[float]``. The argument will only accept that exact type.
 
-    Example:
-        class FlexibleFunction(TableInOutFunction):
-            # Accept any Arrow type for these parameters
-            default_value = Arg[AnyArrow](0, doc="Default value (any type)")
-            threshold = Arg[AnyArrow](1, doc="Threshold for comparison")
+    - **Multiple valid types**: Use ``Arg[AnyArrow]`` with ``type_bound`` to specify
+      which types are acceptable. For example, numeric operations that work on
+      integers, floats, and decimals should use AnyArrow with a type_bound predicate.
 
-        # SQL: SELECT * FROM flexible_function(42, 'text')
-        # SQL: SELECT * FROM flexible_function(3.14, true)
+    The ``type_bound`` parameter is ONLY meaningful for ``Arg[AnyArrow]``. Using it
+    with other types will emit a warning.
 
-        def transform(self, batch):
-            # Access the value
-            val = self.default_value.value
-            # Or look up field by position
-            field = self.input_schema.field(self.default_value.position)
+    Examples:
+        # Single type: function only works with strings
+        class UpperCaseFunction(ScalarFunction):
+            column = Arg[str](0, doc="String column to uppercase")
+
+        # Multiple types: function works with any numeric type
+        class DoubleFunction(ScalarFunction):
+            column = Arg[AnyArrow](
+                0,
+                doc="Numeric column to double",
+                type_bound=[pa.types.is_integer, pa.types.is_floating],
+            )
+
+            def bind(self) -> None:
+                # Access column metadata for dynamic output type
+                field = self.input_schema.field(self.column.value)
+                self._output_type = field.type
+
+        # Any type: function works with all types
+        class IdentityFunction(ScalarFunction):
+            column = Arg[AnyArrow](0, doc="Column to pass through")
+
+    Accessing Values:
+        When using AnyArrow, access the value via the ``.value`` attribute::
+
+            val = self.column.value  # The column name as a string
+            field = self.input_schema.field(self.column.value)
 
     Note:
         Unlike TableInput, AnyArrow arguments have actual Arrow values -

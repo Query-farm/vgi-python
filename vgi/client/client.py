@@ -945,12 +945,14 @@ class Client(CatalogClientMixin):
             log.error(
                 "worker_exited_with_error",
                 worker_index=worker.worker_index,
+                pid=worker.proc.pid,
                 returncode=returncode,
             )
         else:
             log.debug(
                 "worker_exited",
                 worker_index=worker.worker_index,
+                pid=worker.proc.pid,
                 returncode=returncode,
             )
         return returncode
@@ -1011,6 +1013,10 @@ class Client(CatalogClientMixin):
                         "secondary_worker_data_writer_closed",
                         worker_index=worker.worker_index,
                     )
+                # Also close stdin to send EOF (data_writer.close() only closes
+                # the IPC stream, not the underlying pipe)
+                if worker.proc.stdin:
+                    worker.proc.stdin.close()
         else:
             # Close stdin for table functions
             for worker in secondary_workers:
@@ -2148,10 +2154,14 @@ class Client(CatalogClientMixin):
         self._join_threads(threads)
         log.debug("all_scalar_worker_threads_complete")
 
-        # Close data writers to signal EOF to workers
+        # Close data writers and stdin to signal EOF to workers
         for worker in all_workers:
             if worker.data_writer is not None:
                 worker.data_writer.close()
+            # Also close stdin to send EOF (data_writer.close() only closes
+            # the IPC stream, not the underlying pipe)
+            if worker.proc.stdin:
+                worker.proc.stdin.close()
 
         # Wait for secondary workers to exit
         secondary_workers = all_workers[1:]
