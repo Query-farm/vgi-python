@@ -442,6 +442,37 @@ class TestCLIOutputFormats:
         table = pq.read_table(str(output_file))
         assert table.num_rows == 3
 
+    def test_output_format_arrow_ipc(
+        self, example_worker: str, input_parquet: Path, tmp_path: Path
+    ) -> None:
+        """Arrow IPC streaming output format."""
+        from pyarrow import ipc
+
+        output_file = tmp_path / "output.arrow"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--input",
+                str(input_parquet),
+                "--output",
+                str(output_file),
+                "--format",
+                "arrow-ipc",
+                "--function",
+                "echo",
+                "--server",
+                example_worker,
+            ],
+        )
+        assert result.exit_code == 0
+        # Verify it's valid Arrow IPC
+        with open(output_file, "rb") as f:
+            reader = ipc.open_stream(f)
+            table = reader.read_all()
+        assert table.num_rows == 3
+        assert "id" in table.schema.names
+
 
 class TestCLIOptions:
     """Tests for various CLI options."""

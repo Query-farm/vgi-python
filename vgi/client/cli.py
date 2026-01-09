@@ -21,6 +21,10 @@ Usage:
     vgi-client --input data.parquet --function transform --args '["prefix"]' \
         --table-input-position 1
 
+    # Output in Arrow IPC format (useful for debugging):
+    vgi-client --function sequence --args '[10]' --format arrow-ipc -o out.arrow
+    vgi-client --function echo --input data.parquet --format arrow-ipc -o -
+
     # Catalog operations (all nested under 'catalog'):
     vgi-client catalog list --server vgi-example-worker
     vgi-client catalog attach example --server vgi-example-worker
@@ -37,6 +41,7 @@ import sys
 from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
+from pyarrow import ipc
 
 from vgi.arguments import Arguments
 from vgi.client.client import Client, ClientError, log
@@ -46,7 +51,21 @@ if TYPE_CHECKING:
 
 
 class OutputWriter:
-    """Handles writing output batches in various formats."""
+    """Handles writing output batches in various formats.
+
+    Supported formats:
+        - json: JSON Lines format (one JSON object per row)
+        - csv: CSV with header
+        - parquet: Apache Parquet columnar format
+        - arrow-ipc: Apache Arrow IPC streaming format (useful for debugging)
+
+    The arrow-ipc format writes batches in the standard Arrow IPC streaming
+    format, which can be read by any Arrow implementation. This is useful for:
+        - Debugging VGI protocol issues
+        - Inspecting raw output data with tools like pyarrow or arrow CLI
+        - Piping data to other Arrow-aware tools
+
+    """
 
     def __init__(
         self, output_file: str | None, format: str, schema: pa.Schema | None = None
@@ -55,20 +74,23 @@ class OutputWriter:
 
         Args:
             output_file: Path to output file, "-" for stdout, or None for logging.
-            format: Output format ("parquet", "csv", or "json").
+            format: Output format ("parquet", "csv", "json", or "arrow-ipc").
             schema: Optional schema for the output data.
 
         """
         self.output_file = output_file
         self.format = format
         self.schema = schema
-        self._writer: pq.ParquetWriter | None = None
+        self._writer: pq.ParquetWriter | ipc.RecordBatchStreamWriter | None = None
         self._is_stdout = output_file == "-"
         self._first_write = True
+        self._output_file_handle: io.IOBase | None = None
 
     def _get_output_stream(self) -> Any:
         if self._is_stdout:
-            return sys.stdout.buffer if self.format == "parquet" else sys.stdout
+            if self.format in ("parquet", "arrow-ipc"):
+                return sys.stdout.buffer
+            return sys.stdout
         return self.output_file
 
     def write_batch(self, batch: pa.RecordBatch) -> None:
@@ -89,6 +111,21 @@ class OutputWriter:
                     )
                 else:
                     self._writer = pq.ParquetWriter(self.output_file, batch.schema)
+            self._writer.write_batch(batch)
+
+        elif self.format == "arrow-ipc":
+            if self._writer is None:
+                if self._is_stdout:
+                    sink = pa.PythonFile(cast(io.IOBase, sys.stdout.buffer), mode="w")
+                else:
+                    # Open file and keep handle for closing in close()
+                    self._output_file_handle = open(  # noqa: SIM115
+                        self.output_file, "wb"
+                    )
+                    sink = pa.PythonFile(self._output_file_handle, mode="w")
+                self._writer = ipc.new_stream(sink, batch.schema)
+            # Type narrowing for mypy
+            assert isinstance(self._writer, ipc.RecordBatchStreamWriter)
             self._writer.write_batch(batch)
 
         elif self.format == "csv":
@@ -127,6 +164,8 @@ class OutputWriter:
         """Close the underlying writer if one exists."""
         if self._writer is not None:
             self._writer.close()
+        if self._output_file_handle is not None:
+            self._output_file_handle.close()
 
 
 def _create_cli() -> Any:
@@ -154,9 +193,13 @@ def _create_cli() -> Any:
     @click.option(
         "--format",
         "output_format",
-        type=click.Choice(["json", "csv", "parquet"]),
+        type=click.Choice(["json", "csv", "parquet", "arrow-ipc"]),
         default="json",
-        help="Output format (default: json)",
+        help=(
+            "Output format (default: json). Use 'arrow-ipc' for Apache Arrow IPC "
+            "streaming format, which is useful for debugging or piping to other "
+            "Arrow-aware tools."
+        ),
     )
     @click.option(
         "--function",
