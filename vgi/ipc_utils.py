@@ -63,6 +63,8 @@ from pyarrow import ipc
 
 # IPC debug logging - enable with VGI_IPC_DEBUG=1
 _IPC_DEBUG = os.environ.get("VGI_IPC_DEBUG", "").lower() in ("1", "true", "yes")
+# IPC stats logging - enable with VGI_IPC_STATS=1 for aggregate stream stats
+_IPC_STATS = os.environ.get("VGI_IPC_STATS", "").lower() in ("1", "true", "yes")
 _ipc_log: structlog.stdlib.BoundLogger | None = None
 
 

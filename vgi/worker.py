@@ -102,7 +102,13 @@ from vgi.function import (
     OutputSpec,
 )
 from vgi.invocation import Invocation, InvocationType
-from vgi.ipc_utils import IPCError, read_single_record_batch
+from vgi.ipc_utils import (
+    _IPC_DEBUG,
+    _IPC_STATS,
+    IPCError,
+    _get_ipc_log,
+    read_single_record_batch,
+)
 from vgi.scalar_function import ProtocolInput as ScalarProtocolInput
 from vgi.scalar_function import ScalarFunctionGenerator
 from vgi.table_function import TableFunctionGenerator
@@ -123,12 +129,20 @@ class WorkerStats:
         batch_count: Number of data batches processed.
         total_input_rows: Total number of input rows processed.
         total_output_rows: Total number of output rows produced.
+        reader_num_messages: IPC messages read (from PyArrow stats).
+        reader_num_record_batches: Record batches read (from PyArrow stats).
+        writer_num_messages: IPC messages written (from PyArrow stats).
+        writer_num_record_batches: Record batches written (from PyArrow stats).
 
     """
 
     batch_count: int
     total_input_rows: int
     total_output_rows: int
+    reader_num_messages: int = 0
+    reader_num_record_batches: int = 0
+    writer_num_messages: int = 0
+    writer_num_record_batches: int = 0
 
 
 class Worker:
@@ -654,10 +668,17 @@ class Worker:
                     writer, instance.output_schema, e, invocation
                 )
                 raise  # Re-raise so worker exits with error state
+            # Capture IPC stats before exiting context manager
+            reader_stats = data_reader.stats
+            writer_stats = writer.stats
         return WorkerStats(
             batch_count=batch_count,
             total_input_rows=total_input_rows,
             total_output_rows=total_output_rows,
+            reader_num_messages=reader_stats.num_messages,
+            reader_num_record_batches=reader_stats.num_record_batches,
+            writer_num_messages=writer_stats.num_messages,
+            writer_num_record_batches=writer_stats.num_record_batches,
         )
 
     def _process_batches(
@@ -751,10 +772,17 @@ class Worker:
                     writer, instance.output_schema, e, invocation
                 )
                 raise  # Re-raise so worker exits with error state
+            # Capture IPC stats before exiting context manager
+            reader_stats = data_reader.stats
+            writer_stats = writer.stats
         return WorkerStats(
             batch_count=batch_count,
             total_input_rows=total_input_rows,
             total_output_rows=total_output_rows,
+            reader_num_messages=reader_stats.num_messages,
+            reader_num_record_batches=reader_stats.num_record_batches,
+            writer_num_messages=writer_stats.num_messages,
+            writer_num_record_batches=writer_stats.num_record_batches,
         )
 
     def _generate_batches(
@@ -802,11 +830,15 @@ class Worker:
                     writer, instance.output_schema, e, invocation
                 )
                 raise  # Re-raise so worker exits with error state
+            # Capture IPC stats before exiting context manager
+            writer_stats = writer.stats
 
         return WorkerStats(
             batch_count=batch_count,
             total_input_rows=0,
             total_output_rows=total_output_rows,
+            writer_num_messages=writer_stats.num_messages,
+            writer_num_record_batches=writer_stats.num_record_batches,
         )
 
     def _handle_catalog_invocation(
@@ -1083,3 +1115,16 @@ class Worker:
                 "worker_call_complete",
                 stats=stats,
             )
+
+            # Log IPC stream stats when requested via VGI_IPC_STATS or VGI_IPC_DEBUG
+            if _IPC_STATS or _IPC_DEBUG:
+                _get_ipc_log().info(
+                    "ipc_stream_stats",
+                    batches=stats.batch_count,
+                    input_rows=stats.total_input_rows,
+                    output_rows=stats.total_output_rows,
+                    reader_messages=stats.reader_num_messages,
+                    reader_batches=stats.reader_num_record_batches,
+                    writer_messages=stats.writer_num_messages,
+                    writer_batches=stats.writer_num_record_batches,
+                )

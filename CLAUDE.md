@@ -123,7 +123,30 @@ vgi-client --input data.parquet --function sum_all_columns --server vgi-example-
 | Variable | Description |
 |----------|-------------|
 | `VGI_IPC_DEBUG=1` | Enable Arrow IPC debug logging (see below) |
+| `VGI_IPC_STATS=1` | Enable IPC stream statistics logging (see below) |
 | `VGI_QUIET=1` | Suppress worker startup logging |
+
+### IPC Stream Statistics
+
+Enable `VGI_IPC_STATS=1` to log aggregate IPC stream statistics at the end of each worker invocation. This logs the total number of batches, rows, and PyArrow IPC message counts for both reader and writer streams.
+
+```bash
+VGI_IPC_STATS=1 vgi-client --input data.parquet --function echo --server vgi-example-worker --worker-stderr
+```
+
+**Output format:**
+```
+ipc_stream_stats batches=2 input_rows=100 output_rows=100 reader_messages=3 reader_batches=2 writer_messages=3 writer_batches=2
+```
+
+**Fields logged:**
+- `batches` - Number of data batches processed
+- `input_rows` - Total input rows processed
+- `output_rows` - Total output rows produced
+- `reader_messages` - IPC messages read (from PyArrow stats)
+- `reader_batches` - Record batches read (from PyArrow stats)
+- `writer_messages` - IPC messages written (from PyArrow stats)
+- `writer_batches` - Record batches written (from PyArrow stats)
 
 ### IPC Debug Logging
 
