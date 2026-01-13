@@ -35,7 +35,7 @@ def view() -> None:
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
 def view_get(
     schema_name: str,
@@ -43,7 +43,7 @@ def view_get(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
 ) -> None:
     """Get information about a view.
@@ -52,7 +52,7 @@ def view_get(
     NAME is the view name.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -83,7 +83,7 @@ def view_get(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--definition", required=True, help="View definition SQL")
 @click.option(
@@ -98,7 +98,7 @@ def view_create(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     definition: str,
     on_conflict: str,
@@ -109,7 +109,7 @@ def view_create(
     NAME is the name for the new view.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -139,7 +139,7 @@ def view_create(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if not found")
 def view_drop(
@@ -148,7 +148,7 @@ def view_drop(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     ignore_not_found: bool,
 ) -> None:
@@ -158,7 +158,7 @@ def view_drop(
     NAME is the name of the view to drop.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -188,7 +188,7 @@ def view_drop(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if not found")
 def view_rename(
@@ -198,7 +198,7 @@ def view_rename(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     ignore_not_found: bool,
 ) -> None:
@@ -209,7 +209,7 @@ def view_rename(
     NEW_NAME is the new name for the view.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -246,7 +246,7 @@ def view_rename(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--set", "comment_text", help="Set comment to this text")
 @click.option("--clear", is_flag=True, help="Clear the comment")
@@ -257,7 +257,7 @@ def view_comment(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     comment_text: str | None,
     clear: bool,
@@ -276,7 +276,7 @@ def view_comment(
     if comment_text is not None and clear:
         raise click.ClickException("Cannot specify both --set and --clear")
 
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts

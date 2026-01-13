@@ -47,47 +47,47 @@ def catalog() -> None:
 
 
 @catalog.command("list")
-@click.option("--server", required=True, help="VGI worker command")
-def catalog_list(server: str) -> None:
+@click.option("--worker", "-w", required=True, help="VGI worker command")
+def catalog_list(worker: str) -> None:
     """List available catalogs."""
-    client = Client(server)
+    client = Client(worker)
     catalogs = client.catalogs()
     output_json(catalogs)
 
 
 @catalog.command("attach")
 @click.argument("name")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--options", default="{}", help="Catalog options as JSON object")
-def catalog_attach(name: str, server: str, options: str) -> None:
+def catalog_attach(name: str, worker: str, options: str) -> None:
     """Attach to a catalog and return attach_id.
 
     NAME is the catalog name to attach to.
 
     """
     opts = parse_json_option(options, "--options")
-    client = Client(server)
+    client = Client(worker)
     result = client.catalog_attach(name=name, options=opts)
     output_json(catalog_attach_result_to_dict(result))
 
 
 @catalog.command("detach")
 @click.argument("attach_id")
-@click.option("--server", required=True, help="VGI worker command")
-def catalog_detach(attach_id: str, server: str) -> None:
+@click.option("--worker", "-w", required=True, help="VGI worker command")
+def catalog_detach(attach_id: str, worker: str) -> None:
     """Detach from a catalog.
 
     ATTACH_ID is the hex-encoded attach ID from catalog attach.
 
     """
-    client = Client(server)
+    client = Client(worker)
     client.catalog_detach(attach_id=hex_to_attach_id(attach_id))
     output_json({"status": "detached"})
 
 
 @catalog.command("create")
 @click.argument("name")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option(
     "--on-conflict",
     type=click.Choice(["error", "ignore", "replace"]),
@@ -95,14 +95,14 @@ def catalog_detach(attach_id: str, server: str) -> None:
     help="Behavior if catalog already exists",
 )
 @click.option("--options", default="{}", help="Catalog options as JSON object")
-def catalog_create(name: str, server: str, on_conflict: str, options: str) -> None:
+def catalog_create(name: str, worker: str, on_conflict: str, options: str) -> None:
     """Create a new catalog.
 
     NAME is the name for the new catalog.
 
     """
     opts = parse_json_option(options, "--options")
-    client = Client(server)
+    client = Client(worker)
     client.catalog_create(
         name=name,
         on_conflict=OnConflict(on_conflict),
@@ -113,14 +113,14 @@ def catalog_create(name: str, server: str, on_conflict: str, options: str) -> No
 
 @catalog.command("drop")
 @click.argument("name")
-@click.option("--server", required=True, help="VGI worker command")
-def catalog_drop(name: str, server: str) -> None:
+@click.option("--worker", "-w", required=True, help="VGI worker command")
+def catalog_drop(name: str, worker: str) -> None:
     """Drop a catalog.
 
     NAME is the name of the catalog to drop.
 
     """
-    client = Client(server)
+    client = Client(worker)
     client.catalog_drop(name=name)
     output_json({"status": "dropped", "name": name})
 
@@ -129,17 +129,17 @@ def catalog_drop(name: str, server: str) -> None:
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
 def catalog_version(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
 ) -> None:
     """Get the current catalog version."""
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts

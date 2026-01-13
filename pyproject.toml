@@ -13,6 +13,7 @@ dev = ["mypy", "pyarrow-stubs", "pytest", "pytest-cov", "pytest-examples", "pyte
 vgi-client = "vgi.client.cli:main"
 vgi-example-worker = "vgi.examples.worker:main"
 vgi-example-catalog-worker = "vgi.examples.catalog:main"
+vgi-ci-worker = "vgi.ci.worker:main"
 
 [build-system]
 requires = ["hatchling"]

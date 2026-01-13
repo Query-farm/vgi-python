@@ -39,7 +39,7 @@ def table() -> None:
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
 def table_get(
     schema_name: str,
@@ -47,7 +47,7 @@ def table_get(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
 ) -> None:
     """Get information about a table.
@@ -56,7 +56,7 @@ def table_get(
     NAME is the table name.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -87,7 +87,7 @@ def table_get(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option(
     "--columns",
@@ -118,7 +118,7 @@ def table_create(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     columns: str,
     on_conflict: str,
@@ -132,7 +132,7 @@ def table_create(
     NAME is the name for the new table.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -175,7 +175,7 @@ def table_create(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if not found")
 def table_drop(
@@ -184,7 +184,7 @@ def table_drop(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     ignore_not_found: bool,
 ) -> None:
@@ -194,7 +194,7 @@ def table_drop(
     NAME is the table name to drop.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -224,7 +224,7 @@ def table_drop(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if not found")
 def table_rename(
@@ -234,7 +234,7 @@ def table_rename(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     ignore_not_found: bool,
 ) -> None:
@@ -245,7 +245,7 @@ def table_rename(
     NEW_NAME is the new name for the table.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -282,7 +282,7 @@ def table_rename(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--set", "comment_text", help="Set comment to this text")
 @click.option("--clear", is_flag=True, help="Clear the comment")
@@ -293,7 +293,7 @@ def table_comment(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     comment_text: str | None,
     clear: bool,
@@ -312,7 +312,7 @@ def table_comment(
     if comment_text and clear:
         raise click.ClickException("Cannot specify both --set and --clear")
 
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -343,7 +343,7 @@ def table_comment(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
 @click.option("--at-unit", help="Time travel unit (e.g., 'timestamp', 'version')")
 @click.option("--at-value", help="Time travel value")
@@ -353,7 +353,7 @@ def table_scan_function(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     at_unit: str | None,
     at_value: str | None,
@@ -364,7 +364,7 @@ def table_scan_function(
     NAME is the table name.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -400,7 +400,7 @@ def column() -> None:
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option(
     "--column",
@@ -418,7 +418,7 @@ def column_add(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     column_def: str,
     ignore_not_found: bool,
@@ -430,7 +430,7 @@ def column_add(
     TABLE_NAME is the table to add the column to.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -473,7 +473,7 @@ def column_add(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if table not found")
 @click.option("--if-exists", is_flag=True, help="Don't error if column doesn't exist")
@@ -485,7 +485,7 @@ def column_drop(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     ignore_not_found: bool,
     if_exists: bool,
@@ -498,7 +498,7 @@ def column_drop(
     COLUMN_NAME is the column to drop.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -539,7 +539,7 @@ def column_drop(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if table not found")
 def column_rename(
@@ -550,7 +550,7 @@ def column_rename(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     ignore_not_found: bool,
 ) -> None:
@@ -562,7 +562,7 @@ def column_rename(
     NEW_COLUMN_NAME is the new name for the column.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -603,7 +603,7 @@ def column_rename(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if table not found")
 def column_set_default(
@@ -614,7 +614,7 @@ def column_set_default(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     ignore_not_found: bool,
 ) -> None:
@@ -626,7 +626,7 @@ def column_set_default(
     EXPRESSION is the SQL expression for the default value.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -665,7 +665,7 @@ def column_set_default(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if table not found")
 def column_drop_default(
@@ -675,7 +675,7 @@ def column_drop_default(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     ignore_not_found: bool,
 ) -> None:
@@ -686,7 +686,7 @@ def column_drop_default(
     COLUMN_NAME is the column to remove the default from.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -723,7 +723,7 @@ def column_drop_default(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option(
     "--column",
@@ -739,7 +739,7 @@ def column_set_type(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     column_def: str,
     expression: str | None,
@@ -753,7 +753,7 @@ def column_set_type(
     The --column option specifies the column name and new type.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -796,7 +796,7 @@ def column_set_type(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if table not found")
 def column_set_not_null(
@@ -806,7 +806,7 @@ def column_set_not_null(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     ignore_not_found: bool,
 ) -> None:
@@ -817,7 +817,7 @@ def column_set_not_null(
     COLUMN_NAME is the column to add NOT NULL to.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -855,7 +855,7 @@ def column_set_not_null(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if table not found")
 def column_drop_not_null(
@@ -865,7 +865,7 @@ def column_drop_not_null(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     ignore_not_found: bool,
 ) -> None:
@@ -876,7 +876,7 @@ def column_drop_not_null(
     COLUMN_NAME is the column to remove NOT NULL from.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts

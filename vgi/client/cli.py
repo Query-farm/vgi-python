@@ -26,12 +26,12 @@ Usage:
     vgi-client --function echo --input data.parquet --format arrow-ipc -o -
 
     # Catalog operations (all nested under 'catalog'):
-    vgi-client catalog list --server vgi-example-worker
-    vgi-client catalog attach example --server vgi-example-worker
-    vgi-client catalog schema list $ATTACH_ID --server vgi-example-worker
-    vgi-client catalog schema contents $ATTACH_ID main --server vgi-example-worker
-    vgi-client catalog table get $ATTACH_ID main users --server vgi-example-worker
-    vgi-client catalog transaction begin $ATTACH_ID --server vgi-example-worker
+    vgi-client catalog list --worker vgi-example-worker
+    vgi-client catalog attach example --worker vgi-example-worker
+    vgi-client catalog schema list $ATTACH_ID --worker vgi-example-worker
+    vgi-client catalog schema contents $ATTACH_ID main --worker vgi-example-worker
+    vgi-client catalog table get $ATTACH_ID main users --worker vgi-example-worker
+    vgi-client catalog transaction begin $ATTACH_ID --worker vgi-example-worker
 
 """
 
@@ -186,8 +186,8 @@ EXAMPLES:
   vgi-client --function sequence --args '[5]' -o - -f arrow-ipc
 \b
   # Catalog operations
-  vgi-client catalog list -s vgi-example-worker
-  vgi-client catalog attach mydb -s vgi-example-worker
+  vgi-client catalog list -w vgi-example-worker
+  vgi-client catalog attach mydb -w vgi-example-worker
 
 \b
 FUNCTION TYPES:
@@ -267,9 +267,9 @@ def _create_cli() -> Any:
         help="JSON array of positional arguments. Example: '[10]' or '[\"col\"]'.",
     )
     @click.option(
-        "--server",
-        "-s",
-        "server_path",
+        "--worker",
+        "-w",
+        "worker_path",
         default="vgi-example-worker",
         type=str,
         help="VGI worker command or path. Default: vgi-example-worker.",
@@ -337,7 +337,7 @@ def _create_cli() -> Any:
         output_format: str,
         function_name: str | None,
         arguments: str,
-        server_path: str,
+        worker_path: str,
         worker_stderr: bool,
         projection_ids: tuple[int, ...],
         max_workers: int | None,
@@ -407,7 +407,7 @@ def _create_cli() -> Any:
                     f"Invalid --transaction-id: must be a valid hex string: {e}"
                 ) from e
 
-        log.info("starting_server", function=function_name, server_path=server_path)
+        log.info("starting_worker", function=function_name, worker_path=worker_path)
 
         # Validate function_type requirements
         if function_type == "scalar" and input_file is None:
@@ -424,7 +424,7 @@ def _create_cli() -> Any:
         output_writer: OutputWriter | None = None
         try:
             with Client(
-                server_path,
+                worker_path,
                 passthrough_stderr=worker_stderr,
                 max_workers=max_workers,
                 attach_id=attach_id_bytes,

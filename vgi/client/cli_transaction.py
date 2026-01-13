@@ -27,14 +27,14 @@ def transaction() -> None:
 
 @transaction.command("begin")
 @click.option("--attach-id", required=True, help="Hex-encoded attach ID")
-@click.option("--server", required=True, help="VGI worker command")
-def transaction_begin(attach_id: str, server: str) -> None:
+@click.option("--worker", "-w", required=True, help="VGI worker command")
+def transaction_begin(attach_id: str, worker: str) -> None:
     """Begin a new transaction.
 
     Returns a transaction_id that can be used with other catalog operations.
 
     """
-    client = Client(server)
+    client = Client(worker)
     result = client.transaction_begin(attach_id=hex_to_attach_id(attach_id))
     output_json(
         {
@@ -47,14 +47,14 @@ def transaction_begin(attach_id: str, server: str) -> None:
 @transaction.command("commit")
 @click.argument("transaction_id")
 @click.option("--attach-id", required=True, help="Hex-encoded attach ID")
-@click.option("--server", required=True, help="VGI worker command")
-def transaction_commit(transaction_id: str, attach_id: str, server: str) -> None:
+@click.option("--worker", "-w", required=True, help="VGI worker command")
+def transaction_commit(transaction_id: str, attach_id: str, worker: str) -> None:
     """Commit a transaction.
 
     TRANSACTION_ID is the hex-encoded transaction ID from transaction begin.
 
     """
-    client = Client(server)
+    client = Client(worker)
     client.transaction_commit(
         attach_id=hex_to_attach_id(attach_id),
         transaction_id=hex_to_transaction_id(transaction_id),
@@ -71,14 +71,14 @@ def transaction_commit(transaction_id: str, attach_id: str, server: str) -> None
 @transaction.command("rollback")
 @click.argument("transaction_id")
 @click.option("--attach-id", required=True, help="Hex-encoded attach ID")
-@click.option("--server", required=True, help="VGI worker command")
-def transaction_rollback(transaction_id: str, attach_id: str, server: str) -> None:
+@click.option("--worker", "-w", required=True, help="VGI worker command")
+def transaction_rollback(transaction_id: str, attach_id: str, worker: str) -> None:
     """Rollback a transaction.
 
     TRANSACTION_ID is the hex-encoded transaction ID from transaction begin.
 
     """
-    client = Client(server)
+    client = Client(worker)
     client.transaction_rollback(
         attach_id=hex_to_attach_id(attach_id),
         transaction_id=hex_to_transaction_id(transaction_id),

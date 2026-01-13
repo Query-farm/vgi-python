@@ -31,7 +31,7 @@ class TestCLICatalogList:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["catalog", "list", "--server", example_worker],
+            ["catalog", "list", "--worker", example_worker],
         )
         assert result.exit_code == 0
         catalogs = json.loads(result.output)
@@ -46,7 +46,7 @@ class TestCLICatalogAttach:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["catalog", "attach", "example", "--server", example_worker],
+            ["catalog", "attach", "example", "--worker", example_worker],
         )
         assert result.exit_code == 0
         attach_result = json.loads(result.output)
@@ -68,7 +68,7 @@ class TestCLISchemaContents:
         # First attach to get attach_id
         attach_result = runner.invoke(
             cli,
-            ["catalog", "attach", "example", "--server", example_worker],
+            ["catalog", "attach", "example", "--worker", example_worker],
         )
         assert attach_result.exit_code == 0
         attach_data = json.loads(attach_result.output)
@@ -84,7 +84,7 @@ class TestCLISchemaContents:
                 "main",
                 "--attach-id",
                 attach_id,
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -115,7 +115,7 @@ class TestCLISchemaContents:
                 "main",
                 "--catalog",
                 "example",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -139,7 +139,7 @@ class TestCLISchemaContents:
         # Attach to catalog
         attach_result = runner.invoke(
             cli,
-            ["catalog", "attach", "example", "--server", example_worker],
+            ["catalog", "attach", "example", "--worker", example_worker],
         )
         assert attach_result.exit_code == 0
         attach_id = json.loads(attach_result.output)["attach_id"]
@@ -154,7 +154,7 @@ class TestCLISchemaContents:
                 "main",
                 "--attach-id",
                 attach_id,
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -183,7 +183,7 @@ class TestCLISchemaContents:
         # Attach and get contents
         attach_result = runner.invoke(
             cli,
-            ["catalog", "attach", "example", "--server", example_worker],
+            ["catalog", "attach", "example", "--worker", example_worker],
         )
         attach_id = json.loads(attach_result.output)["attach_id"]
 
@@ -196,7 +196,7 @@ class TestCLISchemaContents:
                 "main",
                 "--attach-id",
                 attach_id,
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -221,7 +221,7 @@ class TestCLISchemaContents:
         # Attach and get contents
         attach_result = runner.invoke(
             cli,
-            ["catalog", "attach", "example", "--server", example_worker],
+            ["catalog", "attach", "example", "--worker", example_worker],
         )
         attach_id = json.loads(attach_result.output)["attach_id"]
 
@@ -234,7 +234,7 @@ class TestCLISchemaContents:
                 "main",
                 "--attach-id",
                 attach_id,
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -256,7 +256,7 @@ class TestCLISchemaContents:
         # Attach and get contents
         attach_result = runner.invoke(
             cli,
-            ["catalog", "attach", "example", "--server", example_worker],
+            ["catalog", "attach", "example", "--worker", example_worker],
         )
         attach_id = json.loads(attach_result.output)["attach_id"]
 
@@ -269,7 +269,7 @@ class TestCLISchemaContents:
                 "main",
                 "--attach-id",
                 attach_id,
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -294,7 +294,7 @@ class TestCLISchemaContents:
         # Attach and get contents
         attach_result = runner.invoke(
             cli,
-            ["catalog", "attach", "example", "--server", example_worker],
+            ["catalog", "attach", "example", "--worker", example_worker],
         )
         attach_id = json.loads(attach_result.output)["attach_id"]
 
@@ -307,7 +307,7 @@ class TestCLISchemaContents:
                 "main",
                 "--attach-id",
                 attach_id,
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -343,7 +343,7 @@ class TestCLISchemaList:
         # Attach first
         attach_result = runner.invoke(
             cli,
-            ["catalog", "attach", "example", "--server", example_worker],
+            ["catalog", "attach", "example", "--worker", example_worker],
         )
         attach_id = json.loads(attach_result.output)["attach_id"]
 
@@ -356,7 +356,7 @@ class TestCLISchemaList:
                 "list",
                 "--attach-id",
                 attach_id,
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -380,7 +380,7 @@ class TestCLISchemaList:
                 "list",
                 "--catalog",
                 "example",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -402,7 +402,7 @@ class TestCLIAttachIdCatalogOptions:
         # First get an attach_id
         attach_result = runner.invoke(
             cli,
-            ["catalog", "attach", "example", "--server", example_worker],
+            ["catalog", "attach", "example", "--worker", example_worker],
         )
         attach_id = json.loads(attach_result.output)["attach_id"]
 
@@ -417,7 +417,7 @@ class TestCLIAttachIdCatalogOptions:
                 attach_id,
                 "--catalog",
                 "example",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -434,7 +434,7 @@ class TestCLIAttachIdCatalogOptions:
                 "catalog",
                 "schema",
                 "list",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )

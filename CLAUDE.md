@@ -114,8 +114,8 @@ vgi/
 
 ```bash
 vgi-example-worker                                                    # Run example worker
-vgi-client --input data.parquet --function echo --server vgi-example-worker
-vgi-client --input data.parquet --function sum_all_columns --server vgi-example-worker
+vgi-client --input data.parquet --function echo --worker vgi-example-worker
+vgi-client --input data.parquet --function sum_all_columns --worker vgi-example-worker
 ```
 
 ## Environment Variables
@@ -131,7 +131,7 @@ vgi-client --input data.parquet --function sum_all_columns --server vgi-example-
 Enable `VGI_IPC_STATS=1` to log aggregate IPC stream statistics at the end of each worker invocation. This logs the total number of batches, rows, and PyArrow IPC message counts for both reader and writer streams.
 
 ```bash
-VGI_IPC_STATS=1 vgi-client --input data.parquet --function echo --server vgi-example-worker --worker-stderr
+VGI_IPC_STATS=1 vgi-client --input data.parquet --function echo --worker vgi-example-worker --worker-stderr
 ```
 
 **Output format:**
@@ -154,7 +154,7 @@ Enable `VGI_IPC_DEBUG=1` to trace Arrow record batches read and written during c
 
 ```bash
 VGI_IPC_DEBUG=1 vgi-example-worker
-VGI_IPC_DEBUG=1 vgi-client --input data.parquet --function echo --server vgi-example-worker
+VGI_IPC_DEBUG=1 vgi-client --input data.parquet --function echo --worker vgi-example-worker
 ```
 
 **Output format:**
@@ -177,10 +177,10 @@ ipc_read   num_rows=1 schema={'sum': 'int64'} metadata={'vgi.status': 'FINISHED'
 ## Creating a Scalar Function (Per-Row Transform)
 
 ```python
+from typing import Annotated
 import pyarrow as pa
 import pyarrow.compute as pc
-from vgi import ScalarFunction, Arg
-from vgi.arguments import AnyArrow
+from vgi import ScalarFunction, Arg, AnyArrowValue
 
 class AddColumns(ScalarFunction):
     """Add two integer columns together."""
@@ -188,8 +188,8 @@ class AddColumns(ScalarFunction):
     class Meta:
         output_type = pa.int64()
 
-    left = Arg[AnyArrow](0, type_bound=pa.types.is_integer, doc="First column")
-    right = Arg[AnyArrow](1, type_bound=pa.types.is_integer, doc="Second column")
+    left: Annotated[AnyArrowValue, Arg(0, type_bound=pa.types.is_integer, doc="First column")]
+    right: Annotated[AnyArrowValue, Arg(1, type_bound=pa.types.is_integer, doc="Second column")]
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array:
         return pc.add(batch.column(self.left.value), batch.column(self.right.value))
@@ -206,6 +206,7 @@ For scalar functions that use Polars, use `PolarsScalarFunction` which handles
 zero-copy Arrow <-> Polars conversion automatically:
 
 ```python
+from typing import Annotated
 import polars as pl
 from vgi import PolarsScalarFunction, Arg
 
@@ -215,7 +216,7 @@ class UpperCase(PolarsScalarFunction):
     class Meta:
         output_type = pl.Utf8  # Polars type, not Arrow
 
-    column = Arg[str](0, doc="Column to uppercase")
+    column: Annotated[str, Arg(0, doc="Column to uppercase")]
 
     def compute_polars(self, df: pl.DataFrame) -> pl.Series:
         return df[self.column].str.to_uppercase()
@@ -226,6 +227,7 @@ class UpperCase(PolarsScalarFunction):
 Use `AnyPolars` when output type depends on input:
 
 ```python
+from typing import Annotated
 from vgi import PolarsScalarFunction, Arg, AnyPolars
 import polars as pl
 
@@ -235,7 +237,7 @@ class PreserveType(PolarsScalarFunction):
     class Meta:
         output_type = AnyPolars
 
-    column = Arg[str](0, doc="Column to double")
+    column: Annotated[str, Arg(0, doc="Column to double")]
 
     @property
     def output_polars_type(self) -> pl.DataType:
@@ -254,6 +256,7 @@ class PreserveType(PolarsScalarFunction):
 ## Creating a Table-In-Out Function (Recommended)
 
 ```python
+from typing import Annotated
 import pyarrow as pa
 from vgi import TableInOutFunction, Arg
 
@@ -261,7 +264,7 @@ class MyFunction(TableInOutFunction):
     """Transform each batch by doubling numeric values."""
 
     # Declare arguments as class attributes
-    multiplier = Arg[int](0, default=2)  # positional with default
+    multiplier: Annotated[int, Arg(0, default=2)]  # positional with default
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -343,6 +346,7 @@ class SumColumns(AggregationFunction):
 Use when filtering rows by a boolean predicate:
 
 ```python
+from typing import Annotated
 import pyarrow as pa
 import pyarrow.compute as pc
 from vgi import FilterFunction, Arg
@@ -350,7 +354,7 @@ from vgi import FilterFunction, Arg
 class PositiveFilter(FilterFunction):
     """Keep only rows where value is positive."""
 
-    column = Arg[str](0, doc="Column to filter on")
+    column: Annotated[str, Arg(0, doc="Column to filter on")]
 
     def predicate(self, batch: pa.RecordBatch) -> pa.Array:
         return pc.greater(batch.column(self.column), 0)
@@ -375,6 +379,7 @@ class DoubleValues(MapFunction):
 ## Creating a Table Function (No Input)
 
 ```python
+from typing import Annotated
 import pyarrow as pa
 from vgi import TableFunctionGenerator, Output, Arg
 
@@ -384,7 +389,7 @@ class SequenceFunction(TableFunctionGenerator):
     class Meta:
         max_workers = 1
 
-    count = Arg[int](0, doc="Number of integers")
+    count: Annotated[int, Arg(0, doc="Number of integers")]
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -405,6 +410,8 @@ access them via `self.settings` or `self.get_setting()`. Settings are available
 during the bind phase, allowing output schema to depend on setting values.
 
 ```python
+from typing import Annotated
+
 class SettingsAwareFunction(TableFunctionGenerator):
     """Function that uses settings to determine output."""
 
@@ -412,7 +419,7 @@ class SettingsAwareFunction(TableFunctionGenerator):
         required_settings = ["vgi_verbose_mode"]  # Declare required settings
         max_workers = 1
 
-    count = Arg[int](0, doc="Number of rows")
+    count: Annotated[int, Arg(0, doc="Number of rows")]
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -486,13 +493,29 @@ from vgi.log import Level
 
 ### Argument Declaration
 
+**Recommended: Annotated pattern** (full type safety, no `# type: ignore`):
+
+```python
+from typing import Annotated
+from vgi import Arg, AnyArrowValue
+
+class MyFunction(TableInOutFunction):
+    count: Annotated[int, Arg(0)]                        # Required positional
+    multiplier: Annotated[int, Arg(1, default=1)]        # Optional positional
+    target: Annotated[str, Arg("target")]                # Required named
+    format: Annotated[str, Arg("format", default="json")] # Optional named
+    column: Annotated[AnyArrowValue, Arg(0, type_bound=pa.types.is_integer)]  # AnyArrow
+```
+
+**Alternative: Legacy Arg[T] pattern** (requires `# type: ignore`):
+
 ```python
 class MyFunction(TableInOutFunction):
-    count = Arg[int](0)                        # Required positional
-    multiplier = Arg[int](1, default=1)        # Optional positional
-    target = Arg[str]("target")                # Required named
-    format = Arg[str]("format", default="json") # Optional named
+    count = Arg[int](0)                        # type: ignore[assignment]
+    multiplier = Arg[int](1, default=1)        # type: ignore[assignment]
 ```
+
+**Important**: When using `Annotated` inside functions/methods with `from __future__ import annotations`, ensure `Annotated` and `AnyArrowValue` are imported at module level (not locally inside the function).
 
 ### Schema Helpers
 
@@ -521,14 +544,18 @@ At bind time:
 - Type bounds have been validated
 
 ```python
+from typing import Annotated
+from vgi import ScalarFunction, Arg, AnyArrowValue
+from vgi.arguments import AnyArrow
+
 class AddColumns(ScalarFunction):
     """Add two numeric columns with dynamic output type."""
 
     class Meta:
         output_type = AnyArrow  # Output type depends on input columns
 
-    left = Arg[AnyArrow](0, type_bound=[pa.types.is_integer, pa.types.is_floating])
-    right = Arg[AnyArrow](1, type_bound=[pa.types.is_integer, pa.types.is_floating])
+    left: Annotated[AnyArrowValue, Arg(0, type_bound=[pa.types.is_integer, pa.types.is_floating])]
+    right: Annotated[AnyArrowValue, Arg(1, type_bound=[pa.types.is_integer, pa.types.is_floating])]
 
     def bind(self) -> None:
         """Compute output type from input columns."""

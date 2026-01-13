@@ -36,17 +36,17 @@ def schema() -> None:
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
 def schema_list(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
 ) -> None:
     """List schemas in a catalog."""
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -71,14 +71,14 @@ def schema_list(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
 def schema_get(
     name: str,
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
 ) -> None:
     """Get information about a schema.
@@ -86,7 +86,7 @@ def schema_get(
     NAME is the schema name.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -115,7 +115,7 @@ def schema_get(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--comment", help="Description of the schema")
 @click.option("--tags", default="{}", help="Metadata tags as JSON object")
@@ -124,7 +124,7 @@ def schema_create(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     comment: str | None,
     tags: str,
@@ -134,7 +134,7 @@ def schema_create(
     NAME is the name for the new schema.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -163,7 +163,7 @@ def schema_create(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if not found")
 @click.option("--cascade", is_flag=True, help="Drop contained tables and views")
@@ -172,7 +172,7 @@ def schema_drop(
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
     ignore_not_found: bool,
     cascade: bool,
@@ -182,7 +182,7 @@ def schema_drop(
     NAME is the name of the schema to drop.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts
@@ -210,14 +210,14 @@ def schema_drop(
 @click.option("--attach-id", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
-@click.option("--server", required=True, help="VGI worker command")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
 def schema_contents(
     name: str,
     attach_id: str | None,
     catalog_name: str | None,
     attach_options: str,
-    server: str,
+    worker: str,
     transaction_id: str | None,
 ) -> None:
     """List contents of a schema (tables, views, functions).
@@ -225,7 +225,7 @@ def schema_contents(
     NAME is the schema name.
 
     """
-    client = Client(server)
+    client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
     resolved_attach_id, is_stateful = get_attach_id_from_options(
         client, attach_id, catalog_name, opts

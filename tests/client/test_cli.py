@@ -153,7 +153,7 @@ class TestCLIValidation:
                 "echo",
                 "--args",
                 "not valid json",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -170,7 +170,7 @@ class TestCLIValidation:
                 "echo",
                 "--args",
                 '{"key": "value"}',
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -189,7 +189,7 @@ class TestCLIValidation:
                 "[10]",
                 "--table-input-position",
                 "1",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -210,7 +210,7 @@ class TestCLIValidation:
                 "echo",
                 "--table-input-position",
                 "-1",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -233,7 +233,7 @@ class TestCLIValidation:
                 "[1, 2]",
                 "--table-input-position",
                 "5",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -252,7 +252,7 @@ class TestCLIValidation:
                 "[5]",
                 "--attach-id",
                 "not_hex_string",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -281,7 +281,7 @@ class TestCLITableFunction:
                 "sequence",
                 "--args",
                 "[5]",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -304,7 +304,7 @@ class TestCLITableFunction:
                 str(output_file),
                 "--format",
                 "json",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -329,7 +329,7 @@ class TestCLITableInOutFunction:
                 str(input_parquet),
                 "--function",
                 "echo",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -352,7 +352,7 @@ class TestCLITableInOutFunction:
                 "json",
                 "--function",
                 "echo",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -382,7 +382,7 @@ class TestCLIOutputFormats:
                 "json",
                 "--function",
                 "echo",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -408,7 +408,7 @@ class TestCLIOutputFormats:
                 "csv",
                 "--function",
                 "echo",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -433,7 +433,7 @@ class TestCLIOutputFormats:
                 "parquet",
                 "--function",
                 "echo",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -461,7 +461,7 @@ class TestCLIOutputFormats:
                 "arrow-ipc",
                 "--function",
                 "echo",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -489,7 +489,7 @@ class TestCLIOptions:
                 "echo",
                 "--max-workers",
                 "2",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -508,7 +508,7 @@ class TestCLIOptions:
                 "--function",
                 "echo",
                 "--worker-stderr",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -526,7 +526,7 @@ class TestCLIOptions:
                 "[5]",
                 "--attach-id",
                 "deadbeef",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -546,7 +546,7 @@ class TestCLIOptions:
                 "0",
                 "--projection-id",
                 "1",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -568,7 +568,7 @@ class TestCLIOptions:
                 "[]",
                 "--table-input-position",
                 "0",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -586,7 +586,7 @@ class TestCLIErrorHandling:
             [
                 "--function",
                 "nonexistent_function_xyz",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -606,7 +606,7 @@ class TestCLIErrorHandling:
                 "-",
                 "--format",
                 "json",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -642,7 +642,7 @@ class TestCLIScalarFunction:
                 '["x"]',
                 "--type",
                 "scalar",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -669,7 +669,7 @@ class TestCLIScalarFunction:
                 '["x"]',
                 "--type",
                 "scalar",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -703,7 +703,7 @@ class TestCLIScalarFunction:
                 '["x"]',
                 "--type",
                 "scalar",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -726,7 +726,7 @@ class TestCLIScalarFunction:
                 '["x"]',
                 "--type",
                 "scalar",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -743,7 +743,7 @@ class TestCLIScalarFunction:
                 "echo",
                 "--type",
                 "table-in-out",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -766,7 +766,7 @@ class TestCLIScalarFunction:
                 "[5]",
                 "--type",
                 "table",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -792,7 +792,7 @@ class TestCLIScalarFunction:
                 "echo",
                 "--type",
                 "auto",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -820,7 +820,7 @@ class TestCLIScalarFunction:
                 "[3]",
                 "--type",
                 "auto",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -852,7 +852,7 @@ class TestCLIScalarFunction:
                 '["a", "b"]',
                 "--type",
                 "scalar",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
@@ -886,7 +886,7 @@ class TestCLIScalarFunction:
                 '["name"]',
                 "--type",
                 "scalar",
-                "--server",
+                "--worker",
                 example_worker,
             ],
         )
