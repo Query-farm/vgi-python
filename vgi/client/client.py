@@ -98,6 +98,65 @@ class ClientError(Exception):
     """Error raised by Client operations."""
 
 
+def _safe_write_bytes(
+    sink: pa.PythonFile,
+    data: bytes,
+    proc: subprocess.Popen[bytes],
+    context: str = "write",
+) -> None:
+    """Write bytes to sink, converting BrokenPipeError to ClientError.
+
+    Args:
+        sink: PyArrow file wrapper for stdin.
+        data: Bytes to write.
+        proc: The subprocess to check for exit status on error.
+        context: Description of what's being written (for error messages).
+
+    Raises:
+        ClientError: If BrokenPipeError occurs (worker terminated) or write fails.
+
+    """
+    try:
+        if sink.write(data) != len(data):
+            raise ClientError(f"Failed to {context}: incomplete write")
+    except BrokenPipeError:
+        # Worker process died - get exit status for better error message
+        proc.poll()  # Update returncode without waiting
+        raise ClientError(
+            f"Worker process terminated unexpectedly during {context} "
+            f"(exit code: {proc.returncode})"
+        ) from None
+
+
+def _safe_write_batch(
+    writer: ipc.RecordBatchStreamWriter,
+    batch: pa.RecordBatch,
+    proc: subprocess.Popen[bytes],
+    context: str = "batch write",
+) -> None:
+    """Write a batch to an IPC writer, converting BrokenPipeError to ClientError.
+
+    Args:
+        writer: Arrow IPC stream writer.
+        batch: RecordBatch to write.
+        proc: The subprocess to check for exit status on error.
+        context: Description of what's being written (for error messages).
+
+    Raises:
+        ClientError: If BrokenPipeError occurs (worker terminated).
+
+    """
+    try:
+        writer.write_batch(batch)
+    except BrokenPipeError:
+        # Worker process died - get exit status for better error message
+        proc.poll()  # Update returncode without waiting
+        raise ClientError(
+            f"Worker process terminated unexpectedly during {context} "
+            f"(exit code: {proc.returncode})"
+        ) from None
+
+
 @dataclass
 class WorkerConnection:
     """Holds state for a single worker subprocess connection."""
@@ -430,7 +489,7 @@ class Client(CatalogClientMixin):
             ClientError: If the worker activated unsupported features.
 
         """
-        if self._stdin_sink is None or self._stdout_buffered is None:
+        if self._stdin_sink is None or self._stdout_buffered is None or self._proc is None:
             raise ClientError("Worker process not started. Call start() first.")
 
         # Send initialization batch
@@ -453,10 +512,12 @@ class Client(CatalogClientMixin):
         )
         call_parameters_batch_bytes = initial_request.serialize()
 
-        if self._stdin_sink.write(call_parameters_batch_bytes) != len(
-            call_parameters_batch_bytes
-        ):
-            raise OSError("Failed to write call parameters record batch")
+        _safe_write_bytes(
+            self._stdin_sink,
+            call_parameters_batch_bytes,
+            self._proc,
+            context="call parameters write",
+        )
 
         # Read and parse bind result
         log.debug("reading_bind_result")
@@ -513,8 +574,12 @@ class Client(CatalogClientMixin):
                 projection_ids=projection_ids
             ).serialize()
 
-        if self._stdin_sink.write(init_serialized_bytes) != len(init_serialized_bytes):
-            raise OSError("Failed to write init record batch")
+        _safe_write_bytes(
+            self._stdin_sink,
+            init_serialized_bytes,
+            self._proc,
+            context="init input write",
+        )
 
         # Read init result
         log.debug("reading_init_result")
@@ -891,8 +956,12 @@ class Client(CatalogClientMixin):
 
         # Send the request with global_execution_identifier
         request_bytes = request_with_init.serialize()
-        if worker.stdin_sink.write(request_bytes) != len(request_bytes):
-            raise OSError(f"Failed to write request to worker {worker.worker_index}")
+        _safe_write_bytes(
+            worker.stdin_sink,
+            request_bytes,
+            worker.proc,
+            context=f"request to worker {worker.worker_index}",
+        )
 
         # Read the bind result (we already have output schema from first worker)
         try:
@@ -1119,7 +1188,12 @@ class Client(CatalogClientMixin):
                 batch_index=batch_index,
                 num_rows=input_batch.num_rows,
             )
-            worker.data_writer.write_batch(input_batch)
+            _safe_write_batch(
+                worker.data_writer,
+                input_batch,
+                worker.proc,
+                context=f"batch {batch_index} to worker {worker.worker_index}",
+            )
 
             if worker.output_reader is None:
                 worker.output_reader = ipc.open_stream(worker.stdout_buffered)
@@ -1193,9 +1267,16 @@ class Client(CatalogClientMixin):
         output_batches: list[pa.RecordBatch] = []
         while True:
             log.debug("sending_finalize_to_worker", worker_index=worker.worker_index)
-            worker.data_writer.write_batch(
-                empty_batch, custom_metadata={b"type": b"FINALIZE"}
-            )
+            try:
+                worker.data_writer.write_batch(
+                    empty_batch, custom_metadata={b"type": b"FINALIZE"}
+                )
+            except BrokenPipeError:
+                worker.proc.poll()
+                raise ClientError(
+                    f"Worker {worker.worker_index} terminated unexpectedly during "
+                    f"finalize (exit code: {worker.proc.returncode})"
+                ) from None
 
             output_batch, output_metadata = (
                 worker.output_reader.read_next_batch_with_custom_metadata()

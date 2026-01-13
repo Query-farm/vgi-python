@@ -188,7 +188,14 @@ class CatalogClientMixin:
                 arguments=Arguments(),
             )
             invocation_bytes = invocation.serialize()
-            proc.stdin.write(invocation_bytes)
+            try:
+                proc.stdin.write(invocation_bytes)
+            except BrokenPipeError:
+                proc.poll()
+                raise CatalogClientError(
+                    f"Worker terminated unexpectedly during {method_name} invocation "
+                    f"(exit code: {proc.returncode})"
+                ) from None
 
             # Create and send arguments batch (1 row with kwargs as columns)
             args_batch = self._create_catalog_args_batch(kwargs)
@@ -196,8 +203,15 @@ class CatalogClientMixin:
                 args_batch.schema.serialize().to_pybytes()
                 + args_batch.serialize().to_pybytes()
             )
-            proc.stdin.write(args_bytes)
-            proc.stdin.flush()
+            try:
+                proc.stdin.write(args_bytes)
+                proc.stdin.flush()
+            except BrokenPipeError:
+                proc.poll()
+                raise CatalogClientError(
+                    f"Worker terminated unexpectedly during {method_name} arguments "
+                    f"(exit code: {proc.returncode})"
+                ) from None
             proc.stdin.close()
 
             # Read result
@@ -279,7 +293,14 @@ class CatalogClientMixin:
                 arguments=Arguments(),
             )
             invocation_bytes = invocation.serialize()
-            proc.stdin.write(invocation_bytes)
+            try:
+                proc.stdin.write(invocation_bytes)
+            except BrokenPipeError:
+                proc.poll()
+                raise CatalogClientError(
+                    f"Worker terminated unexpectedly during {method_name} invocation "
+                    f"(exit code: {proc.returncode})"
+                ) from None
 
             # Create and send arguments batch
             args_batch = self._create_catalog_args_batch(kwargs)
@@ -287,8 +308,15 @@ class CatalogClientMixin:
                 args_batch.schema.serialize().to_pybytes()
                 + args_batch.serialize().to_pybytes()
             )
-            proc.stdin.write(args_bytes)
-            proc.stdin.flush()
+            try:
+                proc.stdin.write(args_bytes)
+                proc.stdin.flush()
+            except BrokenPipeError:
+                proc.poll()
+                raise CatalogClientError(
+                    f"Worker terminated unexpectedly during {method_name} arguments "
+                    f"(exit code: {proc.returncode})"
+                ) from None
             proc.stdin.close()
 
             # Stream results - read batches until EOF signal
