@@ -119,7 +119,6 @@ class AttachmentStorage:
             info=SchemaInfo(
                 attach_id=attach_id,
                 name="main",
-                is_default=True,
                 comment=None,
                 tags={},
             )
@@ -196,7 +195,6 @@ class AttachmentStorage:
             info=SchemaInfo(
                 attach_id=attach_id,
                 name=name,
-                is_default=False,
                 comment=comment,
                 tags=tags or {},
             )
@@ -267,7 +265,6 @@ class AttachmentStorage:
             yield SchemaInfo(
                 attach_id=attach_id,
                 name=schema.info.name,
-                is_default=schema.info.is_default,
                 comment=schema.info.comment,
                 tags=schema.info.tags,
             )

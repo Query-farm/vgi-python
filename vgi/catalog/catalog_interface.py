@@ -80,6 +80,8 @@ class CatalogAttachResult:
     # True: Catalog is stateful; attach_id represents a session
     # False: Catalog is stateless; CLI can auto-attach on each command
     attach_id_required: bool = True
+    # The name of the default schema for this catalog.
+    default_schema: str = "main"
     # Extension options (settings) exposed by this catalog/worker.
     # Each ExtensionOption is serialized as bytes for Arrow compatibility.
     settings: list[bytes] = field(default_factory=list)
@@ -92,6 +94,7 @@ class CatalogAttachResult:
             pa.field("catalog_version_frozen", pa.bool_(), nullable=False),
             pa.field("catalog_version", pa.int64(), nullable=False),
             pa.field("attach_id_required", pa.bool_(), nullable=False),
+            pa.field("default_schema", pa.string(), nullable=False),
             pa.field("settings", pa.list_(pa.binary()), nullable=False),
         ]  # type: ignore[arg-type]
     )
@@ -107,6 +110,7 @@ class CatalogAttachResult:
                     "catalog_version_frozen": self.catalog_version_frozen,
                     "catalog_version": self.catalog_version,
                     "attach_id_required": self.attach_id_required,
+                    "default_schema": self.default_schema,
                     "settings": self.settings,
                 }
             ],
@@ -127,6 +131,7 @@ class CatalogAttachResult:
                 "catalog_version_frozen",
                 "catalog_version",
                 "attach_id_required",
+                "default_schema",
             ],
         )
         return cls(
@@ -136,6 +141,7 @@ class CatalogAttachResult:
             catalog_version_frozen=row["catalog_version_frozen"],
             catalog_version=row["catalog_version"],
             attach_id_required=row["attach_id_required"],
+            default_schema=row["default_schema"],
             settings=list(row.get("settings") or []),
         )
 
@@ -224,14 +230,10 @@ class SchemaInfo(CatalogObject):
     attach_id: AttachId
     name: str
 
-    # Is this the default schema of the catalog
-    is_default: bool
-
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
             pa.field("attach_id", pa.binary(), nullable=False),
             pa.field("name", pa.string(), nullable=False),
-            pa.field("is_default", pa.bool_(), nullable=False),
             pa.field("comment", pa.string(), nullable=True),
             pa.field("tags", pa.map_(pa.string(), pa.string()), nullable=False),
         ]  # type: ignore[arg-type]
@@ -244,7 +246,6 @@ class SchemaInfo(CatalogObject):
                 {
                     "attach_id": self.attach_id,
                     "name": self.name,
-                    "is_default": self.is_default,
                     "comment": self.comment,
                     "tags": self.tags,
                 }
@@ -259,12 +260,11 @@ class SchemaInfo(CatalogObject):
         row = vgi.ipc_utils.validate_single_row_batch(
             batch,
             cls.__name__,
-            required_fields=["attach_id", "name", "is_default", "tags"],
+            required_fields=["attach_id", "name", "tags"],
         )
         return cls(
             attach_id=AttachId(row["attach_id"]),
             name=row["name"],
-            is_default=row["is_default"],
             comment=row.get("comment"),
             tags=dict(row["tags"]) if row["tags"] else {},
         )
@@ -796,7 +796,6 @@ class CatalogInterface(ABC):
                     name="main",
                     comment=None,
                     tags={},
-                    is_default=True,
                 )
             ]
         )
@@ -1193,6 +1192,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             catalog_version_frozen=True,
             catalog_version=1,
             attach_id_required=False,
+            default_schema="main",
         )
 
     def schema_get(
@@ -1208,7 +1208,6 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         return SchemaInfo(
             attach_id=attach_id,
             name="main",
-            is_default=True,
             comment=None,
             tags={},
         )

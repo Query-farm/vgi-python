@@ -14,7 +14,7 @@ GeneratorExceptionFunction    - Demonstrates exception handling
 
 import random
 import struct
-from typing import ClassVar, cast
+from typing import Annotated, ClassVar, cast
 
 import pyarrow as pa
 
@@ -82,7 +82,7 @@ class SequenceFunction(TableFunctionGenerator):
             )
         ]
 
-    count: int = Arg[int](0, doc="Number of integers to generate", ge=0)  # type: ignore[assignment]
+    count: Annotated[int, Arg(0, doc="Number of integers to generate", ge=0)]
 
     # Batch size for chunking output
     BATCH_SIZE: ClassVar[int] = 1000
@@ -151,12 +151,12 @@ class RangeFunction(TableFunctionGenerator):
             )
         ]
 
-    start: int = Arg[int](0, doc="Start of range (inclusive)")  # type: ignore[assignment]
-    end: int = Arg[int](1, doc="End of range (exclusive)")  # type: ignore[assignment]
+    start: Annotated[int, Arg(0, doc="Start of range (inclusive)")]
+    end: Annotated[int, Arg(1, doc="End of range (exclusive)")]
     # Explicit arrow_type to use int32 instead of inferred int64
-    step: int = Arg[int](  # type: ignore[assignment]
-        2, default=1, doc="Step between values", ge=1, arrow_type=pa.int32()
-    )
+    step: Annotated[
+        int, Arg(2, default=1, doc="Step between values", ge=1, arrow_type=pa.int32())
+    ]
 
     BATCH_SIZE: ClassVar[int] = 1000
 
@@ -232,7 +232,7 @@ class ConstantTableFunction(TableFunctionGenerator):
             )
         ]
 
-    value: int = Arg[int](0, doc="The constant value to return")  # type: ignore[assignment]
+    value: Annotated[int, Arg(0, doc="The constant value to return")]
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -292,8 +292,8 @@ class RandomSampleFunction(TableFunctionGenerator):
             )
         ]
 
-    count: int = Arg[int](0, doc="Number of rows to generate", ge=0)  # type: ignore[assignment]
-    seed: int = Arg[int](1, default=None, doc="Random seed for reproducibility")  # type: ignore[assignment]
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+    seed: Annotated[int, Arg(1, default=None, doc="Random seed for reproducibility")]
 
     BATCH_SIZE: ClassVar[int] = 10000
 
@@ -360,7 +360,7 @@ class GeneratorExceptionFunction(TableFunctionGenerator):
         tags = {"category": "testing", "type": "error-handling"}
         max_workers = 1
 
-    fail_after: int = Arg[int](0, doc="Number of batches before failure", ge=0)  # type: ignore[assignment]
+    fail_after: Annotated[int, Arg(0, doc="Number of batches before failure", ge=0)]
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -398,7 +398,7 @@ class LoggingGeneratorFunction(TableFunctionGenerator):
         categories = ["testing"]
         max_workers = 1
 
-    count: int = Arg[int](0, doc="Number of values to generate", ge=0)  # type: ignore[assignment]
+    count: Annotated[int, Arg(0, doc="Number of values to generate", ge=0)]
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -463,7 +463,7 @@ class PartitionedRangeFunction(TableFunctionGenerator):
             )
         ]
 
-    count: int = Arg[int](0, doc="Total number of integers to generate", ge=0)  # type: ignore[assignment]
+    count: Annotated[int, Arg(0, doc="Total number of integers to generate", ge=0)]
 
     # Size of each work chunk in the queue
     CHUNK_SIZE: ClassVar[int] = 1000
@@ -571,7 +571,7 @@ class ProjectedDataFunction(TableFunctionGenerator):
             ),
         ]
 
-    count: int = Arg[int](0, doc="Number of rows to generate", ge=0)  # type: ignore[assignment]
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
 
     # Full schema with all 4 columns
     FULL_SCHEMA: pa.Schema = pa.schema(
@@ -696,7 +696,7 @@ class SettingsAwareFunction(TableFunctionGenerator):
             )
         ]
 
-    count: int = Arg[int](0, doc="Number of rows to generate", ge=0)  # type: ignore[assignment]
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
 
     @property
     def output_schema(self) -> pa.Schema:

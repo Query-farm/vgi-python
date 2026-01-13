@@ -112,7 +112,6 @@ class CICatalog(CatalogInterface):
             return SchemaInfo(
                 attach_id=attach_id,
                 name=schema.info.name,
-                is_default=schema.info.is_default,
                 comment=schema.info.comment,
                 tags=schema.info.tags,
             )

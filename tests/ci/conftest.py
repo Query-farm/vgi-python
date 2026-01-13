@@ -165,7 +165,6 @@ def main_schema_info(attach_id: AttachId) -> SchemaInfo:
     return SchemaInfo(
         attach_id=attach_id,
         name="main",
-        is_default=True,
         comment=None,
         tags={},
     )
@@ -177,7 +176,6 @@ def test_schema_info(attach_id: AttachId) -> SchemaInfo:
     return SchemaInfo(
         attach_id=attach_id,
         name="test",
-        is_default=False,
         comment="Test schema",
         tags={"env": "test"},
     )

@@ -86,7 +86,6 @@ class InMemoryCatalog(CatalogInterface):
             info=SchemaInfo(
                 attach_id=placeholder_attach_id,
                 name="main",
-                is_default=True,
                 comment=None,
                 tags={},
             )
@@ -166,7 +165,6 @@ class InMemoryCatalog(CatalogInterface):
         return SchemaInfo(
             attach_id=attach_id,
             name=schema_data.info.name,
-            is_default=schema_data.info.is_default,
             comment=schema_data.info.comment,
             tags=schema_data.info.tags,
         )
@@ -235,7 +233,6 @@ class InMemoryCatalog(CatalogInterface):
             info=SchemaInfo(
                 attach_id=placeholder_attach_id,
                 name="main",
-                is_default=True,
                 comment=None,
                 tags={},
             )
@@ -265,7 +262,6 @@ class InMemoryCatalog(CatalogInterface):
                 SchemaInfo(
                     attach_id=attach_id,
                     name=schema_data.info.name,
-                    is_default=schema_data.info.is_default,
                     comment=schema_data.info.comment,
                     tags=schema_data.info.tags,
                 )
@@ -290,7 +286,6 @@ class InMemoryCatalog(CatalogInterface):
             info=SchemaInfo(
                 attach_id=attach_id,
                 name=name,
-                is_default=False,
                 comment=comment,
                 tags=tags,
             )

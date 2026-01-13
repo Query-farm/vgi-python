@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 import pyarrow as pa
 import pytest
@@ -20,7 +20,7 @@ from vgi.argument_spec import (
     extract_argument_specs,
     schema_to_argument_specs,
 )
-from vgi.arguments import AnyArrow, Arg, TableInput
+from vgi.arguments import AnyArrow, AnyArrowValue, Arg, TableInput
 from vgi.table_in_out_function import TableInOutFunction
 
 
@@ -539,6 +539,44 @@ class TestExtractArgumentSpecsValidation:
             assert len(type_warnings) == 0
 
         assert specs[0].arrow_type == pa.int64()
+
+    def test_annotated_pattern_basic(self) -> None:
+        """Annotated pattern should work without type: ignore."""
+
+        class FunctionWithAnnotated(TableInOutFunction):
+            count: Annotated[int, Arg(0, doc="Count")]
+            name: Annotated[str, Arg(1, default="default")]
+
+        specs = extract_argument_specs(FunctionWithAnnotated)
+
+        assert len(specs) == 2
+        assert specs[0].name == "count"
+        assert specs[0].arrow_type == pa.int64()
+        assert specs[1].name == "name"
+        assert specs[1].arrow_type == pa.utf8()
+
+    def test_annotated_pattern_any_arrow_value(self) -> None:
+        """Annotated[AnyArrowValue, Arg(...)] should be detected as any type."""
+
+        class FunctionWithAnyArrow(TableInOutFunction):
+            column: Annotated[AnyArrowValue, Arg(0, doc="Column")]
+
+        specs = extract_argument_specs(FunctionWithAnyArrow)
+
+        assert len(specs) == 1
+        assert specs[0].name == "column"
+        assert specs[0].is_any_type is True
+
+    def test_annotated_pattern_with_arrow_type(self) -> None:
+        """Annotated pattern should respect explicit arrow_type."""
+
+        class FunctionWithArrowType(TableInOutFunction):
+            value: Annotated[int, Arg(0, arrow_type=pa.int32())]
+
+        specs = extract_argument_specs(FunctionWithArrowType)
+
+        assert len(specs) == 1
+        assert specs[0].arrow_type == pa.int32()
 
 
 class TestEdgeCases:

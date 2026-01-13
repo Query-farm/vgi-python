@@ -24,7 +24,6 @@ class TestAttachmentLifecycle:
         assert state.catalog_name == "ci"
         assert state.version == 1
         assert "main" in state.schemas
-        assert state.schemas["main"].info.is_default is True
 
     def test_get_attachment(self, storage: AttachmentStorage) -> None:
         """Getting existing attachment returns its state."""
@@ -85,7 +84,6 @@ class TestSchemaOperations:
         schema = storage.get_schema(attach_id, "test_schema")
         assert schema is not None
         assert schema.info.name == "test_schema"
-        assert schema.info.is_default is False
 
     def test_create_schema_with_comment_and_tags(
         self, storage_with_attachment: tuple[AttachmentStorage, AttachId]

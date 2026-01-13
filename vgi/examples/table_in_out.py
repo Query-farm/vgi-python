@@ -23,7 +23,7 @@ RepeatInputsFunction      - Duplicates each input batch N times
 SumAllColumnsFunction     - Aggregates numeric columns into sums
 """
 
-from typing import Any
+from typing import Annotated, Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -86,7 +86,7 @@ class EchoFunction(TableInOutGenerator):
             )
         ]
 
-    data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
+    data: Annotated[TableInput, Arg(0, doc="Input table")]
 
 
 class BufferInputFunction(TableInOutGenerator):
@@ -141,7 +141,7 @@ class BufferInputFunction(TableInOutGenerator):
             )
         ]
 
-    data: TableInput = Arg[TableInput](0, doc="Input table to buffer")  # type: ignore[assignment]
+    data: Annotated[TableInput, Arg(0, doc="Input table to buffer")]
 
     def process(self, batch: pa.RecordBatch) -> OutputGenerator:
         """Buffer all input batches without producing output."""
@@ -175,7 +175,7 @@ class RepeatInputsFunction(TableInOutGenerator):
 
     Arguments:
     ---------
-    repeat_count = Arg[int](0): (required)
+    repeat_count: Annotated[int, Arg(0)] (required)
         Number of times to repeat each input batch.
 
     BEHAVIOR
@@ -234,8 +234,10 @@ class RepeatInputsFunction(TableInOutGenerator):
             )
         ]
 
-    repeat_count = Arg[int](0, doc="Number of times to repeat each input batch")
-    data: TableInput = Arg[TableInput](1, doc="Input table to repeat")  # type: ignore[assignment]
+    repeat_count: Annotated[
+        int, Arg(0, doc="Number of times to repeat each input batch")
+    ]
+    data: Annotated[TableInput, Arg(1, doc="Input table to repeat")]
 
     def bind(self) -> None:
         """Validate repeat count argument."""
@@ -349,7 +351,7 @@ class SumAllColumnsFunction(TableInOutGenerator):
             )
         ]
 
-    data: TableInput = Arg[TableInput](0, doc="Input table with numeric columns")  # type: ignore[assignment]
+    data: Annotated[TableInput, Arg(0, doc="Input table with numeric columns")]
 
     @property
     def cardinality(self) -> TableCardinality | None:
@@ -659,7 +661,7 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction):
             )
         ]
 
-    data: TableInput = Arg[TableInput](0, doc="Input table with numeric columns")  # type: ignore[assignment]
+    data: Annotated[TableInput, Arg(0, doc="Input table with numeric columns")]
 
     def bind(self) -> None:
         """Initialize with empty sums dict."""

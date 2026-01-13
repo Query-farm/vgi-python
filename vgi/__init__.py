@@ -146,7 +146,14 @@ from vgi.argument_spec import (
     argument_specs_to_schema,
     schema_to_argument_specs,
 )
-from vgi.arguments import AnyArrow, Arg, Arguments, ArgumentValidationError, TableInput
+from vgi.arguments import (
+    AnyArrow,
+    AnyArrowValue,
+    Arg,
+    Arguments,
+    ArgumentValidationError,
+    TableInput,
+)
 from vgi.invocation import Invocation
 from vgi.log import Level, Message
 from vgi.metadata import (
@@ -189,6 +196,7 @@ from vgi.worker import Worker
 __all__ = [
     "AggregationFunction",
     "AnyArrow",
+    "AnyArrowValue",
     "AnyPolars",
     "Arg",
     "ArgumentSpec",

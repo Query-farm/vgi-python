@@ -11,6 +11,7 @@ including yielding log messages during processing. For most use cases, prefer th
 ### Basic Template
 
 ```python
+from typing import Annotated
 import pyarrow as pa
 import pyarrow.compute as pc
 from vgi import ScalarFunctionGenerator, Output, Arg
@@ -19,7 +20,7 @@ from vgi.log import Level, Message
 class MyScalarFunction(ScalarFunctionGenerator):
     """Transform each row to a single output value."""
 
-    col_name = Arg[str](0, doc="Name of the column to transform")
+    col_name: Annotated[str, Arg(0, doc="Name of the column to transform")]
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -77,6 +78,7 @@ Use `TableFunctionGenerator` when you need to generate data without receiving in
 ### Basic Template
 
 ```python
+from typing import Annotated
 import pyarrow as pa
 from vgi import TableFunctionGenerator, Output, Arg
 from vgi.table_function import TableCardinality
@@ -88,7 +90,7 @@ class MyTableFunction(TableFunctionGenerator):
         name = "my_table_function"
         max_workers = 1  # Or None for parallel
 
-    count = Arg[int](0, doc="Number of rows to generate")
+    count: Annotated[int, Arg(0, doc="Number of rows to generate")]
     BATCH_SIZE = 1000
 
     @property

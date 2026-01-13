@@ -7,6 +7,7 @@ Functions can define a nested `Meta` class to provide introspection metadata. No
 Metadata works with all function types: `ScalarFunction`, `TableFunctionGenerator`, and `TableInOutFunction`.
 
 ```python
+from typing import Annotated
 from vgi import TableInOutFunction, Arg
 
 class SumColumnsFunction(TableInOutFunction):
@@ -18,13 +19,14 @@ class SumColumnsFunction(TableInOutFunction):
         categories = ["aggregation", "numeric"]
         max_workers = 1  # Single-threaded (used by max_processes property)
 
-    column_name = Arg[str]("column", default=None, doc="Column to sum (optional)")
+    column_name: Annotated[str | None, Arg("column", default=None, doc="Column to sum")]
 
     def transform(self, batch):
         ...
 ```
 
 ```python
+from typing import Annotated
 from vgi import ScalarFunction, Arg
 from vgi.arguments import AnyArrow
 import pyarrow as pa
@@ -38,7 +40,7 @@ class DoubleValues(ScalarFunction):
         output_type = AnyArrow  # Dynamic type - depends on input
         categories = ["numeric", "transform"]
 
-    col_name = Arg[str](0, doc="Name of the column to double")
+    col_name: Annotated[str, Arg(0, doc="Name of the column to double")]
 
     @property
     def output_type(self) -> pa.DataType:

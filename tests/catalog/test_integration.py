@@ -53,7 +53,6 @@ class TestInMemoryCatalogSchemas:
 
         assert len(schemas) == 1
         assert schemas[0].name == "main"
-        assert schemas[0].is_default is True
 
     def test_schema_get_main(self) -> None:
         """Can get the main schema."""

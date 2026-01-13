@@ -19,6 +19,7 @@
 
 ```python
 # my_worker.py
+from typing import Annotated
 from vgi import ScalarFunction, Arg, Worker
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -29,7 +30,7 @@ class Greeting(ScalarFunction):
     class Meta:
         output_type = pa.string()
 
-    col_name = Arg[str](0, doc="Column containing names")
+    col_name: Annotated[str, Arg(0, doc="Column containing names")]
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array:
         names = batch.column(self.col_name)
@@ -106,6 +107,7 @@ A worker is a Python script that defines one or more functions:
 ```python
 #!/usr/bin/env python
 # my_worker.py
+from typing import Annotated
 import pyarrow as pa
 import pyarrow.compute as pc
 from vgi import ScalarFunction, Arg, Worker
@@ -117,7 +119,7 @@ class UpperCase(ScalarFunction):
     class Meta:
         output_type = pa.string()
 
-    col_name = Arg[str](0, doc="Column to uppercase")
+    col_name: Annotated[str, Arg(0, doc="Column to uppercase")]
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array:
         return pc.utf8_upper(batch.column(self.col_name))
@@ -155,11 +157,11 @@ Your function is now available in DuckDB. Ship the Python script to your team, a
 
 ## Going Further: Type-Safe Arguments
 
-For production use, you'll want type validation. Use `Arg[AnyArrow]` with `type_bound` to ensure columns have the correct type:
+For production use, you'll want type validation. Use `AnyArrowValue` with `type_bound` to ensure columns have the correct type:
 
 ```python
-from vgi import ScalarFunction, Arg, Worker
-from vgi.arguments import AnyArrow
+from typing import Annotated
+from vgi import ScalarFunction, Arg, AnyArrowValue, Worker
 import pyarrow as pa
 import pyarrow.compute as pc
 
@@ -170,8 +172,8 @@ class AddColumns(ScalarFunction):
     class Meta:
         output_type = pa.int64()
 
-    left = Arg[AnyArrow](0, type_bound=pa.types.is_integer, doc="First column")
-    right = Arg[AnyArrow](1, type_bound=pa.types.is_integer, doc="Second column")
+    left: Annotated[AnyArrowValue, Arg(0, type_bound=pa.types.is_integer, doc="First column")]
+    right: Annotated[AnyArrowValue, Arg(1, type_bound=pa.types.is_integer, doc="Second column")]
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array:
         return pc.add(
@@ -188,8 +190,8 @@ SELECT add_columns(price, tax) as total FROM orders;
 -- Error: Column 'name' has type string, expected integer
 ```
 
-Key differences from `Arg[str]`:
-- `Arg[AnyArrow]` validates the column's Arrow type at bind time
+Key differences from `Annotated[str, Arg(...)]`:
+- `AnyArrowValue` validates the column's Arrow type at bind time
 - `type_bound` specifies which types are allowed
 - Access the column name via `.value` (e.g., `self.left.value`)
 
@@ -214,7 +216,7 @@ class Double(ScalarFunction):
     class Meta:
         output_type = pa.int64()
 
-    col_name = Arg[str](0)
+    col_name: Annotated[str, Arg(0)]
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array:
         return pc.multiply(batch.column(self.col_name), 2)
@@ -229,7 +231,7 @@ class Sequence(TableFunctionGenerator):
     class Meta:
         max_workers = 1
 
-    count = Arg[int](0)
+    count: Annotated[int, Arg(0)]
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -257,7 +259,7 @@ class Sum(TableInOutFunction):
     class Meta:
         max_workers = 1  # Aggregations need single worker
 
-    col_name = Arg[str](0)
+    col_name: Annotated[str, Arg(0)]
 
     def bind(self) -> None:
         self.total = 0

@@ -30,6 +30,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from typing import (
+    Annotated,
     Any,
     ClassVar,
     Protocol,
@@ -309,6 +310,88 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
         # Fallback to base type if not found
         cls._init_input_type_cache[cls] = FunctionInitInput
         return FunctionInitInput
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Extract Arg descriptors from Annotated type hints.
+
+        This allows the Annotated pattern for declaring arguments:
+
+            class MyFunction(TableInOutFunction):
+                count: Annotated[int, Arg(0, doc="Number of items")]
+                column: Annotated[AnyArrowValue, Arg(0, type_bound=...)]
+
+        The Arg is extracted from the annotation metadata and installed
+        as a class attribute (descriptor).
+        """
+        super().__init_subclass__(**kwargs)
+
+        # Import here to avoid circular imports
+        from vgi.arguments import AnyArrowValue, Arg
+
+        # Get type hints with include_extras=True to access Annotated metadata
+        # We only look at the class's own annotations (not inherited) to avoid
+        # issues with forward references that can't be resolved in this module
+        annotations = getattr(cls, "__annotations__", {})
+        if not annotations:
+            return
+
+        # Build evaluation namespace from module globals
+        module = __import__(cls.__module__, fromlist=[""])
+        globalns = getattr(module, "__dict__", {})
+        # Add common typing imports that might be needed
+        globalns.setdefault("Annotated", Annotated)
+
+        for attr_name, annotation in annotations.items():
+            # Evaluate string annotation if needed (from __future__ import annotations)
+            if isinstance(annotation, str):
+                try:
+                    hint = eval(annotation, globalns)  # noqa: S307
+                except Exception:
+                    # Can't evaluate this annotation, skip it
+                    continue
+            else:
+                hint = annotation
+            # Skip if not Annotated
+            if get_origin(hint) is not Annotated:
+                continue
+
+            # Get the base type and metadata from Annotated[BaseType, metadata...]
+            args = get_args(hint)
+            if not args:
+                continue
+
+            base_type = args[0]
+            metadata = args[1:]
+
+            # Look for Arg in the metadata
+            for meta in metadata:
+                if isinstance(meta, Arg):
+                    # Check if an Arg descriptor already exists for this name
+                    # (could be from a parent class or explicit assignment)
+                    existing = getattr(cls, attr_name, None)
+                    if isinstance(existing, Arg):
+                        continue
+
+                    # Set the name on the Arg (normally done by __set_name__)
+                    meta._name = attr_name
+
+                    # Set _returns_any_arrow_value based on the annotated type
+                    meta._returns_any_arrow_value = base_type is AnyArrowValue
+
+                    # Infer _type_param from the base type for metadata extraction
+                    # and type_bound validation
+                    if base_type is AnyArrowValue or meta.type_bound is not None:
+                        # AnyArrowValue or type_bound means this is an AnyArrow arg
+                        from vgi.arguments import AnyArrow
+
+                        meta._type_param = AnyArrow
+                    elif meta._type_param is None:
+                        # Use the annotation type as the type param
+                        meta._type_param = base_type
+
+                    # Install the Arg as a class attribute
+                    setattr(cls, attr_name, meta)
+                    break
 
     def __init__(
         self,

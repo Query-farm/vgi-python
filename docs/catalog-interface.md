@@ -131,6 +131,7 @@ Returned by `catalog_attach()` with attachment metadata:
 | `catalog_version_frozen` | `bool` | Whether metadata will change |
 | `catalog_version` | `int` | Current version (increments on changes) |
 | `attach_id_required` | `bool` | Whether attach_id must be persisted |
+| `default_schema` | `str` | Name of the default schema (usually "main") |
 
 ### SchemaInfo
 
@@ -140,7 +141,6 @@ Information about a schema in a catalog:
 |-------|------|-------------|
 | `attach_id` | `AttachId` | Parent attachment |
 | `name` | `str` | Schema name |
-| `is_default` | `bool` | Whether this is the default schema |
 | `comment` | `str \| None` | Optional description |
 | `tags` | `dict[str, str]` | Key-value metadata |
 
@@ -307,7 +307,7 @@ class MyReadOnlyCatalog(ReadOnlyCatalogInterface):
 
     def schema_get(self, *, attach_id, transaction_id, name) -> SchemaInfo | None:
         if name == "main":
-            return SchemaInfo(attach_id=attach_id, name="main", is_default=True, comment=None, tags={})
+            return SchemaInfo(attach_id=attach_id, name="main", comment=None, tags={})
         return None
 
     # table_get, view_get return None by default
@@ -643,7 +643,6 @@ class SimpleCatalog(CatalogInterface):
             return SchemaInfo(
                 attach_id=attach_id,
                 name="main",
-                is_default=True,
                 comment="Default schema",
                 tags={},
             )

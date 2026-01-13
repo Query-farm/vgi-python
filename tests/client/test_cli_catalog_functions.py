@@ -365,7 +365,6 @@ class TestCLISchemaList:
         # Parse schema info
         schema_info = json.loads(list_result.output)
         assert schema_info["name"] == "main"
-        assert schema_info["is_default"] is True
 
     def test_schema_list_with_catalog_option(self, example_worker: str) -> None:
         """Schema list works with --catalog option."""
@@ -389,7 +388,6 @@ class TestCLISchemaList:
         # Parse schema info
         schema_info = json.loads(list_result.output)
         assert schema_info["name"] == "main"
-        assert schema_info["is_default"] is True
 
 
 class TestCLIAttachIdCatalogOptions:

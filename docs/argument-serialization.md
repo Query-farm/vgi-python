@@ -36,10 +36,10 @@ Positional arguments have no special metadata. Their position index is
 determined by their order in the schema.
 
 ```python
-# Arg[int](0) becomes:
+# count: Annotated[int, Arg(0)] becomes:
 pa.field("count", pa.int64())
 
-# Arg[str](1) becomes:
+# name: Annotated[str, Arg(1)] becomes:
 pa.field("name", pa.utf8())
 ```
 
@@ -49,7 +49,7 @@ Named arguments have `vgi_arg=named` metadata. The field name is the
 argument key used in SQL.
 
 ```python
-# Arg[str]("format") becomes:
+# format: Annotated[str, Arg("format")] becomes:
 pa.field("format", pa.utf8(), metadata={b"vgi_arg": b"named"})
 ```
 
@@ -57,27 +57,27 @@ pa.field("format", pa.utf8(), metadata={b"vgi_arg": b"named"})
 
 ### Table Input
 
-Table input arguments (`Arg[TableInput]`) receive streaming RecordBatches
-rather than scalar values.
+Table input arguments (`Annotated[TableInput, Arg(...)]`) receive streaming
+RecordBatches rather than scalar values.
 
 - **Arrow type**: `pa.null()`
 - **Metadata**: `{b"vgi_type": b"table"}`
 
 ```python
-# Arg[TableInput](1) becomes:
+# data: Annotated[TableInput, Arg(1)] becomes:
 pa.field("data", pa.null(), metadata={b"vgi_type": b"table"})
 ```
 
 ### Any Type
 
-Any-type arguments (`Arg[AnyArrow]`) accept any valid Arrow scalar type
-at runtime.
+Any-type arguments (`Annotated[AnyArrowValue, Arg(...)]`) accept any valid
+Arrow scalar type at runtime.
 
 - **Arrow type**: `pa.null()`
 - **Metadata**: `{b"vgi_type": b"any"}`
 
 ```python
-# Arg[AnyArrow](0) becomes:
+# value: Annotated[AnyArrowValue, Arg(0)] becomes:
 pa.field("value", pa.null(), metadata={b"vgi_type": b"any"})
 ```
 
@@ -90,7 +90,7 @@ arguments from their position onwards.
 - **Metadata**: `{b"vgi_varargs": b"true"}`
 
 ```python
-# Arg[str](0, varargs=True) becomes:
+# columns: Annotated[tuple[str, ...], Arg(0, varargs=True)] becomes:
 pa.field("columns", pa.utf8(), metadata={b"vgi_varargs": b"true"})
 ```
 
@@ -100,7 +100,7 @@ Fields can have multiple metadata keys. For example, a named argument
 that accepts any type:
 
 ```python
-# Arg[AnyArrow]("threshold") becomes:
+# threshold: Annotated[AnyArrowValue, Arg("threshold")] becomes:
 pa.field("threshold", pa.null(), metadata={
     b"vgi_arg": b"named",
     b"vgi_type": b"any",
@@ -112,10 +112,12 @@ pa.field("threshold", pa.null(), metadata={
 ### Example 1: Simple Function
 
 ```python
+from typing import Annotated
+
 class MyFunction(TableInOutFunction):
-    count = Arg[int](0)           # Positional 0
-    name = Arg[str](1)            # Positional 1
-    verbose = Arg[bool]("verbose") # Named
+    count: Annotated[int, Arg(0)]           # Positional 0
+    name: Annotated[str, Arg(1)]            # Positional 1
+    verbose: Annotated[bool, Arg("verbose")] # Named
 
 # Serializes to:
 schema = pa.schema([
@@ -128,9 +130,12 @@ schema = pa.schema([
 ### Example 2: Function with Table Input
 
 ```python
+from typing import Annotated
+from vgi.arguments import TableInput
+
 class TransformFunction(TableInOutFunction):
-    multiplier = Arg[float](0)
-    data: TableInput = Arg[TableInput](1)
+    multiplier: Annotated[float, Arg(0)]
+    data: Annotated[TableInput, Arg(1)]
 
 # Serializes to:
 schema = pa.schema([
@@ -142,8 +147,10 @@ schema = pa.schema([
 ### Example 3: Function with Varargs
 
 ```python
+from typing import Annotated
+
 class SumColumnsFunction(TableInOutFunction):
-    columns = Arg[str](0, varargs=True)
+    columns: Annotated[tuple[str, ...], Arg(0, varargs=True)]
 
 # Serializes to:
 schema = pa.schema([
@@ -154,12 +161,16 @@ schema = pa.schema([
 ### Example 4: Complex Function
 
 ```python
+from typing import Annotated
+from vgi import AnyArrowValue
+from vgi.arguments import TableInput
+
 class ComplexFunction(TableInOutFunction):
-    count = Arg[int](0)
-    data: TableInput = Arg[TableInput](1)
-    extra = Arg[float](2, varargs=True)
-    format = Arg[str]("format")
-    threshold: AnyArrow = Arg[AnyArrow]("threshold")
+    count: Annotated[int, Arg(0)]
+    data: Annotated[TableInput, Arg(1)]
+    extra: Annotated[tuple[float, ...], Arg(2, varargs=True)]
+    format: Annotated[str, Arg("format")]
+    threshold: Annotated[AnyArrowValue, Arg("threshold")]
 
 # Serializes to:
 schema = pa.schema([

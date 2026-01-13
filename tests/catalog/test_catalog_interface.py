@@ -88,7 +88,6 @@ class MinimalCatalog(CatalogInterface):
             return SchemaInfo(
                 attach_id=attach_id,
                 name="main",
-                is_default=True,
                 comment=None,
                 tags={},
             )
@@ -142,7 +141,6 @@ class TestCatalogInterfaceDefaults:
 
         assert len(schemas) == 1
         assert schemas[0].name == "main"
-        assert schemas[0].is_default is True
         assert schemas[0].comment is None
         assert schemas[0].tags == {}
 

@@ -119,7 +119,6 @@ class TestSchemaInfoSerialization:
         original = SchemaInfo(
             attach_id=AttachId(b"\x01\x02\x03\x04"),
             name="main",
-            is_default=True,
             comment="Test schema",
             tags={"env": "test", "owner": "alice"},
         )
@@ -129,7 +128,6 @@ class TestSchemaInfoSerialization:
 
         assert restored.attach_id == original.attach_id
         assert restored.name == original.name
-        assert restored.is_default == original.is_default
         assert restored.comment == original.comment
         assert restored.tags == original.tags
 
@@ -138,7 +136,6 @@ class TestSchemaInfoSerialization:
         original = SchemaInfo(
             attach_id=AttachId(b"test"),
             name="schema1",
-            is_default=False,
             comment=None,
             tags={},
         )
@@ -153,7 +150,6 @@ class TestSchemaInfoSerialization:
         original = SchemaInfo(
             attach_id=AttachId(b"test"),
             name="schema1",
-            is_default=False,
             comment="Comment",
             tags={},
         )
@@ -168,7 +164,6 @@ class TestSchemaInfoSerialization:
         original = SchemaInfo(
             attach_id=AttachId(b"test"),
             name="",
-            is_default=False,
             comment=None,
             tags={},
         )
@@ -649,22 +644,22 @@ class TestArrowSchemaCorrectness:
     def test_catalog_attach_result_schema(self) -> None:
         """Verify CatalogAttachResult Arrow schema."""
         schema = CatalogAttachResult.ARROW_SCHEMA
-        assert len(schema) == 7
+        assert len(schema) == 8
         assert schema.field("attach_id").type == pa.binary()
         assert schema.field("supports_transactions").type == pa.bool_()
         assert schema.field("supports_time_travel").type == pa.bool_()
         assert schema.field("catalog_version_frozen").type == pa.bool_()
         assert schema.field("catalog_version").type == pa.int64()
         assert schema.field("attach_id_required").type == pa.bool_()
+        assert schema.field("default_schema").type == pa.string()
         assert schema.field("settings").type == pa.list_(pa.binary())
 
     def test_schema_info_schema(self) -> None:
         """Verify SchemaInfo Arrow schema."""
         schema = SchemaInfo.ARROW_SCHEMA
-        assert len(schema) == 5
+        assert len(schema) == 4
         assert schema.field("attach_id").type == pa.binary()
         assert schema.field("name").type == pa.string()
-        assert schema.field("is_default").type == pa.bool_()
         assert schema.field("comment").type == pa.string()
         assert schema.field("comment").nullable is True
         assert schema.field("tags").type == pa.map_(pa.string(), pa.string())

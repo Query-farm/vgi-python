@@ -243,7 +243,6 @@ def schema_info_to_dict(schema_info: Any) -> dict[str, Any]:
     """
     return {
         "name": schema_info.name,
-        "is_default": schema_info.is_default,
         "comment": schema_info.comment,
         "tags": dict(schema_info.tags),
     }
@@ -358,6 +357,7 @@ def catalog_attach_result_to_dict(result: Any) -> dict[str, Any]:
         "catalog_version_frozen": result.catalog_version_frozen,
         "catalog_version": result.catalog_version,
         "attach_id_required": result.attach_id_required,
+        "default_schema": result.default_schema,
         "settings": [bytes_to_hex(s) for s in result.settings],
     }
 

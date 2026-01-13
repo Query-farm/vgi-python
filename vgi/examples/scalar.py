@@ -12,12 +12,12 @@ UpperCaseFunction           - Converts string column to uppercase
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from vgi.arguments import AnyArrow, Arg
+from vgi.arguments import AnyArrow, AnyArrowValue, Arg
 from vgi.exceptions import SchemaValidationError
 from vgi.metadata import FunctionExample
 from vgi.scalar_function import ScalarFunction
@@ -97,11 +97,9 @@ class DoubleColumnFunction(ScalarFunction):
         ]
 
     # Explicit arrow_type demonstrates type specification
-    column = Arg[AnyArrow](
-        0,
-        doc="Value to double",
-        type_bound=_is_addable_type,
-    )
+    column: Annotated[
+        AnyArrowValue, Arg(0, doc="Value to double", type_bound=_is_addable_type)
+    ]
 
     def bind(self) -> None:
         """Compute output type from input column types."""
@@ -154,8 +152,12 @@ class AddNumericColumnsFunction(ScalarFunction):
         ]
 
     # type_bound validates column types at bind time (automatic via Function.__init__)
-    col1 = Arg[AnyArrow](0, doc="First column name", type_bound=_is_addable_type)
-    col2 = Arg[AnyArrow](1, doc="Second column name", type_bound=_is_addable_type)
+    col1: Annotated[
+        AnyArrowValue, Arg(0, doc="First column name", type_bound=_is_addable_type)
+    ]
+    col2: Annotated[
+        AnyArrowValue, Arg(1, doc="Second column name", type_bound=_is_addable_type)
+    ]
 
     _output_type: pa.DataType
 
@@ -210,7 +212,7 @@ class UpperCaseFunction(ScalarFunction):
             ),
         ]
 
-    column = Arg[str](0, doc="Value")
+    column: Annotated[str, Arg(0, doc="Value")]
 
     # Note: No need to override output_type - default uses Meta.output_type
 
@@ -246,12 +248,16 @@ class SumColumnsFunction(ScalarFunction):
         ]
 
     # Varargs with type_bound validates all columns are numeric
-    columns = Arg[AnyArrow](
-        0,
-        varargs=True,
-        type_bound=_is_addable_type,
-        doc="Columns to sum (must be numeric)",
-    )
+    # Note: varargs returns tuple[Any, ...], not AnyArrowValue
+    columns: Annotated[
+        tuple[Any, ...],
+        Arg(
+            0,
+            varargs=True,
+            type_bound=_is_addable_type,
+            doc="Columns to sum (must be numeric)",
+        ),
+    ]
 
     _output_type: pa.DataType
 

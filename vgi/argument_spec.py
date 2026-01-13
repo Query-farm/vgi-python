@@ -40,7 +40,7 @@ from typing import Any, get_type_hints
 
 import pyarrow as pa
 
-from vgi.arguments import PYTHON_TO_ARROW, AnyArrow, Arg, TableInput
+from vgi.arguments import PYTHON_TO_ARROW, AnyArrow, AnyArrowValue, Arg, TableInput
 
 __all__ = [
     "ArgumentSpec",
@@ -339,10 +339,16 @@ def extract_argument_specs(
 
                 # Check for special types (AnyArrow, TableInput)
                 # Priority: Arg subscript type (Arg[AnyArrow]) > class type hint
+                # Also check _returns_any_arrow_value for Annotated[AnyArrowValue, ...]
                 hint = hints.get(attr_name)
                 type_param = getattr(arg, "_type_param", None)
                 is_table_input = type_param is TableInput or hint is TableInput
-                is_any_type = type_param is AnyArrow or hint is AnyArrow
+                is_any_type = (
+                    type_param is AnyArrow
+                    or hint is AnyArrow
+                    or hint is AnyArrowValue
+                    or getattr(arg, "_returns_any_arrow_value", False)
+                )
 
                 # Determine Arrow type using priority order:
                 # 1. Explicit arrow_type on Arg

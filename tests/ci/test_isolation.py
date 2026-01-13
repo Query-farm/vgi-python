@@ -420,7 +420,6 @@ class TestDetachIsolation:
                 attach_id=attach_id, transaction_id=None, name="main"
             )
             assert schema is not None
-            assert schema.is_default is True
 
         # Detach all except the last
         for attach_id in attachments[:-1]:

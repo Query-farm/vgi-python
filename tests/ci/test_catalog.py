@@ -191,7 +191,6 @@ class TestSchemaGet:
 
         assert schema is not None
         assert schema.name == "main"
-        assert schema.is_default is True
 
     def test_get_nonexistent_schema(
         self, attached_catalog: tuple[CICatalog, AttachId]

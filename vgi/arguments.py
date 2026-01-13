@@ -6,14 +6,24 @@ Classes:
     Arguments: Container for positional and named function arguments.
     ArgumentValidationError: Raised when an argument fails validation.
     Arg: Descriptor for declarative argument parsing with optional validation.
+    AnyArrow: Sentinel type for arguments accepting multiple Arrow types.
+    AnyArrowValue: Wrapper returned when accessing AnyArrow arguments.
 
-Example:
-    # Using Arg descriptor for declarative parsing
+Example using Annotated (recommended):
+    from typing import Annotated
+    from vgi import Arg, AnyArrowValue
+
+    class MyFunction(TableInOutFunction):
+        count: Annotated[int, Arg(0)]  # Required positional
+        name: Annotated[str, Arg("name", default="unnamed")]  # Optional named
+        column: Annotated[AnyArrowValue, Arg(0, type_bound=pa.types.is_integer)]
+
+Example using legacy Arg[T] syntax:
     class MyFunction(TableInOutFunction):
         count = Arg[int](0)  # Required positional
         name = Arg[str]("name", default="unnamed")  # Optional named
 
-    # Using Arguments.get() for manual parsing
+Example using Arguments.get() for manual parsing:
     count = args.get(0)
     name = args.get("name", default="unnamed")
 
@@ -99,7 +109,7 @@ class TableInput:
 class AnyArrowValue:
     """Wrapper for AnyArrow argument values with metadata.
 
-    When an Arg is declared with type AnyArrow, accessing the attribute returns
+    When an Arg returns an AnyArrow type, accessing the attribute returns
     an AnyArrowValue instead of just the raw value. This provides access to
     both the value and the argument's position/name for schema lookups.
 
@@ -109,16 +119,21 @@ class AnyArrowValue:
             str for named arguments).
         name: The Python attribute name of the Arg.
 
-    Example:
-        class MyFunction(ScalarFunction):
-            col1 = Arg[AnyArrow](0, doc="First column")
+    Example using Annotated (recommended):
+        from typing import Annotated
 
-            def __init__(self, ...):
-                super().__init__(...)
+        class MyFunction(ScalarFunction):
+            col1: Annotated[AnyArrowValue, Arg(0, doc="First column")]
+
+            def bind(self) -> None:
                 # self.col1 is an AnyArrowValue
                 field = self.input_schema.field(self.col1.position)
                 # Or access the value directly
                 print(self.col1.value)
+
+    Example using legacy Arg[AnyArrow] syntax:
+        class MyFunction(ScalarFunction):
+            col1 = Arg[AnyArrow](0, doc="First column")  # type: ignore[assignment]
 
     """
 
@@ -130,35 +145,37 @@ class AnyArrowValue:
 class AnyArrow:
     """Sentinel type for arguments accepting multiple Arrow types.
 
-    Use this as the type parameter for Arg when an argument should accept
-    multiple valid Arrow types, validated via the ``type_bound`` parameter.
-    When accessed, returns an AnyArrowValue containing the value plus metadata
-    (position and name).
+    Use this with ``AnyArrowValue`` in the Annotated pattern when an argument
+    should accept multiple valid Arrow types, validated via the ``type_bound``
+    parameter. When accessed, returns an AnyArrowValue containing the value
+    plus metadata (position and name).
 
-    Choosing Between Specific Types and AnyArrow
-    --------------------------------------------
-    - **Single required type**: Use a specific type like ``Arg[str]``, ``Arg[int]``,
-      or ``Arg[float]``. The argument will only accept that exact type.
+    Choosing Between Specific Types and AnyArrowValue
+    -------------------------------------------------
+    - **Single required type**: Use ``Annotated[str, Arg(...)]`` or similar.
+      The argument will only accept that exact type.
 
-    - **Multiple valid types**: Use ``Arg[AnyArrow]`` with ``type_bound`` to specify
-      which types are acceptable. For example, numeric operations that work on
-      integers, floats, and decimals should use AnyArrow with a type_bound predicate.
+    - **Multiple valid types**: Use ``Annotated[AnyArrowValue, Arg(...)]`` with
+      ``type_bound`` to specify which types are acceptable. For example, numeric
+      operations that work on integers, floats, and decimals should use AnyArrowValue.
 
-    The ``type_bound`` parameter is ONLY meaningful for ``Arg[AnyArrow]``. Using it
-    with other types will emit a warning.
+    The ``type_bound`` parameter is ONLY meaningful for ``AnyArrowValue`` arguments.
+    Using it with other types will emit a warning.
 
-    Examples:
+    Examples using Annotated (recommended):
+        from typing import Annotated
+        from vgi import Arg, AnyArrowValue
+
         # Single type: function only works with strings
         class UpperCaseFunction(ScalarFunction):
-            column = Arg[str](0, doc="String column to uppercase")
+            column: Annotated[str, Arg(0, doc="String column to uppercase")]
 
         # Multiple types: function works with any numeric type
         class DoubleFunction(ScalarFunction):
-            column = Arg[AnyArrow](
-                0,
-                doc="Numeric column to double",
-                type_bound=[pa.types.is_integer, pa.types.is_floating],
-            )
+            column: Annotated[
+                AnyArrowValue,
+                Arg(0, type_bound=[pa.types.is_integer, pa.types.is_floating])
+            ]
 
             def bind(self) -> None:
                 # Access column metadata for dynamic output type
@@ -167,10 +184,10 @@ class AnyArrow:
 
         # Any type: function works with all types
         class IdentityFunction(ScalarFunction):
-            column = Arg[AnyArrow](0, doc="Column to pass through")
+            column: Annotated[AnyArrowValue, Arg(0, doc="Column to pass through")]
 
     Accessing Values:
-        When using AnyArrow, access the value via the ``.value`` attribute::
+        When using AnyArrowValue, access the value via the ``.value`` attribute::
 
             val = self.column.value  # The column name as a string
             field = self.input_schema.field(self.column.value)
@@ -628,6 +645,8 @@ class _ArgFactory:
         arg._name = None
         arg._compiled_pattern = None
         arg._type_param = self._type_param
+        # Set based on legacy Arg[AnyArrow] pattern
+        arg._returns_any_arrow_value = self._type_param is AnyArrow
 
         if pattern is not None:
             arg._compiled_pattern = re.compile(pattern)
@@ -710,6 +729,7 @@ class Arg[ArgT]:
         "_name",
         "_compiled_pattern",
         "_type_param",
+        "_returns_any_arrow_value",
     )
 
     def __init__(
@@ -787,6 +807,8 @@ class Arg[ArgT]:
         self._name: str | None = None
         self._compiled_pattern: re.Pattern[str] | None = None
         self._type_param: type | None = None
+        # Set by __init_subclass__ when using Annotated[AnyArrowValue, Arg(...)]
+        self._returns_any_arrow_value: bool = False
 
         # Pre-compile pattern for efficiency
         if pattern is not None:
@@ -870,7 +892,7 @@ class Arg[ArgT]:
         self._validate(value)
 
         # Wrap AnyArrow values with metadata for schema lookups
-        if self._type_param is AnyArrow:
+        if self._returns_any_arrow_value:
             assert self._name is not None  # Set by __set_name__
             return AnyArrowValue(value, self.position, self._name)  # type: ignore[return-value]
 
