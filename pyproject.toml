@@ -6,10 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12.4"
 dependencies = [
     "click",
- "pyarrow",
- "structlog",
- "platformdirs",
- "numpy>=2.4.1",
+    "pyarrow",
+    "structlog",
+    "platformdirs",
+    "numpy>=2.4.1",
+    "opentelemetry-sdk>=1.39.1",
+    "opentelemetry-exporter-otlp>=1.39.1",
 ]
 
 [project.optional-dependencies]

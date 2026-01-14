@@ -21,25 +21,50 @@ Alternative exporters:
 
 ## Configuration
 
-VGI uses standard OpenTelemetry configuration. Set environment variables to configure the tracer provider:
+VGI auto-configures the OpenTelemetry SDK when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Just set environment variables and run your worker:
 
 ```bash
-# Basic configuration
-export OTEL_SERVICE_NAME=vgi-worker
+# Basic configuration - tracing auto-enabled when endpoint is set
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+export OTEL_SERVICE_NAME=vgi-worker
 
-# Run your worker
+# Run your worker - tracing is automatically configured
 vgi-example-worker
 ```
 
-Common environment variables:
+### Environment Variables
 
-| Variable | Description | Example |
+| Variable | Description | Default |
 |----------|-------------|---------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint (required to enable tracing) | - |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | Protocol: `grpc` or `http/protobuf` | `grpc` |
 | `OTEL_SERVICE_NAME` | Service name in traces | `vgi-worker` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint | `http://localhost:4317` |
-| `OTEL_TRACES_SAMPLER` | Sampling strategy | `always_on`, `parentbased_traceidratio` |
-| `OTEL_TRACES_SAMPLER_ARG` | Sampler argument | `0.1` (10% sampling) |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Auth headers (e.g., `Authorization=Bearer token`) | - |
+| `OTEL_EXPORTER_OTLP_COMPRESSION` | Compression: `gzip` or `none` | `none` |
+| `OTEL_TRACES_SAMPLER` | Sampling strategy | `parentbased_always_on` |
+| `OTEL_TRACES_SAMPLER_ARG` | Sampler argument (e.g., `0.1` for 10%) | - |
+
+### Protocol Selection
+
+```bash
+# gRPC (default) - typically port 4317
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+
+# HTTP/protobuf - typically port 4318
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+```
+
+### Authentication
+
+```bash
+# Bearer token auth
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer your-token-here"
+
+# Multiple headers
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer token,X-Custom=value"
+```
 
 **Important:** The console exporter will not work since VGI workers use stdout for Arrow IPC data. Use network-based exporters (OTLP, Jaeger, Zipkin).
 
@@ -163,7 +188,7 @@ vgi-example-worker
 
 ## Programmatic Configuration
 
-For more control, configure the tracer provider programmatically before starting workers:
+For advanced use cases (custom exporters, processors, or resource attributes), configure the tracer provider before calling `run()`. VGI will detect the existing provider and skip auto-configuration:
 
 ```python
 from opentelemetry import trace
@@ -172,8 +197,12 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 
-# Configure resource
-resource = Resource.create({"service.name": "my-vgi-worker"})
+# Configure resource with custom attributes
+resource = Resource.create({
+    "service.name": "my-vgi-worker",
+    "service.version": "1.0.0",
+    "deployment.environment": "production",
+})
 
 # Configure tracer provider
 provider = TracerProvider(resource=resource)
@@ -181,7 +210,7 @@ processor = BatchSpanProcessor(OTLPSpanExporter(endpoint="http://localhost:4317"
 provider.add_span_processor(processor)
 trace.set_tracer_provider(provider)
 
-# Now start your worker - it will use the configured provider
+# Now start your worker - it will use YOUR provider (auto-config is skipped)
 from my_worker import MyWorker
 MyWorker().run()
 ```
@@ -190,8 +219,8 @@ MyWorker().run()
 
 ### No spans appearing
 
-1. Verify `opentelemetry-api` is installed: `python -c "import opentelemetry"`
-2. Check that a tracer provider is configured (SDK installed and configured)
+1. Verify `OTEL_EXPORTER_OTLP_ENDPOINT` is set: `echo $OTEL_EXPORTER_OTLP_ENDPOINT`
+2. Check worker logs for `otel_tracing_configured` message
 3. Verify the exporter endpoint is reachable
 4. Check sampling configuration (use `OTEL_TRACES_SAMPLER=always_on` for debugging)
 

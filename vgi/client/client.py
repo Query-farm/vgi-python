@@ -1606,40 +1606,58 @@ class Client(CatalogClientMixin):
                 "Client not started. Call start() or use context manager."
             )
 
-        # Get the first batch to determine schema and initialize
-        for input_batch in input:
-            if not isinstance(input_batch, pa.RecordBatch):
-                raise ClientError("Input iterator must yield RecordBatches")
-
-            input_schema = input_batch.schema
-            data_writer, _ = self._initialize_function_stream(
-                function_name=function_name,
-                arguments=arguments,
-                input_schema=input_schema,
-                function_type=InvocationType.TABLE,
-                bind_result_callback=bind_result_callback,
-                projection_ids=projection_ids,
-                settings=settings,
-                transaction_id=transaction_id,
-            )
-
-            # Use parallel processing for all cases (handles both single and
-            # multi-worker)
-            assert data_writer is not None  # set when input_schema is not None
-            yield from self._table_in_out_function_parallel(
-                input_batch=input_batch,
-                input_iterator=input,
-                input_schema=input_schema,
-                data_writer=data_writer,
-            )
-            return
-
-        # Input iterator was empty - table-in-out functions require input
-        raise ClientError(
-            f"table_in_out_function requires at least one input batch. "
-            f"The input iterator for function '{function_name}' was empty. "
-            f"Use table_function() for functions that generate data without input."
+        # Start client span for tracing - manually managed for generator lifecycle
+        tracer = tracing.get_tracer("vgi.client")
+        span = tracer.start_span(
+            f"client.table_in_out.{function_name}",
+            kind=tracing.get_span_kind_client(),
         )
+        span.set_attribute(tracing.VGI_FUNCTION_NAME, function_name)
+        span.set_attribute(tracing.VGI_FUNCTION_TYPE, "table_in_out")
+        ctx = tracing.set_span_in_context(span)
+        token = tracing.attach_context(ctx)
+
+        try:
+            # Get the first batch to determine schema and initialize
+            for input_batch in input:
+                if not isinstance(input_batch, pa.RecordBatch):
+                    raise ClientError("Input iterator must yield RecordBatches")
+
+                input_schema = input_batch.schema
+                data_writer, _ = self._initialize_function_stream(
+                    function_name=function_name,
+                    arguments=arguments,
+                    input_schema=input_schema,
+                    function_type=InvocationType.TABLE,
+                    bind_result_callback=bind_result_callback,
+                    projection_ids=projection_ids,
+                    settings=settings,
+                    transaction_id=transaction_id,
+                )
+
+                # Use parallel processing for all cases (handles both single and
+                # multi-worker)
+                assert data_writer is not None  # set when input_schema is not None
+                yield from self._table_in_out_function_parallel(
+                    input_batch=input_batch,
+                    input_iterator=input,
+                    input_schema=input_schema,
+                    data_writer=data_writer,
+                )
+                return
+
+            # Input iterator was empty - table-in-out functions require input
+            raise ClientError(
+                f"table_in_out_function requires at least one input batch. "
+                f"The input iterator for function '{function_name}' was empty. "
+                f"Use table_function() for functions that generate data without input."
+            )
+        except Exception as e:
+            tracing.set_span_error(span, e)
+            raise
+        finally:
+            span.end()
+            tracing.detach_context(token)
 
     def _table_in_out_function_parallel(
         self,
@@ -1996,24 +2014,43 @@ class Client(CatalogClientMixin):
                 "Client not started. Call start() or use context manager."
             )
 
-        _, output_reader = self._initialize_function_stream(
-            function_name=function_name,
-            arguments=arguments,
-            input_schema=None,
-            function_type=InvocationType.TABLE,
-            bind_result_callback=bind_result_callback,
-            projection_ids=projection_ids,
-            settings=settings,
-            transaction_id=transaction_id,
+        # Start client span for tracing - manually managed for generator lifecycle
+        tracer = tracing.get_tracer("vgi.client")
+        span = tracer.start_span(
+            f"client.table.{function_name}",
+            kind=tracing.get_span_kind_client(),
         )
+        span.set_attribute(tracing.VGI_FUNCTION_NAME, function_name)
+        span.set_attribute(tracing.VGI_FUNCTION_TYPE, "table")
+        ctx = tracing.set_span_in_context(span)
+        token = tracing.attach_context(ctx)
 
-        if output_reader is None:
-            raise ClientError("Protocol error: output_reader not initialized")
+        try:
+            _, output_reader = self._initialize_function_stream(
+                function_name=function_name,
+                arguments=arguments,
+                input_schema=None,
+                function_type=InvocationType.TABLE,
+                bind_result_callback=bind_result_callback,
+                projection_ids=projection_ids,
+                settings=settings,
+                transaction_id=transaction_id,
+            )
 
-        # Use parallel processing for all cases (handles both single and multi-worker)
-        yield from self._table_function_parallel(
-            primary_output_reader=output_reader,
-        )
+            if output_reader is None:
+                raise ClientError("Protocol error: output_reader not initialized")
+
+            # Use parallel processing for all cases (handles both single and
+            # multi-worker)
+            yield from self._table_function_parallel(
+                primary_output_reader=output_reader,
+            )
+        except Exception as e:
+            tracing.set_span_error(span, e)
+            raise
+        finally:
+            span.end()
+            tracing.detach_context(token)
 
     def scalar_function(
         self,
@@ -2095,39 +2132,57 @@ class Client(CatalogClientMixin):
                 "Client not started. Call start() or use context manager."
             )
 
-        # Get the first batch to determine schema and initialize
-        for input_batch in input:
-            if not isinstance(input_batch, pa.RecordBatch):
-                raise ClientError("Input iterator must yield RecordBatches")
-
-            input_schema = input_batch.schema
-            data_writer, _ = self._initialize_function_stream(
-                function_name=function_name,
-                arguments=arguments,
-                input_schema=input_schema,
-                function_type=InvocationType.SCALAR,
-                bind_result_callback=bind_result_callback,
-                projection_ids=None,  # Scalar functions don't use projection
-                settings=settings,
-                transaction_id=transaction_id,
-            )
-
-            # Use parallel processing for all cases (handles both single and
-            # multi-worker)
-            assert data_writer is not None  # set when input_schema is not None
-            yield from self._scalar_function_parallel(
-                input_batch=input_batch,
-                input_iterator=input,
-                data_writer=data_writer,
-            )
-            return
-
-        # Input iterator was empty - scalar functions require input
-        raise ClientError(
-            f"scalar_function requires at least one input batch. "
-            f"The input iterator for function '{function_name}' was empty. "
-            f"Use table_function() for functions that generate data without input."
+        # Start client span for tracing - manually managed for generator lifecycle
+        tracer = tracing.get_tracer("vgi.client")
+        span = tracer.start_span(
+            f"client.scalar.{function_name}",
+            kind=tracing.get_span_kind_client(),
         )
+        span.set_attribute(tracing.VGI_FUNCTION_NAME, function_name)
+        span.set_attribute(tracing.VGI_FUNCTION_TYPE, "scalar")
+        ctx = tracing.set_span_in_context(span)
+        token = tracing.attach_context(ctx)
+
+        try:
+            # Get the first batch to determine schema and initialize
+            for input_batch in input:
+                if not isinstance(input_batch, pa.RecordBatch):
+                    raise ClientError("Input iterator must yield RecordBatches")
+
+                input_schema = input_batch.schema
+                data_writer, _ = self._initialize_function_stream(
+                    function_name=function_name,
+                    arguments=arguments,
+                    input_schema=input_schema,
+                    function_type=InvocationType.SCALAR,
+                    bind_result_callback=bind_result_callback,
+                    projection_ids=None,  # Scalar functions don't use projection
+                    settings=settings,
+                    transaction_id=transaction_id,
+                )
+
+                # Use parallel processing for all cases (handles both single and
+                # multi-worker)
+                assert data_writer is not None  # set when input_schema is not None
+                yield from self._scalar_function_parallel(
+                    input_batch=input_batch,
+                    input_iterator=input,
+                    data_writer=data_writer,
+                )
+                return
+
+            # Input iterator was empty - scalar functions require input
+            raise ClientError(
+                f"scalar_function requires at least one input batch. "
+                f"The input iterator for function '{function_name}' was empty. "
+                f"Use table_function() for functions that generate data without input."
+            )
+        except Exception as e:
+            tracing.set_span_error(span, e)
+            raise
+        finally:
+            span.end()
+            tracing.detach_context(token)
 
     def _scalar_function_parallel(
         self,

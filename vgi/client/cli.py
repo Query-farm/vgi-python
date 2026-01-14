@@ -510,7 +510,16 @@ cli = _create_cli()
 
 def main() -> None:
     """CLI entry point for vgi-client."""
-    cli()
+    from vgi import tracing
+
+    provider = tracing.maybe_configure_tracing(
+        default_service_name="vgi-client",
+        log_func=log.info,
+    )
+    try:
+        cli()
+    finally:
+        tracing.shutdown_tracing(provider, log_func=log.debug)
 
 
 if __name__ == "__main__":

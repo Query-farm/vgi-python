@@ -460,6 +460,7 @@ class Worker:
 
         """
         self._quiet = quiet or os.environ.get("VGI_QUIET") == "1"
+        self._tracer_provider: Any = None  # Set by _maybe_configure_tracing
         structlog.configure(
             processors=[
                 structlog.processors.add_log_level,
@@ -472,6 +473,21 @@ class Worker:
         self.log: structlog.stdlib.BoundLogger = structlog.get_logger().bind(
             component="worker", pid=os.getpid()
         )
+
+    def _maybe_configure_tracing(self) -> None:
+        """Auto-configure OpenTelemetry SDK if OTEL env vars are set.
+
+        Delegates to the shared tracing.maybe_configure_tracing() function.
+        See that function for environment variables and configuration details.
+        """
+        self._tracer_provider = tracing.maybe_configure_tracing(
+            default_service_name="vgi-worker",
+            log_func=self.log.info,
+        )
+
+    def _shutdown_tracing(self) -> None:
+        """Shutdown the tracer provider to flush pending spans."""
+        tracing.shutdown_tracing(self._tracer_provider, log_func=self.log.debug)
 
     def _read_single_record_batch(self, context: str) -> pa.RecordBatch:
         """Read a schema + record batch pair from stdin.
@@ -993,16 +1009,23 @@ class Worker:
 
         # Dispatch catalog invocations separately (simplified protocol)
         if invocation.function_type == InvocationType.CATALOG:
-            try:
-                self._handle_catalog_invocation(invocation, fn_log)
-            except (KeyboardInterrupt, SystemExit):
-                raise  # Let these propagate normally
-            except Exception as e:
-                fn_log.exception("catalog_invocation_failed", error=str(e))
-                tracing.set_span_error(invocation_span, e)
-                error_batch_bytes = self._create_bind_error_batch(e, invocation)
-                stdout.write(error_batch_bytes)
-                stdout.flush()
+            with tracer.start_as_current_span(
+                "worker.catalog", kind=tracing.get_span_kind_internal()
+            ) as catalog_span:
+                catalog_span.set_attribute(
+                    tracing.VGI_FUNCTION_NAME, invocation.function_name
+                )
+                try:
+                    self._handle_catalog_invocation(invocation, fn_log)
+                except (KeyboardInterrupt, SystemExit):
+                    raise  # Let these propagate normally
+                except Exception as e:
+                    fn_log.exception("catalog_invocation_failed", error=str(e))
+                    tracing.set_span_error(catalog_span, e)
+                    tracing.set_span_error(invocation_span, e)
+                    error_batch_bytes = self._create_bind_error_batch(e, invocation)
+                    stdout.write(error_batch_bytes)
+                    stdout.flush()
             return
 
         # Bind phase with tracing
@@ -1232,34 +1255,41 @@ class Worker:
             )
             sys.stderr.flush()
 
+        # Auto-configure tracing from env vars if set
+        self._maybe_configure_tracing()
+
         self.log.info("worker_starting")
         sys.stdin = os.fdopen(0, "rb")
         sys.stdout = os.fdopen(1, "wb", buffering=0)
 
         tracer = tracing.get_tracer("vgi.worker")
 
-        while True:
-            self.log.info("waiting_for_invocation")
-            try:
-                invocation = self._read_invocation()
-            except IPCError:
-                break
+        try:
+            while True:
+                self.log.info("waiting_for_invocation")
+                try:
+                    invocation = self._read_invocation()
+                except IPCError:
+                    break
 
-            fn_log = self.log.bind(function=invocation.function_name)
-            fn_log.info("init_received", arguments=invocation.arguments)
-            fn_log.debug("input_schema_parsed", schema=str(invocation.input_schema))
+                fn_log = self.log.bind(function=invocation.function_name)
+                fn_log.info("init_received", arguments=invocation.arguments)
+                fn_log.debug("input_schema_parsed", schema=str(invocation.input_schema))
 
-            # Restore trace context from invocation
-            trace_token = tracing.restore_trace_context(
-                invocation.traceparent, invocation.tracestate
-            )
+                # Restore trace context from invocation
+                trace_token = tracing.restore_trace_context(
+                    invocation.traceparent, invocation.tracestate
+                )
 
-            try:
-                with tracer.start_as_current_span(
-                    "worker.invocation",
-                    kind=tracing.get_span_kind_server(),
-                ) as invocation_span:
-                    self._process_invocation(invocation, fn_log, invocation_span)
-            finally:
-                # Always detach trace context
-                tracing.detach_trace_context(trace_token)
+                try:
+                    with tracer.start_as_current_span(
+                        "worker.invocation",
+                        kind=tracing.get_span_kind_server(),
+                    ) as invocation_span:
+                        self._process_invocation(invocation, fn_log, invocation_span)
+                finally:
+                    # Always detach trace context
+                    tracing.detach_trace_context(trace_token)
+        finally:
+            # Flush any pending spans
+            self._shutdown_tracing()

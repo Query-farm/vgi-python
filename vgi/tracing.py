@@ -34,8 +34,14 @@ __all__ = [
     "extract_trace_context",
     "detach_trace_context",
     "get_span_kind_server",
+    "get_span_kind_client",
     "get_span_kind_internal",
+    "set_span_in_context",
+    "attach_context",
+    "detach_context",
     "set_span_error",
+    "maybe_configure_tracing",
+    "shutdown_tracing",
     # Attribute constants
     "VGI_FUNCTION_NAME",
     "VGI_FUNCTION_TYPE",
@@ -302,11 +308,59 @@ def get_span_kind_server() -> Any:
     return None
 
 
+def get_span_kind_client() -> Any:
+    """Get SpanKind.CLIENT or None if tracing unavailable."""
+    if TRACING_AVAILABLE and SpanKind is not None:
+        return SpanKind.CLIENT
+    return None
+
+
 def get_span_kind_internal() -> Any:
     """Get SpanKind.INTERNAL or None if tracing unavailable."""
     if TRACING_AVAILABLE and SpanKind is not None:
         return SpanKind.INTERNAL
     return None
+
+
+def set_span_in_context(span: Any) -> Any:
+    """Set a span in a new context, returning the context.
+
+    Args:
+        span: The span to set in context.
+
+    Returns:
+        A context with the span set, or None if tracing unavailable.
+
+    """
+    if not TRACING_AVAILABLE or trace is None:
+        return None
+    return trace.set_span_in_context(span)
+
+
+def attach_context(ctx: Any) -> Any:
+    """Attach a context as the current context.
+
+    Args:
+        ctx: The context to attach.
+
+    Returns:
+        A token to pass to detach_context(), or None if tracing unavailable.
+
+    """
+    if not TRACING_AVAILABLE or ctx is None or otel_context is None:
+        return None
+    return otel_context.attach(ctx)
+
+
+def detach_context(token: Any) -> None:
+    """Detach a previously attached context.
+
+    Args:
+        token: The token returned by attach_context().
+
+    """
+    if token is not None and TRACING_AVAILABLE and otel_context is not None:
+        otel_context.detach(token)
 
 
 def set_span_error(span: Any, exception: BaseException) -> None:
@@ -323,3 +377,116 @@ def set_span_error(span: Any, exception: BaseException) -> None:
     if hasattr(span, "set_status") and hasattr(span, "record_exception"):
         span.record_exception(exception)
         span.set_status(Status(StatusCode.ERROR, str(exception)))
+
+
+def maybe_configure_tracing(
+    default_service_name: str = "vgi",
+    log_func: Any | None = None,
+) -> Any:
+    """Auto-configure OpenTelemetry SDK if OTEL env vars are set.
+
+    Checks for OTEL_EXPORTER_OTLP_ENDPOINT and configures the appropriate
+    exporter based on OTEL_EXPORTER_OTLP_PROTOCOL (grpc or http/protobuf).
+
+    This is a no-op if:
+    - OTEL_EXPORTER_OTLP_ENDPOINT is not set
+    - A TracerProvider is already configured
+    - Required packages are not installed
+
+    Environment variables used:
+    - OTEL_EXPORTER_OTLP_ENDPOINT: Collector endpoint (required to enable)
+    - OTEL_EXPORTER_OTLP_PROTOCOL: "grpc" (default) or "http/protobuf"
+    - OTEL_SERVICE_NAME: Service name (default: default_service_name param)
+    - OTEL_EXPORTER_OTLP_HEADERS: Auth headers (handled by exporter)
+    - OTEL_EXPORTER_OTLP_COMPRESSION: Compression (handled by exporter)
+
+    Args:
+        default_service_name: Service name to use if OTEL_SERVICE_NAME not set.
+        log_func: Optional logging function that accepts keyword arguments.
+            Called with (event, endpoint, protocol, service_name) on success.
+
+    Returns:
+        The configured TracerProvider, or None if not configured.
+        Caller should call provider.shutdown() when done to flush spans.
+
+    Example:
+        provider = maybe_configure_tracing("vgi-worker", log.info)
+        try:
+            # ... do work ...
+        finally:
+            if provider:
+                provider.shutdown()
+
+    """
+    import os
+
+    endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if not endpoint:
+        return None
+
+    try:
+        from opentelemetry import trace as otel_trace
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    except ImportError:
+        return None
+
+    # Don't override if already configured
+    current_provider = otel_trace.get_tracer_provider()
+    if isinstance(current_provider, TracerProvider):
+        return None
+
+    # Determine protocol and get appropriate exporter
+    protocol = os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
+
+    try:
+        if protocol == "http/protobuf":
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                OTLPSpanExporter as HttpExporter,
+            )
+
+            exporter_cls: Any = HttpExporter
+        else:
+            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+                OTLPSpanExporter as GrpcExporter,
+            )
+
+            exporter_cls = GrpcExporter
+    except ImportError:
+        return None
+
+    # Configure provider
+    service_name = os.environ.get("OTEL_SERVICE_NAME", default_service_name)
+    resource = Resource.create({"service.name": service_name})
+    provider = TracerProvider(resource=resource)
+    provider.add_span_processor(BatchSpanProcessor(exporter_cls()))
+    otel_trace.set_tracer_provider(provider)
+
+    if log_func is not None:
+        log_func(
+            "otel_tracing_configured",
+            endpoint=endpoint,
+            protocol=protocol,
+            service_name=service_name,
+        )
+
+    return provider
+
+
+def shutdown_tracing(provider: Any, log_func: Any | None = None) -> None:
+    """Shutdown the tracer provider to flush pending spans.
+
+    Args:
+        provider: The TracerProvider returned by maybe_configure_tracing().
+        log_func: Optional logging function for debug messages.
+
+    """
+    if provider is not None:
+        try:
+            provider.shutdown()
+            if log_func is not None:
+                log_func("otel_tracing_shutdown")
+        except Exception as e:
+            if log_func is not None:
+                log_func("otel_shutdown_error", error=str(e))
