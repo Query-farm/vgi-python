@@ -92,7 +92,7 @@ During data transfer, each direction uses a **single long-lived IPC stream** con
 | 3 | Client → Worker | Handshake | InitInput | 1 |
 | 4 | Worker → Client | Handshake | InitResult | 1 |
 | 5 | Client → Worker | Data | Input batches | 0..N |
-| 6 | Worker → Client | Data | Output batches with status | 1..N |
+| 6 | Worker → Client | Data | Output batches with status | 1..N (always ≥1) |
 
 **Notes:**
 - Stream 5 is absent for Table functions (no input)
@@ -181,6 +181,11 @@ Client                                  Worker
   │                                       │ teardown()
   └───────────────────────────────────────┘
 ```
+
+**Empty output handling:**
+- If `process()` yields no batches, the worker emits an empty batch with `FINISHED` status
+- This ensures the client receives a completion signal and doesn't block waiting for data
+- The client filters out empty batches before yielding to callers (protocol detail not exposed to users)
 
 ### Table-In-Out Function Protocol
 
@@ -451,12 +456,14 @@ Workers support multiple invocations within a single process. After completing o
 - Schema validation before sending to client
 - Row count validation for scalar functions
 - Automatic error wrapping with stack traces
+- Table functions always emit at least one batch (empty if no output) to signal completion
 
 **Client responsibilities:**
 - Spawn worker subprocess with correct command
 - Send Invocation as first message
 - Handle all status values correctly
 - Close stdin (not just IPC stream) to signal worker shutdown
+- Filter out empty batches from table functions before yielding to callers
 
 **Worker responsibilities:**
 - Parse Invocation and lookup function

@@ -112,6 +112,7 @@ from vgi.ipc_utils import (
 )
 from vgi.scalar_function import ProtocolInput as ScalarProtocolInput
 from vgi.scalar_function import ScalarFunctionGenerator
+from vgi.table_function import OutputSpec as TableFunctionOutputSpec
 from vgi.table_function import TableFunctionGenerator
 from vgi.table_in_out_function import (
     ProtocolInput,
@@ -1045,21 +1046,50 @@ class Worker:
                     active_features=active_features,
                 )
 
-                output_spec = OutputSpec(
-                    output_schema=instance.output_schema,
-                    max_processes=instance.max_processes,
-                    invocation_id=instance.create_invocation_id(),
-                    active_features=active_features,
-                )
-                bind_result_bytes = output_spec.serialize()
+                # Use the appropriate OutputSpec class based on function type
+                invocation_id = instance.create_invocation_id()
+                if isinstance(instance, TableFunctionGenerator):
+                    cardinality = instance.cardinality
+                    bind_result_bytes = TableFunctionOutputSpec(
+                        output_schema=instance.output_schema,
+                        max_processes=instance.max_processes,
+                        invocation_id=invocation_id,
+                        active_features=active_features,
+                        cardinality=cardinality,
+                    ).serialize()
+                    fn_log.debug(
+                        "bind_result",
+                        output_schema={
+                            f.name: str(f.type) for f in instance.output_schema
+                        },
+                        max_processes=instance.max_processes,
+                        invocation_id=invocation_id.hex(),
+                        cardinality_estimate=(
+                            cardinality.estimate if cardinality else None
+                        ),
+                        cardinality_max=cardinality.max if cardinality else None,
+                    )
+                else:
+                    bind_result_bytes = OutputSpec(
+                        output_schema=instance.output_schema,
+                        max_processes=instance.max_processes,
+                        invocation_id=invocation_id,
+                        active_features=active_features,
+                    ).serialize()
+                    fn_log.debug(
+                        "bind_result",
+                        output_schema={
+                            f.name: str(f.type) for f in instance.output_schema
+                        },
+                        max_processes=instance.max_processes,
+                        invocation_id=invocation_id.hex(),
+                    )
 
                 # Set bind span attributes
                 bind_span.set_attribute(tracing.VGI_MAX_WORKERS, instance.max_processes)
                 bind_span.set_attribute(
                     tracing.VGI_OUTPUT_SCHEMA_COLUMNS, len(instance.output_schema)
                 )
-                # Store invocation_id for later use
-                invocation_id = output_spec.invocation_id
             except (KeyboardInterrupt, SystemExit):
                 raise
             except Exception as e:

@@ -390,14 +390,15 @@ class SequenceFunction(TableFunctionGenerator):
         max_workers = 1
 
     count: Annotated[int, Arg(0, doc="Number of integers")]
+    batch_size: Annotated[int, Arg(1, default=1000, doc="Batch size for output")]
 
     @property
     def output_schema(self) -> pa.Schema:
         return pa.schema([("n", pa.int64())])
 
     def process(self):
-        for start in range(0, self.count, 1000):
-            end = min(start + 1000, self.count)
+        for start in range(0, self.count, self.batch_size):
+            end = min(start + self.batch_size, self.count)
             yield Output(pa.RecordBatch.from_pydict(
                 {"n": list(range(start, end))}, schema=self.output_schema
             ))

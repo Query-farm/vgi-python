@@ -16,6 +16,7 @@ import random
 import struct
 from typing import Annotated, ClassVar, cast
 
+import numpy as np
 import pyarrow as pa
 
 from vgi.arguments import Arg
@@ -65,6 +66,9 @@ class SequenceFunction(TableFunctionGenerator):
     SELECT * FROM sequence(5)
     Returns: [{"n": 0}, {"n": 1}, {"n": 2}, {"n": 3}, {"n": 4}]
 
+    SELECT * FROM sequence(1000, 100)
+    Returns: integers 0-999 in batches of 100 rows each
+
     """
 
     class Meta:
@@ -79,13 +83,15 @@ class SequenceFunction(TableFunctionGenerator):
             FunctionExample(
                 sql="SELECT * FROM sequence(10)",
                 description="Generate integers 0-9",
-            )
+            ),
+            FunctionExample(
+                sql="SELECT * FROM sequence(1000, 100)",
+                description="Generate integers 0-999 in batches of 100",
+            ),
         ]
 
     count: Annotated[int, Arg(0, doc="Number of integers to generate", ge=0)]
-
-    # Batch size for chunking output
-    BATCH_SIZE: ClassVar[int] = 1000
+    batch_size: Annotated[int, Arg(1, default=1000, doc="Batch size for output", ge=1)]
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -103,15 +109,15 @@ class SequenceFunction(TableFunctionGenerator):
         current = 0
 
         while remaining > 0:
-            batch_size = min(remaining, self.BATCH_SIZE)
-            values = list(range(current, current + batch_size))
+            size = min(remaining, self.batch_size)
+            values = np.arange(current, current + size, dtype=np.int64)
 
             yield Output(
                 pa.RecordBatch.from_pydict({"n": values}, schema=self.output_schema)
             )
 
-            current += batch_size
-            remaining -= batch_size
+            current += size
+            remaining -= size
 
 
 class RangeFunction(TableFunctionGenerator):

@@ -1913,8 +1913,9 @@ class Client(CatalogClientMixin):
                 )
                 continue
 
-            # Yield the output batch
-            yield result
+            # Yield the output batch (skip empty batches used for protocol completion)
+            if result.num_rows > 0:
+                yield result
 
         self._join_threads(threads)
         log.debug("all_table_function_workers_complete")

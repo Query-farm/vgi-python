@@ -427,11 +427,21 @@ class TableFunctionGenerator(TableFunctionBase):
         generator = self.process()
 
         try:
+            sent_batch: bool = False
             # DATA phase - iterate until generator is exhausted
             while True:
                 try:
                     result = self._process_with_exception_handling(generator)
+                    sent_batch = True
                 except StopIteration:
+                    if not sent_batch:
+                        # If no batches were sent, emit an empty batch to
+                        # signal completion, otherwise the client may
+                        # block indefinitely waiting for data.
+                        result = OutputComplete(
+                            batch=self.empty_output_batch, log_message=None
+                        )
+                        yield ProtocolOutput.from_process_result(result)
                     break
                 yield ProtocolOutput.from_process_result(result)
                 if self._should_terminate(result):
