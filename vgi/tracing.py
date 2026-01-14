@@ -1,0 +1,325 @@
+"""OpenTelemetry tracing support for VGI workers.
+
+This module provides optional OpenTelemetry integration for distributed tracing.
+When opentelemetry-api is installed and a tracer provider is configured,
+worker processes will emit spans for function invocations.
+
+The module gracefully degrades when opentelemetry-api is not installed,
+providing no-op implementations that have minimal overhead.
+
+Example:
+    # In worker code
+    from vgi.tracing import get_tracer, restore_trace_context
+
+    tracer = get_tracer("vgi.worker")
+    with tracer.start_as_current_span("worker.invocation") as span:
+        span.set_attribute(VGI_FUNCTION_NAME, "my_function")
+        # ... do work ...
+
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    pass
+
+__all__ = [
+    "TRACING_AVAILABLE",
+    "get_tracer",
+    "restore_trace_context",
+    "extract_trace_context",
+    "detach_trace_context",
+    "get_span_kind_server",
+    "get_span_kind_internal",
+    "set_span_error",
+    # Attribute constants
+    "VGI_FUNCTION_NAME",
+    "VGI_FUNCTION_TYPE",
+    "VGI_INVOCATION_ID",
+    "VGI_EXECUTION_ID",
+    "VGI_CORRELATION_ID",
+    "VGI_WORKER_PID",
+    "VGI_WORKER_IS_PRIMARY",
+    "VGI_MAX_WORKERS",
+    "VGI_INPUT_SCHEMA_COLUMNS",
+    "VGI_OUTPUT_SCHEMA_COLUMNS",
+    "VGI_BATCH_INDEX",
+    "VGI_BATCH_INPUT_ROWS",
+    "VGI_BATCH_OUTPUT_ROWS",
+    "VGI_TOTAL_BATCHES",
+    "VGI_TOTAL_INPUT_ROWS",
+    "VGI_TOTAL_OUTPUT_ROWS",
+    "VGI_TOTAL_INPUT_BYTES",
+    "VGI_TOTAL_OUTPUT_BYTES",
+    "VGI_IPC_READER_MESSAGES",
+    "VGI_IPC_WRITER_MESSAGES",
+]
+
+# Span attribute constants following OpenTelemetry semantic conventions
+VGI_FUNCTION_NAME = "vgi.function.name"
+VGI_FUNCTION_TYPE = "vgi.function.type"
+VGI_INVOCATION_ID = "vgi.invocation.id"
+VGI_EXECUTION_ID = "vgi.execution.id"
+VGI_CORRELATION_ID = "vgi.correlation.id"
+VGI_WORKER_PID = "vgi.worker.pid"
+VGI_WORKER_IS_PRIMARY = "vgi.worker.is_primary"
+VGI_MAX_WORKERS = "vgi.max_workers"
+VGI_INPUT_SCHEMA_COLUMNS = "vgi.input_schema.columns"
+VGI_OUTPUT_SCHEMA_COLUMNS = "vgi.output_schema.columns"
+VGI_BATCH_INDEX = "vgi.batch.index"
+VGI_BATCH_INPUT_ROWS = "vgi.batch.input_rows"
+VGI_BATCH_OUTPUT_ROWS = "vgi.batch.output_rows"
+VGI_TOTAL_BATCHES = "vgi.total.batches"
+VGI_TOTAL_INPUT_ROWS = "vgi.total.input_rows"
+VGI_TOTAL_OUTPUT_ROWS = "vgi.total.output_rows"
+VGI_TOTAL_INPUT_BYTES = "vgi.total.input_bytes"
+VGI_TOTAL_OUTPUT_BYTES = "vgi.total.output_bytes"
+VGI_IPC_READER_MESSAGES = "vgi.ipc.reader_messages"
+VGI_IPC_WRITER_MESSAGES = "vgi.ipc.writer_messages"
+
+# Check if opentelemetry-api is available
+try:
+    from opentelemetry import context as otel_context
+    from opentelemetry import trace
+    from opentelemetry.propagate import extract, inject
+    from opentelemetry.trace import SpanKind, Status, StatusCode
+
+    TRACING_AVAILABLE = True
+except ImportError:
+    TRACING_AVAILABLE = False
+    trace = None  # type: ignore[assignment]
+    otel_context = None  # type: ignore[assignment]
+    extract = None  # type: ignore[assignment]
+    inject = None  # type: ignore[assignment]
+    SpanKind = None  # type: ignore[assignment, misc]
+    Status = None  # type: ignore[assignment, misc]
+    StatusCode = None  # type: ignore[assignment, misc]
+
+
+class _NoOpSpan:
+    """No-op span implementation for when tracing is disabled."""
+
+    def set_attribute(self, key: str, value: Any) -> None:
+        """No-op: does nothing."""
+        pass
+
+    def set_attributes(self, attributes: dict[str, Any]) -> None:
+        """No-op: does nothing."""
+        pass
+
+    def set_status(self, status: Any, description: str | None = None) -> None:
+        """No-op: does nothing."""
+        pass
+
+    def record_exception(
+        self,
+        exception: BaseException,
+        attributes: dict[str, Any] | None = None,
+        timestamp: int | None = None,
+        escaped: bool = False,
+    ) -> None:
+        """No-op: does nothing."""
+        pass
+
+    def add_event(
+        self,
+        name: str,
+        attributes: dict[str, Any] | None = None,
+        timestamp: int | None = None,
+    ) -> None:
+        """No-op: does nothing."""
+        pass
+
+    def is_recording(self) -> bool:
+        """Return False since this is a no-op span."""
+        return False
+
+    def __enter__(self) -> _NoOpSpan:
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        """Exit context manager."""
+        pass
+
+
+class _NoOpTracer:
+    """No-op tracer implementation for when tracing is disabled."""
+
+    @contextmanager
+    def start_as_current_span(
+        self,
+        name: str,
+        context: Any = None,
+        kind: Any = None,
+        attributes: dict[str, Any] | None = None,
+        links: Any = None,
+        start_time: int | None = None,
+        record_exception: bool = True,
+        set_status_on_exception: bool = True,
+        end_on_exit: bool = True,
+    ) -> Iterator[_NoOpSpan]:
+        """Return a no-op span context manager."""
+        yield _NoOpSpan()
+
+    def start_span(
+        self,
+        name: str,
+        context: Any = None,
+        kind: Any = None,
+        attributes: dict[str, Any] | None = None,
+        links: Any = None,
+        start_time: int | None = None,
+        record_exception: bool = True,
+        set_status_on_exception: bool = True,
+    ) -> _NoOpSpan:
+        """Return a no-op span."""
+        return _NoOpSpan()
+
+
+_noop_tracer = _NoOpTracer()
+
+
+def _get_vgi_version() -> str:
+    """Get the VGI package version for tracer instrumentation."""
+    try:
+        from importlib.metadata import version
+
+        return version("vgi")
+    except Exception:
+        return "unknown"
+
+
+def get_tracer(name: str = "vgi.worker") -> Any:
+    """Get a tracer instance for creating spans.
+
+    When opentelemetry-api is installed and a tracer provider is configured,
+    returns a real tracer. Otherwise returns a no-op tracer that has minimal
+    overhead.
+
+    Args:
+        name: The name of the tracer, typically the module or component name.
+            Defaults to "vgi.worker".
+
+    Returns:
+        A tracer instance (real or no-op) that can be used to create spans.
+
+    Example:
+        tracer = get_tracer("vgi.worker")
+        with tracer.start_as_current_span("my_operation") as span:
+            span.set_attribute("key", "value")
+            # ... do work ...
+
+    """
+    if not TRACING_AVAILABLE or trace is None:
+        return _noop_tracer
+    return trace.get_tracer(name, _get_vgi_version())
+
+
+def restore_trace_context(
+    traceparent: str | None, tracestate: str | None = None
+) -> Any:
+    """Restore trace context from W3C Trace Context headers.
+
+    This function should be called at the start of worker processing to
+    link worker spans to the parent trace from the client.
+
+    Args:
+        traceparent: W3C traceparent header value, e.g.,
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+        tracestate: Optional W3C tracestate header value for vendor-specific data.
+
+    Returns:
+        A context token that should be passed to detach_trace_context() when done,
+        or None if tracing is not available or traceparent is None.
+
+    Example:
+        token = restore_trace_context(invocation.traceparent, invocation.tracestate)
+        try:
+            # ... do work with trace context active ...
+        finally:
+            detach_trace_context(token)
+
+    """
+    if not TRACING_AVAILABLE or traceparent is None:
+        return None
+
+    carrier: dict[str, str] = {"traceparent": traceparent}
+    if tracestate:
+        carrier["tracestate"] = tracestate
+
+    ctx = extract(carrier)
+    return otel_context.attach(ctx)
+
+
+def detach_trace_context(token: Any) -> None:
+    """Detach a previously restored trace context.
+
+    Args:
+        token: The token returned by restore_trace_context(), or None.
+
+    """
+    if token is not None and TRACING_AVAILABLE and otel_context is not None:
+        otel_context.detach(token)
+
+
+def extract_trace_context() -> tuple[str | None, str | None]:
+    """Extract W3C Trace Context from the current span.
+
+    This function should be called by the client to get trace context
+    for propagation to worker processes.
+
+    Returns:
+        A tuple of (traceparent, tracestate) strings, or (None, None) if
+        tracing is not available or there is no active span.
+
+    Example:
+        traceparent, tracestate = extract_trace_context()
+        invocation = Invocation(
+            ...,
+            traceparent=traceparent,
+            tracestate=tracestate,
+        )
+
+    """
+    if not TRACING_AVAILABLE or trace is None:
+        return None, None
+
+    carrier: dict[str, str] = {}
+    inject(carrier)
+
+    return carrier.get("traceparent"), carrier.get("tracestate")
+
+
+def get_span_kind_server() -> Any:
+    """Get SpanKind.SERVER or None if tracing unavailable."""
+    if TRACING_AVAILABLE and SpanKind is not None:
+        return SpanKind.SERVER
+    return None
+
+
+def get_span_kind_internal() -> Any:
+    """Get SpanKind.INTERNAL or None if tracing unavailable."""
+    if TRACING_AVAILABLE and SpanKind is not None:
+        return SpanKind.INTERNAL
+    return None
+
+
+def set_span_error(span: Any, exception: BaseException) -> None:
+    """Set error status on a span and record the exception.
+
+    Args:
+        span: The span to set error status on.
+        exception: The exception that occurred.
+
+    """
+    if not TRACING_AVAILABLE or Status is None or StatusCode is None:
+        return
+
+    if hasattr(span, "set_status") and hasattr(span, "record_exception"):
+        span.record_exception(exception)
+        span.set_status(Status(StatusCode.ERROR, str(exception)))

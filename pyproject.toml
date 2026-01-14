@@ -8,6 +8,7 @@ dependencies = ["click", "pyarrow", "structlog", "platformdirs"]
 
 [project.optional-dependencies]
 dev = ["mypy", "pyarrow-stubs", "pytest", "pytest-cov", "pytest-examples", "pytest-mypy", "pytest-ruff", "pytest-xdist", "ruff"]
+tracing = ["opentelemetry-api>=1.20.0"]
 
 [project.scripts]
 vgi-client = "vgi.client.cli:main"
@@ -42,6 +43,10 @@ warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
 module = "structlog.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "opentelemetry.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

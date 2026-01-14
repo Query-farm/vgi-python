@@ -95,6 +95,7 @@ import structlog
 import structlog.stdlib
 from pyarrow import ipc
 
+from vgi import tracing
 from vgi.catalog import CatalogInterface
 from vgi.exceptions import SchemaValidationError
 from vgi.function import (
@@ -953,55 +954,60 @@ class Worker:
 
         fn_log.info("catalog_invocation_complete", method=method_name)
 
-    def run(self) -> None:
-        """Run the worker, reading from stdin and writing to stdout."""
-        # Warn if stdin is a terminal - user likely ran worker directly
-        if sys.stdin.isatty() and not self._quiet:
-            sys.stderr.write(
-                "\n"
-                "Warning: This worker expects Arrow IPC binary data on stdin.\n"
-                "It is not meant to be run interactively in a terminal.\n"
-                "\n"
-                "Usage:\n"
-                "  - Use vgi-client to invoke functions\n"
-                "  - Use DuckDB with VGI extension\n"
-                "\n"
-                "To suppress this warning: --quiet or VGI_QUIET=1\n"
-                "\n"
+    def _process_invocation(
+        self,
+        invocation: Invocation,
+        fn_log: structlog.stdlib.BoundLogger,
+        invocation_span: Any,
+    ) -> None:
+        """Process a single function invocation with tracing.
+
+        Args:
+            invocation: The invocation to process.
+            fn_log: Logger bound to the function context.
+            invocation_span: The parent span for this invocation.
+
+        """
+        # Cast stdout to binary (reassigned in run() to binary mode)
+        stdout = cast(IO[bytes], sys.stdout)
+        tracer = tracing.get_tracer("vgi.worker")
+        is_primary = invocation.global_execution_identifier is None
+
+        # Set initial span attributes
+        invocation_span.set_attribute(
+            tracing.VGI_FUNCTION_NAME, invocation.function_name
+        )
+        invocation_span.set_attribute(
+            tracing.VGI_FUNCTION_TYPE, invocation.function_type.value
+        )
+        invocation_span.set_attribute(
+            tracing.VGI_CORRELATION_ID, invocation.correlation_id
+        )
+        invocation_span.set_attribute(tracing.VGI_WORKER_PID, os.getpid())
+        invocation_span.set_attribute(tracing.VGI_WORKER_IS_PRIMARY, is_primary)
+        if invocation.input_schema is not None:
+            invocation_span.set_attribute(
+                tracing.VGI_INPUT_SCHEMA_COLUMNS, len(invocation.input_schema)
             )
-            sys.stderr.flush()
 
-        self.log.info("worker_starting")
-        sys.stdin = os.fdopen(0, "rb")
-        sys.stdout = os.fdopen(1, "wb", buffering=0)
-
-        while True:
-            self.log.info("waiting_for_invocation")
+        # Dispatch catalog invocations separately (simplified protocol)
+        if invocation.function_type == InvocationType.CATALOG:
             try:
-                invocation = self._read_invocation()
-            except IPCError:
-                break
+                self._handle_catalog_invocation(invocation, fn_log)
+            except (KeyboardInterrupt, SystemExit):
+                raise  # Let these propagate normally
+            except Exception as e:
+                fn_log.exception("catalog_invocation_failed", error=str(e))
+                tracing.set_span_error(invocation_span, e)
+                error_batch_bytes = self._create_bind_error_batch(e, invocation)
+                stdout.write(error_batch_bytes)
+                stdout.flush()
+            return
 
-            fn_log = self.log.bind(function=invocation.function_name)
-            fn_log.info("init_received", arguments=invocation.arguments)
-            fn_log.debug("input_schema_parsed", schema=str(invocation.input_schema))
-
-            # Dispatch catalog invocations separately (simplified protocol)
-            if invocation.function_type == InvocationType.CATALOG:
-                try:
-                    self._handle_catalog_invocation(invocation, fn_log)
-                except (KeyboardInterrupt, SystemExit):
-                    raise  # Let these propagate normally
-                except Exception as e:
-                    fn_log.exception("catalog_invocation_failed", error=str(e))
-                    error_batch_bytes = self._create_bind_error_batch(e, invocation)
-                    sys.stdout.write(error_batch_bytes)
-                    sys.stdout.flush()
-                return
-
-            # Wrap bind phase in try-except to catch and report bind-time errors.
-            # This covers: unknown function, argument matching, settings validation,
-            # function instantiation, and output_schema generation.
+        # Bind phase with tracing
+        with tracer.start_as_current_span(
+            "worker.bind", kind=tracing.get_span_kind_internal()
+        ) as bind_span:
             try:
                 registry = self._build_registry()
                 if invocation.function_name not in registry:
@@ -1031,10 +1037,7 @@ class Worker:
                 instance = func_cls(invocation=invocation, logger=fn_log)
 
                 # Determine active features from client features
-                # Worker can define supported features; active = intersection
-                worker_features: frozenset[str] = (
-                    frozenset()
-                )  # No features supported yet
+                worker_features: frozenset[str] = frozenset()
                 active_features = invocation.client_features & worker_features
                 fn_log.debug(
                     "features_negotiated",
@@ -1042,25 +1045,45 @@ class Worker:
                     active_features=active_features,
                 )
 
-                bind_result_bytes = OutputSpec(
+                output_spec = OutputSpec(
                     output_schema=instance.output_schema,
                     max_processes=instance.max_processes,
                     invocation_id=instance.create_invocation_id(),
                     active_features=active_features,
-                ).serialize()
+                )
+                bind_result_bytes = output_spec.serialize()
+
+                # Set bind span attributes
+                bind_span.set_attribute(tracing.VGI_MAX_WORKERS, instance.max_processes)
+                bind_span.set_attribute(
+                    tracing.VGI_OUTPUT_SCHEMA_COLUMNS, len(instance.output_schema)
+                )
+                # Store invocation_id for later use
+                invocation_id = output_spec.invocation_id
             except (KeyboardInterrupt, SystemExit):
-                raise  # Let these propagate normally
+                raise
             except Exception as e:
                 fn_log.exception("bind_failed", error=str(e))
+                tracing.set_span_error(bind_span, e)
+                tracing.set_span_error(invocation_span, e)
                 error_batch_bytes = self._create_bind_error_batch(e, invocation)
-                sys.stdout.write(error_batch_bytes)
-                sys.stdout.flush()
-                return  # Exit cleanly after sending error
+                stdout.write(error_batch_bytes)
+                stdout.flush()
+                return
 
-            if sys.stdout.write(bind_result_bytes) != len(bind_result_bytes):
-                raise OSError("Failed to write bind result record batch")
+        if stdout.write(bind_result_bytes) != len(bind_result_bytes):
+            raise OSError("Failed to write bind result record batch")
 
-            # Init phase: initialize or load global state
+        # Update invocation span with invocation_id after bind
+        if invocation_id is not None:
+            invocation_span.set_attribute(
+                tracing.VGI_INVOCATION_ID, invocation_id.hex()
+            )
+
+        # Init phase with tracing
+        with tracer.start_as_current_span(
+            "worker.init", kind=tracing.get_span_kind_internal()
+        ) as init_span:
             try:
                 if invocation.global_execution_identifier is None:
                     # Primary worker: perform init and store in storage
@@ -1069,31 +1092,42 @@ class Worker:
                         self._read_init_input()
                     )
                     init_result_bytes = init_result.serialize()
-                    if sys.stdout.write(init_result_bytes) != len(init_result_bytes):
+                    if stdout.write(init_result_bytes) != len(init_result_bytes):
                         raise OSError("Failed to write init result record batch")
                     fn_log.info("processing_init_complete", init_result=init_result)
                     invocation = invocation.with_global_execution_identifier(
                         init_result
                     )
+                    if init_result.global_execution_identifier is not None:
+                        invocation_span.set_attribute(
+                            tracing.VGI_EXECUTION_ID,
+                            init_result.global_execution_identifier.hex(),
+                        )
                 else:
                     # Secondary worker: retrieve shared init from storage
                     fn_log.info("retrieving_init")
-                    instance.load_global_state(invocation.global_execution_identifier)
+                    global_exec = invocation.global_execution_identifier
+                    instance.load_global_state(global_exec)
+                    exec_id = global_exec.global_execution_identifier
+                    if exec_id is not None:
+                        invocation_span.set_attribute(
+                            tracing.VGI_EXECUTION_ID, exec_id.hex()
+                        )
             except (KeyboardInterrupt, SystemExit):
-                raise  # Let these propagate normally
+                raise
             except Exception as e:
                 fn_log.exception("init_failed", error=str(e))
+                tracing.set_span_error(init_span, e)
+                tracing.set_span_error(invocation_span, e)
                 error_batch_bytes = self._create_bind_error_batch(e, invocation)
-                sys.stdout.write(error_batch_bytes)
-                sys.stdout.flush()
-                return  # Exit cleanly after sending error
+                stdout.write(error_batch_bytes)
+                stdout.flush()
+                return
 
-            # Dispatch to appropriate processing method based on function type.
-            # ScalarFunctionGenerator processes input batches to single-column output.
-            # TableInOutGenerator reads input batches and produces output.
-            # TableFunctionGenerator generates output without input batches.
-            # Note: Check ScalarFunctionGenerator first since it doesn't inherit from
-            # TableInOutGenerator, then TableInOutGenerator.
+        # Process phase with tracing
+        with tracer.start_as_current_span(
+            "worker.process", kind=tracing.get_span_kind_internal()
+        ) as process_span:
             if isinstance(instance, ScalarFunctionGenerator):
                 stats = self._process_scalar_batches(instance, invocation, fn_log)
             elif isinstance(instance, TableInOutGenerator):
@@ -1111,20 +1145,91 @@ class Worker:
                     f"vgi.table_function modules."
                 )
 
-            fn_log.info(
-                "worker_call_complete",
-                stats=stats,
+            # Set processing stats on spans
+            process_span.set_attribute(tracing.VGI_TOTAL_BATCHES, stats.batch_count)
+            process_span.set_attribute(
+                tracing.VGI_TOTAL_INPUT_ROWS, stats.total_input_rows
+            )
+            process_span.set_attribute(
+                tracing.VGI_TOTAL_OUTPUT_ROWS, stats.total_output_rows
             )
 
-            # Log IPC stream stats when requested via VGI_IPC_STATS or VGI_IPC_DEBUG
-            if _IPC_STATS or _IPC_DEBUG:
-                _get_ipc_log().info(
-                    "ipc_stream_stats",
-                    batches=stats.batch_count,
-                    input_rows=stats.total_input_rows,
-                    output_rows=stats.total_output_rows,
-                    reader_messages=stats.reader_num_messages,
-                    reader_batches=stats.reader_num_record_batches,
-                    writer_messages=stats.writer_num_messages,
-                    writer_batches=stats.writer_num_record_batches,
-                )
+        # Set final stats on invocation span
+        invocation_span.set_attribute(tracing.VGI_TOTAL_BATCHES, stats.batch_count)
+        invocation_span.set_attribute(
+            tracing.VGI_TOTAL_INPUT_ROWS, stats.total_input_rows
+        )
+        invocation_span.set_attribute(
+            tracing.VGI_TOTAL_OUTPUT_ROWS, stats.total_output_rows
+        )
+        invocation_span.set_attribute(
+            tracing.VGI_IPC_READER_MESSAGES, stats.reader_num_messages
+        )
+        invocation_span.set_attribute(
+            tracing.VGI_IPC_WRITER_MESSAGES, stats.writer_num_messages
+        )
+
+        fn_log.info("worker_call_complete", stats=stats)
+
+        # Log IPC stream stats when requested
+        if _IPC_STATS or _IPC_DEBUG:
+            _get_ipc_log().info(
+                "ipc_stream_stats",
+                batches=stats.batch_count,
+                input_rows=stats.total_input_rows,
+                output_rows=stats.total_output_rows,
+                reader_messages=stats.reader_num_messages,
+                reader_batches=stats.reader_num_record_batches,
+                writer_messages=stats.writer_num_messages,
+                writer_batches=stats.writer_num_record_batches,
+            )
+
+    def run(self) -> None:
+        """Run the worker, reading from stdin and writing to stdout."""
+        # Warn if stdin is a terminal - user likely ran worker directly
+        if sys.stdin.isatty() and not self._quiet:
+            sys.stderr.write(
+                "\n"
+                "Warning: This worker expects Arrow IPC binary data on stdin.\n"
+                "It is not meant to be run interactively in a terminal.\n"
+                "\n"
+                "Usage:\n"
+                "  - Use vgi-client to invoke functions\n"
+                "  - Use DuckDB with VGI extension\n"
+                "\n"
+                "To suppress this warning: --quiet or VGI_QUIET=1\n"
+                "\n"
+            )
+            sys.stderr.flush()
+
+        self.log.info("worker_starting")
+        sys.stdin = os.fdopen(0, "rb")
+        sys.stdout = os.fdopen(1, "wb", buffering=0)
+
+        tracer = tracing.get_tracer("vgi.worker")
+
+        while True:
+            self.log.info("waiting_for_invocation")
+            try:
+                invocation = self._read_invocation()
+            except IPCError:
+                break
+
+            fn_log = self.log.bind(function=invocation.function_name)
+            fn_log.info("init_received", arguments=invocation.arguments)
+            fn_log.debug("input_schema_parsed", schema=str(invocation.input_schema))
+
+            # Restore trace context from invocation
+            trace_token = tracing.restore_trace_context(
+                invocation.traceparent, invocation.tracestate
+            )
+
+            try:
+                with tracer.start_as_current_span(
+                    "worker.invocation",
+                    kind=tracing.get_span_kind_server(),
+                ) as invocation_span:
+                    self._process_invocation(invocation, fn_log, invocation_span)
+            finally:
+                # Always detach trace context
+                tracing.detach_trace_context(trace_token)

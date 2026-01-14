@@ -69,6 +69,7 @@ import structlog
 import structlog.stdlib
 from pyarrow import ipc
 
+from vgi import tracing
 from vgi.arguments import Arguments
 from vgi.client.catalog_mixin import CatalogClientMixin
 from vgi.function import FunctionInitInput
@@ -489,7 +490,11 @@ class Client(CatalogClientMixin):
             ClientError: If the worker activated unsupported features.
 
         """
-        if self._stdin_sink is None or self._stdout_buffered is None or self._proc is None:
+        if (
+            self._stdin_sink is None
+            or self._stdout_buffered is None
+            or self._proc is None
+        ):
             raise ClientError("Worker process not started. Call start() first.")
 
         # Send initialization batch
@@ -497,6 +502,9 @@ class Client(CatalogClientMixin):
 
         # Client features - currently empty, will be populated as features are added
         client_features: frozenset[str] = frozenset()
+
+        # Extract trace context for propagation to worker
+        traceparent, tracestate = tracing.extract_trace_context()
 
         initial_request = Invocation(
             function_name=function_name,
@@ -509,6 +517,8 @@ class Client(CatalogClientMixin):
             attach_id=self._attach_id,
             settings=settings,
             transaction_id=transaction_id,
+            traceparent=traceparent,
+            tracestate=tracestate,
         )
         call_parameters_batch_bytes = initial_request.serialize()
 
@@ -606,6 +616,8 @@ class Client(CatalogClientMixin):
             global_execution_identifier=global_init_result,
             arguments=arguments,
             transaction_id=transaction_id,
+            traceparent=traceparent,
+            tracestate=tracestate,
         )
 
         return bind_result, global_init_result, request_with_init

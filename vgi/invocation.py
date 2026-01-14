@@ -177,6 +177,11 @@ class Invocation:
         transaction_id: Optional unique identifier for the DuckDB transaction.
             When provided, allows functions to participate in transactional
             semantics and correlate calls within the same transaction.
+        traceparent: W3C Trace Context traceparent header for distributed tracing.
+            When provided, allows worker spans to be linked to parent traces.
+            Format: "00-{trace_id}-{span_id}-{trace_flags}"
+        tracestate: W3C Trace Context tracestate header for vendor-specific data.
+            Optional companion to traceparent for additional trace context.
 
     Example:
         invocation = Invocation(
@@ -204,6 +209,8 @@ class Invocation:
     attach_id: bytes | None = None
     settings: dict[str, str] | None = None
     transaction_id: bytes | None = None
+    traceparent: str | None = None
+    tracestate: str | None = None
 
     def with_global_execution_identifier(
         self, global_execution_identifier: InitResult
@@ -251,6 +258,8 @@ class Invocation:
                         list(self.settings.items()) if self.settings else None
                     ),
                     "transaction_id": self.transaction_id,
+                    "traceparent": self.traceparent,
+                    "tracestate": self.tracestate,
                 }
             ],
             schema=pa.schema(
@@ -274,6 +283,8 @@ class Invocation:
                         nullable=True,
                     ),
                     pa.field("transaction_id", pa.binary(), nullable=True),
+                    pa.field("traceparent", pa.string(), nullable=True),
+                    pa.field("tracestate", pa.string(), nullable=True),
                 ]
             ),
         )
@@ -346,6 +357,16 @@ class Invocation:
         if "transaction_id" in data.schema.names:
             transaction_id = first_row.get("transaction_id")
 
+        # Parse traceparent - optional field for W3C Trace Context
+        traceparent: str | None = None
+        if "traceparent" in data.schema.names:
+            traceparent = first_row.get("traceparent")
+
+        # Parse tracestate - optional field for W3C Trace Context
+        tracestate: str | None = None
+        if "tracestate" in data.schema.names:
+            tracestate = first_row.get("tracestate")
+
         return Invocation(
             function_name=first_row["function_name"],
             input_schema=input_schema,
@@ -358,6 +379,8 @@ class Invocation:
             attach_id=attach_id,
             settings=settings,
             transaction_id=transaction_id,
+            traceparent=traceparent,
+            tracestate=tracestate,
         )
 
     @staticmethod
