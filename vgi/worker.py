@@ -468,7 +468,7 @@ class Worker:
             logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
         )
         self.log: structlog.stdlib.BoundLogger = structlog.get_logger().bind(
-            component="worker"
+            component="worker", pid=os.getpid()
         )
 
     def _read_single_record_batch(self, context: str) -> pa.RecordBatch:
