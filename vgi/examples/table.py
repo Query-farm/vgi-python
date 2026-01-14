@@ -497,8 +497,8 @@ class PartitionedRangeFunction(TableFunctionGenerator):
             # Pack as two unsigned 64-bit integers: (start, end)
             work_items.append(struct.pack(">QQ", start, end))
 
-        if work_items:
-            self.enqueue_work(work_items)
+        # Always enqueue (even if empty) to register the invocation
+        self.enqueue_work(work_items)
 
         return InitResult(self.execution_identifier)
 

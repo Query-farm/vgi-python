@@ -103,8 +103,8 @@ class TypedPartitionedRangeFunction(TableFunctionGenerator):
             end = min(start + self.CHUNK_SIZE, self.count)
             work_items.append(RangeWorkItem(start=start, end=end))
 
-        if work_items:
-            self.enqueue_work_items(work_items)
+        # Always enqueue (even if empty) to register the invocation
+        self.enqueue_work_items(work_items)
 
         return InitResult(self.execution_identifier)
 
@@ -174,8 +174,8 @@ class FileProcessingFunction(TableFunctionGenerator):
                     )
                 )
 
-        if work_items:
-            self.enqueue_work_items(work_items)
+        # Always enqueue (even if empty) to register the invocation
+        self.enqueue_work_items(work_items)
 
         return InitResult(self.execution_identifier)
 

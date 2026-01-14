@@ -19,7 +19,17 @@ from typing import Protocol
 __all__ = [
     "FunctionStorage",
     "FunctionStorageSqlite",
+    "UnknownInvocationError",
 ]
+
+
+class UnknownInvocationError(Exception):
+    """Raised when a queue operation references an unknown invocation ID.
+
+    This error indicates that a client is attempting to interact with a queue
+    for an invocation that was never registered (via queue_push) or has already
+    been cleared (via queue_clear).
+    """
 
 
 def _get_default_db_path() -> str:
@@ -123,7 +133,10 @@ class FunctionStorage(Protocol):
     # --- Work Queue (distributed work items) ---
 
     def queue_push(self, invocation_id: bytes, items: list[bytes]) -> int:
-        """Add work items to the queue.
+        """Add work items to the queue and register the invocation.
+
+        This method registers the invocation_id as valid, allowing subsequent
+        queue_pop calls. Even if items is empty, the invocation is registered.
 
         Args:
             invocation_id: Unique identifier for the function invocation.
@@ -138,17 +151,28 @@ class FunctionStorage(Protocol):
     def queue_pop(self, invocation_id: bytes) -> bytes | None:
         """Atomically claim one work item from the queue.
 
+        The invocation_id must have been previously registered via queue_push.
+        This allows detection of badly coded clients or clients attempting to
+        interact after their executions have been completed.
+
         Args:
             invocation_id: Unique identifier for the function invocation.
 
         Returns:
             Serialized work item bytes, or None if queue is empty.
 
+        Raises:
+            UnknownInvocationError: If the invocation_id was never registered
+                via queue_push or has been cleared via queue_clear.
+
         """
         ...
 
     def queue_clear(self, invocation_id: bytes) -> int:
-        """Clear all remaining work items.
+        """Clear all remaining work items and unregister the invocation.
+
+        After calling this method, subsequent queue_pop calls for this
+        invocation_id will raise UnknownInvocationError.
 
         Args:
             invocation_id: Unique identifier for the function invocation.
@@ -223,6 +247,13 @@ class FunctionStorageSqlite:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_work_queue_invocation
                 ON work_queue(invocation_id)
+            """)
+            # Invocation registry - tracks valid invocation IDs for queue operations
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS invocation_registry (
+                    invocation_id BLOB PRIMARY KEY,
+                    created_at REAL DEFAULT (julianday('now'))
+                )
             """)
             conn.commit()
         finally:
@@ -332,27 +363,49 @@ class FunctionStorageSqlite:
     # --- Work Queue ---
 
     def queue_push(self, invocation_id: bytes, items: list[bytes]) -> int:
-        """Add work items to the queue."""
-        if not items:
-            return 0
+        """Add work items to the queue and register the invocation."""
         conn = self._connect()
         try:
-            conn.executemany(
-                """
-                INSERT INTO work_queue (invocation_id, work_item)
-                VALUES (?, ?)
-                """,
-                [(invocation_id, item) for item in items],
+            # Register the invocation_id (idempotent)
+            conn.execute(
+                "INSERT OR IGNORE INTO invocation_registry (invocation_id) VALUES (?)",
+                (invocation_id,),
             )
+            # Add work items if any
+            if items:
+                conn.executemany(
+                    """
+                    INSERT INTO work_queue (invocation_id, work_item)
+                    VALUES (?, ?)
+                    """,
+                    [(invocation_id, item) for item in items],
+                )
             conn.commit()
             return len(items)
         finally:
             conn.close()
 
     def queue_pop(self, invocation_id: bytes) -> bytes | None:
-        """Atomically claim one work item from the queue."""
+        """Atomically claim one work item from the queue.
+
+        Raises:
+            UnknownInvocationError: If invocation_id was never registered via
+                queue_push or has been cleared via queue_clear.
+
+        """
         conn = self._connect()
         try:
+            # Check if invocation is registered
+            reg_cursor = conn.execute(
+                "SELECT 1 FROM invocation_registry WHERE invocation_id = ?",
+                (invocation_id,),
+            )
+            if reg_cursor.fetchone() is None:
+                raise UnknownInvocationError(
+                    f"Invocation {invocation_id.hex()} is not registered. "
+                    "Call queue_push first to register the invocation."
+                )
+
             cursor = conn.execute(
                 """
                 DELETE FROM work_queue
@@ -372,11 +425,16 @@ class FunctionStorageSqlite:
             conn.close()
 
     def queue_clear(self, invocation_id: bytes) -> int:
-        """Clear all remaining work items."""
+        """Clear all remaining work items and unregister the invocation."""
         conn = self._connect()
         try:
             cursor = conn.execute(
                 "DELETE FROM work_queue WHERE invocation_id = ?",
+                (invocation_id,),
+            )
+            # Unregister the invocation
+            conn.execute(
+                "DELETE FROM invocation_registry WHERE invocation_id = ?",
                 (invocation_id,),
             )
             conn.commit()
@@ -419,7 +477,19 @@ class FunctionStorageSqlite:
                 """,
                 (max_age_days,),
             )
+            cursor4 = conn.execute(
+                """
+                DELETE FROM invocation_registry
+                WHERE julianday('now') - created_at > ?
+                """,
+                (max_age_days,),
+            )
             conn.commit()
-            return int(cursor1.rowcount) + int(cursor2.rowcount) + int(cursor3.rowcount)
+            return (
+                int(cursor1.rowcount)
+                + int(cursor2.rowcount)
+                + int(cursor3.rowcount)
+                + int(cursor4.rowcount)
+            )
         finally:
             conn.close()
