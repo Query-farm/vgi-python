@@ -16,11 +16,19 @@ class TestConstantTableFunctionInProcess:
     """In-process tests for the constant_table function."""
 
     def test_returns_constant_value(self) -> None:
-        """Constant table should return a single row with the given value."""
+        """Constant table should return rows with the given value."""
         assert_table_function_output(
             ConstantTableFunction,
-            args=(42,),
-            expected=[batch(value=[42])],
+            args=(3, 42),  # count=3, value=42
+            expected=[batch(value=[42, 42, 42])],
+        )
+
+    def test_returns_single_row(self) -> None:
+        """Constant table with count=1 should return one row."""
+        assert_table_function_output(
+            ConstantTableFunction,
+            args=(1, 100),
+            expected=[batch(value=[100])],
         )
 
     def test_metadata(self) -> None:
@@ -30,10 +38,10 @@ class TestConstantTableFunctionInProcess:
         assert meta.max_workers == 1
 
     def test_cardinality(self) -> None:
-        """Cardinality should always be 1."""
+        """Cardinality should equal the count parameter."""
         invocation = make_invocation(
             function_name="constant_table",
-            arguments=Arguments(positional=(pa.scalar(42),)),
+            arguments=Arguments(positional=(pa.scalar(5), pa.scalar(42))),
         )
         func = ConstantTableFunction(
             invocation=invocation,
@@ -41,8 +49,8 @@ class TestConstantTableFunctionInProcess:
         )
         cardinality = func.cardinality
         assert cardinality is not None
-        assert cardinality.estimate == 1
-        assert cardinality.max == 1
+        assert cardinality.estimate == 5
+        assert cardinality.max == 5
 
 
 class TestConstantTableFunctionBothModes:
@@ -52,10 +60,22 @@ class TestConstantTableFunctionBothModes:
     def test_returns_value(
         self, run_table_function_mode: RunnerWithMode, value: int
     ) -> None:
-        """Constant table should return a single row with the given value."""
+        """Constant table should return rows with the given value."""
         runner, mode = run_table_function_mode
-        outputs, logs = runner(ConstantTableFunction, (value,))
+        count = 3
+        outputs, logs = runner(ConstantTableFunction, (count, value))
 
         table = pa.Table.from_batches(outputs)
-        assert table.num_rows == 1
-        assert table.column("value").to_pylist() == [value]
+        assert table.num_rows == count
+        assert table.column("value").to_pylist() == [value] * count
+
+    def test_large_count(self, run_table_function_mode: RunnerWithMode) -> None:
+        """Large counts should work correctly with batching."""
+        runner, mode = run_table_function_mode
+        count = 2500  # Larger than default BATCH_SIZE of 1000
+        value = 7
+        outputs, logs = runner(ConstantTableFunction, (count, value))
+
+        table = pa.Table.from_batches(outputs)
+        assert table.num_rows == count
+        assert all(v == value for v in table.column("value").to_pylist())

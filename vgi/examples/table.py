@@ -234,12 +234,12 @@ class DoubleSequenceFunction(TableFunctionGenerator):
 
 
 class ConstantTableFunction(TableFunctionGenerator):
-    """Returns a constant single-row table with a specified value.
+    """Returns a table with repeated constant values.
 
     USE CASE
     --------
-    Testing, providing configuration values, or creating a single-row
-    lookup table.
+    Testing, providing repeated configuration values, or creating a
+    lookup table with multiple rows of the same value.
 
     SCHEMA
     ------
@@ -247,12 +247,15 @@ class ConstantTableFunction(TableFunctionGenerator):
 
     PARALLELIZATION
     ---------------
-    Single worker (returns exactly one row).
+    Single worker only (max_workers=1).
 
     Example:
     -------
-    SELECT * FROM constant_table(42)
-    Returns: [{"value": 42}]
+    SELECT * FROM constant_table(3, 42)
+    Returns: [{"value": 42}, {"value": 42}, {"value": 42}]
+
+    SELECT * FROM constant_table(1, 100)
+    Returns: [{"value": 100}]
 
     """
 
@@ -260,17 +263,24 @@ class ConstantTableFunction(TableFunctionGenerator):
         """Metadata for ConstantTableFunction."""
 
         name = "constant_table"
-        description = "Returns a single-row table with a constant value"
+        description = "Returns a table with repeated constant values"
         categories = ["generator", "utility"]
         max_workers = 1
         examples = [
             FunctionExample(
-                sql="SELECT * FROM constant_table(42)",
-                description="Return a table with one row containing 42",
-            )
+                sql="SELECT * FROM constant_table(3, 42)",
+                description="Return a table with 3 rows containing 42",
+            ),
+            FunctionExample(
+                sql="SELECT * FROM constant_table(1, 100)",
+                description="Return a table with one row containing 100",
+            ),
         ]
 
-    value: Annotated[int, Arg(0, doc="The constant value to return")]
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=1)]
+    value: Annotated[int, Arg(1, doc="The constant value to repeat")]
+
+    BATCH_SIZE: int = 1000
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -279,16 +289,20 @@ class ConstantTableFunction(TableFunctionGenerator):
 
     @property
     def cardinality(self) -> TableCardinality:
-        """Return cardinality of exactly one row."""
-        return TableCardinality(estimate=1, max=1)
+        """Return exact cardinality since we know the count."""
+        return TableCardinality(estimate=self.count, max=self.count)
 
     def process(self) -> OutputGenerator:
-        """Emit a single batch with one row."""
-        yield Output(
-            pa.RecordBatch.from_pydict(
-                {"value": [self.value]}, schema=self.output_schema
+        """Emit batches with constant values."""
+        remaining = self.count
+        while remaining > 0:
+            batch_size = min(remaining, self.BATCH_SIZE)
+            yield Output(
+                pa.RecordBatch.from_pydict(
+                    {"value": [self.value] * batch_size}, schema=self.output_schema
+                )
             )
-        )
+            remaining -= batch_size
 
 
 class GeneratorExceptionFunction(TableFunctionGenerator):
