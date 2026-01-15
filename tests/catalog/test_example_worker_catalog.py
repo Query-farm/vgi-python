@@ -111,7 +111,6 @@ class TestExampleWorkerCatalog:
         # Check table functions (TableFunctionGenerator and TableInOutGenerator)
         assert by_name["echo"].function_type == FunctionType.TABLE
         assert by_name["sequence"].function_type == FunctionType.TABLE
-        assert by_name["range"].function_type == FunctionType.TABLE
 
     def test_function_info_has_arguments(self) -> None:
         """FunctionInfo has serialized argument schema."""

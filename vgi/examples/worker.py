@@ -23,10 +23,8 @@ from vgi.examples.table import (
     ConstantTableFunction,
     GeneratorExceptionFunction,
     LoggingGeneratorFunction,
-    PartitionedRangeFunction,
+    PartitionedSequenceFunction,
     ProjectedDataFunction,
-    RandomSampleFunction,
-    RangeFunction,
     SequenceFunction,
     SettingsAwareFunction,
 )
@@ -66,12 +64,10 @@ class ExampleWorker(Worker):
         ExceptionProcessFunction,
         # TableFunctionGenerator - generate output without input
         SequenceFunction,
-        RangeFunction,
         ConstantTableFunction,
-        RandomSampleFunction,
         GeneratorExceptionFunction,
         LoggingGeneratorFunction,
-        PartitionedRangeFunction,
+        PartitionedSequenceFunction,
         ProjectedDataFunction,
         SettingsAwareFunction,
         # ScalarFunctionGenerator - transform to single-column output

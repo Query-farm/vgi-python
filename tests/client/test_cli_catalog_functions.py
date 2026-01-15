@@ -282,7 +282,6 @@ class TestCLISchemaContents:
         # Check known table functions (generators and table-in-out)
         assert by_name["echo"]["function_type"] == "table"
         assert by_name["sequence"]["function_type"] == "table"
-        assert by_name["range"]["function_type"] == "table"
         assert by_name["sum_all_columns"]["function_type"] == "table"
 
     def test_varargs_function_shows_varargs_in_arguments(

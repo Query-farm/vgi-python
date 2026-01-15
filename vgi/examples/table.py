@@ -12,7 +12,6 @@ RandomSampleFunction          - Generates random sample data (parallelizable)
 GeneratorExceptionFunction    - Demonstrates exception handling
 """
 
-import random
 import struct
 from typing import Annotated, ClassVar, cast
 
@@ -33,12 +32,10 @@ from vgi.table_function import (
 
 __all__ = [
     "SequenceFunction",
-    "RangeFunction",
     "ConstantTableFunction",
-    "RandomSampleFunction",
     "GeneratorExceptionFunction",
     "LoggingGeneratorFunction",
-    "PartitionedRangeFunction",
+    "PartitionedSequenceFunction",
     "ProjectedDataFunction",
     "SettingsAwareFunction",
 ]
@@ -137,87 +134,6 @@ class SequenceFunction(TableFunctionGenerator):
             remaining -= size
 
 
-class RangeFunction(TableFunctionGenerator):
-    """Generates integers in a range [start, end) with optional step.
-
-    USE CASE
-    --------
-    Generate a range of values similar to Python's range() function.
-    Useful for creating test data or generating join keys.
-
-    SCHEMA
-    ------
-    Output: {"value": int64}
-
-    PARALLELIZATION
-    ---------------
-    Single worker only. For parallel range generation, use RangePartitionFunction.
-
-    Example:
-    -------
-    SELECT * FROM range(10, 20, 2)
-    Returns: [{"value": 10}, {"value": 12}, {"value": 14}, {"value": 16}, {"value": 18}]
-
-    """
-
-    class Meta:
-        """Metadata for RangeFunction."""
-
-        name = "range"
-        description = "Generates integers in a range [start, end) with optional step"
-        categories = ["generator", "utility"]
-        max_workers = 1
-        examples = [
-            FunctionExample(
-                sql="SELECT * FROM range(0, 100, 10)",
-                description="Generate 0, 10, 20, ..., 90",
-            )
-        ]
-
-    start: Annotated[int, Arg(0, doc="Start of range (inclusive)")]
-    end: Annotated[int, Arg(1, doc="End of range (exclusive)")]
-    # Explicit arrow_type to use int32 instead of inferred int64
-    step: Annotated[
-        int, Arg(2, default=1, doc="Step between values", ge=1, arrow_type=pa.int32())
-    ]
-
-    BATCH_SIZE: ClassVar[int] = 1000
-
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return output schema with single integer column."""
-        return pa.schema([pa.field("value", pa.int64())])
-
-    @property
-    def cardinality(self) -> TableCardinality:
-        """Return cardinality based on range parameters."""
-        if self.end <= self.start:
-            count = 0
-        else:
-            count = (self.end - self.start + self.step - 1) // self.step
-        return TableCardinality(estimate=count, max=count)
-
-    def process(self) -> OutputGenerator:
-        """Generate the range in batches."""
-        current = self.start
-
-        while current < self.end:
-            # Calculate batch values
-            values = []
-            batch_end = min(current + self.BATCH_SIZE * self.step, self.end)
-
-            while current < batch_end:
-                values.append(current)
-                current += self.step
-
-            if values:
-                yield Output(
-                    pa.RecordBatch.from_pydict(
-                        {"value": values}, schema=self.output_schema
-                    )
-                )
-
-
 class ConstantTableFunction(TableFunctionGenerator):
     """Returns a constant single-row table with a specified value.
 
@@ -274,91 +190,6 @@ class ConstantTableFunction(TableFunctionGenerator):
                 {"value": [self.value]}, schema=self.output_schema
             )
         )
-
-
-class RandomSampleFunction(TableFunctionGenerator):
-    """Generates random sample data.
-
-    USE CASE
-    --------
-    Generate random test data for benchmarking, testing, or simulation.
-    Each parallel worker generates its own random sample, making this
-    suitable for parallel execution.
-
-    SCHEMA
-    ------
-    Output: {"id": int64, "value": float64}
-
-    PARALLELIZATION
-    ---------------
-    Fully parallelizable. Each worker generates `count` rows independently,
-    so total output is count * num_workers. Use max_workers to control.
-
-    Example:
-    -------
-    SELECT * FROM random_sample(1000, 42)
-    Returns: 1000 rows with random id and value columns
-
-    """
-
-    class Meta:
-        """Metadata for RandomSampleFunction."""
-
-        name = "random_sample"
-        description = "Generates random sample data"
-        categories = ["generator", "testing"]
-        # No max_workers limit - fully parallelizable
-        examples = [
-            FunctionExample(
-                sql="SELECT * FROM random_sample(1000, 42)",
-                description="Generate 1000 random rows with seed 42",
-            )
-        ]
-
-    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
-    seed: Annotated[int, Arg(1, default=None, doc="Random seed for reproducibility")]
-
-    BATCH_SIZE: ClassVar[int] = 10000
-
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return output schema with id and value columns."""
-        fields: list[tuple[str, pa.DataType]] = [
-            ("id", pa.int64()),
-            ("value", pa.float64()),
-        ]
-        return pa.schema(fields)
-
-    @property
-    def cardinality(self) -> TableCardinality:
-        """Return cardinality estimate."""
-        return TableCardinality(estimate=self.count, max=self.count)
-
-    def setup(self) -> None:
-        """Initialize random number generator with seed."""
-        if self.seed is not None:
-            random.seed(self.seed)
-
-    def process(self) -> OutputGenerator:
-        """Generate random data in batches."""
-        remaining = self.count
-        next_id = 0
-
-        while remaining > 0:
-            batch_size = min(remaining, self.BATCH_SIZE)
-
-            ids = list(range(next_id, next_id + batch_size))
-            values = [random.random() for _ in range(batch_size)]
-
-            yield Output(
-                pa.RecordBatch.from_pydict(
-                    {"id": ids, "value": values},
-                    schema=self.output_schema,
-                )
-            )
-
-            next_id += batch_size
-            remaining -= batch_size
 
 
 class GeneratorExceptionFunction(TableFunctionGenerator):
@@ -440,12 +271,12 @@ class LoggingGeneratorFunction(TableFunctionGenerator):
         yield Message(Level.INFO, "Generation complete")
 
 
-class PartitionedRangeFunction(TableFunctionGenerator):
-    """Generates a partitioned range of integers for multi-worker execution.
+class PartitionedSequenceFunction(TableFunctionGenerator):
+    """Generates a partitioned sequence of integers for multi-worker execution.
 
     USE CASE
     --------
-    Generate a range of values using a work queue pattern. The primary worker
+    Generate a sequence of values using a work queue pattern. The primary worker
     populates a queue with work chunks during initialization. All workers
     (including the primary) pull chunks from the queue and generate output.
 
@@ -454,14 +285,14 @@ class PartitionedRangeFunction(TableFunctionGenerator):
 
     SCHEMA
     ------
-    Output: {"value": int64}
+    Output: {"n": int64}
 
     PARALLELIZATION
     ---------------
     Fully parallelizable using a shared work queue. Each worker pulls chunks
     atomically from the queue and generates values for that chunk.
 
-    The union of all workers' output produces the complete range [0, count).
+    The union of all workers' output produces the complete sequence.
 
     Example:
     -------
@@ -470,23 +301,33 @@ class PartitionedRangeFunction(TableFunctionGenerator):
         Workers pull chunks and generate values for each range.
         Combined output: [0, 1, 2, ..., 2999]
 
+    With count=5 and increment=10:
+        Combined output: [0, 10, 20, 30, 40]
+
     """
 
     class Meta:
-        """Metadata for PartitionedRangeFunction."""
+        """Metadata for PartitionedSequenceFunction."""
 
-        name = "partitioned_range"
-        description = "Generates a partitioned range for multi-worker execution"
+        name = "partitioned_sequence"
+        description = "Generates a partitioned sequence for multi-worker execution"
         categories = ["generator", "utility"]
         # No max_workers limit - fully parallelizable
         examples = [
             FunctionExample(
-                sql="SELECT * FROM partitioned_range(100)",
+                sql="SELECT * FROM partitioned_sequence(100)",
                 description="Generate 0-99 in parallel across workers",
-            )
+            ),
+            FunctionExample(
+                sql="SELECT * FROM partitioned_sequence(5, increment=10)",
+                description="Generate 0, 10, 20, 30, 40 in parallel",
+            ),
         ]
 
     count: Annotated[int, Arg(0, doc="Total number of integers to generate", ge=0)]
+    increment: Annotated[
+        int, Arg("increment", default=1, doc="Step between values", ge=1)
+    ]
 
     # Size of each work chunk in the queue
     CHUNK_SIZE: ClassVar[int] = 1000
@@ -496,7 +337,7 @@ class PartitionedRangeFunction(TableFunctionGenerator):
     @property
     def output_schema(self) -> pa.Schema:
         """Return output schema with single integer column."""
-        return pa.schema([pa.field("value", pa.int64())])
+        return pa.schema([pa.field("n", pa.int64())])
 
     @property
     def cardinality(self) -> TableCardinality:
@@ -508,17 +349,17 @@ class PartitionedRangeFunction(TableFunctionGenerator):
         return TableCardinality(estimate=self.count, max=self.count)
 
     def initialize_global_state(self, init_input: pa.RecordBatch) -> InitResult:
-        """Populate the work queue with range chunks."""
+        """Populate the work queue with sequence chunks."""
         # Parse init data and store in storage
         self.init_input = TableFunctionInitInput.deserialize(init_input)
         self.execution_identifier = self.storage.global_put(self.init_input.serialize())
 
-        # Create work items for each chunk of the range
+        # Create work items for each chunk of the sequence
         work_items: list[bytes] = []
-        for start in range(0, self.count, self.CHUNK_SIZE):
-            end = min(start + self.CHUNK_SIZE, self.count)
-            # Pack as two unsigned 64-bit integers: (start, end)
-            work_items.append(struct.pack(">QQ", start, end))
+        for start_idx in range(0, self.count, self.CHUNK_SIZE):
+            end_idx = min(start_idx + self.CHUNK_SIZE, self.count)
+            # Pack as two unsigned 64-bit integers: (start_idx, end_idx)
+            work_items.append(struct.pack(">QQ", start_idx, end_idx))
 
         # Always enqueue (even if empty) to register the invocation
         self.enqueue_work(work_items)
@@ -533,22 +374,23 @@ class PartitionedRangeFunction(TableFunctionGenerator):
             if work_data is None:
                 break  # Queue empty, done
 
-            # Unpack the range (start, end)
-            start, end = struct.unpack(">QQ", work_data)
+            # Unpack the index range (start_idx, end_idx)
+            start_idx, end_idx = struct.unpack(">QQ", work_data)
 
             # Generate values for this chunk in batches
-            current = start
-            while current < end:
-                batch_end = min(current + self.BATCH_SIZE, end)
-                values = list(range(current, batch_end))
+            current_idx = start_idx
+            while current_idx < end_idx:
+                batch_end_idx = min(current_idx + self.BATCH_SIZE, end_idx)
+                # Generate values: idx * increment for each idx in range
+                values = [
+                    idx * self.increment for idx in range(current_idx, batch_end_idx)
+                ]
 
                 yield Output(
-                    pa.RecordBatch.from_pydict(
-                        {"value": values}, schema=self.output_schema
-                    )
+                    pa.RecordBatch.from_pydict({"n": values}, schema=self.output_schema)
                 )
 
-                current = batch_end
+                current_idx = batch_end_idx
 
 
 class ProjectedDataFunction(TableFunctionGenerator):
