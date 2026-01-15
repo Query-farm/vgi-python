@@ -11,7 +11,7 @@ Usage:
 
     # Table functions (no input):
     vgi-client --function sequence --args '[100]'
-    vgi-client --function sequence --args '[5]' --kwarg increment=10
+    vgi-client --function sequence --args '[5]' --named-arg increment=10
     vgi-client --function range --args '[0, 10]'
 
     # Scalar functions (with input, single-column output):
@@ -174,7 +174,7 @@ _CLI_EPILOG = """
 EXAMPLES:
   # Table function (generates data, no input)
   vgi-client --function sequence --args '[10]'
-  vgi-client --function sequence --args '[5]' --kwarg increment=10
+  vgi-client --function sequence --args '[5]' --named-arg increment=10
 \b
   # Table-in-out function (transforms input)
   vgi-client --input data.parquet --function echo
@@ -207,10 +207,10 @@ ARGUMENT FORMAT (--args as JSON array):
   '[true, 3.14]'    Mixed types
 
 \b
-NAMED ARGUMENTS (--kwarg key=value):
-  --kwarg increment=2       Integer value
-  --kwarg name="test"       String value (use JSON quotes)
-  --kwarg flag=true         Boolean value
+NAMED ARGUMENTS (--named-arg key=value):
+  --named-arg increment=2       Integer value
+  --named-arg name="test"       String value (use JSON quotes)
+  --named-arg flag=true         Boolean value
 
 \b
 OUTPUT FORMATS (-f/--format):
@@ -338,11 +338,11 @@ def _create_cli() -> Any:
         help="DuckDB transaction ID (hex string) for transactional operations.",
     )
     @click.option(
-        "--kwarg",
-        "kwargs",
+        "--named-arg",
+        "named_arg_list",
         multiple=True,
         type=str,
-        help="Named argument as key=value. Can be repeated. E.g.: --kwarg x=2",
+        help="Named argument as key=value. Can be repeated. E.g.: --named-arg x=2",
     )
     @click.pass_context
     def cli(
@@ -360,7 +360,7 @@ def _create_cli() -> Any:
         attach_id: str | None,
         function_type: str,
         transaction_id: str | None,
-        kwargs: tuple[str, ...],
+        named_arg_list: tuple[str, ...],
     ) -> None:
         """VGI client - invoke functions and manage catalogs.
 
@@ -403,14 +403,14 @@ def _create_cli() -> Any:
         # Convert args_list to PyArrow scalars
         positional_args = tuple(pa.scalar(arg) for arg in args_list)
 
-        # Parse kwargs into named arguments dict
+        # Parse named arguments into dict
         named_args: dict[str, pa.Scalar[Any]] = {}
-        for kwarg in kwargs:
-            if "=" not in kwarg:
+        for named_arg in named_arg_list:
+            if "=" not in named_arg:
                 raise click.ClickException(
-                    f"Invalid --kwarg format: '{kwarg}'. Expected key=value format."
+                    f"Invalid --named-arg format: '{named_arg}'. Expected key=value."
                 )
-            key, value_str = kwarg.split("=", 1)
+            key, value_str = named_arg.split("=", 1)
             # Try to parse value as JSON, fall back to string
             try:
                 value = json.loads(value_str)
