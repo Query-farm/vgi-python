@@ -11,6 +11,7 @@ Usage:
 
     # Table functions (no input):
     vgi-client --function sequence --args '[100]'
+    vgi-client --function sequence --args '[5]' --kwarg increment=10
     vgi-client --function range --args '[0, 10]'
 
     # Scalar functions (with input, single-column output):
@@ -173,6 +174,7 @@ _CLI_EPILOG = """
 EXAMPLES:
   # Table function (generates data, no input)
   vgi-client --function sequence --args '[10]'
+  vgi-client --function sequence --args '[5]' --kwarg increment=10
 \b
   # Table-in-out function (transforms input)
   vgi-client --input data.parquet --function echo
@@ -203,6 +205,12 @@ ARGUMENT FORMAT (--args as JSON array):
   '["name"]'        Single string (column name)
   '[0, 100, 5]'     Multiple integers
   '[true, 3.14]'    Mixed types
+
+\b
+NAMED ARGUMENTS (--kwarg key=value):
+  --kwarg increment=2       Integer value
+  --kwarg name="test"       String value (use JSON quotes)
+  --kwarg flag=true         Boolean value
 
 \b
 OUTPUT FORMATS (-f/--format):
@@ -329,6 +337,13 @@ def _create_cli() -> Any:
         default=None,
         help="DuckDB transaction ID (hex string) for transactional operations.",
     )
+    @click.option(
+        "--kwarg",
+        "kwargs",
+        multiple=True,
+        type=str,
+        help="Named argument as key=value. Can be repeated. E.g.: --kwarg x=2",
+    )
     @click.pass_context
     def cli(
         ctx: click.Context,
@@ -345,6 +360,7 @@ def _create_cli() -> Any:
         attach_id: str | None,
         function_type: str,
         transaction_id: str | None,
+        kwargs: tuple[str, ...],
     ) -> None:
         """VGI client - invoke functions and manage catalogs.
 
@@ -386,6 +402,22 @@ def _create_cli() -> Any:
 
         # Convert args_list to PyArrow scalars
         positional_args = tuple(pa.scalar(arg) for arg in args_list)
+
+        # Parse kwargs into named arguments dict
+        named_args: dict[str, pa.Scalar[Any]] = {}
+        for kwarg in kwargs:
+            if "=" not in kwarg:
+                raise click.ClickException(
+                    f"Invalid --kwarg format: '{kwarg}'. Expected key=value format."
+                )
+            key, value_str = kwarg.split("=", 1)
+            # Try to parse value as JSON, fall back to string
+            try:
+                value = json.loads(value_str)
+            except json.JSONDecodeError:
+                # Treat as string if not valid JSON
+                value = value_str
+            named_args[key] = pa.scalar(value)
 
         # Parse attach_id from hex string if provided
         attach_id_bytes: bytes | None = None
@@ -435,12 +467,15 @@ def _create_cli() -> Any:
                 else:
                     effective_type = function_type
 
+                # Build arguments object
+                func_args = Arguments(positional=positional_args, named=named_args)
+
                 if effective_type == "table":
                     # Table function (no input)
                     log.info("invoking_table_function", function=function_name)
                     output_iterator = client.table_function(
                         function_name=function_name,
-                        arguments=Arguments(positional=positional_args, named={}),
+                        arguments=func_args,
                         projection_ids=list(projection_ids) if projection_ids else None,
                         transaction_id=transaction_id_bytes,
                     )
@@ -453,7 +488,7 @@ def _create_cli() -> Any:
 
                     output_iterator = client.scalar_function(
                         function_name=function_name,
-                        arguments=Arguments(positional=positional_args, named={}),
+                        arguments=func_args,
                         input=pf.iter_batches(),
                         transaction_id=transaction_id_bytes,
                     )
@@ -478,7 +513,7 @@ def _create_cli() -> Any:
 
                     output_iterator = client.table_in_out_function(
                         function_name=function_name,
-                        arguments=Arguments(positional=positional_args, named={}),
+                        arguments=func_args,
                         input=pf.iter_batches(),
                         projection_ids=list(projection_ids) if projection_ids else None,
                         transaction_id=transaction_id_bytes,

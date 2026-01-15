@@ -45,12 +45,13 @@ __all__ = [
 
 
 class SequenceFunction(TableFunctionGenerator):
-    """Generates a sequence of integers from 0 to n-1.
+    """Generates a sequence of integers from 0 to n-1 with optional increment.
 
     USE CASE
     --------
     Generate test data, create row numbers, or produce a fixed sequence
-    for joining or filtering.
+    for joining or filtering. The increment parameter allows generating
+    sequences like 0, 2, 4, 6, ... or 0, 10, 20, 30, ...
 
     SCHEMA
     ------
@@ -65,6 +66,9 @@ class SequenceFunction(TableFunctionGenerator):
     -------
     SELECT * FROM sequence(5)
     Returns: [{"n": 0}, {"n": 1}, {"n": 2}, {"n": 3}, {"n": 4}]
+
+    SELECT * FROM sequence(5, increment=2)
+    Returns: [{"n": 0}, {"n": 2}, {"n": 4}, {"n": 6}, {"n": 8}]
 
     SELECT * FROM sequence(1000, 100)
     Returns: integers 0-999 in batches of 100 rows each
@@ -88,10 +92,17 @@ class SequenceFunction(TableFunctionGenerator):
                 sql="SELECT * FROM sequence(1000, 100)",
                 description="Generate integers 0-999 in batches of 100",
             ),
+            FunctionExample(
+                sql="SELECT * FROM sequence(5, increment=10)",
+                description="Generate 0, 10, 20, 30, 40",
+            ),
         ]
 
     count: Annotated[int, Arg(0, doc="Number of integers to generate", ge=0)]
     batch_size: Annotated[int, Arg(1, default=1000, doc="Batch size for output", ge=1)]
+    increment: Annotated[
+        int, Arg("increment", default=1, doc="Step between values", ge=1)
+    ]
 
     @property
     def output_schema(self) -> pa.Schema:
@@ -106,17 +117,23 @@ class SequenceFunction(TableFunctionGenerator):
     def process(self) -> OutputGenerator:
         """Generate the sequence in batches."""
         remaining = self.count
-        current = 0
+        current_index = 0
 
         while remaining > 0:
             size = min(remaining, self.batch_size)
-            values = np.arange(current, current + size, dtype=np.int64)
+            # Generate: idx*increment, (idx+1)*increment, (idx+2)*increment, ...
+            values = np.arange(
+                current_index * self.increment,
+                (current_index + size) * self.increment,
+                self.increment,
+                dtype=np.int64,
+            )
 
             yield Output(
                 pa.RecordBatch.from_pydict({"n": values}, schema=self.output_schema)
             )
 
-            current += size
+            current_index += size
             remaining -= size
 
 
