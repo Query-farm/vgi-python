@@ -6,7 +6,6 @@ Each function demonstrates different patterns for generating data.
 AVAILABLE FUNCTIONS
 -------------------
 ConstantColumnsFunction       - Demonstrates varargs with dynamic output schema
-ConstantTableFunction         - Returns a constant single-row table
 DoubleSequenceFunction        - Generates a sequence of floats 0.0..n-1
 GeneratorExceptionFunction    - Demonstrates exception handling
 LoggingGeneratorFunction      - Demonstrates log message emission
@@ -36,7 +35,6 @@ from vgi.table_function import (
 
 __all__ = [
     "ConstantColumnsFunction",
-    "ConstantTableFunction",
     "DoubleSequenceFunction",
     "GeneratorExceptionFunction",
     "LoggingGeneratorFunction",
@@ -231,78 +229,6 @@ class DoubleSequenceFunction(TableFunctionGenerator):
 
             current_index += size
             remaining -= size
-
-
-class ConstantTableFunction(TableFunctionGenerator):
-    """Returns a table with repeated constant values.
-
-    USE CASE
-    --------
-    Testing, providing repeated configuration values, or creating a
-    lookup table with multiple rows of the same value.
-
-    SCHEMA
-    ------
-    Output: {"value": int64}
-
-    PARALLELIZATION
-    ---------------
-    Single worker only (max_workers=1).
-
-    Example:
-    -------
-    SELECT * FROM constant_table(3, 42)
-    Returns: [{"value": 42}, {"value": 42}, {"value": 42}]
-
-    SELECT * FROM constant_table(1, 100)
-    Returns: [{"value": 100}]
-
-    """
-
-    class Meta:
-        """Metadata for ConstantTableFunction."""
-
-        name = "constant_table"
-        description = "Returns a table with repeated constant values"
-        categories = ["generator", "utility"]
-        max_workers = 1
-        examples = [
-            FunctionExample(
-                sql="SELECT * FROM constant_table(3, 42)",
-                description="Return a table with 3 rows containing 42",
-            ),
-            FunctionExample(
-                sql="SELECT * FROM constant_table(1, 100)",
-                description="Return a table with one row containing 100",
-            ),
-        ]
-
-    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=1)]
-    value: Annotated[int, Arg(1, doc="The constant value to repeat")]
-
-    BATCH_SIZE: int = 1000
-
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return output schema with single integer column."""
-        return pa.schema([pa.field("value", pa.int64())])
-
-    @property
-    def cardinality(self) -> TableCardinality:
-        """Return exact cardinality since we know the count."""
-        return TableCardinality(estimate=self.count, max=self.count)
-
-    def process(self) -> OutputGenerator:
-        """Emit batches with constant values."""
-        remaining = self.count
-        while remaining > 0:
-            batch_size = min(remaining, self.BATCH_SIZE)
-            yield Output(
-                pa.RecordBatch.from_pydict(
-                    {"value": [self.value] * batch_size}, schema=self.output_schema
-                )
-            )
-            remaining -= batch_size
 
 
 class GeneratorExceptionFunction(TableFunctionGenerator):
