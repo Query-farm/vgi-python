@@ -96,7 +96,8 @@ import structlog.stdlib
 from pyarrow import ipc
 
 from vgi import tracing
-from vgi.catalog import CatalogInterface, Setting
+from vgi.catalog import CatalogInterface
+from vgi.catalog.setting import SettingSpec, extract_setting_specs
 from vgi.exceptions import SchemaValidationError
 from vgi.function import (
     Function,
@@ -179,11 +180,21 @@ class Worker:
     """
 
     functions: Sequence[type[Function[Any]]] = []
-    settings: Sequence["Setting"] = []  # Settings exposed via catalog_attach
     catalog_interface: type[CatalogInterface] | None = None
     catalog_name: str | None = "functions"  # Set to None to disable default catalog
     _registry: dict[str, list[type[Function[Any]]]] | None = None
     _default_catalog_interface: type[CatalogInterface] | None = None
+    _setting_specs: list[SettingSpec] = []  # Extracted from Settings inner class
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Process Settings inner class when subclassing Worker."""
+        super().__init_subclass__(**kwargs)
+
+        # Process Settings inner class if present
+        if hasattr(cls, "Settings") and isinstance(cls.Settings, type):
+            cls._setting_specs = extract_setting_specs(cls.Settings)
+        else:
+            cls._setting_specs = []
 
     @classmethod
     def _build_registry(cls) -> dict[str, list[type[Function[Any]]]]:
@@ -238,7 +249,7 @@ class Worker:
                     {
                         "catalog_name": cls.catalog_name,
                         "functions": list(cls.functions),
-                        "settings": list(cls.settings),
+                        "settings": list(cls._setting_specs),
                     },
                 ),
             )

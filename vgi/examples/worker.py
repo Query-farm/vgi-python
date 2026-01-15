@@ -16,6 +16,8 @@ Usage:
     vgi-example-worker
 """
 
+from typing import Annotated
+
 from vgi.catalog import Setting
 from vgi.examples.scalar import (
     AddNumericColumnsFunction,
@@ -59,9 +61,10 @@ class ExampleWorker(Worker):
 
     catalog_name = "example"
 
-    settings = [
-        Setting("vgi_verbose_mode", "Enable verbose output", default=False),
-    ]
+    class Settings:
+        """Settings exposed via catalog_attach."""
+
+        vgi_verbose_mode: Annotated[bool, Setting(desc="Enable verbose output")] = False
 
     functions = [
         # TableInOutGenerator - transform input batches

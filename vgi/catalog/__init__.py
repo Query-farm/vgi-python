@@ -37,12 +37,12 @@ from vgi.catalog.catalog_interface import (
     SchemaInfo,
     SchemaObjectType,
     SerializedSchema,
-    Setting,
     SqlExpression,
     TableInfo,
     TransactionId,
     ViewInfo,
 )
+from vgi.catalog.setting import Setting, SettingSpec
 from vgi.catalog.storage import CatalogStorage, CatalogStorageSqlite
 
 __all__ = [
@@ -62,6 +62,7 @@ __all__ = [
     "CatalogSchemaObject",
     "SchemaInfo",
     "Setting",
+    "SettingSpec",
     "TableInfo",
     "ViewInfo",
     "FunctionInfo",
