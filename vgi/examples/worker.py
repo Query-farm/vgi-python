@@ -30,6 +30,7 @@ from vgi.examples.scalar import (
 from vgi.examples.table import (
     ConstantColumnsFunction,
     ConstantTableFunction,
+    DoubleSequenceFunction,
     GeneratorExceptionFunction,
     LoggingGeneratorFunction,
     PartitionedSequenceFunction,
@@ -86,6 +87,7 @@ class ExampleWorker(Worker):
         # TableFunctionGenerator - generate output without input
         ConstantColumnsFunction,
         ConstantTableFunction,
+        DoubleSequenceFunction,
         GeneratorExceptionFunction,
         LoggingGeneratorFunction,
         PartitionedSequenceFunction,

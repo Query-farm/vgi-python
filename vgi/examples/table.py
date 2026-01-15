@@ -7,6 +7,7 @@ AVAILABLE FUNCTIONS
 -------------------
 ConstantColumnsFunction       - Demonstrates varargs with dynamic output schema
 ConstantTableFunction         - Returns a constant single-row table
+DoubleSequenceFunction        - Generates a sequence of floats 0.0..n-1
 GeneratorExceptionFunction    - Demonstrates exception handling
 LoggingGeneratorFunction      - Demonstrates log message emission
 PartitionedSequenceFunction   - Demonstrates multi-worker parallel execution
@@ -36,6 +37,7 @@ from vgi.table_function import (
 __all__ = [
     "ConstantColumnsFunction",
     "ConstantTableFunction",
+    "DoubleSequenceFunction",
     "GeneratorExceptionFunction",
     "LoggingGeneratorFunction",
     "PartitionedSequenceFunction",
@@ -128,6 +130,99 @@ class SequenceFunction(TableFunctionGenerator):
                 (current_index + size) * self.increment,
                 self.increment,
                 dtype=np.int64,
+            )
+
+            yield Output(
+                pa.RecordBatch.from_pydict({"n": values}, schema=self.output_schema)
+            )
+
+            current_index += size
+            remaining -= size
+
+
+class DoubleSequenceFunction(TableFunctionGenerator):
+    """Generates a sequence of floats from 0.0 to n-1 with optional increment.
+
+    USE CASE
+    --------
+    Generate test data with floating-point values, create sequences for
+    interpolation or sampling. The increment parameter allows generating
+    sequences like 0.0, 0.5, 1.0, 1.5, ... or 0.0, 0.1, 0.2, 0.3, ...
+
+    SCHEMA
+    ------
+    Output: {"n": float64}
+
+    PARALLELIZATION
+    ---------------
+    Single worker only (max_workers=1). Each worker would produce the full
+    sequence, which is typically not desired.
+
+    Example:
+    -------
+    SELECT * FROM double_sequence(5)
+    Returns: [{"n": 0.0}, {"n": 1.0}, {"n": 2.0}, {"n": 3.0}, {"n": 4.0}]
+
+    SELECT * FROM double_sequence(5, increment=0.5)
+    Returns: [{"n": 0.0}, {"n": 0.5}, {"n": 1.0}, {"n": 1.5}, {"n": 2.0}]
+
+    SELECT * FROM double_sequence(1000, 100)
+    Returns: floats 0.0-999.0 in batches of 100 rows each
+
+    """
+
+    class Meta:
+        """Metadata for DoubleSequenceFunction."""
+
+        name = "double_sequence"
+        description = "Generates a sequence of floating-point numbers from 0 to n-1"
+        categories = ["generator", "utility"]
+        tags = {"category": "generator", "type": "utility"}
+        max_workers = 1
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM double_sequence(10)",
+                description="Generate floats 0.0-9.0",
+            ),
+            FunctionExample(
+                sql="SELECT * FROM double_sequence(1000, 100)",
+                description="Generate floats 0.0-999.0 in batches of 100",
+            ),
+            FunctionExample(
+                sql="SELECT * FROM double_sequence(5, increment=0.5)",
+                description="Generate 0.0, 0.5, 1.0, 1.5, 2.0",
+            ),
+        ]
+
+    count: Annotated[int, Arg(0, doc="Number of values to generate", ge=0)]
+    batch_size: Annotated[int, Arg(1, default=1000, doc="Batch size for output", ge=1)]
+    increment: Annotated[
+        float, Arg("increment", default=1.0, doc="Step between values", gt=0.0)
+    ]
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        """Return output schema with single float64 column."""
+        return pa.schema([pa.field("n", pa.float64())])
+
+    @property
+    def cardinality(self) -> TableCardinality:
+        """Return exact cardinality since we know the count."""
+        return TableCardinality(estimate=self.count, max=self.count)
+
+    def process(self) -> OutputGenerator:
+        """Generate the sequence in batches."""
+        remaining = self.count
+        current_index = 0
+
+        while remaining > 0:
+            size = min(remaining, self.batch_size)
+            # Generate: idx*increment, (idx+1)*increment, (idx+2)*increment, ...
+            values = np.arange(
+                current_index * self.increment,
+                (current_index + size) * self.increment,
+                self.increment,
+                dtype=np.float64,
             )
 
             yield Output(
