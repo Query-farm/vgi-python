@@ -11,6 +11,8 @@ The worker supports:
 
 Settings:
 - vgi_verbose_mode: Enable verbose output with extra columns (bool, default: false)
+- greeting: Custom greeting message (str, default: "Hello")
+- multiplier: Value multiplier (int, default: 1)
 
 Usage:
     vgi-example-worker
@@ -57,6 +59,8 @@ class ExampleWorker(Worker):
 
     Settings exposed via catalog_attach:
     - vgi_verbose_mode: Enable verbose output (used by SettingsAwareFunction)
+    - greeting: Custom greeting message (used by SettingsAwareFunction)
+    - multiplier: Value multiplier (used by SettingsAwareFunction)
     """
 
     catalog_name = "example"
@@ -65,6 +69,8 @@ class ExampleWorker(Worker):
         """Settings exposed via catalog_attach."""
 
         vgi_verbose_mode: Annotated[bool, Setting(desc="Enable verbose output")] = False
+        greeting: Annotated[str, Setting(desc="Custom greeting message")] = "Hello"
+        multiplier: Annotated[int, Setting(desc="Value multiplier")] = 1
 
     functions = [
         # TableInOutGenerator - transform input batches

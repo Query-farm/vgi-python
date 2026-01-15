@@ -18,7 +18,7 @@ class TestSettingsInProcess:
     def test_metadata_has_required_settings(self) -> None:
         """Function should declare required_settings in metadata."""
         meta = SettingsAwareFunction.get_metadata()
-        assert meta.required_settings == ["vgi_verbose_mode"]
+        assert meta.required_settings == ["vgi_verbose_mode", "greeting", "multiplier"]
 
     def test_settings_accessor_returns_empty_when_none(self) -> None:
         """Settings property should return empty dict when no settings provided."""
@@ -72,7 +72,7 @@ class TestSettingsInProcess:
         assert func.get_setting("vgi_verbose_mode") == "true"
 
     def test_output_schema_without_verbose(self) -> None:
-        """Output schema should have 2 columns when verbose is false."""
+        """Output schema should have 3 columns when verbose is false."""
         invocation = make_invocation(
             function_name="settings_aware",
             arguments=Arguments(positional=(pa.scalar(3),)),
@@ -82,11 +82,11 @@ class TestSettingsInProcess:
             invocation=invocation,
             logger=structlog.get_logger(),
         )
-        assert len(func.output_schema) == 2
-        assert func.output_schema.names == ["id", "value"]
+        assert len(func.output_schema) == 3
+        assert func.output_schema.names == ["id", "greeting", "value"]
 
     def test_output_schema_with_verbose(self) -> None:
-        """Output schema should have 3 columns when verbose is true."""
+        """Output schema should have 4 columns when verbose is true."""
         invocation = make_invocation(
             function_name="settings_aware",
             arguments=Arguments(positional=(pa.scalar(3),)),
@@ -96,8 +96,8 @@ class TestSettingsInProcess:
             invocation=invocation,
             logger=structlog.get_logger(),
         )
-        assert len(func.output_schema) == 3
-        assert func.output_schema.names == ["id", "value", "details"]
+        assert len(func.output_schema) == 4
+        assert func.output_schema.names == ["id", "greeting", "value", "details"]
 
 
 class TestSettingsViaClient:
@@ -110,15 +110,21 @@ class TestSettingsViaClient:
                 client.table_function(
                     function_name="settings_aware",
                     arguments=Arguments(positional=(pa.scalar(3),)),
-                    settings={"vgi_verbose_mode": "false"},
+                    settings={
+                        "vgi_verbose_mode": "false",
+                        "greeting": "Hi",
+                        "multiplier": "2",
+                    },
                 )
             )
 
         table = pa.Table.from_batches(outputs)
         assert table.num_rows == 3
-        assert table.schema.names == ["id", "value"]
+        assert table.schema.names == ["id", "greeting", "value"]
         assert table.column("id").to_pylist() == [0, 1, 2]
-        assert table.column("value").to_pylist() == [0.0, 2.5, 5.0]
+        assert table.column("greeting").to_pylist() == ["Hi", "Hi", "Hi"]
+        # Values are multiplied by 2: 0*2.5*2=0, 1*2.5*2=5, 2*2.5*2=10
+        assert table.column("value").to_pylist() == [0.0, 5.0, 10.0]
 
     def test_settings_passed_to_function_verbose_true(self) -> None:
         """Verbose mode should add details column."""
@@ -127,14 +133,20 @@ class TestSettingsViaClient:
                 client.table_function(
                     function_name="settings_aware",
                     arguments=Arguments(positional=(pa.scalar(3),)),
-                    settings={"vgi_verbose_mode": "true"},
+                    settings={
+                        "vgi_verbose_mode": "true",
+                        "greeting": "Hello World",
+                        "multiplier": "1",
+                    },
                 )
             )
 
         table = pa.Table.from_batches(outputs)
         assert table.num_rows == 3
-        assert table.schema.names == ["id", "value", "details"]
+        assert table.schema.names == ["id", "greeting", "value", "details"]
         assert table.column("id").to_pylist() == [0, 1, 2]
+        assert table.column("greeting").to_pylist() == ["Hello World"] * 3
+        assert table.column("value").to_pylist() == [0.0, 2.5, 5.0]
         assert table.column("details").to_pylist() == ["row_0", "row_1", "row_2"]
 
     def test_missing_required_setting_fails(self) -> None:
@@ -187,9 +199,13 @@ class TestMetadataSerialization:
         from vgi.metadata import arrow_to_metadata, metadata_to_arrow
 
         meta = SettingsAwareFunction.get_metadata()
-        assert meta.required_settings == ["vgi_verbose_mode"]
+        assert meta.required_settings == ["vgi_verbose_mode", "greeting", "multiplier"]
 
         batch = metadata_to_arrow(meta)
         deserialized = arrow_to_metadata(batch)
 
-        assert deserialized.required_settings == ["vgi_verbose_mode"]
+        assert deserialized.required_settings == [
+            "vgi_verbose_mode",
+            "greeting",
+            "multiplier",
+        ]

@@ -519,22 +519,24 @@ class ProjectedDataFunction(TableFunctionGenerator):
 
 
 class SettingsAwareFunction(TableFunctionGenerator):
-    """Generates data with output schema determined by settings.
+    """Generates data demonstrating that settings are passed to functions.
 
     USE CASE
     --------
     Demonstrates how functions can declare required settings via
     Meta.required_settings and access them via self.settings or
-    self.get_setting(). The output schema is determined at bind time based
-    on the provided settings.
+    self.get_setting(). The output includes columns showing the actual
+    setting values that were passed.
 
-    When vgi_verbose_mode is "true", an extra "details" column is included
-    in the output schema. This shows how settings can affect the bind result.
+    This function uses three settings:
+    - vgi_verbose_mode: bool - when true, adds a details column
+    - greeting: str - a custom greeting message echoed in output
+    - multiplier: int - multiplies the value column
 
     SCHEMA
     ------
-    Base output: {"id": int64, "value": float64}
-    With vgi_verbose_mode="true": {"id": int64, "value": float64, "details": string}
+    Base output: {"id": int64, "greeting": string, "value": float64}
+    With vgi_verbose_mode="true": adds "details": string column
 
     PARALLELIZATION
     ---------------
@@ -542,11 +544,8 @@ class SettingsAwareFunction(TableFunctionGenerator):
 
     Example:
     -------
-    With settings={"vgi_verbose_mode": "true"}:
-    Returns: [{"id": 0, "value": 0.0, "details": "row_0"}, ...]
-
-    With settings={"vgi_verbose_mode": "false"}:
-    Returns: [{"id": 0, "value": 0.0}, ...]
+    With settings={"vgi_verbose_mode": "true", "greeting": "Hi", "multiplier": "2"}:
+    Returns: [{"id": 0, "greeting": "Hi", "value": 0.0, "details": "row_0"}, ...]
 
     """
 
@@ -554,14 +553,14 @@ class SettingsAwareFunction(TableFunctionGenerator):
         """Metadata for SettingsAwareFunction."""
 
         name = "settings_aware"
-        description = "Generates data with schema determined by settings"
+        description = "Generates data demonstrating settings are passed"
         categories = ["generator", "settings"]
         max_workers = 1
-        required_settings = ["vgi_verbose_mode"]
+        required_settings = ["vgi_verbose_mode", "greeting", "multiplier"]
         examples = [
             FunctionExample(
                 sql="SELECT * FROM settings_aware(5)",
-                description="Generate 5 rows (requires vgi_verbose_mode setting)",
+                description="Generate 5 rows showing setting values",
             )
         ]
 
@@ -571,11 +570,12 @@ class SettingsAwareFunction(TableFunctionGenerator):
     def output_schema(self) -> pa.Schema:
         """Return output schema based on vgi_verbose_mode setting.
 
+        Always includes id, greeting (from setting), and value (multiplied).
         When vgi_verbose_mode is "true", includes an extra "details" column.
-        This demonstrates how settings can affect the bind result.
         """
         fields: list[pa.Field[pa.DataType]] = [
             pa.field("id", pa.int64()),
+            pa.field("greeting", pa.string()),
             pa.field("value", pa.float64()),
         ]
 
@@ -593,12 +593,16 @@ class SettingsAwareFunction(TableFunctionGenerator):
     def process(self) -> OutputGenerator:
         """Generate data based on settings."""
         verbose = self.get_setting("vgi_verbose_mode") == "true"
+        greeting = self.get_setting("greeting") or "Hello"
+        multiplier_str = self.get_setting("multiplier") or "1"
+        multiplier = int(multiplier_str)
         output_schema = self.output_schema
 
         for i in range(self.count):
             data: dict[str, list[int] | list[float] | list[str]] = {
                 "id": [i],
-                "value": [float(i) * 2.5],
+                "greeting": [greeting],
+                "value": [float(i) * 2.5 * multiplier],
             }
 
             if verbose:

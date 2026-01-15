@@ -213,6 +213,12 @@ NAMED ARGUMENTS (--named-arg key=value):
   --named-arg flag=true         Boolean value
 
 \b
+SETTINGS (-s/--setting key=value):
+  -s vgi_verbose_mode=true      Enable verbose mode
+  -s greeting=Hello             String setting
+  -s multiplier=2               Integer setting (passed as string)
+
+\b
 OUTPUT FORMATS (-f/--format):
   json       JSON Lines, one object per row (default)
   csv        CSV with header row
@@ -344,6 +350,14 @@ def _create_cli() -> Any:
         type=str,
         help="Named argument as key=value. Can be repeated. E.g.: --named-arg x=2",
     )
+    @click.option(
+        "--setting",
+        "-s",
+        "setting_list",
+        multiple=True,
+        type=str,
+        help="Setting as key=value. Can be repeated. E.g.: -s greeting=Hi",
+    )
     @click.pass_context
     def cli(
         ctx: click.Context,
@@ -361,6 +375,7 @@ def _create_cli() -> Any:
         function_type: str,
         transaction_id: str | None,
         named_arg_list: tuple[str, ...],
+        setting_list: tuple[str, ...],
     ) -> None:
         """VGI client - invoke functions and manage catalogs.
 
@@ -418,6 +433,18 @@ def _create_cli() -> Any:
                 # Treat as string if not valid JSON
                 value = value_str
             named_args[key] = pa.scalar(value)
+
+        # Parse settings into dict (settings are always strings in the protocol)
+        settings: dict[str, str] | None = None
+        if setting_list:
+            settings = {}
+            for setting in setting_list:
+                if "=" not in setting:
+                    raise click.ClickException(
+                        f"Invalid --setting format: '{setting}'. Expected key=value."
+                    )
+                key, value_str = setting.split("=", 1)
+                settings[key] = value_str
 
         # Parse attach_id from hex string if provided
         attach_id_bytes: bytes | None = None
@@ -478,6 +505,7 @@ def _create_cli() -> Any:
                         arguments=func_args,
                         projection_ids=list(projection_ids) if projection_ids else None,
                         transaction_id=transaction_id_bytes,
+                        settings=settings,
                     )
                 elif effective_type == "scalar":
                     # Scalar function (with input, single-column output)
@@ -491,6 +519,7 @@ def _create_cli() -> Any:
                         arguments=func_args,
                         input=pf.iter_batches(),
                         transaction_id=transaction_id_bytes,
+                        settings=settings,
                     )
                 else:
                     # Table-in-out function (with input)
@@ -517,6 +546,7 @@ def _create_cli() -> Any:
                         input=pf.iter_batches(),
                         projection_ids=list(projection_ids) if projection_ids else None,
                         transaction_id=transaction_id_bytes,
+                        settings=settings,
                     )
 
                 for output_batch in output_iterator:

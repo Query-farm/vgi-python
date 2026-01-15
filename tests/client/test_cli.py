@@ -894,3 +894,205 @@ class TestCLIScalarFunction:
         lines = output_file.read_text().strip().split("\n")
         results = [json.loads(line)["result"] for line in lines]
         assert results == ["ALICE", "BOB"]
+
+
+class TestCLISettings:
+    """Tests for CLI --setting option."""
+
+    def test_setting_passed_to_table_function(
+        self, example_worker: str, tmp_path: Path
+    ) -> None:
+        """Settings should be passed to table functions."""
+        output_file = tmp_path / "output.jsonl"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--function",
+                "settings_aware",
+                "--args",
+                "[3]",
+                "--setting",
+                "vgi_verbose_mode=false",
+                "--setting",
+                "greeting=Hi",
+                "--setting",
+                "multiplier=2",
+                "--output",
+                str(output_file),
+                "--format",
+                "json",
+                "--worker",
+                example_worker,
+            ],
+        )
+        assert result.exit_code == 0
+        assert output_file.exists()
+
+        lines = output_file.read_text().strip().split("\n")
+        assert len(lines) == 3
+
+        # Verify greeting is passed through
+        row0 = json.loads(lines[0])
+        assert row0["greeting"] == "Hi"
+
+        # Verify multiplier affects value (value = id * 2.5 * multiplier)
+        # id=0: 0*2.5*2 = 0.0, id=1: 1*2.5*2 = 5.0, id=2: 2*2.5*2 = 10.0
+        values = [json.loads(line)["value"] for line in lines]
+        assert values == [0.0, 5.0, 10.0]
+
+    def test_setting_short_option(self, example_worker: str, tmp_path: Path) -> None:
+        """Short -s option should work for settings."""
+        output_file = tmp_path / "output.jsonl"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--function",
+                "settings_aware",
+                "--args",
+                "[2]",
+                "-s",
+                "vgi_verbose_mode=false",
+                "-s",
+                "greeting=Hello",
+                "-s",
+                "multiplier=1",
+                "--output",
+                str(output_file),
+                "--format",
+                "json",
+                "--worker",
+                example_worker,
+            ],
+        )
+        assert result.exit_code == 0
+
+        lines = output_file.read_text().strip().split("\n")
+        assert len(lines) == 2
+        row0 = json.loads(lines[0])
+        assert row0["greeting"] == "Hello"
+
+    def test_setting_verbose_mode_adds_details(
+        self, example_worker: str, tmp_path: Path
+    ) -> None:
+        """vgi_verbose_mode=true should add details column."""
+        output_file = tmp_path / "output.jsonl"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--function",
+                "settings_aware",
+                "--args",
+                "[2]",
+                "-s",
+                "vgi_verbose_mode=true",
+                "-s",
+                "greeting=Test",
+                "-s",
+                "multiplier=1",
+                "--output",
+                str(output_file),
+                "--format",
+                "json",
+                "--worker",
+                example_worker,
+            ],
+        )
+        assert result.exit_code == 0
+
+        lines = output_file.read_text().strip().split("\n")
+        row0 = json.loads(lines[0])
+        # verbose mode adds the details column
+        assert "details" in row0
+        assert row0["details"] == "row_0"
+
+    def test_setting_invalid_format_raises_error(self, example_worker: str) -> None:
+        """Invalid setting format (missing =) should raise error."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--function",
+                "sequence",
+                "--args",
+                "[5]",
+                "--setting",
+                "invalid_setting_no_equals",
+                "--worker",
+                example_worker,
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Invalid --setting format" in result.output
+
+    def test_multiple_settings_combined(
+        self, example_worker: str, tmp_path: Path
+    ) -> None:
+        """Multiple settings should all be passed through."""
+        output_file = tmp_path / "output.jsonl"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--function",
+                "settings_aware",
+                "--args",
+                "[1]",
+                "-s",
+                "vgi_verbose_mode=true",
+                "-s",
+                "greeting=CustomGreeting",
+                "-s",
+                "multiplier=10",
+                "--output",
+                str(output_file),
+                "--format",
+                "json",
+                "--worker",
+                example_worker,
+            ],
+        )
+        assert result.exit_code == 0
+
+        lines = output_file.read_text().strip().split("\n")
+        row0 = json.loads(lines[0])
+        assert row0["greeting"] == "CustomGreeting"
+        # value = 0 * 2.5 * 10 = 0.0
+        assert row0["value"] == 0.0
+        assert "details" in row0  # verbose mode on
+
+    def test_setting_with_equals_in_value(
+        self, example_worker: str, tmp_path: Path
+    ) -> None:
+        """Settings with = in value should parse correctly."""
+        output_file = tmp_path / "output.jsonl"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--function",
+                "settings_aware",
+                "--args",
+                "[1]",
+                "-s",
+                "vgi_verbose_mode=false",
+                "-s",
+                "greeting=Hello=World",
+                "-s",
+                "multiplier=1",
+                "--output",
+                str(output_file),
+                "--format",
+                "json",
+                "--worker",
+                example_worker,
+            ],
+        )
+        assert result.exit_code == 0
+
+        lines = output_file.read_text().strip().split("\n")
+        row0 = json.loads(lines[0])
+        # The value should be "Hello=World" (split only on first =)
+        assert row0["greeting"] == "Hello=World"
