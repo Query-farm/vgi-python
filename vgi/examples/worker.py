@@ -9,10 +9,16 @@ The worker supports:
 - TableFunctionGenerator: Generates output batches without input
 - ScalarFunctionGenerator: Transforms input to single-column output (1:1 rows)
 
+Settings:
+- vgi_verbose_mode: Enable verbose output with extra columns (bool, default: false)
+
 Usage:
     vgi-example-worker
 """
 
+import pyarrow as pa
+
+from vgi.catalog import Setting
 from vgi.examples.scalar import (
     AddNumericColumnsFunction,
     DoubleColumnFunction,
@@ -48,9 +54,21 @@ class ExampleWorker(Worker):
 
     This worker exposes all example functions via the catalog interface,
     allowing clients to discover available functions via the "example" catalog.
+
+    Settings exposed via catalog_attach:
+    - vgi_verbose_mode: Enable verbose output (used by SettingsAwareFunction)
     """
 
     catalog_name = "example"
+
+    settings = [
+        Setting(
+            name="vgi_verbose_mode",
+            description="Enable verbose output with extra columns",
+            type=pa.bool_(),
+            default_value=False,
+        ),
+    ]
 
     functions = [
         # TableInOutGenerator - transform input batches

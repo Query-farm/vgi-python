@@ -6,12 +6,12 @@ from vgi import schema
 from vgi.catalog import (
     AttachId,
     CatalogAttachResult,
-    ExtensionOption,
     FunctionInfo,
     FunctionType,
     ScanFunctionResult,
     SchemaInfo,
     SerializedSchema,
+    Setting,
     TableInfo,
     ViewInfo,
 )
@@ -508,67 +508,73 @@ class TestScanFunctionResultSerialization:
         assert restored.invocation_id is None
 
 
-class TestExtensionOptionSerialization:
-    """Test ExtensionOption serialization round-trip."""
+class TestSettingSerialization:
+    """Test Setting serialization round-trip."""
 
     def test_basic_round_trip(self) -> None:
         """Test basic serialization and deserialization."""
-        type_schema = pa.schema([pa.field("value", pa.bool_())])
-        original = ExtensionOption(
+        original = Setting(
             name="vgi_verbose_mode",
             description="Enable verbose output",
-            type=SerializedSchema(type_schema.serialize().to_pybytes()),
+            type=pa.bool_(),
             default_value=None,
         )
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
-        restored = ExtensionOption.deserialize(batch)
+        restored = Setting.deserialize(batch)
 
         assert restored.name == original.name
         assert restored.description == original.description
-        assert restored.type == original.type
+        assert restored.type == pa.bool_()
         assert restored.default_value is None
 
     def test_with_default_value(self) -> None:
         """Test with a default value."""
-        type_schema = pa.schema([pa.field("value", pa.string())])
-        # Create a default value batch
-        default_batch = pa.RecordBatch.from_pydict(
-            {"value": ["default"]}, schema=type_schema
-        )
-        from vgi.ipc_utils import serialize_record_batch
-
-        default_bytes = serialize_record_batch(default_batch)
-
-        original = ExtensionOption(
+        original = Setting(
             name="vgi_log_level",
             description="Logging level",
-            type=SerializedSchema(type_schema.serialize().to_pybytes()),
-            default_value=default_bytes,
+            type=pa.string(),
+            default_value="info",
         )
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
-        restored = ExtensionOption.deserialize(batch)
+        restored = Setting.deserialize(batch)
 
         assert restored.name == original.name
         assert restored.description == original.description
-        assert restored.default_value == default_bytes
+        assert restored.type == pa.string()
+        assert restored.default_value == "info"
 
     def test_integer_type(self) -> None:
         """Test with integer type."""
-        type_schema = pa.schema([pa.field("value", pa.int64())])
-        original = ExtensionOption(
+        original = Setting(
             name="vgi_max_workers",
             description="Maximum worker count",
-            type=SerializedSchema(type_schema.serialize().to_pybytes()),
+            type=pa.int64(),
+            default_value=4,
         )
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
-        restored = ExtensionOption.deserialize(batch)
+        restored = Setting.deserialize(batch)
 
-        # Verify the type can be deserialized back
-        restored_type = pa.ipc.read_schema(pa.py_buffer(restored.type))
-        assert restored_type.field("value").type == pa.int64()
+        assert restored.name == original.name
+        assert restored.type == pa.int64()
+        assert restored.default_value == 4
+
+    def test_bool_default_value(self) -> None:
+        """Test with boolean default value."""
+        original = Setting(
+            name="vgi_debug",
+            description="Enable debug mode",
+            type=pa.bool_(),
+            default_value=False,
+        )
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = Setting.deserialize(batch)
+
+        assert restored.type == pa.bool_()
+        assert restored.default_value is False
 
 
 class TestFunctionInfoRequiredSettings:

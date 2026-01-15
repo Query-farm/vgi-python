@@ -148,21 +148,30 @@ class CatalogAttachResult:
 
 
 @dataclass(frozen=True)
-class ExtensionOption:
-    """Configuration option exposed by a VGI worker.
+class Setting:
+    """A setting exposed by a VGI worker.
 
-    Extension options can be configured via DuckDB's SET command
-    and are passed to VGI functions via the settings parameter.
+    Settings can be configured via DuckDB's SET command and are passed
+    to VGI functions via the settings parameter in the Invocation.
+
+    Example:
+        Setting(
+            name="vgi_verbose_mode",
+            description="Enable verbose output with extra columns",
+            type=pa.bool_(),
+            default_value=False,
+        )
+
     """
 
-    # Option name (e.g., "vgi_verbose_mode")
+    # Setting name (e.g., "vgi_verbose_mode")
     name: str
     # Human-readable description
     description: str
-    # Arrow schema with single field representing the type (serialized)
-    type: SerializedSchema
-    # Serialized default value as Arrow IPC (None if no default)
-    default_value: bytes | None = None
+    # Arrow data type for this setting
+    type: pa.DataType
+    # Default value (None if required, otherwise the Python value)
+    default_value: Any = None
 
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
@@ -175,13 +184,25 @@ class ExtensionOption:
 
     def serialize(self) -> bytes:
         """Serialize to Arrow IPC bytes."""
+        # Serialize type as a single-field schema
+        type_schema = pa.schema([pa.field("value", self.type)])
+        type_bytes = type_schema.serialize().to_pybytes()
+
+        # Serialize default value if present
+        default_bytes: bytes | None = None
+        if self.default_value is not None:
+            default_batch = pa.RecordBatch.from_pydict(
+                {"value": [self.default_value]}, schema=type_schema
+            )
+            default_bytes = vgi.ipc_utils.serialize_record_batch(default_batch)
+
         batch = pa.RecordBatch.from_pylist(
             [
                 {
                     "name": self.name,
                     "description": self.description,
-                    "type": self.type,
-                    "default_value": self.default_value,
+                    "type": type_bytes,
+                    "default_value": default_bytes,
                 }
             ],
             schema=self.ARROW_SCHEMA,
@@ -196,11 +217,21 @@ class ExtensionOption:
             cls.__name__,
             required_fields=["name", "description", "type"],
         )
+        # Deserialize type from schema bytes
+        type_schema = pa.ipc.read_schema(pa.py_buffer(row["type"]))
+        data_type = type_schema.field("value").type
+
+        # Deserialize default value if present
+        default_value: Any = None
+        if row["default_value"] is not None:
+            default_batch = vgi.ipc_utils.deserialize_record_batch(row["default_value"])
+            default_value = default_batch.column("value")[0].as_py()
+
         return cls(
             name=row["name"],
             description=row["description"],
-            type=SerializedSchema(row["type"]),
-            default_value=row["default_value"],
+            type=data_type,
+            default_value=default_value,
         )
 
 
@@ -1245,6 +1276,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     # Class attributes for function-based catalogs
     catalog_name: str = "functions"
     functions: list[type] = []
+    settings: list[Setting] = []
 
     # Fixed attach_id for read-only catalogs (no need for unique IDs)
     _FIXED_ATTACH_ID: AttachId = AttachId(b"readonly-catalog-")
@@ -1262,6 +1294,9 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                 f"Unknown catalog: {name!r}. Available: {self.catalog_name}"
             )
 
+        # Serialize settings for the attach result
+        serialized_settings = [s.serialize() for s in self.settings]
+
         return CatalogAttachResult(
             attach_id=self._FIXED_ATTACH_ID,
             supports_transactions=False,
@@ -1270,6 +1305,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             catalog_version=1,
             attach_id_required=False,
             default_schema="main",
+            settings=serialized_settings,
         )
 
     def schema_get(

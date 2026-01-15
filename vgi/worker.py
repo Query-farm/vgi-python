@@ -96,7 +96,7 @@ import structlog.stdlib
 from pyarrow import ipc
 
 from vgi import tracing
-from vgi.catalog import CatalogInterface
+from vgi.catalog import CatalogInterface, Setting
 from vgi.exceptions import SchemaValidationError
 from vgi.function import (
     Function,
@@ -179,6 +179,7 @@ class Worker:
     """
 
     functions: Sequence[type[Function[Any]]] = []
+    settings: Sequence["Setting"] = []  # Settings exposed via catalog_attach
     catalog_interface: type[CatalogInterface] | None = None
     catalog_name: str | None = "functions"  # Set to None to disable default catalog
     _registry: dict[str, list[type[Function[Any]]]] | None = None
@@ -228,7 +229,7 @@ class Worker:
         if cls._default_catalog_interface is None:
             from vgi.catalog import ReadOnlyCatalogInterface
 
-            # Create a dynamic subclass with the worker's functions
+            # Create a dynamic subclass with the worker's functions and settings
             cls._default_catalog_interface = cast(
                 type[CatalogInterface],
                 type(
@@ -237,6 +238,7 @@ class Worker:
                     {
                         "catalog_name": cls.catalog_name,
                         "functions": list(cls.functions),
+                        "settings": list(cls.settings),
                     },
                 ),
             )
