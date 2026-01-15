@@ -14,6 +14,7 @@ from vgi.catalog import (
     FunctionType,
     OnConflict,
     SchemaInfo,
+    SchemaObjectType,
     SerializedSchema,
     TableInfo,
     TransactionId,
@@ -624,12 +625,13 @@ class TestFunctionInfoNewFields:
         assert restored.name == "legacy_func"
         assert restored.schema_name == "main"
         assert restored.function_type == FunctionType.SCALAR
-        assert restored.comment == "A legacy function"
+        assert restored.comment is None  # FunctionInfo ignores comment field
         assert restored.tags == {"version": "1.0"}
 
-        # Optional fields should be None when not in legacy data
+        # Optional fields should be None/default when not in legacy data
         assert restored.stability is None
         assert restored.null_handling is None
+        assert restored.description == ""  # Default for missing description
         assert restored.examples == []
         assert restored.categories == []
         assert restored.projection_pushdown is None
@@ -707,3 +709,182 @@ class TestFunctionInfoNewFields:
         assert restored.examples == []
         assert restored.categories == []
         assert restored.required_settings == []
+
+
+class TestSchemaObjectType:
+    """Test SchemaObjectType enum."""
+
+    def test_enum_values(self) -> None:
+        """Verify all enum values are accessible."""
+        assert SchemaObjectType.TABLE.value == "table"
+        assert SchemaObjectType.VIEW.value == "view"
+        assert SchemaObjectType.SCALAR_FUNCTION.value == "scalar_function"
+        assert SchemaObjectType.TABLE_FUNCTION.value == "table_function"
+
+    def test_enum_from_string(self) -> None:
+        """Verify enum can be created from string values."""
+        assert SchemaObjectType("table") == SchemaObjectType.TABLE
+        assert SchemaObjectType("view") == SchemaObjectType.VIEW
+        assert SchemaObjectType("scalar_function") == SchemaObjectType.SCALAR_FUNCTION
+        assert SchemaObjectType("table_function") == SchemaObjectType.TABLE_FUNCTION
+
+
+class TestSchemaContentsTypeFilter:
+    """Test schema_contents type filtering in ReadOnlyCatalogInterface."""
+
+    @pytest.fixture
+    def catalog_with_functions(self) -> ReadOnlyCatalogInterface:
+        """Create a catalog with scalar and table functions."""
+        from vgi import ScalarFunction
+        from vgi.table_function import (
+            Output,
+            OutputGenerator,
+            TableFunctionGenerator,
+        )
+
+        class MyScalarFunction(ScalarFunction):
+            """A test scalar function."""
+
+            class Meta:
+                output_type = pa.int64()
+
+            def compute(self, batch: pa.RecordBatch) -> "pa.Array[pa.Int64Scalar]":
+                return pa.array([1] * batch.num_rows, type=pa.int64())
+
+        class MyTableFunction(TableFunctionGenerator):
+            """A test table function."""
+
+            class Meta:
+                max_workers = 1
+
+            @property
+            def output_schema(self) -> pa.Schema:
+                return pa.schema([("value", pa.int64())])
+
+            def process(self) -> OutputGenerator:
+                yield Output(
+                    pa.RecordBatch.from_pydict(
+                        {"value": [1]}, schema=self.output_schema
+                    )
+                )
+
+        class TestCatalog(ReadOnlyCatalogInterface):
+            catalog_name = "test"
+            functions = [MyScalarFunction, MyTableFunction]
+
+        return TestCatalog()
+
+    def test_no_filter_returns_all(
+        self, catalog_with_functions: ReadOnlyCatalogInterface
+    ) -> None:
+        """schema_contents with no type filter returns all functions."""
+        attach_result = catalog_with_functions.catalog_attach(name="test", options={})
+        contents = list(
+            catalog_with_functions.schema_contents(
+                attach_id=attach_result.attach_id,
+                transaction_id=None,
+                name="main",
+            )
+        )
+        assert len(contents) == 2
+        names = {obj.name for obj in contents}
+        # Names are derived from class names: MyScalarFunction -> my_scalar
+        assert "my_scalar" in names
+        assert "my_table" in names
+
+    def test_filter_scalar_function(
+        self, catalog_with_functions: ReadOnlyCatalogInterface
+    ) -> None:
+        """schema_contents with SCALAR_FUNCTION filter returns only scalar functions."""
+        attach_result = catalog_with_functions.catalog_attach(name="test", options={})
+        contents = list(
+            catalog_with_functions.schema_contents(
+                attach_id=attach_result.attach_id,
+                transaction_id=None,
+                name="main",
+                type=SchemaObjectType.SCALAR_FUNCTION,
+            )
+        )
+        assert len(contents) == 1
+        func_info = contents[0]
+        assert isinstance(func_info, FunctionInfo)
+        assert func_info.name == "my_scalar"
+        assert func_info.function_type == FunctionType.SCALAR
+
+    def test_filter_table_function(
+        self, catalog_with_functions: ReadOnlyCatalogInterface
+    ) -> None:
+        """schema_contents with TABLE_FUNCTION filter returns only table functions."""
+        attach_result = catalog_with_functions.catalog_attach(name="test", options={})
+        contents = list(
+            catalog_with_functions.schema_contents(
+                attach_id=attach_result.attach_id,
+                transaction_id=None,
+                name="main",
+                type=SchemaObjectType.TABLE_FUNCTION,
+            )
+        )
+        assert len(contents) == 1
+        func_info = contents[0]
+        assert isinstance(func_info, FunctionInfo)
+        assert func_info.name == "my_table"
+        assert func_info.function_type == FunctionType.TABLE
+
+    def test_filter_table_returns_empty(
+        self, catalog_with_functions: ReadOnlyCatalogInterface
+    ) -> None:
+        """schema_contents with TABLE filter returns empty (no tables in catalog)."""
+        attach_result = catalog_with_functions.catalog_attach(name="test", options={})
+        contents = list(
+            catalog_with_functions.schema_contents(
+                attach_id=attach_result.attach_id,
+                transaction_id=None,
+                name="main",
+                type=SchemaObjectType.TABLE,
+            )
+        )
+        assert len(contents) == 0
+
+    def test_filter_view_returns_empty(
+        self, catalog_with_functions: ReadOnlyCatalogInterface
+    ) -> None:
+        """schema_contents with VIEW filter returns empty (no views in catalog)."""
+        attach_result = catalog_with_functions.catalog_attach(name="test", options={})
+        contents = list(
+            catalog_with_functions.schema_contents(
+                attach_id=attach_result.attach_id,
+                transaction_id=None,
+                name="main",
+                type=SchemaObjectType.VIEW,
+            )
+        )
+        assert len(contents) == 0
+
+    def test_wrong_schema_returns_empty(
+        self, catalog_with_functions: ReadOnlyCatalogInterface
+    ) -> None:
+        """schema_contents with non-existent schema returns empty."""
+        attach_result = catalog_with_functions.catalog_attach(name="test", options={})
+        contents = list(
+            catalog_with_functions.schema_contents(
+                attach_id=attach_result.attach_id,
+                transaction_id=None,
+                name="nonexistent",
+            )
+        )
+        assert len(contents) == 0
+
+    def test_type_filter_with_none_explicitly(
+        self, catalog_with_functions: ReadOnlyCatalogInterface
+    ) -> None:
+        """schema_contents with type=None explicitly returns all functions."""
+        attach_result = catalog_with_functions.catalog_attach(name="test", options={})
+        contents = list(
+            catalog_with_functions.schema_contents(
+                attach_id=attach_result.attach_id,
+                transaction_id=None,
+                name="main",
+                type=None,
+            )
+        )
+        assert len(contents) == 2

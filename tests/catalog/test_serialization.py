@@ -685,7 +685,6 @@ class TestArrowSchemaCorrectness:
         """Verify FunctionInfo Arrow schema."""
         schema = FunctionInfo.ARROW_SCHEMA
         assert schema.field("name").type == pa.string()
-        assert schema.field("function_type").type == pa.string()
         assert schema.field("arguments").type == pa.binary()
         assert schema.field("output_schema").type == pa.binary()
 

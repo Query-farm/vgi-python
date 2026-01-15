@@ -151,10 +151,10 @@ class TestExampleWorkerCatalog:
         # Create lookup by name
         by_name = {fn.name: fn for fn in functions}
 
-        # Functions should have descriptions
+        # Functions should have descriptions (in description field, not comment)
         echo_info = by_name["echo"]
-        assert echo_info.comment is not None
-        assert len(echo_info.comment) > 0
+        assert echo_info.description is not None
+        assert len(echo_info.description) > 0
 
     def test_function_info_schema_name(self) -> None:
         """FunctionInfo has schema_name set to 'main'."""

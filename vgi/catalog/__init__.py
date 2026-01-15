@@ -36,6 +36,7 @@ from vgi.catalog.catalog_interface import (
     ReadOnlyCatalogInterface,
     ScanFunctionResult,
     SchemaInfo,
+    SchemaObjectType,
     SerializedSchema,
     SqlExpression,
     TableInfo,
@@ -53,6 +54,7 @@ __all__ = [
     # Enums
     "FunctionType",
     "OnConflict",
+    "SchemaObjectType",
     # Data classes
     "CatalogAttachResult",
     "CatalogExample",

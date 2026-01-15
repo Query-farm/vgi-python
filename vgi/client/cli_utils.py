@@ -304,7 +304,7 @@ def function_info_to_dict(function_info: Any) -> dict[str, Any]:
         "schema_name": function_info.schema_name,
         "function_type": function_info.function_type.value,
         "arguments": arrow_schema_to_json(function_info.arguments),
-        "comment": function_info.comment,
+        "description": function_info.description,
         "tags": dict(function_info.tags),
         # Scalar function behavior fields (None for non-scalar)
         "stability": (

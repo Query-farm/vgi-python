@@ -20,12 +20,14 @@ from vgi.catalog import (
     FunctionInfo,
     OnConflict,
     SchemaInfo,
+    SchemaObjectType,
     SerializedSchema,
     SqlExpression,
     TableInfo,
     TransactionId,
     ViewInfo,
 )
+from vgi.catalog.catalog_interface import _normalize_schema_object_type
 from vgi.ci.storage import AttachmentNotFoundError, AttachmentStorage, TransactionError
 
 
@@ -242,19 +244,50 @@ class CICatalog(CatalogInterface):
         )
 
     def schema_contents(
-        self, *, attach_id: AttachId, transaction_id: TransactionId | None, name: str
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: SchemaObjectType | str | None = None,
     ) -> Iterable[TableInfo | ViewInfo | FunctionInfo]:
-        """Get the contents of a schema."""
+        """Get the contents of a schema.
+
+        Args:
+            attach_id: The attachment identifier.
+            transaction_id: The transaction identifier, if any.
+            name: The name of the schema.
+            type: Optional filter for the type of objects to return.
+                If None, returns all objects. Can be a SchemaObjectType enum
+                or its string value.
+
+        Returns:
+            An iterable of TableInfo, ViewInfo, or FunctionInfo objects.
+
+        """
         schema = self._storage.get_schema(attach_id, name)
         if schema is None:
             msg = f"Schema {name!r} not found"
             raise ValueError(msg)
 
         result: list[TableInfo | ViewInfo | FunctionInfo] = []
-        for table in schema.tables.values():
-            result.append(table.info)
-        for view in schema.views.values():
-            result.append(view.info)
+
+        # Normalize type parameter to enum
+        type_filter = _normalize_schema_object_type(type)
+
+        # Add tables unless filtering for non-table types
+        if type_filter is None or type_filter == SchemaObjectType.TABLE:
+            for table in schema.tables.values():
+                result.append(table.info)
+
+        # Add views unless filtering for non-view types
+        if type_filter is None or type_filter == SchemaObjectType.VIEW:
+            for view in schema.views.values():
+                result.append(view.info)
+
+        # Note: This CI catalog doesn't store functions,
+        # so SCALAR_FUNCTION and TABLE_FUNCTION filters return nothing
+
         return result
 
     # Table DDL

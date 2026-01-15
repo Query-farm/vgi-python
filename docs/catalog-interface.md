@@ -185,6 +185,17 @@ Information about a function in a schema:
 | `comment` | `str \| None` | Optional description |
 | `tags` | `dict[str, str]` | Key-value metadata |
 
+### SchemaObjectType
+
+Enum for filtering objects in `schema_contents()`:
+
+| Value | Description |
+|-------|-------------|
+| `TABLE` | Filter to return only tables |
+| `VIEW` | Filter to return only views |
+| `SCALAR_FUNCTION` | Filter to return only scalar functions |
+| `TABLE_FUNCTION` | Filter to return only table functions |
+
 ### ScanFunctionResult
 
 Information for scanning a table's data:
@@ -394,6 +405,13 @@ for obj in client.schema_contents(attach_id=attach_id, name="main"):
     elif isinstance(obj, FunctionInfo):
         print(f"Function: {obj.name}")
 
+# Get only scalar functions using type filter
+from vgi.catalog import SchemaObjectType
+for obj in client.schema_contents(
+    attach_id=attach_id, name="main", type=SchemaObjectType.SCALAR_FUNCTION
+):
+    print(f"Scalar Function: {obj.name}")
+
 # Detach when done
 client.catalog_detach(attach_id=attach_id)
 ```
@@ -412,7 +430,7 @@ client.catalog_detach(attach_id=attach_id)
 | `schema_get()` | Get schema info |
 | `schema_create()` | Create a schema |
 | `schema_drop()` | Drop a schema |
-| `schema_contents()` | List schema contents |
+| `schema_contents()` | List schema contents (optional `type` filter) |
 | `table_get()` | Get table info |
 | `table_create()` | Create a table |
 | `table_drop()` | Drop a table |

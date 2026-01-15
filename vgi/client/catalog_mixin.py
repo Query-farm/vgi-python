@@ -31,6 +31,7 @@ from vgi.catalog import (
     OnConflict,
     ScanFunctionResult,
     SchemaInfo,
+    SchemaObjectType,
     SerializedSchema,
     SqlExpression,
     TableInfo,
@@ -622,6 +623,7 @@ class CatalogClientMixin:
         attach_id: AttachId,
         transaction_id: TransactionId | None = None,
         name: str,
+        type: SchemaObjectType | None = None,
     ) -> Iterator[TableInfo | ViewInfo | FunctionInfo]:
         """List contents of a schema (tables, views, functions).
 
@@ -629,17 +631,27 @@ class CatalogClientMixin:
             attach_id: The attachment ID from catalog_attach.
             transaction_id: Optional transaction ID for transactional reads.
             name: The schema name.
+            type: Optional filter for the type of objects to return.
+                If None, returns all objects. Valid values are:
+                - SchemaObjectType.TABLE: Return only tables
+                - SchemaObjectType.VIEW: Return only views
+                - SchemaObjectType.SCALAR_FUNCTION: Return only scalar functions
+                - SchemaObjectType.TABLE_FUNCTION: Return only table functions
 
         Yields:
             TableInfo, ViewInfo, or FunctionInfo for each object in the schema.
 
         """
-        for batch in self._catalog_invoke_stream(
-            "schema_contents",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            name=name,
-        ):
+        # Build kwargs, only include type if specified
+        kwargs: dict[str, Any] = {
+            "attach_id": attach_id,
+            "transaction_id": transaction_id,
+            "name": name,
+        }
+        if type is not None:
+            kwargs["type"] = type.value
+
+        for batch in self._catalog_invoke_stream("schema_contents", **kwargs):
             # Determine type from batch schema
             if "columns" in batch.schema.names:
                 yield TableInfo.deserialize(batch)

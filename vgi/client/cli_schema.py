@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import click
 
-from vgi.catalog import FunctionInfo, TableInfo, ViewInfo
+from vgi.catalog import FunctionInfo, SchemaObjectType, TableInfo, ViewInfo
 from vgi.client.cli_utils import (
     function_info_to_dict,
     get_attach_id_from_options,
@@ -212,6 +212,12 @@ def schema_drop(
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
 @click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
+@click.option(
+    "--type",
+    "object_type",
+    type=click.Choice(["table", "view", "scalar_function", "table_function"]),
+    help="Filter by object type",
+)
 def schema_contents(
     name: str,
     attach_id: str | None,
@@ -219,6 +225,7 @@ def schema_contents(
     attach_options: str,
     worker: str,
     transaction_id: str | None,
+    object_type: str | None,
 ) -> None:
     """List contents of a schema (tables, views, functions).
 
@@ -236,12 +243,17 @@ def schema_contents(
             "Consider using --attach-id for session persistence.",
             err=True,
         )
+
+    # Convert string type to SchemaObjectType enum
+    type_filter = SchemaObjectType(object_type) if object_type else None
+
     for item in client.schema_contents(
         attach_id=resolved_attach_id,
         transaction_id=(
             hex_to_transaction_id(transaction_id) if transaction_id else None
         ),
         name=name,
+        type=type_filter,
     ):
         if isinstance(item, TableInfo):
             output_json({"type": "table", **table_info_to_dict(item)})

@@ -31,6 +31,7 @@ __all__ = [
     "OrderPreservation",
     # Catalog-specific
     "CatalogExample",
+    "SchemaObjectType",
 ]
 
 
@@ -402,6 +403,41 @@ class FunctionType(Enum):
     AGGREGATE = "aggregate"
 
 
+class SchemaObjectType(Enum):
+    """The type of object that can exist within a schema.
+
+    Used to filter results from schema_contents().
+    """
+
+    TABLE = "table"
+    VIEW = "view"
+    SCALAR_FUNCTION = "scalar_function"
+    TABLE_FUNCTION = "table_function"
+
+
+def _normalize_schema_object_type(
+    value: SchemaObjectType | str | None,
+) -> SchemaObjectType | None:
+    """Normalize a schema object type value to an enum.
+
+    Args:
+        value: A SchemaObjectType enum, its string value, or None.
+
+    Returns:
+        The corresponding SchemaObjectType enum, or None if value is None.
+
+    Raises:
+        ValueError: If value is a string that doesn't match any enum value.
+
+    """
+    if value is None:
+        return None
+    if isinstance(value, SchemaObjectType):
+        return value
+    # Convert string to enum
+    return SchemaObjectType(value)
+
+
 class OnConflict(Enum):
     """Behavior when a conflict occurs during creation of an object.
 
@@ -434,7 +470,10 @@ class FunctionInfo(CatalogSchemaObject):
     stability: FunctionStability | None = None
     null_handling: NullHandling | None = None
 
-    # Documentation fields (accepts strings for backward compatibility)
+    # Documentation fields
+    # description: intrinsic documentation from function metadata (Meta.description)
+    # comment: user-settable comment (via COMMENT ON FUNCTION, inherited from base)
+    description: str = ""
     examples: list[CatalogExample | str] = field(default_factory=list)
     categories: list[str] = field(default_factory=list)
 
@@ -454,16 +493,22 @@ class FunctionInfo(CatalogSchemaObject):
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
             pa.field("name", pa.string(), nullable=False),
-            pa.field("schema_name", pa.string(), nullable=False),
-            pa.field("function_type", pa.string(), nullable=False),
+            pa.field(
+                "schema_name", pa.dictionary(pa.int8(), pa.string()), nullable=False
+            ),
+            pa.field(
+                "function_type", pa.dictionary(pa.int8(), pa.string()), nullable=False
+            ),
             pa.field("arguments", pa.binary(), nullable=False),
             pa.field("output_schema", pa.binary(), nullable=False),
-            pa.field("comment", pa.string(), nullable=True),
             pa.field("tags", pa.map_(pa.string(), pa.string()), nullable=False),
             # Scalar function behavior fields (nullable for non-scalar functions)
-            pa.field("stability", pa.string(), nullable=True),
-            pa.field("null_handling", pa.string(), nullable=True),
+            pa.field("stability", pa.dictionary(pa.int8(), pa.string()), nullable=True),
+            pa.field(
+                "null_handling", pa.dictionary(pa.int8(), pa.string()), nullable=True
+            ),
             # Documentation fields
+            pa.field("description", pa.string(), nullable=False),
             pa.field(
                 "examples",
                 pa.list_(
@@ -481,14 +526,24 @@ class FunctionInfo(CatalogSchemaObject):
             # Table function capabilities (nullable for scalar functions)
             pa.field("projection_pushdown", pa.bool_(), nullable=True),
             pa.field("filter_pushdown", pa.bool_(), nullable=True),
-            pa.field("order_preservation", pa.string(), nullable=True),
+            pa.field(
+                "order_preservation",
+                pa.dictionary(pa.int8(), pa.string()),
+                nullable=True,
+            ),
             pa.field("max_workers", pa.int32(), nullable=True),
             # Aggregate function fields
-            pa.field("order_dependent", pa.string(), nullable=False),
-            pa.field("distinct_dependent", pa.string(), nullable=False),
+            pa.field(
+                "order_dependent", pa.dictionary(pa.int8(), pa.string()), nullable=False
+            ),
+            pa.field(
+                "distinct_dependent",
+                pa.dictionary(pa.int8(), pa.string()),
+                nullable=False,
+            ),
             # Settings
             pa.field("required_settings", pa.list_(pa.string()), nullable=False),
-        ]  # type: ignore[arg-type]
+        ]
     )
 
     def serialize(self) -> bytes:
@@ -501,7 +556,6 @@ class FunctionInfo(CatalogSchemaObject):
                     "function_type": self.function_type.value,
                     "arguments": self.arguments,
                     "output_schema": self.output_schema,
-                    "comment": self.comment,
                     "tags": self.tags,
                     # Scalar function behavior fields (None for non-scalar)
                     "stability": self.stability.name if self.stability else None,
@@ -509,6 +563,7 @@ class FunctionInfo(CatalogSchemaObject):
                         self.null_handling.name if self.null_handling else None
                     ),
                     # Documentation fields
+                    "description": self.description,
                     "examples": [
                         (
                             {
@@ -567,7 +622,7 @@ class FunctionInfo(CatalogSchemaObject):
             function_type=FunctionType(row["function_type"]),
             arguments=SerializedSchema(row["arguments"]),
             output_schema=SerializedSchema(row["output_schema"]),
-            comment=row.get("comment"),
+            comment=None,  # Functions don't use comment; use description instead
             tags=dict(row["tags"]) if row["tags"] else {},
             # Scalar function behavior fields (None for non-scalar functions)
             stability=(
@@ -581,6 +636,7 @@ class FunctionInfo(CatalogSchemaObject):
                 else None
             ),
             # Documentation fields
+            description=row.get("description", ""),
             examples=[
                 CatalogExample(
                     sql=ex["sql"],
@@ -825,11 +881,32 @@ class CatalogInterface(ABC):
         raise NotImplementedError("Schema drop not implemented.")
 
     def schema_contents(
-        self, *, attach_id: AttachId, transaction_id: TransactionId | None, name: str
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: SchemaObjectType | str | None = None,
     ) -> Iterable[TableInfo | ViewInfo | FunctionInfo]:
         """Get the contents of the schema with the given name.
 
         Schemas can contain tables, views, and various types of functions.
+
+        Args:
+            attach_id: The attachment identifier.
+            transaction_id: The transaction identifier, if any.
+            name: The name of the schema.
+            type: Optional filter for the type of objects to return.
+                If None, returns all objects. Can be a SchemaObjectType enum
+                or its string value. Valid values are:
+                - SchemaObjectType.TABLE / "table": Return only tables
+                - SchemaObjectType.VIEW / "view": Return only views
+                - SchemaObjectType.SCALAR_FUNCTION / "scalar_function": Scalar functions
+                - SchemaObjectType.TABLE_FUNCTION / "table_function": Table functions
+
+        Returns:
+            An iterable of TableInfo, ViewInfo, or FunctionInfo objects.
+
         """
         raise NotImplementedError("Schema contents not implemented.")
 
@@ -1235,14 +1312,56 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         return None
 
     def schema_contents(
-        self, *, attach_id: AttachId, transaction_id: TransactionId | None, name: str
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: SchemaObjectType | str | None = None,
     ) -> Iterable[TableInfo | ViewInfo | FunctionInfo]:
-        """List all functions in the schema."""
+        """List all functions in the schema.
+
+        Args:
+            attach_id: The attachment identifier.
+            transaction_id: The transaction identifier, if any.
+            name: The name of the schema.
+            type: Optional filter for the type of objects to return.
+                If None, returns all objects. For ReadOnlyCatalogInterface,
+                only scalar_function and table_function types are supported
+                since tables and views are not supported.
+                Can be a SchemaObjectType enum or its string value.
+
+        Returns:
+            An iterable of FunctionInfo objects (filtered by type if specified).
+
+        """
         if name != "main" or not self.functions:
             return
 
+        # Normalize type parameter to enum
+        type_filter = _normalize_schema_object_type(type)
+
+        # TABLE and VIEW filters will return nothing since we don't have them
+        if type_filter in (SchemaObjectType.TABLE, SchemaObjectType.VIEW):
+            return
+
         for func_cls in self.functions:
-            yield self._function_to_info(func_cls, name)
+            func_info = self._function_to_info(func_cls, name)
+
+            # Apply type filter if specified
+            if (
+                type_filter == SchemaObjectType.SCALAR_FUNCTION
+                and func_info.function_type != FunctionType.SCALAR
+            ):
+                continue
+            if (
+                type_filter == SchemaObjectType.TABLE_FUNCTION
+                and func_info.function_type
+                not in (FunctionType.TABLE, FunctionType.AGGREGATE)
+            ):
+                continue
+
+            yield func_info
 
     def _function_to_info(self, func_cls: type, schema_name: str) -> FunctionInfo:
         """Convert a function class to FunctionInfo."""
@@ -1285,12 +1404,13 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             function_type=func_type,
             arguments=args_bytes,
             output_schema=output_bytes,
-            comment=meta.description or None,
+            comment=None,  # Functions don't use comment; use description instead
             tags=meta.tags,
             # Scalar function behavior fields (None for non-scalar)
             stability=meta.stability if is_scalar else None,
             null_handling=meta.null_handling if is_scalar else None,
             # Documentation fields
+            description=meta.description or "",  # Intrinsic from Meta.description
             examples=[
                 CatalogExample(
                     sql=ex.sql,
