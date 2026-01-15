@@ -5,15 +5,18 @@ Each function demonstrates different patterns for generating data.
 
 AVAILABLE FUNCTIONS
 -------------------
-SequenceFunction              - Generates a sequence of integers 0..n-1
-RangeFunction                 - Generates integers in a start..end range
+ConstantColumnsFunction       - Demonstrates varargs with dynamic output schema
 ConstantTableFunction         - Returns a constant single-row table
-RandomSampleFunction          - Generates random sample data (parallelizable)
 GeneratorExceptionFunction    - Demonstrates exception handling
+LoggingGeneratorFunction      - Demonstrates log message emission
+PartitionedSequenceFunction   - Demonstrates multi-worker parallel execution
+ProjectedDataFunction         - Demonstrates projection pushdown
+SequenceFunction              - Generates a sequence of integers 0..n-1
+SettingsAwareFunction         - Demonstrates settings-aware output schema
 """
 
 import struct
-from typing import Annotated, ClassVar, cast
+from typing import Annotated, Any, ClassVar, cast
 
 import numpy as np
 import pyarrow as pa
@@ -31,12 +34,13 @@ from vgi.table_function import (
 )
 
 __all__ = [
-    "SequenceFunction",
+    "ConstantColumnsFunction",
     "ConstantTableFunction",
     "GeneratorExceptionFunction",
     "LoggingGeneratorFunction",
     "PartitionedSequenceFunction",
     "ProjectedDataFunction",
+    "SequenceFunction",
     "SettingsAwareFunction",
 ]
 
@@ -601,3 +605,109 @@ class SettingsAwareFunction(TableFunctionGenerator):
                 data["details"] = [f"row_{i}"]
 
             yield Output(pa.RecordBatch.from_pydict(data, schema=output_schema))
+
+
+class ConstantColumnsFunction(TableFunctionGenerator):
+    """Generates a table with constant values in each column based on varargs.
+
+    USE CASE
+    --------
+    Demonstrates varargs with AnyArrow type where the output schema is
+    determined by the types of the values provided. Each vararg value
+    becomes a column filled with that constant value for all rows.
+
+    This shows how varargs can accept mixed types and produce a dynamic
+    output schema based on the argument types.
+
+    SCHEMA
+    ------
+    Output schema is dynamic based on the types of provided values.
+    Column names are auto-generated as col_0, col_1, col_2, etc.
+
+    Example: constant_columns(3, 42, 'hello', 3.14)
+    Output schema: {"col_0": int64, "col_1": string, "col_2": double}
+
+    PARALLELIZATION
+    ---------------
+    Single worker only (max_workers=1).
+
+    Example:
+    -------
+    SELECT * FROM constant_columns(3, 42, 'hello')
+    Returns: [{"col_0": 42, "col_1": "hello"},
+              {"col_0": 42, "col_1": "hello"},
+              {"col_0": 42, "col_1": "hello"}]
+
+    SELECT * FROM constant_columns(2, 1, 2, 3, 'apple')
+    Returns: [{"col_0": 1, "col_1": 2, "col_2": 3, "col_3": "apple"},
+              {"col_0": 1, "col_1": 2, "col_2": 3, "col_3": "apple"}]
+
+    """
+
+    class Meta:
+        """Metadata for ConstantColumnsFunction."""
+
+        name = "constant_columns"
+        description = "Generates rows with constant values from varargs"
+        categories = ["generator", "utility"]
+        max_workers = 1
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM constant_columns(5, 42, 'hello')",
+                description="Generate 5 rows with columns containing 42 and 'hello'",
+            ),
+            FunctionExample(
+                sql="SELECT * FROM constant_columns(3, 1, 2, 3, 'test')",
+                description="Generate 3 rows with 4 columns of mixed types",
+            ),
+        ]
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+    values: Annotated[
+        tuple[Any, ...],
+        Arg(1, varargs=True, doc="Values to fill each column (at least one required)"),
+    ]
+
+    # Store Arrow scalars for type information
+    _value_scalars: list[Any]
+
+    BATCH_SIZE: int = 1000
+
+    def bind(self) -> None:
+        """Extract Arrow scalars from positional arguments for type info."""
+        # Access raw Arrow scalars to preserve type information
+        positional = self.invocation.arguments.positional
+        # Filter to non-None scalars (varargs validation ensures no nulls)
+        self._value_scalars = [s for s in positional[1:] if s is not None]
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        """Return output schema with one column per vararg, typed by value."""
+        fields = [
+            pa.field(f"col_{i}", scalar.type)
+            for i, scalar in enumerate(self._value_scalars)
+        ]
+        return pa.schema(fields)
+
+    @property
+    def cardinality(self) -> TableCardinality:
+        """Return exact cardinality since we know the count."""
+        return TableCardinality(estimate=self.count, max=self.count)
+
+    def process(self) -> OutputGenerator:
+        """Generate rows with constant values in each column."""
+        output_schema = self.output_schema
+        remaining = self.count
+
+        while remaining > 0:
+            batch_size = min(remaining, self.BATCH_SIZE)
+
+            # Create arrays filled with constant values
+            arrays = [
+                pa.array([scalar.as_py()] * batch_size, type=scalar.type)
+                for scalar in self._value_scalars
+            ]
+
+            yield Output(pa.RecordBatch.from_arrays(arrays, schema=output_schema))
+
+            remaining -= batch_size

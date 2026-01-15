@@ -20,6 +20,7 @@ from vgi.examples.scalar import (
     UpperCaseFunction,
 )
 from vgi.examples.table import (
+    ConstantColumnsFunction,
     ConstantTableFunction,
     GeneratorExceptionFunction,
     LoggingGeneratorFunction,
@@ -63,12 +64,13 @@ class ExampleWorker(Worker):
         ExceptionFinalizeFunction,
         ExceptionProcessFunction,
         # TableFunctionGenerator - generate output without input
-        SequenceFunction,
+        ConstantColumnsFunction,
         ConstantTableFunction,
         GeneratorExceptionFunction,
         LoggingGeneratorFunction,
         PartitionedSequenceFunction,
         ProjectedDataFunction,
+        SequenceFunction,
         SettingsAwareFunction,
         # ScalarFunctionGenerator - transform to single-column output
         AddNumericColumnsFunction,
