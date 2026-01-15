@@ -147,6 +147,35 @@ class CatalogAttachResult:
         )
 
 
+def _infer_arrow_type(value: Any) -> pa.DataType:
+    """Infer Arrow type from a Python value.
+
+    Args:
+        value: Python value to infer type from.
+
+    Returns:
+        The inferred Arrow DataType.
+
+    Raises:
+        TypeError: If the type cannot be inferred.
+
+    """
+    if isinstance(value, bool):
+        return pa.bool_()
+    if isinstance(value, int):
+        return pa.int64()
+    if isinstance(value, float):
+        return pa.float64()
+    if isinstance(value, str):
+        return pa.string()
+    if isinstance(value, bytes):
+        return pa.binary()
+    raise TypeError(
+        f"Cannot infer Arrow type from {type(value).__name__}. "
+        f"Please specify type explicitly."
+    )
+
+
 @dataclass(frozen=True)
 class Setting:
     """A setting exposed by a VGI worker.
@@ -154,24 +183,32 @@ class Setting:
     Settings can be configured via DuckDB's SET command and are passed
     to VGI functions via the settings parameter in the Invocation.
 
-    Example:
-        Setting(
-            name="vgi_verbose_mode",
-            description="Enable verbose output with extra columns",
-            type=pa.bool_(),
-            default_value=False,
-        )
+    The type can be inferred from the default value for common Python types
+    (bool, int, float, str, bytes). If no default is provided, type must
+    be specified explicitly.
+
+    Examples:
+        # Type inferred from default
+        Setting("vgi_debug", "Enable debug mode", default=False)
+        Setting("vgi_workers", "Max workers", default=4)
+        Setting("vgi_log_level", "Log level", default="info")
+
+        # Explicit type (required when no default)
+        Setting("vgi_api_key", "API key", type=pa.string())
+
+        # Explicit type with default
+        Setting("vgi_timeout", "Timeout in ms", type=pa.int32(), default=5000)
 
     """
 
     # Setting name (e.g., "vgi_verbose_mode")
     name: str
     # Human-readable description
-    description: str
-    # Arrow data type for this setting
-    type: pa.DataType
-    # Default value (None if required, otherwise the Python value)
-    default_value: Any = None
+    desc: str
+    # Arrow data type (inferred from default if not provided)
+    type: pa.DataType | None = None
+    # Default value (None means the setting is required)
+    default: Any = None
 
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
@@ -182,17 +219,30 @@ class Setting:
         ]  # type: ignore[arg-type]
     )
 
+    def __post_init__(self) -> None:
+        """Infer type from default value if not provided."""
+        if self.type is None:
+            if self.default is None:
+                raise TypeError(
+                    f"Setting '{self.name}': type must be specified when no default "
+                    f"is provided. Use type=pa.string() or similar."
+                )
+            inferred_type = _infer_arrow_type(self.default)
+            object.__setattr__(self, "type", inferred_type)
+
     def serialize(self) -> bytes:
         """Serialize to Arrow IPC bytes."""
+        assert self.type is not None  # Guaranteed by __post_init__
+
         # Serialize type as a single-field schema
         type_schema = pa.schema([pa.field("value", self.type)])
         type_bytes = type_schema.serialize().to_pybytes()
 
         # Serialize default value if present
         default_bytes: bytes | None = None
-        if self.default_value is not None:
+        if self.default is not None:
             default_batch = pa.RecordBatch.from_pydict(
-                {"value": [self.default_value]}, schema=type_schema
+                {"value": [self.default]}, schema=type_schema
             )
             default_bytes = vgi.ipc_utils.serialize_record_batch(default_batch)
 
@@ -200,7 +250,7 @@ class Setting:
             [
                 {
                     "name": self.name,
-                    "description": self.description,
+                    "description": self.desc,
                     "type": type_bytes,
                     "default_value": default_bytes,
                 }
@@ -222,16 +272,16 @@ class Setting:
         data_type = type_schema.field("value").type
 
         # Deserialize default value if present
-        default_value: Any = None
+        default: Any = None
         if row["default_value"] is not None:
             default_batch = vgi.ipc_utils.deserialize_record_batch(row["default_value"])
-            default_value = default_batch.column("value")[0].as_py()
+            default = default_batch.column("value")[0].as_py()
 
         return cls(
             name=row["name"],
-            description=row["description"],
+            desc=row["description"],
             type=data_type,
-            default_value=default_value,
+            default=default,
         )
 
 

@@ -511,70 +511,75 @@ class TestScanFunctionResultSerialization:
 class TestSettingSerialization:
     """Test Setting serialization round-trip."""
 
-    def test_basic_round_trip(self) -> None:
-        """Test basic serialization and deserialization."""
-        original = Setting(
-            name="vgi_verbose_mode",
-            description="Enable verbose output",
-            type=pa.bool_(),
-            default_value=None,
-        )
+    def test_basic_round_trip_explicit_type(self) -> None:
+        """Test with explicit type and no default (required setting)."""
+        original = Setting("vgi_api_key", "API key for auth", type=pa.string())
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
         restored = Setting.deserialize(batch)
 
         assert restored.name == original.name
-        assert restored.description == original.description
-        assert restored.type == pa.bool_()
-        assert restored.default_value is None
-
-    def test_with_default_value(self) -> None:
-        """Test with a default value."""
-        original = Setting(
-            name="vgi_log_level",
-            description="Logging level",
-            type=pa.string(),
-            default_value="info",
-        )
-        serialized = original.serialize()
-        batch = deserialize_record_batch(serialized)
-        restored = Setting.deserialize(batch)
-
-        assert restored.name == original.name
-        assert restored.description == original.description
+        assert restored.desc == original.desc
         assert restored.type == pa.string()
-        assert restored.default_value == "info"
+        assert restored.default is None
 
-    def test_integer_type(self) -> None:
-        """Test with integer type."""
-        original = Setting(
-            name="vgi_max_workers",
-            description="Maximum worker count",
-            type=pa.int64(),
-            default_value=4,
-        )
+    def test_type_inferred_from_string_default(self) -> None:
+        """Test type inference from string default."""
+        original = Setting("vgi_log_level", "Logging level", default="info")
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
         restored = Setting.deserialize(batch)
 
         assert restored.name == original.name
-        assert restored.type == pa.int64()
-        assert restored.default_value == 4
+        assert restored.type == pa.string()
+        assert restored.default == "info"
 
-    def test_bool_default_value(self) -> None:
-        """Test with boolean default value."""
-        original = Setting(
-            name="vgi_debug",
-            description="Enable debug mode",
-            type=pa.bool_(),
-            default_value=False,
-        )
+    def test_type_inferred_from_int_default(self) -> None:
+        """Test type inference from int default."""
+        original = Setting("vgi_max_workers", "Maximum worker count", default=4)
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = Setting.deserialize(batch)
+
+        assert restored.type == pa.int64()
+        assert restored.default == 4
+
+    def test_type_inferred_from_bool_default(self) -> None:
+        """Test type inference from bool default."""
+        original = Setting("vgi_debug", "Enable debug mode", default=False)
         serialized = original.serialize()
         batch = deserialize_record_batch(serialized)
         restored = Setting.deserialize(batch)
 
         assert restored.type == pa.bool_()
-        assert restored.default_value is False
+        assert restored.default is False
+
+    def test_type_inferred_from_float_default(self) -> None:
+        """Test type inference from float default."""
+        original = Setting("vgi_timeout", "Timeout in seconds", default=30.5)
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = Setting.deserialize(batch)
+
+        assert restored.type == pa.float64()
+        assert restored.default == 30.5
+
+    def test_explicit_type_overrides_inference(self) -> None:
+        """Test that explicit type is used even when default is provided."""
+        original = Setting("vgi_port", "Port number", type=pa.int32(), default=8080)
+        serialized = original.serialize()
+        batch = deserialize_record_batch(serialized)
+        restored = Setting.deserialize(batch)
+
+        assert restored.type == pa.int32()
+        assert restored.default == 8080
+
+    def test_missing_type_and_default_raises(self) -> None:
+        """Test that missing type and default raises TypeError."""
+        import pytest
+
+        with pytest.raises(TypeError, match="type must be specified"):
+            Setting("vgi_api_key", "API key")
 
 
 class TestFunctionInfoRequiredSettings:

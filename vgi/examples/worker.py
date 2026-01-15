@@ -16,8 +16,6 @@ Usage:
     vgi-example-worker
 """
 
-import pyarrow as pa
-
 from vgi.catalog import Setting
 from vgi.examples.scalar import (
     AddNumericColumnsFunction,
@@ -62,12 +60,7 @@ class ExampleWorker(Worker):
     catalog_name = "example"
 
     settings = [
-        Setting(
-            name="vgi_verbose_mode",
-            description="Enable verbose output with extra columns",
-            type=pa.bool_(),
-            default_value=False,
-        ),
+        Setting("vgi_verbose_mode", "Enable verbose output", default=False),
     ]
 
     functions = [
