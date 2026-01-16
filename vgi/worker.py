@@ -1321,11 +1321,15 @@ class Worker:
                             tracing.VGI_EXECUTION_ID, exec_id.hex()
                         )
 
-                    # Note: Secondary workers already have trace context restored
-                    # from invocation.traceparent (line 1458 in _run_loop), so we
-                    # don't need to restore from init_input.traceparent here.
-                    # The init_input.traceparent is stored for potential use by
-                    # workers that don't receive traceparent in the invocation.
+                    if (
+                        instance.init_input is not None
+                        and instance.init_input.traceparent is not None
+                    ):
+                        # The traceparent is passed down from the global init.
+                        trace_token = tracing.restore_trace_context(
+                            instance.init_input.traceparent,
+                            instance.init_input.tracestate,
+                        )
 
             except (KeyboardInterrupt, SystemExit):
                 raise
