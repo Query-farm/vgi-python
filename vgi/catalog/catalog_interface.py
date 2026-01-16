@@ -1327,8 +1327,14 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         if name != "main" or not self.functions:
             return []
 
+        # Normalize type parameter (may be string from wire protocol)
+        if isinstance(type, SchemaObjectType):
+            type_enum = type
+        else:
+            type_enum = SchemaObjectType(type)
+
         # TABLE and VIEW types return nothing since we don't have them
-        if type in (SchemaObjectType.TABLE, SchemaObjectType.VIEW):
+        if type_enum in (SchemaObjectType.TABLE, SchemaObjectType.VIEW):
             return []
 
         results: list[TableInfo | ViewInfo | FunctionInfo] = []
@@ -1337,12 +1343,12 @@ class ReadOnlyCatalogInterface(CatalogInterface):
 
             # Apply type filter
             if (
-                type == SchemaObjectType.SCALAR_FUNCTION
+                type_enum == SchemaObjectType.SCALAR_FUNCTION
                 and func_info.function_type != FunctionType.SCALAR
             ):
                 continue
             if (
-                type == SchemaObjectType.TABLE_FUNCTION
+                type_enum == SchemaObjectType.TABLE_FUNCTION
                 and func_info.function_type
                 not in (FunctionType.TABLE, FunctionType.AGGREGATE)
             ):

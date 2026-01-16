@@ -300,15 +300,21 @@ class CICatalog(CatalogInterface):
             msg = f"Schema {name!r} not found"
             raise ValueError(msg)
 
+        # Normalize type parameter (may be string from wire protocol)
+        if isinstance(type, SchemaObjectType):
+            type_enum = type
+        else:
+            type_enum = SchemaObjectType(type)
+
         result: list[TableInfo | ViewInfo | FunctionInfo] = []
 
         # Return tables for TABLE type
-        if type == SchemaObjectType.TABLE:
+        if type_enum == SchemaObjectType.TABLE:
             for table in schema.tables.values():
                 result.append(table.info)
 
         # Return views for VIEW type
-        elif type == SchemaObjectType.VIEW:
+        elif type_enum == SchemaObjectType.VIEW:
             for view in schema.views.values():
                 result.append(view.info)
 

@@ -372,13 +372,19 @@ class InMemoryCatalog(CatalogInterface):
         schema_data = self._get_schema(attach_id, name)
         result: list[TableInfo | ViewInfo | FunctionInfo] = []
 
+        # Normalize type parameter (may be string from wire protocol)
+        if isinstance(type, SchemaObjectType):
+            type_enum = type
+        else:
+            type_enum = SchemaObjectType(type)
+
         # Return tables for TABLE type
-        if type == SchemaObjectType.TABLE:
+        if type_enum == SchemaObjectType.TABLE:
             for table_data in schema_data.tables.values():
                 result.append(table_data.info)
 
         # Return views for VIEW type
-        elif type == SchemaObjectType.VIEW:
+        elif type_enum == SchemaObjectType.VIEW:
             for view_data in schema_data.views.values():
                 result.append(view_data.info)
 
