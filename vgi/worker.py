@@ -124,6 +124,39 @@ from vgi.table_in_out_function import (
 _BIND_ERROR_SCHEMA = pa.schema([("_error", pa.null())])
 
 
+def _inject_trace_context(
+    batch: pa.RecordBatch, traceparent: str, tracestate: str | None
+) -> pa.RecordBatch:
+    """Inject trace context into an init batch.
+
+    Updates or adds traceparent/tracestate columns to propagate trace context
+    from primary worker to secondary workers.
+    """
+    columns = {name: batch.column(name) for name in batch.schema.names}
+    columns["traceparent"] = pa.array([traceparent], type=pa.string())
+    columns["tracestate"] = pa.array([tracestate], type=pa.string())
+
+    # Build new schema preserving field order, updating trace fields
+    fields = []
+    for field in batch.schema:
+        if field.name == "traceparent":
+            fields.append(pa.field("traceparent", pa.string()))
+        elif field.name == "tracestate":
+            fields.append(pa.field("tracestate", pa.string()))
+        else:
+            fields.append(field)
+
+    # Add trace fields if not already present
+    field_names = {f.name for f in fields}
+    if "traceparent" not in field_names:
+        fields.append(pa.field("traceparent", pa.string()))
+    if "tracestate" not in field_names:
+        fields.append(pa.field("tracestate", pa.string()))
+
+    new_schema = pa.schema(fields)
+    return pa.RecordBatch.from_pydict(columns, schema=new_schema)
+
+
 @dataclass(frozen=True, slots=True)
 class WorkerStats:
     """Statistics about a worker's processing run.
@@ -959,28 +992,71 @@ class Worker:
             # Single dataclass result - write serialized bytes directly
             result_bytes = result.serialize()
             stdout.write(result_bytes)
+        elif isinstance(result, list) and result and hasattr(result[0], "to_row_dict"):
+            # List of catalog objects with to_row_dict() - use efficient batch writing
+            # Determine the schema based on method and type parameter
+            from vgi.catalog import (
+                FunctionInfo,
+                SchemaInfo,
+                SchemaObjectType,
+                TableInfo,
+                ViewInfo,
+            )
+
+            if method_name == "schema_contents":
+                type_param = SchemaObjectType(kwargs["type"])
+                if type_param == SchemaObjectType.TABLE:
+                    schema = TableInfo.ARROW_SCHEMA
+                elif type_param == SchemaObjectType.VIEW:
+                    schema = ViewInfo.ARROW_SCHEMA
+                else:  # SCALAR_FUNCTION or TABLE_FUNCTION
+                    schema = FunctionInfo.ARROW_SCHEMA
+            elif method_name == "schemas":
+                schema = SchemaInfo.ARROW_SCHEMA
+            else:
+                # Fallback: use the ARROW_SCHEMA from the first item's class
+                schema = type(result[0]).ARROW_SCHEMA
+
+            # Collect all rows and write as single batch
+            rows = [item.to_row_dict() for item in result]
+            batch = pa.RecordBatch.from_pylist(rows, schema=schema)
+
+            with pa.ipc.new_stream(cast(IOBase, stdout), schema) as writer:
+                writer.write_batch(batch)
+        elif isinstance(result, list) and not result:
+            # Empty list - need to determine schema for empty batch
+            from vgi.catalog import (
+                FunctionInfo,
+                SchemaInfo,
+                SchemaObjectType,
+                TableInfo,
+                ViewInfo,
+            )
+
+            if method_name == "schema_contents":
+                type_param = SchemaObjectType(kwargs["type"])
+                if type_param == SchemaObjectType.TABLE:
+                    schema = TableInfo.ARROW_SCHEMA
+                elif type_param == SchemaObjectType.VIEW:
+                    schema = ViewInfo.ARROW_SCHEMA
+                else:
+                    schema = FunctionInfo.ARROW_SCHEMA
+            elif method_name == "schemas":
+                schema = SchemaInfo.ARROW_SCHEMA
+            else:
+                # Unknown method returning empty list - use empty schema
+                schema = pa.schema([])
+
+            batch = pa.RecordBatch.from_pylist([], schema=schema)
+            with pa.ipc.new_stream(cast(IOBase, stdout), schema) as writer:
+                writer.write_batch(batch)
         else:
-            # Try to iterate (for schema_contents, schemas, etc.)
-            try:
-                for item in result:
-                    if hasattr(item, "serialize"):
-                        item_bytes = item.serialize()
-                        stdout.write(item_bytes)
-                    else:
-                        raise TypeError(
-                            f"Catalog result item has no serialize method: "
-                            f"{type(item).__name__}"
-                        )
-                # Write empty batch to signal end of stream
-                batch = pa.RecordBatch.from_pydict({})
-                stdout.write(batch.schema.serialize().to_pybytes())
-                stdout.write(batch.serialize().to_pybytes())
-            except TypeError:
-                raise TypeError(
-                    f"Catalog method returned unsupported type: "
-                    f"{type(result).__name__}. Expected None, a dataclass "
-                    f"with serialize(), or an iterable of such dataclasses."
-                ) from None
+            raise TypeError(
+                f"Catalog method returned unsupported type: "
+                f"{type(result).__name__}. Expected None, a dataclass "
+                f"with serialize(), a list of primitives, or a list of "
+                f"catalog objects with to_row_dict()."
+            )
 
         fn_log.info("catalog_invocation_complete", method=method_name)
 
@@ -1146,6 +1222,8 @@ class Worker:
                 tracing.VGI_INVOCATION_ID, invocation_id.hex()
             )
 
+        trace_token: Any = None
+
         # Init phase with tracing
         with tracer.start_as_current_span(
             "worker.init", kind=tracing.get_span_kind_internal()
@@ -1154,9 +1232,16 @@ class Worker:
                 if invocation.global_execution_identifier is None:
                     # Primary worker: perform init and store in storage
                     fn_log.info("processing_init")
-                    init_result = instance.initialize_global_state(
-                        self._read_init_input()
-                    )
+                    init_batch = self._read_init_input()
+
+                    # Inject current trace context into init data for secondary workers
+                    traceparent, tracestate = tracing.extract_trace_context()
+                    if traceparent is not None:
+                        init_batch = _inject_trace_context(
+                            init_batch, traceparent, tracestate
+                        )
+
+                    init_result = instance.initialize_global_state(init_batch)
                     init_result_bytes = init_result.serialize()
                     if stdout.write(init_result_bytes) != len(init_result_bytes):
                         raise OSError("Failed to write init result record batch")
@@ -1179,6 +1264,17 @@ class Worker:
                         invocation_span.set_attribute(
                             tracing.VGI_EXECUTION_ID, exec_id.hex()
                         )
+
+                    if (
+                        instance.init_input is not None
+                        and instance.init_input.traceparent is not None
+                    ):
+                        # The traceparent is passed down from the global init.
+                        trace_token = tracing.restore_trace_context(
+                            instance.init_input.traceparent,
+                            instance.init_input.tracestate,
+                        )
+
             except (KeyboardInterrupt, SystemExit):
                 raise
             except Exception as e:
@@ -1236,6 +1332,9 @@ class Worker:
         )
 
         fn_log.info("worker_call_complete", stats=stats)
+
+        if trace_token is not None:
+            tracing.detach_trace_context(trace_token)
 
         # Log IPC stream stats when requested
         if _IPC_STATS or _IPC_DEBUG:

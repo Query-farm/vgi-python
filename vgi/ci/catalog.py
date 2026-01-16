@@ -10,8 +10,8 @@ This module provides a CatalogInterface implementation that:
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, Literal, overload
 
 from vgi.catalog import (
     AttachId,
@@ -27,7 +27,6 @@ from vgi.catalog import (
     TransactionId,
     ViewInfo,
 )
-from vgi.catalog.catalog_interface import _normalize_schema_object_type
 from vgi.ci.storage import AttachmentNotFoundError, AttachmentStorage, TransactionError
 
 
@@ -56,7 +55,7 @@ class CICatalog(CatalogInterface):
 
     # Required abstract methods
 
-    def catalogs(self) -> Iterable[str]:
+    def catalogs(self) -> list[str]:
         """Get a list of available catalog names."""
         return list(self._available_catalogs)
 
@@ -213,7 +212,7 @@ class CICatalog(CatalogInterface):
 
     def schemas(
         self, *, attach_id: AttachId, transaction_id: TransactionId | None
-    ) -> Iterable[SchemaInfo]:
+    ) -> list[SchemaInfo]:
         """Get a list of schemas in the catalog."""
         return self._storage.list_schemas(attach_id)
 
@@ -243,26 +242,57 @@ class CICatalog(CatalogInterface):
             attach_id, name, ignore_not_found=ignore_not_found, cascade=cascade
         )
 
+    @overload
     def schema_contents(
         self,
         *,
         attach_id: AttachId,
         transaction_id: TransactionId | None,
         name: str,
-        type: SchemaObjectType | str | None = None,
-    ) -> Iterable[TableInfo | ViewInfo | FunctionInfo]:
+        type: Literal[SchemaObjectType.TABLE],
+    ) -> Sequence[TableInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: Literal[SchemaObjectType.VIEW],
+    ) -> Sequence[ViewInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: Literal[
+            SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION
+        ],
+    ) -> Sequence[FunctionInfo]: ...
+
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: SchemaObjectType,
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo]:
         """Get the contents of a schema.
 
         Args:
             attach_id: The attachment identifier.
             transaction_id: The transaction identifier, if any.
             name: The name of the schema.
-            type: Optional filter for the type of objects to return.
-                If None, returns all objects. Can be a SchemaObjectType enum
-                or its string value.
+            type: The type of objects to return. Must be a SchemaObjectType enum.
 
         Returns:
-            An iterable of TableInfo, ViewInfo, or FunctionInfo objects.
+            An iterable of TableInfo, ViewInfo, or FunctionInfo objects
+            depending on the type parameter.
 
         """
         schema = self._storage.get_schema(attach_id, name)
@@ -272,21 +302,18 @@ class CICatalog(CatalogInterface):
 
         result: list[TableInfo | ViewInfo | FunctionInfo] = []
 
-        # Normalize type parameter to enum
-        type_filter = _normalize_schema_object_type(type)
-
-        # Add tables unless filtering for non-table types
-        if type_filter is None or type_filter == SchemaObjectType.TABLE:
+        # Return tables for TABLE type
+        if type == SchemaObjectType.TABLE:
             for table in schema.tables.values():
                 result.append(table.info)
 
-        # Add views unless filtering for non-view types
-        if type_filter is None or type_filter == SchemaObjectType.VIEW:
+        # Return views for VIEW type
+        elif type == SchemaObjectType.VIEW:
             for view in schema.views.values():
                 result.append(view.info)
 
         # Note: This CI catalog doesn't store functions,
-        # so SCALAR_FUNCTION and TABLE_FUNCTION filters return nothing
+        # so SCALAR_FUNCTION and TABLE_FUNCTION types return nothing
 
         return result
 

@@ -6,7 +6,14 @@ interface, allowing clients to discover available functions.
 
 import pyarrow as pa
 
-from vgi.catalog import FunctionInfo, FunctionType, TableInfo, ViewInfo
+from vgi.catalog import (
+    AttachId,
+    FunctionInfo,
+    FunctionType,
+    SchemaObjectType,
+    TableInfo,
+    ViewInfo,
+)
 from vgi.client import Client
 from vgi.examples.worker import ExampleWorker
 
@@ -30,6 +37,26 @@ def _get_functions(
     return [item for item in contents if isinstance(item, FunctionInfo)]
 
 
+def _get_all_functions(client: Client, attach_id: AttachId) -> list[FunctionInfo]:
+    """Get both table and scalar functions from the catalog."""
+    table_funcs = list(
+        client.schema_contents(
+            attach_id=attach_id,
+            name="main",
+            type=SchemaObjectType.TABLE_FUNCTION,
+        )
+    )
+    scalar_funcs = list(
+        client.schema_contents(
+            attach_id=attach_id,
+            name="main",
+            type=SchemaObjectType.SCALAR_FUNCTION,
+        )
+    )
+    # Combine to list - the overloads guarantee FunctionInfo for function types
+    return list(table_funcs) + list(scalar_funcs)
+
+
 class TestExampleWorkerCatalog:
     """Test ExampleWorker's catalog interface."""
 
@@ -49,15 +76,19 @@ class TestExampleWorkerCatalog:
         assert result.catalog_version_frozen is True
 
     def test_schema_contents_returns_functions(self) -> None:
-        """schema_contents() returns FunctionInfo for all example functions."""
+        """schema_contents() returns FunctionInfo for table functions."""
         client = Client(EXAMPLE_WORKER)
 
         # Attach to catalog
         attach_result = client.catalog_attach(name="example", options={})
         attach_id = attach_result.attach_id
 
-        # Get schema contents
-        contents = list(client.schema_contents(attach_id=attach_id, name="main"))
+        # Get table functions
+        contents = list(
+            client.schema_contents(
+                attach_id=attach_id, name="main", type=SchemaObjectType.TABLE_FUNCTION
+            )
+        )
 
         # Should have functions
         assert len(contents) > 0
@@ -70,11 +101,29 @@ class TestExampleWorkerCatalog:
         """All example functions are listed in the catalog."""
         client = Client(EXAMPLE_WORKER)
 
-        # Attach and get contents
+        # Attach and get both table and scalar functions
         attach_result = client.catalog_attach(name="example", options={})
-        contents = list(
-            client.schema_contents(attach_id=attach_result.attach_id, name="main")
+
+        # Get table functions
+        table_funcs = list(
+            client.schema_contents(
+                attach_id=attach_result.attach_id,
+                name="main",
+                type=SchemaObjectType.TABLE_FUNCTION,
+            )
         )
+
+        # Get scalar functions
+        scalar_funcs = list(
+            client.schema_contents(
+                attach_id=attach_result.attach_id,
+                name="main",
+                type=SchemaObjectType.SCALAR_FUNCTION,
+            )
+        )
+
+        # Combine all functions
+        contents = table_funcs + scalar_funcs
 
         # Get function names
         function_names = {item.name for item in contents}
@@ -95,10 +144,7 @@ class TestExampleWorkerCatalog:
         client = Client(EXAMPLE_WORKER)
 
         attach_result = client.catalog_attach(name="example", options={})
-        contents = list(
-            client.schema_contents(attach_id=attach_result.attach_id, name="main")
-        )
-        functions = _get_functions(contents)
+        functions = _get_all_functions(client, attach_result.attach_id)
 
         # Create lookup by name
         by_name = {fn.name: fn for fn in functions}
@@ -117,10 +163,7 @@ class TestExampleWorkerCatalog:
         client = Client(EXAMPLE_WORKER)
 
         attach_result = client.catalog_attach(name="example", options={})
-        contents = list(
-            client.schema_contents(attach_id=attach_result.attach_id, name="main")
-        )
-        functions = _get_functions(contents)
+        functions = _get_all_functions(client, attach_result.attach_id)
 
         # Create lookup by name
         by_name = {fn.name: fn for fn in functions}
@@ -142,10 +185,13 @@ class TestExampleWorkerCatalog:
         client = Client(EXAMPLE_WORKER)
 
         attach_result = client.catalog_attach(name="example", options={})
-        contents = list(
-            client.schema_contents(attach_id=attach_result.attach_id, name="main")
+        functions = list(
+            client.schema_contents(
+                attach_id=attach_result.attach_id,
+                name="main",
+                type=SchemaObjectType.TABLE_FUNCTION,
+            )
         )
-        functions = _get_functions(contents)
 
         # Create lookup by name
         by_name = {fn.name: fn for fn in functions}
@@ -160,12 +206,10 @@ class TestExampleWorkerCatalog:
         client = Client(EXAMPLE_WORKER)
 
         attach_result = client.catalog_attach(name="example", options={})
-        contents = list(
-            client.schema_contents(attach_id=attach_result.attach_id, name="main")
-        )
+        functions = _get_all_functions(client, attach_result.attach_id)
 
         # All functions should be in 'main' schema
-        for item in contents:
+        for item in functions:
             assert item.schema_name == "main"
 
     def test_scalar_function_has_output_schema(self) -> None:
@@ -173,10 +217,13 @@ class TestExampleWorkerCatalog:
         client = Client(EXAMPLE_WORKER)
 
         attach_result = client.catalog_attach(name="example", options={})
-        contents = list(
-            client.schema_contents(attach_id=attach_result.attach_id, name="main")
+        functions = list(
+            client.schema_contents(
+                attach_id=attach_result.attach_id,
+                name="main",
+                type=SchemaObjectType.SCALAR_FUNCTION,
+            )
         )
-        functions = _get_functions(contents)
 
         # Create lookup by name
         by_name = {fn.name: fn for fn in functions}
@@ -195,10 +242,13 @@ class TestExampleWorkerCatalog:
         client = Client(EXAMPLE_WORKER)
 
         attach_result = client.catalog_attach(name="example", options={})
-        contents = list(
-            client.schema_contents(attach_id=attach_result.attach_id, name="main")
+        functions = list(
+            client.schema_contents(
+                attach_id=attach_result.attach_id,
+                name="main",
+                type=SchemaObjectType.SCALAR_FUNCTION,
+            )
         )
-        functions = _get_functions(contents)
 
         # Create lookup by name
         by_name = {fn.name: fn for fn in functions}
@@ -218,10 +268,13 @@ class TestExampleWorkerCatalog:
         client = Client(EXAMPLE_WORKER)
 
         attach_result = client.catalog_attach(name="example", options={})
-        contents = list(
-            client.schema_contents(attach_id=attach_result.attach_id, name="main")
+        functions = list(
+            client.schema_contents(
+                attach_id=attach_result.attach_id,
+                name="main",
+                type=SchemaObjectType.TABLE_FUNCTION,
+            )
         )
-        functions = _get_functions(contents)
 
         # Create lookup by name
         by_name = {fn.name: fn for fn in functions}

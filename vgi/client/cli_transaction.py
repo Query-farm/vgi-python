@@ -35,10 +35,13 @@ def transaction_begin(attach_id: str, worker: str) -> None:
 
     """
     client = Client(worker)
-    result = client.transaction_begin(attach_id=hex_to_attach_id(attach_id))
+    tx_id = client.catalog_transaction_begin(attach_id=hex_to_attach_id(attach_id))
+    if tx_id is None:
+        output_json({"error": "Catalog does not support transactions"})
+        return
     output_json(
         {
-            "transaction_id": bytes_to_hex(result.transaction_id),
+            "transaction_id": bytes_to_hex(tx_id),
             "attach_id": attach_id,
         }
     )
@@ -55,7 +58,7 @@ def transaction_commit(transaction_id: str, attach_id: str, worker: str) -> None
 
     """
     client = Client(worker)
-    client.transaction_commit(
+    client.catalog_transaction_commit(
         attach_id=hex_to_attach_id(attach_id),
         transaction_id=hex_to_transaction_id(transaction_id),
     )
@@ -79,7 +82,7 @@ def transaction_rollback(transaction_id: str, attach_id: str, worker: str) -> No
 
     """
     client = Client(worker)
-    client.transaction_rollback(
+    client.catalog_transaction_rollback(
         attach_id=hex_to_attach_id(attach_id),
         transaction_id=hex_to_transaction_id(transaction_id),
     )

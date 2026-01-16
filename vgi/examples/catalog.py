@@ -7,9 +7,9 @@ be used for testing and as a reference implementation.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, overload
 
 from vgi.catalog import (
     AttachId,
@@ -24,7 +24,6 @@ from vgi.catalog import (
     TransactionId,
     ViewInfo,
 )
-from vgi.catalog.catalog_interface import _normalize_schema_object_type
 from vgi.worker import Worker
 
 
@@ -122,7 +121,7 @@ class InMemoryCatalog(CatalogInterface):
 
     # Required abstract methods
 
-    def catalogs(self) -> Iterable[str]:
+    def catalogs(self) -> list[str]:
         """Get a list of catalog names."""
         return list(self._catalogs.keys())
 
@@ -254,7 +253,7 @@ class InMemoryCatalog(CatalogInterface):
 
     def schemas(
         self, *, attach_id: AttachId, transaction_id: TransactionId | None
-    ) -> Iterable[SchemaInfo]:
+    ) -> list[SchemaInfo]:
         """Get a list of schemas in the catalog."""
         catalog = self._get_catalog(attach_id)
         result = []
@@ -317,46 +316,74 @@ class InMemoryCatalog(CatalogInterface):
         del catalog.schemas[name]
         self._increment_version(attach_id)
 
+    @overload
     def schema_contents(
         self,
         *,
         attach_id: AttachId,
         transaction_id: TransactionId | None,
         name: str,
-        type: SchemaObjectType | str | None = None,
-    ) -> Iterable[TableInfo | ViewInfo | FunctionInfo]:
+        type: Literal[SchemaObjectType.TABLE],
+    ) -> Sequence[TableInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: Literal[SchemaObjectType.VIEW],
+    ) -> Sequence[ViewInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: Literal[
+            SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION
+        ],
+    ) -> Sequence[FunctionInfo]: ...
+
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: SchemaObjectType,
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo]:
         """Get the contents of a schema.
 
         Args:
             attach_id: The attachment identifier.
             transaction_id: The transaction identifier, if any.
             name: The name of the schema.
-            type: Optional filter for the type of objects to return.
-                If None, returns all objects. Can be a SchemaObjectType enum
-                or its string value.
+            type: The type of objects to return. Must be a SchemaObjectType enum.
 
         Returns:
-            An iterable of TableInfo, ViewInfo, or FunctionInfo objects.
+            An iterable of TableInfo, ViewInfo, or FunctionInfo objects
+            depending on the type parameter.
 
         """
         schema_data = self._get_schema(attach_id, name)
         result: list[TableInfo | ViewInfo | FunctionInfo] = []
 
-        # Normalize type parameter to enum
-        type_filter = _normalize_schema_object_type(type)
-
-        # Add tables unless filtering for non-table types
-        if type_filter is None or type_filter == SchemaObjectType.TABLE:
+        # Return tables for TABLE type
+        if type == SchemaObjectType.TABLE:
             for table_data in schema_data.tables.values():
                 result.append(table_data.info)
 
-        # Add views unless filtering for non-view types
-        if type_filter is None or type_filter == SchemaObjectType.VIEW:
+        # Return views for VIEW type
+        elif type == SchemaObjectType.VIEW:
             for view_data in schema_data.views.values():
                 result.append(view_data.info)
 
         # Note: This example catalog doesn't store functions,
-        # so SCALAR_FUNCTION and TABLE_FUNCTION filters return nothing
+        # so SCALAR_FUNCTION and TABLE_FUNCTION types return nothing
 
         return result
 

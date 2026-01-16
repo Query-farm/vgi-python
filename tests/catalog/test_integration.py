@@ -476,7 +476,9 @@ class TestInMemoryCatalogSchemaContents:
     """Test schema_contents operation."""
 
     def test_schema_contents_lists_tables_and_views(self) -> None:
-        """schema_contents returns tables and views."""
+        """schema_contents returns tables and views when queried by type."""
+        from vgi.catalog import SchemaObjectType
+
         catalog = InMemoryCatalog()
         result = catalog.catalog_attach(name="memory", options={})
 
@@ -502,15 +504,30 @@ class TestInMemoryCatalogSchemaContents:
             on_conflict=OnConflict.ERROR,
         )
 
-        contents = list(
+        # Get tables
+        tables = list(
             catalog.schema_contents(
-                attach_id=result.attach_id, transaction_id=None, name="main"
+                attach_id=result.attach_id,
+                transaction_id=None,
+                name="main",
+                type=SchemaObjectType.TABLE,
             )
         )
 
-        names = [c.name for c in contents]
-        assert "users" in names
-        assert "user_view" in names
+        # Get views
+        views = list(
+            catalog.schema_contents(
+                attach_id=result.attach_id,
+                transaction_id=None,
+                name="main",
+                type=SchemaObjectType.VIEW,
+            )
+        )
+
+        table_names = [t.name for t in tables]
+        view_names = [v.name for v in views]
+        assert "users" in table_names
+        assert "user_view" in view_names
 
 
 class TestInMemoryCatalogOnConflict:

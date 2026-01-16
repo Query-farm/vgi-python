@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from vgi.catalog import AttachId, OnConflict, SerializedSchema
+from vgi.catalog import AttachId, OnConflict, SchemaObjectType, SerializedSchema
 from vgi.ci.catalog import CICatalog
 
 
@@ -188,7 +188,10 @@ class TestSchemaContents:
 
         contents = list(
             catalog.schema_contents(
-                attach_id=attach_id, transaction_id=None, name="main"
+                attach_id=attach_id,
+                transaction_id=None,
+                name="main",
+                type=SchemaObjectType.TABLE,
             )
         )
         assert contents == []
@@ -214,7 +217,10 @@ class TestSchemaContents:
 
         contents = list(
             catalog.schema_contents(
-                attach_id=attach_id, transaction_id=None, name="main"
+                attach_id=attach_id,
+                transaction_id=None,
+                name="main",
+                type=SchemaObjectType.TABLE,
             )
         )
         assert len(contents) == 1

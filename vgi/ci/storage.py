@@ -26,7 +26,7 @@ from vgi.catalog import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    pass
 
 
 @dataclass
@@ -249,25 +249,26 @@ class AttachmentStorage:
         state = self.get_attachment(attach_id)
         return state.schemas.get(name)
 
-    def list_schemas(self, attach_id: AttachId) -> Iterable[SchemaInfo]:
+    def list_schemas(self, attach_id: AttachId) -> list[SchemaInfo]:
         """List all schemas in an attachment.
 
         Args:
             attach_id: The attachment identifier.
 
         Returns:
-            Iterator of schema info objects.
+            List of schema info objects.
 
         """
         state = self.get_attachment(attach_id)
-        for schema in state.schemas.values():
-            # Return a copy with the current attach_id
-            yield SchemaInfo(
+        return [
+            SchemaInfo(
                 attach_id=attach_id,
                 name=schema.info.name,
                 comment=schema.info.comment,
                 tags=schema.info.tags,
             )
+            for schema in state.schemas.values()
+        ]
 
     # Table operations
 

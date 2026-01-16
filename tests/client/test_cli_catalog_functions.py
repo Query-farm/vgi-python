@@ -61,8 +61,8 @@ class TestCLICatalogAttach:
 class TestCLISchemaContents:
     """Tests for listing schema contents (functions) via CLI."""
 
-    def test_schema_contents_lists_functions(self, example_worker: str) -> None:
-        """Schema contents lists all functions in main schema."""
+    def test_schema_contents_lists_table_functions(self, example_worker: str) -> None:
+        """Schema contents lists table functions in main schema."""
         runner = CliRunner()
 
         # First attach to get attach_id
@@ -74,7 +74,7 @@ class TestCLISchemaContents:
         attach_data = json.loads(attach_result.output)
         attach_id = attach_data["attach_id"]
 
-        # List schema contents using --attach-id option
+        # List schema contents using --attach-id option with --type
         contents_result = runner.invoke(
             cli,
             [
@@ -86,6 +86,8 @@ class TestCLISchemaContents:
                 attach_id,
                 "--worker",
                 example_worker,
+                "--type",
+                "table_function",
             ],
         )
         assert contents_result.exit_code == 0
@@ -100,6 +102,37 @@ class TestCLISchemaContents:
         # All items should be functions
         for item in items:
             assert item["type"] == "function"
+
+    def test_schema_contents_requires_type(self, example_worker: str) -> None:
+        """Schema contents requires --type parameter."""
+        runner = CliRunner()
+
+        # Attach to get attach_id
+        attach_result = runner.invoke(
+            cli,
+            ["catalog", "attach", "example", "--worker", example_worker],
+        )
+        attach_id = json.loads(attach_result.output)["attach_id"]
+
+        # List schema contents without --type should fail
+        contents_result = runner.invoke(
+            cli,
+            [
+                "catalog",
+                "schema",
+                "contents",
+                "main",
+                "--attach-id",
+                attach_id,
+                "--worker",
+                example_worker,
+            ],
+        )
+        assert contents_result.exit_code != 0
+        assert (
+            "Missing option" in contents_result.output
+            or "required" in contents_result.output.lower()
+        )
 
     def test_schema_contents_with_catalog_option(self, example_worker: str) -> None:
         """Schema contents works with --catalog option for auto-attach."""
@@ -117,6 +150,8 @@ class TestCLISchemaContents:
                 "example",
                 "--worker",
                 example_worker,
+                "--type",
+                "table_function",
             ],
         )
         assert contents_result.exit_code == 0
@@ -144,8 +179,8 @@ class TestCLISchemaContents:
         assert attach_result.exit_code == 0
         attach_id = json.loads(attach_result.output)["attach_id"]
 
-        # Get schema contents using --attach-id option
-        contents_result = runner.invoke(
+        # Get table functions
+        table_result = runner.invoke(
             cli,
             [
                 "catalog",
@@ -156,14 +191,36 @@ class TestCLISchemaContents:
                 attach_id,
                 "--worker",
                 example_worker,
+                "--type",
+                "table_function",
             ],
         )
-        assert contents_result.exit_code == 0
+        assert table_result.exit_code == 0
 
-        # Parse function names
-        lines = contents_result.output.strip().split("\n")
-        items = [json.loads(line) for line in lines if line.strip()]
-        function_names = {item["name"] for item in items}
+        # Get scalar functions
+        scalar_result = runner.invoke(
+            cli,
+            [
+                "catalog",
+                "schema",
+                "contents",
+                "main",
+                "--attach-id",
+                attach_id,
+                "--worker",
+                example_worker,
+                "--type",
+                "scalar_function",
+            ],
+        )
+        assert scalar_result.exit_code == 0
+
+        # Parse function names from both results
+        function_names: set[str] = set()
+        for result in [table_result, scalar_result]:
+            lines = result.output.strip().split("\n")
+            items = [json.loads(line) for line in lines if line.strip()]
+            function_names.update(item["name"] for item in items)
 
         # Get expected functions from ExampleWorker
         expected_functions = _get_expected_function_names()
@@ -198,6 +255,8 @@ class TestCLISchemaContents:
                 attach_id,
                 "--worker",
                 example_worker,
+                "--type",
+                "table_function",
             ],
         )
         assert contents_result.exit_code == 0
@@ -212,7 +271,7 @@ class TestCLISchemaContents:
         assert "schema_name" in first_func
         assert first_func["schema_name"] == "main"
         assert "function_type" in first_func
-        assert first_func["function_type"] in ["scalar", "table"]
+        assert first_func["function_type"] == "table"
 
     def test_scalar_functions_have_correct_type(self, example_worker: str) -> None:
         """Scalar functions are marked as function_type='scalar'."""
@@ -236,10 +295,13 @@ class TestCLISchemaContents:
                 attach_id,
                 "--worker",
                 example_worker,
+                "--type",
+                "scalar_function",
             ],
         )
+        assert contents_result.exit_code == 0
 
-        # Parse and find scalar functions
+        # Parse scalar functions
         lines = contents_result.output.strip().split("\n")
         items = [json.loads(line) for line in lines if line.strip()]
         by_name = {item["name"]: item for item in items}
@@ -271,10 +333,13 @@ class TestCLISchemaContents:
                 attach_id,
                 "--worker",
                 example_worker,
+                "--type",
+                "table_function",
             ],
         )
+        assert contents_result.exit_code == 0
 
-        # Parse and find table functions
+        # Parse table functions
         lines = contents_result.output.strip().split("\n")
         items = [json.loads(line) for line in lines if line.strip()]
         by_name = {item["name"]: item for item in items}
@@ -297,6 +362,7 @@ class TestCLISchemaContents:
         )
         attach_id = json.loads(attach_result.output)["attach_id"]
 
+        # sum_columns is a scalar function
         contents_result = runner.invoke(
             cli,
             [
@@ -308,6 +374,8 @@ class TestCLISchemaContents:
                 attach_id,
                 "--worker",
                 example_worker,
+                "--type",
+                "scalar_function",
             ],
         )
         assert contents_result.exit_code == 0

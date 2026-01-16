@@ -1,6 +1,6 @@
 """Tests for CatalogInterface ABC and default implementations."""
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from typing import Any
 
 import pyarrow as pa
@@ -61,7 +61,7 @@ def readonly_catalog() -> "MinimalReadOnlyCatalog":
 class MinimalCatalog(CatalogInterface):
     """Minimal implementation for testing abstract method requirements."""
 
-    def catalogs(self) -> Iterable[str]:
+    def catalogs(self) -> list[str]:
         """Return list of catalogs."""
         return ["test"]
 
@@ -227,7 +227,10 @@ def _not_implemented_test_cases() -> list[
             "schema_contents",
             "Schema contents not implemented",
             lambda c: c.schema_contents(
-                attach_id=TEST_ATTACH_ID, transaction_id=None, name="main"
+                attach_id=TEST_ATTACH_ID,
+                transaction_id=None,
+                name="main",
+                type=SchemaObjectType.TABLE,
             ),
         ),
         (
@@ -283,7 +286,7 @@ class TestCatalogInterfaceNotImplemented:
 class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
     """Minimal read-only implementation for testing."""
 
-    def catalogs(self) -> Iterable[str]:
+    def catalogs(self) -> list[str]:
         """Return list of catalogs."""
         return ["readonly"]
 
@@ -774,20 +777,36 @@ class TestSchemaContentsTypeFilter:
 
         return TestCatalog()
 
-    def test_no_filter_returns_all(
+    def test_fetch_all_function_types(
         self, catalog_with_functions: ReadOnlyCatalogInterface
     ) -> None:
-        """schema_contents with no type filter returns all functions."""
+        """Can fetch both scalar and table functions with separate calls."""
         attach_result = catalog_with_functions.catalog_attach(name="test", options={})
-        contents = list(
+
+        # Get scalar functions
+        scalar_contents = list(
             catalog_with_functions.schema_contents(
                 attach_id=attach_result.attach_id,
                 transaction_id=None,
                 name="main",
+                type=SchemaObjectType.SCALAR_FUNCTION,
             )
         )
-        assert len(contents) == 2
-        names = {obj.name for obj in contents}
+
+        # Get table functions
+        table_contents = list(
+            catalog_with_functions.schema_contents(
+                attach_id=attach_result.attach_id,
+                transaction_id=None,
+                name="main",
+                type=SchemaObjectType.TABLE_FUNCTION,
+            )
+        )
+
+        # Combined should have both functions
+        all_contents = scalar_contents + table_contents
+        assert len(all_contents) == 2
+        names = {obj.name for obj in all_contents}
         # Names are derived from class names: MyScalarFunction -> my_scalar
         assert "my_scalar" in names
         assert "my_table" in names
@@ -870,21 +889,7 @@ class TestSchemaContentsTypeFilter:
                 attach_id=attach_result.attach_id,
                 transaction_id=None,
                 name="nonexistent",
+                type=SchemaObjectType.TABLE_FUNCTION,
             )
         )
         assert len(contents) == 0
-
-    def test_type_filter_with_none_explicitly(
-        self, catalog_with_functions: ReadOnlyCatalogInterface
-    ) -> None:
-        """schema_contents with type=None explicitly returns all functions."""
-        attach_result = catalog_with_functions.catalog_attach(name="test", options={})
-        contents = list(
-            catalog_with_functions.schema_contents(
-                attach_id=attach_result.attach_id,
-                transaction_id=None,
-                name="main",
-                type=None,
-            )
-        )
-        assert len(contents) == 2

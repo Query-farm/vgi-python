@@ -5,10 +5,10 @@ catalog interfaces in VGI workers, enabling DuckDB ATTACH support.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, ClassVar, NewType, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NewType, Self, overload
 
 if TYPE_CHECKING:
     from vgi.catalog.setting import SettingSpec
@@ -186,18 +186,19 @@ class SchemaInfo(CatalogObject):
         ]  # type: ignore[arg-type]
     )
 
+    def to_row_dict(self) -> dict[str, Any]:
+        """Convert to a dictionary for batch construction."""
+        return {
+            "attach_id": self.attach_id,
+            "name": self.name,
+            "comment": self.comment,
+            "tags": self.tags,
+        }
+
     def serialize(self) -> bytes:
         """Serialize to Arrow IPC bytes."""
         batch = pa.RecordBatch.from_pylist(
-            [
-                {
-                    "attach_id": self.attach_id,
-                    "name": self.name,
-                    "comment": self.comment,
-                    "tags": self.tags,
-                }
-            ],
-            schema=self.ARROW_SCHEMA,
+            [self.to_row_dict()], schema=self.ARROW_SCHEMA
         )
         return vgi.ipc_utils.serialize_record_batch(batch)
 
@@ -244,22 +245,23 @@ class TableInfo(CatalogSchemaObject):
         ]  # type: ignore[arg-type]
     )
 
+    def to_row_dict(self) -> dict[str, Any]:
+        """Convert to a dictionary for batch construction."""
+        return {
+            "name": self.name,
+            "schema_name": self.schema_name,
+            "columns": self.columns,
+            "not_null_constraints": self.not_null_constraints,
+            "unique_constraints": self.unique_constraints,
+            "check_constraints": self.check_constraints,
+            "comment": self.comment,
+            "tags": self.tags,
+        }
+
     def serialize(self) -> bytes:
         """Serialize to Arrow IPC bytes."""
         batch = pa.RecordBatch.from_pylist(
-            [
-                {
-                    "name": self.name,
-                    "schema_name": self.schema_name,
-                    "columns": self.columns,
-                    "not_null_constraints": self.not_null_constraints,
-                    "unique_constraints": self.unique_constraints,
-                    "check_constraints": self.check_constraints,
-                    "comment": self.comment,
-                    "tags": self.tags,
-                }
-            ],
-            schema=self.ARROW_SCHEMA,
+            [self.to_row_dict()], schema=self.ARROW_SCHEMA
         )
         return vgi.ipc_utils.serialize_record_batch(batch)
 
@@ -308,19 +310,20 @@ class ViewInfo(CatalogSchemaObject):
         ]
     )
 
+    def to_row_dict(self) -> dict[str, Any]:
+        """Convert to a dictionary for batch construction."""
+        return {
+            "name": self.name,
+            "schema_name": self.schema_name,
+            "definition": self.definition,
+            "comment": self.comment,
+            "tags": self.tags,
+        }
+
     def serialize(self) -> bytes:
         """Serialize to Arrow IPC bytes."""
         batch = pa.RecordBatch.from_pylist(
-            [
-                {
-                    "name": self.name,
-                    "schema_name": self.schema_name,
-                    "definition": self.definition,
-                    "comment": self.comment,
-                    "tags": self.tags,
-                }
-            ],
-            schema=self.ARROW_SCHEMA,
+            [self.to_row_dict()], schema=self.ARROW_SCHEMA
         )
         return vgi.ipc_utils.serialize_record_batch(batch)
 
@@ -359,29 +362,6 @@ class SchemaObjectType(Enum):
     VIEW = "view"
     SCALAR_FUNCTION = "scalar_function"
     TABLE_FUNCTION = "table_function"
-
-
-def _normalize_schema_object_type(
-    value: SchemaObjectType | str | None,
-) -> SchemaObjectType | None:
-    """Normalize a schema object type value to an enum.
-
-    Args:
-        value: A SchemaObjectType enum, its string value, or None.
-
-    Returns:
-        The corresponding SchemaObjectType enum, or None if value is None.
-
-    Raises:
-        ValueError: If value is a string that doesn't match any enum value.
-
-    """
-    if value is None:
-        return None
-    if isinstance(value, SchemaObjectType):
-        return value
-    # Convert string to enum
-    return SchemaObjectType(value)
 
 
 class OnConflict(Enum):
@@ -492,54 +472,51 @@ class FunctionInfo(CatalogSchemaObject):
         ]
     )
 
+    def to_row_dict(self) -> dict[str, Any]:
+        """Convert to a dictionary for batch construction."""
+        return {
+            "name": self.name,
+            "schema_name": self.schema_name,
+            "function_type": self.function_type.value,
+            "arguments": self.arguments,
+            "output_schema": self.output_schema,
+            "tags": self.tags,
+            # Scalar function behavior fields (None for non-scalar)
+            "stability": self.stability.name if self.stability else None,
+            "null_handling": (self.null_handling.name if self.null_handling else None),
+            # Documentation fields
+            "description": self.description,
+            "examples": [
+                (
+                    {
+                        "sql": ex.sql,
+                        "description": ex.description,
+                        "expected_output": ex.expected_output,
+                    }
+                    if isinstance(ex, CatalogExample)
+                    else {"sql": ex, "description": "", "expected_output": None}
+                )
+                for ex in self.examples
+            ],
+            "categories": self.categories,
+            # Table function capabilities (None for scalar)
+            "projection_pushdown": self.projection_pushdown,
+            "filter_pushdown": self.filter_pushdown,
+            "order_preservation": (
+                self.order_preservation.name if self.order_preservation else None
+            ),
+            "max_workers": self.max_workers,
+            # Aggregate function fields
+            "order_dependent": self.order_dependent.name,
+            "distinct_dependent": self.distinct_dependent.name,
+            # Settings
+            "required_settings": self.required_settings,
+        }
+
     def serialize(self) -> bytes:
         """Serialize to Arrow IPC bytes."""
         batch = pa.RecordBatch.from_pylist(
-            [
-                {
-                    "name": self.name,
-                    "schema_name": self.schema_name,
-                    "function_type": self.function_type.value,
-                    "arguments": self.arguments,
-                    "output_schema": self.output_schema,
-                    "tags": self.tags,
-                    # Scalar function behavior fields (None for non-scalar)
-                    "stability": self.stability.name if self.stability else None,
-                    "null_handling": (
-                        self.null_handling.name if self.null_handling else None
-                    ),
-                    # Documentation fields
-                    "description": self.description,
-                    "examples": [
-                        (
-                            {
-                                "sql": ex.sql,
-                                "description": ex.description,
-                                "expected_output": ex.expected_output,
-                            }
-                            if isinstance(ex, CatalogExample)
-                            else {"sql": ex, "description": "", "expected_output": None}
-                        )
-                        for ex in self.examples
-                    ],
-                    "categories": self.categories,
-                    # Table function capabilities (None for scalar)
-                    "projection_pushdown": self.projection_pushdown,
-                    "filter_pushdown": self.filter_pushdown,
-                    "order_preservation": (
-                        self.order_preservation.name
-                        if self.order_preservation
-                        else None
-                    ),
-                    "max_workers": self.max_workers,
-                    # Aggregate function fields
-                    "order_dependent": self.order_dependent.name,
-                    "distinct_dependent": self.distinct_dependent.name,
-                    # Settings
-                    "required_settings": self.required_settings,
-                }
-            ],
-            schema=self.ARROW_SCHEMA,
+            [self.to_row_dict()], schema=self.ARROW_SCHEMA
         )
         return vgi.ipc_utils.serialize_record_batch(batch)
 
@@ -696,7 +673,7 @@ class CatalogInterface(ABC):
         return set()
 
     @abstractmethod
-    def catalogs(self) -> Iterable[str]:
+    def catalogs(self) -> list[str]:
         """Get a list of catalog names provided by the VGI worker.
 
         This is a discovery only method.
@@ -786,21 +763,19 @@ class CatalogInterface(ABC):
 
     def schemas(
         self, *, attach_id: AttachId, transaction_id: TransactionId | None
-    ) -> Iterable[SchemaInfo]:
+    ) -> list[SchemaInfo]:
         """Get a list of schemas for the given attach_id and transaction_id.
 
         The default returns a schema called "main" with no comment or tags.
         """
-        return iter(
-            [
-                SchemaInfo(
-                    attach_id=attach_id,
-                    name="main",
-                    comment=None,
-                    tags={},
-                )
-            ]
-        )
+        return [
+            SchemaInfo(
+                attach_id=attach_id,
+                name="main",
+                comment=None,
+                tags={},
+            )
+        ]
 
     def schema_create(
         self,
@@ -826,14 +801,46 @@ class CatalogInterface(ABC):
         """Drop the schema with the given name."""
         raise NotImplementedError("Schema drop not implemented.")
 
+    @overload
     def schema_contents(
         self,
         *,
         attach_id: AttachId,
         transaction_id: TransactionId | None,
         name: str,
-        type: SchemaObjectType | str | None = None,
-    ) -> Iterable[TableInfo | ViewInfo | FunctionInfo]:
+        type: Literal[SchemaObjectType.TABLE],
+    ) -> Sequence[TableInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: Literal[SchemaObjectType.VIEW],
+    ) -> Sequence[ViewInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: Literal[
+            SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION
+        ],
+    ) -> Sequence[FunctionInfo]: ...
+
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: SchemaObjectType,
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo]:
         """Get the contents of the schema with the given name.
 
         Schemas can contain tables, views, and various types of functions.
@@ -842,16 +849,15 @@ class CatalogInterface(ABC):
             attach_id: The attachment identifier.
             transaction_id: The transaction identifier, if any.
             name: The name of the schema.
-            type: Optional filter for the type of objects to return.
-                If None, returns all objects. Can be a SchemaObjectType enum
-                or its string value. Valid values are:
-                - SchemaObjectType.TABLE / "table": Return only tables
-                - SchemaObjectType.VIEW / "view": Return only views
-                - SchemaObjectType.SCALAR_FUNCTION / "scalar_function": Scalar functions
-                - SchemaObjectType.TABLE_FUNCTION / "table_function": Table functions
+            type: The type of objects to return. Must be a SchemaObjectType enum:
+                - SchemaObjectType.TABLE: Return only tables
+                - SchemaObjectType.VIEW: Return only views
+                - SchemaObjectType.SCALAR_FUNCTION: Scalar functions
+                - SchemaObjectType.TABLE_FUNCTION: Table functions
 
         Returns:
-            An iterable of TableInfo, ViewInfo, or FunctionInfo objects.
+            A list of TableInfo, ViewInfo, or FunctionInfo objects
+            depending on the type parameter.
 
         """
         raise NotImplementedError("Schema contents not implemented.")
@@ -1196,7 +1202,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     # Fixed attach_id for read-only catalogs (no need for unique IDs)
     _FIXED_ATTACH_ID: AttachId = AttachId(b"readonly-catalog-")
 
-    def catalogs(self) -> Iterable[str]:
+    def catalogs(self) -> list[str]:
         """Return the list of available catalogs."""
         return [self.catalog_name]
 
@@ -1262,57 +1268,89 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         """Get information about a view (none in function-only catalogs)."""
         return None
 
+    @overload
     def schema_contents(
         self,
         *,
         attach_id: AttachId,
         transaction_id: TransactionId | None,
         name: str,
-        type: SchemaObjectType | str | None = None,
-    ) -> Iterable[TableInfo | ViewInfo | FunctionInfo]:
-        """List all functions in the schema.
+        type: Literal[SchemaObjectType.TABLE],
+    ) -> Sequence[TableInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: Literal[SchemaObjectType.VIEW],
+    ) -> Sequence[ViewInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: Literal[
+            SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION
+        ],
+    ) -> Sequence[FunctionInfo]: ...
+
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: SchemaObjectType,
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo]:
+        """List functions in the schema.
+
+        For ReadOnlyCatalogInterface, only SCALAR_FUNCTION and TABLE_FUNCTION
+        types return results since tables and views are not supported.
 
         Args:
             attach_id: The attachment identifier.
             transaction_id: The transaction identifier, if any.
             name: The name of the schema.
-            type: Optional filter for the type of objects to return.
-                If None, returns all objects. For ReadOnlyCatalogInterface,
-                only scalar_function and table_function types are supported
-                since tables and views are not supported.
-                Can be a SchemaObjectType enum or its string value.
+            type: The type of objects to return. Must be a SchemaObjectType enum.
 
         Returns:
-            An iterable of FunctionInfo objects (filtered by type if specified).
+            A list of FunctionInfo objects for function types,
+            or empty for TABLE/VIEW types.
 
         """
         if name != "main" or not self.functions:
-            return
+            return []
 
-        # Normalize type parameter to enum
-        type_filter = _normalize_schema_object_type(type)
+        # TABLE and VIEW types return nothing since we don't have them
+        if type in (SchemaObjectType.TABLE, SchemaObjectType.VIEW):
+            return []
 
-        # TABLE and VIEW filters will return nothing since we don't have them
-        if type_filter in (SchemaObjectType.TABLE, SchemaObjectType.VIEW):
-            return
-
+        results: list[TableInfo | ViewInfo | FunctionInfo] = []
         for func_cls in self.functions:
             func_info = self._function_to_info(func_cls, name)
 
-            # Apply type filter if specified
+            # Apply type filter
             if (
-                type_filter == SchemaObjectType.SCALAR_FUNCTION
+                type == SchemaObjectType.SCALAR_FUNCTION
                 and func_info.function_type != FunctionType.SCALAR
             ):
                 continue
             if (
-                type_filter == SchemaObjectType.TABLE_FUNCTION
+                type == SchemaObjectType.TABLE_FUNCTION
                 and func_info.function_type
                 not in (FunctionType.TABLE, FunctionType.AGGREGATE)
             ):
                 continue
 
-            yield func_info
+            results.append(func_info)
+
+        return results
 
     def _function_to_info(self, func_cls: type, schema_name: str) -> FunctionInfo:
         """Convert a function class to FunctionInfo."""

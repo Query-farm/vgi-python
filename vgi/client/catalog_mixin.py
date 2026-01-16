@@ -9,7 +9,27 @@ Usage:
         pass
 
     client = CatalogEnabledClient("vgi-my-worker")
+
+    # List available catalogs
     catalogs = client.catalogs()
+
+    # Attach to a catalog and work with schemas
+    result = client.catalog_attach(name="my_catalog")
+    schemas = client.schemas(attach_id=result.attach_id)
+
+    # Use transactions for atomic operations
+    tx_id = client.catalog_transaction_begin(attach_id=result.attach_id)
+    client.schema_create(
+        attach_id=result.attach_id, transaction_id=tx_id, name="new_schema"
+    )
+    client.catalog_transaction_commit(
+        attach_id=result.attach_id, transaction_id=tx_id
+    )
+
+Error Handling:
+    Worker exceptions are signaled via empty batches (0 rows) with
+    vgi.log_level metadata set to "exception". The error message and
+    traceback are extracted and raised as CatalogClientError.
 
 """
 
@@ -17,9 +37,8 @@ from __future__ import annotations
 
 import io
 import subprocess
-from collections.abc import Iterator
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import pyarrow as pa
 
@@ -44,21 +63,6 @@ from vgi.ipc_utils import read_single_record_batch
 if TYPE_CHECKING:
     import pyarrow as pa_typing
     import structlog.stdlib
-
-
-@dataclass
-class TransactionBeginResult:
-    """Result of beginning a transaction."""
-
-    transaction_id: TransactionId
-
-    @staticmethod
-    def deserialize(batch: pa.RecordBatch) -> TransactionBeginResult:
-        """Deserialize from an Arrow record batch."""
-        row = batch.to_pydict()
-        return TransactionBeginResult(
-            transaction_id=TransactionId(bytes(row["transaction_id"][0])),
-        )
 
 
 class CatalogClientError(Exception):
@@ -138,6 +142,80 @@ class CatalogClientMixin:
         traceback_str = extra.get("traceback", "")
         raise CatalogClientError(f"Worker Exception: {message}\n{traceback_str}")
 
+    def _send_catalog_invocation(
+        self,
+        method_name: str,
+        kwargs: dict[str, Any],
+    ) -> tuple[subprocess.Popen[bytes], io.BufferedReader[Any]]:
+        """Spawn worker subprocess and send catalog invocation.
+
+        This helper handles the common setup for catalog operations:
+        spawning the worker, sending the invocation header, and sending
+        the arguments batch.
+
+        Args:
+            method_name: CatalogInterface method name (e.g., 'catalog_attach').
+            kwargs: Method keyword arguments to send.
+
+        Returns:
+            Tuple of (process, buffered_stdout) for reading results.
+
+        Raises:
+            CatalogClientError: If subprocess creation or invocation send fails.
+
+        """
+        proc = subprocess.Popen(
+            self.server_path,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+            shell=True,
+        )
+
+        if proc.stdin is None or proc.stdout is None:
+            raise CatalogClientError("Failed to create pipes for worker process")
+
+        stdout_buffered = io.BufferedReader(cast(io.RawIOBase, proc.stdout))
+
+        # Create and send invocation
+        invocation = Invocation(
+            function_name=method_name,
+            input_schema=None,
+            function_type=InvocationType.CATALOG,
+            correlation_id=self.correlation_id,
+            invocation_id=None,
+            arguments=Arguments(),
+        )
+        invocation_bytes = invocation.serialize()
+        try:
+            proc.stdin.write(invocation_bytes)
+        except BrokenPipeError:
+            proc.poll()
+            raise CatalogClientError(
+                f"Worker terminated unexpectedly during {method_name} invocation "
+                f"(exit code: {proc.returncode})"
+            ) from None
+
+        # Create and send arguments batch
+        args_batch = self._create_catalog_args_batch(kwargs)
+        args_bytes = (
+            args_batch.schema.serialize().to_pybytes()
+            + args_batch.serialize().to_pybytes()
+        )
+        try:
+            proc.stdin.write(args_bytes)
+            proc.stdin.flush()
+        except BrokenPipeError:
+            proc.poll()
+            raise CatalogClientError(
+                f"Worker terminated unexpectedly during {method_name} arguments "
+                f"(exit code: {proc.returncode})"
+            ) from None
+        proc.stdin.close()
+
+        return proc, stdout_buffered
+
     def _catalog_invoke(
         self,
         method_name: str,
@@ -146,8 +224,8 @@ class CatalogClientMixin:
         """Invoke a catalog method and return the result batch.
 
         Spawns an ephemeral worker subprocess, sends the invocation with
-        method name and arguments, reads the result, and returns the
-        deserialized batch.
+        method name and arguments, reads a single result batch using
+        read_single_record_batch, and returns it.
 
         Args:
             method_name: CatalogInterface method name (e.g., 'catalog_attach').
@@ -163,184 +241,87 @@ class CatalogClientMixin:
         log = self._get_catalog_logger()
         log.debug("catalog_invoke", method=method_name, kwargs=kwargs)
 
-        # Start worker process using shell=True to match Client pattern
-        proc = subprocess.Popen(
-            self.server_path,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False,
-            shell=True,
-        )
-
-        if proc.stdin is None or proc.stdout is None:
-            raise CatalogClientError("Failed to create pipes for worker process")
-
-        stdout_buffered = io.BufferedReader(cast(io.RawIOBase, proc.stdout))
+        proc, stdout_buffered = self._send_catalog_invocation(method_name, kwargs)
 
         try:
-            # Create and send invocation
-            invocation = Invocation(
-                function_name=method_name,
-                input_schema=None,
-                function_type=InvocationType.CATALOG,
-                correlation_id=self.correlation_id,
-                invocation_id=None,
-                arguments=Arguments(),
+            result_batch, result_metadata = read_single_record_batch(
+                stdout_buffered, "catalog_result"
             )
-            invocation_bytes = invocation.serialize()
-            try:
-                proc.stdin.write(invocation_bytes)
-            except BrokenPipeError:
-                proc.poll()
-                raise CatalogClientError(
-                    f"Worker terminated unexpectedly during {method_name} invocation "
-                    f"(exit code: {proc.returncode})"
-                ) from None
+            self._check_catalog_error(result_batch, result_metadata)
 
-            # Create and send arguments batch (1 row with kwargs as columns)
-            args_batch = self._create_catalog_args_batch(kwargs)
-            args_bytes = (
-                args_batch.schema.serialize().to_pybytes()
-                + args_batch.serialize().to_pybytes()
+            log.debug(
+                "catalog_result",
+                method=method_name,
+                num_rows=result_batch.num_rows,
+                num_columns=result_batch.num_columns,
             )
-            try:
-                proc.stdin.write(args_bytes)
-                proc.stdin.flush()
-            except BrokenPipeError:
-                proc.poll()
-                raise CatalogClientError(
-                    f"Worker terminated unexpectedly during {method_name} arguments "
-                    f"(exit code: {proc.returncode})"
-                ) from None
-            proc.stdin.close()
-
-            # Read result
-            try:
-                result_batch, result_metadata = read_single_record_batch(
-                    stdout_buffered, "catalog_result"
-                )
-
-                # Check for error metadata from worker
-                self._check_catalog_error(result_batch, result_metadata)
-
-                log.debug(
-                    "catalog_result",
-                    method=method_name,
-                    num_rows=result_batch.num_rows,
-                    num_columns=result_batch.num_columns,
-                )
-                return result_batch
-            except Exception as e:
-                # Check if worker had an error
-                stderr_output = proc.stderr.read().decode() if proc.stderr else ""
-                if stderr_output:
-                    log.error("worker_stderr", stderr=stderr_output)
-                raise CatalogClientError(
-                    f"Failed to read catalog result: {e}\n{stderr_output}"
-                ) from e
-
+            return result_batch
+        except CatalogClientError:
+            raise
+        except Exception as e:
+            stderr_output = proc.stderr.read().decode() if proc.stderr else ""
+            if stderr_output:
+                log.error("worker_stderr", stderr=stderr_output)
+            raise CatalogClientError(
+                f"Failed to read catalog result: {e}\n{stderr_output}"
+            ) from e
         finally:
             proc.wait()
 
-    def _catalog_invoke_stream(
+    def _catalog_invoke_batch(
         self,
         method_name: str,
         **kwargs: Any,
-    ) -> Iterator[pa.RecordBatch]:
-        """Invoke a catalog method and stream result batches.
+    ) -> pa.RecordBatch:
+        """Invoke a catalog method and return a batch with multiple rows.
 
-        For methods that return iterables (schemas, schema_contents, etc.),
-        this yields each result batch until an empty batch (0 rows, 0 columns)
-        signals end of stream.
+        For methods that return lists (schemas, schema_contents), this uses
+        an IPC stream reader to read a single batch containing all results.
+        Unlike _catalog_invoke which uses read_single_record_batch, this
+        method handles the streaming protocol used for list-returning methods.
 
         Args:
             method_name: CatalogInterface method name.
             **kwargs: Method keyword arguments.
 
-        Yields:
-            RecordBatch for each result item.
+        Returns:
+            RecordBatch with all results (may have 0 rows for empty results).
 
         Raises:
-            CatalogClientError: If worker subprocess fails.
+            CatalogClientError: If worker subprocess fails or returns an error.
 
         """
         log = self._get_catalog_logger()
-        log.debug("catalog_invoke_stream", method=method_name, kwargs=kwargs)
+        log.debug("catalog_invoke_batch", method=method_name, kwargs=kwargs)
 
-        # Start worker process using shell=True to match Client pattern
-        proc = subprocess.Popen(
-            self.server_path,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False,
-            shell=True,
-        )
-
-        if proc.stdin is None or proc.stdout is None:
-            raise CatalogClientError("Failed to create pipes for worker process")
-
-        stdout_buffered = io.BufferedReader(cast(io.RawIOBase, proc.stdout))
+        proc, stdout_buffered = self._send_catalog_invocation(method_name, kwargs)
 
         try:
-            # Create and send invocation
-            invocation = Invocation(
-                function_name=method_name,
-                input_schema=None,
-                function_type=InvocationType.CATALOG,
-                correlation_id=self.correlation_id,
-                invocation_id=None,
-                arguments=Arguments(),
-            )
-            invocation_bytes = invocation.serialize()
-            try:
-                proc.stdin.write(invocation_bytes)
-            except BrokenPipeError:
-                proc.poll()
-                raise CatalogClientError(
-                    f"Worker terminated unexpectedly during {method_name} invocation "
-                    f"(exit code: {proc.returncode})"
-                ) from None
+            with pa.ipc.open_stream(stdout_buffered) as reader:
+                result_batch = reader.read_next_batch()
+                result_metadata = cast(
+                    "pa_typing.KeyValueMetadata | None",
+                    result_batch.schema.metadata,
+                )
+                self._check_catalog_error(result_batch, result_metadata)
 
-            # Create and send arguments batch
-            args_batch = self._create_catalog_args_batch(kwargs)
-            args_bytes = (
-                args_batch.schema.serialize().to_pybytes()
-                + args_batch.serialize().to_pybytes()
-            )
-            try:
-                proc.stdin.write(args_bytes)
-                proc.stdin.flush()
-            except BrokenPipeError:
-                proc.poll()
-                raise CatalogClientError(
-                    f"Worker terminated unexpectedly during {method_name} arguments "
-                    f"(exit code: {proc.returncode})"
-                ) from None
-            proc.stdin.close()
-
-            # Stream results - read batches until EOF signal
-            while True:
-                try:
-                    result_batch, result_metadata = read_single_record_batch(
-                        stdout_buffered, "catalog_result"
-                    )
-
-                    # Check for error metadata from worker
-                    self._check_catalog_error(result_batch, result_metadata)
-
-                    # Empty batch (0 rows, 0 columns) signals end of stream
-                    if result_batch.num_rows == 0 and result_batch.num_columns == 0:
-                        break
-                    yield result_batch
-                except CatalogClientError:
-                    # Re-raise catalog errors
-                    raise
-                except Exception:
-                    # EOF or other error - stop iteration
-                    break
-
+                log.debug(
+                    "catalog_batch_result",
+                    method=method_name,
+                    num_rows=result_batch.num_rows,
+                )
+                return result_batch
+        except StopIteration:
+            return pa.RecordBatch.from_pydict({})
+        except CatalogClientError:
+            raise
+        except Exception as e:
+            stderr_output = proc.stderr.read().decode() if proc.stderr else ""
+            if stderr_output:
+                log.error("worker_stderr", stderr=stderr_output)
+            raise CatalogClientError(
+                f"Failed to read catalog result: {e}\n{stderr_output}"
+            ) from e
         finally:
             proc.wait()
 
@@ -517,21 +498,25 @@ class CatalogClientMixin:
 
     def schemas(
         self, *, attach_id: AttachId, transaction_id: TransactionId | None = None
-    ) -> Iterator[SchemaInfo]:
+    ) -> list[SchemaInfo]:
         """List schemas in the catalog.
 
         Args:
             attach_id: The attachment ID from catalog_attach.
             transaction_id: Optional transaction ID for transactional reads.
 
-        Yields:
-            SchemaInfo for each schema in the catalog.
+        Returns:
+            List of SchemaInfo for each schema in the catalog.
 
         """
-        for batch in self._catalog_invoke_stream(
+        batch = self._catalog_invoke_batch(
             "schemas", attach_id=attach_id, transaction_id=transaction_id
-        ):
-            yield SchemaInfo.deserialize(batch)
+        )
+        results: list[SchemaInfo] = []
+        for i in range(batch.num_rows):
+            row_batch = batch.slice(i, 1)
+            results.append(SchemaInfo.deserialize(row_batch))
+        return results
 
     def schema_get(
         self,
@@ -568,7 +553,7 @@ class CatalogClientMixin:
         transaction_id: TransactionId | None = None,
         name: str,
         comment: str | None = None,
-        tags: set[str] | None = None,
+        tags: dict[str, str] | None = None,
     ) -> None:
         """Create a new schema.
 
@@ -577,7 +562,7 @@ class CatalogClientMixin:
             transaction_id: Optional transaction ID.
             name: The name for the new schema.
             comment: Optional description of the schema.
-            tags: Optional string tags for the schema.
+            tags: Optional key-value tags for the schema.
 
         """
         self._catalog_invoke(
@@ -586,7 +571,7 @@ class CatalogClientMixin:
             transaction_id=transaction_id,
             name=name,
             comment=comment,
-            tags=tags or set(),
+            tags=tags or {},
         )
 
     def schema_drop(
@@ -617,48 +602,93 @@ class CatalogClientMixin:
             cascade=cascade,
         )
 
+    @overload
     def schema_contents(
         self,
         *,
         attach_id: AttachId,
         transaction_id: TransactionId | None = None,
         name: str,
-        type: SchemaObjectType | None = None,
-    ) -> Iterator[TableInfo | ViewInfo | FunctionInfo]:
+        type: Literal[SchemaObjectType.TABLE],
+    ) -> Sequence[TableInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None = None,
+        name: str,
+        type: Literal[SchemaObjectType.VIEW],
+    ) -> Sequence[ViewInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None = None,
+        name: str,
+        type: Literal[
+            SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION
+        ],
+    ) -> Sequence[FunctionInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None = None,
+        name: str,
+        type: SchemaObjectType,
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo]: ...
+
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None = None,
+        name: str,
+        type: SchemaObjectType,
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo]:
         """List contents of a schema (tables, views, functions).
 
         Args:
             attach_id: The attachment ID from catalog_attach.
             transaction_id: Optional transaction ID for transactional reads.
             name: The schema name.
-            type: Optional filter for the type of objects to return.
-                If None, returns all objects. Valid values are:
+            type: The type of objects to return. Must be a SchemaObjectType enum:
                 - SchemaObjectType.TABLE: Return only tables
                 - SchemaObjectType.VIEW: Return only views
                 - SchemaObjectType.SCALAR_FUNCTION: Return only scalar functions
                 - SchemaObjectType.TABLE_FUNCTION: Return only table functions
 
-        Yields:
-            TableInfo, ViewInfo, or FunctionInfo for each object in the schema.
+        Returns:
+            List of TableInfo, ViewInfo, or FunctionInfo depending on the type.
 
         """
-        # Build kwargs, only include type if specified
         kwargs: dict[str, Any] = {
             "attach_id": attach_id,
             "transaction_id": transaction_id,
             "name": name,
+            "type": type.value,
         }
-        if type is not None:
-            kwargs["type"] = type.value
 
-        for batch in self._catalog_invoke_stream("schema_contents", **kwargs):
-            # Determine type from batch schema
-            if "columns" in batch.schema.names:
-                yield TableInfo.deserialize(batch)
-            elif "definition" in batch.schema.names:
-                yield ViewInfo.deserialize(batch)
+        batch = self._catalog_invoke_batch("schema_contents", **kwargs)
+        results: list[TableInfo | ViewInfo | FunctionInfo] = []
+
+        for i in range(batch.num_rows):
+            row_batch = batch.slice(i, 1)
+            # Deserialize based on requested type
+            if type == SchemaObjectType.TABLE:
+                results.append(TableInfo.deserialize(row_batch))
+            elif type == SchemaObjectType.VIEW:
+                results.append(ViewInfo.deserialize(row_batch))
             else:
-                yield FunctionInfo.deserialize(batch)
+                results.append(FunctionInfo.deserialize(row_batch))
+
+        return results
 
     # ========== Table Methods ==========
 
@@ -1282,68 +1312,4 @@ class CatalogClientMixin:
             name=name,
             comment=comment,
             ignore_not_found=ignore_not_found,
-        )
-
-    # =========================================================================
-    # Transaction Methods
-    # =========================================================================
-
-    def transaction_begin(
-        self,
-        *,
-        attach_id: AttachId,
-    ) -> TransactionBeginResult:
-        """Begin a new transaction.
-
-        Args:
-            attach_id: The attachment ID from catalog_attach.
-
-        Returns:
-            TransactionBeginResult containing the transaction_id.
-
-        """
-        result = self._catalog_invoke(
-            "catalog_transaction_begin",
-            attach_id=attach_id,
-        )
-        if result is None:
-            raise CatalogClientError("transaction_begin returned no result")
-        return TransactionBeginResult.deserialize(result)
-
-    def transaction_commit(
-        self,
-        *,
-        attach_id: AttachId,
-        transaction_id: TransactionId,
-    ) -> None:
-        """Commit a transaction.
-
-        Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: The transaction ID from transaction_begin.
-
-        """
-        self._catalog_invoke(
-            "catalog_transaction_commit",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-        )
-
-    def transaction_rollback(
-        self,
-        *,
-        attach_id: AttachId,
-        transaction_id: TransactionId,
-    ) -> None:
-        """Rollback a transaction.
-
-        Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: The transaction ID from transaction_begin.
-
-        """
-        self._catalog_invoke(
-            "catalog_transaction_rollback",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
         )
