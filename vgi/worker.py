@@ -1505,11 +1505,21 @@ class Worker:
                     )
 
                 try:
-                    with tracer.start_as_current_span(
-                        "worker.invocation",
-                        kind=tracing.get_span_kind_server(),
-                    ) as invocation_span:
-                        self._process_invocation(invocation, fn_log, invocation_span)
+                    if is_secondary:
+                        # Secondary workers: skip worker.invocation span since
+                        # they're already children of primary's GlobalInit
+                        from vgi.tracing import _NoOpSpan
+
+                        self._process_invocation(invocation, fn_log, _NoOpSpan())
+                    else:
+                        # Primary workers: create worker.invocation span
+                        with tracer.start_as_current_span(
+                            "worker.invocation",
+                            kind=tracing.get_span_kind_server(),
+                        ) as invocation_span:
+                            self._process_invocation(
+                                invocation, fn_log, invocation_span
+                            )
                 finally:
                     # Always detach trace context
                     tracing.detach_trace_context(trace_token)
