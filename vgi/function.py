@@ -181,47 +181,114 @@ class OutputSpec:
         return vgi.ipc_utils.serialize_record_batch(bind_result_batch)
 
 
+@dataclass(frozen=True, slots=True)
 class FunctionInitInput:
     """Input sent to initialize global state for a Function.
 
-    This is the base init input class for functions that don't require
-    any initialization data (like scalar functions). It serializes to
-    an empty single-row batch.
+    This is the base init input class. Subclasses can add additional fields
+    and override _schema_fields() and _to_dict() to include them in
+    serialization. The serialize() method automatically collects fields
+    from all parent classes.
+
+    Attributes:
+        traceparent: W3C Trace Context traceparent header for distributed tracing.
+        tracestate: W3C Trace Context tracestate header for vendor-specific data.
+
     """
 
-    def serialize(self) -> bytes:
-        """Serialize FunctionInitInput to bytes.
+    traceparent: str | None = None
+    tracestate: str | None = None
 
-        Creates a single-row batch with an empty schema. The batch must have
-        exactly 1 row so that deserialize can access row 0.
+    @classmethod
+    def _schema_fields(cls) -> list[pa.Field]:
+        """Return Arrow schema fields for this class only (not parents).
+
+        Override in subclasses to add additional fields. The serialize()
+        method will collect fields from all classes in the MRO.
         """
-        # Create a batch with 1 row using a struct array approach
-        struct_array: pa.StructArray = pa.array([{}], type=pa.struct([]))  # type: ignore[assignment]
-        batch = pa.RecordBatch.from_struct_array(struct_array)
+        return [
+            pa.field("traceparent", pa.string(), nullable=True),
+            pa.field("tracestate", pa.string(), nullable=True),
+        ]
+
+    def _to_dict(self) -> dict[str, Any]:
+        """Return dict of this class's own field values (not parents).
+
+        Override in subclasses to add additional fields. The serialize()
+        method will collect values from all classes in the MRO.
+        """
+        return {
+            "traceparent": self.traceparent,
+            "tracestate": self.tracestate,
+        }
+
+    @classmethod
+    def _collect_schema_fields(cls) -> list[pa.Field]:
+        """Collect schema fields from this class and all InitInput parents."""
+        fields: list[pa.Field] = []
+        for klass in reversed(cls.__mro__):
+            if klass is object:
+                continue
+            # Check if this class defines its own _schema_fields (not inherited)
+            if "_schema_fields" in klass.__dict__:
+                fields.extend(klass._schema_fields())
+        return fields
+
+    def _collect_values(self) -> dict[str, Any]:
+        """Collect field values from this instance and all InitInput parents."""
+        values: dict[str, Any] = {}
+        for klass in reversed(type(self).__mro__):
+            if klass is object:
+                continue
+            # Check if this class defines its own _to_dict (not inherited)
+            if "_to_dict" in klass.__dict__:
+                values.update(klass._to_dict(self))
+        return values
+
+    def serialize(self) -> bytes:
+        """Serialize to bytes, including all fields from parent classes.
+
+        Creates a single-row batch containing all fields defined in the
+        class hierarchy (via _schema_fields and _to_dict methods).
+        """
+        schema = pa.schema(self._collect_schema_fields())
+        data = self._collect_values()
+        batch = pa.RecordBatch.from_pylist([data], schema=schema)
         return vgi.ipc_utils.serialize_record_batch(batch)
 
     @classmethod
-    def deserialize(cls, _batch: pa.RecordBatch) -> Self:
-        """Deserialize FunctionInitInput from a RecordBatch.
+    def _from_values(cls, values: dict[str, Any]) -> Self:
+        """Create instance from dict. Override in subclasses to add fields."""
+        return cls(
+            traceparent=values.get("traceparent"),
+            tracestate=values.get("tracestate"),
+        )
+
+    @classmethod
+    def deserialize(cls, batch: pa.RecordBatch) -> Self:
+        """Deserialize from a RecordBatch.
 
         Args:
-            _batch: RecordBatch (unused - FunctionInitInput has no fields).
+            batch: RecordBatch with one row containing the init data.
 
         Returns:
-            New FunctionInitInput instance.
+            New instance with fields populated from the batch.
 
         """
-        return cls()
+        if batch.num_rows == 0:
+            return cls()
+        values = batch.to_pylist()[0]
+        return cls._from_values(values)
 
     @classmethod
     def deserialize_bytes(cls, data: bytes) -> Self:
-        """Deserialize FunctionInitInput from bytes.
+        """Deserialize from bytes.
 
         Args:
             data: Serialized bytes.
 
         Returns:
-            New FunctionInitInput instance.
+            New instance with fields populated from the data.
 
         """
         batch = vgi.ipc_utils.deserialize_record_batch(data)

@@ -187,6 +187,8 @@ class ProtocolOutput:
 class TableFunctionInitInput(vgi.function.FunctionInitInput):
     """Input sent to initialize global state for a TableFunction.
 
+    Inherits traceparent and tracestate from FunctionInitInput.
+
     Attributes:
         projection_ids: Optional list of column indices to project, or None for all.
 
@@ -199,26 +201,27 @@ class TableFunctionInitInput(vgi.function.FunctionInitInput):
 
     projection_ids: list[int] | None = None
 
-    def serialize(self) -> bytes:
-        """Serialize TableFunctionInitInput to bytes."""
-        batch = pa.RecordBatch.from_arrays(
-            [pa.array([self.projection_ids], type=pa.list_(pa.int32()))],
-            schema=pa.schema([pa.field("projection_ids", pa.list_(pa.int32()))]),
+    @classmethod
+    def _schema_fields(cls) -> list[pa.Field]:
+        """Return Arrow schema fields for this class only."""
+        return [
+            pa.field("projection_ids", pa.list_(pa.int32()), nullable=True),
+        ]
+
+    def _to_dict(self) -> dict[str, Any]:
+        """Return dict of this class's own field values."""
+        return {
+            "projection_ids": self.projection_ids,
+        }
+
+    @classmethod
+    def _from_values(cls, values: dict[str, Any]) -> Self:
+        """Create instance from dict, including parent fields."""
+        return cls(
+            traceparent=values.get("traceparent"),
+            tracestate=values.get("tracestate"),
+            projection_ids=values.get("projection_ids"),
         )
-        return vgi.ipc_utils.serialize_record_batch(batch)
-
-    @classmethod
-    def deserialize(cls, batch: pa.RecordBatch) -> Self:  # type: ignore[override]
-        """Deserialize TableFunctionInitInput from a RecordBatch."""
-        values = batch.to_pylist()[0]
-        # Handle backward compatibility: ignore extra fields
-        return cls(projection_ids=values.get("projection_ids"))
-
-    @classmethod
-    def deserialize_bytes(cls, data: bytes) -> Self:
-        """Deserialize TableFunctionInitInput from bytes."""
-        batch = vgi.ipc_utils.deserialize_record_batch(data)
-        return cls.deserialize(batch)
 
 
 class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
