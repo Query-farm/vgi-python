@@ -161,7 +161,7 @@ class ProtocolOutput:
 
     def metadata(
         self, invocation: vgi.invocation.Invocation
-    ) -> pa.KeyValueMetadata | None:
+    ) -> pa.KeyValueMetadata:
         """Create metadata for this output based on the status.
 
         Args:
@@ -169,17 +169,22 @@ class ProtocolOutput:
                 to Message.add_to_metadata() for correlation information.
 
         Returns:
-            KeyValueMetadata containing status and optional log message fields.
+            KeyValueMetadata containing protocol state, status and optional log
+            message fields.
 
         """
-        metadata_dict: dict[str, str] = {"vgi.status": self.status.value}
+        # Start with protocol state (required for VGI protocol) and status
+        metadata_dict: dict[bytes, bytes] = {
+            vgi.ipc_utils.PROTOCOL_STATE_KEY: vgi.ipc_utils.ProtocolState.OUTPUT.encode(),
+            b"vgi.status": self.status.value.encode(),
+        }
 
+        # Add log message metadata if present
         if self.log_message is not None:
-            metadata_dict = self.log_message.add_to_metadata(invocation, metadata_dict)
+            for k, v in self.log_message.add_to_metadata(invocation, {}).items():
+                metadata_dict[k.encode()] = v.encode()
 
-        return pa.KeyValueMetadata(
-            {k.encode(): v.encode() for k, v in metadata_dict.items()}
-        )
+        return pa.KeyValueMetadata(metadata_dict)
 
     @classmethod
     def from_process_result(

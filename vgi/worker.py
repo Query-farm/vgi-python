@@ -974,28 +974,47 @@ class Worker:
 
         fn_log.debug("catalog_method_result", result=result)
 
-        # Serialize and stream result
+        # Serialize and stream result with protocol state metadata
         # Result types:
         # - None → empty batch (0 rows, 0 columns)
         # - list of primitives → convert to single-column batch (e.g., catalogs())
         # - Dataclass with serialize() → serialize to bytes, write
         # - Iterable of dataclasses → stream multiple serialized items
+        from vgi.ipc_utils import ProtocolState, protocol_state_metadata
+
+        catalog_result_metadata = protocol_state_metadata(ProtocolState.CATALOG_RESULT)
+
         if result is None:
             # Write empty batch to signal no result
             batch = pa.RecordBatch.from_pydict({})
-            stdout.write(batch.schema.serialize().to_pybytes())
-            stdout.write(batch.serialize().to_pybytes())
+            with pa.ipc.new_stream(cast(IOBase, stdout), batch.schema) as writer:
+                writer.write_batch(batch, custom_metadata=catalog_result_metadata)
         elif isinstance(result, list) and (
             not result or not hasattr(result[0], "serialize")
         ):
             # List of primitives (e.g., strings from catalogs())
             batch = pa.RecordBatch.from_pydict({"value": result})
-            stdout.write(batch.schema.serialize().to_pybytes())
-            stdout.write(batch.serialize().to_pybytes())
+            with pa.ipc.new_stream(cast(IOBase, stdout), batch.schema) as writer:
+                writer.write_batch(batch, custom_metadata=catalog_result_metadata)
         elif hasattr(result, "serialize"):
-            # Single dataclass result - write serialized bytes directly
-            result_bytes = result.serialize()
-            stdout.write(result_bytes)
+            # Single dataclass result - serialize with protocol state if possible
+            # Check if serialize() accepts custom_metadata parameter
+            import inspect
+
+            sig = inspect.signature(result.serialize)
+            if "custom_metadata" in sig.parameters:
+                result_bytes = result.serialize(custom_metadata=catalog_result_metadata)
+                stdout.write(result_bytes)
+            else:
+                # Fallback: use serialize() then we need to re-wrap with protocol state
+                # This is less efficient but ensures protocol state is included
+                result_bytes = result.serialize()
+                # Deserialize and re-serialize with protocol state
+                from vgi.ipc_utils import deserialize_record_batch
+
+                batch, _ = deserialize_record_batch(result_bytes)
+                with pa.ipc.new_stream(cast(IOBase, stdout), batch.schema) as writer:
+                    writer.write_batch(batch, custom_metadata=catalog_result_metadata)
         elif isinstance(result, list) and result and hasattr(result[0], "to_row_dict"):
             # List of catalog objects with to_row_dict() - use efficient batch writing
             # Determine the schema based on method and type parameter
@@ -1045,12 +1064,12 @@ class Worker:
                 # Fallback: use the ARROW_SCHEMA from the first item's class
                 schema = type(result[0]).ARROW_SCHEMA
 
-            # Collect all rows and write as single batch
+            # Collect all rows and write as single batch with protocol state
             rows = [item.to_row_dict() for item in result]
             batch = pa.RecordBatch.from_pylist(rows, schema=schema)
 
             with pa.ipc.new_stream(cast(IOBase, stdout), schema) as writer:
-                writer.write_batch(batch)
+                writer.write_batch(batch, custom_metadata=catalog_result_metadata)
         elif isinstance(result, list) and not result:
             # Empty list - need to determine schema for empty batch
             from vgi.catalog import (
@@ -1086,7 +1105,7 @@ class Worker:
 
             batch = pa.RecordBatch.from_pylist([], schema=schema)
             with pa.ipc.new_stream(cast(IOBase, stdout), schema) as writer:
-                writer.write_batch(batch)
+                writer.write_batch(batch, custom_metadata=catalog_result_metadata)
         else:
             raise TypeError(
                 f"Catalog method returned unsupported type: "
