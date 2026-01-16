@@ -1163,6 +1163,7 @@ class Worker:
         invocation: Invocation,
         fn_log: structlog.stdlib.BoundLogger,
         invocation_span: Any,
+        worker_name: str,
     ) -> None:
         """Process a single function invocation with tracing.
 
@@ -1170,6 +1171,7 @@ class Worker:
             invocation: The invocation to process.
             fn_log: Logger bound to the function context.
             invocation_span: The parent span for this invocation.
+            worker_name: The name of the worker class for tracing attributes.
 
         """
         # Cast stdout to binary (reassigned in run() to binary mode)
@@ -1178,6 +1180,7 @@ class Worker:
         is_primary = invocation.global_execution_identifier is None
 
         # Set initial span attributes
+        invocation_span.set_attribute(tracing.VGI_WORKER_NAME, worker_name)
         invocation_span.set_attribute(
             tracing.VGI_FUNCTION_NAME, invocation.function_name
         )
@@ -1197,10 +1200,17 @@ class Worker:
         # Dispatch catalog invocations separately (simplified protocol)
         if invocation.function_type == InvocationType.CATALOG:
             with tracer.start_as_current_span(
-                "worker.catalog", kind=tracing.get_span_kind_internal()
+                "vgi.catalog", kind=tracing.get_span_kind_internal()
             ) as catalog_span:
+                catalog_span.set_attribute(tracing.VGI_PHASE, "catalog")
                 catalog_span.set_attribute(
                     tracing.VGI_FUNCTION_NAME, invocation.function_name
+                )
+                catalog_span.set_attribute(
+                    tracing.VGI_FUNCTION_TYPE, invocation.function_type.value
+                )
+                catalog_span.set_attribute(
+                    tracing.VGI_CORRELATION_ID, invocation.correlation_id
                 )
                 try:
                     self._handle_catalog_invocation(invocation, fn_log)
@@ -1217,8 +1227,16 @@ class Worker:
 
         # Bind phase with tracing
         with tracer.start_as_current_span(
-            "worker.bind", kind=tracing.get_span_kind_internal()
+            "vgi.bind", kind=tracing.get_span_kind_internal()
         ) as bind_span:
+            bind_span.set_attribute(tracing.VGI_PHASE, "bind")
+            bind_span.set_attribute(tracing.VGI_FUNCTION_NAME, invocation.function_name)
+            bind_span.set_attribute(
+                tracing.VGI_FUNCTION_TYPE, invocation.function_type.value
+            )
+            bind_span.set_attribute(
+                tracing.VGI_CORRELATION_ID, invocation.correlation_id
+            )
             try:
                 registry = self._build_registry()
                 if invocation.function_name not in registry:
@@ -1322,8 +1340,18 @@ class Worker:
 
         # Init phase with tracing
         with tracer.start_as_current_span(
-            "worker.init", kind=tracing.get_span_kind_internal()
+            "vgi.init", kind=tracing.get_span_kind_internal()
         ) as init_span:
+            init_span.set_attribute(tracing.VGI_PHASE, "init")
+            init_span.set_attribute(tracing.VGI_FUNCTION_NAME, invocation.function_name)
+            init_span.set_attribute(
+                tracing.VGI_FUNCTION_TYPE, invocation.function_type.value
+            )
+            init_span.set_attribute(
+                tracing.VGI_CORRELATION_ID, invocation.correlation_id
+            )
+            if invocation_id is not None:
+                init_span.set_attribute(tracing.VGI_INVOCATION_ID, invocation_id.hex())
             try:
                 if invocation.global_execution_identifier is None:
                     # Primary worker: perform init and store in storage
@@ -1379,8 +1407,31 @@ class Worker:
 
         # Process phase with tracing
         with tracer.start_as_current_span(
-            "worker.process", kind=tracing.get_span_kind_internal()
+            "vgi.process", kind=tracing.get_span_kind_internal()
         ) as process_span:
+            process_span.set_attribute(tracing.VGI_PHASE, "process")
+            process_span.set_attribute(
+                tracing.VGI_FUNCTION_NAME, invocation.function_name
+            )
+            process_span.set_attribute(
+                tracing.VGI_FUNCTION_TYPE, invocation.function_type.value
+            )
+            process_span.set_attribute(
+                tracing.VGI_CORRELATION_ID, invocation.correlation_id
+            )
+            if invocation_id is not None:
+                process_span.set_attribute(
+                    tracing.VGI_INVOCATION_ID, invocation_id.hex()
+                )
+            if (
+                invocation.global_execution_identifier is not None
+                and invocation.global_execution_identifier.global_execution_identifier
+                is not None
+            ):
+                process_span.set_attribute(
+                    tracing.VGI_EXECUTION_ID,
+                    invocation.global_execution_identifier.global_execution_identifier.hex(),
+                )
             if isinstance(instance, ScalarFunctionGenerator):
                 stats = self._process_scalar_batches(instance, invocation, fn_log)
             elif isinstance(instance, TableInOutGenerator):
@@ -1506,19 +1557,24 @@ class Worker:
 
                 try:
                     if is_secondary:
-                        # Secondary workers: skip worker.invocation span since
+                        # Secondary workers: skip vgi.invoke span since
                         # they're already children of primary's GlobalInit
                         from vgi.tracing import _NoOpSpan
 
-                        self._process_invocation(invocation, fn_log, _NoOpSpan())
+                        self._process_invocation(
+                            invocation, fn_log, _NoOpSpan(), self.__class__.__name__
+                        )
                     else:
-                        # Primary workers: create worker.invocation span
+                        # Primary workers: create vgi.invoke span
                         with tracer.start_as_current_span(
-                            "worker.invocation",
+                            "vgi.invoke",
                             kind=tracing.get_span_kind_server(),
                         ) as invocation_span:
                             self._process_invocation(
-                                invocation, fn_log, invocation_span
+                                invocation,
+                                fn_log,
+                                invocation_span,
+                                self.__class__.__name__,
                             )
                 finally:
                     # Always detach trace context

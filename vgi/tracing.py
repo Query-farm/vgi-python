@@ -48,8 +48,10 @@ __all__ = [
     "VGI_INVOCATION_ID",
     "VGI_EXECUTION_ID",
     "VGI_CORRELATION_ID",
+    "VGI_WORKER_NAME",
     "VGI_WORKER_PID",
     "VGI_WORKER_IS_PRIMARY",
+    "VGI_PHASE",
     "VGI_MAX_WORKERS",
     "VGI_INPUT_SCHEMA_COLUMNS",
     "VGI_OUTPUT_SCHEMA_COLUMNS",
@@ -71,8 +73,10 @@ VGI_FUNCTION_TYPE = "vgi.function.type"
 VGI_INVOCATION_ID = "vgi.invocation.id"
 VGI_EXECUTION_ID = "vgi.execution.id"
 VGI_CORRELATION_ID = "vgi.correlation.id"
+VGI_WORKER_NAME = "vgi.worker.name"
 VGI_WORKER_PID = "vgi.worker.pid"
 VGI_WORKER_IS_PRIMARY = "vgi.worker.is_primary"
+VGI_PHASE = "vgi.phase"
 VGI_MAX_WORKERS = "vgi.max_workers"
 VGI_INPUT_SCHEMA_COLUMNS = "vgi.input_schema.columns"
 VGI_OUTPUT_SCHEMA_COLUMNS = "vgi.output_schema.columns"
