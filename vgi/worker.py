@@ -852,10 +852,23 @@ class Worker:
 
                     batch_count += 1
                     total_input_rows += batch.num_rows
+
+                    # Log input metadata for protocol debugging
+                    input_metadata_dict = (
+                        {
+                            k.decode() if isinstance(k, bytes) else k: (
+                                v.decode() if isinstance(v, bytes) else v
+                            )
+                            for k, v in metadata.items()
+                        }
+                        if metadata
+                        else None
+                    )
                     fn_log.debug(
                         "batch_received",
                         batch_index=batch_count,
                         input_rows=batch.num_rows,
+                        input_metadata=input_metadata_dict,
                     )
 
                     output = generator.send(
@@ -866,13 +879,25 @@ class Worker:
                     assert output.batch is not None
                     output_rows = output.batch.num_rows
                     total_output_rows += output_rows
+
+                    # Get output metadata for logging
+                    output_custom_metadata = output.metadata(invocation)
                     writer.write_batch(
-                        output.batch, custom_metadata=output.metadata(invocation)
+                        output.batch, custom_metadata=output_custom_metadata
                     )
+
+                    # Log output metadata for protocol debugging
+                    output_metadata_dict = {
+                        k.decode() if isinstance(k, bytes) else k: (
+                            v.decode() if isinstance(v, bytes) else v
+                        )
+                        for k, v in output_custom_metadata.items()
+                    }
                     fn_log.debug(
                         "batch_written",
                         batch_index=batch_count,
                         output_rows=output_rows,
+                        output_metadata=output_metadata_dict,
                     )
             except (KeyboardInterrupt, SystemExit):
                 raise  # Let these propagate normally
