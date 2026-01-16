@@ -1433,6 +1433,16 @@ class Worker:
         tracer = tracing.get_tracer("vgi.worker")
 
         try:
+            self._run_loop(tracer)
+        except KeyboardInterrupt:
+            # Exit cleanly on Ctrl+C without traceback
+            # Exit code 130 = 128 + SIGINT(2), conventional for interrupted processes
+            self.log.debug("worker_interrupted")
+            sys.exit(130)
+
+    def _run_loop(self, tracer: Any) -> None:
+        """Run the main worker loop for processing invocations."""
+        try:
             while True:
                 self.log.info("waiting_for_invocation")
                 try:

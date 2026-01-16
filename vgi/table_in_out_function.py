@@ -159,9 +159,7 @@ class ProtocolOutput:
     status: _OutputStatus
     log_message: vgi.log.Message | None = None
 
-    def metadata(
-        self, invocation: vgi.invocation.Invocation
-    ) -> pa.KeyValueMetadata:
+    def metadata(self, invocation: vgi.invocation.Invocation) -> pa.KeyValueMetadata:
         """Create metadata for this output based on the status.
 
         Args:
@@ -174,8 +172,10 @@ class ProtocolOutput:
 
         """
         # Start with protocol state (required for VGI protocol) and status
+        protocol_key = vgi.ipc_utils.PROTOCOL_STATE_KEY
+        protocol_state = vgi.ipc_utils.ProtocolState.OUTPUT.encode()
         metadata_dict: dict[bytes, bytes] = {
-            vgi.ipc_utils.PROTOCOL_STATE_KEY: vgi.ipc_utils.ProtocolState.OUTPUT.encode(),
+            protocol_key: protocol_state,
             b"vgi.status": self.status.value.encode(),
         }
 
