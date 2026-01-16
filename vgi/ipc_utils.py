@@ -111,6 +111,77 @@ class IPCError(Exception):
     """Error during IPC message reading or writing."""
 
 
+# Protocol state metadata key
+PROTOCOL_STATE_KEY = b"vgi.protocol_state"
+
+
+class ProtocolState:
+    """Protocol state names for IPC message validation.
+
+    These constants identify the type of message being sent in the VGI protocol.
+    Each message should include protocol state metadata so recipients can validate
+    they're receiving the expected message type.
+
+    Protocol flow for function invocation:
+        1. Client sends: INVOCATION
+        2. Worker sends: BIND_RESULT
+        3. Client sends: INIT_INPUT
+        4. Worker sends: INIT_RESULT
+        5. Client sends: DATA (streaming input batches)
+        6. Worker sends: OUTPUT (streaming output batches)
+
+    Protocol flow for catalog operations:
+        1. Client sends: INVOCATION (with catalog function type)
+        2. Client sends: CATALOG_ARGS
+        3. Worker sends: CATALOG_RESULT
+
+    """
+
+    INVOCATION = "invocation"
+    BIND_RESULT = "bind_result"
+    INIT_INPUT = "init_input"
+    INIT_RESULT = "init_result"
+    DATA = "data"
+    OUTPUT = "output"
+    CATALOG_ARGS = "catalog_args"
+    CATALOG_RESULT = "catalog_result"
+
+
+def protocol_state_metadata(state: str) -> pa.KeyValueMetadata:
+    """Create metadata dict with protocol state indicator.
+
+    Args:
+        state: The protocol state name. Should be one of the ProtocolState constants.
+
+    Returns:
+        KeyValueMetadata with the protocol state.
+
+    """
+    return pa.KeyValueMetadata({PROTOCOL_STATE_KEY: state.encode()})
+
+
+def merge_metadata(
+    *metadata_dicts: pa.KeyValueMetadata | dict[bytes, bytes] | None,
+) -> pa.KeyValueMetadata | None:
+    """Merge multiple metadata dictionaries into one.
+
+    Args:
+        *metadata_dicts: Metadata dictionaries to merge. None values are skipped.
+
+    Returns:
+        Merged KeyValueMetadata, or None if all inputs were None/empty.
+
+    """
+    result: dict[bytes, bytes] = {}
+    for md in metadata_dicts:
+        if md is not None:
+            for k, v in md.items():
+                key = k if isinstance(k, bytes) else k.encode()
+                val = v if isinstance(v, bytes) else v.encode()
+                result[key] = val
+    return pa.KeyValueMetadata(result) if result else None
+
+
 def serialize_record_batch(
     batch: pa.RecordBatch, custom_metadata: pa.KeyValueMetadata | None = None
 ) -> bytes:
@@ -144,30 +215,37 @@ def serialize_record_batch(
     return result
 
 
-def deserialize_record_batch(data: bytes) -> pa.RecordBatch:
-    """Deserialize bytes back to a RecordBatch.
+def deserialize_record_batch(
+    data: bytes,
+) -> tuple[pa.RecordBatch, pa.KeyValueMetadata | None]:
+    """Deserialize bytes back to a RecordBatch with custom metadata.
 
     Args:
         data: Bytes containing a serialized RecordBatch in Arrow IPC stream format.
 
     Returns:
-        The deserialized RecordBatch.
+        Tuple of (RecordBatch, custom_metadata). The custom_metadata may be None
+        if no custom metadata was attached to the batch.
 
     Raises:
         IPCError: If more than a single batch is found, or no batches are found.
 
     """
     with ipc.open_stream(pa.BufferReader(data)) as reader:
-        for batch in reader:
-            if _IPC_DEBUG:
-                _get_ipc_log().debug(
-                    "ipc_read",
-                    num_rows=batch.num_rows,
-                    schema=_schema_to_dict(batch.schema),
-                    nbytes=len(data),
-                )
-            return batch
-    raise IPCError("No RecordBatch found in provided data")
+        try:
+            batch, custom_metadata = reader.read_next_batch_with_custom_metadata()
+        except StopIteration:
+            raise IPCError("No RecordBatch found in provided data") from None
+
+        if _IPC_DEBUG:
+            _get_ipc_log().debug(
+                "ipc_read",
+                num_rows=batch.num_rows,
+                schema=_schema_to_dict(batch.schema),
+                metadata=_metadata_to_dict(custom_metadata),
+                nbytes=len(data),
+            )
+        return batch, custom_metadata
 
 
 def read_single_record_batch(
@@ -228,10 +306,30 @@ def read_single_record_batch(
         raise IPCError(f"Error reading record batch from {context} stream: {e}") from e
 
 
+def get_protocol_state(metadata: pa.KeyValueMetadata | None) -> str | None:
+    """Extract the protocol state from batch metadata.
+
+    Args:
+        metadata: The batch's custom metadata.
+
+    Returns:
+        The protocol state string, or None if not present.
+
+    """
+    if metadata is None:
+        return None
+    value = metadata.get(PROTOCOL_STATE_KEY)
+    if value is None:
+        return None
+    return value.decode() if isinstance(value, bytes) else value
+
+
 def validate_single_row_batch(
     data: pa.RecordBatch,
     class_name: str,
     required_fields: list[str] | None = None,
+    custom_metadata: pa.KeyValueMetadata | None = None,
+    expected_protocol_state: str | None = None,
 ) -> dict[str, Any]:
     """Validate a RecordBatch has exactly one row and return it as a dict.
 
@@ -239,15 +337,35 @@ def validate_single_row_batch(
         data: The RecordBatch to validate.
         class_name: Name of the class being deserialized (for error messages).
         required_fields: Optional list of field names that must be present.
+        custom_metadata: Optional custom metadata from the batch (for protocol
+            state validation).
+        expected_protocol_state: If provided, validate that the batch's protocol
+            state matches this value.
 
     Returns:
         The first (and only) row as a dictionary.
 
     Raises:
-        ValueError: If the batch is empty, has multiple rows, or is missing
-            required fields.
+        ValueError: If the batch is empty, has multiple rows, is missing
+            required fields, or has wrong protocol state.
 
     """
+    # Check protocol state first for better error messages
+    if expected_protocol_state is not None:
+        actual_state = get_protocol_state(custom_metadata)
+        if actual_state is None:
+            raise ValueError(
+                f"Protocol state mismatch for {class_name}: "
+                f"expected '{expected_protocol_state}', but no protocol state found. "
+                f"Batch fields: {sorted(data.schema.names)}"
+            )
+        if actual_state != expected_protocol_state:
+            raise ValueError(
+                f"Protocol state mismatch for {class_name}: "
+                f"expected '{expected_protocol_state}', got '{actual_state}'. "
+                f"Batch fields: {sorted(data.schema.names)}"
+            )
+
     if data.num_rows == 0:
         raise ValueError(f"Cannot deserialize {class_name} from empty RecordBatch")
     if data.num_rows > 1:
@@ -262,9 +380,11 @@ def validate_single_row_batch(
         found_fields = set(first_row.keys())
         missing = [f for f in required_fields if f not in found_fields]
         if missing:
+            actual_state = get_protocol_state(custom_metadata)
+            state_info = f" (protocol_state={actual_state})" if actual_state else ""
             raise ValueError(
                 f"Missing fields in {class_name} RecordBatch: {missing}. "
-                f"Found: {sorted(found_fields)}"
+                f"Found: {sorted(found_fields)}{state_info}"
             )
 
     return first_row
@@ -307,4 +427,5 @@ class RecordBatchState:
     @classmethod
     def deserialize(cls, data: bytes) -> Self:
         """Deserialize a RecordBatch from bytes."""
-        return cls(batch=deserialize_record_batch(data))
+        batch, _ = deserialize_record_batch(data)
+        return cls(batch=batch)

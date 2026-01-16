@@ -298,7 +298,11 @@ class Client(CatalogClientMixin):
 
         return True
 
-    def _parse_bind_result(self, batch: pa.RecordBatch) -> _BindResult:
+    def _parse_bind_result(
+        self,
+        batch: pa.RecordBatch,
+        custom_metadata: pa.KeyValueMetadata | None = None,
+    ) -> _BindResult:
         """Parse the bind result batch from a worker into structured data.
 
         Extracts function metadata from the worker's bind response, including
@@ -311,6 +315,7 @@ class Client(CatalogClientMixin):
                 - invocation_id: Unique identifier for this invocation (bytes)
                 - output_schema: IPC-serialized Arrow schema for output batches
                 - active_features: List of feature flags active for this invocation
+            custom_metadata: Optional batch metadata for protocol state validation.
 
         Returns:
             A _BindResult dataclass containing:
@@ -321,6 +326,23 @@ class Client(CatalogClientMixin):
                 - raw_batch: The original RecordBatch for reference
 
         """
+        from vgi.ipc_utils import ProtocolState, get_protocol_state
+
+        # Validate protocol state
+        actual_state = get_protocol_state(custom_metadata)
+        if actual_state is None:
+            raise ClientError(
+                "Protocol state mismatch for bind_result: "
+                f"expected '{ProtocolState.BIND_RESULT}', but no protocol state found. "
+                f"Batch fields: {sorted(batch.schema.names)}"
+            )
+        if actual_state != ProtocolState.BIND_RESULT:
+            raise ClientError(
+                f"Protocol state mismatch for bind_result: "
+                f"expected '{ProtocolState.BIND_RESULT}', got '{actual_state}'. "
+                f"Batch fields: {sorted(batch.schema.names)}"
+            )
+
         if batch.num_rows != 1:
             raise ClientError(
                 "Expected single-row RecordBatch for bind result,"
@@ -553,7 +575,7 @@ class Client(CatalogClientMixin):
 
         log.debug("bind_result_received", batch=bind_result_batch)
 
-        bind_result = self._parse_bind_result(bind_result_batch)
+        bind_result = self._parse_bind_result(bind_result_batch, bind_custom_metadata)
 
         # Validate features
         self._validate_features(client_features, bind_result.active_features)
@@ -594,13 +616,15 @@ class Client(CatalogClientMixin):
         # Read init result
         log.debug("reading_init_result")
         try:
-            init_result_batch, _ = read_single_record_batch(
+            init_result_batch, init_result_metadata = read_single_record_batch(
                 self._stdout_buffered, "init_result"
             )
         except IPCError as e:
             raise ClientError(str(e)) from e
 
-        global_init_result = InitResult.deserialize(init_result_batch)
+        global_init_result = InitResult.deserialize(
+            init_result_batch, init_result_metadata
+        )
         log.debug(
             "init_result_received",
             has_identifier=global_init_result.global_execution_identifier is not None,
@@ -992,6 +1016,23 @@ class Client(CatalogClientMixin):
             # _handle_log_message raises ClientError for exceptions
             # If it returns True (non-exception log), unexpected for bind
             raise ClientError("Unexpected log message during additional worker bind")
+
+        # Validate protocol state for bind_result
+        from vgi.ipc_utils import ProtocolState, get_protocol_state
+
+        actual_state = get_protocol_state(bind_custom_metadata)
+        if actual_state is None:
+            raise ClientError(
+                "Protocol state mismatch for additional worker bind_result: "
+                f"expected '{ProtocolState.BIND_RESULT}', but no protocol state found. "
+                f"Batch fields: {sorted(bind_result_batch.schema.names)}"
+            )
+        if actual_state != ProtocolState.BIND_RESULT:
+            raise ClientError(
+                f"Protocol state mismatch for additional worker bind_result: "
+                f"expected '{ProtocolState.BIND_RESULT}', got '{actual_state}'. "
+                f"Batch fields: {sorted(bind_result_batch.schema.names)}"
+            )
 
         # Create data writer for this worker (only for table-in-out functions)
         if input_schema is not None:

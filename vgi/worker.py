@@ -535,30 +535,34 @@ class Worker:
         """Shutdown the tracer provider to flush pending spans."""
         tracing.shutdown_tracing(self._tracer_provider, log_func=self.log.debug)
 
-    def _read_single_record_batch(self, context: str) -> pa.RecordBatch:
+    def _read_single_record_batch(
+        self, context: str
+    ) -> tuple[pa.RecordBatch, pa.KeyValueMetadata | None]:
         """Read a schema + record batch pair from stdin.
 
         Args:
             context: Description for debug logging (e.g., "invocation", "init_input").
 
         Returns:
-            The deserialized RecordBatch.
+            Tuple of (RecordBatch, custom_metadata). The custom_metadata may be None
+            if no custom metadata was attached to the batch.
 
         Raises:
             IPCError: If unexpected message types are received.
 
         """
         self.log.debug(f"{context}_reading")
-        batch, _ = read_single_record_batch(sys.stdin, context)
-        return batch
+        return read_single_record_batch(sys.stdin, context)
 
     def _read_invocation(self) -> Invocation:
         """Read and parse the call data from stdin."""
-        return Invocation.deserialize(self._read_single_record_batch("invocation"))
+        batch, metadata = self._read_single_record_batch("invocation")
+        return Invocation.deserialize(batch, metadata)
 
     def _read_init_input(self) -> pa.RecordBatch:
         """Read and parse the init data from stdin."""
-        return self._read_single_record_batch("init_input")
+        batch, _ = self._read_single_record_batch("init_input")
+        return batch
 
     def _create_bind_error_batch(
         self,
@@ -949,7 +953,7 @@ class Worker:
 
         # Read arguments from input batch (1 row with columns matching parameters)
         # For methods with no arguments, accept 0 rows (empty batch)
-        args_batch = self._read_single_record_batch("catalog_args")
+        args_batch, _ = self._read_single_record_batch("catalog_args")
         if args_batch.num_rows == 0:
             # No arguments - kwargs is empty
             kwargs: dict[str, Any] = {}

@@ -23,6 +23,8 @@ See Also:
 
 """
 
+from __future__ import annotations
+
 import os
 import uuid
 from abc import ABC, abstractmethod
@@ -178,7 +180,12 @@ class OutputSpec:
             [self.serialize_dict()],
             schema=bind_result_schema,
         )
-        return vgi.ipc_utils.serialize_record_batch(bind_result_batch)
+        return vgi.ipc_utils.serialize_record_batch(
+            bind_result_batch,
+            vgi.ipc_utils.protocol_state_metadata(
+                vgi.ipc_utils.ProtocolState.BIND_RESULT
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,7 +207,7 @@ class FunctionInitInput:
     tracestate: str | None = None
 
     @classmethod
-    def _schema_fields(cls) -> list[pa.Field]:
+    def _schema_fields(cls) -> list[pa.Field[Any]]:
         """Return Arrow schema fields for this class only (not parents).
 
         Override in subclasses to add additional fields. The serialize()
@@ -223,15 +230,15 @@ class FunctionInitInput:
         }
 
     @classmethod
-    def _collect_schema_fields(cls) -> list[pa.Field]:
+    def _collect_schema_fields(cls) -> list[pa.Field[Any]]:
         """Collect schema fields from this class and all InitInput parents."""
-        fields: list[pa.Field] = []
+        fields: list[pa.Field[Any]] = []
         for klass in reversed(cls.__mro__):
             if klass is object:
                 continue
             # Check if this class defines its own _schema_fields (not inherited)
             if "_schema_fields" in klass.__dict__:
-                fields.extend(klass._schema_fields())
+                fields.extend(klass._schema_fields())  # type: ignore[attr-defined]
         return fields
 
     def _collect_values(self) -> dict[str, Any]:
@@ -242,7 +249,7 @@ class FunctionInitInput:
                 continue
             # Check if this class defines its own _to_dict (not inherited)
             if "_to_dict" in klass.__dict__:
-                values.update(klass._to_dict(self))
+                values.update(klass._to_dict(self))  # type: ignore[attr-defined]
         return values
 
     def serialize(self) -> bytes:
@@ -254,7 +261,12 @@ class FunctionInitInput:
         schema = pa.schema(self._collect_schema_fields())
         data = self._collect_values()
         batch = pa.RecordBatch.from_pylist([data], schema=schema)
-        return vgi.ipc_utils.serialize_record_batch(batch)
+        return vgi.ipc_utils.serialize_record_batch(
+            batch,
+            vgi.ipc_utils.protocol_state_metadata(
+                vgi.ipc_utils.ProtocolState.INIT_INPUT
+            ),
+        )
 
     @classmethod
     def _from_values(cls, values: dict[str, Any]) -> Self:
@@ -265,16 +277,38 @@ class FunctionInitInput:
         )
 
     @classmethod
-    def deserialize(cls, batch: pa.RecordBatch) -> Self:
+    def deserialize(
+        cls,
+        batch: pa.RecordBatch,
+        custom_metadata: pa.KeyValueMetadata | None = None,
+    ) -> Self:
         """Deserialize from a RecordBatch.
 
         Args:
             batch: RecordBatch with one row containing the init data.
+            custom_metadata: Optional batch metadata for protocol state validation.
 
         Returns:
             New instance with fields populated from the batch.
 
         """
+        # Validate protocol state if metadata is provided
+        if custom_metadata is not None:
+            actual_state = vgi.ipc_utils.get_protocol_state(custom_metadata)
+            expected_state = vgi.ipc_utils.ProtocolState.INIT_INPUT
+            if actual_state is None:
+                raise ValueError(
+                    f"Protocol state mismatch for FunctionInitInput: "
+                    f"expected '{expected_state}', but no protocol state found. "
+                    f"Batch fields: {sorted(batch.schema.names)}"
+                )
+            if actual_state != expected_state:
+                raise ValueError(
+                    f"Protocol state mismatch for FunctionInitInput: "
+                    f"expected '{expected_state}', got '{actual_state}'. "
+                    f"Batch fields: {sorted(batch.schema.names)}"
+                )
+
         if batch.num_rows == 0:
             return cls()
         values = batch.to_pylist()[0]
@@ -291,7 +325,7 @@ class FunctionInitInput:
             New instance with fields populated from the data.
 
         """
-        batch = vgi.ipc_utils.deserialize_record_batch(data)
+        batch, _ = vgi.ipc_utils.deserialize_record_batch(data)
         return cls.deserialize(batch)
 
 
@@ -350,10 +384,10 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
     init_input: T | None = None
 
     # Cache for _get_init_input_type per class
-    _init_input_type_cache: ClassVar[dict[type, type["FunctionInitInput"]]] = {}
+    _init_input_type_cache: ClassVar[dict[type, type[FunctionInitInput]]] = {}
 
     @classmethod
-    def _get_init_input_type(cls) -> type["FunctionInitInput"]:
+    def _get_init_input_type(cls) -> type[FunctionInitInput]:
         """Get the InitInput type from the generic parameter.
 
         Walks the MRO to find Function[T] and extracts T.
@@ -463,7 +497,7 @@ class Function[T: FunctionInitInput](ABC, MetadataMixin):
     def __init__(
         self,
         *,
-        invocation: "Invocation",
+        invocation: Invocation,
         logger: structlog.stdlib.BoundLogger,
     ):
         """Initialize the function with invocation data and logger.

@@ -185,8 +185,8 @@ class TestInvocationSerialization:
             settings=settings,
         )
 
-        batch = deserialize_record_batch(original.serialize())
-        deserialized = Invocation.deserialize(batch)
+        batch, metadata = deserialize_record_batch(original.serialize())
+        deserialized = Invocation.deserialize(batch, metadata)
 
         assert deserialized.settings == settings
 

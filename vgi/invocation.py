@@ -119,21 +119,35 @@ class InitResult:
             ],
             schema=self.schema(),
         )
-        return vgi.ipc_utils.serialize_record_batch(batch)
+        return vgi.ipc_utils.serialize_record_batch(
+            batch,
+            vgi.ipc_utils.protocol_state_metadata(
+                vgi.ipc_utils.ProtocolState.INIT_RESULT
+            ),
+        )
 
     @classmethod
-    def deserialize(cls, data: pa.RecordBatch) -> InitResult:
+    def deserialize(
+        cls,
+        data: pa.RecordBatch,
+        custom_metadata: pa.KeyValueMetadata | None = None,
+    ) -> InitResult:
         """Deserialize InitResult from an Arrow RecordBatch.
 
         Args:
           data: RecordBatch containing serialized InitResult fields.
+          custom_metadata: Optional batch metadata for protocol state validation.
 
         Returns:
           Deserialized InitResult instance.
 
         """
         first_row = vgi.ipc_utils.validate_single_row_batch(
-            data, "InitResult", required_fields=[cls._IDENTIFIER_FIELD_NAME]
+            data,
+            "InitResult",
+            required_fields=[cls._IDENTIFIER_FIELD_NAME],
+            custom_metadata=custom_metadata,
+            expected_protocol_state=vgi.ipc_utils.ProtocolState.INIT_RESULT,
         )
         return InitResult(
             global_execution_identifier=first_row[cls._IDENTIFIER_FIELD_NAME],
@@ -288,14 +302,23 @@ class Invocation:
                 ]
             ),
         )
-        return vgi.ipc_utils.serialize_record_batch(batch)
+        return vgi.ipc_utils.serialize_record_batch(
+            batch,
+            vgi.ipc_utils.protocol_state_metadata(
+                vgi.ipc_utils.ProtocolState.INVOCATION
+            ),
+        )
 
     @staticmethod
-    def deserialize(data: pa.RecordBatch) -> Invocation:
+    def deserialize(
+        data: pa.RecordBatch,
+        custom_metadata: pa.KeyValueMetadata | None = None,
+    ) -> Invocation:
         """Deserialize Invocation from an Arrow RecordBatch.
 
         Args:
           data: RecordBatch containing serialized Invocation fields.
+          custom_metadata: Optional batch metadata for protocol state validation.
 
         Returns:
           Deserialized Invocation instance.
@@ -314,7 +337,11 @@ class Invocation:
             "correlation_id",
         ]
         first_row = vgi.ipc_utils.validate_single_row_batch(
-            data, "Invocation", required_fields=required_fields
+            data,
+            "Invocation",
+            required_fields=required_fields,
+            custom_metadata=custom_metadata,
+            expected_protocol_state=vgi.ipc_utils.ProtocolState.INVOCATION,
         )
 
         input_schema = None

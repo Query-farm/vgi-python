@@ -225,7 +225,7 @@ class TestSettingSpecSerialization:
         # Deserialize
         import vgi.ipc_utils
 
-        batch = vgi.ipc_utils.deserialize_record_batch(serialized)
+        batch, _ = vgi.ipc_utils.deserialize_record_batch(serialized)
         deserialized = SettingSpec.deserialize(batch)
 
         assert deserialized.name == "verbose"
@@ -242,8 +242,9 @@ class TestSettingSpecSerialization:
             default=1000,
         )
         serialized = spec.serialize()
-        batch = __import__("vgi.ipc_utils", fromlist=["deserialize_record_batch"])
-        batch = batch.deserialize_record_batch(serialized)
+        import vgi.ipc_utils
+
+        batch, _ = vgi.ipc_utils.deserialize_record_batch(serialized)
         deserialized = SettingSpec.deserialize(batch)
 
         assert deserialized.name == "batch_size"
@@ -262,7 +263,7 @@ class TestSettingSpecSerialization:
 
         import vgi.ipc_utils
 
-        batch = vgi.ipc_utils.deserialize_record_batch(serialized)
+        batch, _ = vgi.ipc_utils.deserialize_record_batch(serialized)
         deserialized = SettingSpec.deserialize(batch)
 
         assert deserialized.name == "api_key"
@@ -281,7 +282,7 @@ class TestSettingSpecSerialization:
 
         import vgi.ipc_utils
 
-        batch = vgi.ipc_utils.deserialize_record_batch(serialized)
+        batch, _ = vgi.ipc_utils.deserialize_record_batch(serialized)
         deserialized = SettingSpec.deserialize(batch)
 
         assert deserialized.name == "allowed_ids"

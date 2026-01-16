@@ -21,6 +21,8 @@ input batches via yield - they just produce output batches in a loop until done.
 For functions that transform input batches, use TableInOutGenerator.
 """
 
+from __future__ import annotations
+
 from collections.abc import Generator
 from dataclasses import dataclass
 from typing import Any, Self, final
@@ -170,7 +172,7 @@ class ProtocolOutput:
         )
 
     @classmethod
-    def from_process_result(cls, process_result: "OutputComplete") -> "ProtocolOutput":
+    def from_process_result(cls, process_result: OutputComplete) -> ProtocolOutput:
         """Create a ProtocolOutput from an Output and status.
 
         Args:
@@ -202,7 +204,7 @@ class TableFunctionInitInput(vgi.function.FunctionInitInput):
     projection_ids: list[int] | None = None
 
     @classmethod
-    def _schema_fields(cls) -> list[pa.Field]:
+    def _schema_fields(cls) -> list[pa.Field[Any]]:
         """Return Arrow schema fields for this class only."""
         return [
             pa.field("projection_ids", pa.list_(pa.int32()), nullable=True),

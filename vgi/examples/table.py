@@ -13,6 +13,7 @@ PartitionedSequenceFunction   - Demonstrates multi-worker parallel execution
 ProjectedDataFunction         - Demonstrates projection pushdown
 SequenceFunction              - Generates a sequence of integers 0..n-1
 SettingsAwareFunction         - Demonstrates settings-aware output schema
+TraceContextReporterFunction  - Reports worker PID and traceparent from init
 """
 
 import struct
@@ -42,6 +43,7 @@ __all__ = [
     "ProjectedDataFunction",
     "SequenceFunction",
     "SettingsAwareFunction",
+    "TraceContextReporterFunction",
 ]
 
 
@@ -647,6 +649,107 @@ class SettingsAwareFunction(TableFunctionGenerator):
             yield Output(pa.RecordBatch.from_pydict(data, schema=output_schema))
 
 
+class TraceContextReporterFunction(TableFunctionGenerator):
+    """Reports worker PID and traceparent from init data.
+
+    USE CASE
+    --------
+    Demonstrates and tests trace context propagation in multi-worker scenarios.
+    The primary worker injects its trace context into init data, and all workers
+    (primary and secondary) report the traceparent they received. This allows
+    verification that secondary workers receive the primary's trace context.
+
+    Workers sleep at the start to allow all workers to initialize and reach
+    the processing loop, then sleep after each item to ensure fair distribution.
+
+    SCHEMA
+    ------
+    Output: {"worker_pid": int32, "traceparent": string}
+
+    PARALLELIZATION
+    ---------------
+    Fully parallelizable using a shared work queue. Workers sleep before
+    processing to ensure work distribution across multiple workers.
+
+    Example:
+    -------
+    With count=10 and max_workers=3:
+        Returns 10 rows, each with a worker's PID and the traceparent.
+        All rows should have the same traceparent (from primary worker).
+        Rows will have different PIDs if multiple workers participated.
+
+    """
+
+    class Meta:
+        """Metadata for TraceContextReporterFunction."""
+
+        name = "trace_context_reporter"
+        description = "Reports worker PID and traceparent from init data"
+        categories = ["generator", "utility", "tracing"]
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM trace_context_reporter(10)",
+                description="Generate 10 rows reporting PID and traceparent",
+            ),
+        ]
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        """Return output schema with worker_pid and traceparent columns."""
+        fields: list[pa.Field[pa.DataType]] = [
+            pa.field("worker_pid", pa.int32()),
+            pa.field("traceparent", pa.string()),
+        ]
+        return pa.schema(fields)
+
+    @property
+    def cardinality(self) -> TableCardinality:
+        """Return cardinality estimate."""
+        return TableCardinality(estimate=self.count, max=self.count)
+
+    def initialize_global_state(self, init_input: pa.RecordBatch) -> InitResult:
+        """Populate the work queue with work items."""
+        self.init_input = TableFunctionInitInput.deserialize(init_input)
+        self.execution_identifier = self.storage.global_put(self.init_input.serialize())
+
+        # Create work items - one per row to generate
+        work_items: list[bytes] = []
+        for i in range(self.count):
+            work_items.append(struct.pack(">I", i))
+
+        self.enqueue_work(work_items)
+        return InitResult(self.execution_identifier)
+
+    def process(self) -> OutputGenerator:
+        """Generate rows reporting PID and traceparent.
+
+        Each work item produces a batch of 10,000 rows.
+        """
+        import os
+
+        worker_pid = os.getpid()
+        traceparent = self.init_input.traceparent if self.init_input else None
+        batch_size = 10000
+
+        while True:
+            work_data = self.dequeue_work()
+            if work_data is None:
+                break
+
+            # Each work item produces a batch of 100,000 rows
+            yield Output(
+                pa.RecordBatch.from_pydict(
+                    {
+                        "worker_pid": [worker_pid] * batch_size,
+                        "traceparent": [traceparent] * batch_size,
+                    },
+                    schema=self.output_schema,
+                )
+            )
+
+
 class ConstantColumnsFunction(TableFunctionGenerator):
     """Generates a table with constant values in each column based on varargs.
 
@@ -705,7 +808,12 @@ class ConstantColumnsFunction(TableFunctionGenerator):
     count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
     values: Annotated[
         tuple[Any, ...],
-        Arg(1, varargs=True, doc="Values to fill each column (at least one required)"),
+        Arg(
+            1,
+            varargs=True,
+            doc="Values to fill each column (at least one required)",
+            arrow_type=pa.null(),  # Type is dynamic based on actual values provided
+        ),
     ]
 
     # Store Arrow scalars for type information

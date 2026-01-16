@@ -116,7 +116,9 @@ class SettingSpec:
         # Deserialize default value if present
         default: Any = None
         if row["default_value"] is not None:
-            default_batch = vgi.ipc_utils.deserialize_record_batch(row["default_value"])
+            default_batch, _ = vgi.ipc_utils.deserialize_record_batch(
+                row["default_value"]
+            )
             default = default_batch.column("value")[0].as_py()
 
         return cls(

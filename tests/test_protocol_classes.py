@@ -26,8 +26,8 @@ T = TypeVar("T")
 
 def ipc_round_trip(obj: T, cls: type[T]) -> T:
     """Serialize an object and deserialize via IPC stream."""
-    batch = deserialize_record_batch(obj.serialize())  # type: ignore[attr-defined]
-    return cls.deserialize(batch)  # type: ignore[attr-defined, no-any-return]
+    batch, metadata = deserialize_record_batch(obj.serialize())  # type: ignore[attr-defined]
+    return cls.deserialize(batch, metadata)  # type: ignore[attr-defined, no-any-return]
 
 
 def encode_arguments_to_struct(args: Arguments) -> pa.StructScalar:
@@ -239,6 +239,8 @@ class TestInvocation:
 
     def test_deserialize_empty_batch_raises(self) -> None:
         """Deserializing empty batch should raise ValueError."""
+        from vgi.ipc_utils import ProtocolState, protocol_state_metadata
+
         empty_batch = pa.RecordBatch.from_pylist(
             [],
             schema=pa.schema(
@@ -251,12 +253,15 @@ class TestInvocation:
                 ]
             ),
         )
+        metadata = protocol_state_metadata(ProtocolState.INVOCATION)
 
         with pytest.raises(ValueError, match="empty RecordBatch"):
-            Invocation.deserialize(empty_batch)
+            Invocation.deserialize(empty_batch, metadata)
 
     def test_deserialize_multi_row_batch_raises(self) -> None:
         """Deserializing multi-row batch should raise ValueError."""
+        from vgi.ipc_utils import ProtocolState, protocol_state_metadata
+
         multi_row_batch = pa.RecordBatch.from_pylist(
             [
                 {
@@ -275,9 +280,10 @@ class TestInvocation:
                 },
             ]
         )
+        metadata = protocol_state_metadata(ProtocolState.INVOCATION)
 
         with pytest.raises(ValueError, match="single-row"):
-            Invocation.deserialize(multi_row_batch)
+            Invocation.deserialize(multi_row_batch, metadata)
 
     def test_with_global_execution_identifier(self) -> None:
         """Test that with_global_execution_identifier creates a new Invocation."""
@@ -333,18 +339,23 @@ class TestInitResult:
 
     def test_deserialize_empty_batch_raises(self) -> None:
         """Deserializing empty batch should raise ValueError."""
+        from vgi.ipc_utils import ProtocolState, protocol_state_metadata
+
         empty_batch = pa.RecordBatch.from_pylist(
             [],
             schema=pa.schema(
                 [pa.field("global_execution_identifier", pa.binary(), nullable=True)]
             ),
         )
+        metadata = protocol_state_metadata(ProtocolState.INIT_RESULT)
 
         with pytest.raises(ValueError, match="empty RecordBatch"):
-            InitResult.deserialize(empty_batch)
+            InitResult.deserialize(empty_batch, metadata)
 
     def test_deserialize_multi_row_batch_raises(self) -> None:
         """Deserializing multi-row batch should raise ValueError."""
+        from vgi.ipc_utils import ProtocolState, protocol_state_metadata
+
         multi_row_batch = pa.RecordBatch.from_pylist(
             [
                 {"global_execution_identifier": b"id1"},
@@ -354,9 +365,10 @@ class TestInitResult:
                 [pa.field("global_execution_identifier", pa.binary(), nullable=True)]
             ),
         )
+        metadata = protocol_state_metadata(ProtocolState.INIT_RESULT)
 
         with pytest.raises(ValueError, match="single-row"):
-            InitResult.deserialize(multi_row_batch)
+            InitResult.deserialize(multi_row_batch, metadata)
 
     def test_schema(self) -> None:
         """schema() should return correct Arrow schema."""

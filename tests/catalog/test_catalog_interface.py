@@ -43,7 +43,8 @@ def empty_schema_bytes() -> SerializedSchema:
 
 def function_info_round_trip(info: FunctionInfo) -> FunctionInfo:
     """Serialize and deserialize FunctionInfo."""
-    return FunctionInfo.deserialize(deserialize_record_batch(info.serialize()))
+    batch, _ = deserialize_record_batch(info.serialize())
+    return FunctionInfo.deserialize(batch)
 
 
 @pytest.fixture
@@ -571,7 +572,7 @@ class TestFunctionInfoNewFields:
         )
 
         # Serialize and inspect the Arrow data
-        batch = deserialize_record_batch(info.serialize())
+        batch, _ = deserialize_record_batch(info.serialize())
 
         # Verify enums were serialized as strings
         row = batch.to_pydict()

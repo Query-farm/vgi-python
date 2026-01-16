@@ -222,8 +222,8 @@ class TestInvocationTraceContext:
 
         # Serialize and deserialize
         serialized = invocation.serialize()
-        batch = deserialize_record_batch(serialized)
-        restored = Invocation.deserialize(batch)
+        batch, metadata = deserialize_record_batch(serialized)
+        restored = Invocation.deserialize(batch, metadata)
 
         assert restored.traceparent == invocation.traceparent
         assert restored.tracestate == invocation.tracestate
@@ -245,8 +245,8 @@ class TestInvocationTraceContext:
 
         # Serialize and deserialize
         serialized = invocation.serialize()
-        batch = deserialize_record_batch(serialized)
-        restored = Invocation.deserialize(batch)
+        batch, metadata = deserialize_record_batch(serialized)
+        restored = Invocation.deserialize(batch, metadata)
 
         assert restored.traceparent is None
         assert restored.tracestate is None
@@ -310,3 +310,122 @@ class TestTracingGracefulDegradation:
 
         # Should not raise, even with no-op span
         tracing.set_span_error(span, exception)
+
+
+class TestTraceContextPropagationToSecondaryWorkers:
+    """Tests for trace context propagation from primary to secondary workers."""
+
+    def test_secondary_workers_receive_primary_trace_context(self) -> None:
+        """Secondary workers should receive the primary worker's trace context.
+
+        This test verifies the full protocol flow:
+        1. Client runs under an active trace span
+        2. Primary worker extracts its trace context and injects it into init data
+        3. Secondary workers load init data and receive the traceparent
+        4. All workers report the same traceparent value
+        5. Multiple workers actually participated (different PIDs)
+        """
+        import pyarrow as pa
+        import pytest
+
+        try:
+            from opentelemetry import trace
+            from opentelemetry.sdk.trace import TracerProvider
+        except ImportError:
+            pytest.skip("opentelemetry-sdk not installed")
+
+        from vgi import tracing
+        from vgi.arguments import Arguments
+        from vgi.client import Client
+
+        # Set up tracer provider
+        provider = TracerProvider()
+        trace.set_tracer_provider(provider)
+
+        tracer = trace.get_tracer("test")
+        with tracer.start_as_current_span("test_span"):
+            traceparent, _ = tracing.extract_trace_context()
+            assert traceparent is not None, "Should have active trace context"
+
+            # Run trace_context_reporter with 2 workers and enough work items
+            # to ensure both workers participate. Each work item produces 10,000 rows.
+            num_work_items = 4
+            rows_per_work_item = 10_000
+            with Client("vgi-example-worker", max_workers=2) as client:
+                outputs = list(
+                    client.table_function(
+                        function_name="trace_context_reporter",
+                        arguments=Arguments(positional=(pa.scalar(num_work_items),)),
+                    )
+                )
+
+            table = pa.Table.from_batches(outputs)
+            assert table.num_rows == num_work_items * rows_per_work_item
+
+            # Verify multiple workers participated (different PIDs)
+            worker_pids = set(table.column("worker_pid").to_pylist())
+            assert len(worker_pids) >= 2, (
+                f"Expected at least 2 workers to participate, got PIDs: {worker_pids}"
+            )
+
+            # Get unique traceparents reported by all workers
+            traceparents = set(table.column("traceparent").to_pylist())
+
+            # All workers should report the same non-null traceparent
+            assert len(traceparents) == 1, (
+                f"All workers should see same traceparent, got: {traceparents}"
+            )
+            reported_traceparent = traceparents.pop()
+            assert reported_traceparent is not None, (
+                "Workers should have received traceparent from init data"
+            )
+
+    def test_multiple_workers_same_traceparent(self) -> None:
+        """Multiple workers processing work items should all see same traceparent."""
+        import pyarrow as pa
+        import pytest
+
+        try:
+            from opentelemetry import trace
+            from opentelemetry.sdk.trace import TracerProvider
+        except ImportError:
+            pytest.skip("opentelemetry-sdk not installed")
+
+        from vgi.arguments import Arguments
+        from vgi.client import Client
+
+        # Set up tracer provider
+        provider = TracerProvider()
+        trace.set_tracer_provider(provider)
+
+        tracer = trace.get_tracer("test")
+        with tracer.start_as_current_span("parent_span"):
+            # Run with 3 workers and enough work items to ensure all participate.
+            # Each work item produces 10,000 rows.
+            num_work_items = 6
+            rows_per_work_item = 10_000
+            with Client("vgi-example-worker", max_workers=3) as client:
+                outputs = list(
+                    client.table_function(
+                        function_name="trace_context_reporter",
+                        arguments=Arguments(positional=(pa.scalar(num_work_items),)),
+                    )
+                )
+
+            table = pa.Table.from_batches(outputs)
+            assert table.num_rows == num_work_items * rows_per_work_item
+
+            # Verify multiple workers participated (different PIDs)
+            worker_pids = set(table.column("worker_pid").to_pylist())
+            assert len(worker_pids) >= 2, (
+                f"Expected at least 2 workers to participate, got PIDs: {worker_pids}"
+            )
+
+            # All rows should have the same traceparent
+            traceparents = set(table.column("traceparent").to_pylist())
+            assert len(traceparents) == 1, (
+                f"All workers should report same traceparent, got {len(traceparents)}"
+            )
+
+            # The traceparent should not be None
+            assert None not in traceparents, "Traceparent should not be None"

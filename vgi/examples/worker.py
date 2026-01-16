@@ -36,6 +36,7 @@ from vgi.examples.table import (
     ProjectedDataFunction,
     SequenceFunction,
     SettingsAwareFunction,
+    TraceContextReporterFunction,
 )
 from vgi.examples.table_in_out import (
     BufferInputFunction,
@@ -92,6 +93,7 @@ class ExampleWorker(Worker):
         ProjectedDataFunction,
         SequenceFunction,
         SettingsAwareFunction,
+        TraceContextReporterFunction,
         # ScalarFunctionGenerator - transform to single-column output
         AddNumericColumnsFunction,
         DoubleColumnFunction,

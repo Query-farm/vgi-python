@@ -216,7 +216,8 @@ def schema_drop(
     "--type",
     "object_type",
     type=click.Choice(["table", "view", "scalar_function", "table_function"]),
-    help="Filter by object type",
+    required=True,
+    help="Object type to list (required)",
 )
 def schema_contents(
     name: str,
@@ -225,11 +226,13 @@ def schema_contents(
     attach_options: str,
     worker: str,
     transaction_id: str | None,
-    object_type: str | None,
+    object_type: str,
 ) -> None:
-    """List contents of a schema (tables, views, functions).
+    """List contents of a schema by object type.
 
     NAME is the schema name.
+
+    Requires --type to specify which object type to list.
 
     """
     client = Client(worker)
@@ -245,7 +248,7 @@ def schema_contents(
         )
 
     # Convert string type to SchemaObjectType enum
-    type_filter = SchemaObjectType(object_type) if object_type else None
+    type_filter = SchemaObjectType(object_type)
 
     for item in client.schema_contents(
         attach_id=resolved_attach_id,
