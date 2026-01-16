@@ -564,6 +564,48 @@ class Worker:
         batch, _ = self._read_single_record_batch("init_input")
         return batch
 
+    def _load_init_trace_context(
+        self, invocation: Invocation
+    ) -> tuple[str | None, str | None]:
+        """Load trace context from stored init data for secondary workers.
+
+        Secondary workers need to restore trace context from the GlobalInit
+        (primary worker's init phase) so their spans appear under it.
+
+        Args:
+            invocation: The invocation with global_execution_identifier set.
+
+        Returns:
+            Tuple of (traceparent, tracestate) from stored init data.
+
+        """
+        from vgi.function import FunctionInitInput
+        from vgi.ipc_utils import deserialize_record_batch
+
+        global_exec = invocation.global_execution_identifier
+        if global_exec is None or global_exec.global_execution_identifier is None:
+            return None, None
+
+        # Match the function class to access its storage
+        registry = self._build_registry()
+        if invocation.function_name not in registry:
+            return None, None
+        candidates = registry[invocation.function_name]
+        func_cls = self._match_function(invocation, candidates)
+
+        # Load init bytes from storage and deserialize to get trace context
+        exec_id = global_exec.global_execution_identifier
+        try:
+            raw_bytes = func_cls.storage.global_get(exec_id)
+            # Deserialize just enough to get traceparent/tracestate
+            # FunctionInitInput is the base class with these fields
+            batch, metadata = deserialize_record_batch(raw_bytes)
+            init_input = FunctionInitInput.deserialize(batch, metadata)
+            return init_input.traceparent, init_input.tracestate
+        except Exception:
+            # If loading fails, return None and let normal error handling occur
+            return None, None
+
     def _create_bind_error_batch(
         self,
         exception: Exception,
@@ -1278,8 +1320,6 @@ class Worker:
                 tracing.VGI_INVOCATION_ID, invocation_id.hex()
             )
 
-        trace_token: Any = None
-
         # Init phase with tracing
         with tracer.start_as_current_span(
             "worker.init", kind=tracing.get_span_kind_internal()
@@ -1321,15 +1361,10 @@ class Worker:
                             tracing.VGI_EXECUTION_ID, exec_id.hex()
                         )
 
-                    if (
-                        instance.init_input is not None
-                        and instance.init_input.traceparent is not None
-                    ):
-                        # The traceparent is passed down from the global init.
-                        trace_token = tracing.restore_trace_context(
-                            instance.init_input.traceparent,
-                            instance.init_input.tracestate,
-                        )
+                    # Note: Trace context for secondary workers is restored in
+                    # _run_loop BEFORE span creation, using init_input.traceparent
+                    # loaded via _load_init_trace_context(). This ensures all
+                    # secondary worker spans are children of the GlobalInit span.
 
             except (KeyboardInterrupt, SystemExit):
                 raise
@@ -1388,9 +1423,6 @@ class Worker:
         )
 
         fn_log.info("worker_call_complete", stats=stats)
-
-        if trace_token is not None:
-            tracing.detach_trace_context(trace_token)
 
         # Log IPC stream stats when requested
         if _IPC_STATS or _IPC_DEBUG:
@@ -1454,10 +1486,23 @@ class Worker:
                 fn_log.info("init_received", arguments=invocation.arguments)
                 fn_log.debug("input_schema_parsed", schema=str(invocation.input_schema))
 
-                # Restore trace context from invocation
-                trace_token = tracing.restore_trace_context(
-                    invocation.traceparent, invocation.tracestate
-                )
+                # Restore trace context - source depends on worker type
+                # Primary workers: use invocation.traceparent (from client)
+                # Secondary workers: use init_input.traceparent (from GlobalInit)
+                is_secondary = invocation.global_execution_identifier is not None
+                if is_secondary:
+                    # Secondary worker: load init to get trace context from GlobalInit
+                    init_traceparent, init_tracestate = self._load_init_trace_context(
+                        invocation
+                    )
+                    trace_token = tracing.restore_trace_context(
+                        init_traceparent, init_tracestate
+                    )
+                else:
+                    # Primary worker: use trace context from invocation
+                    trace_token = tracing.restore_trace_context(
+                        invocation.traceparent, invocation.tracestate
+                    )
 
                 try:
                     with tracer.start_as_current_span(
