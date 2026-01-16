@@ -464,6 +464,7 @@ class ProjectedDataFunction(TableFunctionGenerator):
         description = "Generates data with 4 columns, supporting projection pushdown"
         categories = ["generator", "utility"]
         max_workers = 1
+        projection_pushdown = True
         examples = [
             FunctionExample(
                 sql="SELECT * FROM projected_data(10)",

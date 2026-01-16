@@ -322,7 +322,7 @@ class ResolvedMetadata:
     required_settings: list[str] = field(default_factory=list)
 
     # Table function specific
-    projection_pushdown: bool = True
+    projection_pushdown: bool = False
     filter_pushdown: bool = False
     preserves_order: OrderPreservation = OrderPreservation.PRESERVES_ORDER
     max_workers: int | None = None
@@ -368,7 +368,7 @@ class ResolvedMetadata:
             stability=FunctionStability[d.get("stability", "CONSISTENT")],
             null_handling=NullHandling[d.get("null_handling", "DEFAULT")],
             required_settings=d.get("required_settings", []),
-            projection_pushdown=d.get("projection_pushdown", True),
+            projection_pushdown=d.get("projection_pushdown", False),
             filter_pushdown=d.get("filter_pushdown", False),
             preserves_order=OrderPreservation[
                 d.get("preserves_order", "PRESERVES_ORDER")
@@ -790,7 +790,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         stability=attrs.get("stability", FunctionStability.CONSISTENT),
         null_handling=attrs.get("null_handling", NullHandling.DEFAULT),
         required_settings=attrs.get("required_settings", []),
-        projection_pushdown=attrs.get("projection_pushdown", True),
+        projection_pushdown=attrs.get("projection_pushdown", False),
         filter_pushdown=attrs.get("filter_pushdown", False),
         preserves_order=attrs.get("preserves_order", OrderPreservation.PRESERVES_ORDER),
         max_workers=attrs.get("max_workers"),
