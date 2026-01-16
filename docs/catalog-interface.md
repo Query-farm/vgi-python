@@ -85,7 +85,9 @@ Catalog invocations use `InvocationType.CATALOG`:
 
 ### Arguments Batch
 
-Method arguments are sent as a single-row RecordBatch where column names match parameter names:
+Method arguments are sent as a single-row RecordBatch where column names match parameter names.
+
+**Protocol state:** `catalog_args`
 
 ```python
 # For catalog_attach(name='mydb', options={})
@@ -97,12 +99,16 @@ args_batch = pa.RecordBatch.from_pylist([{
 
 ### Result Serialization
 
+**Protocol state:** `catalog_result`
+
 | Return Type | Serialization |
 |-------------|---------------|
 | `None` | Empty batch (0 rows, 0 columns) |
 | Dataclass with `serialize()` | Single serialized batch |
 | `list[str]` | Single-column batch named "value" |
 | `Iterable[Dataclass]` | Stream of serialized batches + empty EOF batch |
+
+All result batches include `vgi.protocol_state: catalog_result` in their custom metadata.
 
 ---
 
@@ -504,6 +510,18 @@ class CatalogStorage(Protocol):
 ---
 
 ## Wire Format
+
+### Protocol State Metadata
+
+All catalog protocol messages include protocol state metadata in their custom metadata:
+
+| Message | Protocol State |
+|---------|---------------|
+| Invocation | `invocation` |
+| Arguments batch | `catalog_args` |
+| Result batch(es) | `catalog_result` |
+
+See [Protocol State Metadata](protocol.md#protocol-state-metadata) for details.
 
 ### Schema Serialization
 

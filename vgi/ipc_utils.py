@@ -5,18 +5,59 @@ VGI protocol, reducing code duplication between client and worker.
 
 KEY FUNCTIONS
 -------------
-serialize_record_batch(batch) : Serialize RecordBatch to bytes
-deserialize_record_batch(data) : Deserialize bytes to RecordBatch
+serialize_record_batch(batch, custom_metadata) : Serialize RecordBatch to bytes
+deserialize_record_batch(data) : Deserialize bytes to (RecordBatch, metadata) tuple
 read_single_record_batch(stream, context) : Read schema + batch from stream
-validate_single_row_batch(batch, class_name, required_fields)
-    : Validate batch has exactly one row and return as dict
+validate_single_row_batch(batch, class_name, required_fields, custom_metadata,
+    expected_protocol_state) : Validate batch and optionally verify protocol state
+protocol_state_metadata(state) : Create metadata dict with protocol state
+get_protocol_state(metadata) : Extract protocol state from metadata
+merge_metadata(*metadata_dicts) : Merge multiple metadata dictionaries
 
 KEY CLASSES
 -----------
+ProtocolState : Constants for protocol state names (INVOCATION, BIND_RESULT, etc.)
+
 RecordBatchState : Wrapper for RecordBatch implementing Serializable protocol.
     Use this in distributed functions for storing/collecting state across workers.
 
 IPCError : Exception raised on IPC communication errors
+
+PROTOCOL STATE METADATA
+-----------------------
+All VGI protocol messages must include protocol state metadata to identify
+the message type. This enables validation and helps debug synchronization issues.
+
+Protocol states:
+- INVOCATION: Client → Worker (function invocation request)
+- BIND_RESULT: Worker → Client (OutputSpec with schema)
+- INIT_INPUT: Client → Worker (initialization data)
+- INIT_RESULT: Worker → Client (initialization result)
+- DATA: Client → Worker (input data batches)
+- OUTPUT: Worker → Client (output data batches)
+- CATALOG_ARGS: Client → Worker (catalog operation arguments)
+- CATALOG_RESULT: Worker → Client (catalog operation results)
+
+Example - attaching protocol state when serializing:
+    from vgi.ipc_utils import (
+        ProtocolState, protocol_state_metadata, serialize_record_batch
+    )
+
+    metadata = protocol_state_metadata(ProtocolState.INVOCATION)
+    data = serialize_record_batch(batch, custom_metadata=metadata)
+
+Example - validating protocol state when deserializing:
+    from vgi.ipc_utils import (
+        ProtocolState, deserialize_record_batch, validate_single_row_batch
+    )
+
+    batch, metadata = deserialize_record_batch(data)
+    row = validate_single_row_batch(
+        batch, "Invocation",
+        required_fields=["function_name"],
+        custom_metadata=metadata,
+        expected_protocol_state=ProtocolState.INVOCATION
+    )
 
 DISTRIBUTED STATE EXAMPLE
 -------------------------

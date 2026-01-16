@@ -98,6 +98,77 @@ During data transfer, each direction uses a **single long-lived IPC stream** con
 - Stream 5 is absent for Table functions (no input)
 - Handshake streams use `serialize_record_batch()` → complete IPC stream bytes
 - Data streams use `ipc.new_stream()` / `ipc.open_stream()` for streaming multiple batches
+- All protocol batches include protocol state metadata (see [Protocol State Metadata](#protocol-state-metadata))
+
+---
+
+## Protocol State Metadata
+
+**IMPORTANT:** All record batches in the VGI protocol must include protocol state metadata. This allows receivers to validate they're processing the expected message type and helps debug protocol synchronization issues.
+
+### Protocol State Key
+
+Protocol state is stored in batch custom metadata with the key:
+```
+vgi.protocol_state
+```
+
+### Protocol States
+
+| State | Message Type | Direction |
+|-------|--------------|-----------|
+| `invocation` | Invocation | Client → Worker |
+| `bind_result` | OutputSpec | Worker → Client |
+| `init_input` | InitInput/GlobalStateInitInput | Client → Worker |
+| `init_result` | InitResult | Worker → Client |
+| `data` | Input data batches | Client → Worker |
+| `output` | Output data batches | Worker → Client |
+| `catalog_args` | Catalog operation arguments | Client → Worker |
+| `catalog_result` | Catalog operation results | Worker → Client |
+
+### Implementation
+
+**Attaching protocol state (sender):**
+```python test="skip"
+from vgi.ipc_utils import protocol_state_metadata, ProtocolState
+
+# For single-batch streams (handshake)
+metadata = protocol_state_metadata(ProtocolState.INVOCATION)
+bytes_data = serialize_record_batch(batch, custom_metadata=metadata)
+
+# For multi-batch streams (data phase)
+writer.write_batch(batch, custom_metadata=protocol_state_metadata(ProtocolState.OUTPUT))
+```
+
+**Validating protocol state (receiver):**
+```python test="skip"
+from vgi.ipc_utils import get_protocol_state, validate_single_row_batch, ProtocolState
+
+# For single-batch protocol messages
+batch, metadata = deserialize_record_batch(data)
+row = validate_single_row_batch(
+    batch, "Invocation",
+    required_fields=["function_name", "function_type"],
+    custom_metadata=metadata,
+    expected_protocol_state=ProtocolState.INVOCATION
+)
+
+# For data streams, check state manually
+batch, metadata = reader.read_next_batch_with_custom_metadata()
+state = get_protocol_state(metadata)
+if state != ProtocolState.OUTPUT:
+    raise ValueError(f"Expected 'output' state, got '{state}'")
+```
+
+### Error Handling
+
+When protocol state validation fails, a `ValueError` is raised with details:
+```
+Protocol state mismatch for Invocation: expected 'invocation', got 'bind_result'.
+Batch fields: ['function_name', 'function_type', ...]
+```
+
+This helps identify when streams are out of sync or messages are being read in the wrong order.
 
 ---
 
@@ -244,6 +315,8 @@ Output batches include a status string in Arrow IPC custom metadata:
 
 First message sent when invoking a function. Serialized as Arrow RecordBatch with single row.
 
+**Protocol state:** `invocation`
+
 | Field | Arrow Type | Description |
 |-------|------------|-------------|
 | `function_name` | `string` | Function name in worker registry |
@@ -269,6 +342,8 @@ arguments: {
 
 Response to Invocation, describing output schema and execution hints.
 
+**Protocol state:** `bind_result`
+
 | Field | Arrow Type | Description |
 |-------|------------|-------------|
 | `output_schema` | `binary` | Arrow IPC serialized output schema |
@@ -290,6 +365,8 @@ cardinality: {
 
 Sent after OutputSpec to initialize global state (table/table-in-out functions).
 
+**Protocol state:** `init_input`
+
 | Field | Arrow Type | Description |
 |-------|------------|-------------|
 | `projected_columns` | `list<string>` | Requested output columns (nullable) |
@@ -297,6 +374,8 @@ Sent after OutputSpec to initialize global state (table/table-in-out functions).
 ### InitResult (Worker → Client)
 
 Response to GlobalStateInitInput.
+
+**Protocol state:** `init_result`
 
 | Field | Arrow Type | Description |
 |-------|------------|-------------|
@@ -306,7 +385,12 @@ Response to GlobalStateInitInput.
 
 Input and output data are standard Arrow RecordBatches matching the declared schemas.
 
+**Input batch protocol state:** `data`
+
+**Output batch protocol state:** `output`
+
 **Output batch metadata includes:**
+- `vgi.protocol_state`: Always `output`
 - `vgi.status`: One of `NEED_MORE_INPUT`, `HAVE_MORE_OUTPUT`, `FINISHED`
 - `vgi.log_level`: Log level if log message present (optional)
 - `vgi.log_message`: Log message text (optional)
@@ -395,7 +479,8 @@ Each IPC stream consists of:
 **Custom Metadata:**
 - Attached per-batch via `write_batch(batch, custom_metadata=pa.KeyValueMetadata({...}))`
 - Read via `reader.read_next_batch_with_custom_metadata()` → `(batch, metadata)`
-- Keys are bytes in metadata dict (e.g., `b"vgi.status"`)
+- Keys are bytes in metadata dict (e.g., `b"vgi.status"`, `b"vgi.protocol_state"`)
+- **Protocol state is required** on all batches (see [Protocol State Metadata](#protocol-state-metadata))
 
 **Transport:** stdin/stdout of worker subprocess
 - Client writes to worker's stdin (Streams 1, 3, 5)
@@ -457,6 +542,7 @@ Workers support multiple invocations within a single process. After completing o
 - Row count validation for scalar functions
 - Automatic error wrapping with stack traces
 - Table functions always emit at least one batch (empty if no output) to signal completion
+- Protocol state metadata attached to all serialized messages
 
 **Client responsibilities:**
 - Spawn worker subprocess with correct command
@@ -464,6 +550,8 @@ Workers support multiple invocations within a single process. After completing o
 - Handle all status values correctly
 - Close stdin (not just IPC stream) to signal worker shutdown
 - Filter out empty batches from table functions before yielding to callers
+- Validate protocol state on received messages (bind_result, init_result, output)
+- Attach protocol state metadata when sending messages (invocation, init_input, data)
 
 **Worker responsibilities:**
 - Parse Invocation and lookup function
@@ -471,3 +559,5 @@ Workers support multiple invocations within a single process. After completing o
 - Send OutputSpec with correct schema
 - Handle GeneratorExit for cleanup
 - Loop to handle multiple invocations until EOF on stdin
+- Validate protocol state on received messages (invocation, init_input, data)
+- Attach protocol state metadata when sending messages (bind_result, init_result, output)
