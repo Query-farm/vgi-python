@@ -1004,13 +1004,37 @@ class Worker:
             )
 
             if method_name == "schema_contents":
-                type_param = SchemaObjectType(kwargs["type"])
+                # Validate the type parameter
+                type_value = kwargs.get("type")
+                valid_types = {e.value for e in SchemaObjectType}
+                if type_value not in valid_types:
+                    raise ValueError(
+                        f"Invalid schema_contents type: {type_value!r}. "
+                        f"Must be one of: {sorted(valid_types)}"
+                    )
+                type_param = SchemaObjectType(type_value)
+
+                # Determine expected class and schema based on type
+                expected_class: type[TableInfo | ViewInfo | FunctionInfo]
                 if type_param == SchemaObjectType.TABLE:
+                    expected_class = TableInfo
                     schema = TableInfo.ARROW_SCHEMA
                 elif type_param == SchemaObjectType.VIEW:
+                    expected_class = ViewInfo
                     schema = ViewInfo.ARROW_SCHEMA
                 else:  # SCALAR_FUNCTION or TABLE_FUNCTION
+                    expected_class = FunctionInfo
                     schema = FunctionInfo.ARROW_SCHEMA
+
+                # Validate all results match the expected type
+                for i, item in enumerate(result):
+                    if not isinstance(item, expected_class):
+                        raise TypeError(
+                            f"schema_contents returned wrong type at index {i}: "
+                            f"expected {expected_class.__name__}, "
+                            f"got {type(item).__name__}. "
+                            f"The catalog's schema_contents() must filter by type."
+                        )
             elif method_name == "schemas":
                 schema = SchemaInfo.ARROW_SCHEMA
             else:
@@ -1034,7 +1058,16 @@ class Worker:
             )
 
             if method_name == "schema_contents":
-                type_param = SchemaObjectType(kwargs["type"])
+                # Validate the type parameter
+                type_value = kwargs.get("type")
+                valid_types = {e.value for e in SchemaObjectType}
+                if type_value not in valid_types:
+                    raise ValueError(
+                        f"Invalid schema_contents type: {type_value!r}. "
+                        f"Must be one of: {sorted(valid_types)}"
+                    )
+                type_param = SchemaObjectType(type_value)
+
                 if type_param == SchemaObjectType.TABLE:
                     schema = TableInfo.ARROW_SCHEMA
                 elif type_param == SchemaObjectType.VIEW:
