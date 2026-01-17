@@ -694,6 +694,7 @@ class Worker:
         - Finalize signaled by empty batch with {type: FINALIZE} metadata
         - HAVE_MORE_OUTPUT only used for log messages (not multiple output batches)
         - No output returned after finalize (unlike table-in-out)
+        - Reads end-of-stream marker after finalize before returning
 
         Returns:
             WorkerStats with batch_count, total_input_rows, total_output_rows.
@@ -744,6 +745,12 @@ class Worker:
                     if protocol_input.is_finalize:
                         fn_log.debug("finalize_received")
                         generator.close()
+                        # Read end-of-stream marker before returning to invocation loop
+                        try:
+                            data_reader.read_next_batch_with_custom_metadata()
+                            fn_log.warning("unexpected_batch_after_finalize")
+                        except StopIteration:
+                            fn_log.debug("end_of_stream_received")
                         break
 
                     batch_count += 1

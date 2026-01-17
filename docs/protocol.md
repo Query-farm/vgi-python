@@ -214,8 +214,9 @@ Client                                  Worker
   │──── Input Batch N ────────────────▶  │
   │◀──── Output Batch N ──────────────   │
   │                                       │
-  │──── FINALIZE (empty batch) ───────▶  │ teardown(), return to waiting
+  │──── FINALIZE (empty batch) ───────▶  │ teardown()
   │      ({type: FINALIZE} metadata)      │
+  │──── (close Stream 5 / EOS) ────────▶  │ return to waiting
   └───────────────────────────────────────┘
 ```
 
@@ -223,6 +224,7 @@ Client                                  Worker
 - Output schema: exactly 1 column named "result"
 - Output row count = input row count (enforced by framework)
 - Finalize: empty batch with `{type: FINALIZE}` metadata, no response expected
+- Worker reads end-of-stream marker after finalize before returning to invocation loop
 - No `NEED_MORE_INPUT` status (implicit: always ready)
 
 ### Table Function Protocol
