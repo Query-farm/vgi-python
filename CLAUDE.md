@@ -198,7 +198,7 @@ class AddColumns(ScalarFunction):
 ### Key Constraints for Scalar Functions:
 - **1:1 row mapping**: Output must have exactly the same number of rows as input
 - **Single column output**: Output schema has exactly one column named "result"
-- **No finalize phase**: All processing happens in compute()
+- **Finalize message**: Client sends finalize to signal end, but no finish() method
 
 ## Creating a Polars Scalar Function
 

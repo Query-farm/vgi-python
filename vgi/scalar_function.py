@@ -6,7 +6,7 @@ input row into exactly one output value, producing a single column of results.
 Key characteristics:
 - **1:1 row mapping**: Output has exactly the same number of rows as input
 - **Single column output**: Output schema has exactly one column named "result"
-- **No finalization**: All processing happens in compute(), no finish() phase
+- **Finalize message**: Processing ends when client sends finalize (no finish() method)
 
 Common use cases:
 - Mathematical operations: multiply, add, abs

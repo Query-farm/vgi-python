@@ -2208,6 +2208,7 @@ class Client(CatalogClientMixin):
                 yield from self._scalar_function_parallel(
                     input_batch=input_batch,
                     input_iterator=input,
+                    input_schema=input_schema,
                     data_writer=data_writer,
                 )
                 return
@@ -2230,6 +2231,7 @@ class Client(CatalogClientMixin):
         *,
         input_batch: pa.RecordBatch,
         input_iterator: Iterator[pa.RecordBatch],
+        input_schema: pa.Schema,
         data_writer: ipc.RecordBatchStreamWriter,
     ) -> Generator[pa.RecordBatch, None, None]:
         """Process scalar function batches across one or more workers using threads.
@@ -2243,13 +2245,14 @@ class Client(CatalogClientMixin):
         4. Signals end-of-input to all workers via None sentinel
         5. Collects all output batches from shared output queue
         6. Waits for worker threads to complete
-        7. Closes all workers
+        7. Sends finalize message and closes all workers
 
         Args:
             input_batch: The first input batch, already consumed from the
                 iterator by scalar_function().
             input_iterator: Iterator for remaining input batches. May be empty
                 if all input was in the first batch.
+            input_schema: Schema of input batches, used to create finalize message.
             data_writer: IPC stream writer for the primary worker, already
                 initialized by _initialize_function_stream().
 
@@ -2344,9 +2347,18 @@ class Client(CatalogClientMixin):
         self._join_threads(threads)
         log.debug("all_scalar_worker_threads_complete")
 
-        # Close data writers and stdin to signal EOF to workers
+        # Create empty finalize batch
+        empty_batch = pa.RecordBatch.from_arrays(
+            [pa.array([], type=field.type) for field in input_schema],
+            schema=input_schema,
+        )
+
+        # Send finalize to all workers
         for worker in all_workers:
             if worker.data_writer is not None:
+                worker.data_writer.write_batch(
+                    empty_batch, custom_metadata={b"type": b"FINALIZE"}
+                )
                 worker.data_writer.close()
             # Also close stdin to send EOF (data_writer.close() only closes
             # the IPC stream, not the underlying pipe)

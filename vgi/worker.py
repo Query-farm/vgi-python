@@ -691,8 +691,9 @@ class Worker:
         """Process data batches through a scalar function.
 
         Similar to _process_batches but simplified:
-        - No FINALIZE phase (ends when input exhausted)
+        - Finalize signaled by empty batch with {type: FINALIZE} metadata
         - HAVE_MORE_OUTPUT only used for log messages (not multiple output batches)
+        - No output returned after finalize (unlike table-in-out)
 
         Returns:
             WorkerStats with batch_count, total_input_rows, total_output_rows.
@@ -732,8 +733,16 @@ class Worker:
                             data_reader.read_next_batch_with_custom_metadata()
                         )
                     except StopIteration:
-                        fn_log.debug("input_stream_ended")
-                        # Close the generator - no FINALIZE for scalar functions
+                        # Fallback for unexpected EOF (should not happen with proper
+                        # finalize protocol, but kept for robustness)
+                        fn_log.debug("input_stream_ended_unexpected")
+                        generator.close()
+                        break
+
+                    # Check for finalize signal before processing
+                    protocol_input = ScalarProtocolInput(batch=batch, metadata=metadata)
+                    if protocol_input.is_finalize:
+                        fn_log.debug("finalize_received")
                         generator.close()
                         break
 
@@ -745,7 +754,6 @@ class Worker:
                         input_rows=batch.num_rows,
                     )
 
-                    protocol_input = ScalarProtocolInput(batch=batch, metadata=metadata)
                     output = generator.send(protocol_input)
 
                     # Handle log messages (indicated by log_message being set)

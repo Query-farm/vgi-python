@@ -69,7 +69,7 @@ from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from enum import Enum
 from functools import wraps
-from typing import ClassVar, final
+from typing import final
 
 import pyarrow as pa
 import structlog
@@ -112,8 +112,7 @@ class _OutputStatus(Enum):
 class ProtocolInput(ProtocolInputBase):
     """Input sent to the generator via send().
 
-    Extends ProtocolInputBase with finalize phase signaling for table-in-out
-    functions.
+    Inherits finalize phase signaling from ProtocolInputBase.
 
     Attributes:
         batch: The input RecordBatch to process.
@@ -121,26 +120,7 @@ class ProtocolInput(ProtocolInputBase):
 
     """
 
-    # pa.KeyValueMetadata uses bytes so we define signals as bytes
-    _FINALIZE_SIGNAL: ClassVar[bytes] = b"FINALIZE"
-
-    @property
-    def is_finalize(self) -> bool:
-        """Check if this input signals the FINALIZE phase."""
-        return (
-            self.metadata is not None
-            and self.metadata.get(b"type") == self._FINALIZE_SIGNAL
-        )
-
-    @classmethod
-    def create_finalize(cls, batch: pa.RecordBatch) -> "ProtocolInput":
-        """Create a ProtocolInput that signals the FINALIZE phase.
-
-        This is only sent once so there is no benefit to caching it.
-        """
-        return cls(
-            batch=batch, metadata=pa.KeyValueMetadata({b"type": cls._FINALIZE_SIGNAL})
-        )
+    pass
 
 
 @dataclass(frozen=True, slots=True)
