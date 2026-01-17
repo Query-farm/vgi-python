@@ -284,3 +284,152 @@ class TestScalarFunction:
 
         assert output.batch is not None
         assert output.batch.num_rows == 0
+
+
+class TestNullHandlingFunction:
+    """Tests for NullHandlingFunction metadata and behavior."""
+
+    def test_metadata_null_handling_special(self) -> None:
+        """Test that null_handling is set to SPECIAL in metadata."""
+        from vgi.examples.scalar import NullHandlingFunction
+        from vgi.metadata import NullHandling, resolve_metadata
+
+        metadata = resolve_metadata(NullHandlingFunction)
+        assert metadata.null_handling == NullHandling.SPECIAL
+
+    def test_compute_replaces_nulls(self) -> None:
+        """Test that compute() replaces null values with -5000."""
+        from vgi.examples.scalar import NullHandlingFunction
+
+        input_schema = schema(x=pa.int64())
+
+        func = NullHandlingFunction(
+            invocation=Invocation(
+                function_name="null_handling",
+                input_schema=input_schema,
+                function_type=InvocationType.SCALAR,
+                correlation_id="test",
+                invocation_id=None,
+                arguments=Arguments(positional=(pa.scalar("x"),)),
+            ),
+            logger=structlog.get_logger(),
+        )
+
+        generator = func.run()
+        next(generator)  # Prime
+
+        input_batch = pa.RecordBatch.from_pydict(
+            {"x": [1, None, 3, None, 5]}, schema=input_schema
+        )
+        output = generator.send(ProtocolInput(batch=input_batch))
+
+        assert output.batch is not None
+        assert output.batch.num_rows == 5
+        assert output.batch.column("result").to_pylist() == [1, -5000, 3, -5000, 5]
+
+    def test_compute_with_no_nulls(self) -> None:
+        """Test that compute() passes through values when no nulls present."""
+        from vgi.examples.scalar import NullHandlingFunction
+
+        input_schema = schema(x=pa.int64())
+
+        func = NullHandlingFunction(
+            invocation=Invocation(
+                function_name="null_handling",
+                input_schema=input_schema,
+                function_type=InvocationType.SCALAR,
+                correlation_id="test",
+                invocation_id=None,
+                arguments=Arguments(positional=(pa.scalar("x"),)),
+            ),
+            logger=structlog.get_logger(),
+        )
+
+        generator = func.run()
+        next(generator)
+
+        input_batch = pa.RecordBatch.from_pydict(
+            {"x": [10, 20, 30]}, schema=input_schema
+        )
+        output = generator.send(ProtocolInput(batch=input_batch))
+
+        assert output.batch is not None
+        assert output.batch.column("result").to_pylist() == [10, 20, 30]
+
+
+class TestRandomIntFunction:
+    """Tests for RandomIntFunction metadata and behavior."""
+
+    def test_metadata_stability_volatile(self) -> None:
+        """Test that stability is set to VOLATILE in metadata."""
+        from vgi.examples.scalar import RandomIntFunction
+        from vgi.metadata import FunctionStability, resolve_metadata
+
+        metadata = resolve_metadata(RandomIntFunction)
+        assert metadata.stability == FunctionStability.VOLATILE
+
+    def test_compute_values_in_range(self) -> None:
+        """Test that computed values are within specified range."""
+        from vgi.examples.scalar import RandomIntFunction
+
+        input_schema = schema(x=pa.int64())
+
+        func = RandomIntFunction(
+            invocation=Invocation(
+                function_name="random_int",
+                input_schema=input_schema,
+                function_type=InvocationType.SCALAR,
+                correlation_id="test",
+                invocation_id=None,
+                arguments=Arguments(
+                    positional=(pa.scalar(10), pa.scalar(20))
+                ),  # min=10, max=20
+            ),
+            logger=structlog.get_logger(),
+        )
+
+        generator = func.run()
+        next(generator)  # Prime
+
+        input_batch = pa.RecordBatch.from_pydict(
+            {"x": [1, 2, 3, 4, 5]}, schema=input_schema
+        )
+        output = generator.send(ProtocolInput(batch=input_batch))
+
+        assert output.batch is not None
+        assert output.batch.num_rows == 5
+
+        # All values should be within range [10, 20]
+        values: list[int] = output.batch.column("result").to_pylist()  # type: ignore[assignment]
+        for v in values:
+            assert 10 <= v <= 20, f"Value {v} not in range [10, 20]"
+
+    def test_compute_preserves_row_count(self) -> None:
+        """Test that output has same row count as input."""
+        from vgi.examples.scalar import RandomIntFunction
+
+        input_schema = schema(x=pa.int64())
+
+        func = RandomIntFunction(
+            invocation=Invocation(
+                function_name="random_int",
+                input_schema=input_schema,
+                function_type=InvocationType.SCALAR,
+                correlation_id="test",
+                invocation_id=None,
+                arguments=Arguments(),  # Use defaults
+            ),
+            logger=structlog.get_logger(),
+        )
+
+        generator = func.run()
+        next(generator)
+
+        # Test with various row counts
+        for num_rows in [0, 1, 10, 100]:
+            input_batch = pa.RecordBatch.from_pydict(
+                {"x": list(range(num_rows))}, schema=input_schema
+            )
+            output = generator.send(ProtocolInput(batch=input_batch))
+            assert output.batch is not None
+            assert output.batch.num_rows == num_rows

@@ -471,6 +471,190 @@ class TestScalarFunctionParallel:
         assert outputs[0].to_pydict() == {"result": [2, 4, 6]}
 
 
+class TestNullHandlingFunction:
+    """Tests for NullHandlingFunction via Client."""
+
+    def test_null_handling_basic(self, example_worker: str) -> None:
+        """Test that null values are replaced with -5000."""
+        s = schema(x=pa.int64())
+        batch = pa.RecordBatch.from_pydict({"x": [1, None, 3, None, 5]}, schema=s)
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="null_handling",
+                    input=iter([batch]),
+                    arguments=Arguments(positional=(pa.scalar("x"),)),
+                )
+            )
+
+        assert len(outputs) == 1
+        assert outputs[0].to_pydict() == {"result": [1, -5000, 3, -5000, 5]}
+
+    def test_null_handling_no_nulls(self, example_worker: str) -> None:
+        """Test with no null values - should return values unchanged."""
+        s = schema(x=pa.int64())
+        batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=s)
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="null_handling",
+                    input=iter([batch]),
+                    arguments=Arguments(positional=(pa.scalar("x"),)),
+                )
+            )
+
+        assert len(outputs) == 1
+        assert outputs[0].to_pydict() == {"result": [1, 2, 3]}
+
+    def test_null_handling_all_nulls(self, example_worker: str) -> None:
+        """Test with all null values - should return all -5000."""
+        s = schema(x=pa.int64())
+        batch = pa.RecordBatch.from_pydict({"x": [None, None, None]}, schema=s)
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="null_handling",
+                    input=iter([batch]),
+                    arguments=Arguments(positional=(pa.scalar("x"),)),
+                )
+            )
+
+        assert len(outputs) == 1
+        assert outputs[0].to_pydict() == {"result": [-5000, -5000, -5000]}
+
+    def test_null_handling_empty_batch(self, example_worker: str) -> None:
+        """Test with empty batch."""
+        s = schema(x=pa.int64())
+        empty_batch = pa.RecordBatch.from_pydict({"x": []}, schema=s)
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="null_handling",
+                    input=iter([empty_batch]),
+                    arguments=Arguments(positional=(pa.scalar("x"),)),
+                )
+            )
+
+        assert len(outputs) == 1
+        assert outputs[0].num_rows == 0
+
+    def test_null_handling_multiple_batches(self, example_worker: str) -> None:
+        """Test with multiple batches containing nulls."""
+        s = schema(x=pa.int64())
+        batch1 = pa.RecordBatch.from_pydict({"x": [1, None]}, schema=s)
+        batch2 = pa.RecordBatch.from_pydict({"x": [None, 4]}, schema=s)
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="null_handling",
+                    input=iter([batch1, batch2]),
+                    arguments=Arguments(positional=(pa.scalar("x"),)),
+                )
+            )
+
+        assert len(outputs) == 2
+        assert_total_rows(outputs, 4)
+        # Collect all values
+        all_values: list[int] = []
+        for batch in outputs:
+            all_values.extend(cast(list[int], batch.column("result").to_pylist()))
+        assert sorted(all_values) == [-5000, -5000, 1, 4]
+
+
+class TestRandomIntFunction:
+    """Tests for RandomIntFunction via Client."""
+
+    def test_random_int_basic(self, example_worker: str) -> None:
+        """Test that random values are generated within range."""
+        s = schema(x=pa.int64())
+        batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3, 4, 5]}, schema=s)
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="random_int",
+                    input=iter([batch]),
+                    arguments=Arguments(
+                        positional=(pa.scalar(10), pa.scalar(20))
+                    ),  # min=10, max=20
+                )
+            )
+
+        assert len(outputs) == 1
+        assert outputs[0].num_rows == 5
+
+        # All values should be within range [10, 20]
+        values = cast(list[int], outputs[0].column("result").to_pylist())
+        for v in values:
+            assert 10 <= v <= 20, f"Value {v} not in range [10, 20]"
+
+    def test_random_int_default_args(self, example_worker: str) -> None:
+        """Test with default arguments (0-100)."""
+        s = schema(x=pa.int64())
+        batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=s)
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="random_int",
+                    input=iter([batch]),
+                    arguments=Arguments(),  # Use defaults: min=0, max=100
+                )
+            )
+
+        assert len(outputs) == 1
+        values = cast(list[int], outputs[0].column("result").to_pylist())
+        for v in values:
+            assert 0 <= v <= 100, f"Value {v} not in default range [0, 100]"
+
+    def test_random_int_empty_batch(self, example_worker: str) -> None:
+        """Test with empty batch."""
+        s = schema(x=pa.int64())
+        empty_batch = pa.RecordBatch.from_pydict({"x": []}, schema=s)
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="random_int",
+                    input=iter([empty_batch]),
+                    arguments=Arguments(positional=(pa.scalar(1), pa.scalar(10))),
+                )
+            )
+
+        assert len(outputs) == 1
+        assert outputs[0].num_rows == 0
+
+    def test_random_int_multiple_batches(self, example_worker: str) -> None:
+        """Test with multiple batches."""
+        s = schema(x=pa.int64())
+        batch1 = pa.RecordBatch.from_pydict({"x": [1, 2]}, schema=s)
+        batch2 = pa.RecordBatch.from_pydict({"x": [3, 4, 5]}, schema=s)
+
+        with Client(example_worker) as client:
+            outputs = list(
+                client.scalar_function(
+                    function_name="random_int",
+                    input=iter([batch1, batch2]),
+                    arguments=Arguments(positional=(pa.scalar(1), pa.scalar(5))),
+                )
+            )
+
+        assert len(outputs) == 2
+        assert_total_rows(outputs, 5)
+
+        # All values should be in range [1, 5]
+        all_values: list[int] = []
+        for batch in outputs:
+            all_values.extend(cast(list[int], batch.column("result").to_pylist()))
+        for v in all_values:
+            assert 1 <= v <= 5
+
+
 class TestScalarMultiWorkerEdgeCases:
     """Tests for edge cases with multiple workers for scalar functions.
 

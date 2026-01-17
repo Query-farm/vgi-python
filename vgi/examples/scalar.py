@@ -19,12 +19,14 @@ import pyarrow.compute as pc
 
 from vgi.arguments import AnyArrow, AnyArrowValue, Arg
 from vgi.exceptions import SchemaValidationError
-from vgi.metadata import FunctionExample
+from vgi.metadata import FunctionExample, FunctionStability, NullHandling
 from vgi.scalar_function import ScalarFunction
 
 __all__ = [
     "AddNumericColumnsFunction",
     "DoubleColumnFunction",
+    "NullHandlingFunction",
+    "RandomIntFunction",
     "SumColumnsFunction",
     "UpperCaseFunction",
 ]
@@ -281,3 +283,88 @@ class SumColumnsFunction(ScalarFunction):
         for col_name in columns[1:]:
             result = pc.add(result, batch.column(col_name))
         return result
+
+
+class NullHandlingFunction(ScalarFunction):
+    """Demonstrates special null handling in a scalar function.
+
+    This function returns the input value if it's not null, or -5000 if it is null.
+    It demonstrates how to use NullHandling.SPECIAL to receive null values
+    instead of having them automatically converted to null output.
+
+    Example:
+        Input:  x=[1, None, 3]
+        Args:   column="x"
+        Output: result=[1, -5000, 3]
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "null_handling"
+        description = "Returns value or -5000 if null"
+        output_type = pa.int64()
+        null_handling = NullHandling.SPECIAL
+        examples = [
+            FunctionExample(
+                sql="SELECT null_handling(value) FROM data",
+                description="Replace null values with -5000",
+            ),
+        ]
+
+    column: Annotated[str, Arg(0, doc="Column name to process")]
+
+    def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+        """Return value if not null, otherwise -5000."""
+        col = batch.column(self.column)
+        # Use if_else: if value is null, return -5000, otherwise return the value
+        result: pa.Array[Any] = pc.if_else(
+            pc.is_null(col), pa.scalar(-5000, type=pa.int64()), col
+        )
+        return result
+
+
+class RandomIntFunction(ScalarFunction):
+    """Generates random integers for each row (demonstrates VOLATILE stability).
+
+    This function demonstrates FunctionStability.VOLATILE - calling it twice
+    with the same input will produce different results. The database optimizer
+    cannot cache or reuse results from volatile functions.
+
+    Other stability options:
+    - CONSISTENT: Same input always produces same output (deterministic)
+    - CONSISTENT_WITHIN_QUERY: Same within a query, may vary across queries
+
+    Example:
+        Input:  x=[1, 2, 3]  (any column, used only for row count)
+        Args:   min_val=1, max_val=100
+        Output: result=[42, 87, 13]  (random values, different each time)
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "random_int"
+        description = "Generate random integers (demonstrates VOLATILE stability)"
+        output_type = pa.int64()
+        stability = FunctionStability.VOLATILE
+        examples = [
+            FunctionExample(
+                sql="SELECT random_int(1, 100) FROM data",
+                description="Generate random integers between 1 and 100",
+            ),
+        ]
+
+    min_val: Annotated[int, Arg(0, doc="Minimum value (inclusive)", default=0)]
+    max_val: Annotated[int, Arg(1, doc="Maximum value (inclusive)", default=100)]
+
+    def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+        """Generate random integers for each row."""
+        import random
+
+        num_rows = batch.num_rows
+        # Generate random integers in the range [min_val, max_val]
+        values = [random.randint(self.min_val, self.max_val) for _ in range(num_rows)]
+        return pa.array(values, type=pa.int64())
