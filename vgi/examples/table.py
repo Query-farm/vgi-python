@@ -819,7 +819,7 @@ class ConstantColumnsFunction(TableFunctionGenerator):
     # Store Arrow scalars for type information
     _value_scalars: list[Any]
 
-    BATCH_SIZE: int = 1000
+    BATCH_SIZE: int = 2048
 
     def bind(self) -> None:
         """Extract Arrow scalars from positional arguments for type info."""
@@ -847,15 +847,13 @@ class ConstantColumnsFunction(TableFunctionGenerator):
         output_schema = self.output_schema
         remaining = self.count
 
-        while remaining > 0:
-            batch_size = min(remaining, self.BATCH_SIZE)
+        # Create full-size batch once and reuse (slice for final partial batch)
+        arrays = [pa.repeat(scalar, self.BATCH_SIZE) for scalar in self._value_scalars]
+        full_batch = pa.RecordBatch.from_arrays(arrays, schema=output_schema)
 
-            # Create arrays filled with constant values
-            arrays = [
-                pa.array([scalar.as_py()] * batch_size, type=scalar.type)
-                for scalar in self._value_scalars
-            ]
+        while remaining >= self.BATCH_SIZE:
+            yield Output(full_batch)
+            remaining -= self.BATCH_SIZE
 
-            yield Output(pa.RecordBatch.from_arrays(arrays, schema=output_schema))
-
-            remaining -= batch_size
+        if remaining > 0:
+            yield Output(full_batch.slice(0, remaining))
