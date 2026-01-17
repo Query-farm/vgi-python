@@ -570,18 +570,22 @@ class TestRandomIntFunction:
     """Tests for RandomIntFunction via Client."""
 
     def test_random_int_basic(self, example_worker: str) -> None:
-        """Test that random values are generated within range."""
-        s = schema(x=pa.int64())
-        batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3, 4, 5]}, schema=s)
+        """Test that random values are generated within range from columns."""
+        # min/max values come from columns, not arguments
+        s = schema(min_val=pa.int64(), max_val=pa.int64())
+        batch = pa.RecordBatch.from_pydict(
+            {"min_val": [10, 10, 10, 10, 10], "max_val": [20, 20, 20, 20, 20]}, schema=s
+        )
 
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="random_int",
                     input=iter([batch]),
+                    # Args are column names, not values
                     arguments=Arguments(
-                        positional=(pa.scalar(10), pa.scalar(20))
-                    ),  # min=10, max=20
+                        positional=(pa.scalar("min_val"), pa.scalar("max_val"))
+                    ),
                 )
             )
 
@@ -593,36 +597,46 @@ class TestRandomIntFunction:
         for v in values:
             assert 10 <= v <= 20, f"Value {v} not in range [10, 20]"
 
-    def test_random_int_default_args(self, example_worker: str) -> None:
-        """Test with default arguments (0-100)."""
-        s = schema(x=pa.int64())
-        batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=s)
+    def test_random_int_per_row_range(self, example_worker: str) -> None:
+        """Test with different min/max per row."""
+        s = schema(min_val=pa.int64(), max_val=pa.int64())
+        batch = pa.RecordBatch.from_pydict(
+            {"min_val": [0, 100, 1000], "max_val": [10, 200, 2000]}, schema=s
+        )
 
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="random_int",
                     input=iter([batch]),
-                    arguments=Arguments(),  # Use defaults: min=0, max=100
+                    arguments=Arguments(
+                        positional=(pa.scalar("min_val"), pa.scalar("max_val"))
+                    ),
                 )
             )
 
         assert len(outputs) == 1
         values = cast(list[int], outputs[0].column("result").to_pylist())
-        for v in values:
-            assert 0 <= v <= 100, f"Value {v} not in default range [0, 100]"
+        # Check each value is within its row's range
+        assert 0 <= values[0] <= 10
+        assert 100 <= values[1] <= 200
+        assert 1000 <= values[2] <= 2000
 
     def test_random_int_empty_batch(self, example_worker: str) -> None:
         """Test with empty batch."""
-        s = schema(x=pa.int64())
-        empty_batch = pa.RecordBatch.from_pydict({"x": []}, schema=s)
+        s = schema(min_val=pa.int64(), max_val=pa.int64())
+        empty_batch = pa.RecordBatch.from_pydict(
+            {"min_val": [], "max_val": []}, schema=s
+        )
 
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="random_int",
                     input=iter([empty_batch]),
-                    arguments=Arguments(positional=(pa.scalar(1), pa.scalar(10))),
+                    arguments=Arguments(
+                        positional=(pa.scalar("min_val"), pa.scalar("max_val"))
+                    ),
                 )
             )
 
@@ -631,16 +645,22 @@ class TestRandomIntFunction:
 
     def test_random_int_multiple_batches(self, example_worker: str) -> None:
         """Test with multiple batches."""
-        s = schema(x=pa.int64())
-        batch1 = pa.RecordBatch.from_pydict({"x": [1, 2]}, schema=s)
-        batch2 = pa.RecordBatch.from_pydict({"x": [3, 4, 5]}, schema=s)
+        s = schema(min_val=pa.int64(), max_val=pa.int64())
+        batch1 = pa.RecordBatch.from_pydict(
+            {"min_val": [1, 1], "max_val": [5, 5]}, schema=s
+        )
+        batch2 = pa.RecordBatch.from_pydict(
+            {"min_val": [1, 1, 1], "max_val": [5, 5, 5]}, schema=s
+        )
 
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="random_int",
                     input=iter([batch1, batch2]),
-                    arguments=Arguments(positional=(pa.scalar(1), pa.scalar(5))),
+                    arguments=Arguments(
+                        positional=(pa.scalar("min_val"), pa.scalar("max_val"))
+                    ),
                 )
             )
 

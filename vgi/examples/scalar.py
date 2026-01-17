@@ -153,12 +153,12 @@ class AddNumericColumnsFunction(ScalarFunction):
             ),
         ]
 
-    # type_bound validates column types at bind time (automatic via Function.__init__)
+    # type_bound validates value types at bind time (automatic via Function.__init__)
     col1: Annotated[
-        AnyArrowValue, Arg(0, doc="First column name", type_bound=_is_addable_type)
+        AnyArrowValue, Arg(0, doc="First numeric value", type_bound=_is_addable_type)
     ]
     col2: Annotated[
-        AnyArrowValue, Arg(1, doc="Second column name", type_bound=_is_addable_type)
+        AnyArrowValue, Arg(1, doc="Second numeric value", type_bound=_is_addable_type)
     ]
 
     _output_type: pa.DataType
@@ -214,12 +214,12 @@ class UpperCaseFunction(ScalarFunction):
             ),
         ]
 
-    column: Annotated[str, Arg(0, doc="Value")]
+    column: Annotated[str, Arg(0, doc="String value to uppercase")]
 
     # Note: No need to override output_type - default uses Meta.output_type
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
-        """Convert the column values to uppercase."""
+        """Convert the string values to uppercase."""
         return pc.utf8_upper(batch.column(self.column))  # type: ignore[no-matching-overload]
 
 
@@ -249,7 +249,7 @@ class SumColumnsFunction(ScalarFunction):
             ),
         ]
 
-    # Varargs with type_bound validates all columns are numeric
+    # Varargs with type_bound validates all values are numeric
     # Note: varargs returns tuple[Any, ...], not AnyArrowValue
     columns: Annotated[
         tuple[Any, ...],
@@ -257,7 +257,7 @@ class SumColumnsFunction(ScalarFunction):
             0,
             varargs=True,
             type_bound=_is_addable_type,
-            doc="Columns to sum (must be numeric)",
+            doc="Numeric values to sum",
         ),
     ]
 
@@ -313,13 +313,13 @@ class NullHandlingFunction(ScalarFunction):
             ),
         ]
 
-    column: Annotated[str, Arg(0, doc="Column name to process")]
+    column: Annotated[int, Arg(0, doc="Integer value to process")]
 
-    def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+    def compute(self, batch: pa.RecordBatch) -> pa.Array[pa.Int64Scalar]:
         """Return value if not null, otherwise -5000."""
         col = batch.column(self.column)
         # Use if_else: if value is null, return -5000, otherwise return the value
-        result: pa.Array[Any] = pc.if_else(
+        result: pa.Array[pa.Int64Scalar] = pc.if_else(
             pc.is_null(col), pa.scalar(-5000, type=pa.int64()), col
         )
         return result
@@ -337,9 +337,9 @@ class RandomIntFunction(ScalarFunction):
     - CONSISTENT_WITHIN_QUERY: Same within a query, may vary across queries
 
     Example:
-        Input:  x=[1, 2, 3]  (any column, used only for row count)
-        Args:   min_val=1, max_val=100
-        Output: result=[42, 87, 13]  (random values, different each time)
+        SQL:    SELECT random_int(min_col, max_col) FROM data
+        Input:  min_col=[1, 10, 100], max_col=[10, 100, 1000]
+        Output: result=[7, 55, 823]  (random values per row, different each time)
 
     """
 
@@ -352,19 +352,25 @@ class RandomIntFunction(ScalarFunction):
         stability = FunctionStability.VOLATILE
         examples = [
             FunctionExample(
-                sql="SELECT random_int(1, 100) FROM data",
-                description="Generate random integers between 1 and 100",
+                sql="SELECT random_int(min_col, max_col) FROM data",
+                description="Generate random integers between min and max values",
             ),
         ]
 
-    min_val: Annotated[int, Arg(0, doc="Minimum value (inclusive)", default=0)]
-    max_val: Annotated[int, Arg(1, doc="Maximum value (inclusive)", default=100)]
+    min_val: Annotated[AnyArrowValue, Arg(0, doc="Minimum value (inclusive)")]
+    max_val: Annotated[AnyArrowValue, Arg(1, doc="Maximum value (inclusive)")]
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
         """Generate random integers for each row."""
         import random
 
-        num_rows = batch.num_rows
-        # Generate random integers in the range [min_val, max_val]
-        values = [random.randint(self.min_val, self.max_val) for _ in range(num_rows)]
+        # Get values from the batch columns
+        min_values: list[int] = batch.column(self.min_val.value).to_pylist()  # type: ignore[assignment]
+        max_values: list[int] = batch.column(self.max_val.value).to_pylist()  # type: ignore[assignment]
+
+        # Generate random integers using per-row min/max
+        values = [
+            random.randint(min_v, max_v)
+            for min_v, max_v in zip(min_values, max_values, strict=True)
+        ]
         return pa.array(values, type=pa.int64())

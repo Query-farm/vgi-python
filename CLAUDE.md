@@ -188,8 +188,8 @@ class AddColumns(ScalarFunction):
     class Meta:
         output_type = pa.int64()
 
-    left: Annotated[AnyArrowValue, Arg(0, type_bound=pa.types.is_integer, doc="First column")]
-    right: Annotated[AnyArrowValue, Arg(1, type_bound=pa.types.is_integer, doc="Second column")]
+    left: Annotated[AnyArrowValue, Arg(0, type_bound=pa.types.is_integer, doc="First numeric value")]
+    right: Annotated[AnyArrowValue, Arg(1, type_bound=pa.types.is_integer, doc="Second numeric value")]
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array:
         return pc.add(batch.column(self.left.value), batch.column(self.right.value))
@@ -216,7 +216,7 @@ class UpperCase(PolarsScalarFunction):
     class Meta:
         output_type = pl.Utf8  # Polars type, not Arrow
 
-    column: Annotated[str, Arg(0, doc="Column to uppercase")]
+    column: Annotated[str, Arg(0, doc="String value to uppercase")]
 
     def compute_polars(self, df: pl.DataFrame) -> pl.Series:
         return df[self.column].str.to_uppercase()
@@ -237,7 +237,7 @@ class PreserveType(PolarsScalarFunction):
     class Meta:
         output_type = AnyPolars
 
-    column: Annotated[str, Arg(0, doc="Column to double")]
+    column: Annotated[str, Arg(0, doc="Numeric value to double")]
 
     @property
     def output_polars_type(self) -> pl.DataType:

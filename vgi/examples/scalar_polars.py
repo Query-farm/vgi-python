@@ -14,7 +14,7 @@ PolarsScalarFunction handles the Arrow <-> Polars conversion automatically:
         class Meta:
             output_type = pl.Utf8  # Polars type, not Arrow
 
-        column: Annotated[str, Arg(0, doc="Column name")]
+        column: Annotated[str, Arg(0, doc="String value to process")]
 
         def compute_polars(self, df: pl.DataFrame) -> pl.Series:
             return df[self.column].str.to_uppercase()
@@ -69,10 +69,10 @@ class PolarsUpperCaseFunction(PolarsScalarFunction):
             ),
         ]
 
-    column: Annotated[str, Arg(0, doc="Column name to uppercase")]
+    column: Annotated[str, Arg(0, doc="String value to uppercase")]
 
     def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-        """Convert the column values to uppercase using Polars."""
+        """Convert the string values to uppercase using Polars."""
         return df[self.column].str.to_uppercase()
 
 
@@ -102,7 +102,7 @@ class PolarsStringLengthFunction(PolarsScalarFunction):
             ),
         ]
 
-    column: Annotated[str, Arg(0, doc="Column name to compute length of")]
+    column: Annotated[str, Arg(0, doc="String value to compute length of")]
 
     def compute_polars(self, df: pl.DataFrame) -> pl.Series:
         """Compute string lengths using Polars."""
@@ -135,9 +135,9 @@ class PolarsNormalizeFunction(PolarsScalarFunction):
             ),
         ]
 
-    column: Annotated[str, Arg(0, doc="Column name to normalize")]
+    column: Annotated[str, Arg(0, doc="Numeric value to normalize")]
 
     def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-        """Normalize the column using z-score (value - mean) / std."""
+        """Normalize the values using z-score (value - mean) / std."""
         col = df[self.column]
         return (col - col.mean()) / col.std()

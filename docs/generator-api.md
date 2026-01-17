@@ -20,7 +20,7 @@ from vgi.log import Level, Message
 class MyScalarFunction(ScalarFunctionGenerator):
     """Transform each row to a single output value."""
 
-    col_name: Annotated[str, Arg(0, doc="Name of the column to transform")]
+    col_name: Annotated[str, Arg(0, doc="String value to transform")]
 
     @property
     def output_schema(self) -> pa.Schema:

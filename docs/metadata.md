@@ -19,7 +19,7 @@ class SumColumnsFunction(TableInOutFunction):
         categories = ["aggregation", "numeric"]
         max_workers = 1  # Single-threaded (used by max_processes property)
 
-    column_name: Annotated[str | None, Arg("column", default=None, doc="Column to sum")]
+    column_name: Annotated[str | None, Arg("column", default=None, doc="Value to sum")]
 
     def transform(self, batch):
         ...
@@ -40,7 +40,7 @@ class DoubleValues(ScalarFunction):
         output_type = AnyArrow  # Dynamic type - depends on input
         categories = ["numeric", "transform"]
 
-    col_name: Annotated[str, Arg(0, doc="Name of the column to double")]
+    col_name: Annotated[str, Arg(0, doc="Numeric value to double")]
 
     @property
     def output_type(self) -> pa.DataType:

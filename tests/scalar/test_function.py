@@ -369,10 +369,11 @@ class TestRandomIntFunction:
         assert metadata.stability == FunctionStability.VOLATILE
 
     def test_compute_values_in_range(self) -> None:
-        """Test that computed values are within specified range."""
+        """Test that computed values are within specified range from columns."""
         from vgi.examples.scalar import RandomIntFunction
 
-        input_schema = schema(x=pa.int64())
+        # min/max values come from columns
+        input_schema = schema(min_val=pa.int64(), max_val=pa.int64())
 
         func = RandomIntFunction(
             invocation=Invocation(
@@ -381,9 +382,10 @@ class TestRandomIntFunction:
                 function_type=InvocationType.SCALAR,
                 correlation_id="test",
                 invocation_id=None,
+                # Args are column names, not values
                 arguments=Arguments(
-                    positional=(pa.scalar(10), pa.scalar(20))
-                ),  # min=10, max=20
+                    positional=(pa.scalar("min_val"), pa.scalar("max_val"))
+                ),
             ),
             logger=structlog.get_logger(),
         )
@@ -392,7 +394,8 @@ class TestRandomIntFunction:
         next(generator)  # Prime
 
         input_batch = pa.RecordBatch.from_pydict(
-            {"x": [1, 2, 3, 4, 5]}, schema=input_schema
+            {"min_val": [10, 10, 10, 10, 10], "max_val": [20, 20, 20, 20, 20]},
+            schema=input_schema,
         )
         output = generator.send(ProtocolInput(batch=input_batch))
 
@@ -408,7 +411,7 @@ class TestRandomIntFunction:
         """Test that output has same row count as input."""
         from vgi.examples.scalar import RandomIntFunction
 
-        input_schema = schema(x=pa.int64())
+        input_schema = schema(min_val=pa.int64(), max_val=pa.int64())
 
         func = RandomIntFunction(
             invocation=Invocation(
@@ -417,7 +420,9 @@ class TestRandomIntFunction:
                 function_type=InvocationType.SCALAR,
                 correlation_id="test",
                 invocation_id=None,
-                arguments=Arguments(),  # Use defaults
+                arguments=Arguments(
+                    positional=(pa.scalar("min_val"), pa.scalar("max_val"))
+                ),
             ),
             logger=structlog.get_logger(),
         )
@@ -428,7 +433,8 @@ class TestRandomIntFunction:
         # Test with various row counts
         for num_rows in [0, 1, 10, 100]:
             input_batch = pa.RecordBatch.from_pydict(
-                {"x": list(range(num_rows))}, schema=input_schema
+                {"min_val": [0] * num_rows, "max_val": [100] * num_rows},
+                schema=input_schema,
             )
             output = generator.send(ProtocolInput(batch=input_batch))
             assert output.batch is not None
