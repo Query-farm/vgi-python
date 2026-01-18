@@ -204,6 +204,7 @@ class ParameterInfo:
         constraints: Validation constraints as dict.
         is_table_input: True if this is the table input parameter.
         is_varargs: True if this accepts multiple trailing values.
+        is_const: True if this is a constant parameter (ConstParam).
 
     """
 
@@ -216,6 +217,7 @@ class ParameterInfo:
     constraints: dict[str, Any] = field(default_factory=dict)
     is_table_input: bool = False
     is_varargs: bool = False
+    is_const: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -230,6 +232,7 @@ class ParameterInfo:
             "constraints": json.dumps(self.constraints) if self.constraints else None,
             "is_table_input": self.is_table_input,
             "is_varargs": self.is_varargs,
+            "is_const": self.is_const,
         }
 
     @staticmethod
@@ -257,6 +260,7 @@ class ParameterInfo:
             constraints=constraints,
             is_table_input=d.get("is_table_input", False),
             is_varargs=d.get("is_varargs", False),
+            is_const=d.get("is_const", False),
         )
 
 
@@ -455,7 +459,8 @@ def extract_parameters(
     """Extract parameter information from Arg descriptors on a class.
 
     Walks the class and its bases to find all Arg descriptors and converts
-    them to ParameterInfo objects.
+    them to ParameterInfo objects. Also handles the new Param/ConstParam API
+    for ScalarFunction subclasses.
 
     Args:
         cls: The function class to extract parameters from.
@@ -475,7 +480,52 @@ def extract_parameters(
     parameters: list[ParameterInfo] = []
     seen_names: set[str] = set()
 
-    # Walk MRO to find all Arg descriptors
+    # Check for new Param/ConstParam API (ScalarFunction subclasses)
+    # These are stored in _compute_params and _const_params class attributes
+    compute_params: dict[str, Arg[Any]] = getattr(cls, "_compute_params", {})
+    const_params: dict[str, Arg[Any]] = getattr(cls, "_const_params", {})
+
+    for name, arg in compute_params.items():
+        seen_names.add(name)
+        required = arg.default is _MISSING
+        # For new API, use arrow_type if available
+        type_name: str | None = str(arg.arrow_type) if arg.arrow_type else "any"
+
+        parameters.append(
+            ParameterInfo(
+                name=name,
+                position=arg.position,
+                type_name=type_name,
+                description=arg.doc,
+                required=required,
+                default=None if required else arg.default,
+                constraints=_build_constraints(arg),
+                is_table_input=False,
+                is_varargs=arg.varargs,
+            )
+        )
+
+    for name, arg in const_params.items():
+        seen_names.add(name)
+        required = arg.default is _MISSING
+        type_name = str(arg.arrow_type) if arg.arrow_type else "any"
+
+        parameters.append(
+            ParameterInfo(
+                name=name,
+                position=arg.position,
+                type_name=type_name,
+                description=arg.doc,
+                required=required,
+                default=None if required else arg.default,
+                constraints=_build_constraints(arg),
+                is_table_input=False,
+                is_varargs=arg.varargs,
+                is_const=arg.const,
+            )
+        )
+
+    # Walk MRO to find all Arg descriptors (legacy API)
     for klass in cls.__mro__:
         if klass is object:
             continue
@@ -488,7 +538,7 @@ def extract_parameters(
 
             if isinstance(attr_value, Arg):
                 seen_names.add(attr_name)
-                arg: Arg[Any] = attr_value
+                arg = attr_value
                 required = arg.default is _MISSING
                 type_name, is_table_input = _get_arg_type_info(cls, attr_name)
 
@@ -829,6 +879,7 @@ _PARAMETER_STRUCT = pa.struct(
         pa.field("constraints", pa.string(), nullable=True),  # JSON for flexibility
         pa.field("is_table_input", pa.bool_()),
         pa.field("is_varargs", pa.bool_()),
+        pa.field("is_const", pa.bool_()),
     ]
 )
 

@@ -341,7 +341,48 @@ def extract_argument_specs(
     except (NameError, AttributeError):
         hints = {}
 
-    # Walk MRO to find all Arg descriptors
+    # Check for new Param/ConstParam API (ScalarFunction subclasses)
+    # These are stored in _compute_params and _const_params class attributes
+    compute_params: dict[str, Arg[Any]] = getattr(cls, "_compute_params", {})
+    const_params: dict[str, Arg[Any]] = getattr(cls, "_const_params", {})
+
+    for param_name, param_arg in compute_params.items():
+        seen_names.add(param_name)
+        # Use arrow_type from Param() which stores the pa.DataType
+        param_arrow_type = (
+            param_arg.arrow_type if param_arg.arrow_type is not None else pa.null()
+        )
+        specs.append(
+            ArgumentSpec(
+                name=param_name,
+                position=param_arg.position,
+                arrow_type=param_arrow_type,
+                is_table_input=False,
+                is_any_type=param_arg.arrow_type is None,
+                is_varargs=param_arg.varargs,
+                is_const=False,
+            )
+        )
+
+    for const_name, const_arg in const_params.items():
+        seen_names.add(const_name)
+        # ConstParam stores arrow_type from the Python type mapping
+        const_arrow_type = (
+            const_arg.arrow_type if const_arg.arrow_type is not None else pa.null()
+        )
+        specs.append(
+            ArgumentSpec(
+                name=const_name,
+                position=const_arg.position,
+                arrow_type=const_arrow_type,
+                is_table_input=False,
+                is_any_type=const_arg.arrow_type is None,
+                is_varargs=const_arg.varargs,
+                is_const=True,
+            )
+        )
+
+    # Walk MRO to find all Arg descriptors (legacy API)
     for klass in cls.__mro__:
         if klass is object:
             continue

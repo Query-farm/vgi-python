@@ -843,10 +843,30 @@ class ScalarFunction(ScalarFunctionGenerator):
     def catalog_output_schema(cls) -> pa.Schema:
         """Return output schema for catalog introspection.
 
-        Returns the output schema with a single "result" field. If
-        Meta.output_type is AnyArrow, the field has type null() with
-        metadata indicating it's a dynamic "any" type.
+        Returns the output schema with a single "result" field.
+
+        For new Param/Returns API:
+        - Uses _returns_output_type from Returns() annotation
+        - None _returns_output_type indicates dynamic type (similar to AnyArrow)
+
+        For legacy API:
+        - Uses Meta.output_type
+        - AnyArrow indicates dynamic type
+
+        Dynamic types return null() with metadata indicating "any" type.
         """
+        # Check for new API first: _returns_output_type is set by __init_subclass__
+        returns_type = getattr(cls, "_returns_output_type", None)
+        uses_new_api = getattr(cls, "_uses_new_param_api", False)
+
+        if uses_new_api:
+            if returns_type is None:
+                # Dynamic type in new API (no explicit Returns type)
+                field = pa.field("result", pa.null(), metadata={b"vgi:any": b"true"})
+                return pa.schema([field])
+            return pa.schema([pa.field("result", returns_type)])
+
+        # Legacy API: use Meta.output_type
         output_type = cls._get_meta_output_type()
         if output_type is AnyArrow:
             # Use null type with metadata to indicate "any" type
@@ -1005,7 +1025,7 @@ class ScalarFunction(ScalarFunctionGenerator):
                     )
 
     @final
-    def _validate_output_type(self, result: pa.Array) -> None:
+    def _validate_output_type(self, result: pa.Array[Any]) -> None:
         """Validate that output array type matches declared Returns type.
 
         Only validates for the new Param/ConstParam API with explicit Returns().

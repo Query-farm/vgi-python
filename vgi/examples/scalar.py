@@ -3,15 +3,18 @@
 This module provides example scalar functions that transform input batches
 to single-column output with 1:1 row mapping.
 
-AVAILABLE FUNCTIONS
--------------------
-DoubleColumnFunction        - Doubles values in a numeric column (AnyArrow example)
-AddNumericColumnsFunction   - Adds two numeric columns
-UpperCaseFunction           - Converts string column to uppercase
+NEW PARAM/CONSTPARAM/RETURNS API
+--------------------------------
 MultiplyFunction            - Multiplies column by constant (ConstParam example)
-SumColumnsFunction          - Sums multiple columns (varargs example)
-NullHandlingFunction        - Demonstrates special null handling
+UpperCaseFunction           - Converts string column to uppercase
+NullHandlingFunction        - Demonstrates special null handling (NullHandling.SPECIAL)
 RandomIntFunction           - Generates random integers (VOLATILE stability)
+
+LEGACY ARG DESCRIPTOR API (still supported)
+-------------------------------------------
+DoubleColumnFunction        - Doubles values in a numeric column (AnyArrow + type_bound)
+AddNumericColumnsFunction   - Adds two numeric columns (type promotion)
+SumColumnsFunction          - Sums multiple columns (varargs example)
 """
 
 from __future__ import annotations
@@ -246,9 +249,11 @@ class AddNumericColumnsFunction(ScalarFunction):
 class UpperCaseFunction(ScalarFunction):
     """Converts a string column to uppercase.
 
+    This example demonstrates the new Param/Returns API with a static output type.
+
     Example:
+        SQL:    SELECT upper_case(name) FROM users
         Input:  name=["alice", "bob", "charlie"]
-        Args:   column="name"
         Output: result=["ALICE", "BOB", "CHARLIE"]
 
     """
@@ -258,7 +263,6 @@ class UpperCaseFunction(ScalarFunction):
 
         name = "upper_case"
         description = "Converts string column to uppercase"
-        output_type = pa.string()  # Static output type
         examples = [
             FunctionExample(
                 sql="SELECT upper_case(name) FROM users",
@@ -270,13 +274,12 @@ class UpperCaseFunction(ScalarFunction):
             ),
         ]
 
-    column: Annotated[str, Arg(0, doc="String value to uppercase")]
-
-    # Note: No need to override output_type - default uses Meta.output_type
-
-    def compute(self, *, column: pa.Array[Any]) -> pa.Array[Any]:
+    def compute(
+        self,
+        column: Param(pa.string(), "String column to uppercase"),  # type: ignore[valid-type]
+    ) -> Returns(pa.string()):  # type: ignore[valid-type]
         """Convert the string values to uppercase."""
-        return pc.utf8_upper(column)  # type: ignore[no-matching-overload]
+        return pc.utf8_upper(column)
 
 
 class SumColumnsFunction(ScalarFunction):
@@ -346,9 +349,11 @@ class NullHandlingFunction(ScalarFunction):
     It demonstrates how to use NullHandling.SPECIAL to receive null values
     instead of having them automatically converted to null output.
 
+    This example uses the new Param/Returns API with Meta.null_handling.
+
     Example:
-        Input:  x=[1, None, 3]
-        Args:   column="x"
+        SQL:    SELECT null_handling(value) FROM data
+        Input:  value=[1, None, 3]
         Output: result=[1, -5000, 3]
 
     """
@@ -358,7 +363,6 @@ class NullHandlingFunction(ScalarFunction):
 
         name = "null_handling"
         description = "Returns value or -5000 if null"
-        output_type = pa.int64()
         null_handling = NullHandling.SPECIAL
         examples = [
             FunctionExample(
@@ -367,15 +371,13 @@ class NullHandlingFunction(ScalarFunction):
             ),
         ]
 
-    column: Annotated[int, Arg(0, doc="Integer value to process")]
-
-    def compute(self, *, column: pa.Array[Any]) -> pa.Array[pa.Int64Scalar]:
+    def compute(
+        self,
+        column: Param(pa.int64(), "Integer value to process"),  # type: ignore[valid-type]
+    ) -> Returns(pa.int64()):  # type: ignore[valid-type]
         """Return value if not null, otherwise -5000."""
         # Use if_else: if value is null, return -5000, otherwise return the value
-        result: pa.Array[pa.Int64Scalar] = pc.if_else(
-            pc.is_null(column), pa.scalar(-5000, type=pa.int64()), column
-        )
-        return result
+        return pc.if_else(pc.is_null(column), pa.scalar(-5000, type=pa.int64()), column)
 
 
 class RandomIntFunction(ScalarFunction):
@@ -384,6 +386,8 @@ class RandomIntFunction(ScalarFunction):
     This function demonstrates FunctionStability.VOLATILE - calling it twice
     with the same input will produce different results. The database optimizer
     cannot cache or reuse results from volatile functions.
+
+    This example uses the new Param/Returns API with Meta.stability.
 
     Other stability options:
     - CONSISTENT: Same input always produces same output (deterministic)
@@ -401,7 +405,6 @@ class RandomIntFunction(ScalarFunction):
 
         name = "random_int"
         description = "Generate random integers (demonstrates VOLATILE stability)"
-        output_type = pa.int64()
         stability = FunctionStability.VOLATILE
         examples = [
             FunctionExample(
@@ -410,12 +413,11 @@ class RandomIntFunction(ScalarFunction):
             ),
         ]
 
-    min_val: Annotated[AnyArrowValue, Arg(0, doc="Minimum value (inclusive)")]
-    max_val: Annotated[AnyArrowValue, Arg(1, doc="Maximum value (inclusive)")]
-
     def compute(
-        self, *, min_val: pa.Array[Any], max_val: pa.Array[Any]
-    ) -> pa.Array[Any]:
+        self,
+        min_val: Param(pa.int64(), "Minimum value (inclusive)"),  # type: ignore[valid-type]
+        max_val: Param(pa.int64(), "Maximum value (inclusive)"),  # type: ignore[valid-type]
+    ) -> Returns(pa.int64()):  # type: ignore[valid-type]
         """Generate random integers for each row."""
         import random
 
