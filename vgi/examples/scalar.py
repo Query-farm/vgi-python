@@ -3,15 +3,17 @@
 This module provides example scalar functions that transform input batches
 to single-column output with 1:1 row mapping.
 
-NEW PARAM/CONSTPARAM/RETURNS API
---------------------------------
+All functions use the Param/ConstParam/Returns API:
+
+STATIC OUTPUT TYPE
+------------------
 MultiplyFunction            - Multiplies column by constant (ConstParam example)
 UpperCaseFunction           - Converts string column to uppercase
 NullHandlingFunction        - Demonstrates special null handling (NullHandling.SPECIAL)
 RandomIntFunction           - Generates random integers (VOLATILE stability)
 
-LEGACY ARG DESCRIPTOR API (still supported)
--------------------------------------------
+DYNAMIC OUTPUT TYPE (with type_bound)
+-------------------------------------
 DoubleColumnFunction        - Doubles values in a numeric column (AnyArrow + type_bound)
 AddNumericColumnsFunction   - Adds two numeric columns (type promotion)
 SumColumnsFunction          - Sums multiple columns (varargs example)
@@ -19,12 +21,12 @@ SumColumnsFunction          - Sums multiple columns (varargs example)
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from vgi.arguments import AnyArrow, AnyArrowValue, Arg, ConstParam, Param, Returns
+from vgi.arguments import AnyArrow, ConstParam, Param, Returns
 from vgi.exceptions import SchemaValidationError
 from vgi.metadata import FunctionExample, FunctionStability, NullHandling
 from vgi.scalar_function import ScalarFunction
@@ -125,17 +127,16 @@ class MultiplyFunction(ScalarFunction):
         return pc.multiply(column, factor)
 
 
-# =============================================================================
-# Legacy Arg Descriptor API Examples (still supported)
-# =============================================================================
-
-
 class DoubleColumnFunction(ScalarFunction):
     """Doubles values in a numeric column.
 
+    This example demonstrates the new Param API with:
+    - AnyArrow type with type_bound for flexible numeric input
+    - Dynamic output type computed in bind()
+
     Example:
-        Input:  x=[1, 2, 3]
-        Args:   column="x"
+        SQL:    SELECT double_column(price) FROM products
+        Input:  price=[1, 2, 3]
         Output: result=[2, 4, 6]
 
     """
@@ -145,7 +146,6 @@ class DoubleColumnFunction(ScalarFunction):
 
         name = "double_column"
         description = "Doubles values in a numeric column"
-        output_type = AnyArrow  # Output type depends on input column type
         examples = [
             FunctionExample(
                 sql="SELECT double_column(price) FROM products",
@@ -157,37 +157,42 @@ class DoubleColumnFunction(ScalarFunction):
             ),
         ]
 
-    # Explicit arrow_type demonstrates type specification
-    column: Annotated[
-        AnyArrowValue, Arg(0, doc="Value to double", type_bound=_is_addable_type)
-    ]
+    _output_type: pa.DataType
 
     def bind(self) -> None:
         """Compute output type from input column types."""
-        field1 = self.input_schema.field(self.column.value)
-
-        # Since we're going to be multiplying by 2, promote to a wider type
-        self._output_type = _promote_for_addition(field1.type)
+        # Get the input column type from the schema
+        field = self.input_schema.field(0)
+        # Promote to a wider type since we're multiplying by 2
+        self._output_type = _promote_for_addition(field.type)
 
     @property
     def output_type(self) -> pa.DataType:
         """Return the type of the doubled column."""
         return self._output_type
 
-    def compute(self, *, column: pa.Array[Any]) -> pa.Array[Any]:
+    def compute(
+        self,
+        column: Param(AnyArrow, "Numeric value to double", type_bound=_is_addable_type),  # type: ignore[valid-type]
+    ) -> pa.Array[Any]:
         """Double the values in the specified column."""
-        return pc.multiply(column, 2)
+        result: pa.Array[Any] = pc.multiply(column, 2)
+        return result
 
 
 class AddNumericColumnsFunction(ScalarFunction):
     """Adds two numeric columns together.
 
+    This example demonstrates:
+    - Multiple Param() annotations with type_bound validation
+    - Dynamic output type with type promotion for overflow safety
+
     Validates that both columns are numeric types (integer, float, decimal, or
-    temporal) at bind time, raising SchemaValidationError if not.
+    temporal) at compute time, raising SchemaValidationError if not.
 
     Example:
-        Input:  a=[1, 2, 3], b=[10, 20, 30]
-        Args:   col1="a", col2="b"
+        SQL:    SELECT add_columns(price, tax) FROM orders
+        Input:  price=[1, 2, 3], tax=[10, 20, 30]
         Output: result=[11, 22, 33]
 
     Raises:
@@ -200,7 +205,6 @@ class AddNumericColumnsFunction(ScalarFunction):
 
         name = "add_columns"
         description = "Adds two numeric columns"
-        output_type = AnyArrow  # Output type depends on input column types
         examples = [
             FunctionExample(
                 sql="SELECT add_columns(price, tax) FROM orders",
@@ -212,25 +216,15 @@ class AddNumericColumnsFunction(ScalarFunction):
             ),
         ]
 
-    # type_bound validates value types at bind time (automatic via Function.__init__)
-    col1: Annotated[
-        AnyArrowValue, Arg(0, doc="First numeric value", type_bound=_is_addable_type)
-    ]
-    col2: Annotated[
-        AnyArrowValue, Arg(1, doc="Second numeric value", type_bound=_is_addable_type)
-    ]
-
     _output_type: pa.DataType
 
     def bind(self) -> None:
         """Compute output type from input column types."""
-        field1 = self.input_schema.field(self.col1.value)
-        field2 = self.input_schema.field(self.col2.value)
+        field1 = self.input_schema.field(0)
+        field2 = self.input_schema.field(1)
 
         # Compute the output type by promoting to the wider of the two types,
         # then promoting again to reduce overflow risk.
-        # Use pc.add with null values to determine the common type, as PyArrow's
-        # compute functions handle type promotion correctly.
         common_type = pc.add(
             pa.nulls(1, type=field1.type), pa.nulls(1, type=field2.type)
         ).type
@@ -241,9 +235,14 @@ class AddNumericColumnsFunction(ScalarFunction):
         """Return the computed output type based on input column types."""
         return self._output_type
 
-    def compute(self, *, col1: pa.Array[Any], col2: pa.Array[Any]) -> pa.Array[Any]:
+    def compute(
+        self,
+        col1: Param(AnyArrow, "First numeric value", type_bound=_is_addable_type),  # type: ignore[valid-type]
+        col2: Param(AnyArrow, "Second numeric value", type_bound=_is_addable_type),  # type: ignore[valid-type]
+    ) -> pa.Array[Any]:
         """Add the two columns together."""
-        return pc.add(col1, col2)
+        result: pa.Array[Any] = pc.add(col1, col2)
+        return result
 
 
 class UpperCaseFunction(ScalarFunction):
@@ -285,12 +284,14 @@ class UpperCaseFunction(ScalarFunction):
 class SumColumnsFunction(ScalarFunction):
     """Sums values from multiple numeric columns.
 
-    Uses varargs with type_bound to accept any number of numeric columns
-    and validates that all columns are addable types at bind time.
+    This example demonstrates:
+    - varargs=True to accept variable number of columns
+    - type_bound validation on all varargs columns
+    - Dynamic output type computed in bind()
 
     Example:
-        Input:  a=[1, 2], b=[10, 20], c=[100, 200]
-        Args:   columns=('a', 'b', 'c')
+        SQL:    SELECT sum_columns(price, tax, shipping) FROM orders
+        Input:  price=[1, 2], tax=[10, 20], shipping=[100, 200]
         Output: result=[111, 222]
 
     """
@@ -300,7 +301,6 @@ class SumColumnsFunction(ScalarFunction):
 
         name = "sum_columns"
         description = "Sum values from multiple numeric columns"
-        output_type = AnyArrow  # Output type depends on input column types
         examples = [
             FunctionExample(
                 sql="SELECT sum_columns(price, tax, shipping) FROM orders",
@@ -308,25 +308,11 @@ class SumColumnsFunction(ScalarFunction):
             ),
         ]
 
-    # Varargs with type_bound validates all values are numeric
-    # Note: varargs returns tuple[Any, ...], not AnyArrowValue
-    columns: Annotated[
-        tuple[Any, ...],
-        Arg(
-            0,
-            varargs=True,
-            type_bound=_is_addable_type,
-            doc="Numeric values to sum",
-        ),
-    ]
-
     _output_type: pa.DataType
 
     def bind(self) -> None:
         """Compute output type from first column, promoted for overflow safety."""
-        # With varargs=True, self.columns is a tuple of column names
-        first_col = self.columns[0]  # type: ignore[index]
-        first_type = self.input_schema.field(first_col).type
+        first_type = self.input_schema.field(0).type
         self._output_type = _promote_for_addition(first_type)
 
     @property
@@ -334,9 +320,14 @@ class SumColumnsFunction(ScalarFunction):
         """Return the computed output type based on first column."""
         return self._output_type
 
-    def compute(self, *, columns: list[pa.Array[Any]]) -> pa.Array[Any]:
+    def compute(
+        self,
+        columns: Param(  # type: ignore[valid-type]
+            AnyArrow, "Numeric values to sum", type_bound=_is_addable_type, varargs=True
+        ),
+    ) -> pa.Array[Any]:
         """Sum values from all specified columns."""
-        result = columns[0]
+        result: pa.Array[Any] = columns[0]
         for col in columns[1:]:
             result = pc.add(result, col)
         return result

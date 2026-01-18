@@ -719,7 +719,8 @@ class _ArgFactory:
                 )
 
         # Warn if type_bound is used with non-AnyArrow type
-        if type_bound is not None and self._type_param is not AnyArrow:
+        # Check both _type_param (legacy API) and is_any (new Param API)
+        if type_bound is not None and self._type_param is not AnyArrow and not is_any:
             type_name = getattr(self._type_param, "__name__", str(self._type_param))
             warnings.warn(
                 f"type_bound is only meaningful for Arg[AnyArrow], "

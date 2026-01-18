@@ -980,31 +980,31 @@ class ScalarFunction(ScalarFunctionGenerator):
     def _validate_param_types(self, kwargs: dict[str, Any]) -> None:
         """Validate that input array types match declared Param types.
 
-        Only validates for the new Param/ConstParam API, and only for params
-        that have a declared arrow_type (not is_any=True).
+        For the new Param/ConstParam API:
+        - Validates exact type match for params with declared arrow_type
+        - Validates type_bound predicates for AnyArrow params with type_bound
 
         Args:
             kwargs: Dict of parameter names to arrays (from _extract_compute_kwargs).
 
         Raises:
             TypeMismatchError: If any array type doesn't match its declared type.
+            SchemaValidationError: If any array type fails type_bound validation.
 
         """
         if not self._uses_new_param_api:
-            return  # Legacy API doesn't have explicit type declarations
+            return  # Legacy API uses _validate_type_bounds in Function.__init__
 
         for name, arg in self._compute_params.items():
-            if arg.is_any:
-                continue  # Skip AnyArrow params
-
-            if arg.arrow_type is None:
-                continue  # No type declared (shouldn't happen with new API)
-
             if arg.varargs:
                 # Validate all arrays in varargs
                 arrays = kwargs[name]
                 for i, arr in enumerate(arrays):
-                    if arr.type != arg.arrow_type:
+                    if arg.is_any:
+                        # AnyArrow: validate type_bound if specified
+                        if arg.type_bound is not None:
+                            arg.validate_type_bound(arr.type)
+                    elif arg.arrow_type is not None and arr.type != arg.arrow_type:
                         raise TypeMismatchError(
                             f"Input type mismatch for vararg parameter '{name}' "
                             f"at index {i}.",
@@ -1015,7 +1015,11 @@ class ScalarFunction(ScalarFunctionGenerator):
                         )
             else:
                 arr = kwargs[name]
-                if arr.type != arg.arrow_type:
+                if arg.is_any:
+                    # AnyArrow: validate type_bound if specified
+                    if arg.type_bound is not None:
+                        arg.validate_type_bound(arr.type)
+                elif arg.arrow_type is not None and arr.type != arg.arrow_type:
                     raise TypeMismatchError(
                         f"Input type mismatch for parameter '{name}'.",
                         param_name=name,
