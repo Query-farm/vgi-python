@@ -55,7 +55,7 @@ VGI (Vector Gateway Interface) provides an Apache Arrow-based protocol for conne
 │  ┌───────────────────────────────────────────────────────────────┐  │
 │  │                      Worker Process                           │  │
 │  │  SCALAR FUNCTION (ScalarFunction)                             │  │
-│  │  - compute(batch): Transform each row to single output column │  │
+│  │  - compute(**cols): Transform each row to single output column│  │
 │  │                           OR                                  │  │
 │  │  TABLE FUNCTION (TableFunctionGenerator)                      │  │
 │  │  - process(): Generator yielding output batches (no input)    │  │
@@ -176,29 +176,71 @@ ipc_read   num_rows=1 schema={'sum': 'int64'} metadata={'vgi.status': 'FINISHED'
 
 ## Creating a Scalar Function (Per-Row Transform)
 
+Use `Param()`, `ConstParam()`, and `Returns()` annotations on the `compute()` method:
+
 ```python
-from typing import Annotated
 import pyarrow as pa
 import pyarrow.compute as pc
-from vgi import ScalarFunction, Arg, AnyArrowValue
+from vgi import ConstParam, Param, Returns, ScalarFunction
 
 class AddColumns(ScalarFunction):
     """Add two integer columns together."""
 
-    class Meta:
-        output_type = pa.int64()
+    def compute(
+        self,
+        left: Param(pa.int64(), "First column"),
+        right: Param(pa.int64(), "Second column"),
+    ) -> Returns(pa.int64()):
+        return pc.add(left, right)
+```
 
-    left: Annotated[AnyArrowValue, Arg(0, type_bound=pa.types.is_integer, doc="First numeric value")]
-    right: Annotated[AnyArrowValue, Arg(1, type_bound=pa.types.is_integer, doc="Second numeric value")]
+### With Constant Argument (ConstParam)
 
-    def compute(self, batch: pa.RecordBatch) -> pa.Array:
-        return pc.add(batch.column(self.left.value), batch.column(self.right.value))
+Use `ConstParam` for values known at planning time (not per-row arrays):
+
+```python
+class MultiplyByFactor(ScalarFunction):
+    """Multiply column by constant factor."""
+
+    def compute(
+        self,
+        column: Param(pa.int64(), "Column to multiply"),
+        factor: ConstParam(int, "Multiplication factor"),
+    ) -> Returns(pa.int64()):
+        # factor is Python int (scalar), not pa.Array
+        return pc.multiply(column, factor)
+```
+
+### With Dynamic Output Type (AnyArrow)
+
+Use `AnyArrow` when output type depends on input schema:
+
+```python
+from vgi import AnyArrow
+
+class Double(ScalarFunction):
+    """Double values, preserving input type."""
+
+    _output_type: pa.DataType
+
+    def bind(self) -> None:
+        self._output_type = self.input_schema.field(0).type
+
+    @property
+    def output_type(self) -> pa.DataType:
+        return self._output_type
+
+    def compute(
+        self,
+        column: Param(AnyArrow, "Numeric value"),
+    ) -> Returns(AnyArrow):
+        return pc.multiply(column, 2)
 ```
 
 ### Key Constraints for Scalar Functions:
 - **1:1 row mapping**: Output must have exactly the same number of rows as input
 - **Single column output**: Output schema has exactly one column named "result"
-- **Finalize message**: Client sends finalize to signal end, but no finish() method
+- **Type validation**: Input/output types are validated at runtime (TypeMismatchError on mismatch)
 
 ## Creating a Polars Scalar Function
 
@@ -470,8 +512,11 @@ if __name__ == "__main__":
 ### Imports
 
 ```python
-# Scalar Functions (per-row transform)
-from vgi import ScalarFunction, Arg, Worker
+# Scalar Functions (per-row transform) - new Param/Returns API
+from vgi import ScalarFunction, Param, ConstParam, Returns, AnyArrow, Worker
+
+# Scalar Functions - legacy Arg API (still supported)
+from vgi import ScalarFunction, Arg, AnyArrowValue, Worker
 
 # Table Functions (no input)
 from vgi import TableFunctionGenerator, Output, Arg, Worker
@@ -494,11 +539,26 @@ from vgi.log import Level
 
 ### Argument Declaration
 
-**Recommended: Annotated pattern** (full type safety, no `# type: ignore`):
+**For ScalarFunction (Recommended): Param/ConstParam/Returns on compute()**
+
+```python
+from vgi import ScalarFunction, Param, ConstParam, Returns
+import pyarrow as pa
+
+class MyScalar(ScalarFunction):
+    def compute(
+        self,
+        col: Param(pa.int64(), "Column input"),           # Array from batch
+        factor: ConstParam(int, "Constant factor"),       # Scalar from args
+    ) -> Returns(pa.int64()):                             # Output type
+        return pc.multiply(col, factor)
+```
+
+**For TableInOutFunction/TableFunctionGenerator: Annotated[T, Arg(...)]**
 
 ```python
 from typing import Annotated
-from vgi import Arg, AnyArrowValue
+from vgi import Arg, AnyArrowValue, TableInOutFunction
 
 class MyFunction(TableInOutFunction):
     count: Annotated[int, Arg(0)]                        # Required positional
@@ -545,29 +605,29 @@ At bind time:
 - Type bounds have been validated
 
 ```python
-from typing import Annotated
-from vgi import ScalarFunction, Arg, AnyArrowValue
-from vgi.arguments import AnyArrow
+from vgi import ScalarFunction, Param, Returns, AnyArrow
+import pyarrow as pa
+import pyarrow.compute as pc
 
 class AddColumns(ScalarFunction):
     """Add two numeric columns with dynamic output type."""
 
-    class Meta:
-        output_type = AnyArrow  # Output type depends on input columns
-
-    left: Annotated[AnyArrowValue, Arg(0, type_bound=[pa.types.is_integer, pa.types.is_floating])]
-    right: Annotated[AnyArrowValue, Arg(1, type_bound=[pa.types.is_integer, pa.types.is_floating])]
+    _output_type: pa.DataType
 
     def bind(self) -> None:
         """Compute output type from input columns."""
-        self._output_type = self.input_schema.field(self.left.value).type
+        self._output_type = self.input_schema.field(0).type
 
     @property
     def output_type(self) -> pa.DataType:
         return self._output_type
 
-    def compute(self, batch: pa.RecordBatch) -> pa.Array:
-        return pc.add(batch.column(self.left.value), batch.column(self.right.value))
+    def compute(
+        self,
+        left: Param(AnyArrow, "First column"),
+        right: Param(AnyArrow, "Second column"),
+    ) -> Returns(AnyArrow):
+        return pc.add(left, right)
 ```
 
 ### Parallel Execution and bind() State
@@ -599,10 +659,9 @@ For advanced distributed aggregations with `max_workers > 1`, use `store_state()
 
 | Method/Attribute | When to Override | Default |
 |------------------|------------------|---------|
-| `Meta.output_type` | Always required (pa.DataType or AnyArrow) | Required |
-| `bind()` | Process input schema, compute dynamic output type | No-op |
-| `output_type` | Override if Meta.output_type is AnyArrow | Uses Meta.output_type |
-| `compute(batch)` | Transform batch to single array | Required |
+| `compute(self, ...)` | Always - use Param/ConstParam annotations, Returns() for output | Required |
+| `bind()` | Compute dynamic output type when using AnyArrow | No-op |
+| `output_type` | Override when using Returns(AnyArrow) | Uses Returns() type |
 | `setup()` | Acquire resources | No-op |
 | `teardown()` | Release resources | No-op |
 
@@ -632,7 +691,7 @@ How will your function be used in SQL?
 
 1. SELECT my_func(col1, col2) FROM table
    → SCALAR FUNCTION: Returns one value per input row
-   → Use ScalarFunction, define Meta.output_type and compute()
+   → Use ScalarFunction with Param/ConstParam/Returns on compute()
    → Example: upper(), abs(), concat()
 
 2. SELECT * FROM my_func(args)

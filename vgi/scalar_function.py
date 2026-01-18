@@ -496,88 +496,103 @@ class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInp
 
 
 class ScalarFunction(ScalarFunctionGenerator):
-    """Base class for scalar functions using the compute() callback.
+    """Base class for scalar functions (1:1 row mapping, single output column).
 
-    This is the recommended API for scalar functions. Define Meta.output_type
-    to declare the output type, and compute() to transform each batch.
+    Scalar functions transform each input row to exactly one output value.
+    Use Param/ConstParam/Returns annotations on compute() to declare types.
 
-    Scalar functions transform input rows to output values with 1:1 mapping.
-    The output is always a single column named "result".
+    Minimal Example
+    ---------------
+    ::
 
-    Methods/Attributes to Override
-    ------------------------------
-    Meta.output_type : pa.DataType | type[AnyArrow] (required)
-        Declare the output type for catalog introspection.
-        Use a pa.DataType for static output, or AnyArrow if output
-        type depends on input schema.
+        class Upper(ScalarFunction):
+            def compute(
+                self,
+                col: Param(pa.string(), "Input string"),
+            ) -> Returns(pa.string()):
+                return pc.utf8_upper(col)
 
-    compute(*, ...) : pa.Array
-        Transform input arrays to a single output array. Define keyword-only
-        parameters that match your Arg attribute names. Arrays are automatically
-        extracted from the batch and passed to your compute() method.
-        Must return an array with the same number of elements as input.
+    With Constant Argument
+    ----------------------
+    Use ConstParam for values known at planning time (not per-row arrays)::
 
-    output_type : pa.DataType (property, optional)
-        Override only if Meta.output_type is AnyArrow.
-        Default implementation uses Meta.output_type.
+        class Multiply(ScalarFunction):
+            def compute(
+                self,
+                col: Param(pa.int64(), "Column to multiply"),
+                factor: ConstParam(int, "Multiplication factor"),
+            ) -> Returns(pa.int64()):
+                # factor is Python int, not pa.Array
+                return pc.multiply(col, factor)
 
-    setup() : None
-        Called before processing. Acquire resources here.
+    With Dynamic Output Type (AnyArrow)
+    -----------------------------------
+    Use AnyArrow when output type depends on input schema::
 
-    teardown() : None
-        Called after processing. Release resources here.
+        class Double(ScalarFunction):
+            _output_type: pa.DataType
 
-    Logging
-    -------
-    Call self.log(level, message) from compute() to emit log messages:
+            def bind(self) -> None:
+                self._output_type = self.input_schema.field(0).type
 
-        def compute(self, *, x: pa.Array) -> pa.Array:
-            self.log(Level.INFO, f"Processing {len(x)} rows")
-            return pc.multiply(x, 2)
+            @property
+            def output_type(self) -> pa.DataType:
+                return self._output_type
 
-    Example (static output type):
-    -----------------------------
-    A function that converts a column to uppercase:
+            def compute(
+                self,
+                column: Param(AnyArrow, "Numeric value"),
+            ) -> Returns(AnyArrow):
+                return pc.multiply(column, 2)
+
+    Type Validation
+    ---------------
+    Input and output types are validated at runtime:
+    - Param types are checked against actual array types
+    - Returns type is checked against compute() result
+    - AnyArrow parameters skip validation
+    - TypeMismatchError is raised on mismatch
+
+    Legacy API (Arg Descriptors)
+    ----------------------------
+    The older Arg descriptor API is still supported::
 
         class UpperCase(ScalarFunction):
             class Meta:
                 output_type = pa.string()
 
-            column: Annotated[str, Arg(0, doc="String value to uppercase")]
+            column: Annotated[str, Arg(0, doc="String to uppercase")]
 
             def compute(self, *, column: pa.Array) -> pa.Array:
                 return pc.utf8_upper(column)
 
-    Example (dynamic output type):
-    ------------------------------
-    A function that doubles values, preserving input type:
+    Methods to Override
+    -------------------
+    compute(self, ...) -> pa.Array
+        Transform input arrays to output. Use Param/ConstParam annotations.
 
-        class DoubleColumn(ScalarFunction):
-            class Meta:
-                output_type = AnyArrow  # Output type depends on input
+    bind(self) -> None
+        Called after init. Use for schema-dependent initialization.
 
-            column: Annotated[AnyArrowValue, Arg(0, doc="Value to double")]
+    output_type -> pa.DataType (property)
+        Override when using Returns(AnyArrow) to return actual type.
 
-            @property
-            def output_type(self) -> pa.DataType:
-                return self.input_schema.field(self.column.value).type
+    setup(self) -> None
+        Called before processing. Acquire resources here.
 
-            def compute(self, *, column: pa.Array) -> pa.Array:
-                return pc.multiply(column, 2)
+    teardown(self) -> None
+        Called after processing. Release resources here.
 
     Available Attributes
     --------------------
-    self.invocation : Invocation
-        The complete invocation request with function name and arguments.
-
     self.input_schema : pa.Schema
         Schema of input batches.
 
     self.output_schema : pa.Schema
-        Schema of output batches (single column named "result").
+        Schema of output (single column named "result").
 
-    self.empty_output_batch : pa.RecordBatch
-        Empty batch conforming to output_schema.
+    self.invocation : Invocation
+        The invocation request with function name and arguments.
 
     """
 
