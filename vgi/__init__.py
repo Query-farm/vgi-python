@@ -137,6 +137,8 @@ See vgi.examples.table_in_out for example functions:
 from vgi.argument_spec import (
     VGI_ARG_KEY,
     VGI_ARG_NAMED,
+    VGI_CONST_KEY,
+    VGI_CONST_TRUE,
     VGI_TYPE_ANY,
     VGI_TYPE_KEY,
     VGI_TYPE_TABLE,
@@ -152,6 +154,9 @@ from vgi.arguments import (
     Arg,
     Arguments,
     ArgumentValidationError,
+    ConstParam,
+    Param,
+    Returns,
     TableInput,
 )
 from vgi.invocation import Invocation
@@ -171,6 +176,7 @@ from vgi.scalar_function import (
     ScalarFunction,
     ScalarFunctionGenerator,
     ScalarOutputGenerator,
+    TypeMismatchError,
 )
 from vgi.scalar_function_polars import (
     AnyPolars,
@@ -203,10 +209,15 @@ __all__ = [
     "ArgumentValidationError",
     "Arguments",
     "argument_specs_to_schema",
+    "ConstParam",
     "FilterFunction",
+    "Param",
+    "Returns",
     # Metadata constants for parsing argument spec schemas
     "VGI_ARG_KEY",
     "VGI_ARG_NAMED",
+    "VGI_CONST_KEY",
+    "VGI_CONST_TRUE",
     "VGI_TYPE_KEY",
     "VGI_TYPE_TABLE",
     "VGI_TYPE_ANY",
@@ -235,6 +246,7 @@ __all__ = [
     "TableInOutGenerator",
     "TableInput",
     "TableInputValidationError",
+    "TypeMismatchError",
     "Worker",
     "functions_to_arrow",
     "hello",

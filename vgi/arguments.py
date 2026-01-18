@@ -33,7 +33,7 @@ import re
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
+from typing import TYPE_CHECKING, Annotated, Any, Final, TypeVar, overload
 
 import pyarrow as pa
 
@@ -48,6 +48,98 @@ PYTHON_TO_ARROW: dict[type, pa.DataType] = {
     bool: pa.bool_(),
     bytes: pa.binary(),
 }
+
+# Private mapping used by _python_to_arrow() helper
+_PYTHON_TO_ARROW: dict[type, pa.DataType] = {
+    int: pa.int64(),
+    float: pa.float64(),
+    str: pa.string(),
+    bool: pa.bool_(),
+    bytes: pa.binary(),
+}
+
+# Arrow type to Python scalar type mapping
+# Keys are the type class of Arrow DataType instances (e.g., type(pa.int8()))
+_ARROW_TO_PYTHON: dict[type, type] = {
+    # Primitives - integers
+    type(pa.int8()): int,
+    type(pa.int16()): int,
+    type(pa.int32()): int,
+    type(pa.int64()): int,
+    type(pa.uint8()): int,
+    type(pa.uint16()): int,
+    type(pa.uint32()): int,
+    type(pa.uint64()): int,
+    # Primitives - floats
+    type(pa.float16()): float,
+    type(pa.float32()): float,
+    type(pa.float64()): float,
+    # Primitives - strings
+    type(pa.string()): str,
+    type(pa.large_string()): str,
+    # Primitives - boolean
+    type(pa.bool_()): bool,
+    # Primitives - binary
+    type(pa.binary()): bytes,
+    type(pa.large_binary()): bytes,
+    # Nested types
+    type(pa.struct([])): dict,
+    type(pa.list_(pa.int32())): list,
+    type(pa.large_list(pa.int32())): list,
+    type(pa.list_(pa.int32(), 3)): list,  # FixedSizeListType
+    type(pa.map_(pa.string(), pa.int32())): dict,
+}
+
+
+def _python_to_arrow(py_type: type) -> pa.DataType:
+    """Convert a Python type to the corresponding Arrow type.
+
+    Args:
+        py_type: Python type (int, float, str, bool, bytes).
+
+    Returns:
+        Corresponding Arrow data type.
+
+    Raises:
+        TypeError: If py_type is not a supported Python type.
+
+    Example:
+        >>> _python_to_arrow(int)
+        DataType(int64)
+        >>> _python_to_arrow(str)
+        DataType(string)
+
+    """
+    if py_type in _PYTHON_TO_ARROW:
+        return _PYTHON_TO_ARROW[py_type]
+
+    supported = ", ".join(t.__name__ for t in _PYTHON_TO_ARROW)
+    raise TypeError(
+        f"Cannot convert Python type '{py_type.__name__}' to Arrow type. "
+        f"Supported types: {supported}. "
+        f"Example: _python_to_arrow(int) -> pa.int64()"
+    )
+
+
+def _arrow_type_to_python(arrow_type: pa.DataType) -> type:
+    """Convert an Arrow type to the corresponding Python scalar type.
+
+    Args:
+        arrow_type: Arrow data type instance.
+
+    Returns:
+        Corresponding Python type for scalar values.
+        Returns Any (object) for unknown Arrow types.
+
+    Example:
+        >>> _arrow_type_to_python(pa.int64())
+        <class 'int'>
+        >>> _arrow_type_to_python(pa.string())
+        <class 'str'>
+
+    """
+    arrow_type_class = type(arrow_type)
+    return _ARROW_TO_PYTHON.get(arrow_type_class, object)
 
 
 # Sentinel for missing default value - proper type pattern
@@ -74,9 +166,13 @@ __all__ = [
     "Arg",
     "ArgumentValidationError",
     "Arguments",
+    "ConstParam",
+    "Param",
     "PYTHON_TO_ARROW",
+    "Returns",
     "TableInput",
     "TypeBoundPredicate",
+    "_OutputType",
 ]
 
 
@@ -600,6 +696,8 @@ class _ArgFactory:
         varargs: bool = False,
         arrow_type: pa.DataType | None = None,
         type_bound: "TypeBoundPredicate | Sequence[TypeBoundPredicate] | None" = None,
+        const: bool = False,
+        is_any: bool = False,
     ) -> "Arg[Any]":
         """Create an Arg instance with the captured type parameter."""
         arg: Arg[Any] = Arg.__new__(Arg)
@@ -642,6 +740,8 @@ class _ArgFactory:
         arg.varargs = varargs
         arg.arrow_type = arrow_type
         arg.type_bound = type_bound
+        arg.const = const
+        arg.is_any = is_any
         arg._name = None
         arg._compiled_pattern = None
         arg._type_param = self._type_param
@@ -726,6 +826,8 @@ class Arg[ArgT]:
         "varargs",
         "arrow_type",
         "type_bound",
+        "const",
+        "is_any",
         "_name",
         "_compiled_pattern",
         "_type_param",
@@ -747,6 +849,8 @@ class Arg[ArgT]:
         varargs: bool = False,
         arrow_type: pa.DataType | None = None,
         type_bound: "TypeBoundPredicate | Sequence[TypeBoundPredicate] | None" = None,
+        const: bool = False,
+        is_any: bool = False,
     ) -> None:
         """Initialize an Arg descriptor with optional validation.
 
@@ -769,6 +873,10 @@ class Arg[ArgT]:
                 Accepts a single predicate (e.g., pa.types.is_integer) or a sequence
                 of predicates where any match is valid (OR logic). Only meaningful
                 for Arg[AnyArrow] arguments; issues a warning if used with other types.
+            const: If True, marks this argument as constant-folded (ConstParam).
+                Constant arguments have their values known at planning time.
+            is_any: If True, indicates this argument accepts any Arrow type (AnyArrow).
+                Used for tracking when AnyArrow was specified in the type hint.
 
         Raises:
             ValueError: If conflicting constraints are specified (e.g., ge and gt).
@@ -804,6 +912,8 @@ class Arg[ArgT]:
         self.varargs = varargs
         self.arrow_type = arrow_type
         self.type_bound = type_bound
+        self.const = const
+        self.is_any = is_any
         self._name: str | None = None
         self._compiled_pattern: re.Pattern[str] | None = None
         self._type_param: type | None = None
@@ -1227,5 +1337,247 @@ class Arg[ArgT]:
             else:
                 names = [getattr(p, "__name__", str(p)) for p in self.type_bound]
                 parts.append(f"type_bound=[{', '.join(names)}]")
+        if self.const:
+            parts.append("const=True")
+        if self.is_any:
+            parts.append("is_any=True")
 
         return f"Arg({', '.join(parts)})"
+
+
+# =============================================================================
+# Param, ConstParam, Returns - Annotation Helpers for Scalar Functions
+# =============================================================================
+
+# Sentinel value for positions that will be inferred from compute() signature
+_INFER_POSITION: Final = -1
+
+
+@dataclass(frozen=True, slots=True)
+class _OutputType:
+    """Marker class for annotating scalar function output types.
+
+    Used by Returns() to capture the output Arrow type for catalog registration.
+    This is extracted during function introspection to determine the return type
+    of compute() methods.
+
+    Attributes:
+        arrow_type: The Arrow data type of the output, or None for AnyArrow
+            (dynamic output type determined at bind time).
+
+    """
+
+    arrow_type: pa.DataType | None
+
+
+def Param(
+    type_: pa.DataType | type,
+    doc: str = "",
+    *,
+    type_bound: "TypeBoundPredicate | Sequence[TypeBoundPredicate] | None" = None,
+    varargs: bool = False,
+) -> Any:
+    """Annotate a scalar function parameter that receives columnar data.
+
+    Creates an Annotated type hint for compute() parameters that receive
+    pa.Array values at runtime. The type information is used for catalog
+    registration and argument validation.
+
+    Args:
+        type_: The Arrow data type, Python type (int/str/float/bool/bytes),
+            or AnyArrow for dynamic types.
+        doc: Documentation string describing this parameter.
+        type_bound: Type predicate(s) for validating input column types.
+            Only meaningful when type_ is AnyArrow.
+        varargs: If True, this parameter collects all remaining positional
+            arguments as a list of arrays.
+
+    Returns:
+        Annotated type suitable for use in compute() parameter annotations.
+
+    Raises:
+        TypeError: If type_ cannot be converted to an Arrow type.
+
+    Example:
+        class AddColumns(ScalarFunction):
+            def compute(
+                self,
+                left: Param(pa.int64(), "First value"),
+                right: Param(pa.int64(), "Second value"),
+            ) -> Returns(pa.int64()):
+                return pc.add(left, right)
+
+        # With Python types (converted to Arrow automatically):
+        class Concat(ScalarFunction):
+            def compute(
+                self,
+                a: Param(str, "First string"),
+                b: Param(str, "Second string"),
+            ) -> Returns(pa.string()):
+                return pc.binary_join_element_wise(a, b, "")
+
+        # With AnyArrow for dynamic types:
+        class Identity(ScalarFunction):
+            def compute(
+                self,
+                value: Param(AnyArrow, "Value to pass through"),
+            ) -> Returns(AnyArrow):
+                return value
+
+    """
+    # Determine Arrow type and is_any flag
+    is_any = type_ is AnyArrow
+    arrow_type: pa.DataType
+    if is_any:
+        arrow_type = pa.null()  # Placeholder for AnyArrow
+    elif isinstance(type_, pa.DataType):
+        arrow_type = type_
+    elif type_ in _PYTHON_TO_ARROW:
+        arrow_type = _PYTHON_TO_ARROW[type_]
+    else:
+        raise TypeError(
+            f"Cannot convert type '{type_}' to Arrow type. "
+            f"Use pa.DataType, Python type (int/str/float/bool/bytes), or AnyArrow. "
+            f"Example: Param(pa.int64(), 'description') or Param(int, 'description')"
+        )
+
+    # Create Arg with inferred position (will be set from compute() signature)
+    arg = Arg[Any](
+        _INFER_POSITION,
+        doc=doc,
+        arrow_type=arrow_type,
+        type_bound=type_bound,
+        varargs=varargs,
+        is_any=is_any,
+    )
+
+    # Return type depends on varargs
+    # Note: Use Any as base type instead of pa.Array[Any] because pa.Array
+    # isn't subscriptable and causes issues with `from __future__ import annotations`
+    if varargs:
+        return Annotated[list[Any], arg]
+    return Annotated[Any, arg]
+
+
+def ConstParam(
+    type_: pa.DataType | type,
+    doc: str = "",
+    *,
+    type_bound: "TypeBoundPredicate | Sequence[TypeBoundPredicate] | None" = None,
+) -> Any:
+    """Annotate a scalar function parameter that receives a constant scalar value.
+
+    Creates an Annotated type hint for compute() parameters that receive
+    constant (non-columnar) values. These are scalar values known at planning
+    time, not arrays processed at runtime. Useful for configuration parameters
+    like format strings, precision values, or flags.
+
+    Args:
+        type_: The Arrow data type or Python type (int/str/float/bool/bytes).
+            AnyArrow is not supported for const parameters.
+        doc: Documentation string describing this parameter.
+        type_bound: Type predicate(s) for validating the argument type.
+
+    Returns:
+        Annotated type suitable for use in compute() parameter annotations.
+
+    Raises:
+        TypeError: If type_ cannot be converted to an Arrow type or is AnyArrow.
+
+    Example:
+        class FormatNumber(ScalarFunction):
+            def compute(
+                self,
+                value: Param(pa.float64(), "Number to format"),
+                precision: ConstParam(int, "Decimal places"),
+            ) -> Returns(pa.string()):
+                # precision is an int, not an array
+                fmt = f"%.{precision}f"
+                return pa.array([fmt % v for v in value.to_pylist()])
+
+    """
+    # ConstParam doesn't support AnyArrow
+    if type_ is AnyArrow:
+        raise TypeError(
+            "ConstParam does not support AnyArrow. "
+            "Use a specific type for constant parameters."
+        )
+
+    # Determine Arrow type
+    if isinstance(type_, pa.DataType):
+        arrow_type = type_
+    elif type_ in _PYTHON_TO_ARROW:
+        arrow_type = _PYTHON_TO_ARROW[type_]
+    else:
+        raise TypeError(
+            f"Cannot convert type '{type_}' to Arrow type. "
+            f"Use pa.DataType or Python type (int/str/float/bool/bytes). "
+            f"Example: ConstParam(int, 'description') or ConstParam(pa.int32(), 'desc')"
+        )
+
+    # Determine Python scalar type for type annotation
+    python_type = _arrow_type_to_python(arrow_type)
+
+    # Create Arg with const=True
+    arg = Arg[Any](
+        _INFER_POSITION,
+        doc=doc,
+        arrow_type=arrow_type,
+        type_bound=type_bound,
+        const=True,
+    )
+
+    return Annotated[python_type, arg]
+
+
+def Returns(arrow_type: pa.DataType | type) -> Any:
+    """Annotate the return type of a scalar function's compute() method.
+
+    Creates an Annotated type hint that captures the output Arrow type for
+    catalog registration. The annotation indicates that compute() returns
+    a pa.Array of the specified type.
+
+    Args:
+        arrow_type: The Arrow data type of the output, or AnyArrow for
+            dynamic output types determined at bind time.
+
+    Returns:
+        Annotated type suitable for use as compute() return type annotation.
+
+    Raises:
+        TypeError: If arrow_type is not a valid Arrow type or AnyArrow.
+
+    Example:
+        class DoubleValue(ScalarFunction):
+            def compute(
+                self,
+                value: Param(pa.int64(), "Input value"),
+            ) -> Returns(pa.int64()):
+                return pc.multiply(value, 2)
+
+        # With AnyArrow for dynamic output type:
+        class Identity(ScalarFunction):
+            @property
+            def output_type(self) -> pa.DataType:
+                return self.input_schema.field(0).type
+
+            def compute(
+                self,
+                value: Param(AnyArrow, "Value to pass through"),
+            ) -> Returns(AnyArrow):
+                return value
+
+    """
+    # Note: Use Any as base type instead of pa.Array[Any] because pa.Array
+    # isn't subscriptable and causes issues with `from __future__ import annotations`
+    if arrow_type is AnyArrow:
+        return Annotated[Any, _OutputType(None)]
+
+    if not isinstance(arrow_type, pa.DataType):
+        raise TypeError(
+            f"Returns() requires pa.DataType or AnyArrow, "
+            f"got {type(arrow_type).__name__}. "
+            f"Example: Returns(pa.int64()) or Returns(AnyArrow)"
+        )
+
+    return Annotated[Any, _OutputType(arrow_type)]

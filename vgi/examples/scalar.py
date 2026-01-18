@@ -5,9 +5,13 @@ to single-column output with 1:1 row mapping.
 
 AVAILABLE FUNCTIONS
 -------------------
-DoubleColumnFunction        - Doubles values in a numeric column
+DoubleColumnFunction        - Doubles values in a numeric column (AnyArrow example)
 AddNumericColumnsFunction   - Adds two numeric columns
 UpperCaseFunction           - Converts string column to uppercase
+MultiplyFunction            - Multiplies column by constant (ConstParam example)
+SumColumnsFunction          - Sums multiple columns (varargs example)
+NullHandlingFunction        - Demonstrates special null handling
+RandomIntFunction           - Generates random integers (VOLATILE stability)
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ from typing import Annotated, Any
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from vgi.arguments import AnyArrow, AnyArrowValue, Arg
+from vgi.arguments import AnyArrow, AnyArrowValue, Arg, ConstParam, Param, Returns
 from vgi.exceptions import SchemaValidationError
 from vgi.metadata import FunctionExample, FunctionStability, NullHandling
 from vgi.scalar_function import ScalarFunction
@@ -25,6 +29,7 @@ from vgi.scalar_function import ScalarFunction
 __all__ = [
     "AddNumericColumnsFunction",
     "DoubleColumnFunction",
+    "MultiplyFunction",
     "NullHandlingFunction",
     "RandomIntFunction",
     "SumColumnsFunction",
@@ -71,6 +76,57 @@ def _promote_for_addition(dtype: pa.DataType) -> pa.DataType:
     raise SchemaValidationError(f"Unsupported numeric type for addition: {dtype}")
 
 
+# =============================================================================
+# New Param/ConstParam/Returns API Examples
+# =============================================================================
+
+
+class MultiplyFunction(ScalarFunction):
+    """Multiplies a column by a constant factor.
+
+    This example demonstrates the new Param/ConstParam/Returns API:
+    - Param() for columnar input (receives pa.Array at runtime)
+    - ConstParam() for constant scalar input (receives Python value at runtime)
+    - Returns() for declaring output type
+
+    Example:
+        SQL:    SELECT multiply(price, 2) FROM products
+        Input:  price=[10, 20, 30]
+        Args:   factor=2
+        Output: result=[20, 40, 60]
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "multiply"
+        description = "Multiplies a column by a constant factor"
+        examples = [
+            FunctionExample(
+                sql="SELECT multiply(price, 2) FROM products",
+                description="Double all prices",
+            ),
+            FunctionExample(
+                sql="SELECT multiply(quantity, 10) FROM inventory",
+                description="Scale quantities by 10",
+            ),
+        ]
+
+    def compute(
+        self,
+        column: Param(pa.int64(), "Column to multiply"),  # type: ignore[valid-type]
+        factor: ConstParam(int, "Multiplication factor"),  # type: ignore[valid-type]
+    ) -> Returns(pa.int64()):  # type: ignore[valid-type]
+        """Multiply column values by the constant factor."""
+        return pc.multiply(column, factor)
+
+
+# =============================================================================
+# Legacy Arg Descriptor API Examples (still supported)
+# =============================================================================
+
+
 class DoubleColumnFunction(ScalarFunction):
     """Doubles values in a numeric column.
 
@@ -115,9 +171,9 @@ class DoubleColumnFunction(ScalarFunction):
         """Return the type of the doubled column."""
         return self._output_type
 
-    def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+    def compute(self, *, column: pa.Array[Any]) -> pa.Array[Any]:
         """Double the values in the specified column."""
-        return pc.multiply(batch.column(self.column.value), 2)
+        return pc.multiply(column, 2)
 
 
 class AddNumericColumnsFunction(ScalarFunction):
@@ -182,9 +238,9 @@ class AddNumericColumnsFunction(ScalarFunction):
         """Return the computed output type based on input column types."""
         return self._output_type
 
-    def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+    def compute(self, *, col1: pa.Array[Any], col2: pa.Array[Any]) -> pa.Array[Any]:
         """Add the two columns together."""
-        return pc.add(batch.column(self.col1.value), batch.column(self.col2.value))
+        return pc.add(col1, col2)
 
 
 class UpperCaseFunction(ScalarFunction):
@@ -218,9 +274,9 @@ class UpperCaseFunction(ScalarFunction):
 
     # Note: No need to override output_type - default uses Meta.output_type
 
-    def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+    def compute(self, *, column: pa.Array[Any]) -> pa.Array[Any]:
         """Convert the string values to uppercase."""
-        return pc.utf8_upper(batch.column(self.column))  # type: ignore[no-matching-overload]
+        return pc.utf8_upper(column)  # type: ignore[no-matching-overload]
 
 
 class SumColumnsFunction(ScalarFunction):
@@ -275,13 +331,11 @@ class SumColumnsFunction(ScalarFunction):
         """Return the computed output type based on first column."""
         return self._output_type
 
-    def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+    def compute(self, *, columns: list[pa.Array[Any]]) -> pa.Array[Any]:
         """Sum values from all specified columns."""
-        # With varargs=True, self.columns is a tuple of column names at runtime
-        columns: tuple[str, ...] = self.columns  # type: ignore[assignment]
-        result = batch.column(columns[0])
-        for col_name in columns[1:]:
-            result = pc.add(result, batch.column(col_name))
+        result = columns[0]
+        for col in columns[1:]:
+            result = pc.add(result, col)
         return result
 
 
@@ -315,12 +369,11 @@ class NullHandlingFunction(ScalarFunction):
 
     column: Annotated[int, Arg(0, doc="Integer value to process")]
 
-    def compute(self, batch: pa.RecordBatch) -> pa.Array[pa.Int64Scalar]:
+    def compute(self, *, column: pa.Array[Any]) -> pa.Array[pa.Int64Scalar]:
         """Return value if not null, otherwise -5000."""
-        col = batch.column(self.column)
         # Use if_else: if value is null, return -5000, otherwise return the value
         result: pa.Array[pa.Int64Scalar] = pc.if_else(
-            pc.is_null(col), pa.scalar(-5000, type=pa.int64()), col
+            pc.is_null(column), pa.scalar(-5000, type=pa.int64()), column
         )
         return result
 
@@ -360,13 +413,15 @@ class RandomIntFunction(ScalarFunction):
     min_val: Annotated[AnyArrowValue, Arg(0, doc="Minimum value (inclusive)")]
     max_val: Annotated[AnyArrowValue, Arg(1, doc="Maximum value (inclusive)")]
 
-    def compute(self, batch: pa.RecordBatch) -> pa.Array[Any]:
+    def compute(
+        self, *, min_val: pa.Array[Any], max_val: pa.Array[Any]
+    ) -> pa.Array[Any]:
         """Generate random integers for each row."""
         import random
 
-        # Get values from the batch columns
-        min_values: list[int] = batch.column(self.min_val.value).to_pylist()  # type: ignore[assignment]
-        max_values: list[int] = batch.column(self.max_val.value).to_pylist()  # type: ignore[assignment]
+        # Get values from the arrays
+        min_values: list[int] = min_val.to_pylist()  # type: ignore[assignment]
+        max_values: list[int] = max_val.to_pylist()  # type: ignore[assignment]
 
         # Generate random integers using per-row min/max
         values = [

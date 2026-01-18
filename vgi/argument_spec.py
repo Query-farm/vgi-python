@@ -55,6 +55,8 @@ __all__ = [
     "VGI_TYPE_ANY",
     "VGI_VARARGS_KEY",
     "VGI_VARARGS_TRUE",
+    "VGI_CONST_KEY",
+    "VGI_CONST_TRUE",
 ]
 
 # =============================================================================
@@ -73,6 +75,10 @@ VGI_TYPE_ANY = b"any"
 # Key indicating varargs (collects remaining positional arguments)
 VGI_VARARGS_KEY = b"vgi_varargs"
 VGI_VARARGS_TRUE = b"true"
+
+# Key indicating constant-folded argument (scalar value, not array)
+VGI_CONST_KEY = b"vgi_const"
+VGI_CONST_TRUE = b"true"
 
 
 def _argument_spec_sort_key(spec: "ArgumentSpec") -> tuple[int, int | str]:
@@ -108,6 +114,9 @@ class ArgumentSpec:
             (Arg[AnyArrow]).
         is_varargs: True if this argument collects all remaining positional
             arguments (varargs=True).
+        is_const: True if this argument is constant-folded (ConstParam).
+            Constant arguments are scalar values known at planning time,
+            rather than columnar data processed at runtime.
 
     Note:
         For named arguments, the Python attribute name (``name``) and the SQL
@@ -128,6 +137,7 @@ class ArgumentSpec:
     is_table_input: bool = False
     is_any_type: bool = False
     is_varargs: bool = False
+    is_const: bool = False
 
     def __repr__(self) -> str:
         """Return concise repr showing key attributes."""
@@ -142,6 +152,8 @@ class ArgumentSpec:
             flags.append("any_type")
         if self.is_varargs:
             flags.append("varargs")
+        if self.is_const:
+            flags.append("const")
 
         flags_str = f", flags=[{', '.join(flags)}]" if flags else ""
 
@@ -214,6 +226,9 @@ def argument_specs_to_schema(specs: Sequence[ArgumentSpec]) -> pa.Schema:
         if spec.is_varargs:
             metadata[VGI_VARARGS_KEY] = VGI_VARARGS_TRUE
 
+        if spec.is_const:
+            metadata[VGI_CONST_KEY] = VGI_CONST_TRUE
+
         # Create field with or without metadata
         field = pa.field(
             spec.name,
@@ -268,6 +283,9 @@ def schema_to_argument_specs(schema: pa.Schema) -> list[ArgumentSpec]:
         # Check varargs
         is_varargs = metadata.get(VGI_VARARGS_KEY) == VGI_VARARGS_TRUE
 
+        # Check const
+        is_const = metadata.get(VGI_CONST_KEY) == VGI_CONST_TRUE
+
         specs.append(
             ArgumentSpec(
                 name=field.name,
@@ -276,6 +294,7 @@ def schema_to_argument_specs(schema: pa.Schema) -> list[ArgumentSpec]:
                 is_table_input=is_table_input,
                 is_any_type=is_any_type,
                 is_varargs=is_varargs,
+                is_const=is_const,
             )
         )
 
@@ -381,6 +400,9 @@ def extract_argument_specs(
                 # Check varargs flag
                 is_varargs = arg.varargs
 
+                # Check const flag
+                is_const = getattr(arg, "const", False)
+
                 specs.append(
                     ArgumentSpec(
                         name=attr_name,
@@ -389,6 +411,7 @@ def extract_argument_specs(
                         is_table_input=is_table_input,
                         is_any_type=is_any_type,
                         is_varargs=is_varargs,
+                        is_const=is_const,
                     )
                 )
 
