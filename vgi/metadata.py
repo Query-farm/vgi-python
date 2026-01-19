@@ -528,7 +528,7 @@ def extract_parameters(
                         description=param_info.doc,
                         required=True,
                         default=None,
-                        constraints=None,
+                        constraints={},
                         is_table_input=False,
                         is_varargs=False,
                         is_const=True,
@@ -536,18 +536,18 @@ def extract_parameters(
                 )
             else:
                 # Column binding (Param): use Polars type from param_info
-                type_name = (
+                polars_type_name = (
                     str(param_info.polars_type) if param_info.polars_type else "any"
                 )
                 parameters.append(
                     ParameterInfo(
                         name=name,
                         position=param_info.position,
-                        type_name=type_name,
+                        type_name=polars_type_name,
                         description=param_info.doc,
                         required=True,
                         default=None,
-                        constraints=None,
+                        constraints={},
                         is_table_input=False,
                         is_varargs=param_info.varargs,
                         is_const=False,
@@ -563,13 +563,13 @@ def extract_parameters(
         seen_names.add(name)
         required = arg.default is _MISSING
         # For new API, use arrow_type if available
-        type_name: str | None = str(arg.arrow_type) if arg.arrow_type else "any"
+        compute_type_name = str(arg.arrow_type) if arg.arrow_type else "any"
 
         parameters.append(
             ParameterInfo(
                 name=name,
                 position=arg.position,
-                type_name=type_name,
+                type_name=compute_type_name,
                 description=arg.doc,
                 required=required,
                 default=None if required else arg.default,
@@ -582,13 +582,13 @@ def extract_parameters(
     for name, arg in const_params.items():
         seen_names.add(name)
         required = arg.default is _MISSING
-        type_name = str(arg.arrow_type) if arg.arrow_type else "any"
+        const_type_name = str(arg.arrow_type) if arg.arrow_type else "any"
 
         parameters.append(
             ParameterInfo(
                 name=name,
                 position=arg.position,
-                type_name=type_name,
+                type_name=const_type_name,
                 description=arg.doc,
                 required=required,
                 default=None if required else arg.default,
@@ -614,13 +614,13 @@ def extract_parameters(
                 seen_names.add(attr_name)
                 arg = attr_value
                 required = arg.default is _MISSING
-                type_name, is_table_input = _get_arg_type_info(cls, attr_name)
+                legacy_type_name, is_table_input = _get_arg_type_info(cls, attr_name)
 
                 parameters.append(
                     ParameterInfo(
                         name=attr_name,
                         position=arg.position,
-                        type_name=type_name,
+                        type_name=legacy_type_name or "any",
                         description=arg.doc,
                         required=required,
                         default=None if required else arg.default,
