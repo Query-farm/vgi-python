@@ -1588,6 +1588,8 @@ class ConstParam:
         doc: Documentation string describing this parameter.
         arrow_type: Optional explicit Arrow type. If not provided, type is
             inferred from the Annotated first argument.
+        position: Position in the argument list (required for PolarsScalarFunction,
+            optional for ScalarFunction where position is inferred from signature).
 
     Example:
         class FormatNumber(ScalarFunction):
@@ -1600,10 +1602,20 @@ class ConstParam:
                 fmt = f"%.{precision}f"
                 return pa.array([fmt % v for v in value.to_pylist()])
 
+    Example for PolarsScalarFunction:
+        class Multiply(PolarsScalarFunction):
+            value: Annotated[pl.Float64, Param(position=0, doc="Value to multiply")]
+            factor: Annotated[float, ConstParam("Factor", position=0)]
+
+            def compute_polars(self) -> pl.Expr:
+                return pl.col("value") * self.factor
+
     """
 
     doc: str = ""
     arrow_type: pa.DataType | type | None = None
+    # Position in the argument list (for PolarsScalarFunction class-level attributes)
+    position: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

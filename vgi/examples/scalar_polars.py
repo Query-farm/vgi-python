@@ -62,7 +62,7 @@ from typing import Annotated, Any
 import polars as pl
 import pyarrow.types as pat
 
-from vgi.arguments import Param
+from vgi.arguments import ConstParam, Param
 from vgi.metadata import FunctionExample
 from vgi.scalar_function_polars import AnyPolars, PolarsScalarFunction
 
@@ -253,17 +253,15 @@ class PolarsMultiplyFunction(PolarsScalarFunction):
     """Multiply a numeric column by a constant factor using Polars.
 
     Demonstrates combining a column parameter with a constant (scalar) argument.
-    The constant factor is passed via SQL and accessed through
-    ``self.invocation.arguments.positional``.
+    Use ``ConstParam`` to declare constant arguments that appear in function
+    signatures and metadata.
 
     This pattern is useful when you need a user-specified value that doesn't
     come from a table column (e.g., scaling factor, threshold, limit).
 
     Attributes:
-        value: Numeric column to multiply (position 0).
-
-    Properties:
-        factor: The constant multiplication factor from arguments.
+        value: Numeric column to multiply (position 0 in input batch).
+        factor: Constant multiplication factor (position 0 in function arguments).
 
     SQL Usage:
         ``SELECT polars_multiply(price, 1.1) FROM products``
@@ -272,9 +270,15 @@ class PolarsMultiplyFunction(PolarsScalarFunction):
         >>> input: value=[10.0, 20.0, 30.0], factor=2.0
         >>> output: [20.0, 40.0, 60.0]
 
+    Note:
+        The ``factor`` is a constant argument passed from SQL, not a table column.
+        It's declared with ``ConstParam(position=0)`` to indicate it's the first
+        positional argument in the function call.
+
     """
 
     value: Annotated[pl.Float64, Param(position=0, doc="Value to multiply")]
+    factor: Annotated[float, ConstParam("Multiplication factor", position=0)]
 
     class Meta:
         """Function metadata."""
@@ -290,13 +294,13 @@ class PolarsMultiplyFunction(PolarsScalarFunction):
         ]
 
     @property
-    def factor(self) -> float:
+    def _factor(self) -> float:
         """Get the multiplication factor from arguments."""
         return self.invocation.arguments.positional[0].as_py()  # type: ignore
 
     def compute_polars(self) -> pl.Expr:
         """Multiply the values by the constant factor."""
-        return pl.col("value") * self.factor
+        return pl.col("value") * self._factor
 
 
 # =============================================================================

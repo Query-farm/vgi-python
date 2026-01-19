@@ -29,6 +29,15 @@ from vgi.examples.scalar import (
     SumValuesFunction,
     UpperCaseFunction,
 )
+from vgi.examples.scalar_polars import (
+    PolarsAddValuesFunction,
+    PolarsDoubleFunction,
+    PolarsMultiplyFunction,
+    PolarsNormalizeFunction,
+    PolarsStringLengthFunction,
+    PolarsSumValuesFunction,
+    PolarsUpperCaseFunction,
+)
 from vgi.examples.table import (
     ConstantColumnsFunction,
     DoubleSequenceFunction,
@@ -103,6 +112,14 @@ class ExampleWorker(Worker):
         RandomIntFunction,
         SumValuesFunction,
         UpperCaseFunction,
+        # PolarsScalarFunction - Polars-based scalar functions
+        PolarsAddValuesFunction,
+        PolarsDoubleFunction,
+        PolarsMultiplyFunction,
+        PolarsNormalizeFunction,
+        PolarsStringLengthFunction,
+        PolarsSumValuesFunction,
+        PolarsUpperCaseFunction,
     ]
 
 

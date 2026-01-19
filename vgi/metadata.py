@@ -480,30 +480,30 @@ def extract_parameters(
     parameters: list[ParameterInfo] = []
     seen_names: set[str] = set()
 
-    # Check for _polars_params (PolarsScalarFunction subclasses)
-    # These store PolarsParamInfo objects with Polars types
+    # Note: _polars_params (PolarsScalarFunction subclasses) with is_const=False
+    # are NOT extracted as function parameters. They're column position bindings
+    # that describe which columns from the input batch map to expression variables.
+    # However, ConstParam entries (is_const=True) ARE function arguments and must
+    # be extracted for the function signature.
     polars_params = getattr(cls, "_polars_params", {})
     for name, param_info in polars_params.items():
+        if not param_info.is_const:
+            continue  # Skip column bindings, only extract ConstParam
         seen_names.add(name)
-        # Convert Polars type to string representation
-        type_name: str | None = None
-        if param_info.polars_type is not None:
-            type_name = str(param_info.polars_type)
-        else:
-            type_name = "any"  # Dynamic type
-
+        # ConstParam is always required (no default support currently)
+        type_name = "double"  # TODO: Infer from annotation type
         parameters.append(
             ParameterInfo(
                 name=name,
                 position=param_info.position,
                 type_name=type_name,
                 description=param_info.doc,
-                required=True,  # Polars params are always required
+                required=True,
                 default=None,
-                constraints={},
+                constraints=None,
                 is_table_input=False,
-                is_varargs=param_info.varargs,
-                is_const=param_info.is_const,
+                is_varargs=False,
+                is_const=True,
             )
         )
 

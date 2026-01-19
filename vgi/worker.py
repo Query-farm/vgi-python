@@ -745,6 +745,18 @@ class Worker:
                     if protocol_input.is_finalize:
                         fn_log.debug("finalize_received")
                         generator.close()
+                        # Send FINISHED status response (client expects this)
+                        empty_output = pa.RecordBatch.from_pydict(
+                            {
+                                instance.output_schema.field(0).name: pa.array(
+                                    [], type=instance.output_schema.field(0).type
+                                )
+                            },
+                            schema=instance.output_schema,
+                        )
+                        finished_md = pa.KeyValueMetadata({b"vgi.status": b"FINISHED"})
+                        writer.write_batch(empty_output, custom_metadata=finished_md)
+                        fn_log.debug("finished_status_sent")
                         # Read end-of-stream marker before returning to invocation loop
                         try:
                             data_reader.read_next_batch_with_custom_metadata()
