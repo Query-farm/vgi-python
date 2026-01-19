@@ -116,6 +116,8 @@ from typing import TYPE_CHECKING, Annotated, Any, cast, get_args, get_origin
 
 import polars as pl
 import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.types as pat
 import structlog
 from polars.datatypes.classes import DataTypeClass
 
@@ -167,6 +169,69 @@ def _normalize_polars_type(polars_type: pl.DataType | DataTypeClass) -> pl.DataT
     return polars_type
 
 
+def _normalize_arrow_type_for_duckdb(arrow_type: pa.DataType) -> pa.DataType:
+    """Recursively normalize Arrow types to DuckDB-compatible equivalents.
+
+    Polars uses large_string/large_binary internally, but DuckDB doesn't
+    support these types. This function recursively converts nested types
+    to their standard equivalents.
+
+    Args:
+        arrow_type: The Arrow data type to normalize.
+
+    Returns:
+        A DuckDB-compatible Arrow data type.
+
+    """
+    # Base cases: convert large types to standard equivalents
+    if pat.is_large_string(arrow_type):
+        return pa.string()
+    if pat.is_large_binary(arrow_type):
+        return pa.binary()
+
+    # Recursive cases for container types
+    if pat.is_list(arrow_type):
+        return pa.list_(_normalize_arrow_type_for_duckdb(arrow_type.value_type))
+
+    if pat.is_large_list(arrow_type):
+        return pa.list_(_normalize_arrow_type_for_duckdb(arrow_type.value_type))
+
+    if pat.is_fixed_size_list(arrow_type):
+        return cast(
+            pa.DataType,
+            pa.list_(
+                _normalize_arrow_type_for_duckdb(arrow_type.value_type),
+                arrow_type.list_size,
+            ),
+        )
+
+    if pat.is_struct(arrow_type):
+        return pa.struct(
+            [
+                pa.field(f.name, _normalize_arrow_type_for_duckdb(f.type))
+                for f in arrow_type
+            ]
+        )
+
+    if pat.is_map(arrow_type):
+        return pa.map_(
+            _normalize_arrow_type_for_duckdb(arrow_type.key_type),
+            _normalize_arrow_type_for_duckdb(arrow_type.item_type),
+        )
+
+    if pat.is_dictionary(arrow_type):
+        return cast(
+            pa.DataType,
+            pa.dictionary(
+                arrow_type.index_type,
+                _normalize_arrow_type_for_duckdb(arrow_type.value_type),
+            ),
+        )
+
+    # Return unchanged for all other types
+    return arrow_type
+
+
 def _polars_to_arrow_type(polars_type: pl.DataType | DataTypeClass) -> pa.DataType:
     """Convert a Polars data type to an Arrow data type.
 
@@ -174,7 +239,7 @@ def _polars_to_arrow_type(polars_type: pl.DataType | DataTypeClass) -> pa.DataTy
         polars_type: The Polars data type to convert (instance or class).
 
     Returns:
-        The equivalent Arrow data type.
+        The equivalent Arrow data type, normalized for DuckDB compatibility.
 
     """
     # Normalize to DataType instance
@@ -184,7 +249,10 @@ def _polars_to_arrow_type(polars_type: pl.DataType | DataTypeClass) -> pa.DataTy
     # This lets Polars handle the type mapping correctly
     dummy = pl.Series("x", [], dtype=dtype)
     arrow_array = dummy.to_arrow()
-    return cast(pa.DataType, arrow_array.type)
+    arrow_type = cast(pa.DataType, arrow_array.type)
+
+    # Normalize for DuckDB compatibility (e.g., large_string -> string)
+    return _normalize_arrow_type_for_duckdb(arrow_type)
 
 
 @dataclass(frozen=True, slots=True)
@@ -701,7 +769,14 @@ class PolarsScalarFunction(ScalarFunctionGenerator):
         result_series = df.select(expr.alias("result"))["result"]
 
         # Zero-copy conversion back to Arrow
-        return result_series.to_arrow()
+        result_array = result_series.to_arrow()
+
+        # Normalize for DuckDB compatibility (handles nested types)
+        normalized_type = _normalize_arrow_type_for_duckdb(result_array.type)
+        if normalized_type != result_array.type:
+            result_array = pc.cast(result_array, normalized_type)
+
+        return result_array
 
     def _yield_pending_messages(self) -> ScalarOutputGenerator:
         """Yield all pending log messages. Helper for process()."""
