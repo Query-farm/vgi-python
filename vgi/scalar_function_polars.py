@@ -4,58 +4,106 @@ This module provides PolarsScalarFunction, a base class for scalar functions
 that use Polars for data processing. It handles the zero-copy conversion
 between Arrow and Polars automatically.
 
+Expression-Based API
+--------------------
+PolarsScalarFunction uses an expression-based API where:
+
+1. Parameters are declared as class attributes with ``Annotated[type, Param(...)]``
+2. ``compute_polars()`` returns a ``pl.Expr`` (not a Series)
+3. Columns are referenced by their declared param names: ``pl.col("param_name")``
+
+This approach enables Polars' lazy evaluation and query optimization.
+
+Basic Example
+-------------
+A function that converts text to uppercase::
+
+    from typing import Annotated
+    import polars as pl
+    from vgi import PolarsScalarFunction, Param
+
+    class UpperCase(PolarsScalarFunction):
+        # Declare input parameter with position and Polars type
+        text: Annotated[pl.Utf8, Param(position=0, doc="Input string")]
+
+        class Meta:
+            output_type = pl.Utf8
+
+        def compute_polars(self) -> pl.Expr:
+            # Reference column by param name, return expression
+            return pl.col("text").str.to_uppercase()
+
+Multiple Parameters
+-------------------
+Add multiple columns together::
+
+    class AddValues(PolarsScalarFunction):
+        left: Annotated[pl.Float64, Param(position=0, doc="First value")]
+        right: Annotated[pl.Float64, Param(position=1, doc="Second value")]
+
+        class Meta:
+            output_type = pl.Float64
+
+        def compute_polars(self) -> pl.Expr:
+            return pl.col("left") + pl.col("right")
+
+Dynamic Output Type
+-------------------
+When output type depends on input, use ``AnyPolars`` and override
+``output_polars_type``::
+
+    from typing import Any, Annotated
+    import pyarrow.types as pat
+
+    class Double(PolarsScalarFunction):
+        # Any type with type_bound constraint
+        value: Annotated[
+            Any,
+            Param(
+                position=0,
+                doc="Numeric value",
+                type_bound=[pat.is_integer, pat.is_floating],
+            ),
+        ]
+
+        class Meta:
+            output_type = AnyPolars  # Dynamic type
+
+        @property
+        def output_polars_type(self) -> pl.DataType:
+            # Preserve input type
+            return self.polars_schema[self.input_schema.field(0).name]
+
+        def compute_polars(self) -> pl.Expr:
+            return pl.col("value") * 2
+
+Varargs (Variable Arguments)
+----------------------------
+Accept any number of columns with ``varargs=True``::
+
+    class SumValues(PolarsScalarFunction):
+        values: Annotated[pl.Float64, Param(position=0, varargs=True)]
+
+        class Meta:
+            output_type = pl.Float64
+
+        def compute_polars(self) -> pl.Expr:
+            # Vararg columns are renamed to values_0, values_1, etc.
+            # Use regex to match all of them
+            return pl.sum_horizontal(pl.col("^values_.*$"))
+
 Zero-Copy Pattern
 -----------------
-Polars can work directly with Arrow data without copying:
+Under the hood, Polars works directly with Arrow data without copying:
 
     # Arrow -> Polars (zero-copy)
     df = pl.from_arrow(batch)
 
-    # Polars operations
-    result_series = df.select(pl.col("x") * 2).to_series()
+    # Evaluate expression
+    result = df.select(expr.alias("result"))["result"]
 
     # Polars -> Arrow (zero-copy)
-    result_array = result_series.to_arrow()
-
-PolarsScalarFunction automates this pattern:
-
-    class DoubleColumn(PolarsScalarFunction):
-        class Meta:
-            output_type = pl.Int64  # Polars type
-
-        column = Arg[str](0, doc="Column to double")
-
-        def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-            return df[self.column] * 2
-
-Example:
--------
-Simple uppercase function::
-
-    class UpperCase(PolarsScalarFunction):
-        class Meta:
-            output_type = pl.Utf8
-
-        column = Arg[str](0, doc="Column to uppercase")
-
-        def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-            return df[self.column].str.to_uppercase()
-
-Dynamic output type (depends on input)::
-
-    class DoubleColumn(PolarsScalarFunction):
-        class Meta:
-            output_type = AnyPolars  # Dynamic type
-
-        column = Arg[str](0, doc="Column to double")
-
-        @property
-        def output_polars_type(self) -> pl.DataType:
-            # Determine output type from input column
-            return self.polars_schema[self.column]
-
-        def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-            return df[self.column] * 2
+    return result.to_arrow()
 
 """
 
@@ -164,61 +212,113 @@ class PolarsParamInfo:
 
 
 class PolarsScalarFunction(ScalarFunctionGenerator):
-    """Base class for scalar functions using Polars.
+    """Base class for scalar functions using Polars expressions.
 
-    This class handles the zero-copy conversion between Arrow and Polars,
-    letting you work with Polars DataFrames in compute_polars().
+    This class provides an expression-based API for Polars scalar functions
+    with zero-copy Arrow conversion. Parameters are declared as class
+    attributes, and ``compute_polars()`` returns a ``pl.Expr``.
 
-    Methods/Attributes to Override
-    ------------------------------
-    Meta.output_type : pl.DataType | type[AnyPolars] (required)
-        Declare the Polars output type for catalog introspection.
-        Use a pl.DataType for static output, or AnyPolars if output
-        type depends on input schema.
+    Defining Parameters
+    -------------------
+    Declare parameters as class attributes using ``Annotated[type, Param(...)]``:
 
-    compute_polars(df) : pl.Series
-        Transform the input DataFrame to a single output Series.
-        Must return a Series with exactly df.height elements.
+    - ``position``: Column position in input batch (required)
+    - ``doc``: Documentation string for the parameter
+    - ``varargs``: True to collect all remaining columns
+    - ``type_bound``: Type constraint for dynamic types (Any)
 
-    output_polars_type : pl.DataType (property, optional)
-        Override only if Meta.output_type is AnyPolars.
-        Default implementation uses Meta.output_type.
+    Example::
 
-    setup() : None
-        Called before processing. Acquire resources here.
+        text: Annotated[pl.Utf8, Param(position=0, doc="Input string")]
+        value: Annotated[pl.Float64, Param(position=1, doc="Numeric value")]
 
-    teardown() : None
-        Called after processing. Release resources here.
+    Methods to Override
+    -------------------
+    compute_polars() -> pl.Expr (required)
+        Return a Polars expression for the transformation.
+        Reference columns by param name: ``pl.col("param_name")``.
 
-    Available Attributes
-    --------------------
+    output_polars_type -> pl.DataType (property, optional)
+        Override only when ``Meta.output_type = AnyPolars``.
+        Returns the actual output type based on input schema.
+
+    bind() -> None (optional)
+        Called after input schema is available. Override to validate
+        or compute values that depend on the schema.
+
+    setup() / teardown() (optional)
+        Called before/after processing for resource management.
+
+    Meta Class Attributes
+    ---------------------
+    output_type : pl.DataType | type[AnyPolars] (required)
+        The Polars output type. Use ``AnyPolars`` for dynamic output types.
+
+    name : str (optional)
+        Function name for SQL registration (defaults to class name).
+
+    description : str (optional)
+        Human-readable function description.
+
+    examples : list[FunctionExample] (optional)
+        Example SQL queries demonstrating usage.
+
+    Available Instance Attributes
+    -----------------------------
     self.invocation : Invocation
-        The complete invocation request with function name and arguments.
+        The complete invocation with function name and arguments.
 
     self.input_schema : pa.Schema
         Arrow schema of input batches.
 
-    self.polars_schema : dict[str, pl.DataType]
+    self.polars_schema : Mapping[str, pl.DataType]
         Polars schema derived from input_schema.
 
     self.output_schema : pa.Schema
-        Arrow schema of output batches (single column named "result").
+        Arrow output schema (single "result" column).
 
     self.empty_output_batch : pa.RecordBatch
-        Empty batch conforming to output_schema.
+        Empty batch matching output_schema.
 
-    Example:
-    -------
-    A function that converts a column to uppercase::
+    Column Naming
+    -------------
+    The framework automatically renames input columns to match param names:
 
-        class PolarsUpperCase(PolarsScalarFunction):
+    - Input: ``["col_0", "col_1"]`` -> Renamed: ``["text", "value"]``
+    - Varargs: ``["col_0", ...]`` -> ``["values_0", "values_1", ...]``
+
+    This lets you use ``pl.col("param_name")`` regardless of input column names.
+
+    Examples
+    --------
+    Basic uppercase function::
+
+        class UpperCase(PolarsScalarFunction):
+            text: Annotated[pl.Utf8, Param(position=0, doc="Input")]
+
             class Meta:
                 output_type = pl.Utf8
 
-            column = Arg[str](0, doc="Column to uppercase")
+            def compute_polars(self) -> pl.Expr:
+                return pl.col("text").str.to_uppercase()
 
-            def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-                return df[self.column].str.to_uppercase()
+    Dynamic output type (preserves input type)::
+
+        class Double(PolarsScalarFunction):
+            value: Annotated[
+                Any,
+                Param(position=0, type_bound=[pat.is_integer, pat.is_floating]),
+            ]
+
+            class Meta:
+                output_type = AnyPolars
+
+            @property
+            def output_polars_type(self) -> pl.DataType:
+                return self.polars_schema[self.input_schema.field(0).name]
+
+            def compute_polars(self) -> pl.Expr:
+                return pl.col("value") * 2
 
     """
 
