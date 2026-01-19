@@ -147,7 +147,7 @@ class TestPolarsNormalizeFunction:
 
         # Check that mean of z-scores is approximately 0
         mean_zscore = sum(result) / len(result)
-        assert abs(mean_zscore) < 0.0001, f"Mean z-score should be ~0, got {mean_zscore}"
+        assert abs(mean_zscore) < 0.0001, f"Mean z-score should be ~0: {mean_zscore}"
 
         # Check that middle value (30) has z-score ~0
         assert abs(result[2]) < 0.0001, "z-score of middle value should be ~0"

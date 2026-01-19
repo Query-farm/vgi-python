@@ -79,6 +79,8 @@ from vgi.arguments import (
     ConstParam,
     Param,
     Returns,
+    is_polars_type,
+    polars_type_to_arrow,
 )
 from vgi.output_complete import OutputComplete
 from vgi.protocol_types import ProtocolInput
@@ -156,10 +158,14 @@ def _param_to_arg(param: Param, base_type: type, position: int) -> Arg[Any]:
             arrow_type = param.arrow_type
         elif param.arrow_type in _PYTHON_TO_ARROW:
             arrow_type = _PYTHON_TO_ARROW[param.arrow_type]
+        elif is_polars_type(param.arrow_type):
+            # Convert Polars type (pl.Utf8, pl.Int64, etc.) to Arrow
+            arrow_type = polars_type_to_arrow(param.arrow_type)
         else:
             raise TypeError(
                 f"Cannot convert type '{param.arrow_type}' to Arrow type. "
-                f"Use pa.DataType, Python type (int/str/float/bool/bytes), or None."
+                f"Use pa.DataType, Polars type, Python type "
+                f"(int/str/float/bool/bytes), or None for AnyArrow."
             )
     # Priority 2: Infer from simple array class (pa.Int64Array -> pa.int64())
     elif base_type in ARRAY_CLASS_TO_DATATYPE:

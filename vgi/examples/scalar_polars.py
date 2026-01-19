@@ -4,19 +4,20 @@ This module provides example scalar functions that use Polars for data
 processing, demonstrating the PolarsScalarFunction base class which
 handles zero-copy Arrow-Polars conversion automatically.
 
-POLARS SCALAR FUNCTIONS
------------------------
-PolarsScalarFunction handles the Arrow <-> Polars conversion automatically.
-The compute_polars() method receives a DataFrame containing the input values
-(columns accessed by position, not name):
+EXPRESSION-BASED API
+--------------------
+PolarsScalarFunction uses an expression-based API where compute_polars()
+returns a pl.Expr instead of a pl.Series. Columns are referenced by their
+declared param names using pl.col("param_name"):
 
     class MyFunction(PolarsScalarFunction):
-        class Meta:
-            output_type = pl.Utf8  # Polars type, not Arrow
+        text: Annotated[pl.Utf8, Param(position=0, doc="Input text")]
 
-        def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-            # Access first input value by position
-            return df.get_columns()[0].str.to_uppercase()
+        class Meta:
+            output_type = pl.Utf8
+
+        def compute_polars(self) -> pl.Expr:
+            return pl.col("text").str.to_uppercase()
 
 STATIC OUTPUT TYPE
 ------------------
@@ -33,18 +34,19 @@ VARARGS
 -------
 PolarsSumValuesFunction     - Sums multiple numeric values
 
-DYNAMIC OUTPUT TYPE (AnyPolars)
--------------------------------
+DYNAMIC OUTPUT TYPE
+-------------------
 PolarsDoubleFunction        - Doubles numeric values, preserving input type
 """
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 import polars as pl
+import pyarrow.types as pat
 
-from vgi.arguments import Arg
+from vgi.arguments import Param
 from vgi.metadata import FunctionExample
 from vgi.scalar_function_polars import AnyPolars, PolarsScalarFunction
 
@@ -62,9 +64,8 @@ __all__ = [
 class PolarsUpperCaseFunction(PolarsScalarFunction):
     """Converts string values to uppercase using Polars.
 
-    Demonstrates PolarsScalarFunction which handles zero-copy Arrow-to-Polars
-    conversion automatically. The input values are accessed by position in
-    the DataFrame.
+    Demonstrates the expression-based API where compute_polars() returns
+    a pl.Expr and columns are referenced by their declared param names.
 
     Example:
         SQL:    SELECT polars_upper_case(name) FROM users
@@ -72,6 +73,8 @@ class PolarsUpperCaseFunction(PolarsScalarFunction):
         Output: ["ALICE", "BOB", "CHARLIE"]
 
     """
+
+    text: Annotated[pl.Utf8, Param(position=0, doc="String value to uppercase")]
 
     class Meta:
         """Function metadata."""
@@ -86,16 +89,16 @@ class PolarsUpperCaseFunction(PolarsScalarFunction):
             ),
         ]
 
-    def compute_polars(self, df: pl.DataFrame) -> pl.Series:
+    def compute_polars(self) -> pl.Expr:
         """Convert the string values to uppercase using Polars."""
-        return df.get_columns()[0].str.to_uppercase()
+        return pl.col("text").str.to_uppercase()
 
 
 class PolarsStringLengthFunction(PolarsScalarFunction):
     """Computes string lengths using Polars.
 
-    Demonstrates using Polars string length computation with
-    PolarsScalarFunction for automatic Arrow integration.
+    Demonstrates using Polars string length computation with the
+    expression-based API.
 
     Example:
         SQL:    SELECT polars_string_length(text) FROM documents
@@ -103,6 +106,8 @@ class PolarsStringLengthFunction(PolarsScalarFunction):
         Output: [5, 2, 7]
 
     """
+
+    text: Annotated[pl.Utf8, Param(position=0, doc="String value")]
 
     class Meta:
         """Function metadata."""
@@ -117,16 +122,16 @@ class PolarsStringLengthFunction(PolarsScalarFunction):
             ),
         ]
 
-    def compute_polars(self, df: pl.DataFrame) -> pl.Series:
+    def compute_polars(self) -> pl.Expr:
         """Compute string lengths using Polars."""
-        return df.get_columns()[0].str.len_chars()
+        return pl.col("text").str.len_chars()
 
 
 class PolarsNormalizeFunction(PolarsScalarFunction):
     """Z-score normalization using Polars.
 
     Computes (value - mean) / std for numeric values, demonstrating
-    Polars aggregation and arithmetic operations with PolarsScalarFunction.
+    Polars aggregation and arithmetic operations with the expression API.
 
     Example:
         SQL:    SELECT polars_normalize(score) FROM exam_results
@@ -134,6 +139,8 @@ class PolarsNormalizeFunction(PolarsScalarFunction):
         Output: [-1.41, -0.71, 0.0, 0.71, 1.41] (approximately)
 
     """
+
+    value: Annotated[pl.Float64, Param(position=0, doc="Numeric value to normalize")]
 
     class Meta:
         """Function metadata."""
@@ -148,9 +155,9 @@ class PolarsNormalizeFunction(PolarsScalarFunction):
             ),
         ]
 
-    def compute_polars(self, df: pl.DataFrame) -> pl.Series:
+    def compute_polars(self) -> pl.Expr:
         """Normalize the values using z-score (value - mean) / std."""
-        col = df.get_columns()[0]
+        col = pl.col("value")
         return (col - col.mean()) / col.std()
 
 
@@ -162,8 +169,7 @@ class PolarsNormalizeFunction(PolarsScalarFunction):
 class PolarsAddValuesFunction(PolarsScalarFunction):
     """Adds two numeric values together using Polars.
 
-    Demonstrates multiple positional arguments with PolarsScalarFunction.
-    Input values are accessed by position in the DataFrame.
+    Demonstrates multiple positional arguments with named param references.
 
     Example:
         SQL:    SELECT polars_add_values(price, tax) FROM orders
@@ -171,6 +177,9 @@ class PolarsAddValuesFunction(PolarsScalarFunction):
         Output: [11, 22, 33]
 
     """
+
+    left: Annotated[pl.Float64, Param(position=0, doc="First value")]
+    right: Annotated[pl.Float64, Param(position=1, doc="Second value")]
 
     class Meta:
         """Function metadata."""
@@ -185,17 +194,16 @@ class PolarsAddValuesFunction(PolarsScalarFunction):
             ),
         ]
 
-    def compute_polars(self, df: pl.DataFrame) -> pl.Series:
+    def compute_polars(self) -> pl.Expr:
         """Add the two values together."""
-        cols = df.get_columns()
-        return cols[0] + cols[1]
+        return pl.col("left") + pl.col("right")
 
 
 class PolarsMultiplyFunction(PolarsScalarFunction):
     """Multiplies a numeric value by a constant factor using Polars.
 
-    Demonstrates mixing a value with a constant argument. The first
-    argument is the numeric value, the second is the constant factor.
+    Demonstrates mixing a column value with instance state. The factor
+    is resolved from the constant argument during initialization.
 
     Example:
         SQL:    SELECT polars_multiply(price, 2) FROM products
@@ -203,6 +211,8 @@ class PolarsMultiplyFunction(PolarsScalarFunction):
         Output: [20, 40, 60]
 
     """
+
+    value: Annotated[pl.Float64, Param(position=0, doc="Value to multiply")]
 
     class Meta:
         """Function metadata."""
@@ -217,11 +227,14 @@ class PolarsMultiplyFunction(PolarsScalarFunction):
             ),
         ]
 
-    factor: Annotated[float, Arg(1, doc="Multiplication factor")]
+    @property
+    def factor(self) -> float:
+        """Get the multiplication factor from arguments."""
+        return self.invocation.arguments.positional[0].as_py()  # type: ignore
 
-    def compute_polars(self, df: pl.DataFrame) -> pl.Series:
+    def compute_polars(self) -> pl.Expr:
         """Multiply the values by the constant factor."""
-        return df.get_columns()[0] * self.factor
+        return pl.col("value") * self.factor
 
 
 # =============================================================================
@@ -232,9 +245,8 @@ class PolarsMultiplyFunction(PolarsScalarFunction):
 class PolarsSumValuesFunction(PolarsScalarFunction):
     """Sums multiple numeric values using Polars.
 
-    Demonstrates varargs with PolarsScalarFunction - accepts any number
-    of numeric values and sums them row-wise. All input values are
-    accessed by position in the DataFrame.
+    Demonstrates varargs with the expression API - accepts any number
+    of numeric values and sums them row-wise using pl.sum_horizontal().
 
     Example:
         SQL:    SELECT polars_sum_values(a, b, c) FROM data
@@ -242,6 +254,8 @@ class PolarsSumValuesFunction(PolarsScalarFunction):
         Output: [111, 222]
 
     """
+
+    values: Annotated[pl.Float64, Param(position=0, doc="Values to sum", varargs=True)]
 
     class Meta:
         """Function metadata."""
@@ -256,25 +270,24 @@ class PolarsSumValuesFunction(PolarsScalarFunction):
             ),
         ]
 
-    def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-        """Sum all input values."""
-        cols = df.get_columns()
-        result = cols[0]
-        for col in cols[1:]:
-            result = result + col
-        return result
+    def compute_polars(self) -> pl.Expr:
+        """Sum all input values using sum_horizontal."""
+        # With varargs, columns are renamed to values_0, values_1, etc.
+        # Use regex to match all vararg columns
+        return pl.sum_horizontal(pl.col("^values_.*$"))
 
 
 # =============================================================================
-# Dynamic Output Type (AnyPolars) Example
+# Dynamic Output Type Example
 # =============================================================================
 
 
 class PolarsDoubleFunction(PolarsScalarFunction):
     """Doubles numeric values, preserving the input type.
 
-    Demonstrates AnyPolars for dynamic output type - the output type
+    Demonstrates dynamic output type with type_bound - the output type
     matches the input type (int64 in -> int64 out, float64 in -> float64 out).
+    Uses type_bound to ensure only numeric inputs are accepted.
 
     Example:
         SQL:    SELECT polars_double(count) FROM inventory
@@ -282,6 +295,15 @@ class PolarsDoubleFunction(PolarsScalarFunction):
         Output: [2, 4, 6] (Int64, same type preserved)
 
     """
+
+    value: Annotated[
+        Any,
+        Param(
+            position=0,
+            doc="Numeric value to double",
+            type_bound=[pat.is_integer, pat.is_floating],
+        ),
+    ]
 
     class Meta:
         """Function metadata."""
@@ -302,6 +324,6 @@ class PolarsDoubleFunction(PolarsScalarFunction):
         # Get the type of the first input column
         return self.polars_schema[self.input_schema.field(0).name]
 
-    def compute_polars(self, df: pl.DataFrame) -> pl.Series:
+    def compute_polars(self) -> pl.Expr:
         """Double the values, preserving the input type."""
-        return df.get_columns()[0] * 2
+        return pl.col("value") * 2

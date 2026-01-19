@@ -33,12 +33,15 @@ import re
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
 
 import pyarrow as pa
 
 if TYPE_CHECKING:
     from pyarrow import Scalar
+
+# Note: Param.arrow_type also accepts Polars types (pl.DataType, pl.Utf8, etc.)
+# These are detected at runtime by is_polars_type() and converted to Arrow types
 
 
 # Python type to Arrow type mapping for Arg type hints
@@ -185,6 +188,88 @@ COMPLEX_ARRAY_CLASSES: set[type] = {
 }
 
 
+# =============================================================================
+# Polars Type Detection and Conversion
+# =============================================================================
+
+
+def is_polars_type(obj: Any) -> bool:
+    """Check if an object is a Polars data type.
+
+    Detects both Polars DataType instances (pl.Utf8()) and DataTypeClass
+    (pl.Utf8). Works without importing polars at module level.
+
+    Args:
+        obj: Object to check.
+
+    Returns:
+        True if obj is a Polars DataType or DataTypeClass, False otherwise.
+
+    """
+    # Check by module name to avoid importing polars
+    obj_type = type(obj)
+    module = getattr(obj_type, "__module__", "")
+
+    # DataType instances: polars.datatypes.classes module
+    if module.startswith("polars.datatypes"):
+        return True
+
+    # DataTypeClass (type classes like pl.Utf8): check if it's a class
+    # with a polars module that's callable and returns a DataType
+    if isinstance(obj, type):
+        obj_module = getattr(obj, "__module__", "")
+        if obj_module.startswith("polars.datatypes"):
+            return True
+
+    return False
+
+
+def polars_type_to_arrow(polars_type: Any) -> pa.DataType:
+    """Convert a Polars data type to an Arrow data type.
+
+    Args:
+        polars_type: A Polars DataType instance (pl.Utf8()) or DataTypeClass (pl.Utf8).
+
+    Returns:
+        The equivalent Arrow data type.
+
+    Raises:
+        TypeError: If polars is not installed or conversion fails.
+
+    Example:
+        >>> import polars as pl
+        >>> polars_type_to_arrow(pl.Utf8)
+        DataType(string)
+        >>> polars_type_to_arrow(pl.Int64())
+        DataType(int64)
+
+    """
+    try:
+        import polars as pl
+    except ImportError as e:
+        raise TypeError(
+            f"Cannot convert Polars type '{polars_type}' - polars is not installed"
+        ) from e
+
+    # Normalize DataTypeClass to DataType instance
+    # DataTypeClass types (like pl.Utf8) are callable to produce instances
+    if isinstance(polars_type, type) and getattr(
+        polars_type, "__module__", ""
+    ).startswith("polars.datatypes"):
+        polars_type = polars_type()  # Call to get instance
+
+    if not isinstance(polars_type, pl.DataType):
+        raise TypeError(
+            f"Expected Polars DataType, got {type(polars_type).__name__}: {polars_type}"
+        )
+
+    # Create a minimal series of the given type and convert to Arrow
+    # This lets Polars handle the type mapping correctly
+    dummy = pl.Series("x", [], dtype=polars_type)
+    arrow_array = dummy.to_arrow()
+    return cast(pa.DataType, arrow_array.type)
+
+
 def _arrow_type_to_python(arrow_type: pa.DataType) -> type:
     """Convert an Arrow type to the corresponding Python scalar type.
 
@@ -238,6 +323,8 @@ __all__ = [
     "Returns",
     "TableInput",
     "TypeBoundPredicate",
+    "is_polars_type",
+    "polars_type_to_arrow",
 ]
 
 
@@ -1430,22 +1517,29 @@ class Arg[ArgT]:
 
 @dataclass(frozen=True, slots=True)
 class Param:
-    """Metadata for columnar parameters in compute().
+    """Metadata for columnar parameters in compute() or class-level declarations.
 
     Use with Annotated to declare parameters that receive pa.Array values
     at runtime. The type information is used for catalog registration and
     argument validation.
 
+    For ScalarFunction compute() methods, position is inferred from parameter order.
+    For PolarsScalarFunction class-level attributes, specify position explicitly.
+
     Args:
-        arrow_type: The Arrow data type, Python type (int/str/float/bool/bytes),
-            or None for AnyArrow (accepts any type).
+        position: Explicit column position (for class-level attributes).
+            None means position is inferred from method signature order.
+        arrow_type: The Arrow data type, Polars data type, Python type
+            (int/str/float/bool/bytes), or None for AnyArrow (accepts any type).
+            Polars types (pl.Utf8, pl.Int64, etc.) are automatically converted
+            to Arrow types internally.
         doc: Documentation string describing this parameter.
         type_bound: Type predicate(s) for validating input column types.
             Only meaningful when arrow_type is None (AnyArrow).
         varargs: If True, this parameter collects all remaining positional
             arguments as a list of arrays.
 
-    Example:
+    Example (ScalarFunction compute() - position inferred):
         class AddColumns(ScalarFunction):
             def compute(
                 self,
@@ -1454,20 +1548,32 @@ class Param:
             ) -> Annotated[pa.Array, Returns(pa.int64())]:
                 return pc.add(left, right)
 
-        # With AnyArrow for dynamic types (use None as arrow_type):
-        class Identity(ScalarFunction):
+    Example (PolarsScalarFunction class-level - explicit position):
+        class UpperCase(PolarsScalarFunction):
+            text: Annotated[pl.Utf8, Param(position=0, doc="String to uppercase")]
+
+            def compute_polars(self) -> pl.Expr:
+                return pl.col("text").str.to_uppercase()
+
+    Example (AnyArrow with type_bound):
+        class Double(ScalarFunction):
             def compute(
                 self,
-                value: Annotated[pa.Array, Param(doc="Value to pass through")],
+                value: Annotated[pa.Array, Param(doc="Numeric value",
+                                                  type_bound=pa.types.is_numeric)],
             ) -> Annotated[pa.Array, Returns()]:
-                return value
+                return pc.multiply(value, 2)
 
     """
 
-    arrow_type: pa.DataType | type | None = None
+    # Keep arrow_type first for backwards compatibility with Param(pa.int64(), "doc")
+    # Also accepts Polars types (pl.Utf8, pl.Int64, etc.) - detected at runtime
+    arrow_type: "pa.DataType | type | Any" = None
     doc: str = ""
     type_bound: "TypeBoundPredicate | Sequence[TypeBoundPredicate] | None" = None
     varargs: bool = False
+    # position is keyword-only for class-level attributes (PolarsScalarFunction)
+    position: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

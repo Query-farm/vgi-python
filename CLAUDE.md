@@ -285,55 +285,129 @@ class ExtractX(ScalarFunction):
 ## Creating a Polars Scalar Function
 
 For scalar functions that use Polars, use `PolarsScalarFunction` which handles
-zero-copy Arrow <-> Polars conversion automatically:
+zero-copy Arrow <-> Polars conversion automatically. The API uses an expression-based
+approach where `compute_polars()` returns a `pl.Expr` and columns are referenced
+by their declared parameter names.
 
 ```python
 from typing import Annotated
 import polars as pl
-from vgi import PolarsScalarFunction, Arg
+from vgi import PolarsScalarFunction, Param
 
 class UpperCase(PolarsScalarFunction):
     """Convert string column to uppercase using Polars."""
 
+    # Declare parameter with position and Polars type
+    text: Annotated[pl.Utf8, Param(position=0, doc="String value to uppercase")]
+
     class Meta:
         output_type = pl.Utf8  # Polars type, not Arrow
 
-    column: Annotated[str, Arg(0, doc="String value to uppercase")]
+    def compute_polars(self) -> pl.Expr:
+        # Reference column by param name
+        return pl.col("text").str.to_uppercase()
+```
 
-    def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-        return df[self.column].str.to_uppercase()
+### Multiple Parameters
+
+```python
+class AddValues(PolarsScalarFunction):
+    """Add two numeric values together."""
+
+    left: Annotated[pl.Float64, Param(position=0, doc="First value")]
+    right: Annotated[pl.Float64, Param(position=1, doc="Second value")]
+
+    class Meta:
+        output_type = pl.Float64
+
+    def compute_polars(self) -> pl.Expr:
+        return pl.col("left") + pl.col("right")
+```
+
+### With Constant Argument
+
+Access constant arguments via `self.invocation.arguments.positional`:
+
+```python
+class Multiply(PolarsScalarFunction):
+    """Multiply a column by a constant factor."""
+
+    value: Annotated[pl.Float64, Param(position=0, doc="Value to multiply")]
+
+    class Meta:
+        output_type = pl.Float64
+
+    @property
+    def factor(self) -> float:
+        # Constant argument at position 0 in Arguments
+        return self.invocation.arguments.positional[0].as_py()
+
+    def compute_polars(self) -> pl.Expr:
+        return pl.col("value") * self.factor
 ```
 
 ### Dynamic Output Type with AnyPolars
 
-Use `AnyPolars` when output type depends on input:
+Use `AnyPolars` when output type depends on input. Use `type_bound` to constrain
+acceptable input types:
 
 ```python
-from typing import Annotated
-from vgi import PolarsScalarFunction, Arg, AnyPolars
+from typing import Any, Annotated
+import pyarrow.types as pat
+from vgi import PolarsScalarFunction, Param, AnyPolars
 import polars as pl
 
-class PreserveType(PolarsScalarFunction):
+class Double(PolarsScalarFunction):
     """Double values, preserving input type."""
+
+    # Any type with constraint: must be integer or floating point
+    value: Annotated[
+        Any,
+        Param(
+            position=0,
+            doc="Numeric value to double",
+            type_bound=[pat.is_integer, pat.is_floating],
+        ),
+    ]
 
     class Meta:
         output_type = AnyPolars
 
-    column: Annotated[str, Arg(0, doc="Numeric value to double")]
-
     @property
     def output_polars_type(self) -> pl.DataType:
-        return self.polars_schema[self.column]
+        # Return input type to preserve it
+        return self.polars_schema[self.input_schema.field(0).name]
 
-    def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-        return df[self.column] * 2
+    def compute_polars(self) -> pl.Expr:
+        return pl.col("value") * 2
 ```
 
-### Key Differences from ScalarFunction:
-- **Meta.output_type**: Use Polars types (`pl.Utf8`, `pl.Int64`) instead of Arrow types
-- **compute_polars()**: Takes `pl.DataFrame`, returns `pl.Series` (not Arrow batch/array)
-- **polars_schema**: Property providing input schema as Polars types
-- **Zero-copy**: Automatic conversion between Arrow and Polars without data copying
+### Varargs (Variable Number of Arguments)
+
+Use `varargs=True` to accept multiple columns. Columns are renamed to
+`{name}_0`, `{name}_1`, etc. and can be matched with regex:
+
+```python
+class SumValues(PolarsScalarFunction):
+    """Sum multiple numeric values."""
+
+    values: Annotated[pl.Float64, Param(position=0, doc="Values to sum", varargs=True)]
+
+    class Meta:
+        output_type = pl.Float64
+
+    def compute_polars(self) -> pl.Expr:
+        # Use regex to match all vararg columns
+        return pl.sum_horizontal(pl.col("^values_.*$"))
+```
+
+### Key Features of PolarsScalarFunction:
+- **Expression-based**: `compute_polars()` returns `pl.Expr`, not `pl.Series`
+- **Named column access**: Reference columns by param name with `pl.col("param_name")`
+- **Position-based params**: Use `Param(position=N, ...)` to declare column positions
+- **Type bounds**: Use `type_bound` to constrain dynamic types with pyarrow type predicates
+- **Zero-copy**: Automatic Arrow <-> Polars conversion without data copying
+- **Meta.output_type**: Use Polars types (`pl.Utf8`, `pl.Int64`) or `AnyPolars` for dynamic
 
 ## Creating a Table-In-Out Function (Recommended)
 

@@ -480,6 +480,33 @@ def extract_parameters(
     parameters: list[ParameterInfo] = []
     seen_names: set[str] = set()
 
+    # Check for _polars_params (PolarsScalarFunction subclasses)
+    # These store PolarsParamInfo objects with Polars types
+    polars_params = getattr(cls, "_polars_params", {})
+    for name, param_info in polars_params.items():
+        seen_names.add(name)
+        # Convert Polars type to string representation
+        type_name: str | None = None
+        if param_info.polars_type is not None:
+            type_name = str(param_info.polars_type)
+        else:
+            type_name = "any"  # Dynamic type
+
+        parameters.append(
+            ParameterInfo(
+                name=name,
+                position=param_info.position,
+                type_name=type_name,
+                description=param_info.doc,
+                required=True,  # Polars params are always required
+                default=None,
+                constraints={},
+                is_table_input=False,
+                is_varargs=param_info.varargs,
+                is_const=param_info.is_const,
+            )
+        )
+
     # Check for new Param/ConstParam API (ScalarFunction subclasses)
     # These are stored in _compute_params and _const_params class attributes
     compute_params: dict[str, Arg[Any]] = getattr(cls, "_compute_params", {})
@@ -688,6 +715,7 @@ _CLASS_NAME_TO_FUNCTION_TYPE: dict[str, FunctionType] = {
     # Future function types (not yet implemented)
     "AggregateFunction": FunctionType.AGGREGATE,
     "ScalarFunction": FunctionType.SCALAR,
+    "ScalarFunctionGenerator": FunctionType.SCALAR,
 }
 
 # Valid Meta class attribute names (for typo detection)

@@ -1,7 +1,7 @@
 """Tests for PolarsScalarFunction base class.
 
 These tests verify the functionality of the PolarsScalarFunction base class
-independently of the example functions.
+using the expression-based API where compute_polars() returns a pl.Expr.
 """
 
 # ruff: noqa: E402
@@ -9,14 +9,18 @@ independently of the example functions.
 
 from __future__ import annotations
 
+from typing import Annotated, Any
+
 import pytest
 
 # Skip all tests if polars is not installed
 polars = pytest.importorskip("polars")
 import polars as pl  # noqa: E402
 import pyarrow as pa
+import pyarrow.types as pat
 
-from vgi import Arg, Arguments, schema
+from vgi import Arguments, schema
+from vgi.arguments import Param
 from vgi.scalar_function_polars import AnyPolars, PolarsScalarFunction
 from vgi.testing import ScalarFunctionTestClient
 
@@ -33,13 +37,13 @@ class TestPolarsScalarFunctionBasic:
         """Test basic Polars expression in compute_polars."""
 
         class DoubleColumn(PolarsScalarFunction):
+            value: Annotated[pl.Int64, Param(position=0, doc="Column to double")]
+
             class Meta:
                 output_type = pl.Int64
 
-            column = Arg[str](0, doc="Column to double")
-
-            def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-                return df[self.column] * 2
+            def compute_polars(self) -> pl.Expr:
+                return pl.col("value") * 2
 
         input_batch = batch(x=[1, 2, 3, 4, 5])
 
@@ -47,7 +51,7 @@ class TestPolarsScalarFunctionBasic:
             outputs = list(
                 client.scalar_function(
                     input=iter([input_batch]),
-                    arguments=Arguments(positional=(pa.scalar("x"),)),
+                    arguments=Arguments(),
                 )
             )
 
@@ -58,13 +62,13 @@ class TestPolarsScalarFunctionBasic:
         """Test Polars string operations in compute_polars."""
 
         class ReverseString(PolarsScalarFunction):
+            text: Annotated[pl.Utf8, Param(position=0, doc="Column to reverse")]
+
             class Meta:
                 output_type = pl.Utf8
 
-            column = Arg[str](0, doc="Column to reverse")
-
-            def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-                return df[self.column].str.reverse()
+            def compute_polars(self) -> pl.Expr:
+                return pl.col("text").str.reverse()
 
         input_batch = batch(text=["hello", "world", "abc"])
 
@@ -72,7 +76,7 @@ class TestPolarsScalarFunctionBasic:
             outputs = list(
                 client.scalar_function(
                     input=iter([input_batch]),
-                    arguments=Arguments(positional=(pa.scalar("text"),)),
+                    arguments=Arguments(),
                 )
             )
 
@@ -92,13 +96,13 @@ class TestPolarsScalarFunctionRowCount:
         """
 
         class IdentityFunction(PolarsScalarFunction):
+            value: Annotated[pl.Int64, Param(position=0, doc="Column")]
+
             class Meta:
                 output_type = pl.Int64
 
-            column = Arg[str](0, doc="Column")
-
-            def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-                return df[self.column]
+            def compute_polars(self) -> pl.Expr:
+                return pl.col("value")
 
         s = schema(value=pa.int64())
         input_batch = pa.RecordBatch.from_pydict({"value": []}, schema=s)
@@ -107,7 +111,7 @@ class TestPolarsScalarFunctionRowCount:
             outputs = list(
                 client.scalar_function(
                     input=iter([input_batch]),
-                    arguments=Arguments(positional=(pa.scalar("value"),)),
+                    arguments=Arguments(),
                 )
             )
 
@@ -119,13 +123,13 @@ class TestPolarsScalarFunctionRowCount:
         """Single row batch should return single row output."""
 
         class AddOne(PolarsScalarFunction):
+            value: Annotated[pl.Int64, Param(position=0, doc="Column")]
+
             class Meta:
                 output_type = pl.Int64
 
-            column = Arg[str](0, doc="Column")
-
-            def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-                return df[self.column] + 1
+            def compute_polars(self) -> pl.Expr:
+                return pl.col("value") + 1
 
         input_batch = batch(value=[42])
 
@@ -133,7 +137,7 @@ class TestPolarsScalarFunctionRowCount:
             outputs = list(
                 client.scalar_function(
                     input=iter([input_batch]),
-                    arguments=Arguments(positional=(pa.scalar("value"),)),
+                    arguments=Arguments(),
                 )
             )
 
@@ -145,13 +149,13 @@ class TestPolarsScalarFunctionRowCount:
         """Multiple batches should preserve row counts."""
 
         class AddOne(PolarsScalarFunction):
+            value: Annotated[pl.Int64, Param(position=0, doc="Column")]
+
             class Meta:
                 output_type = pl.Int64
 
-            column = Arg[str](0, doc="Column")
-
-            def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-                return df[self.column] + 1
+            def compute_polars(self) -> pl.Expr:
+                return pl.col("value") + 1
 
         batch1 = batch(value=[1, 2])
         batch2 = batch(value=[3, 4, 5])
@@ -161,7 +165,7 @@ class TestPolarsScalarFunctionRowCount:
             outputs = list(
                 client.scalar_function(
                     input=iter([batch1, batch2, batch3]),
-                    arguments=Arguments(positional=(pa.scalar("value"),)),
+                    arguments=Arguments(),
                 )
             )
 
@@ -178,13 +182,13 @@ class TestPolarsScalarFunctionOutputType:
         """Static output type should match Meta.output_type."""
 
         class Float64Output(PolarsScalarFunction):
+            value: Annotated[pl.Int64, Param(position=0, doc="Column")]
+
             class Meta:
                 output_type = pl.Float64
 
-            column = Arg[str](0, doc="Column")
-
-            def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-                return df[self.column].cast(pl.Float64)
+            def compute_polars(self) -> pl.Expr:
+                return pl.col("value").cast(pl.Float64)
 
         input_batch = batch(x=[1, 2, 3])
 
@@ -192,7 +196,7 @@ class TestPolarsScalarFunctionOutputType:
             outputs = list(
                 client.scalar_function(
                     input=iter([input_batch]),
-                    arguments=Arguments(positional=(pa.scalar("x"),)),
+                    arguments=Arguments(),
                 )
             )
 
@@ -202,17 +206,24 @@ class TestPolarsScalarFunctionOutputType:
         """Dynamic output type using AnyPolars and polars_schema."""
 
         class PreserveType(PolarsScalarFunction):
+            value: Annotated[
+                Any,
+                Param(
+                    position=0,
+                    doc="Column",
+                    type_bound=[pat.is_integer, pat.is_floating],
+                ),
+            ]
+
             class Meta:
                 output_type = AnyPolars
 
-            column = Arg[str](0, doc="Column")
-
             @property
             def output_polars_type(self) -> pl.DataType:
-                return self.polars_schema[self.column]
+                return self.polars_schema[self.input_schema.field(0).name]
 
-            def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-                return df[self.column]
+            def compute_polars(self) -> pl.Expr:
+                return pl.col("value")
 
         # Test with int64 input
         input_batch = batch(value=[1, 2, 3])
@@ -221,7 +232,7 @@ class TestPolarsScalarFunctionOutputType:
             outputs = list(
                 client.scalar_function(
                     input=iter([input_batch]),
-                    arguments=Arguments(positional=(pa.scalar("value"),)),
+                    arguments=Arguments(),
                 )
             )
 
@@ -235,22 +246,31 @@ class TestPolarsScalarFunctionPolarsSchema:
         """polars_schema should be available during bind."""
 
         class UsePolarsSchema(PolarsScalarFunction):
+            value: Annotated[
+                Any,
+                Param(
+                    position=0,
+                    doc="Column",
+                    type_bound=[pat.is_integer, pat.is_floating],
+                ),
+            ]
+            _detected_type: pl.DataType
+
             class Meta:
                 output_type = AnyPolars
 
-            column = Arg[str](0, doc="Column")
-            _detected_type: pl.DataType
-
             def bind(self) -> None:
+                super().bind()
                 # Store the detected type for verification
-                self._detected_type = self.polars_schema[self.column]
+                col_name = self.input_schema.field(0).name
+                self._detected_type = self.polars_schema[col_name]
 
             @property
             def output_polars_type(self) -> pl.DataType:
                 return self._detected_type
 
-            def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-                return df[self.column]
+            def compute_polars(self) -> pl.Expr:
+                return pl.col("value")
 
         input_batch = batch(value=[1.5, 2.5, 3.5])
 
@@ -258,7 +278,7 @@ class TestPolarsScalarFunctionPolarsSchema:
             outputs = list(
                 client.scalar_function(
                     input=iter([input_batch]),
-                    arguments=Arguments(positional=(pa.scalar("value"),)),
+                    arguments=Arguments(),
                 )
             )
 
@@ -273,15 +293,14 @@ class TestPolarsScalarFunctionComplexOperations:
         """Test Polars when/then/otherwise in compute_polars."""
 
         class ConditionalSign(PolarsScalarFunction):
+            value: Annotated[pl.Int64, Param(position=0, doc="Column")]
+
             class Meta:
                 output_type = pl.Int64
 
-            column = Arg[str](0, doc="Column")
-
-            def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-                col = pl.col(self.column)
-                expr = pl.when(col > 0).then(1).when(col < 0).then(-1).otherwise(0)
-                return df.select(expr.alias("result"))["result"]
+            def compute_polars(self) -> pl.Expr:
+                col = pl.col("value")
+                return pl.when(col > 0).then(1).when(col < 0).then(-1).otherwise(0)
 
         input_batch = batch(value=[-5, 0, 5, -1, 1])
 
@@ -289,7 +308,7 @@ class TestPolarsScalarFunctionComplexOperations:
             outputs = list(
                 client.scalar_function(
                     input=iter([input_batch]),
-                    arguments=Arguments(positional=(pa.scalar("value"),)),
+                    arguments=Arguments(),
                 )
             )
 
@@ -299,14 +318,14 @@ class TestPolarsScalarFunctionComplexOperations:
         """Test per-row operations that reference multiple columns."""
 
         class RowSum(PolarsScalarFunction):
+            col1: Annotated[pl.Int64, Param(position=0, doc="First column")]
+            col2: Annotated[pl.Int64, Param(position=1, doc="Second column")]
+
             class Meta:
                 output_type = pl.Int64
 
-            col1 = Arg[str](0, doc="First column")
-            col2 = Arg[str](1, doc="Second column")
-
-            def compute_polars(self, df: pl.DataFrame) -> pl.Series:
-                return df[self.col1] + df[self.col2]
+            def compute_polars(self) -> pl.Expr:
+                return pl.col("col1") + pl.col("col2")
 
         input_batch = batch(a=[1, 2, 3], b=[10, 20, 30])
 
@@ -314,7 +333,7 @@ class TestPolarsScalarFunctionComplexOperations:
             outputs = list(
                 client.scalar_function(
                     input=iter([input_batch]),
-                    arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
+                    arguments=Arguments(),
                 )
             )
 
