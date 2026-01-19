@@ -63,14 +63,23 @@ import contextlib
 import inspect
 from abc import abstractmethod
 from collections.abc import Generator
-from typing import TYPE_CHECKING, Any, cast, final, get_type_hints
+from typing import TYPE_CHECKING, Any, Final, cast, final, get_args, get_type_hints
 
 import pyarrow as pa
 import structlog
 
 import vgi.function
 import vgi.log
-from vgi.arguments import AnyArrow, Arg, _OutputType
+from vgi.arguments import (
+    _PYTHON_TO_ARROW,
+    ARRAY_CLASS_TO_DATATYPE,
+    COMPLEX_ARRAY_CLASSES,
+    AnyArrow,
+    Arg,
+    ConstParam,
+    Param,
+    Returns,
+)
 from vgi.output_complete import OutputComplete
 from vgi.protocol_types import ProtocolInput
 from vgi.table_function import Output, ProtocolOutput
@@ -89,6 +98,134 @@ __all__ = [
 # Use pa.DataType for static output types, or AnyArrow for dynamic types
 # that depend on input schema.
 ScalarOutputType = pa.DataType | type[AnyArrow]
+
+
+# =============================================================================
+# Helpers for Param/ConstParam -> Arg Conversion
+# =============================================================================
+
+# Sentinel value for positions that will be inferred from compute() signature
+_INFER_POSITION: Final = -1
+
+
+def _param_to_arg(param: Param, base_type: type, position: int) -> Arg[Any]:
+    """Convert Param dataclass to internal Arg object with type inference.
+
+    Supports hybrid type inference:
+    1. Explicit arrow_type in Param() takes priority
+    2. Simple array classes (pa.Int64Array, etc.) are inferred automatically
+    3. Complex/parameterized types (pa.StructArray, etc.) require explicit arrow_type
+    4. pa.Array or pa.Array[Any] indicates AnyArrow (dynamic type)
+
+    Args:
+        param: The Param metadata from an Annotated type hint.
+        base_type: The type from the Annotated first argument (e.g., pa.Int64Array
+            from Annotated[pa.Int64Array, Param(...)]).
+        position: The parameter's position in the compute() signature.
+
+    Returns:
+        Arg instance configured for columnar input.
+
+    Raises:
+        TypeError: If type cannot be determined (complex type without explicit
+            arrow_type).
+
+    Examples:
+        # Explicit arrow_type (always wins)
+        Annotated[pa.Array, Param(pa.int64(), "doc")] -> pa.int64()
+
+        # Inferred from array class
+        Annotated[pa.Int64Array, Param(doc="doc")] -> pa.int64()
+        Annotated[pa.StringArray, Param(doc="doc")] -> pa.string()
+
+        # AnyArrow (dynamic type)
+        Annotated[pa.Array, Param(doc="doc")] -> AnyArrow
+        Annotated[pa.Array[Any], Param(doc="doc")] -> AnyArrow
+
+        # Complex type requires explicit arrow_type
+        Annotated[pa.StructArray, Param(doc="doc")] -> TypeError!
+        Annotated[pa.StructArray, Param(arrow_type=pa.struct([...]), doc="doc")] -> OK
+
+    """
+    is_any = False
+    arrow_type: pa.DataType
+
+    # Priority 1: Explicit arrow_type in Param() always wins
+    if param.arrow_type is not None:
+        if isinstance(param.arrow_type, pa.DataType):
+            arrow_type = param.arrow_type
+        elif param.arrow_type in _PYTHON_TO_ARROW:
+            arrow_type = _PYTHON_TO_ARROW[param.arrow_type]
+        else:
+            raise TypeError(
+                f"Cannot convert type '{param.arrow_type}' to Arrow type. "
+                f"Use pa.DataType, Python type (int/str/float/bool/bytes), or None."
+            )
+    # Priority 2: Infer from simple array class (pa.Int64Array -> pa.int64())
+    elif base_type in ARRAY_CLASS_TO_DATATYPE:
+        arrow_type = ARRAY_CLASS_TO_DATATYPE[base_type]
+    # Priority 3: Complex types require explicit arrow_type
+    elif base_type in COMPLEX_ARRAY_CLASSES:
+        raise TypeError(
+            f"{base_type.__name__} requires explicit arrow_type in Param(). "
+            f"Example: Param(arrow_type=pa.list_(pa.int64()), doc='...')"
+        )
+    # Priority 4: pa.Array or generic -> AnyArrow
+    else:
+        # Covers pa.Array, pa.Array[Any], Any, and other generic types
+        is_any = True
+        arrow_type = pa.null()  # Placeholder for AnyArrow
+
+    return Arg[Any](
+        position,
+        doc=param.doc,
+        arrow_type=arrow_type,
+        type_bound=param.type_bound,
+        varargs=param.varargs,
+        is_any=is_any,
+    )
+
+
+def _const_param_to_arg(
+    const_param: ConstParam, base_type: type, position: int
+) -> Arg[Any]:
+    """Convert ConstParam dataclass to internal Arg object.
+
+    Args:
+        const_param: The ConstParam metadata from an Annotated type hint.
+        base_type: The type from the Annotated first argument (e.g., int from
+            Annotated[int, ConstParam(...)]).
+        position: The parameter's position in the const arguments.
+
+    Returns:
+        Arg instance configured for constant (scalar) input.
+
+    Raises:
+        TypeError: If the Arrow type cannot be determined.
+
+    """
+    arrow_type: pa.DataType
+
+    if const_param.arrow_type is not None:
+        # Explicit arrow_type specified
+        if isinstance(const_param.arrow_type, pa.DataType):
+            arrow_type = const_param.arrow_type
+        elif const_param.arrow_type in _PYTHON_TO_ARROW:
+            arrow_type = _PYTHON_TO_ARROW[const_param.arrow_type]
+        else:
+            raise TypeError(
+                f"Cannot convert type '{const_param.arrow_type}' to Arrow type."
+            )
+    elif base_type in _PYTHON_TO_ARROW:
+        # Infer from Annotated first argument
+        arrow_type = _PYTHON_TO_ARROW[base_type]
+    else:
+        raise TypeError(
+            f"Cannot infer Arrow type from {base_type}. "
+            f"Use a supported type (int/str/float/bool/bytes) or specify arrow_type."
+        )
+
+    return Arg[Any](position, doc=const_param.doc, arrow_type=arrow_type, const=True)
 
 
 # =============================================================================
@@ -632,11 +769,11 @@ class ScalarFunction(ScalarFunctionGenerator):
         if compute_method is None:
             raise TypeError(
                 f"{cls.__name__} must define a compute() method.\n\n"
-                f"Example using Param/ConstParam (recommended):\n"
+                f"Example using Annotated with Param/ConstParam (recommended):\n"
                 f"    def compute(\n"
                 f"        self,\n"
-                f"        value: Param(pa.int64(), 'Input value'),\n"
-                f"    ) -> Returns(pa.int64()):\n"
+                f"        value: Annotated[pa.Array, Param(pa.int64(), 'doc')],\n"
+                f"    ) -> Annotated[pa.Array, Returns(pa.int64())]:\n"
                 f"        return pc.multiply(value, 2)\n\n"
                 f"Example using Arg descriptors (legacy):\n"
                 f"    column: Annotated[str, Arg(0, doc='Column name')]\n"
@@ -672,8 +809,11 @@ class ScalarFunction(ScalarFunctionGenerator):
                 def __getattr__(self, name: str) -> Any:
                     return getattr(pa, name)
 
+            from typing import Annotated
+
             eval_namespace = {
                 **getattr(compute_method, "__globals__", {}),
+                "Annotated": Annotated,
                 "Param": vgi_args.Param,
                 "ConstParam": vgi_args.ConstParam,
                 "Returns": vgi_args.Returns,
@@ -696,11 +836,29 @@ class ScalarFunction(ScalarFunctionGenerator):
         # Check return type for Returns() annotation
         return_hint = hints.get("return")
         if return_hint is not None and hasattr(return_hint, "__metadata__"):
-            # Extract _OutputType from Annotated[..., _OutputType(...)]
+            # Extract Returns from Annotated[..., Returns(...)]
             for meta in return_hint.__metadata__:
-                if isinstance(meta, _OutputType):
-                    returns_output_type = meta.arrow_type
+                if isinstance(meta, Returns):
                     uses_new_api = True
+                    # Priority 1: Explicit arrow_type in Returns()
+                    if meta.arrow_type is not None:
+                        returns_output_type = meta.arrow_type
+                    else:
+                        # Priority 2: Infer from Annotated first argument
+                        type_args = get_args(return_hint)
+                        if type_args:
+                            return_base_type = type_args[0]
+                            if return_base_type in ARRAY_CLASS_TO_DATATYPE:
+                                returns_output_type = ARRAY_CLASS_TO_DATATYPE[
+                                    return_base_type
+                                ]
+                            elif return_base_type in COMPLEX_ARRAY_CLASSES:
+                                raise TypeError(
+                                    f"{return_base_type.__name__} requires explicit "
+                                    f"arrow_type in Returns(). "
+                                    f"Example: Returns(arrow_type=pa.list_(pa.int64()))"
+                                )
+                            # Else: AnyArrow (returns_output_type remains None)
                     break
 
         # Extract Param/ConstParam from parameter annotations
@@ -716,9 +874,36 @@ class ScalarFunction(ScalarFunctionGenerator):
             if hint is None:
                 continue
 
-            # Check for Annotated[..., Arg(...)] pattern
+            # Check for Annotated[..., Param/ConstParam/Arg(...)] pattern
             if hasattr(hint, "__metadata__"):
                 for meta in hint.__metadata__:
+                    # New API: Param dataclass
+                    if isinstance(meta, Param):
+                        uses_new_api = True
+                        # Get base type from Annotated first argument for inference
+                        type_args = get_args(hint)
+                        base_type = type_args[0] if type_args else pa.Array
+                        arg = _param_to_arg(meta, base_type, column_position)
+                        arg._name = name
+                        compute_params[name] = arg
+                        setattr(cls, name, _ArgDescriptor(arg, name))
+                        column_position += 1
+                        break
+
+                    # New API: ConstParam dataclass
+                    if isinstance(meta, ConstParam):
+                        uses_new_api = True
+                        # Get base type from Annotated first argument
+                        type_args = get_args(hint)
+                        base_type = type_args[0] if type_args else Any
+                        arg = _const_param_to_arg(meta, base_type, const_position)
+                        arg._name = name
+                        const_params[name] = arg
+                        setattr(cls, name, _ConstArgDescriptor(arg, name))
+                        const_position += 1
+                        break
+
+                    # Legacy API: Arg instance (still supported for backwards compat)
                     if isinstance(meta, Arg):
                         uses_new_api = True
                         meta._name = name
@@ -726,19 +911,17 @@ class ScalarFunction(ScalarFunctionGenerator):
                         if meta.const:
                             # Const params use their own position counter
                             # (position into invocation.arguments.positional)
-                            if meta.position == -1:  # _INFER_POSITION
+                            if meta.position == _INFER_POSITION:
                                 meta.position = const_position
                             const_params[name] = meta
-                            # Create descriptor for const param
                             setattr(cls, name, _ConstArgDescriptor(meta, name))
                             const_position += 1
                         else:
                             # Column params use their own position counter
                             # (position into batch columns)
-                            if meta.position == -1:  # _INFER_POSITION
+                            if meta.position == _INFER_POSITION:
                                 meta.position = column_position
                             compute_params[name] = meta
-                            # Create descriptor for regular param
                             setattr(cls, name, _ArgDescriptor(meta, name))
                             column_position += 1
 
@@ -759,21 +942,21 @@ class ScalarFunction(ScalarFunctionGenerator):
 
             for name, param in sig.parameters.items():
                 if param.kind == inspect.Parameter.KEYWORD_ONLY:
-                    arg = getattr(cls, name, None)
-                    if not isinstance(arg, Arg):
+                    arg_attr = getattr(cls, name, None)
+                    if not isinstance(arg_attr, Arg):
                         raise TypeError(
                             f"{cls.__name__}.compute() has keyword-only parameter "
                             f"'{name}' but no matching Arg descriptor.\n\n"
                             f"Option 1 - Add Arg descriptor:\n"
                             f"    {name}: Annotated[str, Arg(0, doc='...')]\n\n"
-                            f"Option 2 - Use Param() annotation (recommended):\n"
+                            f"Option 2 - Use Annotated with Param (recommended):\n"
                             f"    def compute(\n"
                             f"        self,\n"
-                            f"        {name}: Param(pa.int64(), 'description'),\n"
-                            f"    ) -> Returns(pa.int64()):\n"
+                            f"        {name}: Annotated[pa.Array, Param(pa.int64())],\n"
+                            f"    ) -> Annotated[pa.Array, Returns(pa.int64())]:\n"
                             f"        ..."
                         )
-                    kwonly_params[name] = arg
+                    kwonly_params[name] = arg_attr
 
             # Validate varargs is last if present
             vararg_names = [n for n, a in kwonly_params.items() if a.varargs]

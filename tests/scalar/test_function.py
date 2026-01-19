@@ -488,17 +488,19 @@ class TestRandomIntFunction:
 
 
 class TestParamConstParamReturnsAPI:
-    """Tests for the new Param(), ConstParam(), and Returns() annotation API."""
+    """Tests for the new Annotated[T, Param/ConstParam/Returns] annotation API."""
 
     def test_param_with_python_int(self) -> None:
         """Test Param(int, ...) creates correct Arrow type."""
+        from typing import Annotated
+
         from vgi.arguments import Param, Returns
 
         class DoubleInt(ScalarFunction):
             def compute(
                 self,
-                value: Param(int, "Input value"),  # type: ignore[valid-type]
-            ) -> Returns(pa.int64()):  # type: ignore[valid-type]
+                value: Annotated[pa.Array[Any], Param(int, "Input value")],
+            ) -> Annotated[pa.Array[Any], Returns(pa.int64())]:
                 import pyarrow.compute as pc
 
                 return pc.multiply(value, 2)
@@ -510,13 +512,15 @@ class TestParamConstParamReturnsAPI:
 
     def test_param_with_python_str(self) -> None:
         """Test Param(str, ...) creates pa.string() type."""
+        from typing import Annotated
+
         from vgi.arguments import Param, Returns
 
         class UpperStr(ScalarFunction):
             def compute(
                 self,
-                text: Param(str, "Input text"),  # type: ignore[valid-type]
-            ) -> Returns(pa.string()):  # type: ignore[valid-type]
+                text: Annotated[pa.Array[Any], Param(str, "Input text")],
+            ) -> Annotated[pa.Array[Any], Returns(pa.string())]:
                 import pyarrow.compute as pc
 
                 return pc.utf8_upper(text)
@@ -526,13 +530,15 @@ class TestParamConstParamReturnsAPI:
 
     def test_param_with_arrow_type(self) -> None:
         """Test Param(pa.DataType, ...) preserves Arrow type."""
+        from typing import Annotated
+
         from vgi.arguments import Param, Returns
 
         class DecimalDouble(ScalarFunction):
             def compute(
                 self,
-                value: Param(pa.decimal128(10, 2), "Decimal"),  # type: ignore[valid-type]
-            ) -> Returns(pa.decimal128(10, 2)):  # type: ignore[valid-type]
+                value: Annotated[pa.Array[Any], Param(pa.decimal128(10, 2), "Decimal")],
+            ) -> Annotated[pa.Array[Any], Returns(pa.decimal128(10, 2))]:
                 import pyarrow.compute as pc
 
                 return pc.multiply(value, 2)
@@ -542,14 +548,16 @@ class TestParamConstParamReturnsAPI:
 
     def test_const_param_basic(self) -> None:
         """Test ConstParam creates const=True Arg."""
+        from typing import Annotated
+
         from vgi.arguments import ConstParam, Param, Returns
 
         class Multiply(ScalarFunction):
             def compute(
                 self,
-                value: Param(int, "Value"),  # type: ignore[valid-type]
-                factor: ConstParam(int, "Factor"),  # type: ignore[valid-type]
-            ) -> Returns(pa.int64()):  # type: ignore[valid-type]
+                value: Annotated[pa.Array[Any], Param(int, "Value")],
+                factor: Annotated[int, ConstParam("Factor")],
+            ) -> Annotated[pa.Array[Any], Returns(pa.int64())]:
                 import pyarrow.compute as pc
 
                 return pc.multiply(value, factor)
@@ -561,20 +569,24 @@ class TestParamConstParamReturnsAPI:
 
     def test_returns_sets_output_type(self) -> None:
         """Test Returns() annotation sets _returns_output_type."""
+        from typing import Annotated
+
         from vgi.arguments import Param, Returns
 
         class StringFunc(ScalarFunction):
             def compute(
                 self,
-                x: Param(str, "Input"),  # type: ignore[valid-type]
-            ) -> Returns(pa.string()):  # type: ignore[valid-type]
+                x: Annotated[pa.Array[Any], Param(str, "Input")],
+            ) -> Annotated[pa.Array[Any], Returns(pa.string())]:
                 return x
 
         assert StringFunc._returns_output_type == pa.string()
 
     def test_returns_with_any_arrow(self) -> None:
-        """Test Returns(AnyArrow) sets _returns_output_type to None."""
-        from vgi.arguments import AnyArrow, Param, Returns
+        """Test Returns() with no arrow_type sets _returns_output_type to None."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
 
         class IdentityFunc(ScalarFunction):
             _output_type: pa.DataType
@@ -588,8 +600,8 @@ class TestParamConstParamReturnsAPI:
 
             def compute(
                 self,
-                x: Param(AnyArrow, "Input"),  # type: ignore[valid-type]
-            ) -> Returns(AnyArrow):  # type: ignore[valid-type]
+                x: Annotated[pa.Array[Any], Param(doc="Input")],
+            ) -> Annotated[pa.Array[Any], Returns()]:
                 return x
 
         assert IdentityFunc._returns_output_type is None
@@ -597,15 +609,17 @@ class TestParamConstParamReturnsAPI:
 
     def test_position_inference_from_signature(self) -> None:
         """Test that positions are inferred from parameter order."""
+        from typing import Annotated
+
         from vgi.arguments import Param, Returns
 
         class AddFunc(ScalarFunction):
             def compute(
                 self,
-                a: Param(int, "First"),  # type: ignore[valid-type]
-                b: Param(int, "Second"),  # type: ignore[valid-type]
-                c: Param(int, "Third"),  # type: ignore[valid-type]
-            ) -> Returns(pa.int64()):  # type: ignore[valid-type]
+                a: Annotated[pa.Array[Any], Param(int, "First")],
+                b: Annotated[pa.Array[Any], Param(int, "Second")],
+                c: Annotated[pa.Array[Any], Param(int, "Third")],
+            ) -> Annotated[pa.Array[Any], Returns(pa.int64())]:
                 import pyarrow.compute as pc
 
                 return pc.add(pc.add(a, b), c)
@@ -654,25 +668,60 @@ class TestParamConstParamReturnsAPI:
         assert result == [3, 6, 9, 12, 15]
 
     def test_param_type_error_for_unknown_type(self) -> None:
-        """Test that Param() raises TypeError for unsupported types."""
-        from vgi.arguments import Param
+        """Test Param() with unsupported type raises TypeError during class def."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
 
         with pytest.raises(TypeError, match="Cannot convert type"):
-            Param(list, "A list")  # list is not a supported type
+            # list is not a supported type - error raised during __init_subclass__
+            class BadFunc(ScalarFunction):
+                def compute(
+                    self,
+                    value: Annotated[pa.Array[Any], Param(list, "A list")],
+                ) -> Annotated[pa.Array[Any], Returns(pa.int64())]:
+                    return value
 
-    def test_const_param_rejects_any_arrow(self) -> None:
-        """Test that ConstParam() rejects AnyArrow."""
-        from vgi.arguments import AnyArrow, ConstParam
+    def test_const_param_type_inference_error(self) -> None:
+        """Test that ConstParam with unsupported base type raises TypeError."""
+        from typing import Annotated
 
-        with pytest.raises(TypeError, match="does not support AnyArrow"):
-            ConstParam(AnyArrow, "Any value")
+        from vgi.arguments import ConstParam, Param, Returns
 
-    def test_returns_type_error_for_invalid_type(self) -> None:
-        """Test that Returns() raises TypeError for non-DataType."""
-        from vgi.arguments import Returns
+        with pytest.raises(TypeError, match="Cannot infer Arrow type"):
+            # dict is not a supported type - error raised during __init_subclass__
+            class BadFunc(ScalarFunction):
+                def compute(
+                    self,
+                    value: Annotated[pa.Array[Any], Param(int, "Value")],
+                    factor: Annotated[dict[str, Any], ConstParam("Factor")],
+                ) -> Annotated[pa.Array[Any], Returns(pa.int64())]:
+                    return value
 
-        with pytest.raises(TypeError, match="requires pa.DataType or AnyArrow"):
-            Returns("string")  # type: ignore[arg-type] # Intentionally bad type
+    def test_returns_accepts_none_for_any_arrow(self) -> None:
+        """Test that Returns() with None or no args works for AnyArrow."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        # This should not raise - Returns() means AnyArrow (output type set in bind)
+        class AnyFunc(ScalarFunction):
+            _output_type: pa.DataType
+
+            def bind(self) -> None:
+                self._output_type = self.input_schema.field(0).type
+
+            @property
+            def output_type(self) -> pa.DataType:
+                return self._output_type
+
+            def compute(
+                self,
+                x: Annotated[pa.Array[Any], Param(doc="Input")],
+            ) -> Annotated[pa.Array[Any], Returns()]:
+                return x
+
+        assert AnyFunc._returns_output_type is None
 
 
 class TestTypeValidation:
@@ -680,14 +729,16 @@ class TestTypeValidation:
 
     def test_input_type_mismatch_raises_error(self) -> None:
         """Test that input type mismatch raises TypeMismatchError."""
+        from typing import Annotated
+
         from vgi.arguments import Param, Returns
         from vgi.scalar_function import TypeMismatchError
 
         class Int64Func(ScalarFunction):
             def compute(
                 self,
-                x: Param(pa.int64(), "Input"),  # type: ignore[valid-type]
-            ) -> Returns(pa.int64()):  # type: ignore[valid-type]
+                x: Annotated[pa.Array[Any], Param(pa.int64(), "Input")],
+            ) -> Annotated[pa.Array[Any], Returns(pa.int64())]:
                 return x
 
         # Create function with float64 input instead of int64
@@ -717,14 +768,16 @@ class TestTypeValidation:
 
     def test_output_type_mismatch_raises_error(self) -> None:
         """Test that output type mismatch raises TypeMismatchError."""
+        from typing import Annotated
+
         from vgi.arguments import Param, Returns
         from vgi.scalar_function import TypeMismatchError
 
         class WrongOutputFunc(ScalarFunction):
             def compute(
                 self,
-                x: Param(pa.int64(), "Input"),  # type: ignore[valid-type]
-            ) -> Returns(pa.int64()):  # type: ignore[valid-type]
+                x: Annotated[pa.Array[Any], Param(pa.int64(), "Input")],
+            ) -> Annotated[pa.Array[Any], Returns(pa.int64())]:
                 # Intentionally return wrong type (string instead of int64)
                 return pa.array(["a", "b", "c"])
 
@@ -751,8 +804,10 @@ class TestTypeValidation:
         assert exc_info.value.actual_type == pa.string()
 
     def test_any_arrow_skips_input_validation(self) -> None:
-        """Test that AnyArrow params skip type validation."""
-        from vgi.arguments import AnyArrow, Param, Returns
+        """Test that AnyArrow params (arrow_type=None) skip type validation."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
 
         class AnyFunc(ScalarFunction):
             _output_type: pa.DataType
@@ -766,8 +821,8 @@ class TestTypeValidation:
 
             def compute(
                 self,
-                x: Param(AnyArrow, "Input"),  # type: ignore[valid-type]
-            ) -> Returns(AnyArrow):  # type: ignore[valid-type]
+                x: Annotated[pa.Array[Any], Param(doc="Input")],
+            ) -> Annotated[pa.Array[Any], Returns()]:
                 return x
 
         # Should work with any input type
@@ -791,13 +846,15 @@ class TestTypeValidation:
 
     def test_correct_types_pass_validation(self) -> None:
         """Test that correct types pass validation without error."""
+        from typing import Annotated
+
         from vgi.arguments import Param, Returns
 
         class CorrectFunc(ScalarFunction):
             def compute(
                 self,
-                x: Param(pa.int64(), "Input"),  # type: ignore[valid-type]
-            ) -> Returns(pa.int64()):  # type: ignore[valid-type]
+                x: Annotated[pa.Array[Any], Param(pa.int64(), "Input")],
+            ) -> Annotated[pa.Array[Any], Returns(pa.int64())]:
                 import pyarrow.compute as pc
 
                 return pc.multiply(x, 2)
@@ -879,3 +936,336 @@ class TestTypeValidation:
         assert "Parameter: x" in msg
         assert "Expected type: int64" in msg
         assert "Actual type:   double" in msg
+
+
+# =============================================================================
+# Tests for Hybrid Type Inference
+# =============================================================================
+
+
+class TestHybridTypeInference:
+    """Tests for inferring Arrow types from array classes in Annotated."""
+
+    def test_infer_int64_from_array_class(self) -> None:
+        """Test pa.Int64Array infers pa.int64()."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        class Int64Func(ScalarFunction):
+            def compute(
+                self,
+                x: Annotated[pa.Int64Array, Param(doc="Input")],
+            ) -> Annotated[pa.Int64Array, Returns()]:
+                return x
+
+        assert Int64Func._uses_new_param_api is True
+        assert Int64Func._compute_params["x"].arrow_type == pa.int64()
+        assert Int64Func._returns_output_type == pa.int64()
+
+    def test_infer_string_from_array_class(self) -> None:
+        """Test pa.StringArray infers pa.string()."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        class StringFunc(ScalarFunction):
+            def compute(
+                self,
+                x: Annotated[pa.StringArray, Param(doc="Input")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                import pyarrow.compute as pc
+
+                return pc.utf8_upper(x)
+
+        assert StringFunc._compute_params["x"].arrow_type == pa.string()
+        assert StringFunc._returns_output_type == pa.string()
+
+    def test_infer_float64_from_double_array(self) -> None:
+        """Test pa.DoubleArray infers pa.float64()."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        class DoubleFunc(ScalarFunction):
+            def compute(
+                self,
+                x: Annotated[pa.DoubleArray, Param(doc="Input")],
+            ) -> Annotated[pa.DoubleArray, Returns()]:
+                import pyarrow.compute as pc
+
+                return pc.multiply(x, 2.0)
+
+        assert DoubleFunc._compute_params["x"].arrow_type == pa.float64()
+        assert DoubleFunc._returns_output_type == pa.float64()
+
+    def test_infer_bool_from_boolean_array(self) -> None:
+        """Test pa.BooleanArray infers pa.bool_()."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        class BoolFunc(ScalarFunction):
+            def compute(
+                self,
+                x: Annotated[pa.BooleanArray, Param(doc="Input")],
+            ) -> Annotated[pa.BooleanArray, Returns()]:
+                import pyarrow.compute as pc
+
+                return pc.invert(x)
+
+        assert BoolFunc._compute_params["x"].arrow_type == pa.bool_()
+        assert BoolFunc._returns_output_type == pa.bool_()
+
+    def test_infer_various_integer_types(self) -> None:
+        """Test various integer array types are inferred correctly."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        class Int8Func(ScalarFunction):
+            def compute(
+                self,
+                x: Annotated[pa.Int8Array, Param(doc="Input")],
+            ) -> Annotated[pa.Int8Array, Returns()]:
+                return x
+
+        class UInt32Func(ScalarFunction):
+            def compute(
+                self,
+                x: Annotated[pa.UInt32Array, Param(doc="Input")],
+            ) -> Annotated[pa.UInt32Array, Returns()]:
+                return x
+
+        assert Int8Func._compute_params["x"].arrow_type == pa.int8()
+        assert Int8Func._returns_output_type == pa.int8()
+        assert UInt32Func._compute_params["x"].arrow_type == pa.uint32()
+        assert UInt32Func._returns_output_type == pa.uint32()
+
+    def test_explicit_arrow_type_overrides_inference(self) -> None:
+        """Test explicit arrow_type in Param() overrides type inference."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        class OverrideFunc(ScalarFunction):
+            def compute(
+                self,
+                # Use Int64Array type hint but override to int32
+                x: Annotated[pa.Int64Array, Param(arrow_type=pa.int32(), doc="Input")],
+            ) -> Annotated[pa.Int64Array, Returns(pa.int32())]:
+                return x
+
+        # Explicit arrow_type wins over inference
+        assert OverrideFunc._compute_params["x"].arrow_type == pa.int32()
+        assert OverrideFunc._returns_output_type == pa.int32()
+
+    def test_complex_type_without_arrow_type_raises_error(self) -> None:
+        """Test that complex types without explicit arrow_type raise TypeError."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        with pytest.raises(TypeError, match="StructArray requires explicit arrow_type"):
+
+            class BadStructFunc(ScalarFunction):
+                def compute(
+                    self,
+                    x: Annotated[pa.StructArray, Param(doc="Struct input")],
+                ) -> Annotated[pa.Int64Array, Returns()]:
+                    return pa.array([1, 2, 3])
+
+    def test_complex_type_with_explicit_arrow_type_works(self) -> None:
+        """Test that complex types with explicit arrow_type work correctly."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        # Define struct_type inline in the Param to avoid annotation evaluation issues
+        # with from __future__ import annotations
+        class StructFunc(ScalarFunction):
+            def compute(
+                self,
+                s: Annotated[
+                    pa.StructArray,
+                    Param(
+                        arrow_type=pa.struct([("x", pa.int64()), ("y", pa.int64())]),
+                        doc="Point",
+                    ),
+                ],
+            ) -> Annotated[pa.Int64Array, Returns()]:
+                import pyarrow.compute as pc
+
+                return pc.struct_field(s, "x")  # type: ignore[no-any-return]
+
+        expected_type = pa.struct([("x", pa.int64()), ("y", pa.int64())])
+        assert StructFunc._compute_params["s"].arrow_type == expected_type
+        assert StructFunc._returns_output_type == pa.int64()
+
+    def test_list_array_requires_explicit_arrow_type(self) -> None:
+        """Test that ListArray without explicit arrow_type raises TypeError."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        with pytest.raises(TypeError, match="ListArray requires explicit arrow_type"):
+
+            class BadListFunc(ScalarFunction):
+                def compute(
+                    self,
+                    x: Annotated[pa.ListArray, Param(doc="List input")],  # type: ignore[type-arg]
+                ) -> Annotated[pa.Int64Array, Returns()]:
+                    return pa.array([1, 2, 3])
+
+    def test_timestamp_requires_explicit_arrow_type(self) -> None:
+        """Test that TimestampArray without explicit arrow_type raises TypeError."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        with pytest.raises(
+            TypeError, match="TimestampArray requires explicit arrow_type"
+        ):
+
+            class BadTimestampFunc(ScalarFunction):
+                def compute(
+                    self,
+                    x: Annotated[pa.TimestampArray, Param(doc="Timestamp input")],
+                ) -> Annotated[pa.Int64Array, Returns()]:
+                    return pa.array([1, 2, 3])
+
+    def test_pa_array_generic_is_any_arrow(self) -> None:
+        """Test that pa.Array (generic) is treated as AnyArrow."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        class AnyFunc(ScalarFunction):
+            _output_type: pa.DataType
+
+            def bind(self) -> None:
+                self._output_type = self.input_schema.field(0).type
+
+            @property
+            def output_type(self) -> pa.DataType:
+                return self._output_type
+
+            def compute(
+                self,
+                x: Annotated[pa.Array, Param(doc="Any input")],  # type: ignore[type-arg]
+            ) -> Annotated[pa.Array, Returns()]:  # type: ignore[type-arg]
+                return x
+
+        assert AnyFunc._compute_params["x"].is_any is True
+        assert AnyFunc._returns_output_type is None
+
+    def test_returns_complex_type_without_arrow_type_raises_error(self) -> None:
+        """Test complex return types without explicit arrow_type raise TypeError."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        with pytest.raises(TypeError, match="StructArray requires explicit arrow_type"):
+
+            class BadReturnFunc(ScalarFunction):
+                def compute(
+                    self,
+                    x: Annotated[pa.Int64Array, Param(doc="Input")],
+                ) -> Annotated[pa.StructArray, Returns()]:
+                    return pa.StructArray.from_arrays([], names=[])
+
+    def test_multiply_function_uses_inferred_types(self) -> None:
+        """Test that the updated MultiplyFunction uses inferred types."""
+        from vgi.examples.scalar import MultiplyFunction
+
+        assert MultiplyFunction._uses_new_param_api is True
+        # column should be inferred as int64 from pa.Int64Array
+        assert MultiplyFunction._compute_params["column"].arrow_type == pa.int64()
+        # Returns type should be inferred as int64 from pa.Int64Array
+        assert MultiplyFunction._returns_output_type == pa.int64()
+        # factor is a const param
+        assert MultiplyFunction._const_params["factor"].const is True
+
+    def test_uppercase_function_uses_inferred_types(self) -> None:
+        """Test that the updated UpperCaseFunction uses inferred types."""
+        from vgi.examples.scalar import UpperCaseFunction
+
+        assert UpperCaseFunction._uses_new_param_api is True
+        # column should be inferred as string from pa.StringArray
+        assert UpperCaseFunction._compute_params["column"].arrow_type == pa.string()
+        # Returns type should be inferred as string from pa.StringArray
+        assert UpperCaseFunction._returns_output_type == pa.string()
+
+    def test_inferred_types_execute_correctly(self) -> None:
+        """Test that functions with inferred types execute correctly."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        class DoubleInt(ScalarFunction):
+            def compute(
+                self,
+                x: Annotated[pa.Int64Array, Param(doc="Input")],
+            ) -> Annotated[pa.Int64Array, Returns()]:
+                import pyarrow.compute as pc
+
+                return pc.multiply(x, 2)
+
+        input_schema = schema(x=pa.int64())
+        invocation = Invocation(
+            function_name="double_int",
+            input_schema=input_schema,
+            function_type=InvocationType.SCALAR,
+            correlation_id="test",
+            invocation_id=None,
+            arguments=Arguments(positional=(), named={}),
+        )
+        func = DoubleInt(invocation=invocation, logger=structlog.get_logger())
+
+        generator = func.run()
+        next(generator)
+
+        input_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=input_schema)
+        output = generator.send(ProtocolInput(batch=input_batch))
+
+        assert output.batch is not None
+        assert output.batch.column("result").to_pylist() == [2, 4, 6]
+
+    def test_date_array_inference(self) -> None:
+        """Test pa.Date32Array and pa.Date64Array are inferred correctly."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        class Date32Func(ScalarFunction):
+            def compute(
+                self,
+                x: Annotated[pa.Date32Array, Param(doc="Date input")],
+            ) -> Annotated[pa.Date32Array, Returns()]:
+                return x
+
+        class Date64Func(ScalarFunction):
+            def compute(
+                self,
+                x: Annotated[pa.Date64Array, Param(doc="Date input")],
+            ) -> Annotated[pa.Date64Array, Returns()]:
+                return x
+
+        assert Date32Func._compute_params["x"].arrow_type == pa.date32()
+        assert Date64Func._compute_params["x"].arrow_type == pa.date64()
+
+    def test_binary_array_inference(self) -> None:
+        """Test pa.BinaryArray is inferred correctly."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+
+        class BinaryFunc(ScalarFunction):
+            def compute(
+                self,
+                x: Annotated[pa.BinaryArray, Param(doc="Binary input")],
+            ) -> Annotated[pa.BinaryArray, Returns()]:
+                return x
+
+        assert BinaryFunc._compute_params["x"].arrow_type == pa.binary()
+        assert BinaryFunc._returns_output_type == pa.binary()

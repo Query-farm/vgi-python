@@ -3,10 +3,15 @@
 This module provides example scalar functions that transform input batches
 to single-column output with 1:1 row mapping.
 
-All functions use the Param/ConstParam/Returns API:
+All functions use the Annotated[T, Param/ConstParam/Returns] API with hybrid
+type inference:
 
-STATIC OUTPUT TYPE
-------------------
+- Simple array types: Inferred from array class (pa.Int64Array -> pa.int64())
+- Complex types: Require explicit arrow_type (pa.StructArray needs arrow_type=...)
+- AnyArrow: Use pa.Array with no arrow_type for dynamic types
+
+STATIC OUTPUT TYPE (inferred from array class)
+----------------------------------------------
 MultiplyFunction            - Multiplies column by constant (ConstParam example)
 UpperCaseFunction           - Converts string column to uppercase
 NullHandlingFunction        - Demonstrates special null handling (NullHandling.SPECIAL)
@@ -21,12 +26,12 @@ SumColumnsFunction          - Sums multiple columns (varargs example)
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from vgi.arguments import AnyArrow, ConstParam, Param, Returns
+from vgi.arguments import ConstParam, Param, Returns
 from vgi.exceptions import SchemaValidationError
 from vgi.metadata import FunctionExample, FunctionStability, NullHandling
 from vgi.scalar_function import ScalarFunction
@@ -89,10 +94,10 @@ def _promote_for_addition(dtype: pa.DataType) -> pa.DataType:
 class MultiplyFunction(ScalarFunction):
     """Multiplies a column by a constant factor.
 
-    This example demonstrates the new Param/ConstParam/Returns API:
-    - Param() for columnar input (receives pa.Array at runtime)
+    This example demonstrates type inference with array classes:
+    - pa.Int64Array -> pa.int64() (inferred from Annotated type)
     - ConstParam() for constant scalar input (receives Python value at runtime)
-    - Returns() for declaring output type
+    - Returns() output type is also inferred from pa.Int64Array
 
     Example:
         SQL:    SELECT multiply(price, 2) FROM products
@@ -120,9 +125,9 @@ class MultiplyFunction(ScalarFunction):
 
     def compute(
         self,
-        column: Param(pa.int64(), "Column to multiply"),  # type: ignore[valid-type]
-        factor: ConstParam(int, "Multiplication factor"),  # type: ignore[valid-type]
-    ) -> Returns(pa.int64()):  # type: ignore[valid-type]
+        column: Annotated[pa.Int64Array, Param(doc="Column to multiply")],
+        factor: Annotated[int, ConstParam("Multiplication factor")],
+    ) -> Annotated[pa.Int64Array, Returns()]:
         """Multiply column values by the constant factor."""
         return pc.multiply(column, factor)
 
@@ -130,8 +135,8 @@ class MultiplyFunction(ScalarFunction):
 class DoubleColumnFunction(ScalarFunction):
     """Doubles values in a numeric column.
 
-    This example demonstrates the new Param API with:
-    - AnyArrow type with type_bound for flexible numeric input
+    This example demonstrates the Annotated API with:
+    - AnyArrow type (arrow_type=None) with type_bound for flexible numeric input
     - Dynamic output type computed in bind()
 
     Example:
@@ -173,8 +178,11 @@ class DoubleColumnFunction(ScalarFunction):
 
     def compute(
         self,
-        column: Param(AnyArrow, "Numeric value to double", type_bound=_is_addable_type),  # type: ignore[valid-type]
-    ) -> pa.Array[Any]:
+        column: Annotated[
+            pa.Array[Any],
+            Param(doc="Numeric value to double", type_bound=_is_addable_type),
+        ],
+    ) -> Annotated[pa.Array[Any], Returns()]:
         """Double the values in the specified column."""
         result: pa.Array[Any] = pc.multiply(column, 2)
         return result
@@ -237,9 +245,15 @@ class AddNumericColumnsFunction(ScalarFunction):
 
     def compute(
         self,
-        col1: Param(AnyArrow, "First numeric value", type_bound=_is_addable_type),  # type: ignore[valid-type]
-        col2: Param(AnyArrow, "Second numeric value", type_bound=_is_addable_type),  # type: ignore[valid-type]
-    ) -> pa.Array[Any]:
+        col1: Annotated[
+            pa.Array[Any],
+            Param(doc="First numeric value", type_bound=_is_addable_type),
+        ],
+        col2: Annotated[
+            pa.Array[Any],
+            Param(doc="Second numeric value", type_bound=_is_addable_type),
+        ],
+    ) -> Annotated[pa.Array[Any], Returns()]:
         """Add the two columns together."""
         result: pa.Array[Any] = pc.add(col1, col2)
         return result
@@ -248,7 +262,9 @@ class AddNumericColumnsFunction(ScalarFunction):
 class UpperCaseFunction(ScalarFunction):
     """Converts a string column to uppercase.
 
-    This example demonstrates the new Param/Returns API with a static output type.
+    This example demonstrates type inference with pa.StringArray:
+    - pa.StringArray -> pa.string() (inferred from Annotated type)
+    - Returns() output type is also inferred from pa.StringArray
 
     Example:
         SQL:    SELECT upper_case(name) FROM users
@@ -275,8 +291,8 @@ class UpperCaseFunction(ScalarFunction):
 
     def compute(
         self,
-        column: Param(pa.string(), "String column to uppercase"),  # type: ignore[valid-type]
-    ) -> Returns(pa.string()):  # type: ignore[valid-type]
+        column: Annotated[pa.StringArray, Param(doc="String column to uppercase")],
+    ) -> Annotated[pa.StringArray, Returns()]:
         """Convert the string values to uppercase."""
         return pc.utf8_upper(column)
 
@@ -322,10 +338,15 @@ class SumColumnsFunction(ScalarFunction):
 
     def compute(
         self,
-        columns: Param(  # type: ignore[valid-type]
-            AnyArrow, "Numeric values to sum", type_bound=_is_addable_type, varargs=True
-        ),
-    ) -> pa.Array[Any]:
+        columns: Annotated[
+            list[pa.Array[Any]],
+            Param(
+                doc="Numeric values to sum",
+                type_bound=_is_addable_type,
+                varargs=True,
+            ),
+        ],
+    ) -> Annotated[pa.Array[Any], Returns()]:
         """Sum values from all specified columns."""
         result: pa.Array[Any] = columns[0]
         for col in columns[1:]:
@@ -340,7 +361,7 @@ class NullHandlingFunction(ScalarFunction):
     It demonstrates how to use NullHandling.SPECIAL to receive null values
     instead of having them automatically converted to null output.
 
-    This example uses the new Param/Returns API with Meta.null_handling.
+    This example uses type inference with pa.Int64Array and Meta.null_handling.
 
     Example:
         SQL:    SELECT null_handling(value) FROM data
@@ -364,11 +385,14 @@ class NullHandlingFunction(ScalarFunction):
 
     def compute(
         self,
-        column: Param(pa.int64(), "Integer value to process"),  # type: ignore[valid-type]
-    ) -> Returns(pa.int64()):  # type: ignore[valid-type]
+        column: Annotated[pa.Int64Array, Param(doc="Integer value to process")],
+    ) -> Annotated[pa.Int64Array, Returns()]:
         """Return value if not null, otherwise -5000."""
         # Use if_else: if value is null, return -5000, otherwise return the value
-        return pc.if_else(pc.is_null(column), pa.scalar(-5000, type=pa.int64()), column)
+        result: pa.Int64Array = pc.if_else(  # type: ignore[assignment]
+            pc.is_null(column), pa.scalar(-5000, type=pa.int64()), column
+        )
+        return result
 
 
 class RandomIntFunction(ScalarFunction):
@@ -378,7 +402,7 @@ class RandomIntFunction(ScalarFunction):
     with the same input will produce different results. The database optimizer
     cannot cache or reuse results from volatile functions.
 
-    This example uses the new Param/Returns API with Meta.stability.
+    This example uses type inference with pa.Int64Array and Meta.stability.
 
     Other stability options:
     - CONSISTENT: Same input always produces same output (deterministic)
@@ -406,9 +430,9 @@ class RandomIntFunction(ScalarFunction):
 
     def compute(
         self,
-        min_val: Param(pa.int64(), "Minimum value (inclusive)"),  # type: ignore[valid-type]
-        max_val: Param(pa.int64(), "Maximum value (inclusive)"),  # type: ignore[valid-type]
-    ) -> Returns(pa.int64()):  # type: ignore[valid-type]
+        min_val: Annotated[pa.Int64Array, Param(doc="Minimum value (inclusive)")],
+        max_val: Annotated[pa.Int64Array, Param(doc="Maximum value (inclusive)")],
+    ) -> Annotated[pa.Int64Array, Returns()]:
         """Generate random integers for each row."""
         import random
 

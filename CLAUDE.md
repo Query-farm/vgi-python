@@ -176,9 +176,11 @@ ipc_read   num_rows=1 schema={'sum': 'int64'} metadata={'vgi.status': 'FINISHED'
 
 ## Creating a Scalar Function (Per-Row Transform)
 
-Use `Param()`, `ConstParam()`, and `Returns()` annotations on the `compute()` method:
+Use `Annotated[T, Param(...)]`, `Annotated[T, ConstParam(...)]`, and `Annotated[T, Returns(...)]` on the `compute()` method. **Arrow types are inferred from array classes** for concise declarations:
 
 ```python
+from typing import Annotated
+
 import pyarrow as pa
 import pyarrow.compute as pc
 from vgi import ConstParam, Param, Returns, ScalarFunction
@@ -188,10 +190,32 @@ class AddColumns(ScalarFunction):
 
     def compute(
         self,
-        left: Param(pa.int64(), "First column"),
-        right: Param(pa.int64(), "Second column"),
-    ) -> Returns(pa.int64()):
+        # Type inferred from pa.Int64Array -> pa.int64()
+        left: Annotated[pa.Int64Array, Param(doc="First column")],
+        right: Annotated[pa.Int64Array, Param(doc="Second column")],
+    ) -> Annotated[pa.Int64Array, Returns()]:  # Output type also inferred
         return pc.add(left, right)
+```
+
+### Type Inference Rules
+
+| Annotation | Inferred Type | Notes |
+|------------|---------------|-------|
+| `pa.Int64Array` | `pa.int64()` | All integer array types supported |
+| `pa.StringArray` | `pa.string()` | Also `pa.LargeStringArray` → `pa.large_string()` |
+| `pa.DoubleArray` | `pa.float64()` | `pa.FloatArray` → `pa.float32()` |
+| `pa.BooleanArray` | `pa.bool_()` | |
+| `pa.Date32Array` | `pa.date32()` | `pa.Date64Array` → `pa.date64()` |
+| `pa.BinaryArray` | `pa.binary()` | |
+| `pa.Array` | AnyArrow | Dynamic type, requires `bind()` |
+| `pa.StructArray` | Error | Must specify `arrow_type=...` |
+| `pa.ListArray` | Error | Must specify `arrow_type=...` |
+| `pa.TimestampArray` | Error | Must specify `arrow_type=...` (needs unit) |
+
+**Explicit types always override inference:**
+```python test="skip"
+# Override inference with explicit arrow_type
+column: Annotated[pa.Int64Array, Param(arrow_type=pa.int32(), doc="...")]
 ```
 
 ### With Constant Argument (ConstParam)
@@ -204,20 +228,18 @@ class MultiplyByFactor(ScalarFunction):
 
     def compute(
         self,
-        column: Param(pa.int64(), "Column to multiply"),
-        factor: ConstParam(int, "Multiplication factor"),
-    ) -> Returns(pa.int64()):
+        column: Annotated[pa.Int64Array, Param(doc="Column to multiply")],
+        factor: Annotated[int, ConstParam("Multiplication factor")],
+    ) -> Annotated[pa.Int64Array, Returns()]:
         # factor is Python int (scalar), not pa.Array
         return pc.multiply(column, factor)
 ```
 
 ### With Dynamic Output Type (AnyArrow)
 
-Use `AnyArrow` when output type depends on input schema:
+Use `pa.Array` (generic) with no `arrow_type` when output type depends on input schema:
 
 ```python
-from vgi import AnyArrow
-
 class Double(ScalarFunction):
     """Double values, preserving input type."""
 
@@ -232,9 +254,27 @@ class Double(ScalarFunction):
 
     def compute(
         self,
-        column: Param(AnyArrow, "Numeric value"),
-    ) -> Returns(AnyArrow):
+        column: Annotated[pa.Array, Param(doc="Numeric value")],  # AnyArrow
+    ) -> Annotated[pa.Array, Returns()]:  # Dynamic output
         return pc.multiply(column, 2)
+```
+
+### With Complex Types (Explicit arrow_type Required)
+
+Complex/parameterized types like `StructArray`, `ListArray`, `TimestampArray` require explicit `arrow_type`:
+
+```python
+class ExtractX(ScalarFunction):
+    """Extract x field from point struct."""
+
+    def compute(
+        self,
+        point: Annotated[
+            pa.StructArray,
+            Param(arrow_type=pa.struct([("x", pa.int64()), ("y", pa.int64())]), doc="Point")
+        ],
+    ) -> Annotated[pa.Int64Array, Returns()]:
+        return pc.struct_field(point, "x")
 ```
 
 ### Key Constraints for Scalar Functions:
@@ -512,8 +552,9 @@ if __name__ == "__main__":
 ### Imports
 
 ```python
-# Scalar Functions (per-row transform) - new Param/Returns API
-from vgi import ScalarFunction, Param, ConstParam, Returns, AnyArrow, Worker
+# Scalar Functions (per-row transform) - Annotated[T, Param/Returns] API
+from typing import Annotated
+from vgi import ScalarFunction, Param, ConstParam, Returns, Worker
 
 # Scalar Functions - legacy Arg API (still supported)
 from vgi import ScalarFunction, Arg, AnyArrowValue, Worker
@@ -539,18 +580,30 @@ from vgi.log import Level
 
 ### Argument Declaration
 
-**For ScalarFunction (Recommended): Param/ConstParam/Returns on compute()**
+**For ScalarFunction (Recommended): Annotated[T, Param/ConstParam/Returns] on compute()**
 
 ```python
+from typing import Annotated
 from vgi import ScalarFunction, Param, ConstParam, Returns
 import pyarrow as pa
+import pyarrow.compute as pc
 
 class MyScalar(ScalarFunction):
     def compute(
         self,
-        col: Param(pa.int64(), "Column input"),           # Array from batch
-        factor: ConstParam(int, "Constant factor"),       # Scalar from args
-    ) -> Returns(pa.int64()):                             # Output type
+        # Concise: type inferred from pa.Int64Array
+        col: Annotated[pa.Int64Array, Param(doc="Column input")],
+        factor: Annotated[int, ConstParam("Constant factor")],
+    ) -> Annotated[pa.Int64Array, Returns()]:
+        return pc.multiply(col, factor)
+
+# Alternative: explicit arrow_type (for complex types or override)
+class MyExplicitScalar(ScalarFunction):
+    def compute(
+        self,
+        col: Annotated[pa.Array, Param(pa.int64(), "Column input")],
+        factor: Annotated[int, ConstParam("Constant factor")],
+    ) -> Annotated[pa.Array, Returns(pa.int64())]:
         return pc.multiply(col, factor)
 ```
 
@@ -605,7 +658,8 @@ At bind time:
 - Type bounds have been validated
 
 ```python
-from vgi import ScalarFunction, Param, Returns, AnyArrow
+from typing import Annotated
+from vgi import ScalarFunction, Param, Returns
 import pyarrow as pa
 import pyarrow.compute as pc
 
@@ -624,9 +678,9 @@ class AddColumns(ScalarFunction):
 
     def compute(
         self,
-        left: Param(AnyArrow, "First column"),
-        right: Param(AnyArrow, "Second column"),
-    ) -> Returns(AnyArrow):
+        left: Annotated[pa.Array, Param(doc="First column")],    # AnyArrow (pa.Array)
+        right: Annotated[pa.Array, Param(doc="Second column")],  # AnyArrow (pa.Array)
+    ) -> Annotated[pa.Array, Returns()]:  # Dynamic output type
         return pc.add(left, right)
 ```
 
