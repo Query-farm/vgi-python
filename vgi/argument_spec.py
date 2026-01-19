@@ -358,7 +358,7 @@ def extract_argument_specs(
                 position=param_arg.position,
                 arrow_type=param_arrow_type,
                 is_table_input=False,
-                is_any_type=param_arg.arrow_type is None,
+                is_any_type=param_arg.is_any,
                 is_varargs=param_arg.varargs,
                 is_const=False,
             )
@@ -376,7 +376,7 @@ def extract_argument_specs(
                 position=const_arg.position,
                 arrow_type=const_arrow_type,
                 is_table_input=False,
-                is_any_type=const_arg.arrow_type is None,
+                is_any_type=const_arg.is_any,
                 is_varargs=const_arg.varargs,
                 is_const=True,
             )
