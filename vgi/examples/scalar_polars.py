@@ -42,7 +42,6 @@ Example Functions
 Static Output Type:
     - ``PolarsUpperCaseFunction`` - String to uppercase
     - ``PolarsStringLengthFunction`` - Character count
-    - ``PolarsNormalizeFunction`` - Z-score normalization
 
 Multiple Arguments:
     - ``PolarsAddValuesFunction`` - Add two columns
@@ -70,7 +69,6 @@ __all__ = [
     "PolarsAddValuesFunction",
     "PolarsDoubleFunction",
     "PolarsMultiplyFunction",
-    "PolarsNormalizeFunction",
     "PolarsStringLengthFunction",
     "PolarsSumValuesFunction",
     "PolarsUpperCaseFunction",
@@ -156,51 +154,6 @@ class PolarsStringLengthFunction(PolarsScalarFunction):
     def compute_polars(self) -> pl.Expr:
         """Compute string lengths using Polars."""
         return pl.col("text").str.len_chars()
-
-
-class PolarsNormalizeFunction(PolarsScalarFunction):
-    """Z-score normalization (standardization) using Polars.
-
-    Computes ``(value - mean) / std`` for numeric values. This demonstrates
-    using Polars aggregation functions (mean, std) within a scalar expression.
-
-    The expression ``col - col.mean()`` computes the mean once and subtracts
-    it from each value - Polars optimizes this automatically.
-
-    Attributes:
-        value: Numeric column to normalize.
-
-    SQL Usage:
-        ``SELECT polars_normalize(score) FROM exam_results``
-
-    Example:
-        >>> input: [10.0, 20.0, 30.0, 40.0, 50.0]
-        >>> output: [-1.41, -0.71, 0.0, 0.71, 1.41]  # approximately
-
-    Note:
-        Output values will have mean ≈ 0 and standard deviation ≈ 1.
-
-    """
-
-    value: Annotated[pl.Float64, Param(position=0, doc="Numeric value to normalize")]
-
-    class Meta:
-        """Function metadata."""
-
-        name = "polars_normalize"
-        description = "Z-score normalization using Polars"
-        output_type = pl.Float64
-        examples = [
-            FunctionExample(
-                sql="SELECT polars_normalize(score) FROM exam_results",
-                description="Normalize exam scores to z-scores",
-            ),
-        ]
-
-    def compute_polars(self) -> pl.Expr:
-        """Normalize the values using z-score (value - mean) / std."""
-        col = pl.col("value")
-        return (col - col.mean()) / col.std()
 
 
 # =============================================================================

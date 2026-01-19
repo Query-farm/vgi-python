@@ -93,11 +93,28 @@ def compute_polars(self) -> pl.Expr:
 
     # Conditional logic
     return pl.when(pl.col("x") > 0).then(1).otherwise(-1)
-
-    # Aggregations (computed per-batch)
-    col = pl.col("value")
-    return (col - col.mean()) / col.std()
 ```
+
+### Important: Row Independence
+
+Scalar functions must produce deterministic output for each row based **only** on
+that row's input values. Do **not** use batch-level aggregations like `mean()`,
+`std()`, `sum()`, or `count()` in scalar functions because:
+
+1. The output would depend on what other rows happen to be in the batch
+2. Results would be non-deterministic and batch-size dependent
+3. This violates the scalar function contract
+
+**Don't do this:**
+```python
+# WRONG: Output depends on other rows in the batch
+def compute_polars(self) -> pl.Expr:
+    col = pl.col("value")
+    return (col - col.mean()) / col.std()  # Uses batch aggregations!
+```
+
+For operations that need to aggregate across rows, use a `TableInOutFunction`
+or `AggregationFunction` instead.
 
 ## Output Types
 
@@ -288,40 +305,41 @@ import pyarrow.types as pat
 from vgi import PolarsScalarFunction, Param, AnyPolars
 from vgi.metadata import FunctionExample
 
-class ZScoreNormalize(PolarsScalarFunction):
-    """Compute z-score normalization: (value - mean) / std.
+class ClampValue(PolarsScalarFunction):
+    """Clamp numeric values to a range [0, 100].
 
     Accepts any numeric type and preserves it in the output.
+    Values below 0 become 0, values above 100 become 100.
     """
 
     value: Annotated[
         Any,
         Param(
             position=0,
-            doc="Numeric column to normalize",
+            doc="Numeric column to clamp",
             type_bound=[pat.is_integer, pat.is_floating],
         ),
     ]
 
     class Meta:
-        name = "zscore_normalize"
-        description = "Z-score normalization (standardization)"
+        name = "clamp_value"
+        description = "Clamp values to range [0, 100]"
         output_type = AnyPolars
         examples = [
             FunctionExample(
-                sql="SELECT zscore_normalize(score) FROM exams",
-                description="Normalize exam scores",
+                sql="SELECT clamp_value(score) FROM exams",
+                description="Clamp exam scores to valid range",
             ),
         ]
 
     @property
     def output_polars_type(self) -> pl.DataType:
-        # Always output Float64 for normalized values
-        return pl.Float64
+        # Preserve input type
+        return self.polars_schema[self.input_schema.field(0).name]
 
     def compute_polars(self) -> pl.Expr:
-        col = pl.col("value").cast(pl.Float64)
-        return (col - col.mean()) / col.std()
+        # Each row's output depends only on that row's input
+        return pl.col("value").clip(0, 100)
 ```
 
 ## See Also

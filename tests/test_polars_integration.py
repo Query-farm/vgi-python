@@ -17,7 +17,6 @@ from vgi.examples.scalar_polars import (  # noqa: E402
     PolarsAddValuesFunction,
     PolarsDoubleFunction,
     PolarsMultiplyFunction,
-    PolarsNormalizeFunction,
     PolarsStringLengthFunction,
     PolarsSumValuesFunction,
     PolarsUpperCaseFunction,
@@ -123,68 +122,6 @@ class TestPolarsStringLengthFunction:
 
         assert len(outputs) == 1
         assert outputs[0].num_rows == input_batch.num_rows
-
-
-class TestPolarsNormalizeFunction:
-    """Tests for PolarsNormalizeFunction."""
-
-    def test_basic_normalization(self) -> None:
-        """Should compute z-score normalization using Polars."""
-        # Values with known z-scores: [10, 20, 30, 40, 50]
-        # mean = 30, std = 15.81...
-        input_batch = batch(value=[10.0, 20.0, 30.0, 40.0, 50.0])
-
-        with ScalarFunctionTestClient(PolarsNormalizeFunction) as client:
-            outputs = list(
-                client.scalar_function(
-                    input=iter([input_batch]),
-                    arguments=Arguments(),
-                )
-            )
-
-        assert len(outputs) == 1
-        result = outputs[0].to_pydict()["result"]
-
-        # Check that mean of z-scores is approximately 0
-        mean_zscore = sum(result) / len(result)
-        assert abs(mean_zscore) < 0.0001, f"Mean z-score should be ~0: {mean_zscore}"
-
-        # Check that middle value (30) has z-score ~0
-        assert abs(result[2]) < 0.0001, "z-score of middle value should be ~0"
-
-        # Check ordering: lower values have negative z-scores
-        assert result[0] < 0, "Lowest value should have negative z-score"
-        assert result[4] > 0, "Highest value should have positive z-score"
-
-    def test_preserves_row_count(self) -> None:
-        """Output should have same row count as input."""
-        input_batch = batch(value=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
-
-        with ScalarFunctionTestClient(PolarsNormalizeFunction) as client:
-            outputs = list(
-                client.scalar_function(
-                    input=iter([input_batch]),
-                    arguments=Arguments(),
-                )
-            )
-
-        assert len(outputs) == 1
-        assert outputs[0].num_rows == input_batch.num_rows
-
-    def test_output_type_is_float64(self) -> None:
-        """Output should be float64 regardless of input numeric type."""
-        input_batch = batch(value=[1.0, 2.0, 3.0])
-
-        with ScalarFunctionTestClient(PolarsNormalizeFunction) as client:
-            outputs = list(
-                client.scalar_function(
-                    input=iter([input_batch]),
-                    arguments=Arguments(),
-                )
-            )
-
-        assert len(outputs) == 1
-        assert outputs[0].schema.field("result").type == pa.float64()
 
 
 class TestPolarsAddValuesFunction:
