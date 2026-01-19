@@ -356,12 +356,22 @@ class Worker:
             meta = func_cls.get_metadata()
 
             # Split parameters into positional and named (excluding TableInput)
+            # For PolarsScalarFunction, column bindings (Param) are NOT SQL args,
+            # only ConstParam entries are. Check _polars_params to distinguish.
+            polars_params = getattr(func_cls, "_polars_params", None)
+            has_polars_params = polars_params is not None and len(polars_params) > 0
             positional_params = [
                 p
                 for p in meta.parameters
-                if isinstance(p.position, int) and not p.is_table_input
+                if isinstance(p.position, int)
+                and not p.is_table_input
+                and (not has_polars_params or p.is_const)
             ]
-            named_params = [p for p in meta.parameters if isinstance(p.position, str)]
+            named_params = [
+                p
+                for p in meta.parameters
+                if isinstance(p.position, str) and (not has_polars_params or p.is_const)
+            ]
 
             # Check positional arguments
             required_positional = [p for p in positional_params if p.required]
