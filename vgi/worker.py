@@ -371,49 +371,63 @@ class Worker:
 
             # Check positional arguments
             if is_scalar:
-                # Scalar functions: only ConstParams are matched against
-                # invocation.arguments. Column params come from input batches.
-                required_positional = [
-                    p for p in positional_params if p.required and p.is_const
-                ]
-                # For scalar functions, column params can optionally be passed
-                # as arguments (for literals) or come from batches
-                max_positional = len(positional_params)
+                # Scalar functions have two variants:
+                # 1. PolarsScalarFunction (has _polars_params): Column bindings are
+                #    declared in the class, so only ConstParams are passed as args.
+                # 2. Regular ScalarFunction (has _compute_params only): Column NAMES
+                #    are passed as positional args to specify which columns to bind.
+                #
+                # All scalar params are always required (no defaults).
+                # Scalar functions don't support named arguments.
+                is_polars_scalar = getattr(func_cls, "_polars_params", None) is not None
+
+                if is_polars_scalar:
+                    # PolarsScalarFunction: only count ConstParams for matching
+                    const_positional = [p for p in positional_params if p.is_const]
+                    expected_positional = len(const_positional)
+                    if num_positional != expected_positional:
+                        continue  # Must match exactly
+                else:
+                    # Regular ScalarFunction: count ALL params
+                    # (column names + ConstParams)
+                    has_varargs = any(p.is_varargs for p in positional_params)
+                    expected_positional = len(positional_params)
+                    if has_varargs:
+                        # With varargs, need at least expected params
+                        if num_positional < expected_positional:
+                            continue
+                    else:
+                        if num_positional != expected_positional:
+                            continue  # Must match exactly
+
+                # Scalar functions don't support named arguments
+                if named_keys:
+                    continue
             else:
                 # Table functions: all params come from invocation.arguments
                 required_positional = [p for p in positional_params if p.required]
+                min_positional = len(required_positional)
                 max_positional = len(positional_params)
+                has_varargs = any(p.is_varargs for p in positional_params)
 
-            has_varargs = any(p.is_varargs for p in positional_params)
-            min_positional = len(required_positional)
+                if has_varargs:
+                    if num_positional < min_positional:
+                        continue  # Too few positional arguments
+                else:
+                    if not (min_positional <= num_positional <= max_positional):
+                        continue  # Wrong number of positional arguments
 
-            if has_varargs:
-                # Varargs: allow any number >= min_positional
-                if num_positional < min_positional:
-                    continue  # Too few positional arguments
-            else:
-                # Fixed positional: must be within [min, max]
-                if not (min_positional <= num_positional <= max_positional):
-                    continue  # Wrong number of positional arguments
-
-            # Check named arguments
-            if is_scalar:
-                # Scalar: only match ConstParams for named arguments
-                valid_named_keys = {p.position for p in named_params if p.is_const}
-                required_named_keys = {
-                    p.position for p in named_params if p.required and p.is_const
-                }
-            else:
+                # Check named arguments
                 valid_named_keys = {p.position for p in named_params}
                 required_named_keys = {p.position for p in named_params if p.required}
 
-            # All provided named args must be valid
-            if not named_keys.issubset(valid_named_keys):
-                continue  # Unknown named argument
+                # All provided named args must be valid
+                if not named_keys.issubset(valid_named_keys):
+                    continue  # Unknown named argument
 
-            # All required named args must be provided
-            if not required_named_keys.issubset(named_keys):
-                continue  # Missing required named argument
+                # All required named args must be provided
+                if not required_named_keys.issubset(named_keys):
+                    continue  # Missing required named argument
 
             matches.append(func_cls)
 
