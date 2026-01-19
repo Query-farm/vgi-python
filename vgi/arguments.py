@@ -900,6 +900,8 @@ class _ArgFactory:
         arg._type_param = self._type_param
         # Set based on legacy Arg[AnyArrow] pattern
         arg._returns_any_arrow_value = self._type_param is AnyArrow
+        # Resolution index for value lookup (may differ from position for const params)
+        arg._resolution_index = None
 
         if pattern is not None:
             arg._compiled_pattern = re.compile(pattern)
@@ -985,6 +987,7 @@ class Arg[ArgT]:
         "_compiled_pattern",
         "_type_param",
         "_returns_any_arrow_value",
+        "_resolution_index",
     )
 
     def __init__(
@@ -1072,6 +1075,9 @@ class Arg[ArgT]:
         self._type_param: type | None = None
         # Set by __init_subclass__ when using Annotated[AnyArrowValue, Arg(...)]
         self._returns_any_arrow_value: bool = False
+        # Resolution index for value lookup (may differ from position for const params)
+        # When set, _resolve() uses this instead of position for Arguments.get()
+        self._resolution_index: int | None = None
 
         # Pre-compile pattern for efficiency
         if pattern is not None:
@@ -1128,11 +1134,19 @@ class Arg[ArgT]:
             )
         arguments = invocation.arguments
 
+        # Use _resolution_index if set (for const params with separate tracking)
+        # Otherwise fall back to position
+        lookup_pos: int | str
+        if self._resolution_index is not None:
+            lookup_pos = self._resolution_index
+        else:
+            lookup_pos = self.position
+
         if self.varargs:
             # Collect all positional arguments from this position onwards
             # position is guaranteed to be int (validated in __init__)
-            assert isinstance(self.position, int)  # Validated in __init__
-            values = arguments.get_varargs(self.position)
+            assert isinstance(lookup_pos, int)  # Validated in __init__
+            values = arguments.get_varargs(lookup_pos)
             if len(values) == 0:
                 raise ArgumentValidationError(
                     f"Argument '{self._name}' requires at least 1 value.",
@@ -1147,9 +1161,9 @@ class Arg[ArgT]:
             return values  # type: ignore[no-any-return]  # varargs returns tuple
 
         if self.default is _MISSING:
-            value: ArgT = arguments.get(self.position)
+            value: ArgT = arguments.get(lookup_pos)
         else:
-            value = arguments.get(self.position, default=self.default)
+            value = arguments.get(lookup_pos, default=self.default)
 
         # Apply validation
         self._validate(value)

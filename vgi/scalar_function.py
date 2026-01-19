@@ -868,10 +868,12 @@ class ScalarFunction(ScalarFunctionGenerator):
                     break
 
         # Extract Param/ConstParam from parameter annotations
-        # Track separate positions for column params (from batch) and const params
-        # (from invocation arguments)
-        column_position = 0  # Position in batch columns
-        const_position = 0  # Position in invocation.arguments.positional
+        # Track overall position (call order) for metadata/client use.
+        # For const params, track resolution_index (index into Args.positional)
+        # For column params, track column_index (index into batch columns)
+        overall_position = 0  # Overall call order position for metadata
+        column_index = 0  # Index in batch columns (for column params)
+        const_index = 0  # Index in invocation.arguments.positional (for const params)
         for name in sig.parameters:
             if name == "self":
                 continue
@@ -889,11 +891,15 @@ class ScalarFunction(ScalarFunctionGenerator):
                         # Get base type from Annotated first argument for inference
                         type_args = get_args(hint)
                         base_type = type_args[0] if type_args else pa.Array
-                        arg = _param_to_arg(meta, base_type, column_position)
+                        # Use overall position for metadata, column_index for resolution
+                        arg = _param_to_arg(meta, base_type, overall_position)
                         arg._name = name
+                        # Store column_index in _resolution_index for batch lookup
+                        arg._resolution_index = column_index
                         compute_params[name] = arg
                         setattr(cls, name, _ArgDescriptor(arg, name))
-                        column_position += 1
+                        overall_position += 1
+                        column_index += 1
                         break
 
                     # New API: ConstParam dataclass
@@ -902,11 +908,15 @@ class ScalarFunction(ScalarFunctionGenerator):
                         # Get base type from Annotated first argument
                         type_args = get_args(hint)
                         base_type = type_args[0] if type_args else Any
-                        arg = _const_param_to_arg(meta, base_type, const_position)
+                        # Use overall position for metadata
+                        arg = _const_param_to_arg(meta, base_type, overall_position)
                         arg._name = name
+                        # _resolution_index points to Arguments.positional index
+                        arg._resolution_index = const_index
                         const_params[name] = arg
                         setattr(cls, name, _ConstArgDescriptor(arg, name))
-                        const_position += 1
+                        overall_position += 1
+                        const_index += 1
                         break
 
                     # Legacy API: Arg instance (still supported for backwards compat)
@@ -915,21 +925,25 @@ class ScalarFunction(ScalarFunctionGenerator):
                         meta._name = name
 
                         if meta.const:
-                            # Const params use their own position counter
-                            # (position into invocation.arguments.positional)
+                            # Const params: use overall position for metadata,
+                            # _resolution_index for Arguments.positional lookup
                             if meta.position == _INFER_POSITION:
-                                meta.position = const_position
+                                meta.position = overall_position
+                            meta._resolution_index = const_index
                             const_params[name] = meta
                             setattr(cls, name, _ConstArgDescriptor(meta, name))
-                            const_position += 1
+                            overall_position += 1
+                            const_index += 1
                         else:
-                            # Column params use their own position counter
-                            # (position into batch columns)
+                            # Column params: use overall position for metadata,
+                            # _resolution_index for batch column lookup
                             if meta.position == _INFER_POSITION:
-                                meta.position = column_position
+                                meta.position = overall_position
+                            meta._resolution_index = column_index
                             compute_params[name] = meta
                             setattr(cls, name, _ArgDescriptor(meta, name))
-                            column_position += 1
+                            overall_position += 1
+                            column_index += 1
 
                         break
 
@@ -1126,25 +1140,25 @@ class ScalarFunction(ScalarFunctionGenerator):
 
         if self._uses_new_param_api:
             # New Param/ConstParam API
-            # Regular params: extract arrays by position
+            # Regular params: extract arrays by _resolution_index (batch column index)
             for name, arg in self._compute_params.items():
-                # Position is always int for new API (set in __init_subclass__)
-                pos = cast(int, arg.position)
+                # Use _resolution_index for batch column lookup
+                col_idx = cast(int, arg._resolution_index)
                 if arg.varargs:
                     # Varargs: collect all remaining columns from position
                     kwargs[name] = [
-                        batch.column(i) for i in range(pos, batch.num_columns)
+                        batch.column(i) for i in range(col_idx, batch.num_columns)
                     ]
                 else:
-                    # Regular param: extract column by position
-                    kwargs[name] = batch.column(pos)
+                    # Regular param: extract column by index
+                    kwargs[name] = batch.column(col_idx)
 
             # Const params: extract scalar values from arguments
             for name, arg in self._const_params.items():
-                # Position is always int for new API
-                pos = cast(int, arg.position)
+                # Use _resolution_index for Arguments.positional lookup
+                arg_idx = cast(int, arg._resolution_index)
                 # Get the scalar value from invocation arguments
-                scalar = self.invocation.arguments.positional[pos]
+                scalar = self.invocation.arguments.positional[arg_idx]
                 # Convert to Python value
                 kwargs[name] = scalar.as_py() if scalar is not None else None
         else:
