@@ -129,7 +129,7 @@ def _format_arguments_for_error(args: Arguments) -> str:
     """Format Arguments for error messages, showing values and types.
 
     Produces output like:
-        positional=[3 (int64), "hello" (string)], named={sep: "," (string)}
+        const_args=[3 (int64), "hello" (string)], named_args={sep: "," (string)}
 
     Args:
         args: The Arguments instance to format.
@@ -138,50 +138,44 @@ def _format_arguments_for_error(args: Arguments) -> str:
         Human-readable string showing argument values and types.
 
     """
+
+    def format_scalar(scalar: Any) -> str:
+        """Format a single scalar value with its type."""
+        if scalar is None:
+            return "null"
+        elif not scalar.is_valid:
+            return f"null ({scalar.type})"
+        else:
+            value = scalar.as_py()
+            type_name = str(scalar.type)
+            if isinstance(value, str):
+                return f"{value!r} ({type_name})"
+            elif isinstance(value, bytes):
+                if len(value) > 20:
+                    return f"<{len(value)} bytes> ({type_name})"
+                else:
+                    return f"{value!r} ({type_name})"
+            else:
+                return f"{value} ({type_name})"
+
     parts = []
 
-    # Format positional arguments
+    # Format positional constant arguments
     if args.positional:
-        pos_strs = []
-        for scalar in args.positional:
-            if scalar is None:
-                pos_strs.append("null")
-            elif not scalar.is_valid:
-                pos_strs.append(f"null ({scalar.type})")
-            else:
-                # Format value with type
-                value = scalar.as_py()
-                type_name = str(scalar.type)
-                if isinstance(value, str):
-                    pos_strs.append(f"{value!r} ({type_name})")
-                elif isinstance(value, bytes):
-                    # Truncate long bytes
-                    if len(value) > 20:
-                        pos_strs.append(f"<{len(value)} bytes> ({type_name})")
-                    else:
-                        pos_strs.append(f"{value!r} ({type_name})")
-                else:
-                    pos_strs.append(f"{value} ({type_name})")
-        parts.append(f"positional=[{', '.join(pos_strs)}]")
+        pos_strs = [format_scalar(s) for s in args.positional]
+        parts.append(f"const_args=[{', '.join(pos_strs)}]")
     else:
-        parts.append("positional=[]")
+        parts.append("const_args=[]")
 
-    # Format named arguments
+    # Format named constant arguments
     if args.named:
-        named_strs = []
-        for name, scalar in sorted(args.named.items()):
-            if not scalar.is_valid:
-                named_strs.append(f"{name}: null ({scalar.type})")
-            else:
-                value = scalar.as_py()
-                type_name = str(scalar.type)
-                if isinstance(value, str):
-                    named_strs.append(f"{name}: {value!r} ({type_name})")
-                else:
-                    named_strs.append(f"{name}: {value} ({type_name})")
-        parts.append(f"named={{{', '.join(named_strs)}}}")
+        named_strs = [
+            f"{name}: {format_scalar(scalar)}"
+            for name, scalar in sorted(args.named.items())
+        ]
+        parts.append(f"named_args={{{', '.join(named_strs)}}}")
     else:
-        parts.append("named={}")
+        parts.append("named_args={}")
 
     return ", ".join(parts)
 
@@ -498,9 +492,15 @@ class Worker:
                 )
                 param_summaries.append(f"  {func_cls.__name__}({param_str})")
 
+            # Format input schema for scalar functions
+            input_schema_str = ""
+            if invocation.input_schema is not None:
+                cols = [f"{f.name}: {f.type}" for f in invocation.input_schema]
+                input_schema_str = f"input_columns=[{', '.join(cols)}], "
+
             raise ValueError(
                 f"No matching function '{invocation.function_name}' for arguments: "
-                f"{_format_arguments_for_error(args)}. "
+                f"{input_schema_str}{_format_arguments_for_error(args)}. "
                 f"Available overloads:\n" + "\n".join(param_summaries)
             )
 
