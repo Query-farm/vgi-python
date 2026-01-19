@@ -427,19 +427,34 @@ class Worker:
 
             # Check positional arguments
             if is_scalar:
-                # Scalar functions have two variants:
-                # 1. PolarsScalarFunction (has _polars_params): Column bindings are
-                #    declared in the class.
-                # 2. Regular ScalarFunction (has _compute_params only): Column NAMES
-                #    are passed as positional args to specify which columns to bind.
+                # Scalar functions have two calling conventions:
+                #
+                # 1. New API (Param/ConstParam on compute()):
+                #    - Column Params: bound from input batch columns by position
+                #    - ConstParams: passed via invocation.arguments
+                #    - Only count ConstParams for argument matching
+                #
+                # 2. Legacy API (no Param/ConstParam):
+                #    - Column NAMES passed as positional args to specify bindings
+                #    - All params come from invocation.arguments
                 #
                 # All scalar params are always required (no defaults).
                 # Scalar functions don't support named arguments.
 
-                # Regular ScalarFunction: count ALL params
-                # (column names + ConstParams)
-                has_varargs = any(p.is_varargs for p in positional_params)
-                expected_positional = len(positional_params)
+                # Check if function uses new Param/ConstParam API
+                const_params = [p for p in positional_params if p.is_const]
+                has_const_params = len(const_params) > 0
+
+                if has_const_params:
+                    # New API: only ConstParams come from arguments
+                    # Column params come from input batch
+                    expected_positional = len(const_params)
+                    has_varargs = any(p.is_varargs for p in const_params)
+                else:
+                    # Legacy API: all params (column names) come from arguments
+                    expected_positional = len(positional_params)
+                    has_varargs = any(p.is_varargs for p in positional_params)
+
                 if has_varargs:
                     # With varargs, need at least expected params
                     if num_positional < expected_positional:

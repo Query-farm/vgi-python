@@ -38,6 +38,7 @@ from vgi.scalar_function import ScalarFunction
 
 __all__ = [
     "AddValuesFunction",
+    "ConditionalMessageFunction",
     "DoubleFunction",
     "MultiplyFunction",
     "NullHandlingFunction",
@@ -130,6 +131,52 @@ class MultiplyFunction(ScalarFunction):
     ) -> Annotated[pa.Int64Array, Returns()]:
         """Multiply values by the constant factor."""
         return pc.multiply(value, factor)
+
+
+class ConditionalMessageFunction(ScalarFunction):
+    """Returns a repeated message when condition is true, empty string otherwise.
+
+    This example demonstrates multiple ConstParam parameters:
+    - repeat_count (int): How many times to repeat the message
+    - message (string): The message to repeat
+    - condition (boolean column): Whether to apply the message
+
+    The constant parameters come first, followed by the column parameter.
+
+    Example:
+        SQL:    SELECT conditional_message(3, 'Hi! ', is_active) FROM users
+        Input:  is_active=[true, false, true]
+        Args:   repeat_count=3, message='Hi! '
+        Output: result=['Hi! Hi! Hi! ', '', 'Hi! Hi! Hi! ']
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "conditional_message"
+        description = "Returns repeated message when condition is true"
+        examples = [
+            FunctionExample(
+                sql="SELECT conditional_message(3, 'Alert! ', flag) FROM items",
+                description="Show alert message for flagged items",
+            ),
+            FunctionExample(
+                sql="SELECT conditional_message(2, '⭐', is_featured) FROM products",
+                description="Add stars to featured products",
+            ),
+        ]
+
+    def compute(
+        self,
+        repeat_count: Annotated[int, ConstParam("Number of times to repeat")],
+        message: Annotated[str, ConstParam("Message to repeat")],
+        condition: Annotated[pa.BooleanArray, Param(doc="Apply message condition")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Return repeated message when condition is true, empty string otherwise."""
+        repeated_message = message * repeat_count
+        result: pa.StringArray = pc.if_else(condition, repeated_message, "")  # type: ignore[assignment]
+        return result
 
 
 class DoubleFunction(ScalarFunction):
