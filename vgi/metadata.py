@@ -46,6 +46,7 @@ For worker registration, metadata can be serialized to Arrow:
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import re
@@ -53,7 +54,7 @@ import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, get_type_hints
+from typing import TYPE_CHECKING, Annotated, Any, get_args, get_origin, get_type_hints
 
 import pyarrow as pa
 
@@ -486,26 +487,55 @@ def extract_parameters(
     # However, ConstParam entries (is_const=True) ARE function arguments and must
     # be extracted for the function signature.
     polars_params = getattr(cls, "_polars_params", {})
-    for name, param_info in polars_params.items():
-        if not param_info.is_const:
-            continue  # Skip column bindings, only extract ConstParam
-        seen_names.add(name)
-        # ConstParam is always required (no default support currently)
-        type_name = "double"  # TODO: Infer from annotation type
-        parameters.append(
-            ParameterInfo(
-                name=name,
-                position=param_info.position,
-                type_name=type_name,
-                description=param_info.doc,
-                required=True,
-                default=None,
-                constraints=None,
-                is_table_input=False,
-                is_varargs=False,
-                is_const=True,
+    if polars_params:
+        # Get class annotations to infer ConstParam types
+        annotations = getattr(cls, "__annotations__", {})
+        for name, param_info in polars_params.items():
+            if not param_info.is_const:
+                continue  # Skip column bindings, only extract ConstParam
+            seen_names.add(name)
+
+            # Infer type from annotation (e.g., Annotated[float, ConstParam(...)])
+            type_name = "any"
+            if name in annotations:
+                hint = annotations[name]
+                # Handle string annotations (from __future__ import annotations)
+                if isinstance(hint, str):
+                    # Build namespace with builtins, typing constructs, and ConstParam
+                    import builtins
+
+                    from vgi.arguments import ConstParam
+
+                    eval_ns = dict(vars(builtins))
+                    eval_ns["Annotated"] = Annotated
+                    eval_ns["ConstParam"] = ConstParam
+                    with contextlib.suppress(Exception):
+                        hint = eval(hint, eval_ns)  # noqa: S307
+                # Extract base type from Annotated[base_type, ...]
+                base_type = get_args(hint)[0] if get_origin(hint) is Annotated else hint
+                # Map Python types to Arrow type names
+                python_to_arrow = {
+                    float: "double",
+                    int: "int64",
+                    str: "string",
+                    bool: "bool",
+                }
+                type_name = python_to_arrow.get(base_type, "any")
+
+            parameters.append(
+                ParameterInfo(
+                    name=name,
+                    position=param_info.position,
+                    type_name=type_name,
+                    description=param_info.doc,
+                    required=True,  # ConstParam is always required
+                    default=None,
+                    constraints=None,
+                    is_table_input=False,
+                    is_varargs=False,
+                    is_const=True,
+                )
             )
-        )
 
     # Check for new Param/ConstParam API (ScalarFunction subclasses)
     # These are stored in _compute_params and _const_params class attributes

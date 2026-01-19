@@ -195,25 +195,37 @@ class SumAll(PolarsScalarFunction):
 
 ## Constant Arguments
 
-Access scalar values passed in SQL (not from table columns):
+Use `ConstParam` to declare scalar values passed in SQL (not from table columns).
+This ensures the argument appears in function metadata for catalog registration.
 
 ```python
+from vgi import ConstParam
+
 class Multiply(PolarsScalarFunction):
-    value: Annotated[pl.Float64, Param(position=0, doc="Column")]
+    # Column binding: input column at position 0
+    value: Annotated[pl.Float64, Param(position=0, doc="Column to multiply")]
+
+    # ConstParam declaration: scalar argument at position 0 in function call
+    # This is a type annotation for metadata - use _factor property to access value
+    factor: Annotated[float, ConstParam("Multiplication factor", position=0)]
 
     class Meta:
         output_type = pl.Float64
 
     @property
-    def factor(self) -> float:
-        """Get constant from SQL arguments."""
+    def _factor(self) -> float:
+        """Get constant from SQL arguments at runtime."""
         return self.invocation.arguments.positional[0].as_py()
 
     def compute_polars(self) -> pl.Expr:
-        return pl.col("value") * self.factor
+        return pl.col("value") * self._factor
 ```
 
 SQL usage: `SELECT polars_multiply(price, 1.1) FROM products`
+
+**Important**: The `ConstParam` class attribute is a type annotation for metadata
+extraction only. To access the actual value at runtime, use a property that reads
+from `self.invocation.arguments.positional[position]`.
 
 ## Meta Class Options
 

@@ -277,7 +277,12 @@ class PolarsMultiplyFunction(PolarsScalarFunction):
 
     """
 
+    # Column binding: maps input column at position 0 to "value" in expression
     value: Annotated[pl.Float64, Param(position=0, doc="Value to multiply")]
+
+    # ConstParam declaration for metadata extraction (tells catalog about the argument).
+    # The actual value is accessed via _factor property below since class-level
+    # Annotated declarations are type hints only, not instance attributes.
     factor: Annotated[float, ConstParam("Multiplication factor", position=0)]
 
     class Meta:
