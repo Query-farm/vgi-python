@@ -172,7 +172,7 @@ def arrow_schema_to_json(serialized: bytes) -> list[dict[str, Any]]:
         serialized: Serialized Arrow schema bytes
 
     Returns:
-        List of column definitions with name, type, and optional varargs flag
+        List of column definitions with name, type, and optional flags (varargs, const)
 
     """
     reader = pa.BufferReader(serialized)
@@ -181,6 +181,7 @@ def arrow_schema_to_json(serialized: bytes) -> list[dict[str, Any]]:
     for f in schema:
         type_str = str(f.type)
         is_varargs = False
+        is_const = False
         if f.metadata:
             # Check for vgi:any metadata (output schema)
             if f.metadata.get(b"vgi:any") == b"true":
@@ -193,10 +194,15 @@ def arrow_schema_to_json(serialized: bytes) -> list[dict[str, Any]]:
             # Check for varargs metadata
             if f.metadata.get(b"vgi_varargs") == b"true":
                 is_varargs = True
+            # Check for const metadata (ConstParam)
+            if f.metadata.get(b"vgi_const") == b"true":
+                is_const = True
 
         entry: dict[str, Any] = {"name": f.name, "type": type_str}
         if is_varargs:
             entry["varargs"] = True
+        if is_const:
+            entry["const"] = True
         result.append(entry)
     return result
 

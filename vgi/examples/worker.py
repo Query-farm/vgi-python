@@ -24,6 +24,7 @@ from vgi.catalog import Setting
 from vgi.examples.scalar import (
     AddValuesFunction,
     DoubleFunction,
+    MultiplyFunction,
     NullHandlingFunction,
     RandomIntFunction,
     SumValuesFunction,
@@ -108,6 +109,7 @@ class ExampleWorker(Worker):
         # ScalarFunctionGenerator - transform to single-column output
         AddValuesFunction,
         DoubleFunction,
+        MultiplyFunction,
         NullHandlingFunction,
         RandomIntFunction,
         SumValuesFunction,
