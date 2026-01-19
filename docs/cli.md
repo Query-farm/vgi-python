@@ -69,7 +69,7 @@ vgi-client --input data.parquet --function repeat_inputs --args '[3]'
 
 ```bash
 # Double values in column "x"
-vgi-client --input data.parquet --function double_column --args '["x"]' --type scalar
+vgi-client --input data.parquet --function double --args '["x"]' --type scalar
 ```
 
 **Output to file:**
@@ -512,8 +512,8 @@ vgi-example-worker
 | `repeat_inputs` | table-in-out | Repeat each row N times |
 | `sequence` | table | Generate sequence of integers |
 | `range` | table | Generate range of integers |
-| `double_column` | scalar | Double values in a column |
-| `add_columns` | scalar | Add two columns together |
+| `double` | scalar | Double values in a column |
+| `add_values` | scalar | Add two columns together |
 
 ### vgi-example-catalog-worker
 

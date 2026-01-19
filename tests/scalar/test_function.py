@@ -633,7 +633,7 @@ class TestParamConstParamReturnsAPI:
         from vgi.examples.scalar import MultiplyFunction
 
         assert MultiplyFunction._uses_new_param_api is True
-        assert "column" in MultiplyFunction._compute_params
+        assert "value" in MultiplyFunction._compute_params
         assert "factor" in MultiplyFunction._const_params
         assert MultiplyFunction._const_params["factor"].const is True
         assert MultiplyFunction._returns_output_type == pa.int64()
@@ -1179,8 +1179,8 @@ class TestHybridTypeInference:
         from vgi.examples.scalar import MultiplyFunction
 
         assert MultiplyFunction._uses_new_param_api is True
-        # column should be inferred as int64 from pa.Int64Array
-        assert MultiplyFunction._compute_params["column"].arrow_type == pa.int64()
+        # value should be inferred as int64 from pa.Int64Array
+        assert MultiplyFunction._compute_params["value"].arrow_type == pa.int64()
         # Returns type should be inferred as int64 from pa.Int64Array
         assert MultiplyFunction._returns_output_type == pa.int64()
         # factor is a const param
@@ -1191,8 +1191,8 @@ class TestHybridTypeInference:
         from vgi.examples.scalar import UpperCaseFunction
 
         assert UpperCaseFunction._uses_new_param_api is True
-        # column should be inferred as string from pa.StringArray
-        assert UpperCaseFunction._compute_params["column"].arrow_type == pa.string()
+        # value should be inferred as string from pa.StringArray
+        assert UpperCaseFunction._compute_params["value"].arrow_type == pa.string()
         # Returns type should be inferred as string from pa.StringArray
         assert UpperCaseFunction._returns_output_type == pa.string()
 

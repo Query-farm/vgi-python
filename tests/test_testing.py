@@ -545,14 +545,14 @@ class TestAssertFunctionLogs:
 class TestScalarFunctionTestClient:
     """Tests for ScalarFunctionTestClient."""
 
-    def test_basic_double_column(self) -> None:
+    def test_basic_double(self) -> None:
         """ScalarFunctionTestClient should process basic scalar function."""
-        from vgi.examples.scalar import DoubleColumnFunction
+        from vgi.examples.scalar import DoubleFunction
         from vgi.testing import ScalarFunctionTestClient
 
         input_batch = batch(x=[1, 2, 3])
 
-        with ScalarFunctionTestClient(DoubleColumnFunction) as client:
+        with ScalarFunctionTestClient(DoubleFunction) as client:
             outputs = list(
                 client.scalar_function(
                     input=iter([input_batch]),
@@ -563,14 +563,14 @@ class TestScalarFunctionTestClient:
         assert len(outputs) == 1
         assert outputs[0].to_pydict() == {"result": [2, 4, 6]}
 
-    def test_add_columns(self) -> None:
-        """ScalarFunctionTestClient should work with AddNumericColumnsFunction."""
-        from vgi.examples.scalar import AddNumericColumnsFunction
+    def test_add_values(self) -> None:
+        """ScalarFunctionTestClient should work with AddValuesFunction."""
+        from vgi.examples.scalar import AddValuesFunction
         from vgi.testing import ScalarFunctionTestClient
 
         input_batch = batch(a=[1, 2, 3], b=[10, 20, 30])
 
-        with ScalarFunctionTestClient(AddNumericColumnsFunction) as client:
+        with ScalarFunctionTestClient(AddValuesFunction) as client:
             outputs = list(
                 client.scalar_function(
                     input=iter([input_batch]),
@@ -601,14 +601,14 @@ class TestScalarFunctionTestClient:
 
     def test_multiple_batches(self) -> None:
         """ScalarFunctionTestClient should process multiple input batches."""
-        from vgi.examples.scalar import DoubleColumnFunction
+        from vgi.examples.scalar import DoubleFunction
         from vgi.testing import ScalarFunctionTestClient
 
         batch1 = batch(x=[1, 2])
         batch2 = batch(x=[3, 4])
         batch3 = batch(x=[5, 6])
 
-        with ScalarFunctionTestClient(DoubleColumnFunction) as client:
+        with ScalarFunctionTestClient(DoubleFunction) as client:
             outputs = list(
                 client.scalar_function(
                     input=iter([batch1, batch2, batch3]),
@@ -623,10 +623,10 @@ class TestScalarFunctionTestClient:
 
     def test_empty_input(self) -> None:
         """ScalarFunctionTestClient with no input batches should produce no output."""
-        from vgi.examples.scalar import DoubleColumnFunction
+        from vgi.examples.scalar import DoubleFunction
         from vgi.testing import ScalarFunctionTestClient
 
-        with ScalarFunctionTestClient(DoubleColumnFunction) as client:
+        with ScalarFunctionTestClient(DoubleFunction) as client:
             outputs = list(
                 client.scalar_function(
                     input=iter([]),
@@ -638,13 +638,13 @@ class TestScalarFunctionTestClient:
 
     def test_empty_batch(self) -> None:
         """ScalarFunctionTestClient should handle empty batch (zero rows)."""
-        from vgi.examples.scalar import DoubleColumnFunction
+        from vgi.examples.scalar import DoubleFunction
         from vgi.testing import ScalarFunctionTestClient
 
         schema = make_schema([("x", pa.int64())])
         empty_batch = batch(schema, x=[])
 
-        with ScalarFunctionTestClient(DoubleColumnFunction) as client:
+        with ScalarFunctionTestClient(DoubleFunction) as client:
             outputs = list(
                 client.scalar_function(
                     input=iter([empty_batch]),
@@ -657,12 +657,12 @@ class TestScalarFunctionTestClient:
 
     def test_logs_cleared_between_calls(self) -> None:
         """Logs should be cleared at start of each scalar_function call."""
-        from vgi.examples.scalar import DoubleColumnFunction
+        from vgi.examples.scalar import DoubleFunction
         from vgi.testing import ScalarFunctionTestClient
 
         input_batch = batch(x=[1, 2, 3])
 
-        with ScalarFunctionTestClient(DoubleColumnFunction) as client:
+        with ScalarFunctionTestClient(DoubleFunction) as client:
             # First call
             list(
                 client.scalar_function(
@@ -681,12 +681,12 @@ class TestScalarFunctionTestClient:
             )
             second_logs = client.logs.copy()
 
-            # Both should be empty (DoubleColumnFunction doesn't log)
+            # Both should be empty (DoubleFunction doesn't log)
             assert first_logs == second_logs == []
 
     def test_bind_result_callback(self) -> None:
         """bind_result_callback should be called with bind result batch."""
-        from vgi.examples.scalar import DoubleColumnFunction
+        from vgi.examples.scalar import DoubleFunction
         from vgi.testing import ScalarFunctionTestClient
 
         input_batch = batch(x=[1, 2, 3])
@@ -695,7 +695,7 @@ class TestScalarFunctionTestClient:
         def callback(bind_batch: pa.RecordBatch) -> None:
             bind_results.append(bind_batch)
 
-        with ScalarFunctionTestClient(DoubleColumnFunction) as client:
+        with ScalarFunctionTestClient(DoubleFunction) as client:
             list(
                 client.scalar_function(
                     input=iter([input_batch]),
@@ -716,11 +716,11 @@ class TestRunScalarFunction:
 
     def test_basic_usage(self) -> None:
         """run_scalar_function() should run function and return outputs."""
-        from vgi.examples.scalar import DoubleColumnFunction
+        from vgi.examples.scalar import DoubleFunction
         from vgi.testing import run_scalar_function
 
         outputs, logs = run_scalar_function(
-            DoubleColumnFunction,
+            DoubleFunction,
             input_batches=[batch(x=[1, 2, 3])],
             args=("x",),
         )
@@ -731,12 +731,12 @@ class TestRunScalarFunction:
 
     def test_with_kwargs(self) -> None:
         """run_scalar_function() should handle kwargs."""
-        from vgi.examples.scalar import DoubleColumnFunction
+        from vgi.examples.scalar import DoubleFunction
         from vgi.testing import run_scalar_function
 
-        # DoubleColumnFunction only uses positional, but we test the plumbing
+        # DoubleFunction only uses positional, but we test the plumbing
         outputs, logs = run_scalar_function(
-            DoubleColumnFunction,
+            DoubleFunction,
             input_batches=[batch(x=[5, 10])],
             args=("x",),
             kwargs={},
@@ -751,11 +751,11 @@ class TestAssertScalarFunctionOutput:
 
     def test_pass_when_output_matches(self) -> None:
         """assert_scalar_function_output() should pass when output matches."""
-        from vgi.examples.scalar import DoubleColumnFunction
+        from vgi.examples.scalar import DoubleFunction
         from vgi.testing import assert_scalar_function_output
 
         logs = assert_scalar_function_output(
-            DoubleColumnFunction,
+            DoubleFunction,
             input=[batch(x=[1, 2, 3])],
             expected=[batch(result=[2, 4, 6])],
             args=("x",),
@@ -764,12 +764,12 @@ class TestAssertScalarFunctionOutput:
 
     def test_fail_when_count_differs(self) -> None:
         """assert_scalar_function_output() should fail when batch count differs."""
-        from vgi.examples.scalar import DoubleColumnFunction
+        from vgi.examples.scalar import DoubleFunction
         from vgi.testing import assert_scalar_function_output
 
         with pytest.raises(AssertionError, match="Expected 2 output batches"):
             assert_scalar_function_output(
-                DoubleColumnFunction,
+                DoubleFunction,
                 input=[batch(x=[1, 2, 3])],
                 expected=[batch(result=[2, 4]), batch(result=[6])],
                 args=("x",),
@@ -777,24 +777,24 @@ class TestAssertScalarFunctionOutput:
 
     def test_fail_when_content_differs(self) -> None:
         """assert_scalar_function_output() should fail when content differs."""
-        from vgi.examples.scalar import DoubleColumnFunction
+        from vgi.examples.scalar import DoubleFunction
         from vgi.testing import assert_scalar_function_output
 
         with pytest.raises(AssertionError, match="Batch 0 mismatch"):
             assert_scalar_function_output(
-                DoubleColumnFunction,
+                DoubleFunction,
                 input=[batch(x=[1, 2, 3])],
                 expected=[batch(result=[100, 200, 300])],
                 args=("x",),
             )
 
-    def test_add_columns_function(self) -> None:
-        """assert_scalar_function_output() works with AddNumericColumnsFunction."""
-        from vgi.examples.scalar import AddNumericColumnsFunction
+    def test_add_values_function(self) -> None:
+        """assert_scalar_function_output() works with AddValuesFunction."""
+        from vgi.examples.scalar import AddValuesFunction
         from vgi.testing import assert_scalar_function_output
 
         assert_scalar_function_output(
-            AddNumericColumnsFunction,
+            AddValuesFunction,
             input=[batch(a=[1, 2], b=[10, 20])],
             expected=[batch(result=[11, 22])],
             args=("a", "b"),
@@ -814,12 +814,12 @@ class TestAssertScalarFunctionOutput:
 
     def test_custom_message(self) -> None:
         """assert_scalar_function_output() should include custom message in error."""
-        from vgi.examples.scalar import DoubleColumnFunction
+        from vgi.examples.scalar import DoubleFunction
         from vgi.testing import assert_scalar_function_output
 
         with pytest.raises(AssertionError, match="My custom message:"):
             assert_scalar_function_output(
-                DoubleColumnFunction,
+                DoubleFunction,
                 input=[batch(x=[1])],
                 expected=[batch(result=[999])],
                 args=("x",),
@@ -828,12 +828,12 @@ class TestAssertScalarFunctionOutput:
 
     def test_unordered_comparison(self) -> None:
         """assert_scalar_function_output() should support unordered comparison."""
-        from vgi.examples.scalar import DoubleColumnFunction
+        from vgi.examples.scalar import DoubleFunction
         from vgi.testing import assert_scalar_function_output
 
         # With check_order=False, order doesn't matter
         assert_scalar_function_output(
-            DoubleColumnFunction,
+            DoubleFunction,
             input=[batch(x=[1, 2, 3])],
             expected=[batch(result=[2, 4, 6])],  # Same content, different order ok
             args=("x",),

@@ -17,7 +17,7 @@ from vgi.client.client import ClientError
 class TestScalarFunctionClient:
     """Tests for scalar functions via Client subprocess."""
 
-    def test_double_column_basic(self, example_worker: str) -> None:
+    def test_double_basic(self, example_worker: str) -> None:
         """Test basic scalar function via Client."""
         s = schema(x=pa.int64())
         batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=s)
@@ -25,7 +25,7 @@ class TestScalarFunctionClient:
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="double_column",
+                    function_name="double",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -34,8 +34,8 @@ class TestScalarFunctionClient:
         assert len(outputs) == 1
         assert outputs[0].to_pydict() == {"result": [2, 4, 6]}
 
-    def test_add_columns(self, example_worker: str) -> None:
-        """Test add_columns scalar function."""
+    def test_add_values(self, example_worker: str) -> None:
+        """Test add_values scalar function."""
         s = schema(a=pa.int64(), b=pa.int64())
         batch = pa.RecordBatch.from_pydict(
             {"a": [1, 2, 3], "b": [10, 20, 30]}, schema=s
@@ -44,7 +44,7 @@ class TestScalarFunctionClient:
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="add_columns",
+                    function_name="add_values",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -82,7 +82,7 @@ class TestScalarFunctionClient:
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="double_column",
+                    function_name="double",
                     input=iter([batch1, batch2, batch3]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -106,7 +106,7 @@ class TestScalarFunctionClient:
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="double_column",
+                    function_name="double",
                     input=iter([empty_batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -124,7 +124,7 @@ class TestScalarFunctionClient:
         ):
             list(
                 client.scalar_function(
-                    function_name="double_column",
+                    function_name="double",
                     input=iter([]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -139,7 +139,7 @@ class TestScalarFunctionClient:
         with pytest.raises(ClientError, match="not started"):
             list(
                 client.scalar_function(
-                    function_name="double_column",
+                    function_name="double",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -154,7 +154,7 @@ class TestScalarFunctionClient:
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="double_column",
+                    function_name="double",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -182,7 +182,7 @@ class TestScalarFunctionClient:
         with Client(example_worker) as client:
             list(
                 client.scalar_function(
-                    function_name="double_column",
+                    function_name="double",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                     bind_result_callback=capture_bind_result,
@@ -197,15 +197,15 @@ class TestScalarFunctionClient:
         assert "output_schema" in bind_result.schema.names
         assert "max_processes" in bind_result.schema.names
 
-    def test_add_columns_accepts_float_columns(self, example_worker: str) -> None:
-        """Test that add_columns accepts float columns."""
+    def test_add_values_accepts_float_columns(self, example_worker: str) -> None:
+        """Test that add_values accepts float columns."""
         s = schema(a=pa.float64(), b=pa.float64())
         batch = pa.RecordBatch.from_pydict({"a": [1.5, 2.5], "b": [0.5, 0.5]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="add_columns",
+                    function_name="add_values",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -214,15 +214,15 @@ class TestScalarFunctionClient:
         assert len(outputs) == 1
         assert outputs[0].to_pydict() == {"result": [2.0, 3.0]}
 
-    def test_add_columns_accepts_mixed_int_types(self, example_worker: str) -> None:
-        """Test that add_columns accepts mixed integer types and promotes correctly."""
+    def test_add_values_accepts_mixed_int_types(self, example_worker: str) -> None:
+        """Test that add_values accepts mixed integer types and promotes correctly."""
         s = schema(a=pa.int32(), b=pa.int64())
         batch = pa.RecordBatch.from_pydict({"a": [1, 2], "b": [10, 20]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="add_columns",
+                    function_name="add_values",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -234,8 +234,8 @@ class TestScalarFunctionClient:
         assert outputs[0].schema.field("result").type == pa.int64()
 
 
-class TestSumColumns:
-    """Tests for SumColumnsFunction via Client."""
+class TestSumValues:
+    """Tests for SumValuesFunction via Client."""
 
     def test_sum_two_columns(self, example_worker: str) -> None:
         """Sum of two columns."""
@@ -247,7 +247,7 @@ class TestSumColumns:
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="sum_columns",
+                    function_name="sum_values",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -266,7 +266,7 @@ class TestSumColumns:
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="sum_columns",
+                    function_name="sum_values",
                     input=iter([batch]),
                     arguments=Arguments(
                         positional=(pa.scalar("a"), pa.scalar("b"), pa.scalar("c"))
@@ -285,7 +285,7 @@ class TestSumColumns:
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="sum_columns",
+                    function_name="sum_values",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -307,7 +307,7 @@ class TestSumColumns:
         ):
             list(
                 client.scalar_function(
-                    function_name="sum_columns",
+                    function_name="sum_values",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -322,7 +322,7 @@ class TestSumColumns:
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="sum_columns",
+                    function_name="sum_values",
                     input=iter([batch1, batch2]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -342,7 +342,7 @@ class TestSumColumns:
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="sum_columns",
+                    function_name="sum_values",
                     input=iter([empty_batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -359,7 +359,7 @@ class TestSumColumns:
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="sum_columns",
+                    function_name="sum_values",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -372,7 +372,7 @@ class TestSumColumns:
 class TestScalarFunctionParallel:
     """Tests for scalar functions with parallel processing."""
 
-    def test_parallel_double_column(self, example_worker: str) -> None:
+    def test_parallel_double(self, example_worker: str) -> None:
         """Test scalar function with multiple workers."""
         s = schema(x=pa.int64())
         batches = [
@@ -385,7 +385,7 @@ class TestScalarFunctionParallel:
         with Client(example_worker, max_workers=4) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="double_column",
+                    function_name="double",
                     input=iter(batches),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -402,8 +402,8 @@ class TestScalarFunctionParallel:
         expected = {i * 2 for i in range(1000)}
         assert all_values == expected
 
-    def test_parallel_add_columns(self, example_worker: str) -> None:
-        """Test add_columns with multiple workers."""
+    def test_parallel_add_values(self, example_worker: str) -> None:
+        """Test add_values with multiple workers."""
         s = schema(a=pa.int64(), b=pa.int64())
         batches = [
             pa.RecordBatch.from_pydict(
@@ -415,7 +415,7 @@ class TestScalarFunctionParallel:
         with Client(example_worker, max_workers=3) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="add_columns",
+                    function_name="add_values",
                     input=iter(batches),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -438,7 +438,7 @@ class TestScalarFunctionParallel:
         with Client(example_worker, max_workers=2) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="double_column",
+                    function_name="double",
                     input=iter(batches),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -461,7 +461,7 @@ class TestScalarFunctionParallel:
         with Client(example_worker, max_workers=4) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="double_column",
+                    function_name="double",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -691,7 +691,7 @@ class TestScalarMultiWorkerEdgeCases:
         with Client(example_worker, max_workers=1) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="double_column",
+                    function_name="double",
                     input=iter([zero_row_batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -710,7 +710,7 @@ class TestScalarMultiWorkerEdgeCases:
         with Client(example_worker, max_workers=4) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="double_column",
+                    function_name="double",
                     input=iter([zero_row_batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -729,7 +729,7 @@ class TestScalarMultiWorkerEdgeCases:
         with Client(example_worker, max_workers=4) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="double_column",
+                    function_name="double",
                     input=iter([single_batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -748,7 +748,7 @@ class TestScalarMultiWorkerEdgeCases:
         with Client(example_worker, max_workers=4) as client:
             outputs = list(
                 client.scalar_function(
-                    function_name="double_column",
+                    function_name="double",
                     input=iter([batch1, batch2]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )

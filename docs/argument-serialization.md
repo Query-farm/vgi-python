@@ -149,7 +149,7 @@ schema = pa.schema([
 ```python
 from typing import Annotated
 
-class SumColumnsFunction(TableInOutFunction):
+class SumValuesFunction(TableInOutFunction):
     columns: Annotated[tuple[str, ...], Arg(0, varargs=True)]
 
 # Serializes to:

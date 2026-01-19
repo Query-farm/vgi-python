@@ -637,7 +637,7 @@ class TestCLIScalarFunction:
                 "--input",
                 str(scalar_input_parquet),
                 "--function",
-                "double_column",
+                "double",
                 "--args",
                 '["x"]',
                 "--type",
@@ -664,7 +664,7 @@ class TestCLIScalarFunction:
                 "--format",
                 "json",
                 "--function",
-                "double_column",
+                "double",
                 "--args",
                 '["x"]',
                 "--type",
@@ -698,7 +698,7 @@ class TestCLIScalarFunction:
                 "--format",
                 "parquet",
                 "--function",
-                "double_column",
+                "double",
                 "--args",
                 '["x"]',
                 "--type",
@@ -721,7 +721,7 @@ class TestCLIScalarFunction:
             cli,
             [
                 "--function",
-                "double_column",
+                "double",
                 "--args",
                 '["x"]',
                 "--type",
@@ -828,8 +828,8 @@ class TestCLIScalarFunction:
         lines = output_file.read_text().strip().split("\n")
         assert len(lines) == 3
 
-    def test_scalar_with_add_columns(self, example_worker: str, tmp_path: Path) -> None:
-        """Test add_columns scalar function via CLI."""
+    def test_scalar_with_add_values(self, example_worker: str, tmp_path: Path) -> None:
+        """Test add_values scalar function via CLI."""
         # Create input with two columns
         batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3], "b": [10, 20, 30]})
         input_file = tmp_path / "input.parquet"
@@ -847,7 +847,7 @@ class TestCLIScalarFunction:
                 "--format",
                 "json",
                 "--function",
-                "add_columns",
+                "add_values",
                 "--args",
                 '["a", "b"]',
                 "--type",

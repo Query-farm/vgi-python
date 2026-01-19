@@ -150,8 +150,8 @@ class TestExampleWorkerCatalog:
         by_name = {fn.name: fn for fn in functions}
 
         # Check scalar functions
-        assert by_name["double_column"].function_type == FunctionType.SCALAR
-        assert by_name["add_columns"].function_type == FunctionType.SCALAR
+        assert by_name["double"].function_type == FunctionType.SCALAR
+        assert by_name["add_values"].function_type == FunctionType.SCALAR
         assert by_name["upper_case"].function_type == FunctionType.SCALAR
 
         # Check table functions (TableFunctionGenerator and TableInOutGenerator)
@@ -174,11 +174,11 @@ class TestExampleWorkerCatalog:
         field_names = [f.name for f in args_schema]
         assert "count" in field_names
 
-        # Check double_column function has 'column' argument
-        double_info = by_name["double_column"]
+        # Check double function has 'value' argument
+        double_info = by_name["double"]
         args_schema = pa.ipc.read_schema(pa.py_buffer(double_info.arguments))
         field_names = [f.name for f in args_schema]
-        assert "column" in field_names
+        assert "value" in field_names
 
     def test_function_info_has_description(self) -> None:
         """FunctionInfo has description from docstring or Meta."""
@@ -253,8 +253,8 @@ class TestExampleWorkerCatalog:
         # Create lookup by name
         by_name = {fn.name: fn for fn in functions}
 
-        # double_column returns AnyArrow (output depends on input)
-        double_info = by_name["double_column"]
+        # double returns AnyArrow (output depends on input)
+        double_info = by_name["double"]
         output_schema = pa.ipc.read_schema(pa.py_buffer(double_info.output_schema))
 
         # Should have a single "result" field with null type and vgi:any metadata

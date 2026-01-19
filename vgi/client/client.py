@@ -2153,7 +2153,7 @@ class Client(CatalogClientMixin):
             >>> with Client("vgi-example-worker") as client:
             ...     batches = [pa.RecordBatch.from_pydict({"x": [1, 2, 3]})]
             ...     for output in client.scalar_function(
-            ...         function_name="double_column",
+            ...         function_name="double",
             ...         input=iter(batches),
             ...         arguments=Arguments(positional=[pa.scalar("x")]),
             ...     ):

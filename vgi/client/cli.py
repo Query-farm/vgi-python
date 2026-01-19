@@ -15,7 +15,7 @@ Usage:
     vgi-client --function range --args '[0, 10]'
 
     # Scalar functions (with input, single-column output):
-    vgi-client --input data.parquet --function double_column \
+    vgi-client --input data.parquet --function double \
         --args '["x"]' --type scalar
 
     # Specify table input position (for functions where TableInput isn't first):

@@ -10,11 +10,11 @@ Metadata works with all function types: `ScalarFunction`, `TableFunctionGenerato
 from typing import Annotated
 from vgi import TableInOutFunction, Arg
 
-class SumColumnsFunction(TableInOutFunction):
+class SumValuesFunction(TableInOutFunction):
     """Sum all numeric columns in the input."""
 
     class Meta:
-        name = "sum_columns"  # Registration name (default: snake_case of class)
+        name = "sum_values"  # Registration name (default: snake_case of class)
         description = "Sum all numeric columns and return a single row"
         categories = ["aggregation", "numeric"]
         max_workers = 1  # Single-threaded (used by max_processes property)
@@ -33,7 +33,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 class DoubleValues(ScalarFunction):
-    """Double the values in a numeric column."""
+    """Double numeric values."""
 
     class Meta:
         name = "double"
@@ -54,13 +54,13 @@ class DoubleValues(ScalarFunction):
 
 ```python
 # Get resolved metadata
-meta = SumColumnsFunction.get_metadata()
-print(meta.name)        # "sum_columns"
+meta = SumValuesFunction.get_metadata()
+print(meta.name)        # "sum_values"
 print(meta.max_workers) # 1
 print(meta.parameters)  # [ParameterInfo(name='column_name', ...)]
 
 # Get as JSON-serializable dict
-info = SumColumnsFunction.describe()
+info = SumValuesFunction.describe()
 ```
 
 ## Available Meta Attributes

@@ -189,7 +189,7 @@ def _is_lint_only(example: CodeExample) -> bool:
         "MyFunction",
         "AnotherFunction",
         "ReadOnlyCatalogInterface",
-        "SumColumnsFunction",
+        "SumValuesFunction",
         "EchoFunction",
         "Function",  # Generic function references
         "specs",  # Schema specs variable

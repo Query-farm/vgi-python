@@ -199,7 +199,7 @@ class Invocation:
 
     Example:
         invocation = Invocation(
-            function_name="sum_columns",
+            function_name="sum_values",
             input_schema=pa.schema([pa.field("col1", pa.int64())]),
             function_type=InvocationType.TABLE,
             correlation_id="request-123",

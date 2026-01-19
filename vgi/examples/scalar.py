@@ -12,16 +12,16 @@ type inference:
 
 STATIC OUTPUT TYPE (inferred from array class)
 ----------------------------------------------
-MultiplyFunction            - Multiplies column by constant (ConstParam example)
-UpperCaseFunction           - Converts string column to uppercase
+MultiplyFunction            - Multiplies value by constant (ConstParam example)
+UpperCaseFunction           - Converts string value to uppercase
 NullHandlingFunction        - Demonstrates special null handling (NullHandling.SPECIAL)
 RandomIntFunction           - Generates random integers (VOLATILE stability)
 
 DYNAMIC OUTPUT TYPE (with type_bound)
 -------------------------------------
-DoubleColumnFunction        - Doubles values in a numeric column (AnyArrow + type_bound)
-AddNumericColumnsFunction   - Adds two numeric columns (type promotion)
-SumColumnsFunction          - Sums multiple columns (varargs example)
+DoubleFunction              - Doubles numeric values (AnyArrow + type_bound)
+AddValuesFunction           - Adds two numeric values (type promotion)
+SumValuesFunction           - Sums multiple values (varargs example)
 """
 
 from __future__ import annotations
@@ -37,12 +37,12 @@ from vgi.metadata import FunctionExample, FunctionStability, NullHandling
 from vgi.scalar_function import ScalarFunction
 
 __all__ = [
-    "AddNumericColumnsFunction",
-    "DoubleColumnFunction",
+    "AddValuesFunction",
+    "DoubleFunction",
     "MultiplyFunction",
     "NullHandlingFunction",
     "RandomIntFunction",
-    "SumColumnsFunction",
+    "SumValuesFunction",
     "UpperCaseFunction",
 ]
 
@@ -92,7 +92,7 @@ def _promote_for_addition(dtype: pa.DataType) -> pa.DataType:
 
 
 class MultiplyFunction(ScalarFunction):
-    """Multiplies a column by a constant factor.
+    """Multiplies a value by a constant factor.
 
     This example demonstrates type inference with array classes:
     - pa.Int64Array -> pa.int64() (inferred from Annotated type)
@@ -111,7 +111,7 @@ class MultiplyFunction(ScalarFunction):
         """Function metadata."""
 
         name = "multiply"
-        description = "Multiplies a column by a constant factor"
+        description = "Multiplies a value by a constant factor"
         examples = [
             FunctionExample(
                 sql="SELECT multiply(price, 2) FROM products",
@@ -125,22 +125,22 @@ class MultiplyFunction(ScalarFunction):
 
     def compute(
         self,
-        column: Annotated[pa.Int64Array, Param(doc="Column to multiply")],
+        value: Annotated[pa.Int64Array, Param(doc="Integer value to multiply")],
         factor: Annotated[int, ConstParam("Multiplication factor")],
     ) -> Annotated[pa.Int64Array, Returns()]:
-        """Multiply column values by the constant factor."""
-        return pc.multiply(column, factor)
+        """Multiply values by the constant factor."""
+        return pc.multiply(value, factor)
 
 
-class DoubleColumnFunction(ScalarFunction):
-    """Doubles values in a numeric column.
+class DoubleFunction(ScalarFunction):
+    """Doubles numeric values.
 
     This example demonstrates the Annotated API with:
     - AnyArrow type (arrow_type=None) with type_bound for flexible numeric input
     - Dynamic output type computed in bind()
 
     Example:
-        SQL:    SELECT double_column(price) FROM products
+        SQL:    SELECT double(price) FROM products
         Input:  price=[1, 2, 3]
         Output: result=[2, 4, 6]
 
@@ -149,15 +149,15 @@ class DoubleColumnFunction(ScalarFunction):
     class Meta:
         """Function metadata."""
 
-        name = "double_column"
-        description = "Doubles values in a numeric column"
+        name = "double"
+        description = "Doubles numeric values"
         examples = [
             FunctionExample(
-                sql="SELECT double_column(price) FROM products",
-                description="Double the price column",
+                sql="SELECT double(price) FROM products",
+                description="Double the price values",
             ),
             FunctionExample(
-                sql="SELECT double_column(quantity) FROM inventory",
+                sql="SELECT double(quantity) FROM inventory",
                 description="Double inventory quantities",
             ),
         ]
@@ -165,61 +165,61 @@ class DoubleColumnFunction(ScalarFunction):
     _output_type: pa.DataType
 
     def bind(self) -> None:
-        """Compute output type from input column types."""
-        # Get the input column type from the schema
+        """Compute output type from input value type."""
+        # Get the input type from the schema
         field = self.input_schema.field(0)
         # Promote to a wider type since we're multiplying by 2
         self._output_type = _promote_for_addition(field.type)
 
     @property
     def output_type(self) -> pa.DataType:
-        """Return the type of the doubled column."""
+        """Return the type of the doubled value."""
         return self._output_type
 
     def compute(
         self,
-        column: Annotated[
+        value: Annotated[
             pa.Array[Any],
             Param(doc="Numeric value to double", type_bound=_is_addable_type),
         ],
     ) -> Annotated[pa.Array[Any], Returns()]:
-        """Double the values in the specified column."""
-        result: pa.Array[Any] = pc.multiply(column, 2)
+        """Double the input values."""
+        result: pa.Array[Any] = pc.multiply(value, 2)
         return result
 
 
-class AddNumericColumnsFunction(ScalarFunction):
-    """Adds two numeric columns together.
+class AddValuesFunction(ScalarFunction):
+    """Adds two numeric values together.
 
     This example demonstrates:
     - Multiple Param() annotations with type_bound validation
     - Dynamic output type with type promotion for overflow safety
 
-    Validates that both columns are numeric types (integer, float, decimal, or
+    Validates that both values are numeric types (integer, float, decimal, or
     temporal) at compute time, raising SchemaValidationError if not.
 
     Example:
-        SQL:    SELECT add_columns(price, tax) FROM orders
+        SQL:    SELECT add_values(price, tax) FROM orders
         Input:  price=[1, 2, 3], tax=[10, 20, 30]
         Output: result=[11, 22, 33]
 
     Raises:
-        SchemaValidationError: If either column is not a numeric type.
+        SchemaValidationError: If either value is not a numeric type.
 
     """
 
     class Meta:
         """Function metadata."""
 
-        name = "add_columns"
-        description = "Adds two numeric columns"
+        name = "add_values"
+        description = "Adds two numeric values"
         examples = [
             FunctionExample(
-                sql="SELECT add_columns(price, tax) FROM orders",
+                sql="SELECT add_values(price, tax) FROM orders",
                 description="Calculate total by adding price and tax",
             ),
             FunctionExample(
-                sql="SELECT add_columns(quantity, reserved) FROM inventory",
+                sql="SELECT add_values(quantity, reserved) FROM inventory",
                 description="Sum quantity and reserved amounts",
             ),
         ]
@@ -227,7 +227,7 @@ class AddNumericColumnsFunction(ScalarFunction):
     _output_type: pa.DataType
 
     def bind(self) -> None:
-        """Compute output type from input column types."""
+        """Compute output type from input value types."""
         field1 = self.input_schema.field(0)
         field2 = self.input_schema.field(1)
 
@@ -240,7 +240,7 @@ class AddNumericColumnsFunction(ScalarFunction):
 
     @property
     def output_type(self) -> pa.DataType:
-        """Return the computed output type based on input column types."""
+        """Return the computed output type based on input value types."""
         return self._output_type
 
     def compute(
@@ -254,13 +254,13 @@ class AddNumericColumnsFunction(ScalarFunction):
             Param(doc="Second numeric value", type_bound=_is_addable_type),
         ],
     ) -> Annotated[pa.Array[Any], Returns()]:
-        """Add the two columns together."""
+        """Add the two values together."""
         result: pa.Array[Any] = pc.add(col1, col2)
         return result
 
 
 class UpperCaseFunction(ScalarFunction):
-    """Converts a string column to uppercase.
+    """Converts string values to uppercase.
 
     This example demonstrates type inference with pa.StringArray:
     - pa.StringArray -> pa.string() (inferred from Annotated type)
@@ -277,7 +277,7 @@ class UpperCaseFunction(ScalarFunction):
         """Function metadata."""
 
         name = "upper_case"
-        description = "Converts string column to uppercase"
+        description = "Converts string values to uppercase"
         examples = [
             FunctionExample(
                 sql="SELECT upper_case(name) FROM users",
@@ -291,22 +291,22 @@ class UpperCaseFunction(ScalarFunction):
 
     def compute(
         self,
-        column: Annotated[pa.StringArray, Param(doc="String column to uppercase")],
+        value: Annotated[pa.StringArray, Param(doc="String value to uppercase")],
     ) -> Annotated[pa.StringArray, Returns()]:
         """Convert the string values to uppercase."""
-        return pc.utf8_upper(column)
+        return pc.utf8_upper(value)
 
 
-class SumColumnsFunction(ScalarFunction):
-    """Sums values from multiple numeric columns.
+class SumValuesFunction(ScalarFunction):
+    """Sums multiple numeric values.
 
     This example demonstrates:
-    - varargs=True to accept variable number of columns
-    - type_bound validation on all varargs columns
+    - varargs=True to accept variable number of values
+    - type_bound validation on all varargs values
     - Dynamic output type computed in bind()
 
     Example:
-        SQL:    SELECT sum_columns(price, tax, shipping) FROM orders
+        SQL:    SELECT sum_values(price, tax, shipping) FROM orders
         Input:  price=[1, 2], tax=[10, 20], shipping=[100, 200]
         Output: result=[111, 222]
 
@@ -315,30 +315,30 @@ class SumColumnsFunction(ScalarFunction):
     class Meta:
         """Function metadata."""
 
-        name = "sum_columns"
-        description = "Sum values from multiple numeric columns"
+        name = "sum_values"
+        description = "Sum multiple numeric values"
         examples = [
             FunctionExample(
-                sql="SELECT sum_columns(price, tax, shipping) FROM orders",
-                description="Calculate total cost from multiple columns",
+                sql="SELECT sum_values(price, tax, shipping) FROM orders",
+                description="Calculate total cost from multiple values",
             ),
         ]
 
     _output_type: pa.DataType
 
     def bind(self) -> None:
-        """Compute output type from first column, promoted for overflow safety."""
+        """Compute output type from first value, promoted for overflow safety."""
         first_type = self.input_schema.field(0).type
         self._output_type = _promote_for_addition(first_type)
 
     @property
     def output_type(self) -> pa.DataType:
-        """Return the computed output type based on first column."""
+        """Return the computed output type based on first value."""
         return self._output_type
 
     def compute(
         self,
-        columns: Annotated[
+        values: Annotated[
             list[pa.Array[Any]],
             Param(
                 doc="Numeric values to sum",
@@ -347,10 +347,10 @@ class SumColumnsFunction(ScalarFunction):
             ),
         ],
     ) -> Annotated[pa.Array[Any], Returns()]:
-        """Sum values from all specified columns."""
-        result: pa.Array[Any] = columns[0]
-        for col in columns[1:]:
-            result = pc.add(result, col)
+        """Sum all specified values."""
+        result: pa.Array[Any] = values[0]
+        for val in values[1:]:
+            result = pc.add(result, val)
         return result
 
 
@@ -385,12 +385,12 @@ class NullHandlingFunction(ScalarFunction):
 
     def compute(
         self,
-        column: Annotated[pa.Int64Array, Param(doc="Integer value to process")],
+        value: Annotated[pa.Int64Array, Param(doc="Integer value to process")],
     ) -> Annotated[pa.Int64Array, Returns()]:
         """Return value if not null, otherwise -5000."""
         # Use if_else: if value is null, return -5000, otherwise return the value
         result: pa.Int64Array = pc.if_else(  # type: ignore[assignment]
-            pc.is_null(column), pa.scalar(-5000, type=pa.int64()), column
+            pc.is_null(value), pa.scalar(-5000, type=pa.int64()), value
         )
         return result
 

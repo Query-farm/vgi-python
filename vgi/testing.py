@@ -998,7 +998,7 @@ class ScalarFunctionTestClient(_BaseTestClient):
     phase.
 
     Example:
-        with ScalarFunctionTestClient(DoubleColumnFunction) as client:
+        with ScalarFunctionTestClient(DoubleFunction) as client:
             outputs = list(client.scalar_function(
                 input=iter([batch]),
                 arguments=Arguments(positional=(pa.scalar("x"),)),
@@ -1145,7 +1145,7 @@ def run_scalar_function(
 
     Example:
         outputs, logs = run_scalar_function(
-            DoubleColumnFunction,
+            DoubleFunction,
             [batch(x=[1, 2, 3])],
             args=("x",),
         )
@@ -1197,7 +1197,7 @@ def assert_scalar_function_output(
     Examples:
         # Double column test
         assert_scalar_function_output(
-            DoubleColumnFunction,
+            DoubleFunction,
             input=[batch(x=[1, 2, 3])],
             expected=[batch(result=[2, 4, 6])],
             args=("x",),

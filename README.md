@@ -114,12 +114,12 @@ from vgi import ScalarFunction, Arg, Worker
 
 
 class UpperCase(ScalarFunction):
-    """Convert a string column to uppercase."""
+    """Convert string values to uppercase."""
 
     class Meta:
         output_type = pa.string()
 
-    col_name: Annotated[str, Arg(0, doc="Column to uppercase")]
+    col_name: Annotated[str, Arg(0, doc="String value to uppercase")]
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array:
         return pc.utf8_upper(batch.column(self.col_name))
@@ -166,14 +166,14 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 
-class AddColumns(ScalarFunction):
-    """Add two integer columns together."""
+class AddValues(ScalarFunction):
+    """Add two integer values together."""
 
     class Meta:
         output_type = pa.int64()
 
-    left: Annotated[AnyArrowValue, Arg(0, type_bound=pa.types.is_integer, doc="First column")]
-    right: Annotated[AnyArrowValue, Arg(1, type_bound=pa.types.is_integer, doc="Second column")]
+    left: Annotated[AnyArrowValue, Arg(0, type_bound=pa.types.is_integer, doc="First integer value")]
+    right: Annotated[AnyArrowValue, Arg(1, type_bound=pa.types.is_integer, doc="Second integer value")]
 
     def compute(self, batch: pa.RecordBatch) -> pa.Array:
         return pc.add(
@@ -183,10 +183,10 @@ class AddColumns(ScalarFunction):
 ```
 
 ```sql
-SELECT add_columns(price, tax) as total FROM orders;
+SELECT add_values(price, tax) as total FROM orders;
 
 -- This would fail at bind time with a clear error:
--- SELECT add_columns(name, price) FROM orders;
+-- SELECT add_values(name, price) FROM orders;
 -- Error: Column 'name' has type string, expected integer
 ```
 
@@ -351,7 +351,7 @@ SELECT my_func(col) FROM empty_table;
 Type bound violations are caught at bind time (before processing starts):
 
 ```sql
-SELECT add_columns(name, price) FROM orders;
+SELECT add_values(name, price) FROM orders;
 -- Error: Argument 'left': Column 'name' has type string,
 --        but type bound requires: is_integer
 ```

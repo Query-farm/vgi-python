@@ -307,8 +307,8 @@ class TestCLISchemaContents:
         by_name = {item["name"]: item for item in items}
 
         # Check known scalar functions
-        assert by_name["double_column"]["function_type"] == "scalar"
-        assert by_name["add_columns"]["function_type"] == "scalar"
+        assert by_name["double"]["function_type"] == "scalar"
+        assert by_name["add_values"]["function_type"] == "scalar"
         assert by_name["upper_case"]["function_type"] == "scalar"
 
     def test_table_functions_have_correct_type(self, example_worker: str) -> None:
@@ -362,7 +362,7 @@ class TestCLISchemaContents:
         )
         attach_id = json.loads(attach_result.output)["attach_id"]
 
-        # sum_columns is a scalar function
+        # sum_values is a scalar function
         contents_result = runner.invoke(
             cli,
             [
@@ -380,24 +380,24 @@ class TestCLISchemaContents:
         )
         assert contents_result.exit_code == 0
 
-        # Parse and find sum_columns function
+        # Parse and find sum_values function
         lines = contents_result.output.strip().split("\n")
         items = [json.loads(line) for line in lines if line.strip()]
         by_name = {item["name"]: item for item in items}
 
-        # Verify sum_columns function exists
-        assert "sum_columns" in by_name, "sum_columns function not found"
+        # Verify sum_values function exists
+        assert "sum_values" in by_name, "sum_values function not found"
 
-        sum_func = by_name["sum_columns"]
+        sum_func = by_name["sum_values"]
 
         # Verify arguments include varargs indicator
         arguments = sum_func.get("arguments", [])
-        columns_arg = next(
-            (a for a in arguments if a.get("name") == "columns"),
+        values_arg = next(
+            (a for a in arguments if a.get("name") == "values"),
             None,
         )
-        assert columns_arg is not None, "columns argument not found"
-        assert columns_arg.get("varargs") is True, "varargs indicator missing"
+        assert values_arg is not None, "values argument not found"
+        assert values_arg.get("varargs") is True, "varargs indicator missing"
 
 
 class TestCLISchemaList:

@@ -22,11 +22,11 @@ from typing import Annotated
 
 from vgi.catalog import Setting
 from vgi.examples.scalar import (
-    AddNumericColumnsFunction,
-    DoubleColumnFunction,
+    AddValuesFunction,
+    DoubleFunction,
     NullHandlingFunction,
     RandomIntFunction,
-    SumColumnsFunction,
+    SumValuesFunction,
     UpperCaseFunction,
 )
 from vgi.examples.table import (
@@ -97,11 +97,11 @@ class ExampleWorker(Worker):
         SettingsAwareFunction,
         TraceContextReporterFunction,
         # ScalarFunctionGenerator - transform to single-column output
-        AddNumericColumnsFunction,
-        DoubleColumnFunction,
+        AddValuesFunction,
+        DoubleFunction,
         NullHandlingFunction,
         RandomIntFunction,
-        SumColumnsFunction,
+        SumValuesFunction,
         UpperCaseFunction,
     ]
 
