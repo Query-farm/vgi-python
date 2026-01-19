@@ -38,6 +38,7 @@ from vgi.scalar_function import ScalarFunction
 
 __all__ = [
     "AddValuesFunction",
+    "BinaryPacketFunction",
     "ConditionalMessageFunction",
     "DoubleFunction",
     "MultiplyFunction",
@@ -177,6 +178,74 @@ class ConditionalMessageFunction(ScalarFunction):
         repeated_message = message * repeat_count
         result: pa.StringArray = pc.if_else(condition, repeated_message, "")  # type: ignore[assignment]
         return result
+
+
+# Type for config struct: {label: string, version: int64}
+_CONFIG_STRUCT_TYPE = pa.struct([("label", pa.string()), ("version", pa.int64())])
+
+
+class BinaryPacketFunction(ScalarFunction):
+    """Builds binary packets with header, payload, and config metadata.
+
+    This example demonstrates complex ConstParam types:
+    - header (binary): Constant prefix bytes at the start
+    - payload (binary column): Variable binary data per row
+    - config (struct): Constant metadata struct at the end
+
+    The constant parameters bracket the column parameter (first and last).
+
+    The function concatenates: header + payload + config.label encoded + version byte
+
+    Example:
+        SQL:    SELECT binary_packet(x'CAFE', data, {label: 'v1', version: 1}) FROM t
+        Input:  data=[x'0102', x'0304']
+        Args:   header=x'CAFE', config={label: 'v1', version: 1}
+        Output: result=[x'CAFE0102763101', x'CAFE0304763101']
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "binary_packet"
+        description = "Build binary packets with header, payload, and config"
+        examples = [
+            FunctionExample(
+                sql="SELECT binary_packet(x'FF', payload, {'tag': 'msg', 1}) FROM t",
+                description="Build packets with 0xFF header",
+            ),
+        ]
+
+    def compute(
+        self,
+        header: Annotated[
+            bytes,
+            ConstParam("Header bytes to prepend", arrow_type=pa.binary()),
+        ],
+        payload: Annotated[pa.BinaryArray, Param(doc="Binary payload data")],
+        config: Annotated[
+            dict[str, Any],
+            ConstParam("Config {label, version}", arrow_type=_CONFIG_STRUCT_TYPE),
+        ],
+    ) -> Annotated[pa.BinaryArray, Returns()]:
+        """Build binary packets from header, payload, and config."""
+        # Extract config fields
+        label: str = config["label"]
+        version: int = config["version"]
+
+        # Build suffix from config: label bytes + version as single byte
+        suffix = label.encode("utf-8") + bytes([version & 0xFF])
+
+        # Concatenate header + payload + suffix for each row
+        results: list[bytes] = []
+        for i in range(len(payload)):
+            if payload[i].is_valid:
+                payload_bytes: bytes = payload[i].as_py()
+                results.append(header + payload_bytes + suffix)
+            else:
+                results.append(header + suffix)  # Empty payload for nulls
+
+        return pa.array(results, type=pa.binary())
 
 
 class DoubleFunction(ScalarFunction):

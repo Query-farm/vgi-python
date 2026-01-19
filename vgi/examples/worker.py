@@ -23,6 +23,7 @@ from typing import Annotated
 from vgi.catalog import Setting
 from vgi.examples.scalar import (
     AddValuesFunction,
+    BinaryPacketFunction,
     ConditionalMessageFunction,
     DoubleFunction,
     MultiplyFunction,
@@ -108,6 +109,7 @@ class ExampleWorker(Worker):
         TraceContextReporterFunction,
         # ScalarFunctionGenerator - transform to single-column output
         AddValuesFunction,
+        BinaryPacketFunction,
         ConditionalMessageFunction,
         DoubleFunction,
         MultiplyFunction,
