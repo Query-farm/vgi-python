@@ -481,61 +481,78 @@ def extract_parameters(
     parameters: list[ParameterInfo] = []
     seen_names: set[str] = set()
 
-    # Note: _polars_params (PolarsScalarFunction subclasses) with is_const=False
-    # are NOT extracted as function parameters. They're column position bindings
-    # that describe which columns from the input batch map to expression variables.
-    # However, ConstParam entries (is_const=True) ARE function arguments and must
-    # be extracted for the function signature.
+    # Extract _polars_params (PolarsScalarFunction subclasses)
+    # Both column bindings (is_const=False) and constant arguments (is_const=True)
+    # are included as function parameters for catalog registration.
     polars_params = getattr(cls, "_polars_params", {})
     if polars_params:
-        # Get class annotations to infer ConstParam types
+        # Get class annotations to infer types for ConstParam
         annotations = getattr(cls, "__annotations__", {})
         for name, param_info in polars_params.items():
-            if not param_info.is_const:
-                continue  # Skip column bindings, only extract ConstParam
             seen_names.add(name)
 
-            # Infer type from annotation (e.g., Annotated[float, ConstParam(...)])
-            type_name = "any"
-            if name in annotations:
-                hint = annotations[name]
-                # Handle string annotations (from __future__ import annotations)
-                if isinstance(hint, str):
-                    # Build namespace with builtins, typing constructs, and ConstParam
-                    import builtins
+            if param_info.is_const:
+                # ConstParam: infer type from annotation (e.g., Annotated[float, ...])
+                type_name = "any"
+                if name in annotations:
+                    hint = annotations[name]
+                    # Handle string annotations (from __future__ import annotations)
+                    if isinstance(hint, str):
+                        import builtins
 
-                    from vgi.arguments import ConstParam
+                        from vgi.arguments import ConstParam
 
-                    eval_ns = dict(vars(builtins))
-                    eval_ns["Annotated"] = Annotated
-                    eval_ns["ConstParam"] = ConstParam
-                    with contextlib.suppress(Exception):
-                        hint = eval(hint, eval_ns)  # noqa: S307
-                # Extract base type from Annotated[base_type, ...]
-                base_type = get_args(hint)[0] if get_origin(hint) is Annotated else hint
-                # Map Python types to Arrow type names
-                python_to_arrow = {
-                    float: "double",
-                    int: "int64",
-                    str: "string",
-                    bool: "bool",
-                }
-                type_name = python_to_arrow.get(base_type, "any")
+                        eval_ns = dict(vars(builtins))
+                        eval_ns["Annotated"] = Annotated
+                        eval_ns["ConstParam"] = ConstParam
+                        with contextlib.suppress(Exception):
+                            hint = eval(hint, eval_ns)  # noqa: S307
+                    # Extract base type from Annotated[base_type, ...]
+                    base_type = (
+                        get_args(hint)[0] if get_origin(hint) is Annotated else hint
+                    )
+                    # Map Python types to Arrow type names
+                    python_to_arrow = {
+                        float: "double",
+                        int: "int64",
+                        str: "string",
+                        bool: "bool",
+                    }
+                    type_name = python_to_arrow.get(base_type, "any")
 
-            parameters.append(
-                ParameterInfo(
-                    name=name,
-                    position=param_info.position,
-                    type_name=type_name,
-                    description=param_info.doc,
-                    required=True,  # ConstParam is always required
-                    default=None,
-                    constraints=None,
-                    is_table_input=False,
-                    is_varargs=False,
-                    is_const=True,
+                parameters.append(
+                    ParameterInfo(
+                        name=name,
+                        position=param_info.position,
+                        type_name=type_name,
+                        description=param_info.doc,
+                        required=True,
+                        default=None,
+                        constraints=None,
+                        is_table_input=False,
+                        is_varargs=False,
+                        is_const=True,
+                    )
                 )
-            )
+            else:
+                # Column binding (Param): use Polars type from param_info
+                type_name = (
+                    str(param_info.polars_type) if param_info.polars_type else "any"
+                )
+                parameters.append(
+                    ParameterInfo(
+                        name=name,
+                        position=param_info.position,
+                        type_name=type_name,
+                        description=param_info.doc,
+                        required=True,
+                        default=None,
+                        constraints=None,
+                        is_table_input=False,
+                        is_varargs=param_info.varargs,
+                        is_const=False,
+                    )
+                )
 
     # Check for new Param/ConstParam API (ScalarFunction subclasses)
     # These are stored in _compute_params and _const_params class attributes

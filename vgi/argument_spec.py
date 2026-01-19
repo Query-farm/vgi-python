@@ -382,6 +382,47 @@ def extract_argument_specs(
             )
         )
 
+    # Check for PolarsScalarFunction _polars_params API
+    # These are stored as PolarsParamInfo dataclass instances
+    polars_params: dict[str, Any] = getattr(cls, "_polars_params", {})
+    if polars_params:
+        # Import Polars conversion lazily to avoid circular imports
+        try:
+            from vgi.scalar_function_polars import _polars_to_arrow_type
+        except ImportError:
+            _polars_to_arrow_type = None  # Polars not available
+
+        for param_name, param_info in polars_params.items():
+            seen_names.add(param_name)
+
+            # Convert Polars type to Arrow type
+            arrow_type: pa.DataType
+            if param_info.is_const:
+                # ConstParam: get type from annotations
+                # The polars_type won't be set for ConstParam; use null
+                # and mark as any_type since it's a Python scalar
+                arrow_type = pa.null()
+                is_any_type = True
+            elif param_info.polars_type is not None and _polars_to_arrow_type:
+                arrow_type = _polars_to_arrow_type(param_info.polars_type)
+                is_any_type = False
+            else:
+                # Dynamic type (Any) - polars_type is None
+                arrow_type = pa.null()
+                is_any_type = True
+
+            specs.append(
+                ArgumentSpec(
+                    name=param_name,
+                    position=param_info.position,
+                    arrow_type=arrow_type,
+                    is_table_input=False,
+                    is_any_type=is_any_type,
+                    is_varargs=param_info.varargs,
+                    is_const=param_info.is_const,
+                )
+            )
+
     # Walk MRO to find all Arg descriptors (legacy API)
     for klass in cls.__mro__:
         if klass is object:
