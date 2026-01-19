@@ -96,6 +96,7 @@ import structlog.stdlib
 from pyarrow import ipc
 
 from vgi import tracing
+from vgi.arguments import Arguments
 from vgi.catalog import CatalogInterface
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
 from vgi.exceptions import SchemaValidationError
@@ -122,6 +123,67 @@ from vgi.table_in_out_function import (
 
 # Schema for bind-time error batches (zero rows with error metadata)
 _BIND_ERROR_SCHEMA = pa.schema([("_error", pa.null())])
+
+
+def _format_arguments_for_error(args: Arguments) -> str:
+    """Format Arguments for error messages, showing values and types.
+
+    Produces output like:
+        positional=[3 (int64), "hello" (string)], named={sep: "," (string)}
+
+    Args:
+        args: The Arguments instance to format.
+
+    Returns:
+        Human-readable string showing argument values and types.
+
+    """
+    parts = []
+
+    # Format positional arguments
+    if args.positional:
+        pos_strs = []
+        for scalar in args.positional:
+            if scalar is None:
+                pos_strs.append("null")
+            elif not scalar.is_valid:
+                pos_strs.append(f"null ({scalar.type})")
+            else:
+                # Format value with type
+                value = scalar.as_py()
+                type_name = str(scalar.type)
+                if isinstance(value, str):
+                    pos_strs.append(f"{value!r} ({type_name})")
+                elif isinstance(value, bytes):
+                    # Truncate long bytes
+                    if len(value) > 20:
+                        pos_strs.append(f"<{len(value)} bytes> ({type_name})")
+                    else:
+                        pos_strs.append(f"{value!r} ({type_name})")
+                else:
+                    pos_strs.append(f"{value} ({type_name})")
+        parts.append(f"positional=[{', '.join(pos_strs)}]")
+    else:
+        parts.append("positional=[]")
+
+    # Format named arguments
+    if args.named:
+        named_strs = []
+        for name, scalar in sorted(args.named.items()):
+            if not scalar.is_valid:
+                named_strs.append(f"{name}: null ({scalar.type})")
+            else:
+                value = scalar.as_py()
+                type_name = str(scalar.type)
+                if isinstance(value, str):
+                    named_strs.append(f"{name}: {value!r} ({type_name})")
+                else:
+                    named_strs.append(f"{name}: {value} ({type_name})")
+        parts.append(f"named={{{', '.join(named_strs)}}}")
+    else:
+        parts.append("named={}")
+
+    return ", ".join(parts)
 
 
 def _inject_trace_context(
@@ -373,32 +435,24 @@ class Worker:
             if is_scalar:
                 # Scalar functions have two variants:
                 # 1. PolarsScalarFunction (has _polars_params): Column bindings are
-                #    declared in the class, so only ConstParams are passed as args.
+                #    declared in the class.
                 # 2. Regular ScalarFunction (has _compute_params only): Column NAMES
                 #    are passed as positional args to specify which columns to bind.
                 #
                 # All scalar params are always required (no defaults).
                 # Scalar functions don't support named arguments.
-                is_polars_scalar = getattr(func_cls, "_polars_params", None) is not None
 
-                if is_polars_scalar:
-                    # PolarsScalarFunction: only count ConstParams for matching
-                    const_positional = [p for p in positional_params if p.is_const]
-                    expected_positional = len(const_positional)
+                # Regular ScalarFunction: count ALL params
+                # (column names + ConstParams)
+                has_varargs = any(p.is_varargs for p in positional_params)
+                expected_positional = len(positional_params)
+                if has_varargs:
+                    # With varargs, need at least expected params
+                    if num_positional < expected_positional:
+                        continue
+                else:
                     if num_positional != expected_positional:
                         continue  # Must match exactly
-                else:
-                    # Regular ScalarFunction: count ALL params
-                    # (column names + ConstParams)
-                    has_varargs = any(p.is_varargs for p in positional_params)
-                    expected_positional = len(positional_params)
-                    if has_varargs:
-                        # With varargs, need at least expected params
-                        if num_positional < expected_positional:
-                            continue
-                    else:
-                        if num_positional != expected_positional:
-                            continue  # Must match exactly
 
                 # Scalar functions don't support named arguments
                 if named_keys:
@@ -446,7 +500,7 @@ class Worker:
 
             raise ValueError(
                 f"No matching function '{invocation.function_name}' for arguments: "
-                f"{num_positional} positional, named={sorted(named_keys)}. "
+                f"{_format_arguments_for_error(args)}. "
                 f"Available overloads:\n" + "\n".join(param_summaries)
             )
 
