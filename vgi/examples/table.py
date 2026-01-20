@@ -88,6 +88,7 @@ class SequenceFunction(TableFunctionGenerator):
         categories = ["generator", "utility"]
         tags = {"category": "generator", "type": "utility"}
         max_workers = 1
+        projection_pushdown = True
         filter_pushdown = True
         auto_apply_filters = True
         examples = [
@@ -111,10 +112,13 @@ class SequenceFunction(TableFunctionGenerator):
         int, Arg("increment", default=1, doc="Step between values", ge=1)
     ]
 
+    # Full schema before projection
+    FULL_SCHEMA: pa.Schema = pa.schema([pa.field("n", pa.int64())])
+
     @property
     def output_schema(self) -> pa.Schema:
-        """Return output schema with single integer column."""
-        return pa.schema([pa.field("n", pa.int64())])
+        """Return output schema, applying projection if specified."""
+        return self.apply_projection(self.FULL_SCHEMA)
 
     @property
     def cardinality(self) -> TableCardinality:
