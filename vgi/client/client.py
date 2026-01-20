@@ -462,6 +462,7 @@ class Client(CatalogClientMixin):
         function_type: InvocationType,
         bind_result_callback: Callable[[pa.RecordBatch], None] | None,
         projection_ids: list[int] | None,
+        pushdown_filters: bytes | None = None,
         settings: dict[str, str] | None = None,
         transaction_id: bytes | None = None,
     ) -> tuple[_BindResult, InitResult, Invocation]:
@@ -491,6 +492,9 @@ class Client(CatalogClientMixin):
             projection_ids: Optional list of column indices to project in the
                 output. Passed to the worker via TableFunctionInitInput (ignored
                 for scalar functions).
+            pushdown_filters: Optional byte string containing filter predicates
+                to push down to the function. Passed to the worker via
+                TableFunctionInitInput (ignored for scalar functions).
             settings: Optional dictionary of settings/pragmas to
                 pass to the function. Functions that declare required_settings
                 in their Meta class will validate these are present.
@@ -603,7 +607,8 @@ class Client(CatalogClientMixin):
         else:
             # Table functions (generator and table-in-out) use TableFunctionInitInput
             init_serialized_bytes = TableFunctionInitInput(
-                projection_ids=projection_ids
+                projection_ids=projection_ids,
+                pushdown_filters=pushdown_filters,
             ).serialize()
 
         _safe_write_bytes(
@@ -726,6 +731,7 @@ class Client(CatalogClientMixin):
         function_type: InvocationType,
         bind_result_callback: Callable[[pa.RecordBatch], None] | None,
         projection_ids: list[int] | None,
+        pushdown_filters: bytes | None = None,
         settings: dict[str, str] | None = None,
         transaction_id: bytes | None = None,
     ) -> tuple[ipc.RecordBatchStreamWriter | None, ipc.RecordBatchStreamReader | None]:
@@ -753,6 +759,8 @@ class Client(CatalogClientMixin):
             bind_result_callback: Optional callback invoked with the raw bind
                 result RecordBatch.
             projection_ids: Optional list of column indices to project.
+            pushdown_filters: Optional byte string containing filter predicates
+                to push down to the function.
             settings: Optional dictionary of settings/pragmas.
             transaction_id: Optional unique identifier for the DuckDB transaction.
 
@@ -777,6 +785,7 @@ class Client(CatalogClientMixin):
             function_type=function_type,
             bind_result_callback=bind_result_callback,
             projection_ids=projection_ids,
+            pushdown_filters=pushdown_filters,
             settings=settings,
             transaction_id=transaction_id,
         )
@@ -1574,6 +1583,7 @@ class Client(CatalogClientMixin):
         arguments: Arguments | None = None,
         bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
         projection_ids: list[int] | None = None,
+        pushdown_filters: bytes | None = None,
         settings: dict[str, str] | None = None,
         transaction_id: bytes | None = None,
     ) -> Generator[pa.RecordBatch, None, None]:
@@ -1606,6 +1616,9 @@ class Client(CatalogClientMixin):
                 output schema, max_processes, or cardinality hints.
             projection_ids: Optional list of column indices for column projection.
                 Passed to the worker via TableFunctionInitInput.
+            pushdown_filters: Optional byte string containing filter predicates
+                to push down to the function. Passed to the worker via
+                TableFunctionInitInput.
             settings: Optional dictionary of settings/pragmas to
                 pass to the function. Functions that declare required_settings
                 in their Meta class will validate these are present.
@@ -1672,6 +1685,7 @@ class Client(CatalogClientMixin):
                     function_type=InvocationType.TABLE,
                     bind_result_callback=bind_result_callback,
                     projection_ids=projection_ids,
+                    pushdown_filters=pushdown_filters,
                     settings=settings,
                     transaction_id=transaction_id,
                 )
@@ -1989,6 +2003,7 @@ class Client(CatalogClientMixin):
         arguments: Arguments | None = None,
         bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
         projection_ids: list[int] | None = None,
+        pushdown_filters: bytes | None = None,
         settings: dict[str, str] | None = None,
         transaction_id: bytes | None = None,
     ) -> Generator[pa.RecordBatch, None, None]:
@@ -2019,6 +2034,9 @@ class Client(CatalogClientMixin):
                 output schema, max_processes, or cardinality hints.
             projection_ids: Optional list of column indices for column projection.
                 Passed to the worker via TableFunctionInitInput.
+            pushdown_filters: Optional byte string containing filter predicates
+                to push down to the function. Passed to the worker via
+                TableFunctionInitInput.
             settings: Optional dictionary of settings/pragmas to
                 pass to the function. Functions that declare required_settings
                 in their Meta class will validate these are present.
@@ -2074,6 +2092,7 @@ class Client(CatalogClientMixin):
                 function_type=InvocationType.TABLE,
                 bind_result_callback=bind_result_callback,
                 projection_ids=projection_ids,
+                pushdown_filters=pushdown_filters,
                 settings=settings,
                 transaction_id=transaction_id,
             )

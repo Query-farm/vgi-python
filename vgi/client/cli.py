@@ -320,6 +320,13 @@ def _create_cli() -> Any:
         help="Column ID for projection pushdown. Can be repeated.",
     )
     @click.option(
+        "--pushdown-filters",
+        "pushdown_filters",
+        type=str,
+        default=None,
+        help="Filter predicates as hex-encoded bytes for filter pushdown.",
+    )
+    @click.option(
         "--table-input-position",
         "table_input_position",
         type=int,
@@ -369,6 +376,7 @@ def _create_cli() -> Any:
         worker_path: str,
         worker_stderr: bool,
         projection_ids: tuple[int, ...],
+        pushdown_filters: str | None,
         max_workers: int | None,
         table_input_position: int | None,
         attach_id: str | None,
@@ -466,6 +474,16 @@ def _create_cli() -> Any:
                     f"Invalid --transaction-id: must be a valid hex string: {e}"
                 ) from e
 
+        # Parse pushdown_filters from hex string if provided
+        pushdown_filters_bytes: bytes | None = None
+        if pushdown_filters is not None:
+            try:
+                pushdown_filters_bytes = bytes.fromhex(pushdown_filters)
+            except ValueError as e:
+                raise click.ClickException(
+                    f"Invalid --pushdown-filters: must be a valid hex string: {e}"
+                ) from e
+
         log.info("starting_worker", function=function_name, worker_path=worker_path)
 
         # Validate function_type requirements
@@ -504,6 +522,7 @@ def _create_cli() -> Any:
                         function_name=function_name,
                         arguments=func_args,
                         projection_ids=list(projection_ids) if projection_ids else None,
+                        pushdown_filters=pushdown_filters_bytes,
                         transaction_id=transaction_id_bytes,
                         settings=settings,
                     )
@@ -545,6 +564,7 @@ def _create_cli() -> Any:
                         arguments=func_args,
                         input=pf.iter_batches(),
                         projection_ids=list(projection_ids) if projection_ids else None,
+                        pushdown_filters=pushdown_filters_bytes,
                         transaction_id=transaction_id_bytes,
                         settings=settings,
                     )
