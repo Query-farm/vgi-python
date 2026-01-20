@@ -148,6 +148,136 @@ class SequenceFunction(TableFunctionGenerator):
             remaining -= size
 
 
+class NestedSequenceFunction(TableFunctionGenerator):
+    """Generates a sequence with nested struct and list columns.
+
+    USE CASE
+    --------
+    Test filter pushdown with complex types (structs and lists). The function
+    generates rows with:
+    - n: sequence index (0 to count-1)
+    - metadata: struct with {index: int64, label: string}
+    - history: list of the last 20 sequence values
+
+    SCHEMA
+    ------
+    Output: {
+        "n": int64,
+        "metadata": struct<index: int64, label: string>,
+        "history": list<int64>
+    }
+
+    PARALLELIZATION
+    ---------------
+    Single worker only (max_workers=1).
+
+    Example:
+    -------
+    SELECT * FROM nested_sequence(5)
+    Returns rows with n=0..4, metadata structs, and history lists
+
+    SELECT * FROM nested_sequence(100) WHERE n >= 50
+    Test filter pushdown on the sequence column
+
+    SELECT metadata.index FROM nested_sequence(10)
+    Test projection pushdown with struct field access
+
+    """
+
+    class Meta:
+        """Metadata for NestedSequenceFunction."""
+
+        name = "nested_sequence"
+        description = "Generates a sequence with nested struct and list columns"
+        categories = ["generator", "utility", "testing"]
+        tags = {"category": "generator", "type": "testing"}
+        max_workers = 1
+        projection_pushdown = True
+        filter_pushdown = True
+        auto_apply_filters = True
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM nested_sequence(10)",
+                description="Generate 10 rows with nested columns",
+            ),
+            FunctionExample(
+                sql="SELECT n, metadata FROM nested_sequence(100) WHERE n >= 50",
+                description="Filter and project nested sequence",
+            ),
+        ]
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+    batch_size: Annotated[int, Arg(1, default=1000, doc="Batch size for output", ge=1)]
+    history_size: Annotated[
+        int, Arg("history_size", default=20, doc="Max items in history list", ge=1)
+    ]
+
+    # Full schema before projection
+    FULL_SCHEMA: pa.Schema = pa.schema(
+        [
+            pa.field("n", pa.int64()),
+            pa.field(
+                "metadata",
+                pa.struct([("index", pa.int64()), ("label", pa.string())]),
+            ),
+            pa.field("history", pa.list_(pa.int64())),
+        ]
+    )
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        """Return output schema, applying projection if specified."""
+        return self.apply_projection(self.FULL_SCHEMA)
+
+    @property
+    def cardinality(self) -> TableCardinality:
+        """Return exact cardinality since we know the count."""
+        return TableCardinality(estimate=self.count, max=self.count)
+
+    def _get_projected_column_names(self) -> set[str]:
+        """Get the set of column names to generate."""
+        if self.init_input and self.init_input.projection_ids is not None:
+            proj_ids = self.init_input.projection_ids
+            return {self.FULL_SCHEMA.field(i).name for i in proj_ids}
+        return {f.name for f in self.FULL_SCHEMA}
+
+    def process(self) -> OutputGenerator:
+        """Generate the nested sequence in batches."""
+        remaining = self.count
+        current_index = 0
+        projected_cols = self._get_projected_column_names()
+
+        while remaining > 0:
+            size = min(remaining, self.batch_size)
+            data: dict[str, Any] = {}
+
+            # Generate sequence indices for this batch
+            indices = list(range(current_index, current_index + size))
+
+            # Column: n (sequence index)
+            if "n" in projected_cols:
+                data["n"] = indices
+
+            # Column: metadata (struct with index and label)
+            if "metadata" in projected_cols:
+                metadata_list = [{"index": i, "label": f"row_{i}"} for i in indices]
+                data["metadata"] = metadata_list
+
+            # Column: history (list of last N values)
+            if "history" in projected_cols:
+                history_list = []
+                for i in indices:
+                    # History contains up to history_size values ending at i
+                    start = max(0, i - self.history_size + 1)
+                    history_list.append(list(range(start, i + 1)))
+                data["history"] = history_list
+
+            yield Output(pa.RecordBatch.from_pydict(data, schema=self.output_schema))
+
+            current_index += size
+            remaining -= size
+
+
 class DoubleSequenceFunction(TableFunctionGenerator):
     """Generates a sequence of floats from 0.0 to n-1 with optional increment.
 
