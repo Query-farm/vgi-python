@@ -13,6 +13,7 @@ PartitionedSequenceFunction   - Demonstrates multi-worker parallel execution
 ProjectedDataFunction         - Demonstrates projection pushdown
 SequenceFunction              - Generates a sequence of integers 0..n-1
 SettingsAwareFunction         - Demonstrates settings-aware output schema
+TenThousandFunction           - Generates 10000 integers 0..9999 (no args)
 TraceContextReporterFunction  - Reports worker PID and traceparent from init
 """
 
@@ -43,6 +44,7 @@ __all__ = [
     "ProjectedDataFunction",
     "SequenceFunction",
     "SettingsAwareFunction",
+    "TenThousandFunction",
     "TraceContextReporterFunction",
 ]
 
@@ -647,6 +649,65 @@ class SettingsAwareFunction(TableFunctionGenerator):
                 data["details"] = [f"row_{i}"]
 
             yield Output(pa.RecordBatch.from_pydict(data, schema=output_schema))
+
+
+class TenThousandFunction(TableFunctionGenerator):
+    """Generates 10000 rows with integers from 0 to 9999.
+
+    USE CASE
+    --------
+    Simple test data generator with a fixed row count. Useful for testing
+    and benchmarking without needing to specify parameters.
+
+    SCHEMA
+    ------
+    Output: {"n": int64}
+
+    PARALLELIZATION
+    ---------------
+    Single worker only (max_workers=1).
+
+    Example:
+    -------
+    SELECT * FROM ten_thousand()
+    Returns: [{"n": 0}, {"n": 1}, ..., {"n": 9999}]
+
+    """
+
+    class Meta:
+        """Metadata for TenThousandFunction."""
+
+        name = "ten_thousand"
+        description = "Generates 10000 integers from 0 to 9999"
+        categories = ["generator", "utility"]
+        max_workers = 1
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM ten_thousand()",
+                description="Generate integers 0-9999",
+            ),
+        ]
+
+    BATCH_SIZE: int = 1000
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        """Return output schema with single integer column."""
+        return pa.schema([pa.field("n", pa.int64())])
+
+    @property
+    def cardinality(self) -> TableCardinality:
+        """Return exact cardinality (always 10000)."""
+        return TableCardinality(estimate=10000, max=10000)
+
+    def process(self) -> OutputGenerator:
+        """Generate 10000 integers in batches."""
+        for start in range(0, 10000, self.BATCH_SIZE):
+            end = min(start + self.BATCH_SIZE, 10000)
+            values = np.arange(start, end, dtype=np.int64)
+            yield Output(
+                pa.RecordBatch.from_pydict({"n": values}, schema=self.output_schema)
+            )
 
 
 class TraceContextReporterFunction(TableFunctionGenerator):
