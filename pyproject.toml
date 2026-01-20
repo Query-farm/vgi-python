@@ -21,6 +21,7 @@ tracing = ["opentelemetry-api>=1.20.0"]
 [project.scripts]
 vgi-client = "vgi.client.cli:main"
 vgi-example-worker = "vgi.examples.worker:main"
+vgi-example-polars-worker = "vgi.examples.worker_polars:main"
 vgi-example-catalog-worker = "vgi.examples.catalog:main"
 vgi-ci-worker = "vgi.ci.worker:main"
 

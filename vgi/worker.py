@@ -897,11 +897,20 @@ class Worker:
                     assert output.batch is not None
                     output_rows = output.batch.num_rows
                     total_output_rows += output_rows
+                    batch_size = pa.ipc.get_record_batch_size(output.batch)
+                    tracing.add_batch_write_event(
+                        invocation.function_name,
+                        invocation.function_type.value,
+                        batch_size,
+                        output_rows,
+                    )
+
                     writer.write_batch(
                         output.batch, custom_metadata=output.metadata(invocation)
                     )
                     fn_log.debug(
                         "batch_written",
+                        batch_size=batch_size,
                         batch_index=batch_count,
                         output_rows=output_rows,
                     )
@@ -1014,6 +1023,13 @@ class Worker:
                     assert output.batch is not None
                     output_rows = output.batch.num_rows
                     total_output_rows += output_rows
+                    batch_size = pa.ipc.get_record_batch_size(output.batch)
+                    tracing.add_batch_write_event(
+                        invocation.function_name,
+                        invocation.function_type.value,
+                        batch_size,
+                        output_rows,
+                    )
 
                     # Get output metadata for logging
                     output_custom_metadata = output.metadata(invocation)
@@ -1031,6 +1047,7 @@ class Worker:
                     fn_log.debug(
                         "batch_written",
                         batch_index=batch_count,
+                        batch_size=batch_size,
                         output_rows=output_rows,
                         output_metadata=output_metadata_dict,
                     )
@@ -1083,12 +1100,20 @@ class Worker:
                     assert output.batch is not None
                     output_rows = output.batch.num_rows
                     total_output_rows += output_rows
+                    batch_size = pa.ipc.get_record_batch_size(output.batch)
+                    tracing.add_batch_write_event(
+                        invocation.function_name,
+                        invocation.function_type.value,
+                        batch_size,
+                        output_rows,
+                    )
 
                     writer.write_batch(
                         output.batch, custom_metadata=output.metadata(invocation)
                     )
                     fn_log.debug(
                         "batch_written",
+                        batch_size=batch_size,
                         batch_index=batch_count,
                         output_rows=output_rows,
                     )

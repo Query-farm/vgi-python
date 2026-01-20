@@ -9,6 +9,9 @@ The worker supports:
 - TableFunctionGenerator: Generates output batches without input
 - ScalarFunctionGenerator: Transforms input to single-column output (1:1 rows)
 
+For Polars-based scalar functions, use vgi-example-polars-worker instead.
+This separation avoids the ~32ms Polars import cost for users who don't need it.
+
 Settings:
 - vgi_verbose_mode: Enable verbose output with extra columns (bool, default: false)
 - greeting: Custom greeting message (str, default: "Hello")
@@ -31,14 +34,6 @@ from vgi.examples.scalar import (
     RandomIntFunction,
     SumValuesFunction,
     UpperCaseFunction,
-)
-from vgi.examples.scalar_polars import (
-    PolarsAddValuesFunction,
-    PolarsDoubleFunction,
-    PolarsMultiplyFunction,
-    PolarsStringLengthFunction,
-    PolarsSumValuesFunction,
-    PolarsUpperCaseFunction,
 )
 from vgi.examples.table import (
     ConstantColumnsFunction,
@@ -117,13 +112,7 @@ class ExampleWorker(Worker):
         RandomIntFunction,
         SumValuesFunction,
         UpperCaseFunction,
-        # PolarsScalarFunction - Polars-based scalar functions
-        PolarsAddValuesFunction,
-        PolarsDoubleFunction,
-        PolarsMultiplyFunction,
-        PolarsStringLengthFunction,
-        PolarsSumValuesFunction,
-        PolarsUpperCaseFunction,
+        # For Polars functions, use vgi-example-polars-worker
     ]
 
 

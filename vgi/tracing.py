@@ -7,6 +7,9 @@ worker processes will emit spans for function invocations.
 The module gracefully degrades when opentelemetry-api is not installed,
 providing no-op implementations that have minimal overhead.
 
+OpenTelemetry imports are lazy-loaded to avoid ~15ms startup cost when tracing
+is not used.
+
 Example:
     # In worker code
     from vgi.tracing import get_tracer, restore_trace_context
@@ -28,7 +31,7 @@ if TYPE_CHECKING:
     pass
 
 __all__ = [
-    "TRACING_AVAILABLE",
+    "TRACING_AVAILABLE",  # noqa: F822 - provided by __getattr__
     "get_tracer",
     "restore_trace_context",
     "extract_trace_context",
@@ -40,6 +43,7 @@ __all__ = [
     "attach_context",
     "detach_context",
     "set_span_error",
+    "add_batch_write_event",
     "maybe_configure_tracing",
     "shutdown_tracing",
     # Attribute constants
@@ -91,23 +95,60 @@ VGI_TOTAL_OUTPUT_BYTES = "vgi.total.output_bytes"
 VGI_IPC_READER_MESSAGES = "vgi.ipc.reader_messages"
 VGI_IPC_WRITER_MESSAGES = "vgi.ipc.writer_messages"
 
-# Check if opentelemetry-api is available
-try:
-    from opentelemetry import context as otel_context
-    from opentelemetry import trace
-    from opentelemetry.propagate import extract, inject
-    from opentelemetry.trace import SpanKind, Status, StatusCode
+# Lazy-loaded OpenTelemetry modules (cached after first access)
+_otel_modules: dict[str, Any] | None = None
 
-    TRACING_AVAILABLE = True
-except ImportError:
-    TRACING_AVAILABLE = False
-    trace = None  # type: ignore[assignment]
-    otel_context = None  # type: ignore[assignment]
-    extract = None  # type: ignore[assignment]
-    inject = None  # type: ignore[assignment]
-    SpanKind = None  # type: ignore[assignment, misc]
-    Status = None  # type: ignore[assignment, misc]
-    StatusCode = None  # type: ignore[assignment, misc]
+
+def _get_otel() -> dict[str, Any] | None:
+    """Lazily import and cache OpenTelemetry modules.
+
+    Returns a dict with keys: trace, context, extract, inject, SpanKind,
+    Status, StatusCode. Returns None if opentelemetry-api is not installed.
+    """
+    global _otel_modules
+
+    if _otel_modules is not None:
+        return _otel_modules if _otel_modules else None
+
+    try:
+        from opentelemetry import context as otel_context
+        from opentelemetry import trace
+        from opentelemetry.propagate import extract, inject
+        from opentelemetry.trace import SpanKind, Status, StatusCode
+
+        _otel_modules = {
+            "trace": trace,
+            "context": otel_context,
+            "extract": extract,
+            "inject": inject,
+            "SpanKind": SpanKind,
+            "Status": Status,
+            "StatusCode": StatusCode,
+        }
+        return _otel_modules
+    except ImportError:
+        _otel_modules = {}  # Empty dict signals "not available"
+        return None
+
+
+def _tracing_available() -> bool:
+    """Check if OpenTelemetry is available (lazy check)."""
+    return _get_otel() is not None
+
+
+# TRACING_AVAILABLE is lazily evaluated via __getattr__ for backwards compatibility
+# Users can also call _tracing_available() directly
+_TRACING_AVAILABLE_CACHED: bool | None = None
+
+
+def __getattr__(name: str) -> Any:
+    """Module-level __getattr__ for lazy evaluation of TRACING_AVAILABLE."""
+    global _TRACING_AVAILABLE_CACHED
+    if name == "TRACING_AVAILABLE":
+        if _TRACING_AVAILABLE_CACHED is None:
+            _TRACING_AVAILABLE_CACHED = _tracing_available()
+        return _TRACING_AVAILABLE_CACHED
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class _NoOpSpan:
@@ -225,9 +266,10 @@ def get_tracer(name: str = "vgi.worker") -> Any:
             # ... do work ...
 
     """
-    if not TRACING_AVAILABLE or trace is None:
+    otel = _get_otel()
+    if otel is None:
         return _noop_tracer
-    return trace.get_tracer(name, _get_vgi_version())
+    return otel["trace"].get_tracer(name, _get_vgi_version())
 
 
 def restore_trace_context(
@@ -255,15 +297,19 @@ def restore_trace_context(
             detach_trace_context(token)
 
     """
-    if not TRACING_AVAILABLE or traceparent is None:
+    if traceparent is None:
+        return None
+
+    otel = _get_otel()
+    if otel is None:
         return None
 
     carrier: dict[str, str] = {"traceparent": traceparent}
     if tracestate:
         carrier["tracestate"] = tracestate
 
-    ctx = extract(carrier)
-    return otel_context.attach(ctx)
+    ctx = otel["extract"](carrier)
+    return otel["context"].attach(ctx)
 
 
 def detach_trace_context(token: Any) -> None:
@@ -273,8 +319,12 @@ def detach_trace_context(token: Any) -> None:
         token: The token returned by restore_trace_context(), or None.
 
     """
-    if token is not None and TRACING_AVAILABLE and otel_context is not None:
-        otel_context.detach(token)
+    if token is None:
+        return
+
+    otel = _get_otel()
+    if otel is not None:
+        otel["context"].detach(token)
 
 
 def extract_trace_context() -> tuple[str | None, str | None]:
@@ -296,33 +346,37 @@ def extract_trace_context() -> tuple[str | None, str | None]:
         )
 
     """
-    if not TRACING_AVAILABLE or trace is None:
+    otel = _get_otel()
+    if otel is None:
         return None, None
 
     carrier: dict[str, str] = {}
-    inject(carrier)
+    otel["inject"](carrier)
 
     return carrier.get("traceparent"), carrier.get("tracestate")
 
 
 def get_span_kind_server() -> Any:
     """Get SpanKind.SERVER or None if tracing unavailable."""
-    if TRACING_AVAILABLE and SpanKind is not None:
-        return SpanKind.SERVER
+    otel = _get_otel()
+    if otel is not None:
+        return otel["SpanKind"].SERVER
     return None
 
 
 def get_span_kind_client() -> Any:
     """Get SpanKind.CLIENT or None if tracing unavailable."""
-    if TRACING_AVAILABLE and SpanKind is not None:
-        return SpanKind.CLIENT
+    otel = _get_otel()
+    if otel is not None:
+        return otel["SpanKind"].CLIENT
     return None
 
 
 def get_span_kind_internal() -> Any:
     """Get SpanKind.INTERNAL or None if tracing unavailable."""
-    if TRACING_AVAILABLE and SpanKind is not None:
-        return SpanKind.INTERNAL
+    otel = _get_otel()
+    if otel is not None:
+        return otel["SpanKind"].INTERNAL
     return None
 
 
@@ -336,9 +390,10 @@ def set_span_in_context(span: Any) -> Any:
         A context with the span set, or None if tracing unavailable.
 
     """
-    if not TRACING_AVAILABLE or trace is None:
+    otel = _get_otel()
+    if otel is None:
         return None
-    return trace.set_span_in_context(span)
+    return otel["trace"].set_span_in_context(span)
 
 
 def attach_context(ctx: Any) -> Any:
@@ -351,9 +406,13 @@ def attach_context(ctx: Any) -> Any:
         A token to pass to detach_context(), or None if tracing unavailable.
 
     """
-    if not TRACING_AVAILABLE or ctx is None or otel_context is None:
+    if ctx is None:
         return None
-    return otel_context.attach(ctx)
+
+    otel = _get_otel()
+    if otel is None:
+        return None
+    return otel["context"].attach(ctx)
 
 
 def detach_context(token: Any) -> None:
@@ -363,8 +422,12 @@ def detach_context(token: Any) -> None:
         token: The token returned by attach_context().
 
     """
-    if token is not None and TRACING_AVAILABLE and otel_context is not None:
-        otel_context.detach(token)
+    if token is None:
+        return
+
+    otel = _get_otel()
+    if otel is not None:
+        otel["context"].detach(token)
 
 
 def set_span_error(span: Any, exception: BaseException) -> None:
@@ -375,12 +438,49 @@ def set_span_error(span: Any, exception: BaseException) -> None:
         exception: The exception that occurred.
 
     """
-    if not TRACING_AVAILABLE or Status is None or StatusCode is None:
+    otel = _get_otel()
+    if otel is None:
         return
 
     if hasattr(span, "set_status") and hasattr(span, "record_exception"):
         span.record_exception(exception)
-        span.set_status(Status(StatusCode.ERROR, str(exception)))
+        span.set_status(otel["Status"](otel["StatusCode"].ERROR, str(exception)))
+
+
+def add_batch_write_event(
+    function_name: str,
+    function_type: str,
+    byte_size: int,
+    row_count: int,
+) -> None:
+    """Add span event for IPC record batch write.
+
+    Emits a span event on the current span with batch write details.
+    This is a no-op if tracing is not available or no span is active.
+
+    Args:
+        function_name: Name of the function being executed.
+        function_type: Type of the function (e.g., "scalar", "table_in_out").
+        byte_size: Serialized byte size of the record batch.
+        row_count: Number of rows in the batch.
+
+    """
+    otel = _get_otel()
+    if otel is None:
+        return
+
+    span = otel["trace"].get_current_span()
+    if span is not None and span.is_recording():
+        span.add_event(
+            "vgi.ipc.write_batch",
+            attributes={
+                VGI_FUNCTION_NAME: function_name,
+                VGI_FUNCTION_TYPE: function_type,
+                VGI_PHASE: "data",
+                "ipc.batch.byte_size": int(byte_size),
+                "ipc.batch.row_count": int(row_count),
+            },
+        )
 
 
 def maybe_configure_tracing(

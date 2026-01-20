@@ -133,6 +133,8 @@ See vgi.examples.table_in_out for example functions:
 
 """
 
+from typing import Any
+
 # Re-export commonly used classes for convenient imports
 from vgi.argument_spec import (
     VGI_ARG_KEY,
@@ -178,10 +180,6 @@ from vgi.scalar_function import (
     ScalarOutputGenerator,
     TypeMismatchError,
 )
-from vgi.scalar_function_polars import (
-    AnyPolars,
-    PolarsScalarFunction,
-)
 from vgi.schema_utils import schema, schema_like
 from vgi.table_in_out_function import (
     Output,
@@ -198,6 +196,14 @@ from vgi.table_in_out_function_patterns import (
 )
 from vgi.testing import TableInOutFunctionTestClient
 from vgi.worker import Worker
+
+# Lazy imports for Polars support (avoids ~32ms startup cost when not used)
+# Access via: from vgi import PolarsScalarFunction, AnyPolars
+# Or directly: from vgi.scalar_function_polars import PolarsScalarFunction, AnyPolars
+_LAZY_IMPORTS = {
+    "PolarsScalarFunction": "vgi.scalar_function_polars",
+    "AnyPolars": "vgi.scalar_function_polars",
+}
 
 __all__ = [
     "AggregationFunction",
@@ -260,3 +266,13 @@ __all__ = [
 def hello() -> str:
     """Return a greeting string. Used for basic installation verification."""
     return "Hello from vgi-python!"
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import handler for optional dependencies like Polars."""
+    if name in _LAZY_IMPORTS:
+        import importlib
+
+        module = importlib.import_module(_LAZY_IMPORTS[name])
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
