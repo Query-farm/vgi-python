@@ -124,6 +124,7 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-example-
 |----------|-------------|
 | `VGI_IPC_DEBUG=1` | Enable Arrow IPC debug logging (see below) |
 | `VGI_IPC_STATS=1` | Enable IPC stream statistics logging (see below) |
+| `VGI_FILTER_DEBUG=1` | Enable filter pushdown debug logging (see below) |
 | `VGI_QUIET=1` | Suppress worker startup logging |
 
 ### IPC Stream Statistics
@@ -171,6 +172,38 @@ ipc_read   num_rows=1 schema={'sum': 'int64'} metadata={'vgi.status': 'FINISHED'
 - `schema` - Column names and types as `{name: type}` dict
 - `metadata` - Custom metadata dict (shows protocol state like `vgi.status`)
 - `nbytes` - Serialized byte size
+
+**Performance:** Zero overhead when disabled (just a boolean check).
+
+### Filter Pushdown Debug Logging
+
+Enable `VGI_FILTER_DEBUG=1` to trace filter pushdown deserialization, parsing, and evaluation. Useful for debugging filter pushdown issues and understanding how filters are applied.
+
+```bash
+VGI_FILTER_DEBUG=1 vgi-example-worker
+```
+
+**Key events logged:**
+- `deserialize_start` - When filter bytes are received (with byte size)
+- `deserialize_specs` - Parsed filter specifications from JSON
+- `parse_filter_*` - Individual filter parsing (constant, in, is_null, and, or, struct)
+- `pushdown_filters_ready` - Deserialized filters summary
+- `evaluate_start` - Beginning filter evaluation against a batch
+- `evaluate_filter` - Each filter's result (rows passing)
+- `evaluate_complete` - Final evaluation result (input rows, rows passing, rows filtered)
+- `auto_apply_start/complete` - When auto_apply_filters triggers
+
+**Example output:**
+```
+deserialize_start             ipc_bytes_size=600
+deserialize_specs             num_filters=1 specs=[{'column_name': 'n', 'type': 'constant', 'op': 'ge', 'value_ref': 0}]
+parse_filter_constant         column=n op=ge value=5 value_type=int64
+pushdown_filters_ready        function=SequenceFunction num_filters=1 filter_summary=['ConstantFilter(n >= 5)']
+evaluate_start                columns=['n'] input_rows=100 num_filters=1
+evaluate_filter               filter_index=0 filter_repr='ConstantFilter(n >= 5)' rows_passing=50
+evaluate_complete             input_rows=100 rows_passing=50 rows_filtered=50
+auto_apply_complete           function=SequenceFunction input_rows=100 output_rows=50 rows_removed=50
+```
 
 **Performance:** Zero overhead when disabled (just a boolean check).
 

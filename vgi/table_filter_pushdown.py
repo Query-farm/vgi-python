@@ -20,15 +20,51 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
+import sys
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
+import structlog
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
+
+# =============================================================================
+# Debug Logging
+# =============================================================================
+
+# Enable with VGI_FILTER_DEBUG=1 for detailed filter pushdown diagnostics
+_FILTER_DEBUG = os.environ.get("VGI_FILTER_DEBUG", "").lower() in ("1", "true", "yes")
+_filter_log: structlog.stdlib.BoundLogger | None = None
+
+
+def _get_filter_log() -> structlog.stdlib.BoundLogger:
+    """Get or create the filter debug logger, configured to write to stderr."""
+    global _filter_log
+    if _filter_log is None:
+        # Configure structlog to write to stderr for filter debugging
+        structlog.configure(
+            processors=[
+                structlog.processors.add_log_level,
+                structlog.processors.TimeStamper(fmt="iso"),
+                structlog.dev.ConsoleRenderer(),
+            ],
+            wrapper_class=structlog.make_filtering_bound_logger(0),
+            logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
+        )
+        _filter_log = structlog.get_logger().bind(component="filter_pushdown")
+    return _filter_log
+
+
+def _log_debug(event: str, **kwargs: Any) -> None:
+    """Log a debug message if VGI_FILTER_DEBUG is enabled."""
+    if _FILTER_DEBUG:
+        _get_filter_log().debug(event, **kwargs)
+
 
 __all__ = [
     "AndFilter",
@@ -404,11 +440,46 @@ class PushdownFilters:
             Boolean array with True for rows that pass all filters.
 
         """
+        _log_debug(
+            "evaluate_start",
+            num_filters=len(self.filters),
+            input_rows=batch.num_rows,
+            columns=[f.column_name for f in self.filters],
+        )
+
         if not self.filters:
+            _log_debug("evaluate_no_filters", input_rows=batch.num_rows)
             return pa.array([True] * batch.num_rows, type=pa.bool_())
+
         result = self.filters[0].evaluate(batch)
-        for f in self.filters[1:]:
+        # pc.sum works on BooleanArray (counts True values) but stubs don't reflect this
+        true_count: int | None = pc.sum(result).as_py()  # type: ignore[type-var]
+        _log_debug(
+            "evaluate_filter",
+            filter_index=0,
+            filter_type=type(self.filters[0]).__name__,
+            filter_repr=repr(self.filters[0]),
+            rows_passing=true_count,
+        )
+
+        for i, f in enumerate(self.filters[1:], start=1):
             result = pc.and_(result, f.evaluate(batch))
+            true_count = pc.sum(result).as_py()  # type: ignore[type-var]
+            _log_debug(
+                "evaluate_filter",
+                filter_index=i,
+                filter_type=type(f).__name__,
+                filter_repr=repr(f),
+                rows_passing=true_count,
+            )
+
+        final_count: int | None = pc.sum(result).as_py()  # type: ignore[type-var]
+        _log_debug(
+            "evaluate_complete",
+            input_rows=batch.num_rows,
+            rows_passing=final_count,
+            rows_filtered=batch.num_rows - (final_count or 0),
+        )
         return result
 
     def apply(self, batch: pa.RecordBatch) -> pa.RecordBatch:
@@ -421,9 +492,17 @@ class PushdownFilters:
             Filtered RecordBatch containing only rows that pass all filters.
 
         """
+        _log_debug("apply_start", input_rows=batch.num_rows)
         mask = self.evaluate(batch)
         # pc.filter supports RecordBatch but pyarrow-stubs don't have the overload
-        return pc.filter(batch, mask)  # type: ignore[call-overload,no-any-return]
+        filtered: pa.RecordBatch = pc.filter(batch, mask)  # type: ignore[call-overload]
+        _log_debug(
+            "apply_complete",
+            input_rows=batch.num_rows,
+            output_rows=filtered.num_rows,
+            rows_removed=batch.num_rows - filtered.num_rows,
+        )
+        return filtered
 
     # =========================================================================
     # Column Query Helpers
@@ -781,11 +860,20 @@ def deserialize_filters(ipc_bytes: bytes) -> PushdownFilters:
         FilterVersionError: If version is unsupported.
 
     """
+    _log_debug("deserialize_start", ipc_bytes_size=len(ipc_bytes))
+
     try:
         reader = pa.ipc.open_stream(ipc_bytes)
         batch = reader.read_next_batch()
     except Exception as e:
+        _log_debug("deserialize_ipc_error", error=str(e))
         raise FilterDeserializationError(f"Failed to read IPC stream: {e}") from e
+
+    _log_debug(
+        "deserialize_ipc_read",
+        num_columns=batch.num_columns,
+        schema=[f.name for f in batch.schema],
+    )
 
     # Validate version
     metadata = batch.schema.field(0).metadata
@@ -795,21 +883,42 @@ def deserialize_filters(ipc_bytes: bytes) -> PushdownFilters:
     if version != "1":
         raise FilterVersionError(f"Unsupported filter version: {version!r}")
 
+    _log_debug("deserialize_version", version=version)
+
     # Parse JSON spec
     try:
         filter_specs = json.loads(batch.column(0)[0].as_py())
     except Exception as e:
+        _log_debug("deserialize_json_error", error=str(e))
         raise FilterDeserializationError(f"Failed to parse filter JSON: {e}") from e
+
+    _log_debug("deserialize_specs", num_filters=len(filter_specs), specs=filter_specs)
 
     # Value resolver - returns scalar for value_ref N from column N+1
     def get_value(ref: int) -> pa.Scalar[Any]:
-        return batch.column(ref + 1)[0]  # type: ignore[no-any-return]
+        value = batch.column(ref + 1)[0]
+        _log_debug(
+            "deserialize_value_ref",
+            ref=ref,
+            column_index=ref + 1,
+            value_type=str(value.type),
+            value=str(value),
+        )
+        return value  # type: ignore[no-any-return]
 
     # Parse filters
     try:
         filters = tuple(_parse_filter(spec, get_value) for spec in filter_specs)
     except Exception as e:
+        _log_debug("deserialize_parse_error", error=str(e))
         raise FilterDeserializationError(f"Failed to parse filters: {e}") from e
+
+    _log_debug(
+        "deserialize_complete",
+        num_filters=len(filters),
+        filter_types=[type(f).__name__ for f in filters],
+        columns=[f.column_name for f in filters],
+    )
 
     return PushdownFilters(filters=filters, version=version)
 
@@ -834,18 +943,37 @@ def _parse_filter(
     column_index = spec["column_index"]
     filter_type = spec["type"]
 
+    _log_debug(
+        "parse_filter_start",
+        filter_type=filter_type,
+        column_name=column_name,
+        column_index=column_index,
+    )
+
     if filter_type == "constant":
-        return ConstantFilter(
+        op = ComparisonOp(spec["op"])
+        value = get_value(spec["value_ref"])
+        result = ConstantFilter(
             column_name=column_name,
             column_index=column_index,
-            op=ComparisonOp(spec["op"]),
-            value=get_value(spec["value_ref"]),
+            op=op,
+            value=value,
         )
+        _log_debug(
+            "parse_filter_constant",
+            column=column_name,
+            op=op.value,
+            value=str(value),
+            value_type=str(value.type),
+        )
+        return result
 
     elif filter_type == "is_null":
+        _log_debug("parse_filter_is_null", column=column_name)
         return IsNullFilter(column_name=column_name, column_index=column_index)
 
     elif filter_type == "is_not_null":
+        _log_debug("parse_filter_is_not_null", column=column_name)
         return IsNotNullFilter(column_name=column_name, column_index=column_index)
 
     elif filter_type == "in":
@@ -854,6 +982,13 @@ def _parse_filter(
         # ListScalar.values gives us the underlying array
         # pyarrow-stubs doesn't type ListScalar.values correctly
         values_array: pa.Array[Any] = list_scalar.values  # type: ignore[attr-defined]
+        _log_debug(
+            "parse_filter_in",
+            column=column_name,
+            num_values=len(values_array),
+            values=values_array.to_pylist(),
+            value_type=str(values_array.type),
+        )
         return InFilter(
             column_name=column_name,
             column_index=column_index,
@@ -861,7 +996,13 @@ def _parse_filter(
         )
 
     elif filter_type == "and":
+        _log_debug(
+            "parse_filter_and_start",
+            column=column_name,
+            num_children=len(spec["children"]),
+        )
         children = tuple(_parse_filter(c, get_value) for c in spec["children"])
+        _log_debug("parse_filter_and_complete", column=column_name)
         return AndFilter(
             column_name=column_name,
             column_index=column_index,
@@ -869,7 +1010,13 @@ def _parse_filter(
         )
 
     elif filter_type == "or":
+        _log_debug(
+            "parse_filter_or_start",
+            column=column_name,
+            num_children=len(spec["children"]),
+        )
         children = tuple(_parse_filter(c, get_value) for c in spec["children"])
+        _log_debug("parse_filter_or_complete", column=column_name)
         return OrFilter(
             column_name=column_name,
             column_index=column_index,
@@ -877,14 +1024,22 @@ def _parse_filter(
         )
 
     elif filter_type == "struct":
+        child_name = spec["child_name"]
+        _log_debug(
+            "parse_filter_struct_start",
+            column=column_name,
+            child_name=child_name,
+        )
         child_filter = _parse_filter(spec["child_filter"], get_value)
+        _log_debug("parse_filter_struct_complete", column=column_name)
         return StructFilter(
             column_name=column_name,
             column_index=column_index,
             child_index=spec["child_index"],
-            child_name=spec["child_name"],
+            child_name=child_name,
             child_filter=child_filter,
         )
 
     else:
+        _log_debug("parse_filter_unknown", filter_type=filter_type)
         raise FilterDeserializationError(f"Unknown filter type: {filter_type}")

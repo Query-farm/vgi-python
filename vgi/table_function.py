@@ -39,6 +39,15 @@ from vgi.output_complete import OutputComplete
 if TYPE_CHECKING:
     from vgi.table_filter_pushdown import PushdownFilters
 
+
+# Import debug logging from filter module (lazy to avoid circular imports)
+def _filter_log_debug(event: str, **kwargs: Any) -> None:
+    """Forward to filter pushdown debug logging."""
+    from vgi.table_filter_pushdown import _log_debug
+
+    _log_debug(event, **kwargs)
+
+
 __all__ = [
     "TableCardinality",
     "TableFunctionInitInput",
@@ -325,10 +334,27 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
 
         """
         if self.init_input is None or self.init_input.pushdown_filters is None:
+            _filter_log_debug(
+                "pushdown_filters_none",
+                function=self.__class__.__name__,
+                reason="no init_input or no pushdown_filters bytes",
+            )
             return None
         from vgi.table_filter_pushdown import deserialize_filters
 
-        return deserialize_filters(self.init_input.pushdown_filters)
+        _filter_log_debug(
+            "pushdown_filters_deserialize",
+            function=self.__class__.__name__,
+            bytes_size=len(self.init_input.pushdown_filters),
+        )
+        filters = deserialize_filters(self.init_input.pushdown_filters)
+        _filter_log_debug(
+            "pushdown_filters_ready",
+            function=self.__class__.__name__,
+            num_filters=len(filters),
+            filter_summary=[repr(f) for f in filters],
+        )
+        return filters
 
     def _should_auto_apply_filters(self) -> bool:
         """Check if auto_apply_filters is enabled in Meta."""
@@ -348,9 +374,28 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
 
         """
         if batch is None or batch.num_rows == 0:
+            _filter_log_debug(
+                "auto_apply_skip",
+                function=self.__class__.__name__,
+                reason="batch is None or empty",
+                batch_rows=batch.num_rows if batch else 0,
+            )
             return batch
         if self.pushdown_filters:
-            return self.pushdown_filters.apply(batch)
+            _filter_log_debug(
+                "auto_apply_start",
+                function=self.__class__.__name__,
+                input_rows=batch.num_rows,
+            )
+            result = self.pushdown_filters.apply(batch)
+            _filter_log_debug(
+                "auto_apply_complete",
+                function=self.__class__.__name__,
+                input_rows=batch.num_rows,
+                output_rows=result.num_rows,
+                rows_removed=batch.num_rows - result.num_rows,
+            )
+            return result
         return batch
 
 
