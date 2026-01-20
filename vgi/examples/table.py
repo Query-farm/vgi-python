@@ -88,6 +88,8 @@ class SequenceFunction(TableFunctionGenerator):
         categories = ["generator", "utility"]
         tags = {"category": "generator", "type": "utility"}
         max_workers = 1
+        filter_pushdown = True
+        auto_apply_filters = True
         examples = [
             FunctionExample(
                 sql="SELECT * FROM sequence(10)",

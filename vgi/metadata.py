@@ -780,6 +780,7 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         # Table function specific
         "projection_pushdown",
         "filter_pushdown",
+        "auto_apply_filters",  # Auto-apply pushdown filters to output batches
         "preserves_order",
         "max_workers",
         # Aggregate function specific
