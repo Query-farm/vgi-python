@@ -25,7 +25,8 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from dataclasses import dataclass
-from typing import Any, Self, final
+from functools import cached_property
+from typing import TYPE_CHECKING, Any, Self, final
 
 import pyarrow as pa
 import structlog
@@ -34,6 +35,9 @@ import vgi.function
 import vgi.ipc_utils
 import vgi.log
 from vgi.output_complete import OutputComplete
+
+if TYPE_CHECKING:
+    from vgi.table_filter_pushdown import PushdownFilters
 
 __all__ = [
     "TableCardinality",
@@ -195,6 +199,8 @@ class TableFunctionInitInput(vgi.function.FunctionInitInput):
 
     Attributes:
         projection_ids: Optional list of column indices to project, or None for all.
+        pushdown_filters: Optional byte string containing filter predicates to push
+            down to the function, or None if no filter pushdown.
 
     Note:
         For parallel execution, functions should use the work queue pattern
@@ -204,18 +210,21 @@ class TableFunctionInitInput(vgi.function.FunctionInitInput):
     """
 
     projection_ids: list[int] | None = None
+    pushdown_filters: bytes | None = None
 
     @classmethod
     def _schema_fields(cls) -> list[pa.Field[Any]]:
         """Return Arrow schema fields for this class only."""
         return [
             pa.field("projection_ids", pa.list_(pa.int32()), nullable=True),
+            pa.field("pushdown_filters", pa.binary(), nullable=True),
         ]
 
     def _to_dict(self) -> dict[str, Any]:
         """Return dict of this class's own field values."""
         return {
             "projection_ids": self.projection_ids,
+            "pushdown_filters": self.pushdown_filters,
         }
 
     @classmethod
@@ -225,6 +234,7 @@ class TableFunctionInitInput(vgi.function.FunctionInitInput):
             traceparent=values.get("traceparent"),
             tracestate=values.get("tracestate"),
             projection_ids=values.get("projection_ids"),
+            pushdown_filters=values.get("pushdown_filters"),
         )
 
 
@@ -298,6 +308,50 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
                 projected_fields.append(field)
             return pa.schema(projected_fields)
         return schema
+
+    @cached_property
+    def pushdown_filters(self) -> PushdownFilters | None:
+        """Get deserialized pushdown filters, or None if not present.
+
+        Use this property to access the filter AST for:
+        - Custom filter handling (push to SQL, APIs, etc.)
+        - Extracting column bounds for partition pruning
+        - Checking column constants for optimized lookups
+
+        For automatic filtering, set auto_apply_filters=True in Meta.
+
+        Returns:
+            PushdownFilters container with parsed filter AST, or None.
+
+        """
+        if self.init_input is None or self.init_input.pushdown_filters is None:
+            return None
+        from vgi.table_filter_pushdown import deserialize_filters
+
+        return deserialize_filters(self.init_input.pushdown_filters)
+
+    def _should_auto_apply_filters(self) -> bool:
+        """Check if auto_apply_filters is enabled in Meta."""
+        meta = getattr(self, "Meta", None)
+        return bool(getattr(meta, "auto_apply_filters", False))
+
+    def _apply_pushdown_filter(
+        self, batch: pa.RecordBatch | None
+    ) -> pa.RecordBatch | None:
+        """Apply pushdown filters to a batch if present.
+
+        Args:
+            batch: RecordBatch to filter, or None.
+
+        Returns:
+            Filtered batch, or original if no filters or batch is None/empty.
+
+        """
+        if batch is None or batch.num_rows == 0:
+            return batch
+        if self.pushdown_filters:
+            return self.pushdown_filters.apply(batch)
+        return batch
 
 
 class TableFunctionGenerator(TableFunctionBase):
@@ -435,6 +489,7 @@ class TableFunctionGenerator(TableFunctionBase):
 
         try:
             sent_batch: bool = False
+            auto_apply = self._should_auto_apply_filters()
             # DATA phase - iterate until generator is exhausted
             while True:
                 try:
@@ -450,6 +505,20 @@ class TableFunctionGenerator(TableFunctionBase):
                         )
                         yield ProtocolOutput.from_process_result(result)
                     break
+
+                # Apply pushdown filters if enabled
+                if auto_apply and result.batch is not None:
+                    filtered = self._apply_pushdown_filter(result.batch)
+                    # _apply_pushdown_filter returns non-None when given non-None
+                    assert filtered is not None
+                    # Skip empty filtered batches (no log message) to avoid
+                    # DuckDB interpreting zero-row batch as end-of-data
+                    if filtered.num_rows == 0 and result.log_message is None:
+                        continue
+                    result = OutputComplete(
+                        batch=filtered, log_message=result.log_message
+                    )
+
                 yield ProtocolOutput.from_process_result(result)
                 if self._should_terminate(result):
                     break

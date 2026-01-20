@@ -181,6 +181,14 @@ from vgi.scalar_function import (
     TypeMismatchError,
 )
 from vgi.schema_utils import schema, schema_like
+from vgi.table_filter_pushdown import (
+    ColumnBounds,
+    FilterDeserializationError,
+    FilterError,
+    FilterVersionError,
+    PushdownFilters,
+    deserialize_filters,
+)
 from vgi.table_in_out_function import (
     Output,
     OutputGenerator,
@@ -215,9 +223,15 @@ __all__ = [
     "ArgumentValidationError",
     "Arguments",
     "argument_specs_to_schema",
+    "ColumnBounds",
     "ConstParam",
+    "deserialize_filters",
+    "FilterDeserializationError",
+    "FilterError",
     "FilterFunction",
+    "FilterVersionError",
     "Param",
+    "PushdownFilters",
     "Returns",
     # Metadata constants for parsing argument spec schemas
     "VGI_ARG_KEY",

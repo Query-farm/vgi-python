@@ -121,6 +121,7 @@ __all__ = [
     "assert_table_function_output",
     "run_scalar_function",
     "assert_scalar_function_output",
+    "create_pushdown_filters",
 ]
 
 
@@ -369,6 +370,7 @@ class TableInOutFunctionTestClient(_BaseTestClient):
         arguments: Arguments | None = None,
         bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
         projection_ids: list[int] | None = None,
+        pushdown_filters: bytes | None = None,
     ) -> Generator[pa.RecordBatch, None, None]:
         """Call the function with the given input data.
 
@@ -380,6 +382,7 @@ class TableInOutFunctionTestClient(_BaseTestClient):
             arguments: Arguments container with positional and named arguments.
             bind_result_callback: Optional callback invoked with the bind result.
             projection_ids: Optional list of column indices to project.
+            pushdown_filters: Optional byte string containing filter predicates.
 
         Yields:
             Output RecordBatches from the function.
@@ -424,10 +427,21 @@ class TableInOutFunctionTestClient(_BaseTestClient):
             bind_result_callback(bind_batch)
 
         # Perform init with TableFunctionInitInput
-        init_input = TableFunctionInitInput(projection_ids=projection_ids)
+        init_input = TableFunctionInitInput(
+            projection_ids=projection_ids,
+            pushdown_filters=pushdown_filters,
+        )
         init_batch = pa.RecordBatch.from_arrays(
-            [pa.array([init_input.projection_ids], type=pa.list_(pa.int32()))],
-            schema=pa.schema([pa.field("projection_ids", pa.list_(pa.int32()))]),
+            [
+                pa.array([init_input.projection_ids], type=pa.list_(pa.int32())),
+                pa.array([init_input.pushdown_filters], type=pa.binary()),
+            ],
+            schema=pa.schema(
+                [
+                    pa.field("projection_ids", pa.list_(pa.int32())),
+                    pa.field("pushdown_filters", pa.binary()),
+                ]
+            ),
         )
         init_result = func.initialize_global_state(init_batch)
 
@@ -561,12 +575,14 @@ class TableFunctionTestClient(_BaseTestClient):
         *,
         arguments: Arguments | None = None,
         projection_ids: list[int] | None = None,
+        pushdown_filters: bytes | None = None,
     ) -> Generator[pa.RecordBatch, None, None]:
         """Call the table function with the given arguments.
 
         Args:
             arguments: Arguments container with positional and named arguments.
             projection_ids: Optional list of column indices to project.
+            pushdown_filters: Optional byte string containing filter predicates.
 
         Yields:
             Output RecordBatches from the function.
@@ -595,10 +611,21 @@ class TableFunctionTestClient(_BaseTestClient):
         func = self.function_class(invocation=invocation, logger=self._logger)
 
         # Perform init with TableFunctionInitInput
-        init_input = TableFunctionInitInput(projection_ids=projection_ids)
+        init_input = TableFunctionInitInput(
+            projection_ids=projection_ids,
+            pushdown_filters=pushdown_filters,
+        )
         init_batch = pa.RecordBatch.from_arrays(
-            [pa.array([init_input.projection_ids], type=pa.list_(pa.int32()))],
-            schema=pa.schema([pa.field("projection_ids", pa.list_(pa.int32()))]),
+            [
+                pa.array([init_input.projection_ids], type=pa.list_(pa.int32())),
+                pa.array([init_input.pushdown_filters], type=pa.binary()),
+            ],
+            schema=pa.schema(
+                [
+                    pa.field("projection_ids", pa.list_(pa.int32())),
+                    pa.field("pushdown_filters", pa.binary()),
+                ]
+            ),
         )
         init_result = func.initialize_global_state(init_batch)
 
@@ -665,6 +692,7 @@ def run_function(
     args: tuple[Any, ...] | None = None,
     kwargs: dict[str, Any] | None = None,
     projection_ids: list[int] | None = None,
+    pushdown_filters: bytes | None = None,
 ) -> tuple[list[pa.RecordBatch], list[Message]]:
     """Run a function and return outputs and logs.
 
@@ -676,6 +704,7 @@ def run_function(
         args: Optional positional arguments as a tuple.
         kwargs: Optional named arguments as a dict.
         projection_ids: Optional list of column indices to project.
+        pushdown_filters: Optional byte string containing filter predicates.
 
     Returns:
         Tuple of (output_batches, log_messages).
@@ -697,6 +726,7 @@ def run_function(
                 input=iter(input_batches),
                 arguments=arguments,
                 projection_ids=projection_ids,
+                pushdown_filters=pushdown_filters,
             )
         )
         return outputs, client.logs
@@ -709,6 +739,7 @@ def assert_function_output(
     args: tuple[Any, ...] | None = None,
     kwargs: dict[str, Any] | None = None,
     projection_ids: list[int] | None = None,
+    pushdown_filters: bytes | None = None,
     check_order: bool = True,
     msg: str | None = None,
 ) -> list[Message]:
@@ -724,6 +755,7 @@ def assert_function_output(
         args: Optional positional arguments as a tuple.
         kwargs: Optional named arguments as a dict.
         projection_ids: Optional list of column indices to project.
+        pushdown_filters: Optional byte string containing filter predicates.
         check_order: If True, order of output batches must match. Default True.
         msg: Optional custom assertion message prefix.
 
@@ -772,6 +804,7 @@ def assert_function_output(
         args=args,
         kwargs=kwargs,
         projection_ids=projection_ids,
+        pushdown_filters=pushdown_filters,
     )
 
     _assert_batches_equal(outputs, expected, check_order=check_order, msg=msg)
@@ -890,6 +923,7 @@ def run_table_function(
     args: tuple[Any, ...] | None = None,
     kwargs: dict[str, Any] | None = None,
     projection_ids: list[int] | None = None,
+    pushdown_filters: bytes | None = None,
 ) -> tuple[list[pa.RecordBatch], list[Message]]:
     """Run a table function and return outputs and logs.
 
@@ -902,6 +936,7 @@ def run_table_function(
         args: Optional positional arguments as a tuple.
         kwargs: Optional named arguments as a dict.
         projection_ids: Optional list of column indices to project.
+        pushdown_filters: Optional byte string containing filter predicates.
 
     Returns:
         Tuple of (output_batches, log_messages).
@@ -922,6 +957,7 @@ def run_table_function(
             client.table_function(
                 arguments=arguments,
                 projection_ids=projection_ids,
+                pushdown_filters=pushdown_filters,
             )
         )
         return outputs, client.logs
@@ -933,6 +969,7 @@ def assert_table_function_output(
     args: tuple[Any, ...] | None = None,
     kwargs: dict[str, Any] | None = None,
     projection_ids: list[int] | None = None,
+    pushdown_filters: bytes | None = None,
     check_order: bool = True,
     msg: str | None = None,
 ) -> list[Message]:
@@ -947,6 +984,7 @@ def assert_table_function_output(
         args: Optional positional arguments as a tuple.
         kwargs: Optional named arguments as a dict.
         projection_ids: Optional list of column indices to project.
+        pushdown_filters: Optional byte string containing filter predicates.
         check_order: If True, order of output batches must match. Default True.
         msg: Optional custom assertion message prefix.
 
@@ -978,6 +1016,7 @@ def assert_table_function_output(
         args=args,
         kwargs=kwargs,
         projection_ids=projection_ids,
+        pushdown_filters=pushdown_filters,
     )
 
     _assert_batches_equal(outputs, expected, check_order=check_order, msg=msg)
@@ -1222,3 +1261,111 @@ def assert_scalar_function_output(
     _assert_batches_equal(outputs, expected, check_order=check_order, msg=msg)
 
     return logs
+
+
+def create_pushdown_filters(
+    filters: list[dict[str, Any]],
+    values: dict[int, Any] | None = None,
+) -> bytes:
+    """Create Arrow IPC bytes for pushdown filters.
+
+    This test utility creates the binary filter format that would be sent to
+    table functions. Use it to test filter pushdown handling in functions.
+
+    Args:
+        filters: List of filter spec dicts following the VGI filter protocol.
+            Each filter dict should have:
+            - column_name: str - Name of the column
+            - column_index: int - Index of the column in output schema
+            - type: str - One of: "constant", "is_null", "is_not_null", "in",
+                         "and", "or", "struct"
+            - op: str - For "constant" type: "eq", "ne", "gt", "ge", "lt", "le"
+            - value_ref: int - For "constant"/"in": index into values dict
+            - children: list - For "and"/"or": nested filter specs
+            - child_filter: dict - For "struct": nested filter spec
+            - child_index: int - For "struct": index of nested field
+            - child_name: str - For "struct": name of nested field
+        values: Map of value_ref index to value. Values will be converted
+            to Arrow columns. For "in" filters, the value should be a list
+            which becomes a list-type column.
+
+    Returns:
+        Arrow IPC stream bytes that can be passed to pushdown_filters parameter.
+
+    Example:
+        # Simple equality filter: WHERE age >= 18
+        pushdown = create_pushdown_filters(
+            filters=[
+                {
+                    "column_name": "age",
+                    "column_index": 0,
+                    "type": "constant",
+                    "op": "ge",
+                    "value_ref": 0,
+                }
+            ],
+            values={0: 18},
+        )
+
+        # IN filter: WHERE status IN ('active', 'pending')
+        pushdown = create_pushdown_filters(
+            filters=[
+                {
+                    "column_name": "status",
+                    "column_index": 1,
+                    "type": "in",
+                    "value_ref": 0,
+                }
+            ],
+            values={0: ["active", "pending"]},  # List becomes list column
+        )
+
+        # Use with test client
+        with TableFunctionTestClient(MyFunction, pushdown_filters=pushdown) as client:
+            outputs = list(client.table_function())
+
+    """
+    import io
+    import json
+
+    if values is None:
+        values = {}
+
+    # Build schema: filter_spec string column + value columns
+    fields: list[pa.Field[Any]] = [
+        pa.field(
+            "filter_spec",
+            pa.string(),
+            metadata={b"vgi_filter_version": b"1"},
+        )
+    ]
+
+    # Build value columns
+    value_arrays: list[pa.Array[Any]] = []
+    for i in sorted(values.keys()):
+        val = values[i]
+        if isinstance(val, list):
+            # List values become a list-type column for IN filters
+            # Infer element type from first element (default string for empty)
+            elem_type = pa.scalar(val[0]).type if val else pa.string()
+            arr: pa.Array[Any] = pa.array([val], type=pa.list_(elem_type))
+        else:
+            # Single values
+            arr = pa.array([val])
+        value_arrays.append(arr)
+        fields.append(pa.field(f"_val_{i}", arr.type))
+
+    schema = pa.schema(fields)
+
+    # Build record batch
+    filter_spec_json = json.dumps(filters)
+    all_arrays: list[pa.Array[Any]] = [pa.array([filter_spec_json])]
+    all_arrays.extend(value_arrays)
+
+    batch = pa.RecordBatch.from_arrays(all_arrays, schema=schema)
+
+    # Serialize to IPC
+    sink = io.BytesIO()
+    with pa.ipc.new_stream(sink, schema) as writer:
+        writer.write_batch(batch)
+    return sink.getvalue()

@@ -653,11 +653,33 @@ class TableInOutGenerator(vgi.table_function.TableFunctionBase):
         generator = self.process(input.batch)
         # Prime the process() generator past the initial yield
         generator.send(None)
+        auto_apply = self._should_auto_apply_filters()
 
         try:
             # DATA phase
             while not input.is_finalize:
                 result = self._process_with_exception_handling(generator, input.batch)
+
+                # Apply pushdown filters if enabled
+                if auto_apply and result.batch is not None:
+                    filtered = self._apply_pushdown_filter(result.batch)
+                    assert filtered is not None
+                    # Skip empty filtered batches (no log message) to avoid
+                    # DuckDB interpreting zero-row batch as end-of-data
+                    if filtered.num_rows == 0 and result.log_message is None:
+                        # Request more input without emitting the empty batch
+                        input = yield ProtocolOutput(
+                            batch=None, status=_OutputStatus.NEED_MORE_INPUT
+                        )
+                        if input is None:
+                            raise ValueError("Expected ProtocolInput, got None")
+                        continue
+                    result = OutputComplete(
+                        batch=filtered,
+                        log_message=result.log_message,
+                        has_more=result.has_more,
+                    )
+
                 input = yield ProtocolOutput.from_process_result(
                     result, in_finalize_phase=False
                 )
@@ -685,6 +707,21 @@ class TableInOutGenerator(vgi.table_function.TableFunctionBase):
             # FINALIZE phase - send None to signal finalize
             while True:
                 result = self._process_with_exception_handling(finalize_generator, None)
+
+                # Apply pushdown filters if enabled
+                if auto_apply and result.batch is not None:
+                    filtered = self._apply_pushdown_filter(result.batch)
+                    assert filtered is not None
+                    # Skip empty filtered batches (no log message)
+                    if filtered.num_rows == 0 and result.log_message is None:
+                        # In finalize phase, continue to next iteration
+                        continue
+                    result = OutputComplete(
+                        batch=filtered,
+                        log_message=result.log_message,
+                        has_more=result.has_more,
+                    )
+
                 if result.has_more:
                     input = yield ProtocolOutput.from_process_result(
                         result, in_finalize_phase=True
