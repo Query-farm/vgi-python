@@ -101,12 +101,29 @@ args_batch = pa.RecordBatch.from_pylist([{
 
 **Protocol state:** `catalog_result`
 
+Results are serialized using `CATALOG_METHOD_SCHEMAS` to determine the appropriate Arrow schema for each method, enabling consistent handling of both populated and empty results.
+
 | Return Type | Serialization |
 |-------------|---------------|
-| `None` | Empty batch (0 rows, 0 columns) |
-| Dataclass with `serialize()` | Single serialized batch |
-| `list[str]` | Single-column batch named "value" |
-| `Iterable[Dataclass]` | Stream of serialized batches + empty EOF batch |
+| `None` | Empty batch with empty schema (DDL operations) |
+| Primitive (`int`, `str`, etc.) | Single-row batch with "value" column |
+| `list[str]` | Multi-row batch with "value" column |
+| Dataclass with `to_row_dict()` | Single-row batch using method's schema |
+| `list[Dataclass]` | Multi-row batch using method's schema |
+
+The schema for each method is defined in `CATALOG_METHOD_SCHEMAS`:
+
+```python
+from vgi.catalog import CATALOG_METHOD_SCHEMAS, get_catalog_method_schema
+
+# Get schema for a specific method
+schema = get_catalog_method_schema("catalog_attach", {})
+# Returns CatalogAttachResult.ARROW_SCHEMA
+
+# For schema_contents, the type parameter determines the schema
+schema = get_catalog_method_schema("schema_contents", {"type": "table"})
+# Returns TableInfo.ARROW_SCHEMA
+```
 
 All result batches include `vgi.protocol_state: catalog_result` in their custom metadata.
 
@@ -567,10 +584,11 @@ schema = pa.ipc.read_schema(pa.py_buffer(serialized))
 
 ### Dataclass Serialization
 
-Catalog dataclasses have `serialize()` methods and `deserialize()` class methods:
+Catalog dataclasses have `to_row_dict()`, `serialize()`, and `deserialize()` methods:
 
 ```python
 from vgi.catalog import CatalogAttachResult, AttachId
+import pyarrow as pa
 
 # Create result
 result = CatalogAttachResult(
@@ -582,13 +600,19 @@ result = CatalogAttachResult(
     attach_id_required=False,
 )
 
-# Serialize to bytes
+# Convert to dict for batch construction (used internally by workers)
+row_dict = result.to_row_dict()
+batch = pa.RecordBatch.from_pylist([row_dict], schema=CatalogAttachResult.ARROW_SCHEMA)
+
+# Serialize to bytes (convenience method)
 data = result.serialize()
 
 # Deserialize from RecordBatch
 batch = pa.ipc.open_stream(pa.py_buffer(data)).read_next_batch()
 restored = CatalogAttachResult.deserialize(batch)
 ```
+
+The `to_row_dict()` method is used by the worker's `_result_to_batch()` helper for unified result serialization.
 
 ---
 
