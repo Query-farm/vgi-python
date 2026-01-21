@@ -17,9 +17,17 @@ from vgi.examples.worker import ExampleWorker
 def _get_expected_function_names() -> set[str]:
     """Get all function names from ExampleWorker dynamically."""
     names = set()
-    for func_cls in ExampleWorker.functions:
-        meta = func_cls.get_metadata()
-        names.add(meta.name)
+    # Support new declarative catalog pattern
+    if hasattr(ExampleWorker, "catalog") and ExampleWorker.catalog is not None:
+        for schema in ExampleWorker.catalog.schemas:
+            for func_cls in schema.functions:
+                meta = func_cls.get_metadata()
+                names.add(meta.name)
+    # Support legacy functions list pattern
+    elif hasattr(ExampleWorker, "functions"):
+        for func_cls in ExampleWorker.functions:
+            meta = func_cls.get_metadata()
+            names.add(meta.name)
     return names
 
 

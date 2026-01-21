@@ -23,7 +23,7 @@ Usage:
 
 from typing import Annotated
 
-from vgi.catalog import Setting
+from vgi.catalog import Catalog, Schema, Setting, Table
 from vgi.examples.scalar import (
     AddValuesFunction,
     BinaryPacketFunction,
@@ -74,8 +74,6 @@ class ExampleWorker(Worker):
     - multiplier: Value multiplier (used by SettingsAwareFunction)
     """
 
-    catalog_name = "example"
-
     class Settings:
         """Settings exposed via catalog_attach."""
 
@@ -83,41 +81,62 @@ class ExampleWorker(Worker):
         greeting: Annotated[str, Setting(desc="Custom greeting message")] = "Hello"
         multiplier: Annotated[int, Setting(desc="Value multiplier")] = 1
 
-    functions = [
-        # TableInOutGenerator - transform input batches
-        EchoFunction,
-        BufferInputFunction,
-        RepeatInputsFunction,
-        SumAllColumnsFunction,
-        SumAllColumnsFunctionDistributed,
-        SumAllColumnsSimpleDistributed,
-        SumAllColumnsFunctionWithLogging,
-        ExceptionFinalizeFunction,
-        ExceptionProcessFunction,
-        # TableFunctionGenerator - generate output without input
-        ConstantColumnsFunction,
-        DoubleSequenceFunction,
-        GeneratorExceptionFunction,
-        LoggingGeneratorFunction,
-        NestedSequenceFunction,
-        PartitionedSequenceFunction,
-        ProjectedDataFunction,
-        SequenceFunction,
-        SettingsAwareFunction,
-        TenThousandFunction,
-        TraceContextReporterFunction,
-        # ScalarFunctionGenerator - transform to single-column output
-        AddValuesFunction,
-        BinaryPacketFunction,
-        ConditionalMessageFunction,
-        DoubleFunction,
-        MultiplyFunction,
-        NullHandlingFunction,
-        RandomIntFunction,
-        SumValuesFunction,
-        UpperCaseFunction,
-        # For Polars functions, use vgi-example-polars-worker
-    ]
+    catalog = Catalog(
+        name="example",
+        default_schema="main",
+        schemas=[
+            Schema(
+                name="main",
+                comment="Example functions for testing VGI",
+                functions=[
+                    # TableInOutGenerator - transform input batches
+                    EchoFunction,
+                    BufferInputFunction,
+                    RepeatInputsFunction,
+                    SumAllColumnsFunction,
+                    SumAllColumnsFunctionDistributed,
+                    SumAllColumnsSimpleDistributed,
+                    SumAllColumnsFunctionWithLogging,
+                    ExceptionFinalizeFunction,
+                    ExceptionProcessFunction,
+                    # TableFunctionGenerator - generate output without input
+                    ConstantColumnsFunction,
+                    DoubleSequenceFunction,
+                    GeneratorExceptionFunction,
+                    LoggingGeneratorFunction,
+                    NestedSequenceFunction,
+                    PartitionedSequenceFunction,
+                    ProjectedDataFunction,
+                    SequenceFunction,
+                    SettingsAwareFunction,
+                    TenThousandFunction,
+                    TraceContextReporterFunction,
+                    # ScalarFunctionGenerator - transform to single-column output
+                    AddValuesFunction,
+                    BinaryPacketFunction,
+                    ConditionalMessageFunction,
+                    DoubleFunction,
+                    MultiplyFunction,
+                    NullHandlingFunction,
+                    RandomIntFunction,
+                    SumValuesFunction,
+                    UpperCaseFunction,
+                    # For Polars functions, use vgi-example-polars-worker
+                ],
+            ),
+            Schema(
+                name="data",
+                comment="Example tables backed by functions",
+                tables=[
+                    Table(
+                        name="sequence",
+                        function=SequenceFunction,
+                        comment="A sequence of integers from 0 to n-1",
+                    ),
+                ],
+            ),
+        ],
+    )
 
 
 def main() -> None:
