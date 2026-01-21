@@ -664,9 +664,14 @@ class TableInOutGenerator(vgi.table_function.TableFunctionBase):
                 if auto_apply and result.batch is not None:
                     filtered = self._apply_pushdown_filter(result.batch)
                     assert filtered is not None
-                    # Skip empty filtered batches (no log message) to avoid
-                    # DuckDB interpreting zero-row batch as end-of-data
-                    if filtered.num_rows == 0 and result.log_message is None:
+                    # Skip batches that became empty due to filtering (no log message)
+                    # to avoid DuckDB interpreting zero-row batch as end-of-data.
+                    # Only skip if filtering actually removed rows (input had rows).
+                    if (
+                        filtered.num_rows == 0
+                        and result.log_message is None
+                        and result.batch.num_rows > 0
+                    ):
                         # Request more input without emitting the empty batch
                         input = yield ProtocolOutput(
                             batch=None, status=_OutputStatus.NEED_MORE_INPUT
@@ -712,8 +717,13 @@ class TableInOutGenerator(vgi.table_function.TableFunctionBase):
                 if auto_apply and result.batch is not None:
                     filtered = self._apply_pushdown_filter(result.batch)
                     assert filtered is not None
-                    # Skip empty filtered batches (no log message)
-                    if filtered.num_rows == 0 and result.log_message is None:
+                    # Skip batches that became empty due to filtering (no log message).
+                    # Only skip if filtering actually removed rows (input had rows).
+                    if (
+                        filtered.num_rows == 0
+                        and result.log_message is None
+                        and result.batch.num_rows > 0
+                    ):
                         # In finalize phase, continue to next iteration
                         continue
                     result = OutputComplete(

@@ -63,7 +63,13 @@ class EchoFunction(TableInOutGenerator):
     SCHEMA TRANSFORMATION
     ---------------------
     Input:  any schema
-    Output: same schema (passthrough)
+    Output: same schema (passthrough), with optional projection and filtering
+
+    PUSHDOWN SUPPORT
+    ----------------
+    - projection_pushdown: Only returns requested columns
+    - filter_pushdown: Filters rows based on pushed-down predicates
+    - auto_apply_filters: Automatically applies filters to output batches
 
     Example:
     -------
@@ -79,6 +85,9 @@ class EchoFunction(TableInOutGenerator):
         description = "Passthrough function that emits each input batch unchanged"
         categories = ["utility", "debug"]
         tags = {"category": "debug", "type": "passthrough"}
+        projection_pushdown = True
+        filter_pushdown = True
+        auto_apply_filters = True
         examples = [
             FunctionExample(
                 sql="SELECT * FROM echo((SELECT * FROM input_table))",
@@ -87,6 +96,11 @@ class EchoFunction(TableInOutGenerator):
         ]
 
     data: Annotated[TableInput, Arg(0, doc="Input table")]
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        """Return input schema with projection applied."""
+        return self.apply_projection(self.input_schema)
 
 
 class BufferInputFunction(TableInOutGenerator):

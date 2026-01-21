@@ -556,9 +556,14 @@ class TableFunctionGenerator(TableFunctionBase):
                     filtered = self._apply_pushdown_filter(result.batch)
                     # _apply_pushdown_filter returns non-None when given non-None
                     assert filtered is not None
-                    # Skip empty filtered batches (no log message) to avoid
-                    # DuckDB interpreting zero-row batch as end-of-data
-                    if filtered.num_rows == 0 and result.log_message is None:
+                    # Skip batches that became empty due to filtering (no log message)
+                    # to avoid DuckDB interpreting zero-row batch as end-of-data.
+                    # Only skip if filtering actually removed rows (input had rows).
+                    if (
+                        filtered.num_rows == 0
+                        and result.log_message is None
+                        and result.batch.num_rows > 0
+                    ):
                         continue
                     result = OutputComplete(
                         batch=filtered, log_message=result.log_message
