@@ -332,16 +332,31 @@ class Worker:
 
         Multiple functions can share the same name if they have different
         argument signatures (overloading).
+
+        Supports both patterns:
+        - Legacy: cls.functions list
+        - Declarative: cls.catalog.schemas[*].functions
         """
         if cls._registry is not None:
             return cls._registry
 
         registry: dict[str, list[type[Function[Any]]]] = {}
-        for func_cls in cls.functions:
+
+        def add_function(func_cls: type[Function[Any]]) -> None:
             meta = func_cls.get_metadata()
             if meta.name not in registry:
                 registry[meta.name] = []
             registry[meta.name].append(func_cls)
+
+        # Legacy pattern: functions list
+        for func_cls in cls.functions:
+            add_function(func_cls)
+
+        # Declarative pattern: functions in catalog schemas
+        if cls.catalog is not None:
+            for schema in cls.catalog.schemas:
+                for func_cls in schema.functions:
+                    add_function(func_cls)
 
         cls._registry = registry
         return registry
