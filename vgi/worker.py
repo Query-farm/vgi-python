@@ -1507,10 +1507,18 @@ class Worker:
                     suggestions = self._suggest_similar_names(
                         invocation.function_name, available
                     )
+
+                    # Build informative error message with catalog context
+                    catalog_name = (
+                        self.catalog.name if self.catalog else self.catalog_name
+                    )
                     msg_lines = [
                         f"Unknown function: '{invocation.function_name}'",
-                        "",
                     ]
+                    if catalog_name:
+                        msg_lines.append(f"  Catalog: {catalog_name}")
+                    msg_lines.append("")
+
                     if suggestions:
                         msg_lines.append("  Did you mean:")
                         for suggestion in suggestions[:3]:
