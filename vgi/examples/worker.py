@@ -21,9 +21,19 @@ Usage:
     vgi-example-worker
 """
 
-from typing import Annotated
+from typing import Annotated, Any
 
-from vgi.catalog import Catalog, Schema, Setting, Table
+import pyarrow as pa
+
+from vgi.catalog import (
+    AttachId,
+    Catalog,
+    ScanFunctionResult,
+    Schema,
+    Setting,
+    Table,
+    TransactionId,
+)
 from vgi.examples.scalar import (
     AddValuesFunction,
     BinaryPacketFunction,
@@ -128,15 +138,76 @@ class ExampleWorker(Worker):
                 name="data",
                 comment="Example tables backed by functions",
                 tables=[
+                    # Function-backed table: schema derived from function
                     Table(
                         name="sequence",
                         function=SequenceFunction,
                         comment="A sequence of integers from 0 to n-1",
                     ),
+                    # Explicit columns table: requires table_scan_function_get
+                    Table(
+                        name="numbers",
+                        columns=pa.schema([("value", pa.int64())]),
+                        comment="First 100 integers (demonstrates explicit columns)",
+                    ),
                 ],
             ),
         ],
     )
+
+    def table_scan_function_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        at_unit: str | None,
+        at_value: Any,
+    ) -> ScanFunctionResult:
+        """Return scan function for tables with explicit columns.
+
+        This method is called when DuckDB needs to scan a table. For tables
+        defined with explicit columns (not function-backed), you must implement
+        this to specify which function to call for scanning.
+
+        Args:
+            attach_id: The catalog attachment identifier.
+            transaction_id: Optional transaction identifier.
+            schema_name: The schema containing the table.
+            name: The table name.
+            at_unit: Time travel unit (e.g., "version", "timestamp").
+            at_value: Time travel value.
+
+        Returns:
+            ScanFunctionResult specifying the function to call for scanning.
+
+        """
+        # Handle the "numbers" table with explicit columns
+        if schema_name.lower() == "data" and name.lower() == "numbers":
+            # Scan using the sequence function with count=100
+            return ScanFunctionResult(
+                function_name="sequence",
+                positional_arguments=[pa.scalar(100)],  # Generate 100 numbers
+                named_arguments={},
+            )
+
+        # For function-backed tables, delegate to the catalog interface
+        # which handles them automatically
+        catalog_interface = self._get_catalog_interface()
+        if catalog_interface is not None:
+            return catalog_interface().table_scan_function_get(
+                attach_id=attach_id,
+                transaction_id=transaction_id,
+                schema_name=schema_name,
+                name=name,
+                at_unit=at_unit,
+                at_value=at_value,
+            )
+
+        raise NotImplementedError(
+            f"table_scan_function_get not implemented for {schema_name}.{name}"
+        )
 
 
 def main() -> None:
