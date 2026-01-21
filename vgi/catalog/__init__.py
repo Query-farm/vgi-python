@@ -42,6 +42,7 @@ from vgi.catalog.catalog_interface import (
     TransactionId,
     ViewInfo,
 )
+from vgi.catalog.descriptors import Catalog, Schema, Table, View
 from vgi.catalog.setting import Setting, SettingSpec
 from vgi.catalog.storage import CatalogStorage, CatalogStorageSqlite
 
@@ -67,6 +68,11 @@ __all__ = [
     "ViewInfo",
     "FunctionInfo",
     "ScanFunctionResult",
+    # Declarative descriptors
+    "Catalog",
+    "Schema",
+    "Table",
+    "View",
     # Interfaces
     "CatalogInterface",
     "ReadOnlyCatalogInterface",

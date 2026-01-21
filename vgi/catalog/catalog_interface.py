@@ -11,6 +11,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NewType, Self, overload
 
 if TYPE_CHECKING:
+    from vgi.catalog.descriptors import Catalog, Schema, Table, View
     from vgi.catalog.setting import SettingSpec
 
 import pyarrow as pa
@@ -1256,21 +1257,106 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     functions: list[type] = []
     settings: list["SettingSpec"] = []
 
+    # NEW: Optional Catalog object for declarative definition
+    catalog: "Catalog | None" = None
+
     # Fixed attach_id for read-only catalogs (no need for unique IDs)
     _FIXED_ATTACH_ID: AttachId = AttachId(b"readonly-catalog-")
 
+    # Instance-level registry caches (built lazily)
+    # Keys are LOWERCASE for case-insensitive lookup
+    _schema_registry: "dict[str, Schema] | None" = None
+    _table_registry: "dict[tuple[str, str], Table] | None" = None
+    _view_registry: "dict[tuple[str, str], View] | None" = None
+    _function_registry: "dict[tuple[str, str], type] | None" = None
+
+    def _build_registries(self) -> None:
+        """Build lookup dicts from Catalog or legacy patterns.
+
+        All registry keys are lowercase for case-insensitive lookups.
+        Raises ValueError if duplicate names detected within same schema.
+        """
+        if self._schema_registry is not None:
+            return
+
+        # Import here to avoid circular imports
+        from vgi.catalog.descriptors import Schema
+
+        self._schema_registry = {}
+        self._table_registry = {}
+        self._view_registry = {}
+        self._function_registry = {}
+
+        def _register_table(schema_key: str, table: "Table") -> None:
+            key = (schema_key, table.name.lower())
+            if key in self._table_registry:  # type: ignore[operator]
+                raise ValueError(
+                    f"Duplicate table '{table.name}' in schema '{schema_key}'"
+                )
+            self._table_registry[key] = table  # type: ignore[index]
+
+        def _register_view(schema_key: str, view: "View") -> None:
+            key = (schema_key, view.name.lower())
+            if key in self._view_registry:  # type: ignore[operator]
+                raise ValueError(
+                    f"Duplicate view '{view.name}' in schema '{schema_key}'"
+                )
+            self._view_registry[key] = view  # type: ignore[index]
+
+        def _register_function(schema_key: str, func_cls: type) -> None:
+            meta = func_cls.get_metadata()  # type: ignore[attr-defined]
+            key = (schema_key, meta.name.lower())
+            if key in self._function_registry:  # type: ignore[operator]
+                raise ValueError(
+                    f"Duplicate function '{meta.name}' in schema '{schema_key}'"
+                )
+            self._function_registry[key] = func_cls  # type: ignore[index]
+
+        if self.catalog is not None:
+            # Build from Catalog object
+            for schema in self.catalog.schemas:
+                schema_key = schema.name.lower()
+                self._schema_registry[schema_key] = schema
+
+                for table in schema.tables:
+                    _register_table(schema_key, table)
+                for view in schema.views:
+                    _register_view(schema_key, view)
+                for func_cls in schema.functions:
+                    _register_function(schema_key, func_cls)
+        else:
+            # Backward compat: create "main" schema from legacy `functions` list
+            main_schema = Schema(name="main", tables=(), views=(), functions=())
+            self._schema_registry["main"] = main_schema
+
+            for func_cls in self.functions:
+                _register_function("main", func_cls)
+
+    @property
+    def _effective_catalog_name(self) -> str:
+        """Get catalog name from Catalog object or class attribute."""
+        if self.catalog is not None:
+            return self.catalog.name
+        return self.catalog_name
+
+    @property
+    def _default_schema_name(self) -> str:
+        """Get default schema name."""
+        if self.catalog is not None:
+            return self.catalog.default_schema
+        return "main"
+
     def catalogs(self) -> list[str]:
         """Return the list of available catalogs."""
-        return [self.catalog_name]
+        return [self._effective_catalog_name]
 
     def catalog_attach(
         self, *, name: str, options: dict[str, Any]
     ) -> CatalogAttachResult:
         """Attach to the catalog."""
-        if name != self.catalog_name:
-            raise ValueError(
-                f"Unknown catalog: {name!r}. Available: {self.catalog_name}"
-            )
+        effective_name = self._effective_catalog_name
+        if name != effective_name:
+            raise ValueError(f"Unknown catalog: {name!r}. Available: {effective_name}")
 
         # Serialize settings for the attach result
         serialized_settings = [s.serialize() for s in self.settings]
@@ -1282,9 +1368,17 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             catalog_version_frozen=True,
             catalog_version=1,
             attach_id_required=False,
-            default_schema="main",
+            default_schema=self._default_schema_name,
             settings=serialized_settings,
         )
+
+    def schemas(
+        self, *, attach_id: AttachId, transaction_id: TransactionId | None
+    ) -> list[SchemaInfo]:
+        """Get a list of schemas for the given attach_id."""
+        self._build_registries()
+        assert self._schema_registry is not None
+        return [s.to_schema_info(attach_id) for s in self._schema_registry.values()]
 
     def schema_get(
         self,
@@ -1293,15 +1387,11 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         transaction_id: TransactionId | None,
         name: str,
     ) -> SchemaInfo | None:
-        """Get information about a schema."""
-        if name != "main":
-            return None
-        return SchemaInfo(
-            attach_id=attach_id,
-            name="main",
-            comment=None,
-            tags={},
-        )
+        """Get information about a schema (case-insensitive lookup)."""
+        self._build_registries()
+        assert self._schema_registry is not None
+        schema = self._schema_registry.get(name.lower())
+        return schema.to_schema_info(attach_id) if schema else None
 
     def table_get(
         self,
@@ -1311,7 +1401,14 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         schema_name: str,
         name: str,
     ) -> TableInfo | None:
-        """Get information about a table (none in function-only catalogs)."""
+        """Get information about a table (case-insensitive lookup)."""
+        self._build_registries()
+        assert self._table_registry is not None
+        assert self._schema_registry is not None
+        table = self._table_registry.get((schema_name.lower(), name.lower()))
+        if table:
+            schema = self._schema_registry.get(schema_name.lower())
+            return table.to_table_info(schema.name if schema else schema_name)
         return None
 
     def view_get(
@@ -1322,8 +1419,65 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         schema_name: str,
         name: str,
     ) -> ViewInfo | None:
-        """Get information about a view (none in function-only catalogs)."""
+        """Get information about a view (case-insensitive lookup)."""
+        self._build_registries()
+        assert self._view_registry is not None
+        assert self._schema_registry is not None
+        view = self._view_registry.get((schema_name.lower(), name.lower()))
+        if view:
+            schema = self._schema_registry.get(schema_name.lower())
+            return view.to_view_info(schema.name if schema else schema_name)
         return None
+
+    def table_scan_function_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        at_unit: str | None,
+        at_value: str | None,
+    ) -> ScanFunctionResult:
+        """Get scan function for a table.
+
+        For function-backed tables (Table.function is set), automatically returns
+        a ScanFunctionResult that invokes the linked function.
+
+        For tables with explicit columns, override this method in your Worker
+        to provide scan functions.
+        """
+        self._build_registries()
+        assert self._table_registry is not None
+        assert self._schema_registry is not None
+
+        # Check if table exists and is function-backed
+        table = self._table_registry.get((schema_name.lower(), name.lower()))
+        if table is not None and table.function is not None:
+            # Auto-implement for function-backed tables
+            func_meta = table.function.get_metadata()
+            return ScanFunctionResult(
+                function_name=func_meta.name,
+                positional_arguments=[],
+                named_arguments={},
+                required_extensions=[],
+            )
+
+        # No auto-implementation available - provide helpful error
+        available = [
+            f"{self._effective_catalog_name}.{s.name}.{t.name}"
+            for s in self._schema_registry.values()
+            for t in s.tables
+        ]
+        available_str = ", ".join(sorted(available)) if available else "(none)"
+
+        raise NotImplementedError(
+            f"table_scan_function_get not implemented for table "
+            f"'{self._effective_catalog_name}.{schema_name}.{name}'. "
+            f"Available tables: {available_str}. "
+            f"Either use Table(function=...) for automatic scanning, "
+            f"or override table_scan_function_get in your Worker."
+        )
 
     @overload
     def schema_contents(
@@ -1365,10 +1519,10 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         name: str,
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo]:
-        """List functions in the schema.
+        """List contents of a schema.
 
-        For ReadOnlyCatalogInterface, only SCALAR_FUNCTION and TABLE_FUNCTION
-        types return results since tables and views are not supported.
+        Returns tables, views, or functions based on the type parameter.
+        Uses case-insensitive schema name lookup.
 
         Args:
             attach_id: The attachment identifier.
@@ -1377,12 +1531,22 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             type: The type of objects to return. Must be a SchemaObjectType enum.
 
         Returns:
-            A list of FunctionInfo objects for function types,
-            or empty for TABLE/VIEW types.
+            A list of TableInfo, ViewInfo, or FunctionInfo objects.
 
         """
-        if name != "main" or not self.functions:
+        self._build_registries()
+        assert self._schema_registry is not None
+        assert self._table_registry is not None
+        assert self._view_registry is not None
+        assert self._function_registry is not None
+
+        # Case-insensitive schema lookup
+        name_lower = name.lower()
+        schema = self._schema_registry.get(name_lower)
+        if schema is None:
             return []
+
+        schema_name = schema.name
 
         # Normalize type parameter (may be string from wire protocol)
         if isinstance(type, SchemaObjectType):
@@ -1390,28 +1554,35 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         else:
             type_enum = SchemaObjectType(type)
 
-        # TABLE and VIEW types return nothing since we don't have them
-        if type_enum in (SchemaObjectType.TABLE, SchemaObjectType.VIEW):
-            return []
-
         results: list[TableInfo | ViewInfo | FunctionInfo] = []
-        for func_cls in self.functions:
-            func_info = self._function_to_info(func_cls, name)
 
-            # Apply type filter
-            if (
-                type_enum == SchemaObjectType.SCALAR_FUNCTION
-                and func_info.function_type != FunctionType.SCALAR
-            ):
-                continue
-            if (
-                type_enum == SchemaObjectType.TABLE_FUNCTION
-                and func_info.function_type
-                not in (FunctionType.TABLE, FunctionType.AGGREGATE)
-            ):
-                continue
-
-            results.append(func_info)
+        if type_enum == SchemaObjectType.TABLE:
+            for (sn, _), table in self._table_registry.items():
+                if sn == name_lower:
+                    results.append(table.to_table_info(schema_name))
+        elif type_enum == SchemaObjectType.VIEW:
+            for (sn, _), view in self._view_registry.items():
+                if sn == name_lower:
+                    results.append(view.to_view_info(schema_name))
+        else:
+            # SCALAR_FUNCTION or TABLE_FUNCTION
+            for (sn, _), func_cls in self._function_registry.items():
+                if sn != name_lower:
+                    continue
+                func_info = self._function_to_info(func_cls, schema_name)
+                # Filter by function type
+                if (
+                    type_enum == SchemaObjectType.SCALAR_FUNCTION
+                    and func_info.function_type != FunctionType.SCALAR
+                ):
+                    continue
+                if (
+                    type_enum == SchemaObjectType.TABLE_FUNCTION
+                    and func_info.function_type
+                    not in (FunctionType.TABLE, FunctionType.AGGREGATE)
+                ):
+                    continue
+                results.append(func_info)
 
         return results
 

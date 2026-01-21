@@ -271,9 +271,50 @@ class Worker:
     functions: Sequence[type[Function[Any]]] = []
     catalog_interface: type[CatalogInterface] | None = None
     catalog_name: str | None = "functions"  # Set to None to disable default catalog
+    catalog: Any = None  # Optional Catalog object for declarative definition
     _registry: dict[str, list[type[Function[Any]]]] | None = None
     _default_catalog_interface: type[CatalogInterface] | None = None
     _setting_specs: list[SettingSpec] = []  # Extracted from Settings inner class
+
+    def table_scan_function_get(
+        self,
+        *,
+        attach_id: Any,
+        transaction_id: Any,
+        schema_name: str,
+        name: str,
+        at_unit: str | None,
+        at_value: str | None,
+    ) -> Any:
+        """Override this method to provide custom scan functions for tables.
+
+        This method is called when a table defined with explicit columns
+        (not function-backed) needs to be scanned. Override in your Worker
+        subclass to return a ScanFunctionResult.
+
+        For function-backed tables (Table(function=...)), scanning is handled
+        automatically and this method is not called.
+
+        Args:
+            attach_id: The attachment identifier.
+            transaction_id: The transaction identifier, if any.
+            schema_name: The schema name.
+            name: The table name.
+            at_unit: Time travel unit (optional).
+            at_value: Time travel value (optional).
+
+        Returns:
+            ScanFunctionResult describing how to scan the table.
+
+        Raises:
+            NotImplementedError: Always (base implementation).
+
+        """
+        raise NotImplementedError(
+            f"table_scan_function_get not implemented for table "
+            f"'{schema_name}.{name}'. Override this method in your Worker "
+            f"subclass to provide scan functions for tables with explicit columns."
+        )
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Process Settings inner class when subclassing Worker."""
@@ -309,9 +350,11 @@ class Worker:
     def _get_catalog_interface(cls) -> type[CatalogInterface] | None:
         """Get the catalog interface to use for this worker.
 
-        Returns the explicitly set catalog_interface if present. Otherwise,
-        if functions are defined and catalog_name is set, creates a default
-        ReadOnlyCatalogInterface that exposes the worker's functions.
+        Returns the explicitly set catalog_interface if present. Otherwise:
+        - If `catalog` attribute is set (new pattern), creates a default
+          ReadOnlyCatalogInterface using the Catalog object.
+        - If `catalog_name` and `functions` are set (legacy pattern), creates
+          a default ReadOnlyCatalogInterface exposing the functions.
 
         Returns:
             CatalogInterface class to instantiate, or None if no catalog.
@@ -321,25 +364,45 @@ class Worker:
         if cls.catalog_interface is not None:
             return cls.catalog_interface
 
-        # No default catalog if catalog_name is None or no functions
-        if cls.catalog_name is None or not cls.functions:
+        # Check for new Catalog object or legacy patterns
+        catalog_obj = cls.catalog
+        has_catalog = catalog_obj is not None
+        has_legacy = cls.catalog_name is not None and cls.functions
+
+        if not has_catalog and not has_legacy:
             return None
 
         # Create default catalog interface if not already created
         if cls._default_catalog_interface is None:
             from vgi.catalog import ReadOnlyCatalogInterface
 
-            # Create a dynamic subclass with the worker's functions and settings
+            attrs: dict[str, Any] = {
+                "settings": list(cls._setting_specs),
+            }
+
+            if has_catalog:
+                # New pattern: use Catalog object
+                attrs["catalog"] = catalog_obj
+                attrs["catalog_name"] = catalog_obj.name
+            else:
+                # Legacy pattern: use class attributes
+                attrs["catalog_name"] = cls.catalog_name
+                attrs["functions"] = list(cls.functions)
+
+            # Copy table_scan_function_get from Worker if overridden
+            # This allows Worker subclasses to define the scan method directly
+            if (
+                hasattr(cls, "table_scan_function_get")
+                and cls.table_scan_function_get is not Worker.table_scan_function_get
+            ):
+                attrs["table_scan_function_get"] = cls.table_scan_function_get
+
             cls._default_catalog_interface = cast(
                 type[CatalogInterface],
                 type(
                     f"{cls.__name__}Catalog",
                     (ReadOnlyCatalogInterface,),
-                    {
-                        "catalog_name": cls.catalog_name,
-                        "functions": list(cls.functions),
-                        "settings": list(cls._setting_specs),
-                    },
+                    attrs,
                 ),
             )
 
