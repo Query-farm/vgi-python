@@ -371,19 +371,25 @@ def catalog_attach_result_to_dict(result: Any) -> dict[str, Any]:
 def scan_function_result_to_dict(result: Any) -> dict[str, Any]:
     """Convert ScanFunctionResult to a dictionary for JSON output.
 
+    ScanFunctionResult allows the VGI DuckDB extension to call any DuckDB
+    function with specified positional and named arguments, and load any
+    required extensions.
+
     Args:
         result: ScanFunctionResult object
 
     Returns:
-        Dictionary representation
+        Dictionary representation with function_name, positional_arguments,
+        named_arguments, and required_extensions.
 
     """
     return {
         "function_name": result.function_name,
-        "max_processes": result.max_processes,
-        "invocation_id": (
-            bytes_to_hex(result.invocation_id) if result.invocation_id else None
-        ),
+        "positional_arguments": [arg.as_py() for arg in result.positional_arguments],
+        "named_arguments": {
+            name: arg.as_py() for name, arg in result.named_arguments.items()
+        },
+        "required_extensions": result.required_extensions,
     }
 
 

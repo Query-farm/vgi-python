@@ -477,35 +477,81 @@ class TestFunctionInfoSerialization:
 
 
 class TestScanFunctionResultSerialization:
-    """Test ScanFunctionResult serialization round-trip."""
+    """Test ScanFunctionResult serialization round-trip.
+
+    ScanFunctionResult allows the VGI DuckDB extension to call any DuckDB
+    function with specified arguments and load required extensions.
+    """
 
     def test_basic_round_trip(self) -> None:
         """Test basic serialization and deserialization."""
         original = ScanFunctionResult(
-            function_name="scan_table",
-            max_processes=4,
-            invocation_id=b"\x01\x02\x03\x04",
+            function_name="read_parquet",
+            positional_arguments=[pa.scalar("data.parquet")],
+            named_arguments={"hive_partitioning": pa.scalar(True)},
+            required_extensions=["parquet"],
         )
         serialized = original.serialize()
         batch, _ = deserialize_record_batch(serialized)
         restored = ScanFunctionResult.deserialize(batch)
 
         assert restored.function_name == original.function_name
-        assert restored.max_processes == original.max_processes
-        assert restored.invocation_id == original.invocation_id
+        assert len(restored.positional_arguments) == 1
+        assert restored.positional_arguments[0].as_py() == "data.parquet"
+        assert "hive_partitioning" in restored.named_arguments
+        assert restored.named_arguments["hive_partitioning"].as_py() is True
+        assert restored.required_extensions == ["parquet"]
 
-    def test_none_invocation_id(self) -> None:
-        """Test with None invocation_id."""
+    def test_multiple_positional_args(self) -> None:
+        """Test with multiple positional arguments of different types."""
         original = ScanFunctionResult(
-            function_name="scan",
-            max_processes=1,
-            invocation_id=None,
+            function_name="my_function",
+            positional_arguments=[
+                pa.scalar(42),
+                pa.scalar("hello"),
+                pa.scalar(3.14),
+            ],
+            named_arguments={},
         )
         serialized = original.serialize()
         batch, _ = deserialize_record_batch(serialized)
         restored = ScanFunctionResult.deserialize(batch)
 
-        assert restored.invocation_id is None
+        assert restored.function_name == original.function_name
+        assert len(restored.positional_arguments) == 3
+        assert restored.positional_arguments[0].as_py() == 42
+        assert restored.positional_arguments[1].as_py() == "hello"
+        assert restored.positional_arguments[2].as_py() == 3.14
+
+    def test_empty_args(self) -> None:
+        """Test with no arguments."""
+        original = ScanFunctionResult(
+            function_name="simple_function",
+            positional_arguments=[],
+            named_arguments={},
+        )
+        serialized = original.serialize()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = ScanFunctionResult.deserialize(batch)
+
+        assert restored.function_name == original.function_name
+        assert len(restored.positional_arguments) == 0
+        assert len(restored.named_arguments) == 0
+        assert restored.required_extensions == []
+
+    def test_multiple_extensions(self) -> None:
+        """Test with multiple required extensions."""
+        original = ScanFunctionResult(
+            function_name="complex_scan",
+            positional_arguments=[pa.scalar("path")],
+            named_arguments={},
+            required_extensions=["iceberg", "parquet", "httpfs"],
+        )
+        serialized = original.serialize()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = ScanFunctionResult.deserialize(batch)
+
+        assert restored.required_extensions == ["iceberg", "parquet", "httpfs"]
 
 
 class TestSettingSpecSerialization:
@@ -726,6 +772,5 @@ class TestArrowSchemaCorrectness:
         """Verify ScanFunctionResult Arrow schema."""
         schema = ScanFunctionResult.ARROW_SCHEMA
         assert schema.field("function_name").type == pa.string()
-        assert schema.field("max_processes").type == pa.int32()
-        assert schema.field("invocation_id").type == pa.binary()
-        assert schema.field("invocation_id").nullable is True
+        assert schema.field("arguments").type == pa.binary()
+        assert schema.field("required_extensions").type == pa.list_(pa.string())

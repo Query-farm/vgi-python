@@ -803,6 +803,11 @@ class CatalogClientMixin:
     ) -> ScanFunctionResult:
         """Get the scan function for a table.
 
+        Returns a ScanFunctionResult that tells the VGI DuckDB extension which
+        DuckDB function to call to obtain the table data. This allows catalogs
+        to delegate scanning to any DuckDB function (e.g., read_parquet,
+        iceberg_scan) with appropriate arguments.
+
         Args:
             attach_id: The attachment ID from catalog_attach.
             transaction_id: Optional transaction ID for transactional reads.
@@ -812,7 +817,11 @@ class CatalogClientMixin:
             at_value: Optional time travel value.
 
         Returns:
-            ScanFunctionResult with function_name, max_processes, invocation_id.
+            ScanFunctionResult with:
+            - function_name: The DuckDB function to call
+            - positional_arguments: Positional args as PyArrow scalars
+            - named_arguments: Named args as PyArrow scalars
+            - required_extensions: DuckDB extensions to load first
 
         Raises:
             CatalogClientError: If table_scan_function_get returned no result.

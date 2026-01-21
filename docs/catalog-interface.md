@@ -204,13 +204,36 @@ Enum for filtering objects in `schema_contents()`:
 
 ### ScanFunctionResult
 
-Information for scanning a table's data:
+Result from `table_scan_function_get()` that tells the VGI DuckDB extension which DuckDB function to call to obtain table data. This enables catalogs to delegate scanning to any DuckDB function (e.g., `read_parquet`, `iceberg_scan`, or a custom VGI table function) with appropriate arguments.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `function_name` | `str` | VGI function to call for scanning |
-| `max_processes` | `int` | Max parallel scan workers |
-| `invocation_id` | `bytes \| None` | Pre-bound invocation ID |
+| `function_name` | `str` | The DuckDB function to call (e.g., `"read_parquet"`, `"iceberg_scan"`) |
+| `positional_arguments` | `list[pa.Scalar]` | Positional arguments to pass to the function |
+| `named_arguments` | `dict[str, pa.Scalar]` | Named arguments to pass to the function |
+| `required_extensions` | `list[str]` | DuckDB extensions that must be loaded before calling the function |
+
+**Example usage:**
+
+```python
+def table_scan_function_get(
+    self,
+    *,
+    attach_id: AttachId,
+    transaction_id: TransactionId | None,
+    schema_name: str,
+    name: str,
+    at_unit: str | None,
+    at_value: str | None,
+) -> ScanFunctionResult:
+    # Return a parquet scan for this table
+    return ScanFunctionResult(
+        function_name="read_parquet",
+        positional_arguments=[pa.scalar(f"s3://bucket/{schema_name}/{name}/*.parquet")],
+        named_arguments={"hive_partitioning": pa.scalar(True)},
+        required_extensions=["parquet", "httpfs"],
+    )
+```
 
 ---
 

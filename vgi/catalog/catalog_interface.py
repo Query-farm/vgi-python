@@ -592,36 +592,74 @@ class FunctionInfo(CatalogSchemaObject):
 
 @dataclass(frozen=True)
 class ScanFunctionResult:
-    """Result from getting a table scan function."""
+    """Result from getting a table scan function.
 
-    # The name of the VGI table function to call to scan data from the table,
-    # when duckdb attempts to scan a table it will change that call into a
-    # call to VGI to call this named table function.
+    This result tells the VGI DuckDB extension which DuckDB function to call
+    to obtain the data for a table. This enables catalogs to delegate scanning
+    to any DuckDB function (e.g., read_parquet, iceberg_scan, or a custom VGI
+    table function) with appropriate arguments.
+
+    Attributes:
+        function_name: The DuckDB function to call (e.g., "read_parquet").
+        positional_arguments: Positional arguments as PyArrow scalars.
+        named_arguments: Named arguments as PyArrow scalars.
+        required_extensions: DuckDB extensions to load before calling.
+
+    Example:
+        >>> result = ScanFunctionResult(
+        ...     function_name="read_parquet",
+        ...     positional_arguments=[pa.scalar("data.parquet")],
+        ...     named_arguments={"hive_partitioning": pa.scalar(True)},
+        ...     required_extensions=["parquet"],
+        ... )
+
+    """
+
+    # The name of the duckdb function to call to obtain the data
+    # in the table.
     function_name: str
-    max_processes: int
-    # In the DuckDB extension, it will proceed to the BIND phase of the
-    # VGI table function, the invocation_id returned from that phase will be
-    # persisted here, so that when DuckDB actually wants to retrieve
-    # data from the table, it just starts at the init phase and not the bind
-    # phase again.
-    invocation_id: bytes | None
+
+    # The positional arguments to the include in the function call.
+    positional_arguments: list[pa.Scalar]  # type: ignore[type-arg]
+
+    # The named arguments to include in the function call.
+    named_arguments: dict[str, pa.Scalar]  # type: ignore[type-arg]
+
+    # A list of extensions to require to be loaded.
+    required_extensions: list[str] = field(default_factory=list)
 
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
             pa.field("function_name", pa.string(), nullable=False),
-            pa.field("max_processes", pa.int32(), nullable=False),
-            pa.field("invocation_id", pa.binary(), nullable=True),
+            pa.field("arguments", pa.binary(), nullable=False),
+            pa.field("required_extensions", pa.list_(pa.string()), nullable=False),
         ]  # type: ignore[arg-type]
     )
 
     def serialize(self) -> bytes:
         """Serialize to Arrow IPC bytes."""
+        argument_values: dict[str, pa.Scalar] = {}  # type: ignore[type-arg]
+        argument_schema = []
+        for index, arg in enumerate(self.positional_arguments):
+            argument_schema.append(pa.field(f"arg_{index}", arg.type))
+            argument_values[f"arg_{index}"] = arg
+        for name, value in self.named_arguments.items():
+            argument_schema.append(pa.field(name, value.type))
+            argument_values[name] = value
+
+        argument_batch = pa.RecordBatch.from_pylist(
+            [argument_values],
+            schema=pa.schema(argument_schema),
+        )
+
         batch = pa.RecordBatch.from_pylist(
             [
                 {
                     "function_name": self.function_name,
-                    "max_processes": self.max_processes,
-                    "invocation_id": self.invocation_id,
+                    "arguments": vgi.ipc_utils.serialize_record_batch(argument_batch),
+                    "required_extensions": list(self.required_extensions)
+                    if self.required_extensions is not None
+                    else None,
                 }
             ],
             schema=self.ARROW_SCHEMA,
@@ -634,12 +672,31 @@ class ScanFunctionResult:
         row = vgi.ipc_utils.validate_single_row_batch(
             batch,
             cls.__name__,
-            required_fields=["function_name", "max_processes"],
+            required_fields=["function_name", "arguments"],
         )
+
+        # Deserialize the nested arguments batch.
+        # row["arguments"] is already bytes (validate_single_row_batch returns
+        # Python values, not PyArrow scalars).
+        arguments_bytes: bytes = row["arguments"]
+        arguments_batch, _ = vgi.ipc_utils.deserialize_record_batch(arguments_bytes)
+
+        # Extract positional and named arguments from the batch
+        positional_arguments: list[pa.Scalar] = []  # type: ignore[type-arg]
+        named_arguments: dict[str, pa.Scalar] = {}  # type: ignore[type-arg]
+
+        for arg_field in arguments_batch.schema:
+            value = arguments_batch.column(arg_field.name)[0]
+            if arg_field.name.startswith("arg_"):
+                positional_arguments.append(value)
+            else:
+                named_arguments[arg_field.name] = value
+
         return cls(
             function_name=row["function_name"],
-            max_processes=row["max_processes"],
-            invocation_id=row.get("invocation_id"),
+            positional_arguments=positional_arguments,
+            named_arguments=named_arguments,
+            required_extensions=list(row.get("required_extensions") or []),
         )
 
 
