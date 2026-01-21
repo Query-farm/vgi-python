@@ -23,6 +23,7 @@ Example:
 """
 
 from vgi.catalog.catalog_interface import (
+    CATALOG_METHOD_SCHEMAS,
     AttachId,
     CatalogAttachResult,
     CatalogExample,
@@ -41,6 +42,7 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     TransactionId,
     ViewInfo,
+    get_catalog_method_schema,
 )
 from vgi.catalog.descriptors import Catalog, Schema, Table, View
 from vgi.catalog.setting import Setting, SettingSpec
@@ -79,4 +81,7 @@ __all__ = [
     # Storage
     "CatalogStorage",
     "CatalogStorageSqlite",
+    # Schema mapping for catalog methods
+    "CATALOG_METHOD_SCHEMAS",
+    "get_catalog_method_schema",
 ]

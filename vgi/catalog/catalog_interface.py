@@ -36,6 +36,9 @@ __all__ = [
     # Catalog-specific
     "CatalogExample",
     "SchemaObjectType",
+    # Schema mapping for catalog methods
+    "CATALOG_METHOD_SCHEMAS",
+    "get_catalog_method_schema",
 ]
 
 
@@ -104,21 +107,23 @@ class CatalogAttachResult:
         ]  # type: ignore[arg-type]
     )
 
+    def to_row_dict(self) -> dict[str, Any]:
+        """Convert to a dictionary for batch construction."""
+        return {
+            "attach_id": self.attach_id,
+            "supports_transactions": self.supports_transactions,
+            "supports_time_travel": self.supports_time_travel,
+            "catalog_version_frozen": self.catalog_version_frozen,
+            "catalog_version": self.catalog_version,
+            "attach_id_required": self.attach_id_required,
+            "default_schema": self.default_schema,
+            "settings": self.settings,
+        }
+
     def serialize(self) -> bytes:
         """Serialize to Arrow IPC bytes."""
         batch = pa.RecordBatch.from_pylist(
-            [
-                {
-                    "attach_id": self.attach_id,
-                    "supports_transactions": self.supports_transactions,
-                    "supports_time_travel": self.supports_time_travel,
-                    "catalog_version_frozen": self.catalog_version_frozen,
-                    "catalog_version": self.catalog_version,
-                    "attach_id_required": self.attach_id_required,
-                    "default_schema": self.default_schema,
-                    "settings": self.settings,
-                }
-            ],
+            [self.to_row_dict()],
             schema=self.ARROW_SCHEMA,
         )
         return vgi.ipc_utils.serialize_record_batch(batch)
@@ -637,8 +642,12 @@ class ScanFunctionResult:
         ]  # type: ignore[arg-type]
     )
 
-    def serialize(self) -> bytes:
-        """Serialize to Arrow IPC bytes."""
+    def to_row_dict(self) -> dict[str, Any]:
+        """Convert to a dictionary for batch construction.
+
+        The arguments field is serialized as nested Arrow IPC bytes.
+        """
+        # Build arguments as nested batch
         argument_values: dict[str, pa.Scalar] = {}  # type: ignore[type-arg]
         argument_schema = []
         for index, arg in enumerate(self.positional_arguments):
@@ -653,16 +662,18 @@ class ScanFunctionResult:
             schema=pa.schema(argument_schema),
         )
 
+        return {
+            "function_name": self.function_name,
+            "arguments": vgi.ipc_utils.serialize_record_batch(argument_batch),
+            "required_extensions": list(self.required_extensions)
+            if self.required_extensions is not None
+            else None,
+        }
+
+    def serialize(self) -> bytes:
+        """Serialize to Arrow IPC bytes."""
         batch = pa.RecordBatch.from_pylist(
-            [
-                {
-                    "function_name": self.function_name,
-                    "arguments": vgi.ipc_utils.serialize_record_batch(argument_batch),
-                    "required_extensions": list(self.required_extensions)
-                    if self.required_extensions is not None
-                    else None,
-                }
-            ],
+            [self.to_row_dict()],
             schema=self.ARROW_SCHEMA,
         )
         return vgi.ipc_utils.serialize_record_batch(batch)
@@ -699,6 +710,71 @@ class ScanFunctionResult:
             named_arguments=named_arguments,
             required_extensions=list(row.get("required_extensions") or []),
         )
+
+
+# Mapping of catalog method names to their expected Arrow schemas.
+# Used by workers to determine the schema for empty results without
+# needing special-case code for each method.
+#
+# - Methods returning None (DDL operations) don't need entries - use empty schema.
+# - Methods with type-dependent schemas use a dict keyed by the type parameter value.
+CATALOG_METHOD_SCHEMAS: dict[str, pa.Schema | dict[str, pa.Schema]] = {}
+
+
+def _init_catalog_method_schemas() -> None:
+    """Initialize CATALOG_METHOD_SCHEMAS after all dataclasses are defined.
+
+    This is called at module load time to populate the schema mapping.
+    We use a function to avoid forward reference issues.
+    """
+    global CATALOG_METHOD_SCHEMAS
+    CATALOG_METHOD_SCHEMAS = {
+        "catalogs": pa.schema([("value", pa.string())]),
+        "catalog_attach": CatalogAttachResult.ARROW_SCHEMA,
+        "catalog_version": pa.schema([("value", pa.int64())]),
+        "schemas": SchemaInfo.ARROW_SCHEMA,
+        "schema_get": SchemaInfo.ARROW_SCHEMA,
+        "schema_contents": {
+            "table": TableInfo.ARROW_SCHEMA,
+            "view": ViewInfo.ARROW_SCHEMA,
+            "scalar_function": FunctionInfo.ARROW_SCHEMA,
+            "table_function": FunctionInfo.ARROW_SCHEMA,
+        },
+        "table_get": TableInfo.ARROW_SCHEMA,
+        "table_scan_function_get": ScanFunctionResult.ARROW_SCHEMA,
+        "view_get": ViewInfo.ARROW_SCHEMA,
+    }
+
+
+# Initialize the schema mapping
+_init_catalog_method_schemas()
+
+
+def get_catalog_method_schema(method_name: str, kwargs: dict[str, Any]) -> pa.Schema:
+    """Get the Arrow schema for a catalog method's result.
+
+    Args:
+        method_name: The name of the catalog method.
+        kwargs: The keyword arguments passed to the method (used to determine
+            type-dependent schemas like schema_contents).
+
+    Returns:
+        The Arrow schema for the method's result. Returns an empty schema
+        for DDL operations that return None.
+
+    """
+    schema_or_map = CATALOG_METHOD_SCHEMAS.get(method_name)
+    if schema_or_map is None:
+        return pa.schema([])  # DDL operations return None
+    if isinstance(schema_or_map, dict):
+        # schema_contents - lookup by type parameter
+        type_value = kwargs.get("type")
+        if type_value is None:
+            return pa.schema([])
+        if isinstance(type_value, SchemaObjectType):
+            type_value = type_value.value
+        return schema_or_map.get(str(type_value), pa.schema([]))
+    return schema_or_map
 
 
 class CatalogInterface(ABC):

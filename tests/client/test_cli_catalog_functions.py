@@ -437,8 +437,10 @@ class TestCLISchemaList:
         )
         assert list_result.exit_code == 0
 
-        # Parse schema info
-        schema_info = json.loads(list_result.output)
+        # Parse schema info (NDJSON - one JSON object per line)
+        # Get the first schema which should be "main"
+        lines = list_result.output.strip().split("\n")
+        schema_info = json.loads(lines[0])
         assert schema_info["name"] == "main"
 
     def test_schema_list_with_catalog_option(self, example_worker: str) -> None:
@@ -460,8 +462,10 @@ class TestCLISchemaList:
         )
         assert list_result.exit_code == 0
 
-        # Parse schema info
-        schema_info = json.loads(list_result.output)
+        # Parse schema info (NDJSON - one JSON object per line)
+        # Get the first schema which should be "main"
+        lines = list_result.output.strip().split("\n")
+        schema_info = json.loads(lines[0])
         assert schema_info["name"] == "main"
 
 

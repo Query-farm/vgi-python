@@ -97,7 +97,7 @@ from pyarrow import ipc
 
 from vgi import tracing
 from vgi.arguments import Arguments
-from vgi.catalog import CatalogInterface
+from vgi.catalog import CatalogInterface, get_catalog_method_schema
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
 from vgi.exceptions import SchemaValidationError
 from vgi.function import (
@@ -1214,6 +1214,48 @@ class Worker:
             writer_num_record_batches=writer_stats.num_record_batches,
         )
 
+    @staticmethod
+    def _result_to_batch(result: Any, schema: pa.Schema) -> pa.RecordBatch:
+        """Convert a catalog method result to a RecordBatch.
+
+        Args:
+            result: The result from a catalog method. Can be:
+                - None: Returns empty batch with given schema
+                - Primitive (int, str, etc.): Single-row batch with "value" column
+                - list of primitives: Multi-row batch with "value" column
+                - Single object with to_row_dict(): Creates single-row batch
+                - List of objects with to_row_dict(): Creates multi-row batch
+            schema: The Arrow schema for the result.
+
+        Returns:
+            A RecordBatch containing the serialized result.
+
+        Raises:
+            TypeError: If result type is not supported.
+
+        """
+        if result is None:
+            return pa.RecordBatch.from_pylist([], schema=schema)
+
+        if isinstance(result, list):
+            if not result:
+                return pa.RecordBatch.from_pylist([], schema=schema)
+            if hasattr(result[0], "to_row_dict"):
+                rows = [item.to_row_dict() for item in result]
+                return pa.RecordBatch.from_pylist(rows, schema=schema)
+            # Primitives list (e.g., catalogs() -> list[str])
+            return pa.RecordBatch.from_pydict({"value": result}, schema=schema)
+
+        # Single object with to_row_dict
+        if hasattr(result, "to_row_dict"):
+            return pa.RecordBatch.from_pylist([result.to_row_dict()], schema=schema)
+
+        # Primitive scalar (e.g., catalog_version() -> int)
+        if isinstance(result, (int, str, float, bool, bytes)):
+            return pa.RecordBatch.from_pydict({"value": [result]}, schema=schema)
+
+        raise TypeError(f"Unsupported result type: {type(result).__name__}")
+
     def _handle_catalog_invocation(
         self,
         invocation: Invocation,
@@ -1279,145 +1321,16 @@ class Worker:
 
         fn_log.debug("catalog_method_result", result=result)
 
-        # Serialize and stream result with protocol state metadata
-        # Result types:
-        # - None → empty batch (0 rows, 0 columns)
-        # - list of primitives → convert to single-column batch (e.g., catalogs())
-        # - Dataclass with serialize() → serialize to bytes, write
-        # - Iterable of dataclasses → stream multiple serialized items
+        # Get schema for this method and convert result to batch
         from vgi.ipc_utils import ProtocolState, protocol_state_metadata
 
         catalog_result_metadata = protocol_state_metadata(ProtocolState.CATALOG_RESULT)
+        schema = get_catalog_method_schema(method_name, kwargs)
+        batch = self._result_to_batch(result, schema)
 
-        if result is None:
-            # Write empty batch to signal no result
-            batch = pa.RecordBatch.from_pydict({})
-            with pa.ipc.new_stream(cast(IOBase, stdout), batch.schema) as writer:
-                writer.write_batch(batch, custom_metadata=catalog_result_metadata)
-        elif isinstance(result, list) and (
-            not result or not hasattr(result[0], "serialize")
-        ):
-            # List of primitives (e.g., strings from catalogs())
-            batch = pa.RecordBatch.from_pydict({"value": result})
-            with pa.ipc.new_stream(cast(IOBase, stdout), batch.schema) as writer:
-                writer.write_batch(batch, custom_metadata=catalog_result_metadata)
-        elif hasattr(result, "serialize"):
-            # Single dataclass result - serialize with protocol state if possible
-            # Check if serialize() accepts custom_metadata parameter
-            import inspect
-
-            sig = inspect.signature(result.serialize)
-            if "custom_metadata" in sig.parameters:
-                result_bytes = result.serialize(custom_metadata=catalog_result_metadata)
-                stdout.write(result_bytes)
-            else:
-                # Fallback: use serialize() then we need to re-wrap with protocol state
-                # This is less efficient but ensures protocol state is included
-                result_bytes = result.serialize()
-                # Deserialize and re-serialize with protocol state
-                from vgi.ipc_utils import deserialize_record_batch
-
-                batch, _ = deserialize_record_batch(result_bytes)
-                with pa.ipc.new_stream(cast(IOBase, stdout), batch.schema) as writer:
-                    writer.write_batch(batch, custom_metadata=catalog_result_metadata)
-        elif isinstance(result, list) and result and hasattr(result[0], "to_row_dict"):
-            # List of catalog objects with to_row_dict() - use efficient batch writing
-            # Determine the schema based on method and type parameter
-            from vgi.catalog import (
-                FunctionInfo,
-                SchemaInfo,
-                SchemaObjectType,
-                TableInfo,
-                ViewInfo,
-            )
-
-            if method_name == "schema_contents":
-                # Validate the type parameter
-                type_value = kwargs.get("type")
-                valid_types = {e.value for e in SchemaObjectType}
-                if type_value not in valid_types:
-                    raise ValueError(
-                        f"Invalid schema_contents type: {type_value!r}. "
-                        f"Must be one of: {sorted(valid_types)}"
-                    )
-                type_param = SchemaObjectType(type_value)
-
-                # Determine expected class and schema based on type
-                expected_class: type[TableInfo | ViewInfo | FunctionInfo]
-                if type_param == SchemaObjectType.TABLE:
-                    expected_class = TableInfo
-                    schema = TableInfo.ARROW_SCHEMA
-                elif type_param == SchemaObjectType.VIEW:
-                    expected_class = ViewInfo
-                    schema = ViewInfo.ARROW_SCHEMA
-                else:  # SCALAR_FUNCTION or TABLE_FUNCTION
-                    expected_class = FunctionInfo
-                    schema = FunctionInfo.ARROW_SCHEMA
-
-                # Validate all results match the expected type
-                for i, item in enumerate(result):
-                    if not isinstance(item, expected_class):
-                        raise TypeError(
-                            f"schema_contents returned wrong type at index {i}: "
-                            f"expected {expected_class.__name__}, "
-                            f"got {type(item).__name__}. "
-                            f"The catalog's schema_contents() must filter by type."
-                        )
-            elif method_name == "schemas":
-                schema = SchemaInfo.ARROW_SCHEMA
-            else:
-                # Fallback: use the ARROW_SCHEMA from the first item's class
-                schema = type(result[0]).ARROW_SCHEMA
-
-            # Collect all rows and write as single batch with protocol state
-            rows = [item.to_row_dict() for item in result]
-            batch = pa.RecordBatch.from_pylist(rows, schema=schema)
-
-            with pa.ipc.new_stream(cast(IOBase, stdout), schema) as writer:
-                writer.write_batch(batch, custom_metadata=catalog_result_metadata)
-        elif isinstance(result, list) and not result:
-            # Empty list - need to determine schema for empty batch
-            from vgi.catalog import (
-                FunctionInfo,
-                SchemaInfo,
-                SchemaObjectType,
-                TableInfo,
-                ViewInfo,
-            )
-
-            if method_name == "schema_contents":
-                # Validate the type parameter
-                type_value = kwargs.get("type")
-                valid_types = {e.value for e in SchemaObjectType}
-                if type_value not in valid_types:
-                    raise ValueError(
-                        f"Invalid schema_contents type: {type_value!r}. "
-                        f"Must be one of: {sorted(valid_types)}"
-                    )
-                type_param = SchemaObjectType(type_value)
-
-                if type_param == SchemaObjectType.TABLE:
-                    schema = TableInfo.ARROW_SCHEMA
-                elif type_param == SchemaObjectType.VIEW:
-                    schema = ViewInfo.ARROW_SCHEMA
-                else:
-                    schema = FunctionInfo.ARROW_SCHEMA
-            elif method_name == "schemas":
-                schema = SchemaInfo.ARROW_SCHEMA
-            else:
-                # Unknown method returning empty list - use empty schema
-                schema = pa.schema([])
-
-            batch = pa.RecordBatch.from_pylist([], schema=schema)
-            with pa.ipc.new_stream(cast(IOBase, stdout), schema) as writer:
-                writer.write_batch(batch, custom_metadata=catalog_result_metadata)
-        else:
-            raise TypeError(
-                f"Catalog method returned unsupported type: "
-                f"{type(result).__name__}. Expected None, a dataclass "
-                f"with serialize(), a list of primitives, or a list of "
-                f"catalog objects with to_row_dict()."
-            )
+        # Write result using IPC stream
+        with ipc.new_stream(cast(IOBase, stdout), schema) as writer:
+            writer.write_batch(batch, custom_metadata=catalog_result_metadata)
 
         fn_log.info("catalog_invocation_complete", method=method_name)
 
