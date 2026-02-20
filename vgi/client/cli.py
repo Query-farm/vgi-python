@@ -226,7 +226,8 @@ OUTPUT FORMATS (-f/--format):
 
 \b
 ENVIRONMENT VARIABLES:
-  VGI_QUIET=1       Suppress worker startup logging
+  VGI_WORKER_DEBUG=1  Enable DEBUG logging on worker and stderr passthrough on client
+  VGI_QUIET=1         Suppress worker startup logging
 """
 
 

@@ -419,8 +419,10 @@ class Worker:
                 LogFormat.text, "--log-format", help="Stderr log format"
             ),
         ) -> None:
+            env_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
+            effective_debug = debug or env_debug
             effective_level = configure_worker_logging(
-                debug=debug,
+                debug=effective_debug,
                 log_level=log_level,
                 log_loggers=log_logger,
                 log_format=log_format,

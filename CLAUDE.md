@@ -69,6 +69,7 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-example-
 
 | Variable | Description |
 |----------|-------------|
+| `VGI_WORKER_DEBUG=1` | Enable DEBUG logging on worker and stderr passthrough on client |
 | `VGI_FILTER_DEBUG=1` | Enable filter pushdown debug logging (see below) |
 | `VGI_QUIET=1` | Suppress worker startup logging |
 

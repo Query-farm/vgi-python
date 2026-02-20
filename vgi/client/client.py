@@ -272,7 +272,8 @@ class Client(CatalogClientMixin):
 
         """
         self.server_path = server_path
-        self.passthrough_stderr = passthrough_stderr
+        _worker_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
+        self.passthrough_stderr = passthrough_stderr or _worker_debug
         self._worker_limit = worker_limit
         self._attach_id = attach_id
         self._pool = pool
@@ -320,6 +321,24 @@ class Client(CatalogClientMixin):
         """
         with self._stderr_lock:
             return b"".join(self._stderr_buffer).decode("utf-8", errors="replace")
+
+    def _client_error_with_stderr(self, error: ClientError) -> ClientError:
+        """Enrich a ClientError with captured worker stderr, if available.
+
+        When passthrough_stderr is enabled, stderr already went to the terminal
+        so we return the error unchanged. Otherwise, we append the last 50 lines
+        of captured stderr to the error message.
+        """
+        if self.passthrough_stderr:
+            return error
+        stderr = self.get_worker_stderr()
+        if not stderr.strip():
+            return error
+        lines = stderr.strip().splitlines()
+        excerpt = "\n".join(lines[-50:]) if len(lines) > 50 else "\n".join(lines)
+        new_error = ClientError(f"{error}\n\nWorker stderr:\n{excerpt}")
+        new_error.__cause__ = error.__cause__
+        return new_error
 
     def _spawn_worker(self, worker_index: int) -> WorkerConnection:
         """Spawn or borrow a worker subprocess and create an RPC connection.
@@ -1005,85 +1024,88 @@ class Client(CatalogClientMixin):
         if self._primary is None:
             raise ClientError("Client not started. Call start() or use context manager.")
 
-        # Get the first batch to determine schema and initialize
-        for first_batch in input:
-            if not isinstance(first_batch, pa.RecordBatch):
-                raise ClientError("Input iterator must yield RecordBatches")
+        try:
+            # Get the first batch to determine schema and initialize
+            for first_batch in input:
+                if not isinstance(first_batch, pa.RecordBatch):
+                    raise ClientError("Input iterator must yield RecordBatches")
 
-            input_schema = first_batch.schema
-            pushdown_filters_batch = self._deserialize_pushdown_filters(pushdown_filters)
+                input_schema = first_batch.schema
+                pushdown_filters_batch = self._deserialize_pushdown_filters(pushdown_filters)
 
-            # Bind
-            bind_request = self._make_bind_request(
-                function_name=function_name,
-                arguments=arguments,
-                function_type=FunctionType.TABLE,
-                input_schema=input_schema,
-                settings=settings,
-                transaction_id=transaction_id,
+                # Bind
+                bind_request = self._make_bind_request(
+                    function_name=function_name,
+                    arguments=arguments,
+                    function_type=FunctionType.TABLE,
+                    input_schema=input_schema,
+                    settings=settings,
+                    transaction_id=transaction_id,
+                )
+                bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
+
+                # Init (INPUT phase)
+                stream = self._do_init(
+                    self._primary.proxy,
+                    bind_request,
+                    bind_response,
+                    projection_ids=projection_ids,
+                    pushdown_filters_batch=pushdown_filters_batch,
+                    phase=TableInOutFunctionInitPhase.INPUT,
+                )
+                self._primary.stream = stream
+
+                # Get init response header for max_workers
+                init_response = stream.typed_header(GlobalInitResponse)
+                max_workers = self._determine_max_workers(init_response.max_workers)
+
+                # Spawn additional workers if needed
+                self._spawn_additional_workers(
+                    max_workers,
+                    bind_request,
+                    bind_response,
+                    init_response,
+                    projection_ids=projection_ids,
+                    pushdown_filters_batch=pushdown_filters_batch,
+                    phase=TableInOutFunctionInitPhase.INPUT,
+                )
+
+                # Process input batches across all workers
+                all_workers = [self._primary] + self._additional_workers
+                yield from self._distribute_and_collect(
+                    all_workers=all_workers,
+                    first_batch=first_batch,
+                    remaining_input=input,
+                )
+
+                # Close all input streams
+                for worker in all_workers:
+                    if worker.stream is not None:
+                        worker.stream.close()
+                        worker.stream = None
+
+                # Close secondary workers
+                self._close_secondary_workers()
+
+                # Finalize on primary worker
+                _logger.debug("finalizing_primary_worker")
+                yield from self._finalize_primary_worker(
+                    bind_request,
+                    bind_response,
+                    input_schema,
+                    init_response,
+                )
+                _logger.debug("parallel_processing_complete")
+                return
+
+            # Input iterator was empty - table-in-out functions require input
+            raise ClientError(
+                f"table_in_out_function requires at least one input batch. "
+                f"The input iterator for function '{function_name}' was empty. "
+                f"Use table_function() for functions that generate data without input."
             )
-            bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
-
-            # Init (INPUT phase)
-            stream = self._do_init(
-                self._primary.proxy,
-                bind_request,
-                bind_response,
-                projection_ids=projection_ids,
-                pushdown_filters_batch=pushdown_filters_batch,
-                phase=TableInOutFunctionInitPhase.INPUT,
-            )
-            self._primary.stream = stream
-
-            # Get init response header for max_workers
-            init_response = stream.typed_header(GlobalInitResponse)
-            max_workers = self._determine_max_workers(init_response.max_workers)
-
-            # Spawn additional workers if needed
-            self._spawn_additional_workers(
-                max_workers,
-                bind_request,
-                bind_response,
-                init_response,
-                projection_ids=projection_ids,
-                pushdown_filters_batch=pushdown_filters_batch,
-                phase=TableInOutFunctionInitPhase.INPUT,
-            )
-
-            # Process input batches across all workers
-            all_workers = [self._primary] + self._additional_workers
-            yield from self._distribute_and_collect(
-                all_workers=all_workers,
-                first_batch=first_batch,
-                remaining_input=input,
-            )
-
-            # Close all input streams
-            for worker in all_workers:
-                if worker.stream is not None:
-                    worker.stream.close()
-                    worker.stream = None
-
-            # Close secondary workers
-            self._close_secondary_workers()
-
-            # Finalize on primary worker
-            _logger.debug("finalizing_primary_worker")
-            yield from self._finalize_primary_worker(
-                bind_request,
-                bind_response,
-                input_schema,
-                init_response,
-            )
-            _logger.debug("parallel_processing_complete")
-            return
-
-        # Input iterator was empty - table-in-out functions require input
-        raise ClientError(
-            f"table_in_out_function requires at least one input batch. "
-            f"The input iterator for function '{function_name}' was empty. "
-            f"Use table_function() for functions that generate data without input."
-        )
+        except ClientError as e:
+            raise self._client_error_with_stderr(e) from e.__cause__
 
     def _finalize_primary_worker(
         self,
@@ -1189,44 +1211,47 @@ class Client(CatalogClientMixin):
         if self._primary is None:
             raise ClientError("Client not started. Call start() or use context manager.")
 
-        pushdown_filters_batch = self._deserialize_pushdown_filters(pushdown_filters)
+        try:
+            pushdown_filters_batch = self._deserialize_pushdown_filters(pushdown_filters)
 
-        # Bind
-        bind_request = self._make_bind_request(
-            function_name=function_name,
-            arguments=arguments,
-            function_type=FunctionType.TABLE,
-            settings=settings,
-            transaction_id=transaction_id,
-        )
-        bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
+            # Bind
+            bind_request = self._make_bind_request(
+                function_name=function_name,
+                arguments=arguments,
+                function_type=FunctionType.TABLE,
+                settings=settings,
+                transaction_id=transaction_id,
+            )
+            bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
 
-        # Init
-        stream = self._do_init(
-            self._primary.proxy,
-            bind_request,
-            bind_response,
-            projection_ids=projection_ids,
-            pushdown_filters_batch=pushdown_filters_batch,
-        )
-        self._primary.stream = stream
+            # Init
+            stream = self._do_init(
+                self._primary.proxy,
+                bind_request,
+                bind_response,
+                projection_ids=projection_ids,
+                pushdown_filters_batch=pushdown_filters_batch,
+            )
+            self._primary.stream = stream
 
-        # Get init response header for max_workers
-        init_response = stream.typed_header(GlobalInitResponse)
-        max_workers = self._determine_max_workers(init_response.max_workers)
+            # Get init response header for max_workers
+            init_response = stream.typed_header(GlobalInitResponse)
+            max_workers = self._determine_max_workers(init_response.max_workers)
 
-        # Spawn additional workers
-        self._spawn_additional_workers(
-            max_workers,
-            bind_request,
-            bind_response,
-            init_response,
-            projection_ids=projection_ids,
-            pushdown_filters_batch=pushdown_filters_batch,
-        )
+            # Spawn additional workers
+            self._spawn_additional_workers(
+                max_workers,
+                bind_request,
+                bind_response,
+                init_response,
+                projection_ids=projection_ids,
+                pushdown_filters_batch=pushdown_filters_batch,
+            )
 
-        # Read output from all workers in parallel
-        yield from self._table_function_parallel()
+            # Read output from all workers in parallel
+            yield from self._table_function_parallel()
+        except ClientError as e:
+            raise self._client_error_with_stderr(e) from e.__cause__
 
     def _table_function_parallel(self) -> Generator[pa.RecordBatch]:
         """Read output from table function workers using parallel threads.
@@ -1374,64 +1399,67 @@ class Client(CatalogClientMixin):
         if self._primary is None:
             raise ClientError("Client not started. Call start() or use context manager.")
 
-        # Get the first batch to determine schema and initialize
-        for first_batch in input:
-            if not isinstance(first_batch, pa.RecordBatch):
-                raise ClientError("Input iterator must yield RecordBatches")
+        try:
+            # Get the first batch to determine schema and initialize
+            for first_batch in input:
+                if not isinstance(first_batch, pa.RecordBatch):
+                    raise ClientError("Input iterator must yield RecordBatches")
 
-            input_schema = first_batch.schema
+                input_schema = first_batch.schema
 
-            # Bind
-            bind_request = self._make_bind_request(
-                function_name=function_name,
-                arguments=arguments,
-                function_type=FunctionType.SCALAR,
-                input_schema=input_schema,
-                settings=settings,
-                secrets=secrets,
-                transaction_id=transaction_id,
+                # Bind
+                bind_request = self._make_bind_request(
+                    function_name=function_name,
+                    arguments=arguments,
+                    function_type=FunctionType.SCALAR,
+                    input_schema=input_schema,
+                    settings=settings,
+                    secrets=secrets,
+                    transaction_id=transaction_id,
+                )
+                bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
+
+                # Init
+                stream = self._do_init(
+                    self._primary.proxy,
+                    bind_request,
+                    bind_response,
+                )
+                self._primary.stream = stream
+
+                # Get init response header for max_workers
+                init_response = stream.typed_header(GlobalInitResponse)
+                max_workers = self._determine_max_workers(init_response.max_workers)
+
+                # Spawn additional workers
+                self._spawn_additional_workers(
+                    max_workers,
+                    bind_request,
+                    bind_response,
+                    init_response,
+                )
+
+                # Process batches across all workers
+                all_workers = [self._primary] + self._additional_workers
+                yield from self._distribute_and_collect(
+                    all_workers=all_workers,
+                    first_batch=first_batch,
+                    remaining_input=input,
+                )
+
+                # Close streams and secondary workers
+                for worker in all_workers:
+                    if worker.stream is not None:
+                        worker.stream.close()
+                        worker.stream = None
+                self._close_secondary_workers()
+                return
+
+            # Input iterator was empty - scalar functions require input
+            raise ClientError(
+                f"scalar_function requires at least one input batch. "
+                f"The input iterator for function '{function_name}' was empty. "
+                f"Use table_function() for functions that generate data without input."
             )
-            bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
-
-            # Init
-            stream = self._do_init(
-                self._primary.proxy,
-                bind_request,
-                bind_response,
-            )
-            self._primary.stream = stream
-
-            # Get init response header for max_workers
-            init_response = stream.typed_header(GlobalInitResponse)
-            max_workers = self._determine_max_workers(init_response.max_workers)
-
-            # Spawn additional workers
-            self._spawn_additional_workers(
-                max_workers,
-                bind_request,
-                bind_response,
-                init_response,
-            )
-
-            # Process batches across all workers
-            all_workers = [self._primary] + self._additional_workers
-            yield from self._distribute_and_collect(
-                all_workers=all_workers,
-                first_batch=first_batch,
-                remaining_input=input,
-            )
-
-            # Close streams and secondary workers
-            for worker in all_workers:
-                if worker.stream is not None:
-                    worker.stream.close()
-                    worker.stream = None
-            self._close_secondary_workers()
-            return
-
-        # Input iterator was empty - scalar functions require input
-        raise ClientError(
-            f"scalar_function requires at least one input batch. "
-            f"The input iterator for function '{function_name}' was empty. "
-            f"Use table_function() for functions that generate data without input."
-        )
+        except ClientError as e:
+            raise self._client_error_with_stderr(e) from e.__cause__
