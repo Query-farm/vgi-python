@@ -69,9 +69,37 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-example-
 
 | Variable | Description |
 |----------|-------------|
-| `VGI_WORKER_DEBUG=1` | Enable DEBUG logging on worker and stderr passthrough on client |
+| `VGI_WORKER_DEBUG=1` | Enable DEBUG logging on worker and stderr passthrough on client (see below) |
 | `VGI_FILTER_DEBUG=1` | Enable filter pushdown debug logging (see below) |
 | `VGI_QUIET=1` | Suppress worker startup logging |
+
+### Worker Debug Mode
+
+Set `VGI_WORKER_DEBUG=1` to enable comprehensive debugging for worker failures. This single env var has two effects:
+
+1. **Worker side**: Enables DEBUG-level logging on all `vgi` and `vgi_rpc` loggers (equivalent to `--debug` CLI flag)
+2. **Client side**: Forces `passthrough_stderr=True`, streaming worker logs to the terminal in real-time
+
+```bash
+VGI_WORKER_DEBUG=1 vgi-example-worker
+```
+
+When used from the Python client without this env var, errors from worker failures automatically include captured stderr (last 50 lines) in the `ClientError` message. This means integrators using C++ or other clients get the Python traceback in the error message instead of just a generic exit code.
+
+```python test="skip"
+# Without VGI_WORKER_DEBUG: stderr is captured and included in errors
+with Client("./my_worker.py", pool=None) as client:
+    try:
+        list(client.table_function(function_name="broken"))
+    except ClientError as e:
+        # e.g.: "Worker Exception: ...\n\nWorker stderr:\nTraceback (most recent call last):..."
+        print(e)
+
+# With VGI_WORKER_DEBUG=1: stderr streams to terminal in real-time
+# (error messages won't duplicate stderr since it went to terminal)
+```
+
+Accepts `1`, `true`, or `yes` (case-insensitive). Zero overhead when not set.
 
 ### Filter Pushdown Debug Logging
 

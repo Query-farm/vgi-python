@@ -349,6 +349,28 @@ SELECT add_values(name, price) FROM orders;
 --        but type bound requires: is_integer
 ```
 
+### Debugging Worker Failures
+
+When a worker fails, the Python traceback is written to stderr. By default, the client captures this stderr and includes it in the error message (last 50 lines), so you get the full context:
+
+```
+ClientError: Worker Exception: function 'my_func' raised ValueError
+
+Worker stderr:
+Traceback (most recent call last):
+  File "my_worker.py", line 42, in compute
+    ...
+ValueError: Something went wrong
+```
+
+For real-time debugging, set `VGI_WORKER_DEBUG=1` to stream worker logs directly to your terminal and enable DEBUG-level logging:
+
+```bash
+VGI_WORKER_DEBUG=1 python my_script.py
+```
+
+This is especially useful when integrating from C++ or other clients where stderr might otherwise be lost.
+
 ---
 
 ## Testing Your Functions
@@ -422,6 +444,12 @@ vgi-example-worker --log-format json
 
 # Target a specific logger
 vgi-example-worker --log-level DEBUG --log-logger vgi.worker
+```
+
+You can also use the `VGI_WORKER_DEBUG=1` environment variable, which enables `--debug` on the worker and stderr passthrough on the client without changing any code or CLI flags:
+
+```bash
+VGI_WORKER_DEBUG=1 python my_script.py
 ```
 
 See [CLI Reference](docs/cli.md#worker-logging) for the full list of loggers and options.
