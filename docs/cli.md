@@ -493,6 +493,62 @@ vgi-client catalog detach $ATTACH_ID --worker ./worker.py
 
 ---
 
+## Worker Logging
+
+All workers that use `Worker.main()` (including `vgi-example-worker`) support
+logging options on the command line. Logs are written to stderr.
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--debug` | Enable DEBUG level on all `vgi` and `vgi_rpc` loggers |
+| `--log-level LEVEL` | Set log level: `DEBUG`, `INFO` (default), `WARNING`, `ERROR` |
+| `--log-logger NAME` | Target specific logger(s) instead of all defaults (repeatable) |
+| `--log-format FORMAT` | Stderr format: `text` (default) or `json` |
+| `--quiet` / `-q` | Suppress the interactive-terminal startup warning |
+
+`--debug` overrides `--log-level` when both are provided.
+
+### Examples
+
+```bash
+# Enable debug logging
+vgi-example-worker --debug
+
+# Set WARNING level only
+vgi-example-worker --log-level WARNING
+
+# Target a specific logger at DEBUG
+vgi-example-worker --log-level DEBUG --log-logger vgi.worker
+
+# JSON-formatted logs (for structured log pipelines)
+vgi-example-worker --log-format json
+```
+
+### Available Loggers
+
+| Logger | Description |
+|--------|-------------|
+| `vgi` | VGI root logger (all VGI messages) |
+| `vgi.worker` | Worker lifecycle (startup, shutdown) |
+| `vgi.client` | Client operations (spawn, bind, exchange) |
+| `vgi.client.cli` | CLI front-end (argument parsing) |
+| `vgi.filter_pushdown` | Filter pushdown debug (deserialization/evaluation) |
+| `vgi_rpc` | vgi_rpc root logger (all vgi_rpc messages) |
+| `vgi_rpc.wire.request` | RPC wire request (serialised request bytes) |
+| `vgi_rpc.wire.response` | RPC wire response (serialised response bytes) |
+| `vgi_rpc.wire.transport` | Transport layer (pipe/HTTP transport debug) |
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `VGI_QUIET=1` | Suppress the interactive-terminal startup warning (same as `--quiet`) |
+| `VGI_FILTER_DEBUG=1` | Enable filter pushdown debug logging |
+
+---
+
 ## Example Workers
 
 ### vgi-example-worker

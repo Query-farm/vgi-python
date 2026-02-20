@@ -71,7 +71,9 @@ def configure_worker_logging(
 
         handler.setFormatter(VgiJsonFormatter())
     else:
-        handler.setFormatter(logging.Formatter("%(name)-30s %(levelname)-5s %(message)s"))
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(name)-30s %(levelname)-5s %(message)s", datefmt="%H:%M:%S")
+        )
 
     targets = log_loggers if log_loggers else ["vgi", "vgi_rpc"]
 
@@ -81,6 +83,7 @@ def configure_worker_logging(
             # Still configure it — the user may know what they're doing
             sys.stderr.write(f"warning: unknown logger {name!r}\n")
         logger = logging.getLogger(name)
+        logger.handlers.clear()
         logger.setLevel(effective_level)
         logger.addHandler(handler)
 

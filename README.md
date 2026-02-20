@@ -409,6 +409,25 @@ Client                              Worker
 
 ---
 
+## Logging
+
+Workers support `--debug`, `--log-level`, `--log-format`, and `--log-logger` options:
+
+```bash
+# Enable debug logging
+vgi-example-worker --debug
+
+# JSON-formatted logs for structured pipelines
+vgi-example-worker --log-format json
+
+# Target a specific logger
+vgi-example-worker --log-level DEBUG --log-logger vgi.worker
+```
+
+See [CLI Reference](docs/cli.md#worker-logging) for the full list of loggers and options.
+
+---
+
 ## Development
 
 ```bash

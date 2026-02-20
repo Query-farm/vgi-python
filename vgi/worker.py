@@ -90,6 +90,7 @@ from vgi.invocation import (
     BindResponse,
     GlobalInitResponse,
 )
+from vgi.logging_config import LogFormat, LogLevel
 from vgi.protocol import (
     BindRequest,
     CatalogAttachRequest,
@@ -402,13 +403,7 @@ class Worker:
         """
         import typer
 
-        from vgi.logging_config import LogFormat, LogLevel, configure_worker_logging
-
-        # Inject types into module globals so typer can resolve stringified
-        # annotations created by ``from __future__ import annotations``.
-        _mod = globals()
-        _mod["LogLevel"] = LogLevel
-        _mod["LogFormat"] = LogFormat
+        from vgi.logging_config import configure_worker_logging
 
         app = typer.Typer(add_completion=False)
 
@@ -1387,7 +1382,6 @@ class Worker:
         """
         self._quiet = quiet or os.environ.get("VGI_QUIET") == "1"
         logging.getLogger("vgi").setLevel(log_level)
-        self.log: logging.Logger = _logger
 
     def run(self) -> None:
         """Run the worker, reading from stdin and writing to stdout."""
