@@ -13,9 +13,14 @@ type inference:
 STATIC OUTPUT TYPE (inferred from array class)
 ----------------------------------------------
 MultiplyFunction            - Multiplies value by constant (ConstParam example)
+ConditionalMessageFunction  - Multiple ConstParam parameters example
+BinaryPacketFunction        - Complex ConstParam types (binary, struct)
 UpperCaseFunction           - Converts string value to uppercase
 NullHandlingFunction        - Demonstrates special null handling (NullHandling.SPECIAL)
 RandomIntFunction           - Generates random integers (VOLATILE stability)
+BernoulliFunction           - Generates random booleans (no-input VOLATILE example)
+MultiplyBySettingFunction   - Multiplies value by a DuckDB setting
+ReturnSecretValueFunction   - Returns a secret value as string
 
 DYNAMIC OUTPUT TYPE (with type_bound)
 -------------------------------------
@@ -26,24 +31,28 @@ SumValuesFunction           - Sums multiple values (varargs example)
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from vgi.arguments import ConstParam, Param, Returns
+from vgi.arguments import ConstParam, OutputLength, Param, Returns, Secret, Setting
 from vgi.exceptions import SchemaValidationError
 from vgi.metadata import FunctionExample, FunctionStability, NullHandling
-from vgi.scalar_function import ScalarFunction
+from vgi.scalar_function import BindParameters, BindResult, ScalarFunction
 
 __all__ = [
     "AddValuesFunction",
+    "BernoulliFunction",
     "BinaryPacketFunction",
     "ConditionalMessageFunction",
     "DoubleFunction",
+    "MultiplyBySettingFunction",
     "MultiplyFunction",
     "NullHandlingFunction",
     "RandomIntFunction",
+    "ReturnSecretValueFunction",
     "SumValuesFunction",
     "UpperCaseFunction",
 ]
@@ -125,8 +134,9 @@ class MultiplyFunction(ScalarFunction):
             ),
         ]
 
+    @classmethod
     def compute(
-        self,
+        cls,
         value: Annotated[pa.Int64Array, Param(doc="Integer value to multiply")],
         factor: Annotated[int, ConstParam("Multiplication factor")],
     ) -> Annotated[pa.Int64Array, Returns()]:
@@ -168,8 +178,9 @@ class ConditionalMessageFunction(ScalarFunction):
             ),
         ]
 
+    @classmethod
     def compute(
-        self,
+        cls,
         repeat_count: Annotated[int, ConstParam("Number of times to repeat")],
         message: Annotated[str, ConstParam("Message to repeat")],
         condition: Annotated[pa.BooleanArray, Param(doc="Apply message condition")],
@@ -216,8 +227,9 @@ class BinaryPacketFunction(ScalarFunction):
             ),
         ]
 
+    @classmethod
     def compute(
-        self,
+        cls,
         header: Annotated[
             bytes,
             ConstParam("Header bytes to prepend", arrow_type=pa.binary()),
@@ -278,22 +290,15 @@ class DoubleFunction(ScalarFunction):
             ),
         ]
 
-    _output_type: pa.DataType
-
-    def bind(self) -> None:
+    @classmethod
+    def on_bind(cls, params: BindParameters) -> BindResult:
         """Compute output type from input value type."""
-        # Get the input type from the schema
-        field = self.input_schema.field(0)
-        # Promote to a wider type since we're multiplying by 2
-        self._output_type = _promote_for_addition(field.type)
+        field = params.arguments_schema.field(0)
+        return BindResult(_promote_for_addition(field.type))
 
-    @property
-    def output_type(self) -> pa.DataType:
-        """Return the type of the doubled value."""
-        return self._output_type
-
+    @classmethod
     def compute(
-        self,
+        cls,
         value: Annotated[
             pa.Array[Any],
             Param(doc="Numeric value to double", type_bound=_is_addable_type),
@@ -342,25 +347,20 @@ class AddValuesFunction(ScalarFunction):
 
     _output_type: pa.DataType
 
-    def bind(self) -> None:
+    @classmethod
+    def on_bind(cls, params: BindParameters) -> BindResult:
         """Compute output type from input value types."""
-        field1 = self.input_schema.field(0)
-        field2 = self.input_schema.field(1)
+        field1 = params.arguments_schema.field(0)
+        field2 = params.arguments_schema.field(1)
 
         # Compute the output type by promoting to the wider of the two types,
         # then promoting again to reduce overflow risk.
-        common_type = pc.add(
-            pa.nulls(1, type=field1.type), pa.nulls(1, type=field2.type)
-        ).type
-        self._output_type = _promote_for_addition(common_type)
+        common_type = pc.add(pa.nulls(1, type=field1.type), pa.nulls(1, type=field2.type)).type
+        return BindResult(_promote_for_addition(common_type))
 
-    @property
-    def output_type(self) -> pa.DataType:
-        """Return the computed output type based on input value types."""
-        return self._output_type
-
+    @classmethod
     def compute(
-        self,
+        cls,
         col1: Annotated[
             pa.Array[Any],
             Param(doc="First numeric value", type_bound=_is_addable_type),
@@ -405,8 +405,9 @@ class UpperCaseFunction(ScalarFunction):
             ),
         ]
 
+    @classmethod
     def compute(
-        self,
+        cls,
         value: Annotated[pa.StringArray, Param(doc="String value to uppercase")],
     ) -> Annotated[pa.StringArray, Returns()]:
         """Convert the string values to uppercase."""
@@ -440,20 +441,18 @@ class SumValuesFunction(ScalarFunction):
             ),
         ]
 
-    _output_type: pa.DataType
-
-    def bind(self) -> None:
+    @classmethod
+    def on_bind(
+        cls,
+        params: BindParameters,
+    ) -> BindResult:
         """Compute output type from first value, promoted for overflow safety."""
-        first_type = self.input_schema.field(0).type
-        self._output_type = _promote_for_addition(first_type)
+        first_type = params.arguments_schema.field(0).type
+        return BindResult(_promote_for_addition(first_type))
 
-    @property
-    def output_type(self) -> pa.DataType:
-        """Return the computed output type based on first value."""
-        return self._output_type
-
+    @classmethod
     def compute(
-        self,
+        cls,
         values: Annotated[
             list[pa.Array[Any]],
             Param(
@@ -499,8 +498,9 @@ class NullHandlingFunction(ScalarFunction):
             ),
         ]
 
+    @classmethod
     def compute(
-        self,
+        cls,
         value: Annotated[pa.Int64Array, Param(doc="Integer value to process")],
     ) -> Annotated[pa.Int64Array, Returns()]:
         """Return value if not null, otherwise -5000."""
@@ -544,21 +544,111 @@ class RandomIntFunction(ScalarFunction):
             ),
         ]
 
+    @classmethod
     def compute(
-        self,
+        cls,
         min_val: Annotated[pa.Int64Array, Param(doc="Minimum value (inclusive)")],
         max_val: Annotated[pa.Int64Array, Param(doc="Maximum value (inclusive)")],
     ) -> Annotated[pa.Int64Array, Returns()]:
         """Generate random integers for each row."""
+        import numpy as np
+
+        result = np.random.randint(min_val.to_numpy(), max_val.to_numpy() + 1)
+        return pa.array(result, type=pa.int64())
+
+
+class BernoulliFunction(ScalarFunction):
+    """Generates random booleans for each row (demonstrates VOLATILE stability).
+
+    This function demonstrates how to generate output without any input parameters.
+    It will produce a random 0 or 1 for each row in the output.
+
+    Example:
+        SQL:    SELECT bernoulli() FROM data
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "bernoulli"
+        description = "Generate random booleans (demonstrates VOLATILE stability)"
+        stability = FunctionStability.VOLATILE
+        examples = [
+            FunctionExample(
+                sql="SELECT bernoulli() FROM data",
+                description="Generate samples from the bernoulli distribution",
+            ),
+        ]
+
+    @classmethod
+    def compute(
+        cls,
+        _length: Annotated[int, OutputLength()],
+    ) -> Annotated[pa.BooleanArray, Returns()]:
+        """Generate random booleans for each row."""
         import random
 
-        # Get values from the arrays
-        min_values: list[int] = min_val.to_pylist()  # type: ignore[assignment]
-        max_values: list[int] = max_val.to_pylist()  # type: ignore[assignment]
+        values = [bool(random.randint(0, 1)) for _ in range(_length)]
+        return pa.array(values, type=pa.bool_())
 
-        # Generate random integers using per-row min/max
-        values = [
-            random.randint(min_v, max_v)
-            for min_v, max_v in zip(min_values, max_values, strict=True)
+
+class MultiplyBySettingFunction(ScalarFunction):
+    """Generates the input value multiplied by a setting."""
+
+    class Meta:
+        """Function metadata."""
+
+        name = "multiply_by_setting"
+        description = "Multiply the input value by a setting value"
+        examples = [
+            FunctionExample(
+                sql="SELECT multiply_by_setting(5)",
+                description="Multiply the input value by a setting's value",
+            ),
         ]
-        return pa.array(values, type=pa.int64())
+
+    @classmethod
+    def compute(
+        cls,
+        value: Annotated[pa.Int64Array, Param(doc="Integer value to multiply")],
+        multiplier: Annotated[pa.Scalar[Any] | None, Setting()],
+    ) -> Annotated[pa.Int64Array, Returns()]:
+        """Generate the result for each row."""
+        assert multiplier is not None
+        return pc.multiply(multiplier, value)
+
+
+class ReturnSecretValueFunction(ScalarFunction):
+    """Return the value of a secret.
+
+    Example:
+        SQL:    SELECT return_secret_value()
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "return_secret_value"
+        description = "Return a secret's value"
+        examples = [
+            FunctionExample(
+                sql="SELECT return_secret_value()",
+                description="Return a secret's value",
+            ),
+        ]
+
+    @classmethod
+    def compute(
+        cls,
+        vgi_example_secret: Annotated[dict[str, pa.Scalar[Any]], Secret()],
+        _length: Annotated[int, OutputLength()],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Generate the result for each row."""
+        # Convert pa.Scalar values to Python for JSON serialization
+        secret_dict = {k: v.as_py() for k, v in vgi_example_secret.items()}
+        return pa.array(
+            [json.dumps(secret_dict) for _ in range(_length)],
+            type=pa.string(),
+        )

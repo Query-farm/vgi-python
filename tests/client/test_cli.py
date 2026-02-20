@@ -35,18 +35,14 @@ def input_parquet(tmp_path: Path, sample_batch: pa.RecordBatch) -> Path:
 class TestOutputWriter:
     """Tests for OutputWriter class."""
 
-    def test_write_batch_to_log_when_no_output_file(
-        self, sample_batch: pa.RecordBatch
-    ) -> None:
+    def test_write_batch_to_log_when_no_output_file(self, sample_batch: pa.RecordBatch) -> None:
         """When output_file is None, batch is logged, not written."""
         writer = OutputWriter(None, "json")
         # Should not raise - just logs the batch
         writer.write_batch(sample_batch)
         writer.close()
 
-    def test_write_batch_parquet_to_file(
-        self, tmp_path: Path, sample_batch: pa.RecordBatch
-    ) -> None:
+    def test_write_batch_parquet_to_file(self, tmp_path: Path, sample_batch: pa.RecordBatch) -> None:
         """Write parquet format to file path."""
         output_file = tmp_path / "output.parquet"
         writer = OutputWriter(str(output_file), "parquet")
@@ -58,9 +54,7 @@ class TestOutputWriter:
         assert table.num_rows == 3
         assert table.column_names == ["id", "name"]
 
-    def test_write_batch_parquet_multiple_batches(
-        self, tmp_path: Path, sample_batch: pa.RecordBatch
-    ) -> None:
+    def test_write_batch_parquet_multiple_batches(self, tmp_path: Path, sample_batch: pa.RecordBatch) -> None:
         """Write multiple parquet batches to same file."""
         output_file = tmp_path / "output.parquet"
         writer = OutputWriter(str(output_file), "parquet")
@@ -71,9 +65,7 @@ class TestOutputWriter:
         table = pq.read_table(str(output_file))
         assert table.num_rows == 6
 
-    def test_write_batch_csv_to_file(
-        self, tmp_path: Path, sample_batch: pa.RecordBatch
-    ) -> None:
+    def test_write_batch_csv_to_file(self, tmp_path: Path, sample_batch: pa.RecordBatch) -> None:
         """Write CSV format to file."""
         output_file = tmp_path / "output.csv"
         writer = OutputWriter(str(output_file), "csv")
@@ -88,9 +80,7 @@ class TestOutputWriter:
         assert "1" in content
         assert "a" in content
 
-    def test_write_batch_csv_header_once(
-        self, tmp_path: Path, sample_batch: pa.RecordBatch
-    ) -> None:
+    def test_write_batch_csv_header_once(self, tmp_path: Path, sample_batch: pa.RecordBatch) -> None:
         """CSV header should only be written on first batch."""
         output_file = tmp_path / "output.csv"
         writer = OutputWriter(str(output_file), "csv")
@@ -106,9 +96,7 @@ class TestOutputWriter:
         # Should have 6 data rows + 1 header = 7 lines
         assert len(lines) == 7
 
-    def test_write_batch_json_to_file(
-        self, tmp_path: Path, sample_batch: pa.RecordBatch
-    ) -> None:
+    def test_write_batch_json_to_file(self, tmp_path: Path, sample_batch: pa.RecordBatch) -> None:
         """Write JSON format to file."""
         output_file = tmp_path / "output.jsonl"
         writer = OutputWriter(str(output_file), "json")
@@ -121,9 +109,7 @@ class TestOutputWriter:
         assert row1["id"] == 1
         assert row1["name"] == "a"
 
-    def test_write_batch_json_multiple_batches(
-        self, tmp_path: Path, sample_batch: pa.RecordBatch
-    ) -> None:
+    def test_write_batch_json_multiple_batches(self, tmp_path: Path, sample_batch: pa.RecordBatch) -> None:
         """Write multiple JSON batches to same file."""
         output_file = tmp_path / "output.jsonl"
         writer = OutputWriter(str(output_file), "json")
@@ -196,9 +182,7 @@ class TestCLIValidation:
         assert result.exit_code != 0
         assert "requires --input" in result.output
 
-    def test_table_input_position_negative(
-        self, example_worker: str, input_parquet: Path
-    ) -> None:
+    def test_table_input_position_negative(self, example_worker: str, input_parquet: Path) -> None:
         """--table-input-position must be non-negative."""
         runner = CliRunner()
         result = runner.invoke(
@@ -217,9 +201,7 @@ class TestCLIValidation:
         assert result.exit_code != 0
         assert "non-negative" in result.output
 
-    def test_table_input_position_out_of_range(
-        self, example_worker: str, input_parquet: Path
-    ) -> None:
+    def test_table_input_position_out_of_range(self, example_worker: str, input_parquet: Path) -> None:
         """--table-input-position out of range for args."""
         runner = CliRunner()
         result = runner.invoke(
@@ -287,9 +269,7 @@ class TestCLITableFunction:
         )
         assert result.exit_code == 0
 
-    def test_table_function_with_output_file(
-        self, example_worker: str, tmp_path: Path
-    ) -> None:
+    def test_table_function_with_output_file(self, example_worker: str, tmp_path: Path) -> None:
         """Table function with output to file."""
         output_file = tmp_path / "output.jsonl"
         runner = CliRunner()
@@ -317,9 +297,7 @@ class TestCLITableFunction:
 class TestCLITableInOutFunction:
     """Tests for CLI table-in-out function invocation (with input)."""
 
-    def test_table_in_out_function_invocation(
-        self, example_worker: str, input_parquet: Path
-    ) -> None:
+    def test_table_in_out_function_invocation(self, example_worker: str, input_parquet: Path) -> None:
         """Invoke a table-in-out function with input."""
         runner = CliRunner()
         result = runner.invoke(
@@ -335,9 +313,7 @@ class TestCLITableInOutFunction:
         )
         assert result.exit_code == 0
 
-    def test_table_in_out_with_output_file(
-        self, example_worker: str, input_parquet: Path, tmp_path: Path
-    ) -> None:
+    def test_table_in_out_with_output_file(self, example_worker: str, input_parquet: Path, tmp_path: Path) -> None:
         """Table-in-out function with output to file."""
         output_file = tmp_path / "output.jsonl"
         runner = CliRunner()
@@ -365,9 +341,7 @@ class TestCLITableInOutFunction:
 class TestCLIOutputFormats:
     """Tests for CLI output format options."""
 
-    def test_output_format_json(
-        self, example_worker: str, input_parquet: Path, tmp_path: Path
-    ) -> None:
+    def test_output_format_json(self, example_worker: str, input_parquet: Path, tmp_path: Path) -> None:
         """JSON output format."""
         output_file = tmp_path / "output.json"
         runner = CliRunner()
@@ -391,9 +365,7 @@ class TestCLIOutputFormats:
         for line in output_file.read_text().strip().split("\n"):
             json.loads(line)
 
-    def test_output_format_csv(
-        self, example_worker: str, input_parquet: Path, tmp_path: Path
-    ) -> None:
+    def test_output_format_csv(self, example_worker: str, input_parquet: Path, tmp_path: Path) -> None:
         """CSV output format."""
         output_file = tmp_path / "output.csv"
         runner = CliRunner()
@@ -416,9 +388,7 @@ class TestCLIOutputFormats:
         content = output_file.read_text()
         assert "id" in content  # Header present
 
-    def test_output_format_parquet(
-        self, example_worker: str, input_parquet: Path, tmp_path: Path
-    ) -> None:
+    def test_output_format_parquet(self, example_worker: str, input_parquet: Path, tmp_path: Path) -> None:
         """Parquet output format."""
         output_file = tmp_path / "output.parquet"
         runner = CliRunner()
@@ -442,9 +412,7 @@ class TestCLIOutputFormats:
         table = pq.read_table(str(output_file))
         assert table.num_rows == 3
 
-    def test_output_format_arrow_ipc(
-        self, example_worker: str, input_parquet: Path, tmp_path: Path
-    ) -> None:
+    def test_output_format_arrow_ipc(self, example_worker: str, input_parquet: Path, tmp_path: Path) -> None:
         """Arrow IPC streaming output format."""
         from pyarrow import ipc
 
@@ -495,9 +463,7 @@ class TestCLIOptions:
         )
         assert result.exit_code == 0
 
-    def test_worker_stderr_passthrough(
-        self, example_worker: str, input_parquet: Path
-    ) -> None:
+    def test_worker_stderr_passthrough(self, example_worker: str, input_parquet: Path) -> None:
         """--worker-stderr flag works."""
         runner = CliRunner()
         result = runner.invoke(
@@ -552,9 +518,7 @@ class TestCLIOptions:
         )
         assert result.exit_code == 0
 
-    def test_table_input_position_valid(
-        self, example_worker: str, input_parquet: Path
-    ) -> None:
+    def test_table_input_position_valid(self, example_worker: str, input_parquet: Path) -> None:
         """Valid --table-input-position is accepted."""
         runner = CliRunner()
         result = runner.invoke(
@@ -626,9 +590,7 @@ class TestCLIScalarFunction:
         pq.write_table(pa.Table.from_batches([batch]), str(input_file))
         return input_file
 
-    def test_scalar_function_invocation(
-        self, example_worker: str, scalar_input_parquet: Path
-    ) -> None:
+    def test_scalar_function_invocation(self, example_worker: str, scalar_input_parquet: Path) -> None:
         """Invoke a scalar function with --type scalar."""
         runner = CliRunner()
         result = runner.invoke(
@@ -750,9 +712,7 @@ class TestCLIScalarFunction:
         assert result.exit_code != 0
         assert "requires --input" in result.output
 
-    def test_table_type_rejects_input(
-        self, example_worker: str, scalar_input_parquet: Path
-    ) -> None:
+    def test_table_type_rejects_input(self, example_worker: str, scalar_input_parquet: Path) -> None:
         """--type table does not accept --input."""
         runner = CliRunner()
         result = runner.invoke(
@@ -801,9 +761,7 @@ class TestCLIScalarFunction:
         content = output_file.read_text()
         assert '"x"' in content
 
-    def test_auto_type_without_input_uses_table(
-        self, example_worker: str, tmp_path: Path
-    ) -> None:
+    def test_auto_type_without_input_uses_table(self, example_worker: str, tmp_path: Path) -> None:
         """--type auto without --input uses table function."""
         output_file = tmp_path / "output.jsonl"
         runner = CliRunner()
@@ -899,9 +857,7 @@ class TestCLIScalarFunction:
 class TestCLISettings:
     """Tests for CLI --setting option."""
 
-    def test_setting_passed_to_table_function(
-        self, example_worker: str, tmp_path: Path
-    ) -> None:
+    def test_setting_passed_to_table_function(self, example_worker: str, tmp_path: Path) -> None:
         """Settings should be passed to table functions."""
         output_file = tmp_path / "output.jsonl"
         runner = CliRunner()
@@ -973,9 +929,7 @@ class TestCLISettings:
         row0 = json.loads(lines[0])
         assert row0["greeting"] == "Hello"
 
-    def test_setting_verbose_mode_adds_details(
-        self, example_worker: str, tmp_path: Path
-    ) -> None:
+    def test_setting_verbose_mode_adds_details(self, example_worker: str, tmp_path: Path) -> None:
         """vgi_verbose_mode=true should add details column."""
         output_file = tmp_path / "output.jsonl"
         runner = CliRunner()
@@ -1027,9 +981,7 @@ class TestCLISettings:
         assert result.exit_code != 0
         assert "Invalid --setting format" in result.output
 
-    def test_multiple_settings_combined(
-        self, example_worker: str, tmp_path: Path
-    ) -> None:
+    def test_multiple_settings_combined(self, example_worker: str, tmp_path: Path) -> None:
         """Multiple settings should all be passed through."""
         output_file = tmp_path / "output.jsonl"
         runner = CliRunner()
@@ -1063,9 +1015,7 @@ class TestCLISettings:
         assert row0["value"] == 0.0
         assert "details" in row0  # verbose mode on
 
-    def test_setting_with_equals_in_value(
-        self, example_worker: str, tmp_path: Path
-    ) -> None:
+    def test_setting_with_equals_in_value(self, example_worker: str, tmp_path: Path) -> None:
         """Settings with = in value should parse correctly."""
         output_file = tmp_path / "output.jsonl"
         runner = CliRunner()

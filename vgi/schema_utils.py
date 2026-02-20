@@ -3,28 +3,6 @@
 This module provides helpers for creating and modifying Arrow schemas with
 minimal boilerplate, making output_schema definitions more concise.
 
-QUICK START
------------
-Use schema() to build schemas from keyword arguments:
-
-    from vgi import schema
-
-    class MyFunction(TableInOutFunction):
-        @property
-        def output_schema(self) -> pa.Schema:
-            return schema(sum=pa.int64(), count=pa.int64(), avg=pa.float64())
-
-Use schema_like() to derive schemas from input with modifications:
-
-    class MyFunction(TableInOutFunction):
-        @property
-        def output_schema(self) -> pa.Schema:
-            return schema_like(
-                self.input_schema,
-                add={"total": pa.int64()},
-                remove=["temp_column"],
-            )
-
 FUNCTIONS
 ---------
 schema(**fields)
@@ -66,28 +44,6 @@ def schema(
     Raises:
         TypeError: If a value is not a valid Arrow data type.
 
-    Examples:
-        # Simple schema with keyword arguments
-        s = schema(x=pa.int64(), y=pa.string())
-        # Result: schema([('x', int64), ('y', string)])
-
-        # From a dictionary (preserves insertion order in Python 3.7+)
-        fields = {"a": pa.int64(), "b": pa.float64()}
-        s = schema(fields)
-
-        # Combined usage
-        s = schema({"x": pa.int64()}, y=pa.string())
-
-        # Common type shortcuts
-        s = schema(
-            id=pa.int64(),
-            name=pa.string(),
-            score=pa.float64(),
-            active=pa.bool_(),
-            data=pa.binary(),
-            created=pa.timestamp("us"),
-        )
-
     """
     # Combine __fields dict with kwargs
     all_fields: dict[str, pa.DataType] = {}
@@ -100,8 +56,7 @@ def schema(
     for name, dtype in all_fields.items():
         if not isinstance(dtype, pa.DataType):
             raise TypeError(
-                f"Field '{name}': expected pa.DataType, got {type(dtype).__name__}. "
-                f"Use pa.int64(), pa.string(), etc."
+                f"Field '{name}': expected pa.DataType, got {type(dtype).__name__}. Use pa.int64(), pa.string(), etc."
             )
         pa_fields.append(pa.field(name, dtype))
 
@@ -135,32 +90,6 @@ def schema_like(
         KeyError: If a field to remove, rename, or replace doesn't exist.
         ValueError: If trying to add a field that already exists.
 
-    Examples:
-        # Add a new column
-        new_schema = schema_like(input_schema, add={"total": pa.int64()})
-
-        # Remove columns
-        new_schema = schema_like(input_schema, remove=["temp", "debug"])
-
-        # Rename columns
-        new_schema = schema_like(input_schema, rename={"old_name": "new_name"})
-
-        # Change column type
-        new_schema = schema_like(input_schema, replace={"count": pa.float64()})
-
-        # Combine operations
-        new_schema = schema_like(
-            input_schema,
-            remove=["temp"],
-            rename={"val": "value"},
-            add={"computed": pa.float64()},
-        )
-
-        # Passthrough with single addition
-        @property
-        def output_schema(self) -> pa.Schema:
-            return schema_like(self.input_schema, add={"sum": pa.int64()})
-
     """
     # Start with source field names for tracking
     field_names = set(source.names)
@@ -169,28 +98,21 @@ def schema_like(
     if remove:
         for name in remove:
             if name not in field_names:
-                raise KeyError(
-                    f"Cannot remove field '{name}': not found in schema. "
-                    f"Available fields: {source.names}"
-                )
+                raise KeyError(f"Cannot remove field '{name}': not found in schema. Available fields: {source.names}")
 
     # Validate rename fields exist
     if rename:
         for old_name in rename:
             if old_name not in field_names:
                 raise KeyError(
-                    f"Cannot rename field '{old_name}': not found in schema. "
-                    f"Available fields: {source.names}"
+                    f"Cannot rename field '{old_name}': not found in schema. Available fields: {source.names}"
                 )
 
     # Validate replace fields exist
     if replace:
         for name in replace:
             if name not in field_names:
-                raise KeyError(
-                    f"Cannot replace field '{name}': not found in schema. "
-                    f"Available fields: {source.names}"
-                )
+                raise KeyError(f"Cannot replace field '{name}': not found in schema. Available fields: {source.names}")
 
     # Build the new schema
     # Step 1: Remove fields

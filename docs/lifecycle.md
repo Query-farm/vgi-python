@@ -8,169 +8,115 @@ Scalar functions have a simplified lifecycle with no finalize phase. Processing 
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  __init__(invocation, logger)                                   │
+│  bind(request) → BindResponse                                   │
 │    ↓                                                            │
-│  output_schema (property accessed, must be single column)       │
-│    ↓                                                            │
-│  setup()  ← Acquire resources here                              │
+│  init(request) → Stream with ScalarExchangeState                │
 │    ↓                                                            │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │  process(batch1) → compute(batch1) → Array              │    │
+│  │  exchange(batch1) → compute(batch1) → Array             │    │
 │  │    ↓                                                    │    │
 │  │  [return output with same row count]                    │    │
 │  │    ↓                                                    │    │
-│  │  process(batch2) → compute(batch2) → Array              │    │
+│  │  exchange(batch2) → compute(batch2) → Array             │    │
 │  │    ↓                                                    │    │
 │  │  ... (repeat for all batches)                           │    │
 │  │    ↓                                                    │    │
-│  │  Input stream ends (generator closed)                   │    │
+│  │  Input stream ends (stream closed)                      │    │
 │  └─────────────────────────────────────────────────────────┘    │
-│    ↓                                                            │
-│  teardown()  ← Release resources (always called)                │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 **Key differences from Table-In-Out:**
 - No `finalize()` phase - processing ends when input ends
-- No `save_state()` / `load_states()` - not designed for distributed aggregation
+- No distributed state via `params.storage` - not designed for distributed aggregation
 - Output must have exactly 1 column with same row count as input
 
-## Table-In-Out Single-Process Lifecycle (max_processes=1)
+## Table-In-Out Single-Worker Lifecycle (max_workers=1)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  __init__(invocation, logger)                                   │
+│  bind(request) → BindResponse                                   │
 │    ↓                                                            │
-│  output_schema (property accessed)                              │
-│    ↓                                                            │
-│  initialize_global_state(init_batch) → InitResult                    │
-│    ↓                                                            │
-│  setup()  ← Acquire resources here (DB connections, files)      │
+│  init(phase=INPUT) → Stream with TableInOutExchangeState        │
 │    ↓                                                            │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │  process(batch1) → OutputGenerator                      │    │
+│  │  exchange(batch1) → process/transform(batch1, out)      │    │
 │  │    ↓                                                    │    │
-│  │  [yield outputs for batch1]                             │    │
+│  │  [out.emit() produces output]                           │    │
 │  │    ↓                                                    │    │
-│  │  process receives batch2 via yield                      │    │
-│  │    ↓                                                    │    │
-│  │  [yield outputs for batch2]                             │    │
+│  │  exchange(batch2) → process/transform(batch2, out)      │    │
 │  │    ↓                                                    │    │
 │  │  ... (repeat for all batches)                           │    │
 │  │    ↓                                                    │    │
-│  │  process receives None (end of input)                   │    │
+│  │  Input stream ends (stream closed)                      │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │    ↓                                                            │
-│  finalize() → OutputGenerator                                   │
+│  init(phase=FINALIZE) → Stream with TableInOutFinalizeState     │
 │    ↓                                                            │
-│  [yield final outputs]                                          │
-│    ↓                                                            │
-│  teardown()  ← Release resources here (always called)           │
+│  finalize(params, states, out) → out.emit() / out.finish()      │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Multi-Process Lifecycle (max_processes > 1)
+## Multi-Worker Lifecycle (max_workers > 1)
 
-When `max_processes > 1`, the client spawns multiple worker processes.
+When `max_workers > 1`, the client spawns multiple worker processes.
 One becomes the **primary worker** (runs finalize), others are **secondary workers**.
 
 **Primary Worker:**
 ```
-__init__ → output_schema → initialize_global_state → setup → process → finalize → teardown
+bind → init(INPUT) → exchange batches → init(FINALIZE) → finalize
 ```
 
 **Secondary Workers:**
 ```
-__init__ → output_schema → load_global_state → setup → process → teardown
-                                                      ↓
-                                              (NO finalize!)
+bind → init(INPUT, execution_id=...) → exchange batches → stop
+                                                       ↓
+                                               (NO finalize!)
 ```
 
 **Key Differences:**
 
 | Aspect | Primary Worker | Secondary Workers |
 |--------|---------------|-------------------|
-| `initialize_global_state()` called? | Yes | No |
-| `load_global_state()` called? | No | Yes |
+| `global_init()` called? | Yes | No (uses execution_id from primary) |
 | `finalize()` called? | Yes | No |
-| `teardown()` called? | Yes (after finalize) | Yes (after process ends) |
 | Receives all batches? | Subset (round-robin) | Subset (round-robin) |
 
-## Lifecycle with save_state/load_states (Distributed Aggregation)
+## Lifecycle with Distributed State (Distributed Aggregation)
 
-For distributed aggregations, state flows from secondary workers to primary:
+For distributed aggregations, state flows from secondary workers to primary
+via `params.storage` (a `BoundStorage` backed by `FunctionStorageSqlite` by default):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                         SECONDARY WORKERS                                 │
 │  ┌────────────────────┐  ┌────────────────────┐  ┌────────────────────┐  │
 │  │ Worker 1           │  │ Worker 2           │  │ Worker N           │  │
-│  │ setup()            │  │ setup()            │  │ setup()            │  │
-│  │ process(batches)   │  │ process(batches)   │  │ process(batches)   │  │
-│  │ save_state() ──────┼──┼─────────┬──────────┼──┼→ SQLite Storage    │  │
-│  │ teardown()         │  │ teardown()         │  │ teardown()         │  │
+│  │ exchange(batches)  │  │ exchange(batches)  │  │ exchange(batches)  │  │
+│  │ storage.put() ─────┼──┼─────────┬──────────┼──┼→ params.storage    │  │
 │  └────────────────────┘  └─────────│──────────┘  └────────────────────┘  │
 │                                    ↓                                      │
 │                         ┌──────────────────────┐                          │
 │                         │   PRIMARY WORKER     │                          │
-│                         │ setup()              │                          │
-│                         │ process(batches)     │                          │
-│                         │ save_state() ────────┼→ SQLite Storage          │
-│                         │ load_states() ←──────┼─ (collects ALL states)   │
+│                         │ exchange(batches)    │                          │
+│                         │ storage.put() ───────┼→ params.storage          │
+│                         │ storage.collect() ←──┼─ (collects ALL states)   │
 │                         │ finalize()           │                          │
-│                         │ teardown()           │                          │
 │                         └──────────────────────┘                          │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Timing Guarantees:**
 
-1. `save_state()` is called automatically when the process generator closes
-2. Secondary workers' `teardown()` completes BEFORE primary's `load_states()`
-3. Primary's `load_states()` receives states from ALL workers (including itself)
-4. `teardown()` is ALWAYS called, even if an exception occurs
-
-## Resource Management Best Practices
-
-```python
-class MyFunction(TableInOutFunction):
-    def setup(self) -> None:
-        """Acquire resources. Called once per worker."""
-        self.db_conn = sqlite3.connect("my.db")
-        self.temp_file = tempfile.NamedTemporaryFile()
-
-    def teardown(self) -> None:
-        """Release resources. ALWAYS called, even on error."""
-        if hasattr(self, 'db_conn'):
-            self.db_conn.close()
-        if hasattr(self, 'temp_file'):
-            self.temp_file.close()
-
-    def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
-        # Safe to use self.db_conn here
-        return batch
-```
-
-**Anti-Pattern: Don't acquire resources in __init__:**
-```python
-# ❌ WRONG - resources acquired before setup()
-def __init__(self, invocation, logger):
-    super().__init__(invocation, logger)
-    self.db_conn = sqlite3.connect("my.db")  # Too early!
-
-# ✅ CORRECT - acquire in setup()
-def setup(self) -> None:
-    self.db_conn = sqlite3.connect("my.db")
-```
+1. `params.storage.put()` is called after all input batches are processed
+2. Primary's `params.storage.collect()` receives states from ALL workers (including itself)
 
 ## When to Use Each Lifecycle Hook
 
 | Hook | Use For | Example |
 |------|---------|---------|
-| `__init__` | Parse arguments, initialize simple state | `self.total = 0` |
-| `setup()` | Acquire external resources | DB connections, file handles |
-| `process()` | Transform/accumulate data | Main processing logic |
-| `save_state()` | Persist partial results (distributed) | Serialize aggregation state |
-| `load_states()` | Merge worker states (primary only) | Combine partial aggregations |
-| `finalize()` | Emit final results | Output aggregation results |
-| `teardown()` | Release external resources | Close connections, delete temp files |
+| `on_bind()` | Validate arguments, set output schema | Schema based on settings |
+| `process()` / `transform()` | Transform/accumulate data per batch | Main processing logic |
+| `params.storage.put()` | Persist partial results (distributed) | Serialize aggregation state |
+| `params.storage.collect()` | Collect all worker states (primary only) | Combine partial aggregations |
+| `finish()` / `finalize()` | Emit final results | Output aggregation results |

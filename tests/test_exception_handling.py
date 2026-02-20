@@ -158,9 +158,7 @@ class TestTableInOutExceptionHandling:
                     client.table_in_out_function(
                         function_name="multiply_column",
                         input=iter([input_batch]),
-                        arguments=Arguments(
-                            positional=(pa.scalar("nonexistent_column"),)
-                        ),
+                        arguments=Arguments(positional=(pa.scalar("nonexistent_column"),)),
                     )
                 )
 

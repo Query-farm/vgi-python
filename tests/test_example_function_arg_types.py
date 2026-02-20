@@ -46,11 +46,7 @@ def get_expected_type(arg: Arg[Any], hint: type | None) -> pa.DataType:
         return arg.arrow_type
     if hint is TableInput:
         return pa.null()
-    if (
-        hasattr(arg, "_type_param")
-        and arg._type_param is not None
-        and arg._type_param in PYTHON_TO_ARROW
-    ):
+    if hasattr(arg, "_type_param") and arg._type_param is not None and arg._type_param in PYTHON_TO_ARROW:
         return PYTHON_TO_ARROW[arg._type_param]
     if hint is not None and hint in PYTHON_TO_ARROW:
         return PYTHON_TO_ARROW[hint]
@@ -60,29 +56,12 @@ def get_expected_type(arg: Arg[Any], hint: type | None) -> pa.DataType:
 class TestArgTypeParamCapture:
     """Tests that Arg[type] captures the type parameter correctly."""
 
-    def test_arg_captures_type_param_str(self) -> None:
-        """Arg[str] captures str as _type_param."""
-        arg: Arg[Any] = Arg[str](0)
+    @pytest.mark.parametrize("python_type", [str, int, float, bool], ids=["str", "int", "float", "bool"])
+    def test_arg_captures_type_param(self, python_type: type) -> None:
+        """Arg[type] captures the type as _type_param."""
+        arg: Arg[Any] = Arg[python_type](0)  # type: ignore[valid-type]
         assert hasattr(arg, "_type_param")
-        assert arg._type_param is str
-
-    def test_arg_captures_type_param_int(self) -> None:
-        """Arg[int] captures int as _type_param."""
-        arg: Arg[Any] = Arg[int](0)
-        assert hasattr(arg, "_type_param")
-        assert arg._type_param is int
-
-    def test_arg_captures_type_param_float(self) -> None:
-        """Arg[float] captures float as _type_param."""
-        arg: Arg[Any] = Arg[float](0)
-        assert hasattr(arg, "_type_param")
-        assert arg._type_param is float
-
-    def test_arg_captures_type_param_bool(self) -> None:
-        """Arg[bool] captures bool as _type_param."""
-        arg: Arg[Any] = Arg[bool](0)
-        assert hasattr(arg, "_type_param")
-        assert arg._type_param is bool
+        assert arg._type_param is python_type
 
 
 class TestTypeInference:
@@ -111,8 +90,7 @@ class TestTypeInference:
             expected_type = get_expected_type(arg, hint)
             actual_type = spec_by_name[name].arrow_type
             assert actual_type == expected_type, (
-                f"{func_cls.__name__}.{name}: "
-                f"expected {expected_type}, got {actual_type}"
+                f"{func_cls.__name__}.{name}: expected {expected_type}, got {actual_type}"
             )
 
 
@@ -151,8 +129,7 @@ class TestTableInputBecomesNull:
                 if hint is TableInput and name in spec_by_name:
                     spec = spec_by_name[name]
                     assert spec.arrow_type == pa.null(), (
-                        f"{func_cls.__name__}.{name}: "
-                        f"TableInput should be pa.null(), got {spec.arrow_type}"
+                        f"{func_cls.__name__}.{name}: TableInput should be pa.null(), got {spec.arrow_type}"
                     )
                     assert spec.is_table_input is True
 
@@ -181,11 +158,7 @@ class TestPythonToArrowMapping:
                     continue
 
                 # Check if _type_param is in PYTHON_TO_ARROW
-                if (
-                    hasattr(arg, "_type_param")
-                    and arg._type_param is not None
-                    and arg._type_param in PYTHON_TO_ARROW
-                ):
+                if hasattr(arg, "_type_param") and arg._type_param is not None and arg._type_param in PYTHON_TO_ARROW:
                     expected = PYTHON_TO_ARROW[arg._type_param]
                     actual = spec_by_name[name].arrow_type
                     assert actual == expected, (

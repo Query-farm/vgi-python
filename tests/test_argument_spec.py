@@ -203,9 +203,7 @@ class TestSchemaToArgumentSpecs:
         """vgi_varargs=true metadata should set is_varargs."""
         schema = pa.schema(
             [
-                pa.field(
-                    "cols", pa.utf8(), metadata={VGI_VARARGS_KEY: VGI_VARARGS_TRUE}
-                ),
+                pa.field("cols", pa.utf8(), metadata={VGI_VARARGS_KEY: VGI_VARARGS_TRUE}),
             ]
         )
         specs = schema_to_argument_specs(schema)
@@ -283,12 +281,8 @@ class TestRoundTrip:
         """Complete function signature should round-trip."""
         original = [
             ArgumentSpec(name="count", position=0, arrow_type=pa.int64()),
-            ArgumentSpec(
-                name="data", position=1, arrow_type=pa.null(), is_table_input=True
-            ),
-            ArgumentSpec(
-                name="extra", position=2, arrow_type=pa.float64(), is_varargs=True
-            ),
+            ArgumentSpec(name="data", position=1, arrow_type=pa.null(), is_table_input=True),
+            ArgumentSpec(name="extra", position=2, arrow_type=pa.float64(), is_varargs=True),
             ArgumentSpec(name="format", position="format", arrow_type=pa.utf8()),
             ArgumentSpec(
                 name="threshold",
@@ -335,7 +329,7 @@ class TestExtractArgumentSpecs:
     def test_extract_from_simple_function(self) -> None:
         """Extract specs from function with basic Arg descriptors."""
 
-        class SimpleFunction(TableInOutFunction):
+        class SimpleFunction(TableInOutFunction):  # type: ignore[type-arg]
             count: int = Arg[int](0)  # type: ignore[assignment]
             name: str = Arg[str](1)  # type: ignore[assignment]
 
@@ -352,7 +346,7 @@ class TestExtractArgumentSpecs:
     def test_extract_table_input(self) -> None:
         """Extract specs should detect Arg[TableInput]."""
 
-        class FunctionWithTable(TableInOutFunction):
+        class FunctionWithTable(TableInOutFunction):  # type: ignore[type-arg]
             multiplier: float = Arg[float](0)  # type: ignore[assignment]
             data: TableInput = Arg[TableInput](1)  # type: ignore[assignment]
 
@@ -367,7 +361,7 @@ class TestExtractArgumentSpecs:
     def test_extract_any_arrow(self) -> None:
         """Extract specs should detect Arg[AnyArrow]."""
 
-        class FunctionWithAny(TableInOutFunction):
+        class FunctionWithAny(TableInOutFunction):  # type: ignore[type-arg]
             value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
 
         specs = extract_argument_specs(FunctionWithAny)
@@ -379,7 +373,7 @@ class TestExtractArgumentSpecs:
     def test_extract_varargs(self) -> None:
         """Extract specs should detect varargs=True."""
 
-        class FunctionWithVarargs(TableInOutFunction):
+        class FunctionWithVarargs(TableInOutFunction):  # type: ignore[type-arg]
             columns: str = Arg[str](0, varargs=True)  # type: ignore[assignment]
 
         specs = extract_argument_specs(FunctionWithVarargs)
@@ -391,7 +385,7 @@ class TestExtractArgumentSpecs:
     def test_extract_named_arguments(self) -> None:
         """Extract specs should handle named arguments."""
 
-        class FunctionWithNamed(TableInOutFunction):
+        class FunctionWithNamed(TableInOutFunction):  # type: ignore[type-arg]
             count: int = Arg[int](0)  # type: ignore[assignment]
             format: str = Arg[str]("format")  # type: ignore[assignment]
 
@@ -406,7 +400,7 @@ class TestExtractArgumentSpecs:
     def test_extract_mixed_arguments(self) -> None:
         """Extract specs should handle mixed positional and named args."""
 
-        class ComplexFunction(TableInOutFunction):
+        class ComplexFunction(TableInOutFunction):  # type: ignore[type-arg]
             count: int = Arg[int](0)  # type: ignore[assignment]
             data: TableInput = Arg[TableInput](1)  # type: ignore[assignment]
             extra: float = Arg[float](2, varargs=True)  # type: ignore[assignment]
@@ -478,9 +472,7 @@ class TestArgumentSpecToSchemaValidation:
             w.simplefilter("always")
             argument_specs_to_schema(specs)
             # Filter for our specific warning
-            contiguity_warnings = [
-                x for x in caught if "not contiguous" in str(x.message)
-            ]
+            contiguity_warnings = [x for x in caught if "not contiguous" in str(x.message)]
             assert len(contiguity_warnings) == 0
 
 
@@ -494,7 +486,7 @@ class TestExtractArgumentSpecsValidation:
         class CustomType:
             pass
 
-        class FunctionWithArg(TableInOutFunction):
+        class FunctionWithArg(TableInOutFunction):  # type: ignore[type-arg]
             count = Arg[CustomType](0)  # Type not in PYTHON_TO_ARROW
 
         # Should warn about missing type (CustomType is not in PYTHON_TO_ARROW)
@@ -507,7 +499,7 @@ class TestExtractArgumentSpecsValidation:
     def test_explicit_arrow_type_no_warning(self) -> None:
         """Explicit arrow_type should not trigger warning."""
 
-        class FunctionWithArrowType(TableInOutFunction):
+        class FunctionWithArrowType(TableInOutFunction):  # type: ignore[type-arg]
             count = Arg[int](0, arrow_type=pa.int32())  # Explicit type
 
         import warnings as w
@@ -515,9 +507,7 @@ class TestExtractArgumentSpecsValidation:
         with w.catch_warnings(record=True) as caught:
             w.simplefilter("always")
             specs = extract_argument_specs(FunctionWithArrowType)
-            type_warnings = [
-                x for x in caught if "Cannot determine Arrow type" in str(x.message)
-            ]
+            type_warnings = [x for x in caught if "Cannot determine Arrow type" in str(x.message)]
             assert len(type_warnings) == 0
 
         assert specs[0].arrow_type == pa.int32()
@@ -525,7 +515,7 @@ class TestExtractArgumentSpecsValidation:
     def test_type_hint_no_warning(self) -> None:
         """Type hint should be used to infer Arrow type without warning."""
 
-        class FunctionWithTypeHint(TableInOutFunction):
+        class FunctionWithTypeHint(TableInOutFunction):  # type: ignore[type-arg]
             count: int = Arg[int](0)  # type: ignore[assignment]
 
         import warnings as w
@@ -533,9 +523,7 @@ class TestExtractArgumentSpecsValidation:
         with w.catch_warnings(record=True) as caught:
             w.simplefilter("always")
             specs = extract_argument_specs(FunctionWithTypeHint)
-            type_warnings = [
-                x for x in caught if "Cannot determine Arrow type" in str(x.message)
-            ]
+            type_warnings = [x for x in caught if "Cannot determine Arrow type" in str(x.message)]
             assert len(type_warnings) == 0
 
         assert specs[0].arrow_type == pa.int64()
@@ -543,7 +531,7 @@ class TestExtractArgumentSpecsValidation:
     def test_annotated_pattern_basic(self) -> None:
         """Annotated pattern should work without type: ignore."""
 
-        class FunctionWithAnnotated(TableInOutFunction):
+        class FunctionWithAnnotated(TableInOutFunction):  # type: ignore[type-arg]
             count: Annotated[int, Arg(0, doc="Count")]
             name: Annotated[str, Arg(1, default="default")]
 
@@ -558,7 +546,7 @@ class TestExtractArgumentSpecsValidation:
     def test_annotated_pattern_any_arrow_value(self) -> None:
         """Annotated[AnyArrowValue, Arg(...)] should be detected as any type."""
 
-        class FunctionWithAnyArrow(TableInOutFunction):
+        class FunctionWithAnyArrow(TableInOutFunction):  # type: ignore[type-arg]
             column: Annotated[AnyArrowValue, Arg(0, doc="Column")]
 
         specs = extract_argument_specs(FunctionWithAnyArrow)
@@ -570,7 +558,7 @@ class TestExtractArgumentSpecsValidation:
     def test_annotated_pattern_with_arrow_type(self) -> None:
         """Annotated pattern should respect explicit arrow_type."""
 
-        class FunctionWithArrowType(TableInOutFunction):
+        class FunctionWithArrowType(TableInOutFunction):  # type: ignore[type-arg]
             value: Annotated[int, Arg(0, arrow_type=pa.int32())]
 
         specs = extract_argument_specs(FunctionWithArrowType)

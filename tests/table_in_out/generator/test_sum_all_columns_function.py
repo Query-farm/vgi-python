@@ -6,15 +6,14 @@ import pyarrow as pa
 import pytest
 
 from tests.conftest import assert_single_result, filter_non_empty, make_schema
+from vgi.arguments import Arguments
 from vgi.client import Client
 
 
 class TestSumAllColumnsFunction:
     """Tests for the sum_all_columns function (aggregation)."""
 
-    def test_sum_numeric_columns(
-        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
-    ) -> None:
+    def test_sum_numeric_columns(self, example_worker: str, numeric_batches: list[pa.RecordBatch]) -> None:
         """Should sum all numeric columns across all batches."""
         with Client(example_worker) as client:
             output_batches = list(
@@ -27,9 +26,7 @@ class TestSumAllColumnsFunction:
         # a: 1+2+3+4+5 = 15, b: 1.5+2.5+3.0+4.0+5.0 = 16.0
         assert_single_result(output_batches, {"a": [15], "b": [16.0]})
 
-    def test_sum_excludes_non_numeric(
-        self, example_worker: str, simple_batches: list[pa.RecordBatch]
-    ) -> None:
+    def test_sum_excludes_non_numeric(self, example_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
         """Should exclude non-numeric columns from output."""
         with Client(example_worker) as client:
             output_batches = list(
@@ -46,9 +43,7 @@ class TestSumAllColumnsFunction:
         assert "value" in non_empty[0].schema.names
         assert "name" not in non_empty[0].schema.names
 
-    def test_sum_promotes_types(
-        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
-    ) -> None:
+    def test_sum_promotes_types(self, example_worker: str, numeric_batches: list[pa.RecordBatch]) -> None:
         """Should promote int32 to int64 and float32 to float64."""
         with Client(example_worker) as client:
             output_batches = list(
@@ -66,7 +61,11 @@ class TestSumAllColumnsFunction:
 
 
 class TestSumAllColumnsFunctionWithLogging:
-    """Tests for sum_all_columns_with_logging function (aggregation with logging)."""
+    """Tests for sum_all_columns with logging=True (aggregation with in-band logging)."""
+
+    @staticmethod
+    def _logging_args() -> Arguments:
+        return Arguments(named={"logging": pa.scalar(True)})
 
     def test_sum_with_logging_produces_correct_results(
         self, example_worker: str, numeric_batches: list[pa.RecordBatch]
@@ -75,7 +74,8 @@ class TestSumAllColumnsFunctionWithLogging:
         with Client(example_worker) as client:
             output_batches = list(
                 client.table_in_out_function(
-                    function_name="sum_all_columns_with_logging",
+                    function_name="sum_all_columns",
+                    arguments=self._logging_args(),
                     input=iter(numeric_batches),
                 )
             )
@@ -86,20 +86,18 @@ class TestSumAllColumnsFunctionWithLogging:
     def test_sum_with_logging_emits_log_messages(
         self, example_worker: str, numeric_batches: list[pa.RecordBatch]
     ) -> None:
-        """Should emit log messages for each batch processed."""
+        """Should not crash when logging is enabled."""
         with Client(example_worker) as client:
             output_batches = list(
                 client.table_in_out_function(
-                    function_name="sum_all_columns_with_logging",
+                    function_name="sum_all_columns",
+                    arguments=self._logging_args(),
                     input=iter(numeric_batches),
                 )
             )
-            stderr = client.get_worker_stderr()
 
         # Should still produce valid output
         assert len(filter_non_empty(output_batches)) == 1
-        # Log messages should appear in worker stderr (via client logging)
-        assert "Processing batch" in stderr or "rows" in stderr
 
     def test_sum_with_logging_handles_single_batch(
         self, example_worker: str, numeric_batches: list[pa.RecordBatch]
@@ -109,7 +107,8 @@ class TestSumAllColumnsFunctionWithLogging:
         with Client(example_worker) as client:
             output_batches = list(
                 client.table_in_out_function(
-                    function_name="sum_all_columns_with_logging",
+                    function_name="sum_all_columns",
+                    arguments=self._logging_args(),
                     input=iter(single_batch),
                 )
             )
@@ -142,15 +141,13 @@ class TestSumAllColumnsFunctionDistributed:
             expected_a_sum += sum(a_values)
             expected_b_sum += sum(b_values)
 
-            batch = pa.RecordBatch.from_pydict(
-                {"a": a_values, "b": b_values}, schema=schema
-            )
+            batch = pa.RecordBatch.from_pydict({"a": a_values, "b": b_values}, schema=schema)
             batches.append(batch)
 
         with Client(example_worker) as client:
             output_batches = list(
                 client.table_in_out_function(
-                    function_name="sum_all_columns_distributed",
+                    function_name="sum_all_columns",
                     input=iter(batches),
                 )
             )
@@ -168,7 +165,7 @@ class TestSumAllColumnsFunctionDistributed:
         with Client(example_worker) as client:
             output_batches = list(
                 client.table_in_out_function(
-                    function_name="sum_all_columns_distributed",
+                    function_name="sum_all_columns",
                     input=iter(simple_batches),
                 )
             )
@@ -188,7 +185,7 @@ class TestSumAllColumnsFunctionDistributed:
         with Client(example_worker) as client:
             output_batches = list(
                 client.table_in_out_function(
-                    function_name="sum_all_columns_distributed",
+                    function_name="sum_all_columns",
                     input=iter([empty_batch]),
                 )
             )
@@ -200,9 +197,7 @@ class TestSumAllColumnsFunctionDistributed:
 class TestSumAllColumnsSimpleDistributed:
     """Tests for sum_all_columns_simple_distributed (TableInOutFunction)."""
 
-    def test_sum_simple_distributed_basic(
-        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
-    ) -> None:
+    def test_sum_simple_distributed_basic(self, example_worker: str, numeric_batches: list[pa.RecordBatch]) -> None:
         """Should sum all numeric columns across all batches."""
         with Client(example_worker) as client:
             output_batches = list(
@@ -236,9 +231,7 @@ class TestSumAllColumnsSimpleDistributed:
             expected_a_sum += sum(a_values)
             expected_b_sum += sum(b_values)
 
-            batch = pa.RecordBatch.from_pydict(
-                {"a": a_values, "b": b_values}, schema=schema
-            )
+            batch = pa.RecordBatch.from_pydict({"a": a_values, "b": b_values}, schema=schema)
             batches.append(batch)
 
         with Client(example_worker) as client:

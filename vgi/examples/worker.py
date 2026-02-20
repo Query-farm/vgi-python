@@ -9,9 +9,6 @@ The worker supports:
 - TableFunctionGenerator: Generates output batches without input
 - ScalarFunctionGenerator: Transforms input to single-column output (1:1 rows)
 
-For Polars-based scalar functions, use vgi-example-polars-worker instead.
-This separation avoids the ~32ms Polars import cost for users who don't need it.
-
 Settings:
 - vgi_verbose_mode: Enable verbose output with extra columns (bool, default: false)
 - greeting: Custom greeting message (str, default: "Hello")
@@ -25,6 +22,7 @@ from typing import Annotated, Any
 
 import pyarrow as pa
 
+from vgi.arguments import Arguments
 from vgi.catalog import (
     AttachId,
     Catalog,
@@ -36,12 +34,15 @@ from vgi.catalog import (
 )
 from vgi.examples.scalar import (
     AddValuesFunction,
+    BernoulliFunction,
     BinaryPacketFunction,
     ConditionalMessageFunction,
     DoubleFunction,
+    MultiplyBySettingFunction,
     MultiplyFunction,
     NullHandlingFunction,
     RandomIntFunction,
+    ReturnSecretValueFunction,
     SumValuesFunction,
     UpperCaseFunction,
 )
@@ -56,7 +57,6 @@ from vgi.examples.table import (
     SequenceFunction,
     SettingsAwareFunction,
     TenThousandFunction,
-    TraceContextReporterFunction,
 )
 from vgi.examples.table_in_out import (
     BufferInputFunction,
@@ -65,8 +65,6 @@ from vgi.examples.table_in_out import (
     ExceptionProcessFunction,
     RepeatInputsFunction,
     SumAllColumnsFunction,
-    SumAllColumnsFunctionDistributed,
-    SumAllColumnsFunctionWithLogging,
     SumAllColumnsSimpleDistributed,
 )
 from vgi.worker import Worker
@@ -104,9 +102,7 @@ class ExampleWorker(Worker):
                     BufferInputFunction,
                     RepeatInputsFunction,
                     SumAllColumnsFunction,
-                    SumAllColumnsFunctionDistributed,
                     SumAllColumnsSimpleDistributed,
-                    SumAllColumnsFunctionWithLogging,
                     ExceptionFinalizeFunction,
                     ExceptionProcessFunction,
                     # TableFunctionGenerator - generate output without input
@@ -120,29 +116,31 @@ class ExampleWorker(Worker):
                     SequenceFunction,
                     SettingsAwareFunction,
                     TenThousandFunction,
-                    TraceContextReporterFunction,
                     # ScalarFunctionGenerator - transform to single-column output
                     AddValuesFunction,
+                    BernoulliFunction,
                     BinaryPacketFunction,
                     ConditionalMessageFunction,
                     DoubleFunction,
+                    MultiplyBySettingFunction,
                     MultiplyFunction,
                     NullHandlingFunction,
                     RandomIntFunction,
+                    ReturnSecretValueFunction,
                     SumValuesFunction,
                     UpperCaseFunction,
-                    # For Polars functions, use vgi-example-polars-worker
                 ],
             ),
             Schema(
                 name="data",
                 comment="Example tables backed by functions",
                 tables=[
-                    # Function-backed table: schema derived from function
+                    # Function-backed table: schema derived via bind()
                     Table(
-                        name="sequence",
+                        name="large_sequence",
                         function=SequenceFunction,
-                        comment="A sequence of integers from 0 to n-1",
+                        arguments=Arguments(positional=(pa.scalar(1_000_000),)),
+                        comment="A large sequence of integers from 0 to 1,000,000",
                     ),
                     # Explicit columns table: requires table_scan_function_get
                     Table(
@@ -205,9 +203,7 @@ class ExampleWorker(Worker):
                 at_value=at_value,
             )
 
-        raise NotImplementedError(
-            f"table_scan_function_get not implemented for {schema_name}.{name}"
-        )
+        raise NotImplementedError(f"table_scan_function_get not implemented for {schema_name}.{name}")
 
 
 def main() -> None:

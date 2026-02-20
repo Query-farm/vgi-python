@@ -14,25 +14,31 @@ ProjectedDataFunction         - Demonstrates projection pushdown
 SequenceFunction              - Generates a sequence of integers 0..n-1
 SettingsAwareFunction         - Demonstrates settings-aware output schema
 TenThousandFunction           - Generates 10000 integers 0..9999 (no args)
-TraceContextReporterFunction  - Reports worker PID and traceparent from init
 """
 
+from __future__ import annotations
+
 import struct
-from typing import Annotated, Any, ClassVar, cast
+from dataclasses import dataclass, field
+from typing import Annotated, Any, ClassVar
 
 import numpy as np
 import pyarrow as pa
+from vgi_rpc.log import Level
+from vgi_rpc.rpc import OutputCollector
 
-from vgi.arguments import Arg
-from vgi.invocation import InitResult
-from vgi.log import Level, Message
+from vgi.arguments import Arg, Setting
+from vgi.invocation import BindResponse, GlobalInitResponse
 from vgi.metadata import FunctionExample
+from vgi.schema_utils import schema
 from vgi.table_function import (
-    Output,
-    OutputGenerator,
+    BindParams,
+    InitParams,
+    ProcessParams,
     TableCardinality,
     TableFunctionGenerator,
-    TableFunctionInitInput,
+    bind_fixed_schema,
+    init_single_worker,
 )
 
 __all__ = [
@@ -41,15 +47,50 @@ __all__ = [
     "GeneratorExceptionFunction",
     "LoggingGeneratorFunction",
     "PartitionedSequenceFunction",
+    "NestedSequenceFunction",
     "ProjectedDataFunction",
     "SequenceFunction",
     "SettingsAwareFunction",
     "TenThousandFunction",
-    "TraceContextReporterFunction",
 ]
 
 
-class SequenceFunction(TableFunctionGenerator):
+def _cardinality_from_count[T: TableFunctionGenerator[Any, Any]](cls: type[T]) -> type[T]:
+    """Class decorator to implement cardinality() based on a 'count' argument."""
+    if "cardinality" not in cls.__dict__:  # only inject if subclass hasn't overridden
+
+        def cardinality_impl(cls_: type[T], params: BindParams[Any]) -> TableCardinality:
+            count = getattr(params.args, "count", None)
+            if not isinstance(count, int) or count < 0:
+                raise ValueError(f"Expected a non-negative integer 'count' argument for {cls_.__name__}")
+            return TableCardinality(estimate=count, max=count)
+
+        cls.cardinality = classmethod(cardinality_impl)  # type: ignore[assignment]
+
+    return cls
+
+
+@dataclass(slots=True, frozen=True)
+class SequenceFunctionArgs:
+    """Arguments for SequenceFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of integers to generate", ge=0)]
+    batch_size: Annotated[int, Arg(1, default=1000, doc="Batch size for output", ge=1)]
+    increment: Annotated[int, Arg("increment", default=1, doc="Step between values", ge=1)]
+
+
+@dataclass
+class SequenceState:
+    """Mutable state for SequenceFunction."""
+
+    remaining: int
+    current_index: int = 0
+
+
+@init_single_worker
+@bind_fixed_schema
+@_cardinality_from_count
+class SequenceFunction(TableFunctionGenerator[SequenceFunctionArgs, SequenceState]):
     """Generates a sequence of integers from 0 to n-1 with optional increment.
 
     USE CASE
@@ -61,11 +102,6 @@ class SequenceFunction(TableFunctionGenerator):
     SCHEMA
     ------
     Output: {"n": int64}
-
-    PARALLELIZATION
-    ---------------
-    Single worker only (max_workers=1). Each worker would produce the full
-    sequence, which is typically not desired.
 
     Example:
     -------
@@ -87,7 +123,6 @@ class SequenceFunction(TableFunctionGenerator):
         description = "Generates a sequence of integers from 0 to n-1"
         categories = ["generator", "utility"]
         tags = {"category": "generator", "type": "utility"}
-        max_workers = 1
         projection_pushdown = True
         filter_pushdown = True
         auto_apply_filters = True
@@ -101,54 +136,64 @@ class SequenceFunction(TableFunctionGenerator):
                 description="Generate integers 0-999 in batches of 100",
             ),
             FunctionExample(
-                sql="SELECT * FROM sequence(5, increment=10)",
+                sql="SELECT * FROM sequence(5, 10000, increment := 10)",
                 description="Generate 0, 10, 20, 30, 40",
             ),
         ]
 
-    count: Annotated[int, Arg(0, doc="Number of integers to generate", ge=0)]
-    batch_size: Annotated[int, Arg(1, default=1000, doc="Batch size for output", ge=1)]
-    increment: Annotated[
-        int, Arg("increment", default=1, doc="Step between values", ge=1)
-    ]
-
     # Full schema before projection
-    FULL_SCHEMA: pa.Schema = pa.schema([pa.field("n", pa.int64())])
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.int64())])
 
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return output schema, applying projection if specified."""
-        return self.apply_projection(self.FULL_SCHEMA)
+    @classmethod
+    def initial_state(cls, params: ProcessParams[SequenceFunctionArgs]) -> SequenceState:
+        """Create initial state with remaining count."""
+        return SequenceState(remaining=params.args.count)
 
-    @property
-    def cardinality(self) -> TableCardinality:
-        """Return exact cardinality since we know the count."""
-        return TableCardinality(estimate=self.count, max=self.count)
+    @classmethod
+    def process(cls, params: ProcessParams[SequenceFunctionArgs], state: SequenceState, out: OutputCollector) -> None:
+        """Generate the next batch of the sequence."""
+        if state.remaining <= 0:
+            out.finish()
+            return
 
-    def process(self) -> OutputGenerator:
-        """Generate the sequence in batches."""
-        remaining = self.count
-        current_index = 0
+        size = min(state.remaining, params.args.batch_size)
+        values = np.arange(
+            state.current_index * params.args.increment,
+            (state.current_index + size) * params.args.increment,
+            params.args.increment,
+            dtype=np.int64,
+        )
 
-        while remaining > 0:
-            size = min(remaining, self.batch_size)
-            # Generate: idx*increment, (idx+1)*increment, (idx+2)*increment, ...
-            values = np.arange(
-                current_index * self.increment,
-                (current_index + size) * self.increment,
-                self.increment,
-                dtype=np.int64,
+        out.emit(
+            pa.RecordBatch.from_pydict(
+                {"n": values},
+                schema=params.output_schema,
             )
+        )
 
-            yield Output(
-                pa.RecordBatch.from_pydict({"n": values}, schema=self.output_schema)
-            )
-
-            current_index += size
-            remaining -= size
+        state.current_index += size
+        state.remaining -= size
 
 
-class NestedSequenceFunction(TableFunctionGenerator):
+@dataclass(slots=True, frozen=True)
+class NestedSequenceFunctionArguments:
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+    batch_size: Annotated[int, Arg(1, default=1000, doc="Batch size for output", ge=1)]
+    history_size: Annotated[int, Arg("history_size", default=20, doc="Max items in history list", ge=1)]
+
+
+@dataclass
+class NestedSequenceState:
+    """Mutable state for NestedSequenceFunction."""
+
+    remaining: int
+    current_index: int = 0
+
+
+@init_single_worker
+@bind_fixed_schema
+@_cardinality_from_count
+class NestedSequenceFunction(TableFunctionGenerator[NestedSequenceFunctionArguments, NestedSequenceState]):
     """Generates a sequence with nested struct and list columns.
 
     USE CASE
@@ -166,10 +211,6 @@ class NestedSequenceFunction(TableFunctionGenerator):
         "metadata": struct<index: int64, label: string>,
         "history": list<int64>
     }
-
-    PARALLELIZATION
-    ---------------
-    Single worker only (max_workers=1).
 
     Example:
     -------
@@ -191,7 +232,6 @@ class NestedSequenceFunction(TableFunctionGenerator):
         description = "Generates a sequence with nested struct and list columns"
         categories = ["generator", "utility", "testing"]
         tags = {"category": "generator", "type": "testing"}
-        max_workers = 1
         projection_pushdown = True
         filter_pushdown = True
         auto_apply_filters = True
@@ -206,14 +246,8 @@ class NestedSequenceFunction(TableFunctionGenerator):
             ),
         ]
 
-    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
-    batch_size: Annotated[int, Arg(1, default=1000, doc="Batch size for output", ge=1)]
-    history_size: Annotated[
-        int, Arg("history_size", default=20, doc="Max items in history list", ge=1)
-    ]
-
     # Full schema before projection
-    FULL_SCHEMA: pa.Schema = pa.schema(
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
             pa.field("n", pa.int64()),
             pa.field(
@@ -224,61 +258,75 @@ class NestedSequenceFunction(TableFunctionGenerator):
         ]
     )
 
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return output schema, applying projection if specified."""
-        return self.apply_projection(self.FULL_SCHEMA)
-
-    @property
-    def cardinality(self) -> TableCardinality:
-        """Return exact cardinality since we know the count."""
-        return TableCardinality(estimate=self.count, max=self.count)
-
-    def _get_projected_column_names(self) -> set[str]:
+    @classmethod
+    def _get_projected_column_names(cls, projection_ids: list[int] | None) -> set[str]:
         """Get the set of column names to generate."""
-        if self.init_input and self.init_input.projection_ids is not None:
-            proj_ids = self.init_input.projection_ids
-            return {self.FULL_SCHEMA.field(i).name for i in proj_ids}
-        return {f.name for f in self.FULL_SCHEMA}
+        if projection_ids is not None:
+            return {cls.FIXED_SCHEMA.field(i).name for i in projection_ids}
+        return {f.name for f in cls.FIXED_SCHEMA}
 
-    def process(self) -> OutputGenerator:
-        """Generate the nested sequence in batches."""
-        remaining = self.count
-        current_index = 0
-        projected_cols = self._get_projected_column_names()
+    @classmethod
+    def initial_state(cls, params: ProcessParams[NestedSequenceFunctionArguments]) -> NestedSequenceState:
+        """Create initial state with remaining count."""
+        return NestedSequenceState(remaining=params.args.count)
 
-        while remaining > 0:
-            size = min(remaining, self.batch_size)
-            data: dict[str, Any] = {}
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[NestedSequenceFunctionArguments],
+        state: NestedSequenceState,
+        out: OutputCollector,
+    ) -> None:
+        """Generate the next batch of the nested sequence."""
+        if state.remaining <= 0:
+            out.finish()
+            return
 
-            # Generate sequence indices for this batch
-            indices = list(range(current_index, current_index + size))
+        size = min(state.remaining, params.args.batch_size)
+        projected_cols = cls._get_projected_column_names(params.init_call.projection_ids)
+        indices = list(range(state.current_index, state.current_index + size))
+        data: dict[str, Any] = {}
 
-            # Column: n (sequence index)
-            if "n" in projected_cols:
-                data["n"] = indices
+        if "n" in projected_cols:
+            data["n"] = indices
 
-            # Column: metadata (struct with index and label)
-            if "metadata" in projected_cols:
-                metadata_list = [{"index": i, "label": f"row_{i}"} for i in indices]
-                data["metadata"] = metadata_list
+        if "metadata" in projected_cols:
+            data["metadata"] = [{"index": i, "label": f"row_{i}"} for i in indices]
 
-            # Column: history (list of last N values)
-            if "history" in projected_cols:
-                history_list = []
-                for i in indices:
-                    # History contains up to history_size values ending at i
-                    start = max(0, i - self.history_size + 1)
-                    history_list.append(list(range(start, i + 1)))
-                data["history"] = history_list
+        if "history" in projected_cols:
+            history_list = []
+            for i in indices:
+                start = max(0, i - params.args.history_size + 1)
+                history_list.append(list(range(start, i + 1)))
+            data["history"] = history_list
 
-            yield Output(pa.RecordBatch.from_pydict(data, schema=self.output_schema))
+        out.emit(pa.RecordBatch.from_pydict(data, schema=params.output_schema))
 
-            current_index += size
-            remaining -= size
+        state.current_index += size
+        state.remaining -= size
 
 
-class DoubleSequenceFunction(TableFunctionGenerator):
+@dataclass(slots=True, frozen=True)
+class DoubleSequenceFunctionArguments:
+    """Arguments for DoubleSequenceFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of values to generate", ge=0)]
+    batch_size: Annotated[int, Arg(1, default=1000, doc="Batch size for output", ge=1)]
+    increment: Annotated[float, Arg("increment", default=1.0, doc="Step between values", gt=0.0)]
+
+
+@dataclass
+class DoubleSequenceState:
+    """Mutable state for DoubleSequenceFunction."""
+
+    remaining: int
+    current_index: int = 0
+
+
+@init_single_worker
+@bind_fixed_schema
+@_cardinality_from_count
+class DoubleSequenceFunction(TableFunctionGenerator[DoubleSequenceFunctionArguments, DoubleSequenceState]):
     """Generates a sequence of floats from 0.0 to n-1 with optional increment.
 
     USE CASE
@@ -290,11 +338,6 @@ class DoubleSequenceFunction(TableFunctionGenerator):
     SCHEMA
     ------
     Output: {"n": float64}
-
-    PARALLELIZATION
-    ---------------
-    Single worker only (max_workers=1). Each worker would produce the full
-    sequence, which is typically not desired.
 
     Example:
     -------
@@ -316,7 +359,6 @@ class DoubleSequenceFunction(TableFunctionGenerator):
         description = "Generates a sequence of floating-point numbers from 0 to n-1"
         categories = ["generator", "utility"]
         tags = {"category": "generator", "type": "utility"}
-        max_workers = 1
         examples = [
             FunctionExample(
                 sql="SELECT * FROM double_sequence(10)",
@@ -332,46 +374,56 @@ class DoubleSequenceFunction(TableFunctionGenerator):
             ),
         ]
 
-    count: Annotated[int, Arg(0, doc="Number of values to generate", ge=0)]
-    batch_size: Annotated[int, Arg(1, default=1000, doc="Batch size for output", ge=1)]
-    increment: Annotated[
-        float, Arg("increment", default=1.0, doc="Step between values", gt=0.0)
-    ]
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.float64())])
 
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return output schema with single float64 column."""
-        return pa.schema([pa.field("n", pa.float64())])
+    @classmethod
+    def initial_state(cls, params: ProcessParams[DoubleSequenceFunctionArguments]) -> DoubleSequenceState:
+        """Create initial state with remaining count."""
+        return DoubleSequenceState(remaining=params.args.count)
 
-    @property
-    def cardinality(self) -> TableCardinality:
-        """Return exact cardinality since we know the count."""
-        return TableCardinality(estimate=self.count, max=self.count)
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[DoubleSequenceFunctionArguments],
+        state: DoubleSequenceState,
+        out: OutputCollector,
+    ) -> None:
+        """Generate the next batch of the sequence."""
+        if state.remaining <= 0:
+            out.finish()
+            return
 
-    def process(self) -> OutputGenerator:
-        """Generate the sequence in batches."""
-        remaining = self.count
-        current_index = 0
+        size = min(state.remaining, params.args.batch_size)
+        values = np.arange(
+            state.current_index * params.args.increment,
+            (state.current_index + size) * params.args.increment,
+            params.args.increment,
+            dtype=np.float64,
+        )
 
-        while remaining > 0:
-            size = min(remaining, self.batch_size)
-            # Generate: idx*increment, (idx+1)*increment, (idx+2)*increment, ...
-            values = np.arange(
-                current_index * self.increment,
-                (current_index + size) * self.increment,
-                self.increment,
-                dtype=np.float64,
-            )
+        out.emit(pa.RecordBatch.from_pydict({"n": values}, schema=params.output_schema))
 
-            yield Output(
-                pa.RecordBatch.from_pydict({"n": values}, schema=self.output_schema)
-            )
-
-            current_index += size
-            remaining -= size
+        state.current_index += size
+        state.remaining -= size
 
 
-class GeneratorExceptionFunction(TableFunctionGenerator):
+@dataclass(slots=True, frozen=True)
+class GeneratorExceptionFunctionArguments:
+    """Arguments for GeneratorExceptionFunction."""
+
+    fail_after: Annotated[int, Arg(0, doc="Number of batches before failure", ge=0)]
+
+
+@dataclass
+class GeneratorExceptionState:
+    """Mutable state for GeneratorExceptionFunction."""
+
+    batch_count: int = 0
+
+
+@init_single_worker
+@bind_fixed_schema
+class GeneratorExceptionFunction(TableFunctionGenerator[GeneratorExceptionFunctionArguments, GeneratorExceptionState]):
     """Function that raises an exception after generating some output.
 
     USE CASE
@@ -391,26 +443,46 @@ class GeneratorExceptionFunction(TableFunctionGenerator):
         description = "Raises an exception after N batches for testing"
         categories = ["testing"]
         tags = {"category": "testing", "type": "error-handling"}
-        max_workers = 1
 
-    fail_after: Annotated[int, Arg(0, doc="Number of batches before failure", ge=0)]
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.int64())])
 
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return output schema."""
-        return pa.schema([pa.field("n", pa.int64())])
+    @classmethod
+    def initial_state(cls, params: ProcessParams[GeneratorExceptionFunctionArguments]) -> GeneratorExceptionState:
+        """Create initial state."""
+        return GeneratorExceptionState()
 
-    def process(self) -> OutputGenerator:
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[GeneratorExceptionFunctionArguments],
+        state: GeneratorExceptionState,
+        out: OutputCollector,
+    ) -> None:
         """Generate batches then raise an exception."""
-        for i in range(self.fail_after):
-            yield Output(
-                pa.RecordBatch.from_pydict({"n": [i]}, schema=self.output_schema)
-            )
+        if state.batch_count >= params.args.fail_after:
+            raise ValueError(f"Intentional failure after {params.args.fail_after} batches")
 
-        raise ValueError(f"Intentional failure after {self.fail_after} batches")
+        out.emit(pa.RecordBatch.from_pydict({"n": [state.batch_count]}, schema=params.output_schema))
+        state.batch_count += 1
 
 
-class LoggingGeneratorFunction(TableFunctionGenerator):
+@dataclass(slots=True, frozen=True)
+class LoggingGeneratorFunctionArguments:
+    """Arguments for LoggingGeneratorFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of values to generate", ge=0)]
+
+
+@dataclass
+class LoggingGeneratorState:
+    """Mutable state for LoggingGeneratorFunction."""
+
+    index: int = 0
+
+
+@init_single_worker
+@bind_fixed_schema
+class LoggingGeneratorFunction(TableFunctionGenerator[LoggingGeneratorFunctionArguments, LoggingGeneratorState]):
     """Function that emits log messages during generation.
 
     USE CASE
@@ -429,28 +501,56 @@ class LoggingGeneratorFunction(TableFunctionGenerator):
         name = "logging_generator"
         description = "Emits log messages during generation"
         categories = ["testing"]
-        max_workers = 1
 
-    count: Annotated[int, Arg(0, doc="Number of values to generate", ge=0)]
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.int64())])
 
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return output schema."""
-        return pa.schema([pa.field("n", pa.int64())])
+    @classmethod
+    def initial_state(cls, params: ProcessParams[LoggingGeneratorFunctionArguments]) -> LoggingGeneratorState:
+        """Create initial state."""
+        return LoggingGeneratorState()
 
-    def process(self) -> OutputGenerator:
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[LoggingGeneratorFunctionArguments],
+        state: LoggingGeneratorState,
+        out: OutputCollector,
+    ) -> None:
         """Generate values with logging."""
-        yield Message(Level.INFO, f"Starting generation of {self.count} values")
+        if state.index == 0:
+            out.client_log(Level.INFO, f"Starting generation of {params.args.count} values")
 
-        for i in range(self.count):
-            yield Output(
-                pa.RecordBatch.from_pydict({"n": [i]}, schema=self.output_schema)
-            )
+        if state.index >= params.args.count:
+            out.client_log(Level.INFO, "Generation complete")
+            out.finish()
+            return
 
-        yield Message(Level.INFO, "Generation complete")
+        out.emit(pa.RecordBatch.from_pydict({"n": [state.index]}, schema=params.output_schema))
+        state.index += 1
 
 
-class PartitionedSequenceFunction(TableFunctionGenerator):
+@dataclass(slots=True, frozen=True)
+class PartitionedSequenceFunctionArguments:
+    """Arguments for PartitionedSequenceFunction."""
+
+    count: Annotated[int, Arg(0, doc="Total number of integers to generate", ge=0)]
+    increment: Annotated[int, Arg("increment", default=1, doc="Step between values", ge=1)]
+
+
+@dataclass
+class PartitionedSequenceState:
+    """Mutable state for PartitionedSequenceFunction."""
+
+    current_start: int | None = None
+    current_end: int | None = None
+    current_idx: int = 0
+
+
+@bind_fixed_schema
+@_cardinality_from_count
+class PartitionedSequenceFunction(
+    TableFunctionGenerator[PartitionedSequenceFunctionArguments, PartitionedSequenceState]
+):
     """Generates a partitioned sequence of integers for multi-worker execution.
 
     USE CASE
@@ -491,7 +591,6 @@ class PartitionedSequenceFunction(TableFunctionGenerator):
         name = "partitioned_sequence"
         description = "Generates a partitioned sequence for multi-worker execution"
         categories = ["generator", "utility"]
-        # No max_workers limit - fully parallelizable
         examples = [
             FunctionExample(
                 sql="SELECT * FROM partitioned_sequence(100)",
@@ -503,76 +602,79 @@ class PartitionedSequenceFunction(TableFunctionGenerator):
             ),
         ]
 
-    count: Annotated[int, Arg(0, doc="Total number of integers to generate", ge=0)]
-    increment: Annotated[
-        int, Arg("increment", default=1, doc="Step between values", ge=1)
-    ]
-
     # Size of each work chunk in the queue
     CHUNK_SIZE: ClassVar[int] = 1000
     # Batch size for output within each chunk
     BATCH_SIZE: ClassVar[int] = 1000
 
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return output schema with single integer column."""
-        return pa.schema([pa.field("n", pa.int64())])
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.int64())])
 
-    @property
-    def cardinality(self) -> TableCardinality:
-        """Return cardinality estimate.
-
-        Since work is distributed dynamically via queue, we can only provide
-        the total count estimate, not per-worker estimates.
-        """
-        return TableCardinality(estimate=self.count, max=self.count)
-
-    def initialize_global_state(self, init_input: pa.RecordBatch) -> InitResult:
-        """Populate the work queue with sequence chunks."""
-        # Parse init data and store in storage
-        self.init_input = TableFunctionInitInput.deserialize(init_input)
-        self.execution_identifier = self.storage.global_put(self.init_input.serialize())
-
+    @classmethod
+    def on_init(
+        cls,
+        params: InitParams[PartitionedSequenceFunctionArguments],
+    ) -> GlobalInitResponse:
+        """Perform the global init of the worker for this function call."""
         # Create work items for each chunk of the sequence
         work_items: list[bytes] = []
-        for start_idx in range(0, self.count, self.CHUNK_SIZE):
-            end_idx = min(start_idx + self.CHUNK_SIZE, self.count)
+        for start_idx in range(0, params.args.count, cls.CHUNK_SIZE):
+            end_idx = min(start_idx + cls.CHUNK_SIZE, params.args.count)
             # Pack as two unsigned 64-bit integers: (start_idx, end_idx)
             work_items.append(struct.pack(">QQ", start_idx, end_idx))
 
         # Always enqueue (even if empty) to register the invocation
-        self.enqueue_work(work_items)
+        params.storage.queue_push(work_items)
+        return GlobalInitResponse()
 
-        return InitResult(self.execution_identifier)
+    @classmethod
+    def initial_state(cls, params: ProcessParams[PartitionedSequenceFunctionArguments]) -> PartitionedSequenceState:
+        """Create initial state."""
+        return PartitionedSequenceState()
 
-    def process(self) -> OutputGenerator:
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[PartitionedSequenceFunctionArguments],
+        state: PartitionedSequenceState,
+        out: OutputCollector,
+    ) -> None:
         """Generate values by pulling chunks from the work queue."""
-        while True:
-            # Atomically claim a work item from the queue
-            work_data = self.dequeue_work()
+        # If we have no current chunk or finished current chunk, pop next
+        if state.current_start is None or state.current_idx >= (state.current_end or 0):
+            work_data = params.storage.queue_pop()
             if work_data is None:
-                break  # Queue empty, done
+                out.finish()
+                return
+            state.current_start, state.current_end = struct.unpack(">QQ", work_data)
+            state.current_idx = state.current_start
 
-            # Unpack the index range (start_idx, end_idx)
-            start_idx, end_idx = struct.unpack(">QQ", work_data)
+        batch_end_idx = min(state.current_idx + cls.BATCH_SIZE, state.current_end or 0)
+        values = [idx * params.args.increment for idx in range(state.current_idx, batch_end_idx)]
 
-            # Generate values for this chunk in batches
-            current_idx = start_idx
-            while current_idx < end_idx:
-                batch_end_idx = min(current_idx + self.BATCH_SIZE, end_idx)
-                # Generate values: idx * increment for each idx in range
-                values = [
-                    idx * self.increment for idx in range(current_idx, batch_end_idx)
-                ]
+        out.emit(pa.RecordBatch.from_pydict({"n": values}, schema=params.output_schema))
 
-                yield Output(
-                    pa.RecordBatch.from_pydict({"n": values}, schema=self.output_schema)
-                )
-
-                current_idx = batch_end_idx
+        state.current_idx = batch_end_idx
 
 
-class ProjectedDataFunction(TableFunctionGenerator):
+@dataclass(slots=True, frozen=True)
+class ProjectedDataFunctionArguments:
+    """Arguments for ProjectedDataFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+
+
+@dataclass
+class ProjectedDataState:
+    """Mutable state for ProjectedDataFunction."""
+
+    remaining: int
+    current_id: int = 0
+
+
+@init_single_worker
+@bind_fixed_schema
+@_cardinality_from_count
+class ProjectedDataFunction(TableFunctionGenerator[ProjectedDataFunctionArguments, ProjectedDataState]):
     """Generates data with 4 columns, supporting projection pushdown.
 
     USE CASE
@@ -585,10 +687,6 @@ class ProjectedDataFunction(TableFunctionGenerator):
     ------
     Full output: {"id": int64, "name": string, "value": float64, "extra": int64}
     With projection, only the projected columns are included.
-
-    PARALLELIZATION
-    ---------------
-    Single worker only (max_workers=1).
 
     Example:
     -------
@@ -603,7 +701,6 @@ class ProjectedDataFunction(TableFunctionGenerator):
         name = "projected_data"
         description = "Generates data with 4 columns, supporting projection pushdown"
         categories = ["generator", "utility"]
-        max_workers = 1
         projection_pushdown = True
         examples = [
             FunctionExample(
@@ -616,85 +713,86 @@ class ProjectedDataFunction(TableFunctionGenerator):
             ),
         ]
 
-    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
-
     # Full schema with all 4 columns
-    FULL_SCHEMA: pa.Schema = pa.schema(
-        cast(
-            list[tuple[str, pa.DataType]],
-            [
-                ("id", pa.int64()),
-                ("name", pa.string()),
-                ("value", pa.float64()),
-                ("extra", pa.int64()),
-            ],
-        )
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema(
+        {
+            "id": pa.int64(),
+            "name": pa.string(),
+            "value": pa.float64(),
+            "extra": pa.int64(),
+        }
     )
 
-    BATCH_SIZE: int = 1000
+    BATCH_SIZE: ClassVar[int] = 1000
 
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return the projected schema based on init_input."""
-        return self.apply_projection(self.FULL_SCHEMA)
-
-    @property
-    def cardinality(self) -> TableCardinality:
-        """Return exact cardinality since we know the count."""
-        return TableCardinality(estimate=self.count, max=self.count)
-
-    def _get_projected_column_indices(self) -> list[int]:
+    @classmethod
+    def _get_projected_column_indices(cls, projection_ids: list[int] | None) -> list[int]:
         """Get the column indices to generate.
 
         Returns indices from projection_ids if set, otherwise all columns.
         """
-        if self.init_input and self.init_input.projection_ids is not None:
-            return self.init_input.projection_ids
-        return list(range(len(self.FULL_SCHEMA)))
+        if projection_ids is not None:
+            return projection_ids
+        return list(range(len(cls.FIXED_SCHEMA)))
 
-    def process(self) -> OutputGenerator:
+    @classmethod
+    def initial_state(cls, params: ProcessParams[ProjectedDataFunctionArguments]) -> ProjectedDataState:
+        """Create initial state with remaining count."""
+        return ProjectedDataState(remaining=params.args.count)
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[ProjectedDataFunctionArguments],
+        state: ProjectedDataState,
+        out: OutputCollector,
+    ) -> None:
         """Generate data for only the projected columns."""
-        projected_indices = self._get_projected_column_indices()
-        output_schema = self.output_schema
+        if state.remaining <= 0:
+            out.finish()
+            return
 
-        remaining = self.count
-        current_id = 0
+        projected_indices = cls._get_projected_column_indices(params.init_call.projection_ids)
+        batch_size = min(state.remaining, cls.BATCH_SIZE)
 
-        while remaining > 0:
-            batch_size = min(remaining, self.BATCH_SIZE)
+        # Only compute columns that are projected
+        columns: dict[str, list[int] | list[str] | list[float]] = {}
 
-            # Only compute columns that are projected
-            columns: dict[str, list[int] | list[str] | list[float]] = {}
+        for idx in projected_indices:
+            f = cls.FIXED_SCHEMA.field(idx)
+            if f.name == "id":
+                columns["id"] = list(range(state.current_id, state.current_id + batch_size))
+            elif f.name == "name":
+                columns["name"] = [f"item_{i}" for i in range(state.current_id, state.current_id + batch_size)]
+            elif f.name == "value":
+                columns["value"] = [float(i) * 1.5 for i in range(state.current_id, state.current_id + batch_size)]
+            elif f.name == "extra":
+                columns["extra"] = [i * i for i in range(state.current_id, state.current_id + batch_size)]
 
-            for idx in projected_indices:
-                field = self.FULL_SCHEMA.field(idx)
-                if field.name == "id":
-                    # Column 0: Sequential IDs
-                    columns["id"] = list(range(current_id, current_id + batch_size))
-                elif field.name == "name":
-                    # Column 1: Names based on ID
-                    columns["name"] = [
-                        f"item_{i}" for i in range(current_id, current_id + batch_size)
-                    ]
-                elif field.name == "value":
-                    # Column 2: Float values (ID * 1.5)
-                    columns["value"] = [
-                        float(i) * 1.5
-                        for i in range(current_id, current_id + batch_size)
-                    ]
-                elif field.name == "extra":
-                    # Column 3: Extra integer (ID squared)
-                    columns["extra"] = [
-                        i * i for i in range(current_id, current_id + batch_size)
-                    ]
+        out.emit(pa.RecordBatch.from_pydict(columns, schema=params.output_schema))
 
-            yield Output(pa.RecordBatch.from_pydict(columns, schema=output_schema))
-
-            current_id += batch_size
-            remaining -= batch_size
+        state.current_id += batch_size
+        state.remaining -= batch_size
 
 
-class SettingsAwareFunction(TableFunctionGenerator):
+@dataclass(slots=True, frozen=True)
+class SettingsAwareFunctionArguments:
+    """Arguments for SettingsAwareFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+
+
+@dataclass
+class SettingsAwareState:
+    """Mutable state for SettingsAwareFunction."""
+
+    remaining: int
+    current_id: int = 0
+
+
+@init_single_worker
+@_cardinality_from_count
+class SettingsAwareFunction(TableFunctionGenerator[SettingsAwareFunctionArguments, SettingsAwareState]):
     """Generates data demonstrating that settings are passed to functions.
 
     USE CASE
@@ -714,10 +812,6 @@ class SettingsAwareFunction(TableFunctionGenerator):
     Base output: {"id": int64, "greeting": string, "value": float64}
     With vgi_verbose_mode="true": adds "details": string column
 
-    PARALLELIZATION
-    ---------------
-    Single worker only (max_workers=1).
-
     Example:
     -------
     With settings={"vgi_verbose_mode": "true", "greeting": "Hi", "multiplier": "2"}:
@@ -731,8 +825,6 @@ class SettingsAwareFunction(TableFunctionGenerator):
         name = "settings_aware"
         description = "Generates data demonstrating settings are passed"
         categories = ["generator", "settings"]
-        max_workers = 1
-        required_settings = ["vgi_verbose_mode", "greeting", "multiplier"]
         examples = [
             FunctionExample(
                 sql="SELECT * FROM settings_aware(5)",
@@ -740,10 +832,17 @@ class SettingsAwareFunction(TableFunctionGenerator):
             )
         ]
 
-    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+    BATCH_SIZE: ClassVar[int] = 1000
 
-    @property
-    def output_schema(self) -> pa.Schema:
+    @classmethod
+    def on_bind(
+        cls,
+        params: BindParams[SettingsAwareFunctionArguments],
+        *,
+        vgi_verbose_mode: Annotated[pa.Scalar[Any] | None, Setting()] = None,
+        greeting: Annotated[pa.Scalar[Any] | None, Setting()] = None,
+        multiplier: Annotated[pa.Scalar[Any] | None, Setting()] = None,
+    ) -> BindResponse:
         """Return output schema based on vgi_verbose_mode setting.
 
         Always includes id, greeting (from setting), and value (multiplied).
@@ -756,38 +855,67 @@ class SettingsAwareFunction(TableFunctionGenerator):
         ]
 
         # Add details column if verbose mode is enabled
-        if self.get_setting("vgi_verbose_mode") == "true":
+        verbose_value = vgi_verbose_mode.as_py() if vgi_verbose_mode is not None else "false"
+        if verbose_value == "true":
             fields.append(pa.field("details", pa.string()))
 
-        return pa.schema(fields)
+        return BindResponse(output_schema=pa.schema(fields))
 
-    @property
-    def cardinality(self) -> TableCardinality:
-        """Return exact cardinality since we know the count."""
-        return TableCardinality(estimate=self.count, max=self.count)
+    @classmethod
+    def initial_state(cls, params: ProcessParams[SettingsAwareFunctionArguments]) -> SettingsAwareState:
+        """Create initial state with remaining count."""
+        return SettingsAwareState(remaining=params.args.count)
 
-    def process(self) -> OutputGenerator:
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[SettingsAwareFunctionArguments],
+        state: SettingsAwareState,
+        out: OutputCollector,
+    ) -> None:
         """Generate data based on settings."""
-        verbose = self.get_setting("vgi_verbose_mode") == "true"
-        greeting = self.get_setting("greeting") or "Hello"
-        multiplier_str = self.get_setting("multiplier") or "1"
+        if state.remaining <= 0:
+            out.finish()
+            return
+
+        verbose = params.settings.get("vgi_verbose_mode", pa.scalar("false")).as_py() == "true"
+        greeting = params.settings.get("greeting", pa.scalar("Hello")).as_py()
+        multiplier_str = params.settings.get("multiplier", pa.scalar("1")).as_py()
         multiplier = int(multiplier_str)
-        output_schema = self.output_schema
 
-        for i in range(self.count):
-            data: dict[str, list[int] | list[float] | list[str]] = {
-                "id": [i],
-                "greeting": [greeting],
-                "value": [float(i) * 2.5 * multiplier],
-            }
+        size = min(state.remaining, cls.BATCH_SIZE)
+        ids = list(range(state.current_id, state.current_id + size))
 
-            if verbose:
-                data["details"] = [f"row_{i}"]
+        data: dict[str, list[int] | list[float] | list[str]] = {
+            "id": ids,
+            "greeting": [greeting] * size,
+            "value": [float(i) * 2.5 * multiplier for i in ids],
+        }
 
-            yield Output(pa.RecordBatch.from_pydict(data, schema=output_schema))
+        if verbose:
+            data["details"] = [f"row_{i}" for i in ids]
+
+        out.emit(pa.RecordBatch.from_pydict(data, schema=params.output_schema))
+
+        state.current_id += size
+        state.remaining -= size
 
 
-class TenThousandFunction(TableFunctionGenerator):
+@dataclass(slots=True, frozen=True)
+class TenThousandFunctionArguments:
+    """Arguments for TenThousandFunction."""
+
+
+@dataclass
+class TenThousandState:
+    """Mutable state for TenThousandFunction."""
+
+    start: int = 0
+
+
+@init_single_worker
+@bind_fixed_schema
+class TenThousandFunction(TableFunctionGenerator[TenThousandFunctionArguments, TenThousandState]):
     """Generates 10000 rows with integers from 0 to 9999.
 
     USE CASE
@@ -798,10 +926,6 @@ class TenThousandFunction(TableFunctionGenerator):
     SCHEMA
     ------
     Output: {"n": int64}
-
-    PARALLELIZATION
-    ---------------
-    Single worker only (max_workers=1).
 
     Example:
     -------
@@ -816,7 +940,6 @@ class TenThousandFunction(TableFunctionGenerator):
         name = "ten_thousand"
         description = "Generates 10000 integers from 0 to 9999"
         categories = ["generator", "utility"]
-        max_workers = 1
         examples = [
             FunctionExample(
                 sql="SELECT * FROM ten_thousand()",
@@ -824,130 +947,65 @@ class TenThousandFunction(TableFunctionGenerator):
             ),
         ]
 
-    BATCH_SIZE: int = 1000
+    BATCH_SIZE: ClassVar[int] = 1000
 
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return output schema with single integer column."""
-        return pa.schema([pa.field("n", pa.int64())])
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.int64())])
 
-    @property
-    def cardinality(self) -> TableCardinality:
+    @classmethod
+    def cardinality(cls, params: BindParams[TenThousandFunctionArguments]) -> TableCardinality:
         """Return exact cardinality (always 10000)."""
         return TableCardinality(estimate=10000, max=10000)
 
-    def process(self) -> OutputGenerator:
+    @classmethod
+    def initial_state(cls, params: ProcessParams[TenThousandFunctionArguments]) -> TenThousandState:
+        """Create initial state."""
+        return TenThousandState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[TenThousandFunctionArguments],
+        state: TenThousandState,
+        out: OutputCollector,
+    ) -> None:
         """Generate 10000 integers in batches."""
-        for start in range(0, 10000, self.BATCH_SIZE):
-            end = min(start + self.BATCH_SIZE, 10000)
-            values = np.arange(start, end, dtype=np.int64)
-            yield Output(
-                pa.RecordBatch.from_pydict({"n": values}, schema=self.output_schema)
-            )
+        if state.start >= 10000:
+            out.finish()
+            return
+
+        end = min(state.start + cls.BATCH_SIZE, 10000)
+        values = np.arange(state.start, end, dtype=np.int64)
+        out.emit(pa.RecordBatch.from_pydict({"n": values}, schema=params.output_schema))
+        state.start = end
 
 
-class TraceContextReporterFunction(TableFunctionGenerator):
-    """Reports worker PID and traceparent from init data.
-
-    USE CASE
-    --------
-    Demonstrates and tests trace context propagation in multi-worker scenarios.
-    The primary worker injects its trace context into init data, and all workers
-    (primary and secondary) report the traceparent they received. This allows
-    verification that secondary workers receive the primary's trace context.
-
-    Workers sleep at the start to allow all workers to initialize and reach
-    the processing loop, then sleep after each item to ensure fair distribution.
-
-    SCHEMA
-    ------
-    Output: {"worker_pid": int32, "traceparent": string}
-
-    PARALLELIZATION
-    ---------------
-    Fully parallelizable using a shared work queue. Workers sleep before
-    processing to ensure work distribution across multiple workers.
-
-    Example:
-    -------
-    With count=10 and max_workers=3:
-        Returns 10 rows, each with a worker's PID and the traceparent.
-        All rows should have the same traceparent (from primary worker).
-        Rows will have different PIDs if multiple workers participated.
-
-    """
-
-    class Meta:
-        """Metadata for TraceContextReporterFunction."""
-
-        name = "trace_context_reporter"
-        description = "Reports worker PID and traceparent from init data"
-        categories = ["generator", "utility", "tracing"]
-        examples = [
-            FunctionExample(
-                sql="SELECT * FROM trace_context_reporter(10)",
-                description="Generate 10 rows reporting PID and traceparent",
-            ),
-        ]
+@dataclass(slots=True, frozen=True)
+class ConstantColumnsFunctionArguments:
+    """Arguments for ConstantColumnsFunction."""
 
     count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
-
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return output schema with worker_pid and traceparent columns."""
-        fields: list[pa.Field[pa.DataType]] = [
-            pa.field("worker_pid", pa.int32()),
-            pa.field("traceparent", pa.string()),
-        ]
-        return pa.schema(fields)
-
-    @property
-    def cardinality(self) -> TableCardinality:
-        """Return cardinality estimate."""
-        return TableCardinality(estimate=self.count, max=self.count)
-
-    def initialize_global_state(self, init_input: pa.RecordBatch) -> InitResult:
-        """Populate the work queue with work items."""
-        self.init_input = TableFunctionInitInput.deserialize(init_input)
-        self.execution_identifier = self.storage.global_put(self.init_input.serialize())
-
-        # Create work items - one per row to generate
-        work_items: list[bytes] = []
-        for i in range(self.count):
-            work_items.append(struct.pack(">I", i))
-
-        self.enqueue_work(work_items)
-        return InitResult(self.execution_identifier)
-
-    def process(self) -> OutputGenerator:
-        """Generate rows reporting PID and traceparent.
-
-        Each work item produces a batch of 10,000 rows.
-        """
-        import os
-
-        worker_pid = os.getpid()
-        traceparent = self.init_input.traceparent if self.init_input else None
-        batch_size = 10000
-
-        while True:
-            work_data = self.dequeue_work()
-            if work_data is None:
-                break
-
-            # Each work item produces a batch of 100,000 rows
-            yield Output(
-                pa.RecordBatch.from_pydict(
-                    {
-                        "worker_pid": [worker_pid] * batch_size,
-                        "traceparent": [traceparent] * batch_size,
-                    },
-                    schema=self.output_schema,
-                )
-            )
+    values: Annotated[
+        tuple[Any, ...],
+        Arg(
+            1,
+            varargs=True,
+            doc="Values to fill each column (at least one required)",
+            arrow_type=pa.null(),  # Type is dynamic based on actual values provided
+        ),
+    ]
 
 
-class ConstantColumnsFunction(TableFunctionGenerator):
+@dataclass
+class ConstantColumnsState:
+    """Mutable state for ConstantColumnsFunction."""
+
+    remaining: int
+    full_batch: pa.RecordBatch = field(repr=False, default=None)  # type: ignore[assignment]
+
+
+@init_single_worker
+@_cardinality_from_count
+class ConstantColumnsFunction(TableFunctionGenerator[ConstantColumnsFunctionArguments, ConstantColumnsState]):
     """Generates a table with constant values in each column based on varargs.
 
     USE CASE
@@ -966,10 +1024,6 @@ class ConstantColumnsFunction(TableFunctionGenerator):
 
     Example: constant_columns(3, 42, 'hello', 3.14)
     Output schema: {"col_0": int64, "col_1": string, "col_2": double}
-
-    PARALLELIZATION
-    ---------------
-    Single worker only (max_workers=1).
 
     Example:
     -------
@@ -990,7 +1044,6 @@ class ConstantColumnsFunction(TableFunctionGenerator):
         name = "constant_columns"
         description = "Generates rows with constant values from varargs"
         categories = ["generator", "utility"]
-        max_workers = 1
         examples = [
             FunctionExample(
                 sql="SELECT * FROM constant_columns(5, 42, 'hello')",
@@ -1002,55 +1055,35 @@ class ConstantColumnsFunction(TableFunctionGenerator):
             ),
         ]
 
-    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
-    values: Annotated[
-        tuple[Any, ...],
-        Arg(
-            1,
-            varargs=True,
-            doc="Values to fill each column (at least one required)",
-            arrow_type=pa.null(),  # Type is dynamic based on actual values provided
-        ),
-    ]
+    BATCH_SIZE: ClassVar[int] = 2048
 
-    # Store Arrow scalars for type information
-    _value_scalars: list[Any]
-
-    BATCH_SIZE: int = 2048
-
-    def bind(self) -> None:
-        """Extract Arrow scalars from positional arguments for type info."""
-        # Access raw Arrow scalars to preserve type information
-        positional = self.invocation.arguments.positional
-        # Filter to non-None scalars (varargs validation ensures no nulls)
-        self._value_scalars = [s for s in positional[1:] if s is not None]
-
-    @property
-    def output_schema(self) -> pa.Schema:
+    @classmethod
+    def on_bind(cls, params: BindParams[ConstantColumnsFunctionArguments]) -> BindResponse:
         """Return output schema with one column per vararg, typed by value."""
-        fields = [
-            pa.field(f"col_{i}", scalar.type)
-            for i, scalar in enumerate(self._value_scalars)
-        ]
-        return pa.schema(fields)
+        return BindResponse(output_schema=schema({f"col_{i}": v.type for i, v in enumerate(params.args.values)}))
 
-    @property
-    def cardinality(self) -> TableCardinality:
-        """Return exact cardinality since we know the count."""
-        return TableCardinality(estimate=self.count, max=self.count)
+    @classmethod
+    def initial_state(cls, params: ProcessParams[ConstantColumnsFunctionArguments]) -> ConstantColumnsState:
+        """Create initial state with pre-built full batch."""
+        arrays = [pa.repeat(scalar, cls.BATCH_SIZE) for scalar in params.args.values]
+        full_batch = pa.RecordBatch.from_arrays(arrays, schema=params.output_schema)
+        return ConstantColumnsState(remaining=params.args.count, full_batch=full_batch)
 
-    def process(self) -> OutputGenerator:
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[ConstantColumnsFunctionArguments],
+        state: ConstantColumnsState,
+        out: OutputCollector,
+    ) -> None:
         """Generate rows with constant values in each column."""
-        output_schema = self.output_schema
-        remaining = self.count
+        if state.remaining <= 0:
+            out.finish()
+            return
 
-        # Create full-size batch once and reuse (slice for final partial batch)
-        arrays = [pa.repeat(scalar, self.BATCH_SIZE) for scalar in self._value_scalars]
-        full_batch = pa.RecordBatch.from_arrays(arrays, schema=output_schema)
-
-        while remaining >= self.BATCH_SIZE:
-            yield Output(full_batch)
-            remaining -= self.BATCH_SIZE
-
-        if remaining > 0:
-            yield Output(full_batch.slice(0, remaining))
+        if state.remaining >= cls.BATCH_SIZE:
+            out.emit(state.full_batch)
+            state.remaining -= cls.BATCH_SIZE
+        else:
+            out.emit(state.full_batch.slice(0, state.remaining))
+            state.remaining = 0

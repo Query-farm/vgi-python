@@ -9,16 +9,13 @@ from typing import TypeVar
 
 import pyarrow as pa
 import pytest
+from vgi_rpc.log import Level, Message
+from vgi_rpc.utils import deserialize_record_batch
 
 from tests.conftest import make_schema
 from vgi.arguments import Arg, Arguments, ArgumentValidationError
-from vgi.invocation import InitResult, Invocation, InvocationType
-from vgi.ipc_utils import deserialize_record_batch
-from vgi.log import Level, Message
 from vgi.table_function import (
-    OutputSpec,
     TableCardinality,
-    TableFunctionInitInput,
 )
 
 T = TypeVar("T")
@@ -26,8 +23,8 @@ T = TypeVar("T")
 
 def ipc_round_trip(obj: T, cls: type[T]) -> T:
     """Serialize an object and deserialize via IPC stream."""
-    batch, metadata = deserialize_record_batch(obj.serialize())  # type: ignore[attr-defined]
-    return cls.deserialize(batch, metadata)  # type: ignore[attr-defined, no-any-return]
+    batch, metadata = deserialize_record_batch(obj.serialize_to_bytes())  # type: ignore[attr-defined]
+    return cls.deserialize_from_batch(batch, metadata)  # type: ignore[attr-defined, no-any-return]
 
 
 def encode_arguments_to_struct(args: Arguments) -> pa.StructScalar:
@@ -173,213 +170,6 @@ class TestArguments:
             args.get("count", type=pa.string())
 
 
-class TestInvocation:
-    """Tests for Invocation serialization and deserialization."""
-
-    def test_basic_round_trip(self) -> None:
-        """Basic Invocation should serialize and deserialize correctly."""
-        original = Invocation(
-            function_name="test_function",
-            input_schema=make_schema([pa.field("col1", pa.int64())]),
-            function_type=InvocationType.TABLE,
-            correlation_id="test-123",
-            invocation_id=b"bind-id-bytes",
-            arguments=Arguments(positional=(pa.scalar(42),), named={}),
-        )
-
-        deserialized = ipc_round_trip(original, Invocation)
-
-        assert deserialized.function_name == original.function_name
-        assert deserialized.correlation_id == original.correlation_id
-        assert deserialized.invocation_id == original.invocation_id
-        assert deserialized.input_schema == original.input_schema
-        assert len(deserialized.arguments.positional) == 1
-        assert deserialized.arguments.positional[0] is not None
-        assert deserialized.arguments.positional[0].as_py() == 42
-
-    def test_nullmake_schema(self) -> None:
-        """Invocation with null input schema should round-trip correctly."""
-        original = Invocation(
-            function_name="scalar_function",
-            input_schema=None,
-            function_type=InvocationType.TABLE,
-            correlation_id="",
-            invocation_id=None,
-        )
-
-        deserialized = ipc_round_trip(original, Invocation)
-
-        assert deserialized.function_name == "scalar_function"
-        assert deserialized.input_schema is None
-        assert deserialized.invocation_id is None
-
-    def test_complexmake_schema(self) -> None:
-        """Invocation with complex schema should round-trip correctly."""
-        complex_schema = make_schema(
-            [
-                pa.field("int_col", pa.int32()),
-                pa.field("float_col", pa.float64()),
-                pa.field("string_col", pa.string()),
-                pa.field("list_col", pa.list_(pa.int64())),
-                pa.field("struct_col", pa.struct([pa.field("nested", pa.string())])),
-            ]
-        )
-
-        original = Invocation(
-            function_name="complex_function",
-            input_schema=complex_schema,
-            function_type=InvocationType.TABLE,
-            correlation_id="complex-test",
-            invocation_id=b"complex-bind",
-        )
-
-        deserialized = ipc_round_trip(original, Invocation)
-
-        assert deserialized.input_schema == complex_schema
-
-    def test_deserialize_empty_batch_raises(self) -> None:
-        """Deserializing empty batch should raise ValueError."""
-        from vgi.ipc_utils import ProtocolState, protocol_state_metadata
-
-        empty_batch = pa.RecordBatch.from_pylist(
-            [],
-            schema=pa.schema(
-                [
-                    pa.field("function_name", pa.string()),
-                    pa.field("arguments", pa.struct([])),
-                    pa.field("input_schema", pa.binary()),
-                    pa.field("invocation_id", pa.binary()),
-                    pa.field("correlation_id", pa.string()),
-                ]
-            ),
-        )
-        metadata = protocol_state_metadata(ProtocolState.INVOCATION)
-
-        with pytest.raises(ValueError, match="empty RecordBatch"):
-            Invocation.deserialize(empty_batch, metadata)
-
-    def test_deserialize_multi_row_batch_raises(self) -> None:
-        """Deserializing multi-row batch should raise ValueError."""
-        from vgi.ipc_utils import ProtocolState, protocol_state_metadata
-
-        multi_row_batch = pa.RecordBatch.from_pylist(
-            [
-                {
-                    "function_name": "fn1",
-                    "arguments": {},
-                    "input_schema": None,
-                    "invocation_id": None,
-                    "correlation_id": "",
-                },
-                {
-                    "function_name": "fn2",
-                    "arguments": {},
-                    "input_schema": None,
-                    "invocation_id": None,
-                    "correlation_id": "",
-                },
-            ]
-        )
-        metadata = protocol_state_metadata(ProtocolState.INVOCATION)
-
-        with pytest.raises(ValueError, match="single-row"):
-            Invocation.deserialize(multi_row_batch, metadata)
-
-    def test_with_global_execution_identifier(self) -> None:
-        """Test that with_global_execution_identifier creates a new Invocation."""
-        original = Invocation(
-            function_name="test",
-            input_schema=None,
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=None,
-            global_execution_identifier=None,
-        )
-
-        init_result = InitResult(global_execution_identifier=b"init-data")
-        updated = original.with_global_execution_identifier(init_result)
-
-        assert updated.function_name == original.function_name
-        assert updated.global_execution_identifier == init_result
-        assert original.global_execution_identifier is None  # Original unchanged
-
-
-class TestInitResult:
-    """Tests for InitResult serialization."""
-
-    def test_basic_round_trip(self) -> None:
-        """InitResult should serialize and deserialize correctly."""
-        original = InitResult(global_execution_identifier=b"test-init-id")
-        deserialized = ipc_round_trip(original, InitResult)
-        assert deserialized.global_execution_identifier == b"test-init-id"
-
-    def test_null_identifier(self) -> None:
-        """InitResult with null identifier should round-trip correctly."""
-        original = InitResult(global_execution_identifier=None)
-        deserialized = ipc_round_trip(original, InitResult)
-        assert deserialized.global_execution_identifier is None
-
-    def test_has_identifier_true(self) -> None:
-        """has_identifier should return True when field exists."""
-        batch = pa.RecordBatch.from_pylist(
-            [{"global_execution_identifier": b"some-id"}],
-            schema=pa.schema(
-                [pa.field("global_execution_identifier", pa.binary(), nullable=True)]
-            ),
-        )
-        assert InitResult.has_identifier(batch) is True
-
-    def test_has_identifier_false(self) -> None:
-        """has_identifier should return False when field doesn't exist."""
-        batch = pa.RecordBatch.from_pylist(
-            [{"other_field": "value"}],
-            schema=make_schema([pa.field("other_field", pa.string())]),
-        )
-        assert InitResult.has_identifier(batch) is False
-
-    def test_deserialize_empty_batch_raises(self) -> None:
-        """Deserializing empty batch should raise ValueError."""
-        from vgi.ipc_utils import ProtocolState, protocol_state_metadata
-
-        empty_batch = pa.RecordBatch.from_pylist(
-            [],
-            schema=pa.schema(
-                [pa.field("global_execution_identifier", pa.binary(), nullable=True)]
-            ),
-        )
-        metadata = protocol_state_metadata(ProtocolState.INIT_RESULT)
-
-        with pytest.raises(ValueError, match="empty RecordBatch"):
-            InitResult.deserialize(empty_batch, metadata)
-
-    def test_deserialize_multi_row_batch_raises(self) -> None:
-        """Deserializing multi-row batch should raise ValueError."""
-        from vgi.ipc_utils import ProtocolState, protocol_state_metadata
-
-        multi_row_batch = pa.RecordBatch.from_pylist(
-            [
-                {"global_execution_identifier": b"id1"},
-                {"global_execution_identifier": b"id2"},
-            ],
-            schema=pa.schema(
-                [pa.field("global_execution_identifier", pa.binary(), nullable=True)]
-            ),
-        )
-        metadata = protocol_state_metadata(ProtocolState.INIT_RESULT)
-
-        with pytest.raises(ValueError, match="single-row"):
-            InitResult.deserialize(multi_row_batch, metadata)
-
-    def test_schema(self) -> None:
-        """schema() should return correct Arrow schema."""
-        result = InitResult(global_execution_identifier=b"test")
-        schema = result.schema()
-
-        assert len(schema) == 1
-        assert schema.field("global_execution_identifier").type == pa.binary()
-        assert schema.field("global_execution_identifier").nullable is True
-
-
 class TestMessage:
     """Tests for Message convenience methods."""
 
@@ -474,94 +264,6 @@ class TestTableCardinality:
         info = TableCardinality(estimate=100, max=1000)
         with pytest.raises(AttributeError):
             info.estimate = 200  # type: ignore[misc]
-
-
-class TestGlobalStateInitInput:
-    """Tests for GlobalStateInitInput serialization."""
-
-    @pytest.mark.parametrize(
-        "projection_ids",
-        [[0, 2, 4], None, []],
-        ids=["with_ids", "null", "empty"],
-    )
-    def test_round_trip(self, projection_ids: list[int] | None) -> None:
-        """GlobalStateInitInput should serialize and deserialize correctly."""
-        original = TableFunctionInitInput(projection_ids=projection_ids)
-        deserialized = ipc_round_trip(original, TableFunctionInitInput)
-        assert deserialized.projection_ids == projection_ids
-
-    def test_default_value(self) -> None:
-        """GlobalStateInitInput default should have None projection_ids."""
-        default = TableFunctionInitInput()
-        assert default.projection_ids is None
-
-
-class TestTableOutputSpec:
-    """Tests for table_function.OutputSpec with cardinality."""
-
-    def test_serialization_with_cardinality(self) -> None:
-        """OutputSpec with cardinality should serialize correctly."""
-        spec = OutputSpec(
-            output_schema=make_schema([pa.field("col1", pa.int64())]),
-            max_processes=4,
-            invocation_id=b"test-id",
-            cardinality=TableCardinality(estimate=100, max=1000),
-        )
-
-        serialized = spec.serialize()
-        assert isinstance(serialized, bytes)
-        assert len(serialized) > 0
-
-    def test_serialization_without_cardinality(self) -> None:
-        """OutputSpec without cardinality should serialize correctly."""
-        spec = OutputSpec(
-            output_schema=make_schema([pa.field("col1", pa.int64())]),
-            max_processes=1,
-            invocation_id=b"test-id",
-            cardinality=None,
-        )
-
-        serialized = spec.serialize()
-        assert isinstance(serialized, bytes)
-
-    def test_serialize_schema_includes_cardinality_fields(self) -> None:
-        """Serialize schema should include cardinality fields."""
-        spec = OutputSpec(
-            output_schema=make_schema([pa.field("col1", pa.int64())]),
-            max_processes=1,
-            invocation_id=b"test-id",
-            cardinality=TableCardinality(estimate=50, max=100),
-        )
-
-        schema = spec.serialize_schema()
-        assert "cardinality_estimated" in schema.names
-        assert "cardinality_max" in schema.names
-
-    def test_serialize_dict_includes_cardinality_values(self) -> None:
-        """Serialize dict should include cardinality values."""
-        spec = OutputSpec(
-            output_schema=make_schema([pa.field("col1", pa.int64())]),
-            max_processes=1,
-            invocation_id=b"test-id",
-            cardinality=TableCardinality(estimate=50, max=100),
-        )
-
-        data = spec.serialize_dict()
-        assert data["cardinality_estimated"] == 50
-        assert data["cardinality_max"] == 100
-
-    def test_serialize_dict_null_cardinality(self) -> None:
-        """Serialize dict should handle null cardinality."""
-        spec = OutputSpec(
-            output_schema=make_schema([pa.field("col1", pa.int64())]),
-            max_processes=1,
-            invocation_id=b"test-id",
-            cardinality=None,
-        )
-
-        data = spec.serialize_dict()
-        assert data["cardinality_estimated"] is None
-        assert data["cardinality_max"] is None
 
 
 class _MockInvocation:
@@ -843,18 +545,14 @@ class TestArgValidation:
             mode = Arg[str](0, choices=["fast", "slow", "auto"])
 
         obj = MyClass()
-        with pytest.raises(
-            ArgumentValidationError, match="must be one of the allowed choices"
-        ):
+        with pytest.raises(ArgumentValidationError, match="must be one of the allowed choices"):
             _ = obj.mode
 
     def test_pattern_validation_pass(self) -> None:
         """Arg pattern validation should pass when value matches pattern."""
 
         class MyClass:
-            invocation = _MockInvocation(
-                Arguments(positional=(pa.scalar("my_variable"),))
-            )
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("my_variable"),)))
             name = Arg[str](0, pattern=r"^[a-z_][a-z0-9_]*$")
 
         obj = MyClass()
@@ -864,15 +562,11 @@ class TestArgValidation:
         """Arg pattern validation should fail when value doesn't match."""
 
         class MyClass:
-            invocation = _MockInvocation(
-                Arguments(positional=(pa.scalar("123invalid"),))
-            )
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("123invalid"),)))
             name = Arg[str](0, pattern=r"^[a-z_][a-z0-9_]*$")
 
         obj = MyClass()
-        with pytest.raises(
-            ArgumentValidationError, match="does not match the required pattern"
-        ):
+        with pytest.raises(ArgumentValidationError, match="does not match the required pattern"):
             _ = obj.name
 
     def test_pattern_validation_requires_string(self) -> None:
@@ -883,9 +577,7 @@ class TestArgValidation:
             value = Arg[int](0, pattern=r".*")
 
         obj = MyClass()
-        with pytest.raises(
-            ArgumentValidationError, match="must be a string for pattern validation"
-        ):
+        with pytest.raises(ArgumentValidationError, match="must be a string for pattern validation"):
             _ = obj.value
 
     def test_conflicting_ge_gt_raises(self) -> None:
@@ -1001,9 +693,7 @@ class TestArgumentValidationErrorMessages:
         """Error should format named arguments correctly."""
 
         class MyClass:
-            invocation = _MockInvocation(
-                Arguments(named={"threshold": pa.scalar(-1.0)})
-            )
+            invocation = _MockInvocation(Arguments(named={"threshold": pa.scalar(-1.0)}))
             threshold = Arg[float]("threshold", ge=0.0, le=1.0)
 
         obj = MyClass()
@@ -1094,9 +784,7 @@ class TestArgVarargs:
         """Arg with varargs=True should collect multiple values as tuple."""
 
         class MyClass:
-            invocation = _MockInvocation(
-                Arguments(positional=(pa.scalar(1), pa.scalar(2), pa.scalar(3)))
-            )
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(1), pa.scalar(2), pa.scalar(3))))
             values = Arg[int](0, varargs=True)
 
         obj = MyClass()
@@ -1161,9 +849,7 @@ class TestArgVarargs:
         """Varargs should validate each element with ge constraint."""
 
         class MyClass:
-            invocation = _MockInvocation(
-                Arguments(positional=(pa.scalar(5), pa.scalar(10), pa.scalar(15)))
-            )
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(5), pa.scalar(10), pa.scalar(15))))
             values = Arg[int](0, varargs=True, ge=1)
 
         obj = MyClass()
@@ -1173,9 +859,7 @@ class TestArgVarargs:
         """Varargs ge validation should fail for any element below threshold."""
 
         class MyClass:
-            invocation = _MockInvocation(
-                Arguments(positional=(pa.scalar(5), pa.scalar(0), pa.scalar(10)))
-            )
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(5), pa.scalar(0), pa.scalar(10))))
             values = Arg[int](0, varargs=True, ge=1)
 
         obj = MyClass()
@@ -1186,9 +870,7 @@ class TestArgVarargs:
         """Varargs le validation should fail for any element above threshold."""
 
         class MyClass:
-            invocation = _MockInvocation(
-                Arguments(positional=(pa.scalar(5), pa.scalar(10), pa.scalar(150)))
-            )
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(5), pa.scalar(10), pa.scalar(150))))
             values = Arg[int](0, varargs=True, le=100)
 
         obj = MyClass()
@@ -1199,9 +881,7 @@ class TestArgVarargs:
         """Varargs should validate each element against choices."""
 
         class MyClass:
-            invocation = _MockInvocation(
-                Arguments(positional=(pa.scalar("a"), pa.scalar("b"), pa.scalar("a")))
-            )
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("a"), pa.scalar("b"), pa.scalar("a"))))
             values = Arg[str](0, varargs=True, choices=["a", "b", "c"])
 
         obj = MyClass()
@@ -1211,9 +891,7 @@ class TestArgVarargs:
         """Varargs choices validation should fail for invalid element."""
 
         class MyClass:
-            invocation = _MockInvocation(
-                Arguments(positional=(pa.scalar("a"), pa.scalar("invalid")))
-            )
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("a"), pa.scalar("invalid"))))
             values = Arg[str](0, varargs=True, choices=["a", "b", "c"])
 
         obj = MyClass()
@@ -1224,11 +902,7 @@ class TestArgVarargs:
         """Varargs should validate each element against pattern."""
 
         class MyClass:
-            invocation = _MockInvocation(
-                Arguments(
-                    positional=(pa.scalar("foo"), pa.scalar("bar"), pa.scalar("baz"))
-                )
-            )
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("foo"), pa.scalar("bar"), pa.scalar("baz"))))
             values = Arg[str](0, varargs=True, pattern=r"^[a-z]+$")
 
         obj = MyClass()
@@ -1238,22 +912,16 @@ class TestArgVarargs:
         """Varargs pattern validation should fail for invalid element."""
 
         class MyClass:
-            invocation = _MockInvocation(
-                Arguments(positional=(pa.scalar("foo"), pa.scalar("123")))
-            )
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("foo"), pa.scalar("123"))))
             values = Arg[str](0, varargs=True, pattern=r"^[a-z]+$")
 
         obj = MyClass()
-        with pytest.raises(
-            ArgumentValidationError, match="element 1.*does not match pattern"
-        ):
+        with pytest.raises(ArgumentValidationError, match="element 1.*does not match pattern"):
             _ = obj.values
 
     def test_varargs_must_be_positional(self) -> None:
         """Varargs with named argument should raise ValueError at definition."""
-        with pytest.raises(
-            ValueError, match="varargs=True requires a positional argument"
-        ):
+        with pytest.raises(ValueError, match="varargs=True requires a positional argument"):
             Arg[int]("named", varargs=True)
 
     def test_varargs_cannot_have_default(self) -> None:
@@ -1270,9 +938,7 @@ class TestArgVarargs:
         """Varargs result should be cached like regular Arg."""
 
         class MyClass:
-            invocation = _MockInvocation(
-                Arguments(positional=(pa.scalar(1), pa.scalar(2)))
-            )
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(1), pa.scalar(2))))
             values = Arg[int](0, varargs=True)
 
         obj = MyClass()
@@ -1330,67 +996,30 @@ class TestArgumentsGetVarargs:
 class TestAnyArrow:
     """Tests for AnyArrow sentinel type."""
 
-    def test_any_arrow_accepts_int(self) -> None:
-        """AnyArrow should accept integer values and return AnyArrowValue."""
+    @pytest.mark.parametrize(
+        ("input_value", "expected_value"),
+        [
+            (42, 42),
+            ("hello", "hello"),
+            (3.14, 3.14),
+            (True, True),
+            ([1, 2, 3], [1, 2, 3]),
+        ],
+        ids=["int", "string", "float", "bool", "list"],
+    )
+    def test_any_arrow_accepts_type(self, input_value: object, expected_value: object) -> None:
+        """AnyArrow should accept various types and return AnyArrowValue."""
         from vgi.arguments import AnyArrow, AnyArrowValue
 
         class MyClass:
-            invocation = _MockInvocation(Arguments(positional=(pa.scalar(42),)))
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(input_value),)))  # type: ignore[call-overload]
             value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
 
         obj = MyClass()
         assert isinstance(obj.value, AnyArrowValue)
-        assert obj.value.value == 42
+        assert obj.value.value == expected_value
         assert obj.value.position == 0
         assert obj.value.name == "value"
-
-    def test_any_arrow_accepts_string(self) -> None:
-        """AnyArrow should accept string values and return AnyArrowValue."""
-        from vgi.arguments import AnyArrow, AnyArrowValue
-
-        class MyClass:
-            invocation = _MockInvocation(Arguments(positional=(pa.scalar("hello"),)))
-            value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
-
-        obj = MyClass()
-        assert isinstance(obj.value, AnyArrowValue)
-        assert obj.value.value == "hello"
-
-    def test_any_arrow_accepts_float(self) -> None:
-        """AnyArrow should accept float values and return AnyArrowValue."""
-        from vgi.arguments import AnyArrow, AnyArrowValue
-
-        class MyClass:
-            invocation = _MockInvocation(Arguments(positional=(pa.scalar(3.14),)))
-            value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
-
-        obj = MyClass()
-        assert isinstance(obj.value, AnyArrowValue)
-        assert obj.value.value == 3.14
-
-    def test_any_arrow_accepts_bool(self) -> None:
-        """AnyArrow should accept boolean values and return AnyArrowValue."""
-        from vgi.arguments import AnyArrow, AnyArrowValue
-
-        class MyClass:
-            invocation = _MockInvocation(Arguments(positional=(pa.scalar(True),)))
-            value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
-
-        obj = MyClass()
-        assert isinstance(obj.value, AnyArrowValue)
-        assert obj.value.value is True
-
-    def test_any_arrow_accepts_list(self) -> None:
-        """AnyArrow should accept list values and return AnyArrowValue."""
-        from vgi.arguments import AnyArrow, AnyArrowValue
-
-        class MyClass:
-            invocation = _MockInvocation(Arguments(positional=(pa.scalar([1, 2, 3]),)))
-            value: AnyArrow = Arg[AnyArrow](0)  # type: ignore[assignment]
-
-        obj = MyClass()
-        assert isinstance(obj.value, AnyArrowValue)
-        assert obj.value.value == [1, 2, 3]
 
     def test_any_arrow_mixed_types(self) -> None:
         """Multiple AnyArrow args can have different types."""
@@ -1433,9 +1062,7 @@ class TestAnyArrow:
         from vgi.arguments import AnyArrow, AnyArrowValue
 
         class MyClass:
-            invocation = _MockInvocation(
-                Arguments(named={"data": pa.scalar({"key": "value"})})
-            )
+            invocation = _MockInvocation(Arguments(named={"data": pa.scalar({"key": "value"})}))
             data: AnyArrow = Arg[AnyArrow]("data")  # type: ignore[assignment]
 
         obj = MyClass()

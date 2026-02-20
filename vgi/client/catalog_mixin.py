@@ -27,22 +27,23 @@ Usage:
     )
 
 Error Handling:
-    Worker exceptions are signaled via empty batches (0 rows) with
-    vgi.log_level metadata set to "exception". The error message and
-    traceback are extracted and raised as CatalogClientError.
+    Worker exceptions are propagated via vgi_rpc's RpcError mechanism.
+    These are wrapped in CatalogClientError for a consistent client API.
 
 """
 
 from __future__ import annotations
 
-import io
-import subprocess
-from collections.abc import Sequence
+import shlex
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import pyarrow as pa
+from vgi_rpc import WorkerPool
+from vgi_rpc.rpc import RpcError
+from vgi_rpc.utils import deserialize_record_batch
 
-from vgi.arguments import Arguments
 from vgi.catalog import (
     AttachId,
     CatalogAttachResult,
@@ -57,12 +58,20 @@ from vgi.catalog import (
     TransactionId,
     ViewInfo,
 )
-from vgi.invocation import Invocation, InvocationType
-from vgi.ipc_utils import read_single_record_batch
+from vgi.protocol import (
+    CatalogAttachRequest,
+    CatalogCreateRequest,
+    TableCreateRequest,
+    VgiProtocol,
+)
 
 if TYPE_CHECKING:
-    import pyarrow as pa_typing
     import structlog.stdlib
+
+# Module-level worker pool shared across all CatalogClientMixin instances.
+# Workers are cached by command and reused across catalog calls, avoiding
+# the overhead of spawning/tearing down a subprocess for each call.
+_catalog_pool = WorkerPool(max_idle=4, idle_timeout=30.0)
 
 
 class CatalogClientError(Exception):
@@ -73,17 +82,16 @@ class CatalogClientMixin:
     """Mixin that adds catalog operations to a VGI Client.
 
     This mixin provides the core infrastructure for catalog operations.
-    Each catalog method call spawns an ephemeral worker subprocess.
+    Worker subprocesses are pooled and reused across calls via a shared
+    WorkerPool.
 
     Expected attributes from Client:
         server_path: str - Worker command (shell command)
-        correlation_id: str - For distributed tracing
 
     """
 
     # Type hints for attributes expected from Client
     server_path: str
-    correlation_id: str
 
     def _get_catalog_logger(self) -> structlog.stdlib.BoundLogger:
         """Get a logger for catalog operations.
@@ -99,250 +107,34 @@ class CatalogClientMixin:
             structlog.get_logger().bind(component="catalog_mixin"),
         )
 
-    def _check_catalog_error(
-        self,
-        result_batch: pa.RecordBatch,
-        result_metadata: pa_typing.KeyValueMetadata | None,
-    ) -> None:
-        """Check for error metadata in a catalog result and raise if found.
+    @contextmanager
+    def _catalog_connect(self) -> Iterator[VgiProtocol]:
+        """Get a typed proxy to the worker via the connection pool.
 
-        Worker exceptions are signaled via empty batches (0 rows) with
-        vgi.log_level metadata set to "exception".
-
-        Args:
-            result_batch: The result batch from the catalog call.
-            result_metadata: Custom metadata from the batch.
-
-        Raises:
-            CatalogClientError: If the batch contains an exception message.
+        Yields a VgiProtocol proxy. Worker errors are caught and
+        re-raised as CatalogClientError.
 
         """
-        if result_metadata is None:
-            return
-
-        if not (
-            result_batch.num_rows == 0
-            and result_metadata.get(b"vgi.log_level") is not None
-        ):
-            return
-
-        level_name = result_metadata[b"vgi.log_level"].decode().lower()
-        if level_name != "exception":
-            return
-
-        import contextlib
-        import json
-
-        message = result_metadata.get(b"vgi.log_message", b"").decode()
-        extra: dict[str, Any] = {}
-        if result_metadata.get(b"vgi.log_extra") is not None:
-            with contextlib.suppress(json.JSONDecodeError):
-                extra = json.loads(result_metadata[b"vgi.log_extra"].decode())
-
-        traceback_str = extra.get("traceback", "")
-        raise CatalogClientError(f"Worker Exception: {message}\n{traceback_str}")
-
-    def _send_catalog_invocation(
-        self,
-        method_name: str,
-        kwargs: dict[str, Any],
-    ) -> tuple[subprocess.Popen[bytes], io.BufferedReader[Any]]:
-        """Spawn worker subprocess and send catalog invocation.
-
-        This helper handles the common setup for catalog operations:
-        spawning the worker, sending the invocation header, and sending
-        the arguments batch.
-
-        Args:
-            method_name: CatalogInterface method name (e.g., 'catalog_attach').
-            kwargs: Method keyword arguments to send.
-
-        Returns:
-            Tuple of (process, buffered_stdout) for reading results.
-
-        Raises:
-            CatalogClientError: If subprocess creation or invocation send fails.
-
-        """
-        proc = subprocess.Popen(
-            self.server_path,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False,
-            shell=True,
-        )
-
-        if proc.stdin is None or proc.stdout is None:
-            raise CatalogClientError("Failed to create pipes for worker process")
-
-        stdout_buffered = io.BufferedReader(cast(io.RawIOBase, proc.stdout))
-
-        # Create and send invocation
-        invocation = Invocation(
-            function_name=method_name,
-            input_schema=None,
-            function_type=InvocationType.CATALOG,
-            correlation_id=self.correlation_id,
-            invocation_id=None,
-            arguments=Arguments(),
-        )
-        invocation_bytes = invocation.serialize()
+        cmd = shlex.split(self.server_path)
         try:
-            proc.stdin.write(invocation_bytes)
-        except BrokenPipeError:
-            proc.poll()
-            raise CatalogClientError(
-                f"Worker terminated unexpectedly during {method_name} invocation "
-                f"(exit code: {proc.returncode})"
-            ) from None
-
-        # Create and send arguments batch
-        args_batch = self._create_catalog_args_batch(kwargs)
-        args_bytes = (
-            args_batch.schema.serialize().to_pybytes()
-            + args_batch.serialize().to_pybytes()
-        )
-        try:
-            proc.stdin.write(args_bytes)
-            proc.stdin.flush()
-        except BrokenPipeError:
-            proc.poll()
-            raise CatalogClientError(
-                f"Worker terminated unexpectedly during {method_name} arguments "
-                f"(exit code: {proc.returncode})"
-            ) from None
-        proc.stdin.close()
-
-        return proc, stdout_buffered
-
-    def _catalog_invoke(
-        self,
-        method_name: str,
-        **kwargs: Any,
-    ) -> pa.RecordBatch | None:
-        """Invoke a catalog method and return the result batch.
-
-        Spawns an ephemeral worker subprocess, sends the invocation with
-        method name and arguments, reads a single result batch using
-        read_single_record_batch, and returns it.
-
-        Args:
-            method_name: CatalogInterface method name (e.g., 'catalog_attach').
-            **kwargs: Method keyword arguments.
-
-        Returns:
-            RecordBatch with the result, or None for methods that return None.
-
-        Raises:
-            CatalogClientError: If worker subprocess fails or returns an error.
-
-        """
-        log = self._get_catalog_logger()
-        log.debug("catalog_invoke", method=method_name, kwargs=kwargs)
-
-        proc, stdout_buffered = self._send_catalog_invocation(method_name, kwargs)
-
-        try:
-            result_batch, result_metadata = read_single_record_batch(
-                stdout_buffered, "catalog_result"
-            )
-            self._check_catalog_error(result_batch, result_metadata)
-
-            log.debug(
-                "catalog_result",
-                method=method_name,
-                num_rows=result_batch.num_rows,
-                num_columns=result_batch.num_columns,
-            )
-            return result_batch
+            with _catalog_pool.connect(VgiProtocol, cmd) as proxy:  # type: ignore[type-abstract]
+                yield proxy
+        except RpcError as e:
+            raise CatalogClientError(str(e)) from e
         except CatalogClientError:
             raise
         except Exception as e:
-            stderr_output = proc.stderr.read().decode() if proc.stderr else ""
-            if stderr_output:
-                log.error("worker_stderr", stderr=stderr_output)
-            raise CatalogClientError(
-                f"Failed to read catalog result: {e}\n{stderr_output}"
-            ) from e
-        finally:
-            proc.wait()
+            raise CatalogClientError(f"Failed catalog call: {e}") from e
 
-    def _catalog_invoke_batch(
-        self,
-        method_name: str,
-        **kwargs: Any,
-    ) -> pa.RecordBatch:
-        """Invoke a catalog method and return a batch with multiple rows.
+    @staticmethod
+    def _options_to_batch(options: dict[str, Any] | None) -> pa.RecordBatch | None:
+        """Convert an options dict to a one-row RecordBatch for wire transport.
 
-        For methods that return lists (schemas, schema_contents), this uses
-        an IPC stream reader to read a single batch containing all results.
-        Unlike _catalog_invoke which uses read_single_record_batch, this
-        method handles the streaming protocol used for list-returning methods.
-
-        Args:
-            method_name: CatalogInterface method name.
-            **kwargs: Method keyword arguments.
-
-        Returns:
-            RecordBatch with all results (may have 0 rows for empty results).
-
-        Raises:
-            CatalogClientError: If worker subprocess fails or returns an error.
-
+        Returns None if options is empty/None.
         """
-        log = self._get_catalog_logger()
-        log.debug("catalog_invoke_batch", method=method_name, kwargs=kwargs)
-
-        proc, stdout_buffered = self._send_catalog_invocation(method_name, kwargs)
-
-        try:
-            with pa.ipc.open_stream(stdout_buffered) as reader:
-                result_batch = reader.read_next_batch()
-                result_metadata = cast(
-                    "pa_typing.KeyValueMetadata | None",
-                    result_batch.schema.metadata,
-                )
-                self._check_catalog_error(result_batch, result_metadata)
-
-                log.debug(
-                    "catalog_batch_result",
-                    method=method_name,
-                    num_rows=result_batch.num_rows,
-                )
-                return result_batch
-        except StopIteration:
-            return pa.RecordBatch.from_pydict({})
-        except CatalogClientError:
-            raise
-        except Exception as e:
-            stderr_output = proc.stderr.read().decode() if proc.stderr else ""
-            if stderr_output:
-                log.error("worker_stderr", stderr=stderr_output)
-            raise CatalogClientError(
-                f"Failed to read catalog result: {e}\n{stderr_output}"
-            ) from e
-        finally:
-            proc.wait()
-
-    def _create_catalog_args_batch(self, kwargs: dict[str, Any]) -> pa.RecordBatch:
-        """Create a batch from method keyword arguments.
-
-        Converts method kwargs into an Arrow RecordBatch where each column
-        corresponds to a kwarg key/value pair.
-
-        Args:
-            kwargs: Dictionary of method keyword arguments.
-
-        Returns:
-            A RecordBatch with 0 or 1 rows. Empty batch (0 rows) for methods
-            with no arguments, 1-row batch otherwise.
-
-        """
-        if not kwargs:
-            # Empty batch for methods with no arguments
-            return pa.RecordBatch.from_pydict({})
-        return pa.RecordBatch.from_pylist([kwargs])
+        if not options:
+            return None
+        return pa.RecordBatch.from_pylist([options])
 
     # ========== Discovery Methods ==========
 
@@ -353,16 +145,12 @@ class CatalogClientMixin:
             List of catalog names available in the worker.
 
         """
-        result = self._catalog_invoke("catalogs")
-        if result is None or result.num_rows == 0:
-            return []
-        return cast(list[str], result.column(0).to_pylist())
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_catalogs().items
 
     # ========== Catalog Lifecycle Methods ==========
 
-    def catalog_attach(
-        self, *, name: str, options: dict[str, Any] | None = None
-    ) -> CatalogAttachResult:
+    def catalog_attach(self, *, name: str, options: dict[str, Any] | None = None) -> CatalogAttachResult:
         """Attach to a catalog.
 
         Args:
@@ -372,16 +160,14 @@ class CatalogClientMixin:
         Returns:
             CatalogAttachResult with attach_id and catalog capabilities.
 
-        Raises:
-            CatalogClientError: If catalog_attach returned no result.
-
         """
-        result = self._catalog_invoke(
-            "catalog_attach", name=name, options=options or {}
-        )
-        if result is None:
-            raise CatalogClientError("catalog_attach returned no result")
-        return CatalogAttachResult.deserialize(result)
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_attach(
+                request=CatalogAttachRequest(
+                    name=name,
+                    options=self._options_to_batch(options),
+                )
+            )
 
     def catalog_detach(self, *, attach_id: AttachId) -> None:
         """Detach from a catalog.
@@ -390,7 +176,8 @@ class CatalogClientMixin:
             attach_id: The attachment ID from catalog_attach.
 
         """
-        self._catalog_invoke("catalog_detach", attach_id=attach_id)
+        with self._catalog_connect() as proxy:
+            proxy.catalog_detach(attach_id=attach_id)
 
     def catalog_create(
         self,
@@ -407,12 +194,14 @@ class CatalogClientMixin:
             options: Optional dictionary of catalog-specific options.
 
         """
-        self._catalog_invoke(
-            "catalog_create",
-            name=name,
-            on_conflict=on_conflict.value,
-            options=options or {},
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_create(
+                request=CatalogCreateRequest(
+                    name=name,
+                    on_conflict=on_conflict,
+                    options=self._options_to_batch(options),
+                )
+            )
 
     def catalog_drop(self, *, name: str) -> None:
         """Drop a catalog.
@@ -421,11 +210,10 @@ class CatalogClientMixin:
             name: The name of the catalog to drop.
 
         """
-        self._catalog_invoke("catalog_drop", name=name)
+        with self._catalog_connect() as proxy:
+            proxy.catalog_drop(name=name)
 
-    def catalog_version(
-        self, *, attach_id: AttachId, transaction_id: TransactionId | None = None
-    ) -> int:
+    def catalog_version(self, *, attach_id: AttachId, transaction_id: TransactionId | None = None) -> int:
         """Get the current catalog version.
 
         Args:
@@ -436,12 +224,11 @@ class CatalogClientMixin:
             The current catalog version number, or 0 if empty.
 
         """
-        result = self._catalog_invoke(
-            "catalog_version", attach_id=attach_id, transaction_id=transaction_id
-        )
-        if result is None or result.num_rows == 0:
-            return 0
-        return cast(int, result.column(0).to_pylist()[0])
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_version(
+                attach_id=attach_id,
+                transaction_id=transaction_id,
+            ).version
 
     # ========== Transaction Methods ==========
 
@@ -456,15 +243,11 @@ class CatalogClientMixin:
             are not supported by this catalog.
 
         """
-        result = self._catalog_invoke("catalog_transaction_begin", attach_id=attach_id)
-        if result is None or result.num_rows == 0:
-            return None
-        value = result.column(0).to_pylist()[0]
-        return TransactionId(value) if value else None
+        with self._catalog_connect() as proxy:
+            tx_id = proxy.catalog_transaction_begin(attach_id=attach_id).transaction_id
+            return TransactionId(tx_id) if tx_id else None
 
-    def catalog_transaction_commit(
-        self, *, attach_id: AttachId, transaction_id: TransactionId
-    ) -> None:
+    def catalog_transaction_commit(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
         """Commit a transaction.
 
         Args:
@@ -472,15 +255,13 @@ class CatalogClientMixin:
             transaction_id: The transaction ID to commit.
 
         """
-        self._catalog_invoke(
-            "catalog_transaction_commit",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_transaction_commit(
+                attach_id=attach_id,
+                transaction_id=transaction_id,
+            )
 
-    def catalog_transaction_rollback(
-        self, *, attach_id: AttachId, transaction_id: TransactionId
-    ) -> None:
+    def catalog_transaction_rollback(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
         """Rollback a transaction.
 
         Args:
@@ -488,17 +269,15 @@ class CatalogClientMixin:
             transaction_id: The transaction ID to rollback.
 
         """
-        self._catalog_invoke(
-            "catalog_transaction_rollback",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_transaction_rollback(
+                attach_id=attach_id,
+                transaction_id=transaction_id,
+            )
 
     # ========== Schema Methods ==========
 
-    def schemas(
-        self, *, attach_id: AttachId, transaction_id: TransactionId | None = None
-    ) -> list[SchemaInfo]:
+    def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None = None) -> list[SchemaInfo]:
         """List schemas in the catalog.
 
         Args:
@@ -509,14 +288,11 @@ class CatalogClientMixin:
             List of SchemaInfo for each schema in the catalog.
 
         """
-        batch = self._catalog_invoke_batch(
-            "schemas", attach_id=attach_id, transaction_id=transaction_id
-        )
-        results: list[SchemaInfo] = []
-        for i in range(batch.num_rows):
-            row_batch = batch.slice(i, 1)
-            results.append(SchemaInfo.deserialize(row_batch))
-        return results
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_schemas(
+                attach_id=attach_id,
+                transaction_id=transaction_id,
+            ).to_schema_infos()
 
     def schema_get(
         self,
@@ -536,15 +312,12 @@ class CatalogClientMixin:
             SchemaInfo for the schema, or None if not found.
 
         """
-        result = self._catalog_invoke(
-            "schema_get",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            name=name,
-        )
-        if result is None or result.num_rows == 0:
-            return None
-        return SchemaInfo.deserialize(result)
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_schema_get(
+                attach_id=attach_id,
+                name=name,
+                transaction_id=transaction_id,
+            ).to_optional()
 
     def schema_create(
         self,
@@ -565,14 +338,14 @@ class CatalogClientMixin:
             tags: Optional key-value tags for the schema.
 
         """
-        self._catalog_invoke(
-            "schema_create",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            name=name,
-            comment=comment,
-            tags=tags or {},
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_schema_create(
+                attach_id=attach_id,
+                name=name,
+                comment=comment,
+                tags=tags,
+                transaction_id=transaction_id,
+            )
 
     def schema_drop(
         self,
@@ -593,14 +366,14 @@ class CatalogClientMixin:
             cascade: If True, drop all contained tables and views.
 
         """
-        self._catalog_invoke(
-            "schema_drop",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            name=name,
-            ignore_not_found=ignore_not_found,
-            cascade=cascade,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_schema_drop(
+                attach_id=attach_id,
+                name=name,
+                ignore_not_found=ignore_not_found,
+                cascade=cascade,
+                transaction_id=transaction_id,
+            )
 
     @overload
     def schema_contents(
@@ -629,9 +402,7 @@ class CatalogClientMixin:
         attach_id: AttachId,
         transaction_id: TransactionId | None = None,
         name: str,
-        type: Literal[
-            SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION
-        ],
+        type: Literal[SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION],
     ) -> Sequence[FunctionInfo]: ...
 
     @overload
@@ -668,27 +439,26 @@ class CatalogClientMixin:
             List of TableInfo, ViewInfo, or FunctionInfo depending on the type.
 
         """
-        kwargs: dict[str, Any] = {
-            "attach_id": attach_id,
-            "transaction_id": transaction_id,
-            "name": name,
-            "type": type.value,
-        }
-
-        batch = self._catalog_invoke_batch("schema_contents", **kwargs)
-        results: list[TableInfo | ViewInfo | FunctionInfo] = []
-
-        for i in range(batch.num_rows):
-            row_batch = batch.slice(i, 1)
-            # Deserialize based on requested type
+        with self._catalog_connect() as proxy:
             if type == SchemaObjectType.TABLE:
-                results.append(TableInfo.deserialize(row_batch))
+                return proxy.catalog_schema_contents_tables(
+                    attach_id=attach_id,
+                    name=name,
+                    transaction_id=transaction_id,
+                ).to_table_infos()
             elif type == SchemaObjectType.VIEW:
-                results.append(ViewInfo.deserialize(row_batch))
+                return proxy.catalog_schema_contents_views(
+                    attach_id=attach_id,
+                    name=name,
+                    transaction_id=transaction_id,
+                ).to_view_infos()
             else:
-                results.append(FunctionInfo.deserialize(row_batch))
-
-        return results
+                return proxy.catalog_schema_contents_functions(
+                    attach_id=attach_id,
+                    name=name,
+                    type=type,
+                    transaction_id=transaction_id,
+                ).to_function_infos()
 
     # ========== Table Methods ==========
 
@@ -712,16 +482,13 @@ class CatalogClientMixin:
             TableInfo for the table, or None if not found.
 
         """
-        result = self._catalog_invoke(
-            "table_get",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-        )
-        if result is None or result.num_rows == 0:
-            return None
-        return TableInfo.deserialize(result)
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_table_get(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                transaction_id=transaction_id,
+            ).to_optional()
 
     def table_create(
         self,
@@ -750,18 +517,20 @@ class CatalogClientMixin:
             check_constraints: SQL expressions for check constraints.
 
         """
-        self._catalog_invoke(
-            "table_create",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            columns=columns,
-            on_conflict=on_conflict.value,
-            not_null_constraints=not_null_constraints or [],
-            unique_constraints=unique_constraints or [],
-            check_constraints=check_constraints or [],
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_create(
+                request=TableCreateRequest(
+                    attach_id=attach_id,
+                    schema_name=schema_name,
+                    name=name,
+                    columns=columns,
+                    on_conflict=on_conflict,
+                    not_null_constraints=not_null_constraints or [],
+                    unique_constraints=unique_constraints or [],
+                    check_constraints=check_constraints or [],
+                    transaction_id=transaction_id,
+                )
+            )
 
     def table_drop(
         self,
@@ -782,14 +551,14 @@ class CatalogClientMixin:
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
-        self._catalog_invoke(
-            "table_drop",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            ignore_not_found=ignore_not_found,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_drop(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                ignore_not_found=ignore_not_found,
+                transaction_id=transaction_id,
+            )
 
     def table_scan_function_get(
         self,
@@ -804,9 +573,7 @@ class CatalogClientMixin:
         """Get the scan function for a table.
 
         Returns a ScanFunctionResult that tells the VGI DuckDB extension which
-        DuckDB function to call to obtain the table data. This allows catalogs
-        to delegate scanning to any DuckDB function (e.g., read_parquet,
-        iceberg_scan) with appropriate arguments.
+        DuckDB function to call to obtain the table data.
 
         Args:
             attach_id: The attachment ID from catalog_attach.
@@ -817,28 +584,23 @@ class CatalogClientMixin:
             at_value: Optional time travel value.
 
         Returns:
-            ScanFunctionResult with:
-            - function_name: The DuckDB function to call
-            - positional_arguments: Positional args as PyArrow scalars
-            - named_arguments: Named args as PyArrow scalars
-            - required_extensions: DuckDB extensions to load first
+            ScanFunctionResult with function_name, arguments, and extensions.
 
         Raises:
             CatalogClientError: If table_scan_function_get returned no result.
 
         """
-        result = self._catalog_invoke(
-            "table_scan_function_get",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            at_unit=at_unit,
-            at_value=at_value,
-        )
-        if result is None:
-            raise CatalogClientError("table_scan_function_get returned no result")
-        return ScanFunctionResult.deserialize(result)
+        with self._catalog_connect() as proxy:
+            result_bytes = proxy.catalog_table_scan_function_get(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                at_unit=at_unit,
+                at_value=at_value,
+                transaction_id=transaction_id,
+            )
+            batch, _ = deserialize_record_batch(result_bytes)
+            return ScanFunctionResult.deserialize(batch)
 
     def table_comment_set(
         self,
@@ -861,15 +623,15 @@ class CatalogClientMixin:
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
-        self._catalog_invoke(
-            "table_comment_set",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            comment=comment,
-            ignore_not_found=ignore_not_found,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_comment_set(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                comment=comment,
+                ignore_not_found=ignore_not_found,
+                transaction_id=transaction_id,
+            )
 
     def table_rename(
         self,
@@ -892,15 +654,15 @@ class CatalogClientMixin:
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
-        self._catalog_invoke(
-            "table_rename",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            new_name=new_name,
-            ignore_not_found=ignore_not_found,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_rename(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                new_name=new_name,
+                ignore_not_found=ignore_not_found,
+                transaction_id=transaction_id,
+            )
 
     def table_column_add(
         self,
@@ -925,16 +687,16 @@ class CatalogClientMixin:
             if_column_not_exists: If True, don't error if column already exists.
 
         """
-        self._catalog_invoke(
-            "table_column_add",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            column_definition=column_definition,
-            ignore_not_found=ignore_not_found,
-            if_column_not_exists=if_column_not_exists,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_column_add(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                column_definition=column_definition,
+                ignore_not_found=ignore_not_found,
+                if_column_not_exists=if_column_not_exists,
+                transaction_id=transaction_id,
+            )
 
     def table_column_drop(
         self,
@@ -961,17 +723,17 @@ class CatalogClientMixin:
             cascade: If True, drop dependent constraints.
 
         """
-        self._catalog_invoke(
-            "table_column_drop",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            column_name=column_name,
-            ignore_not_found=ignore_not_found,
-            if_column_exists=if_column_exists,
-            cascade=cascade,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_column_drop(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                column_name=column_name,
+                ignore_not_found=ignore_not_found,
+                if_column_exists=if_column_exists,
+                cascade=cascade,
+                transaction_id=transaction_id,
+            )
 
     def table_column_rename(
         self,
@@ -996,16 +758,16 @@ class CatalogClientMixin:
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
-        self._catalog_invoke(
-            "table_column_rename",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            column_name=column_name,
-            new_column_name=new_column_name,
-            ignore_not_found=ignore_not_found,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_column_rename(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                column_name=column_name,
+                new_column_name=new_column_name,
+                ignore_not_found=ignore_not_found,
+                transaction_id=transaction_id,
+            )
 
     def table_column_default_set(
         self,
@@ -1030,16 +792,16 @@ class CatalogClientMixin:
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
-        self._catalog_invoke(
-            "table_column_default_set",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            column_name=column_name,
-            expression=expression,
-            ignore_not_found=ignore_not_found,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_column_default_set(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                column_name=column_name,
+                expression=expression,
+                ignore_not_found=ignore_not_found,
+                transaction_id=transaction_id,
+            )
 
     def table_column_default_drop(
         self,
@@ -1062,15 +824,15 @@ class CatalogClientMixin:
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
-        self._catalog_invoke(
-            "table_column_default_drop",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            column_name=column_name,
-            ignore_not_found=ignore_not_found,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_column_default_drop(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                column_name=column_name,
+                ignore_not_found=ignore_not_found,
+                transaction_id=transaction_id,
+            )
 
     def table_column_type_change(
         self,
@@ -1096,16 +858,16 @@ class CatalogClientMixin:
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
-        self._catalog_invoke(
-            "table_column_type_change",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            column_definition=column_definition,
-            expression=expression,
-            ignore_not_found=ignore_not_found,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_column_type_change(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                column_definition=column_definition,
+                expression=expression,
+                ignore_not_found=ignore_not_found,
+                transaction_id=transaction_id,
+            )
 
     def table_not_null_drop(
         self,
@@ -1128,15 +890,15 @@ class CatalogClientMixin:
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
-        self._catalog_invoke(
-            "table_not_null_drop",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            column_name=column_name,
-            ignore_not_found=ignore_not_found,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_not_null_drop(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                column_name=column_name,
+                ignore_not_found=ignore_not_found,
+                transaction_id=transaction_id,
+            )
 
     def table_not_null_set(
         self,
@@ -1159,15 +921,15 @@ class CatalogClientMixin:
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
-        self._catalog_invoke(
-            "table_not_null_set",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            column_name=column_name,
-            ignore_not_found=ignore_not_found,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_not_null_set(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                column_name=column_name,
+                ignore_not_found=ignore_not_found,
+                transaction_id=transaction_id,
+            )
 
     # ========== View Methods ==========
 
@@ -1191,16 +953,13 @@ class CatalogClientMixin:
             ViewInfo for the view, or None if not found.
 
         """
-        result = self._catalog_invoke(
-            "view_get",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-        )
-        if result is None or result.num_rows == 0:
-            return None
-        return ViewInfo.deserialize(result)
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_view_get(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                transaction_id=transaction_id,
+            ).to_optional()
 
     def view_create(
         self,
@@ -1223,15 +982,15 @@ class CatalogClientMixin:
             on_conflict: Behavior if view already exists.
 
         """
-        self._catalog_invoke(
-            "view_create",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            definition=definition,
-            on_conflict=on_conflict.value,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_view_create(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                definition=definition,
+                on_conflict=on_conflict,
+                transaction_id=transaction_id,
+            )
 
     def view_drop(
         self,
@@ -1252,14 +1011,14 @@ class CatalogClientMixin:
             ignore_not_found: If True, don't error if view doesn't exist.
 
         """
-        self._catalog_invoke(
-            "view_drop",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            ignore_not_found=ignore_not_found,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_view_drop(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                ignore_not_found=ignore_not_found,
+                transaction_id=transaction_id,
+            )
 
     def view_rename(
         self,
@@ -1282,15 +1041,15 @@ class CatalogClientMixin:
             ignore_not_found: If True, don't error if view doesn't exist.
 
         """
-        self._catalog_invoke(
-            "view_rename",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            new_name=new_name,
-            ignore_not_found=ignore_not_found,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_view_rename(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                new_name=new_name,
+                ignore_not_found=ignore_not_found,
+                transaction_id=transaction_id,
+            )
 
     def view_comment_set(
         self,
@@ -1313,12 +1072,12 @@ class CatalogClientMixin:
             ignore_not_found: If True, don't error if view doesn't exist.
 
         """
-        self._catalog_invoke(
-            "view_comment_set",
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            comment=comment,
-            ignore_not_found=ignore_not_found,
-        )
+        with self._catalog_connect() as proxy:
+            proxy.catalog_view_comment_set(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                comment=comment,
+                ignore_not_found=ignore_not_found,
+                transaction_id=transaction_id,
+            )

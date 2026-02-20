@@ -18,9 +18,9 @@ class TestClientLifecycle:
     def test_context_manager(self, example_worker: str) -> None:
         """Client should work as a context manager."""
         with Client(example_worker) as client:
-            assert client._proc is not None
+            assert client._primary is not None
         # After context exit, process should be cleaned up
-        assert client._proc is None
+        assert client._primary is None
 
     def test_start_when_already_started_raises(self, example_worker: str) -> None:
         """Starting an already-started client should raise ClientError."""
@@ -38,9 +38,7 @@ class TestClientLifecycle:
         with pytest.raises(ClientError, match="not started"):
             client.stop()
 
-    def test_table_in_out_function_not_started_raises(
-        self, example_worker: str
-    ) -> None:
+    def test_table_in_out_function_not_started_raises(self, example_worker: str) -> None:
         """Calling table_in_out_function before start should raise ClientError."""
         client = Client(example_worker)
         schema = make_schema([pa.field("id", pa.int64())])
@@ -73,9 +71,7 @@ class TestEdgeCases:
 
     def test_empty_batch(self, example_worker: str) -> None:
         """Empty batch (zero rows) should process correctly."""
-        schema = make_schema(
-            [pa.field("id", pa.int64()), pa.field("value", pa.int64())]
-        )
+        schema = make_schema([pa.field("id", pa.int64()), pa.field("value", pa.int64())])
         empty_batch = pa.RecordBatch.from_pydict({"id": [], "value": []}, schema=schema)
 
         with Client(example_worker) as client:
@@ -109,12 +105,8 @@ class TestEdgeCases:
 
     def test_single_row_batch(self, example_worker: str) -> None:
         """Single row batch should process correctly."""
-        schema = make_schema(
-            [pa.field("id", pa.int64()), pa.field("value", pa.int64())]
-        )
-        single_row_batch = pa.RecordBatch.from_pydict(
-            {"id": [1], "value": [100]}, schema=schema
-        )
+        schema = make_schema([pa.field("id", pa.int64()), pa.field("value", pa.int64())])
+        single_row_batch = pa.RecordBatch.from_pydict({"id": [1], "value": [100]}, schema=schema)
 
         with Client(example_worker) as client:
             output_batches = list(
@@ -129,9 +121,7 @@ class TestEdgeCases:
     def test_large_batch_count(self, example_worker: str) -> None:
         """Many small batches should process correctly."""
         schema = make_schema([pa.field("id", pa.int64())])
-        batches = [
-            pa.RecordBatch.from_pydict({"id": [i]}, schema=schema) for i in range(50)
-        ]
+        batches = [pa.RecordBatch.from_pydict({"id": [i]}, schema=schema) for i in range(50)]
 
         with Client(example_worker) as client:
             output_batches = list(
@@ -154,14 +144,10 @@ class TestMultiWorkerEdgeCases:
 
     def test_zero_row_batch_single_worker(self, example_worker: str) -> None:
         """Baseline: zero-row batch with max_workers=1 should complete quickly."""
-        schema = make_schema(
-            [pa.field("id", pa.int64()), pa.field("value", pa.int64())]
-        )
-        zero_row_batch = pa.RecordBatch.from_pydict(
-            {"id": [], "value": []}, schema=schema
-        )
+        schema = make_schema([pa.field("id", pa.int64()), pa.field("value", pa.int64())])
+        zero_row_batch = pa.RecordBatch.from_pydict({"id": [], "value": []}, schema=schema)
 
-        with Client(example_worker, max_workers=1) as client:
+        with Client(example_worker, worker_limit=1) as client:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
@@ -175,15 +161,11 @@ class TestMultiWorkerEdgeCases:
 
     def test_zero_row_batch_forced_multiple_workers(self, example_worker: str) -> None:
         """Zero-row batch with max_workers=4 should complete without hanging."""
-        schema = make_schema(
-            [pa.field("id", pa.int64()), pa.field("value", pa.int64())]
-        )
-        zero_row_batch = pa.RecordBatch.from_pydict(
-            {"id": [], "value": []}, schema=schema
-        )
+        schema = make_schema([pa.field("id", pa.int64()), pa.field("value", pa.int64())])
+        zero_row_batch = pa.RecordBatch.from_pydict({"id": [], "value": []}, schema=schema)
 
         # Force 4 workers even though there's only one batch with zero rows
-        with Client(example_worker, max_workers=4) as client:
+        with Client(example_worker, worker_limit=4) as client:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
@@ -197,15 +179,11 @@ class TestMultiWorkerEdgeCases:
 
     def test_single_batch_multiple_workers(self, example_worker: str) -> None:
         """Single normal batch with max_workers=4 should complete without hanging."""
-        schema = make_schema(
-            [pa.field("id", pa.int64()), pa.field("value", pa.int64())]
-        )
-        single_batch = pa.RecordBatch.from_pydict(
-            {"id": [1, 2, 3], "value": [10, 20, 30]}, schema=schema
-        )
+        schema = make_schema([pa.field("id", pa.int64()), pa.field("value", pa.int64())])
+        single_batch = pa.RecordBatch.from_pydict({"id": [1, 2, 3], "value": [10, 20, 30]}, schema=schema)
 
         # Force 4 workers even though there's only 1 batch
-        with Client(example_worker, max_workers=4) as client:
+        with Client(example_worker, worker_limit=4) as client:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
@@ -218,18 +196,12 @@ class TestMultiWorkerEdgeCases:
 
     def test_fewer_batches_than_workers(self, example_worker: str) -> None:
         """2 batches with max_workers=4 should complete without hanging."""
-        schema = make_schema(
-            [pa.field("id", pa.int64()), pa.field("value", pa.int64())]
-        )
-        batch1 = pa.RecordBatch.from_pydict(
-            {"id": [1, 2], "value": [10, 20]}, schema=schema
-        )
-        batch2 = pa.RecordBatch.from_pydict(
-            {"id": [3, 4, 5], "value": [30, 40, 50]}, schema=schema
-        )
+        schema = make_schema([pa.field("id", pa.int64()), pa.field("value", pa.int64())])
+        batch1 = pa.RecordBatch.from_pydict({"id": [1, 2], "value": [10, 20]}, schema=schema)
+        batch2 = pa.RecordBatch.from_pydict({"id": [3, 4, 5], "value": [30, 40, 50]}, schema=schema)
 
         # Force 4 workers even though there are only 2 batches
-        with Client(example_worker, max_workers=4) as client:
+        with Client(example_worker, worker_limit=4) as client:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
@@ -244,11 +216,9 @@ class TestMultiWorkerEdgeCases:
 class TestWorkerStderrCapture:
     """Tests for capturing worker stderr output."""
 
-    def test_captures_worker_stderr(
-        self, example_worker: str, simple_batches: list[pa.RecordBatch]
-    ) -> None:
+    def test_captures_worker_stderr(self, example_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
         """Should capture stderr output from the worker process."""
-        with Client(example_worker) as client:
+        with Client(example_worker, pool=None) as client:
             # The example worker uses structlog which writes to stderr
             list(
                 client.table_in_out_function(
@@ -275,7 +245,7 @@ class TestWorkerStderrCapture:
             'sys.exit(1)"'
         )
 
-        client = Client(worker_script)
+        client = Client(worker_script, pool=None)
         client.start()
 
         # Poll for stderr content with timeout instead of fixed sleep

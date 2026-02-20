@@ -125,9 +125,7 @@ class InMemoryCatalog(CatalogInterface):
         """Get a list of catalog names."""
         return list(self._catalogs.keys())
 
-    def catalog_attach(
-        self, *, name: str, options: dict[str, Any]
-    ) -> CatalogAttachResult:
+    def catalog_attach(self, *, name: str, options: dict[str, Any]) -> CatalogAttachResult:
         """Attach to a catalog with the given name."""
         if name not in self._catalogs:
             msg = f"Catalog {name!r} not found"
@@ -208,16 +206,12 @@ class InMemoryCatalog(CatalogInterface):
 
     # Optional methods with implementations
 
-    def catalog_version(
-        self, *, attach_id: AttachId, transaction_id: TransactionId | None
-    ) -> int:
+    def catalog_version(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> int:
         """Get the current catalog version."""
         catalog = self._get_catalog(attach_id)
         return catalog.version
 
-    def catalog_create(
-        self, *, name: str, on_conflict: OnConflict, options: dict[str, Any]
-    ) -> None:
+    def catalog_create(self, *, name: str, on_conflict: OnConflict, options: dict[str, Any]) -> None:
         """Create a new catalog."""
         if name in self._catalogs:
             if on_conflict == OnConflict.ERROR:
@@ -251,9 +245,7 @@ class InMemoryCatalog(CatalogInterface):
             del self._attachments[aid]
         del self._catalogs[name]
 
-    def schemas(
-        self, *, attach_id: AttachId, transaction_id: TransactionId | None
-    ) -> list[SchemaInfo]:
+    def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> list[SchemaInfo]:
         """Get a list of schemas in the catalog."""
         catalog = self._get_catalog(attach_id)
         result = []
@@ -343,9 +335,7 @@ class InMemoryCatalog(CatalogInterface):
         attach_id: AttachId,
         transaction_id: TransactionId | None,
         name: str,
-        type: Literal[
-            SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION
-        ],
+        type: Literal[SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION],
     ) -> Sequence[FunctionInfo]: ...
 
     def schema_contents(
@@ -373,10 +363,7 @@ class InMemoryCatalog(CatalogInterface):
         result: list[TableInfo | ViewInfo | FunctionInfo] = []
 
         # Normalize type parameter (may be string from wire protocol)
-        if isinstance(type, SchemaObjectType):
-            type_enum = type
-        else:
-            type_enum = SchemaObjectType(type)
+        type_enum = type if isinstance(type, SchemaObjectType) else SchemaObjectType(type)
 
         # Return tables for TABLE type
         if type_enum == SchemaObjectType.TABLE:

@@ -68,9 +68,7 @@ class OutputWriter:
 
     """
 
-    def __init__(
-        self, output_file: str | None, format: str, schema: pa.Schema | None = None
-    ):
+    def __init__(self, output_file: str | None, format: str, schema: pa.Schema | None = None):
         """Initialize the output writer.
 
         Args:
@@ -133,9 +131,7 @@ class OutputWriter:
             output = self._get_output_stream()
             write_options = csv.WriteOptions(include_header=self._first_write)
             if self._is_stdout:
-                csv.write_csv(
-                    pa.Table.from_batches([batch]), sys.stdout.buffer, write_options
-                )
+                csv.write_csv(pa.Table.from_batches([batch]), sys.stdout.buffer, write_options)
             else:
                 if self._first_write:
                     csv.write_csv(pa.Table.from_batches([batch]), output, write_options)
@@ -227,8 +223,6 @@ OUTPUT FORMATS (-f/--format):
 
 \b
 ENVIRONMENT VARIABLES:
-  VGI_IPC_DEBUG=1   Trace IPC read/write (protocol debug)
-  VGI_IPC_STATS=1   Log IPC statistics per invocation
   VGI_QUIET=1       Suppress worker startup logging
 """
 
@@ -410,13 +404,9 @@ def _create_cli() -> Any:
         # Validate table_input_position
         if table_input_position is not None:
             if input_file is None:
-                raise click.ClickException(
-                    "--table-input-position requires --input to be specified"
-                )
+                raise click.ClickException("--table-input-position requires --input to be specified")
             if table_input_position < 0:
-                raise click.ClickException(
-                    "--table-input-position must be non-negative"
-                )
+                raise click.ClickException("--table-input-position must be non-negative")
             if table_input_position > len(args_list):
                 raise click.ClickException(
                     f"--table-input-position {table_input_position} is out of range "
@@ -430,9 +420,7 @@ def _create_cli() -> Any:
         named_args: dict[str, pa.Scalar[Any]] = {}
         for named_arg in named_arg_list:
             if "=" not in named_arg:
-                raise click.ClickException(
-                    f"Invalid --named-arg format: '{named_arg}'. Expected key=value."
-                )
+                raise click.ClickException(f"Invalid --named-arg format: '{named_arg}'. Expected key=value.")
             key, value_str = named_arg.split("=", 1)
             # Try to parse value as JSON, fall back to string
             try:
@@ -448,9 +436,7 @@ def _create_cli() -> Any:
             settings = {}
             for setting in setting_list:
                 if "=" not in setting:
-                    raise click.ClickException(
-                        f"Invalid --setting format: '{setting}'. Expected key=value."
-                    )
+                    raise click.ClickException(f"Invalid --setting format: '{setting}'. Expected key=value.")
                 key, value_str = setting.split("=", 1)
                 settings[key] = value_str
 
@@ -460,9 +446,7 @@ def _create_cli() -> Any:
             try:
                 attach_id_bytes = bytes.fromhex(attach_id)
             except ValueError as e:
-                raise click.ClickException(
-                    f"Invalid --attach-id: must be a valid hex string: {e}"
-                ) from e
+                raise click.ClickException(f"Invalid --attach-id: must be a valid hex string: {e}") from e
 
         # Parse transaction_id from hex string if provided
         transaction_id_bytes: bytes | None = None
@@ -470,9 +454,7 @@ def _create_cli() -> Any:
             try:
                 transaction_id_bytes = bytes.fromhex(transaction_id)
             except ValueError as e:
-                raise click.ClickException(
-                    f"Invalid --transaction-id: must be a valid hex string: {e}"
-                ) from e
+                raise click.ClickException(f"Invalid --transaction-id: must be a valid hex string: {e}") from e
 
         # Parse pushdown_filters from hex string if provided
         pushdown_filters_bytes: bytes | None = None
@@ -480,9 +462,7 @@ def _create_cli() -> Any:
             try:
                 pushdown_filters_bytes = bytes.fromhex(pushdown_filters)
             except ValueError as e:
-                raise click.ClickException(
-                    f"Invalid --pushdown-filters: must be a valid hex string: {e}"
-                ) from e
+                raise click.ClickException(f"Invalid --pushdown-filters: must be a valid hex string: {e}") from e
 
         log.info("starting_worker", function=function_name, worker_path=worker_path)
 
@@ -490,20 +470,16 @@ def _create_cli() -> Any:
         if function_type == "scalar" and input_file is None:
             raise click.ClickException("--type scalar requires --input to be specified")
         if function_type == "table-in-out" and input_file is None:
-            raise click.ClickException(
-                "--type table-in-out requires --input to be specified"
-            )
+            raise click.ClickException("--type table-in-out requires --input to be specified")
         if function_type == "table" and input_file is not None:
-            raise click.ClickException(
-                "--type table does not accept --input (table functions have no input)"
-            )
+            raise click.ClickException("--type table does not accept --input (table functions have no input)")
 
         output_writer: OutputWriter | None = None
         try:
             with Client(
                 worker_path,
                 passthrough_stderr=worker_stderr,
-                max_workers=max_workers,
+                worker_limit=max_workers,
                 attach_id=attach_id_bytes,
             ) as client:
                 # Determine effective function type
@@ -571,9 +547,7 @@ def _create_cli() -> Any:
 
                 for output_batch in output_iterator:
                     if output_writer is None:
-                        output_writer = OutputWriter(
-                            output_file, output_format, output_batch.schema
-                        )
+                        output_writer = OutputWriter(output_file, output_format, output_batch.schema)
                     output_writer.write_batch(output_batch)
 
             log.info("processing_complete", function=function_name)
@@ -595,16 +569,7 @@ cli = _create_cli()
 
 def main() -> None:
     """CLI entry point for vgi-client."""
-    from vgi import tracing
-
-    provider = tracing.maybe_configure_tracing(
-        default_service_name="vgi-client",
-        log_func=log.info,
-    )
-    try:
-        cli()
-    finally:
-        tracing.shutdown_tracing(provider, log_func=log.debug)
+    cli()
 
 
 if __name__ == "__main__":

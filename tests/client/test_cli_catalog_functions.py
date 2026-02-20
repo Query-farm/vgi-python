@@ -137,10 +137,7 @@ class TestCLISchemaContents:
             ],
         )
         assert contents_result.exit_code != 0
-        assert (
-            "Missing option" in contents_result.output
-            or "required" in contents_result.output.lower()
-        )
+        assert "Missing option" in contents_result.output or "required" in contents_result.output.lower()
 
     def test_schema_contents_with_catalog_option(self, example_worker: str) -> None:
         """Schema contents works with --catalog option for auto-attach."""
@@ -357,9 +354,7 @@ class TestCLISchemaContents:
         assert by_name["sequence"]["function_type"] == "table"
         assert by_name["sum_all_columns"]["function_type"] == "table"
 
-    def test_varargs_function_shows_varargs_in_arguments(
-        self, example_worker: str
-    ) -> None:
+    def test_varargs_function_shows_varargs_in_arguments(self, example_worker: str) -> None:
         """Varargs functions show varargs indicator in arguments."""
         runner = CliRunner()
 

@@ -3,35 +3,44 @@ name = "vgi"
 version = "0.1.0"
 description = "Vector Gateway Interface - Connect DuckDB to external programs via Apache Arrow"
 readme = "README.md"
-requires-python = ">=3.12.4"
+requires-python = ">=3.13"
 dependencies = [
     "click",
     "pyarrow",
     "structlog",
     "platformdirs",
     "numpy>=2.4.1",
-    "opentelemetry-sdk>=1.39.1",
-    "opentelemetry-exporter-otlp>=1.39.1",
+    "vgi-rpc @ file:///Users/rusty/Development/vgi-rpc",
 ]
 
 [project.optional-dependencies]
-dev = ["mypy", "pyarrow-stubs", "pytest", "pytest-cov", "pytest-examples", "pytest-mypy", "pytest-ruff", "pytest-xdist", "ruff"]
-tracing = ["opentelemetry-api>=1.20.0"]
-
+dev = [
+    "mypy",
+    "pyarrow-stubs",
+    "pytest",
+    "pytest-cov",
+    "pytest-examples",
+    "pytest-mypy",
+    "pytest-ruff",
+    "pytest-xdist",
+    "ruff",
+]
 [project.scripts]
 vgi-client = "vgi.client.cli:main"
 vgi-example-worker = "vgi.examples.worker:main"
-vgi-example-polars-worker = "vgi.examples.worker_polars:main"
 vgi-example-catalog-worker = "vgi.examples.catalog:main"
 vgi-ci-worker = "vgi.ci.worker:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.ruff]
-line-length = 88
-target-version = "py312"
+line-length = 120
+target-version = "py313"
 exclude = ["duckdb"]
 
 [tool.ruff.lint]
@@ -45,7 +54,7 @@ ignore = [
 quote-style = "double"
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.13"
 strict = true
 warn_return_any = true
 warn_unused_ignores = true
@@ -55,16 +64,12 @@ module = "structlog.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = "opentelemetry.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
 # These files have type: ignore comments for ty that mypy doesn't need
 module = ["vgi.examples.scalar", "vgi.table_function"]
 warn_unused_ignores = false
 
 [tool.ty.environment]
-python-version = "3.12"
+python-version = "3.13"
 
 [tool.pytest.ini_options]
 addopts = "--mypy --ruff"
@@ -83,10 +88,7 @@ branch = true
 # What to measure
 source = ["vgi"]
 # Omit test files and examples from coverage
-omit = [
-    "vgi/examples/*",
-    "tests/*",
-]
+omit = ["vgi/examples/*", "tests/*"]
 
 [tool.coverage.report]
 # Fail if coverage drops below this threshold
@@ -100,16 +102,11 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "@overload",
     "raise NotImplementedError",
-    "\\.\\.\\.",  # Ellipsis in stub files
+    "\\.\\.\\.",                  # Ellipsis in stub files
 ]
 
 [tool.coverage.html]
 directory = "htmlcov"
 
 [dependency-groups]
-dev = [
-    "lxml>=6.0.2",
-    "polars>=1.0.0",
-    "pytest-timeout>=2.4.0",
-    "ty>=0.0.8",
-]
+dev = ["lxml>=6.0.2", "pytest-timeout>=2.4.0", "ty>=0.0.8"]

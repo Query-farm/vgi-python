@@ -7,7 +7,7 @@ protocol. They are NOT intended for production use. The VGI protocol will have
 multiple implementations (Python, Go, JavaScript), and these examples serve as:
 
 1. Protocol conformance tests - Verify implementations correctly handle the
-   VGI streaming protocol (DATA, FINALIZE, HAVE_MORE_OUTPUT, etc.)
+   VGI streaming protocol.
 2. Pattern demonstrations - Show how to implement common function patterns
 3. Cross-implementation test cases - Ensure consistent behavior across languages
 
@@ -17,25 +17,31 @@ on protocol correctness.
 
 AVAILABLE FUNCTIONS
 -------------------
-EchoFunction              - Passthrough, no transformation
-BufferInputFunction       - Collects all input, emits on finalize
-RepeatInputsFunction      - Duplicates each input batch N times
-SumAllColumnsFunction     - Aggregates numeric columns into sums
+EchoFunction                   - Passthrough, no transformation
+BufferInputFunction            - Collects all input, emits on finalize
+RepeatInputsFunction           - Duplicates each input batch N times
+SumAllColumnsFunction          - Aggregates numeric columns into sums
+ExceptionProcessFunction       - Raises exception during process (test)
+ExceptionFinalizeFunction      - Raises exception during finalize (test)
+SumAllColumnsSimpleDistributed - Distributed aggregation via callback API
 """
 
+from dataclasses import dataclass
 from typing import Annotated, Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
+from vgi_rpc import ArrowSerializableDataclass, ArrowType
+from vgi_rpc.log import Level
+from vgi_rpc.rpc import OutputCollector
+from vgi_rpc.utils import empty_batch
 
 from vgi.arguments import Arg, TableInput
-from vgi.ipc_utils import RecordBatchState
-from vgi.log import Level, Message
+from vgi.invocation import BindResponse, GlobalInitResponse
 from vgi.metadata import FunctionExample
-from vgi.table_function import TableCardinality
+from vgi.schema_utils import schema
+from vgi.table_function import BindParams, InitParams, ProcessParams, TableCardinality
 from vgi.table_in_out_function import (
-    Output,
-    OutputGenerator,
     TableInOutFunction,
     TableInOutGenerator,
 )
@@ -45,15 +51,20 @@ __all__ = [
     "BufferInputFunction",
     "RepeatInputsFunction",
     "SumAllColumnsFunction",
-    "SumAllColumnsFunctionDistributed",
     "SumAllColumnsSimpleDistributed",
-    "SumAllColumnsFunctionWithLogging",
     "ExceptionProcessFunction",
     "ExceptionFinalizeFunction",
 ]
 
 
-class EchoFunction(TableInOutGenerator):
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SingleTableArguments:
+    """Arguments for a table in/out function that just takes a table."""
+
+    data: Annotated[TableInput, Arg(0, doc="Input table")]
+
+
+class EchoFunction(TableInOutGenerator[SingleTableArguments]):
     """Passthrough function that emits each input batch unchanged.
 
     USE CASE
@@ -95,15 +106,14 @@ class EchoFunction(TableInOutGenerator):
             )
         ]
 
-    data: Annotated[TableInput, Arg(0, doc="Input table")]
+    @classmethod
+    def on_bind(cls, params: BindParams[SingleTableArguments]) -> BindResponse:
+        """Produce the output schema."""
+        assert params.bind_call.input_schema is not None
+        return BindResponse(output_schema=params.bind_call.input_schema)
 
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Return input schema with projection applied."""
-        return self.apply_projection(self.input_schema)
 
-
-class BufferInputFunction(TableInOutGenerator):
+class BufferInputFunction(TableInOutGenerator[SingleTableArguments]):
     """Buffering function that collects all input and emits during finalization.
 
     USE CASE
@@ -115,23 +125,17 @@ class BufferInputFunction(TableInOutGenerator):
     BEHAVIOR
     --------
     - output_schema: Returns input schema unchanged (default)
-    - process(): Stores batches in buffer and yields empty results
-    - finalize(): Yields buffered batches one at a time
+    - process(): Stores batches in buffer and emits empty results
+    - finalize(): Returns buffered batches
 
     SCHEMA TRANSFORMATION
     ---------------------
     Input:  any schema
     Output: same schema (passthrough)
 
-    STATE
-    -----
-    buffered_batches: list[pa.RecordBatch]
-        Accumulates all input batches in memory (instance attribute).
-
     Note:
     ----
-    This is a test/example function for protocol validation. Memory buffering is
-    intentional to test the FINALIZE phase of the VGI protocol.
+    This is a test/example function for protocol validation.
 
     Example:
     -------
@@ -147,7 +151,6 @@ class BufferInputFunction(TableInOutGenerator):
         name = "buffer_input"
         description = "Collects all input batches and emits during finalization"
         categories = ["utility", "buffer"]
-        max_workers = 1
         examples = [
             FunctionExample(
                 sql="SELECT * FROM buffer_input((SELECT * FROM input_table))",
@@ -155,31 +158,41 @@ class BufferInputFunction(TableInOutGenerator):
             )
         ]
 
-    data: Annotated[TableInput, Arg(0, doc="Input table to buffer")]
+    @classmethod
+    def on_init(cls, params: InitParams[SingleTableArguments]) -> GlobalInitResponse:
+        """Enforce single-worker execution."""
+        return GlobalInitResponse(max_workers=1)
 
-    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-        """Buffer all input batches without producing output."""
-        self.buffered_batches: list[pa.RecordBatch] = [batch]
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[SingleTableArguments],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        """Buffer each input batch in storage queue and emit empty."""
+        params.storage.queue_push_batches([batch])
+        out.emit(empty_batch(params.output_schema))
 
-        _ = yield None
-
-        while True:
-            received = yield None
-            if received is None:
-                break
-            self.buffered_batches.append(received)
-
-    def finalize(self) -> OutputGenerator:
-        """Emit all buffered batches sequentially."""
-        # Emit buffered batches one at a time during finalize
-        _ = yield None
-
-        for index, b in enumerate(self.buffered_batches):
-            has_more = index < len(self.buffered_batches) - 1
-            yield Output(b, has_more)
+    @classmethod
+    def finalize(cls, params: ProcessParams[SingleTableArguments]) -> list[pa.RecordBatch]:
+        """Return all buffered batches."""
+        batches: list[pa.RecordBatch] = []
+        while batch := params.storage.queue_pop_batch():
+            batches.append(batch)
+        return batches
 
 
-class RepeatInputsFunction(TableInOutGenerator):
+@dataclass(slots=True, frozen=True)
+class RepeatsInputsFunctionArguments:
+    """Arguments for RepeatInputsFunction."""
+
+    repeat_count: Annotated[int, Arg(0, doc="Number of times to repeat each input batch")]
+    data: Annotated[TableInput, Arg(1, doc="Input table to repeat")]
+
+
+class RepeatInputsFunction(TableInOutGenerator[RepeatsInputsFunctionArguments]):
     """Explosion function that duplicates each input batch N times.
 
     USE CASE
@@ -194,44 +207,19 @@ class RepeatInputsFunction(TableInOutGenerator):
 
     BEHAVIOR
     --------
-    - output_schema: Returns input schema unchanged (default)
-    - process(): For each input, yields it N times using has_more=True
-    - max_processes: Uses default high value to enable parallel processing
+    - output_schema: Returns input schema unchanged
+    - process(): For each input, concatenates it N times into one output
 
     SCHEMA TRANSFORMATION
     ---------------------
     Input:  any schema
     Output: same schema (passthrough)
 
-    STATE
-    -----
-    self.repeat_count: int
-        Number of times to emit each input batch (declared via Arg descriptor).
-
-    KEY PATTERN: MULTIPLE OUTPUTS FROM ONE INPUT
-    ---------------------------------------------
-    This function demonstrates how to produce multiple output batches from
-    a single input batch using the has_more flag. All iterations yield
-    has_more=True; the loop's `yield None` receives the next batch:
-
-        while True:
-            for i in range(self.repeat_count):
-                yield Output(batch, has_more=True)
-            batch = yield None
-            if batch is None:
-                break
-
-    KEY PATTERN: STATELESS DISTRIBUTED PROCESSING
-    ----------------------------------------------
-    This function is stateless - each batch is processed independently without
-    any cross-batch state. This makes it trivially parallelizable using the
-    default max_processes from the base class.
-
     Example:
     -------
     With repeat_count=3:
     Input:  [{"a": 1}]
-    Output: [{"a": 1}], [{"a": 1}], [{"a": 1}]
+    Output: [{"a": 1}, {"a": 1}, {"a": 1}]
 
     """
 
@@ -248,31 +236,44 @@ class RepeatInputsFunction(TableInOutGenerator):
             )
         ]
 
-    repeat_count: Annotated[
-        int, Arg(0, doc="Number of times to repeat each input batch")
-    ]
-    data: Annotated[TableInput, Arg(1, doc="Input table to repeat")]
-
-    def bind(self) -> None:
+    @classmethod
+    def on_bind(cls, params: BindParams[RepeatsInputsFunctionArguments]) -> BindResponse:
         """Validate repeat count argument."""
-        if self.repeat_count < 1:
+        if params.args.repeat_count < 1:
             raise ValueError("Repeat count must be at least 1")
+        if params.bind_call.input_schema is None:
+            raise ValueError("input_schema is required but was None")
+        return BindResponse(output_schema=params.bind_call.input_schema)
 
-    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-        """Emit each input batch repeat_count times."""
-        _ = yield None
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[RepeatsInputsFunctionArguments],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        """Emit input batch concatenated repeat_count times."""
+        combined = pa.Table.from_batches([batch] * params.args.repeat_count).combine_chunks()
+        out.emit(combined.to_batches()[0])
 
-        while True:
-            for _ in range(self.repeat_count):
-                yield Output(batch, has_more=True)
 
-            received = yield None
-            if received is None:
-                break
-            batch = received
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SumAllColumnsFunctionArguments:
+    """Arguments for SumAllColumnsFunction."""
+
+    data: Annotated[TableInput, Arg(0, doc="Input table")]
+    logging: Annotated[bool, Arg("logging", doc="Whether to log during processing", default=False)] = False
 
 
-class SumAllColumnsFunction(TableInOutGenerator):
+@dataclass
+class SumAllColumnsState:
+    """Mutable state for SumAllColumnsFunction - tracks running sums."""
+
+    sums: dict[str, Any]  # name -> pa.Scalar
+
+
+class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, SumAllColumnsState]):
     """Aggregation function that computes column-wise sums across all batches.
 
     USE CASE
@@ -282,9 +283,8 @@ class SumAllColumnsFunction(TableInOutGenerator):
 
     BEHAVIOR
     --------
-    - output_schema: Builds output schema from numeric columns only
-    - process(): Accumulates sums and yields empty results
-    - finalize(): Yields single row with final sums
+    - process(): Accumulates sums and emits empty results
+    - finalize(): Returns single row with final sums
 
     SCHEMA TRANSFORMATION
     ---------------------
@@ -296,46 +296,10 @@ class SumAllColumnsFunction(TableInOutGenerator):
     - Floating types -> float64
     - Non-numeric types -> excluded from output
 
-    STATE
-    -----
-    self.sums: dict[str, pa.Scalar]
-        Running sum for each numeric column. Keys are column names,
-        values are PyArrow scalars with the output type.
-
-    KEY PATTERN: SCHEMA TRANSFORMATION IN output_schema
-    ---------------------------------------------------
-    This function demonstrates inspecting input_schema to build a different
-    output schema as a property:
-
-        @property
-        def output_schema(self) -> pa.Schema:
-            output_fields = []
-            for field in self.input_schema:
-                if pa.types.is_integer(field.type):
-                    output_fields.append(pa.field(field.name, pa.int64()))
-                elif pa.types.is_floating(field.type):
-                    output_fields.append(pa.field(field.name, pa.float64()))
-            return pa.schema(output_fields)
-
     KEY PATTERN: ACCUMULATE IN process(), EMIT IN finalize()
     --------------------------------------------------------
-    In process(), accumulate state but yield empty results.
-    In finalize(), yield the final aggregated result:
-
-        def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-            _ = yield None
-            while True:
-                for name in self.sums:
-                    col_sum = pc.sum(batch.column(name))
-                    if col_sum.is_valid:
-                        self.sums[name] = pc.add(self.sums[name], col_sum)
-                batch = yield None
-                if batch is None:
-                    break
-
-        def finalize(self) -> OutputGenerator:
-            _ = yield None
-            yield Output(pa.RecordBatch.from_pydict(...))
+    In process(), accumulate state but emit empty results.
+    In finalize(), return the final aggregated result.
 
     Example:
     -------
@@ -357,7 +321,6 @@ class SumAllColumnsFunction(TableInOutGenerator):
         name = "sum_all_columns"
         description = "Computes column-wise sums across all batches"
         categories = ["aggregation", "numeric"]
-        max_workers = 1
         examples = [
             FunctionExample(
                 sql="SELECT * FROM sum_all_columns((SELECT * FROM input_table))",
@@ -365,24 +328,17 @@ class SumAllColumnsFunction(TableInOutGenerator):
             )
         ]
 
-    data: Annotated[TableInput, Arg(0, doc="Input table with numeric columns")]
-
-    @property
-    def cardinality(self) -> TableCardinality | None:
+    @classmethod
+    def cardinality(cls, params: BindParams[SumAllColumnsFunctionArguments]) -> TableCardinality | None:
         """Return cardinality estimate of exactly 1 row."""
         return TableCardinality(estimate=1, max=1)
 
-    def bind(self) -> None:
-        """Initialize the sum accumulator."""
-        self.sums: dict[str, pa.Scalar[Any]] = {}
-
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Build schema with only numeric columns promoted to int64/float64."""
-        if self.input_schema is None:
-            raise ValueError("input_schema is required but was None")
-        output_fields = []
-        for field in self.input_schema:
+    @classmethod
+    def on_bind(cls, params: BindParams[SumAllColumnsFunctionArguments]) -> BindResponse:
+        """Produce the output schema with only numeric columns."""
+        assert params.bind_call.input_schema is not None
+        output_fields: dict[str, pa.DataType] = {}
+        for field in params.bind_call.input_schema:
             out_type: pa.DataType
             if pa.types.is_integer(field.type):
                 out_type = pa.int64()
@@ -390,256 +346,143 @@ class SumAllColumnsFunction(TableInOutGenerator):
                 out_type = pa.float64()
             else:
                 continue
-            output_fields.append(pa.field(field.name, out_type))
+            output_fields[field.name] = out_type
 
-        return self.apply_projection(pa.schema(output_fields))
+        return BindResponse(output_schema=schema(output_fields))
 
-    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
+    @staticmethod
+    def _scalars_to_single_row_batch(values: dict[str, pa.Scalar]) -> pa.RecordBatch:  # type: ignore[type-arg]
+        arrays = [pa.array([scalar], type=scalar.type) for scalar in values.values()]
+        return pa.RecordBatch.from_arrays(arrays, names=list(values.keys()))
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[SumAllColumnsFunctionArguments]) -> SumAllColumnsState:
+        """Initialize running sums to zero."""
+        sums: dict[str, Any] = {}
+        for field in params.output_schema:
+            sums[field.name] = pa.scalar(0, type=field.type)
+        return SumAllColumnsState(sums=sums)
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[SumAllColumnsFunctionArguments],
+        state: SumAllColumnsState,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
         """Accumulate column sums across all batches."""
-        # The priming of the generator
-        _ = yield None
-
-        # Initialize sums to zero for each numeric column
-        for field in self.output_schema:
-            self.sums[field.name] = pa.scalar(0, type=field.type)
-
-        # Process all batches
-        while True:
-            for name in self.sums:
-                col_sum = pc.sum(batch.column(name))
-                if col_sum.is_valid:
-                    self.sums[name] = pc.add(self.sums[name], col_sum)
-
-            received = yield None
-            if received is None:
-                break
-            batch = received
-
-    def finalize(self) -> OutputGenerator:
-        """Emit single row containing the column sums."""
-        _ = yield None
-
-        # Finalize: emit single row with sums
-        yield Output(
-            pa.RecordBatch.from_pydict(
-                {name: [val] for name, val in self.sums.items()},
-                schema=self.output_schema,
+        if params.args.logging:
+            out.client_log(
+                Level.INFO,
+                f"Processing batch with {batch.num_rows} rows",
             )
+
+        for name in state.sums:
+            col_sum = pc.sum(batch.column(name))
+            if col_sum.is_valid:
+                state.sums[name] = pc.add(state.sums[name], col_sum)
+
+        # Save running sums to storage for finalize (upsert per worker)
+        params.storage.put(params.storage.serialize_record_batch(cls._scalars_to_single_row_batch(state.sums)))
+
+        out.emit(empty_batch(params.output_schema))
+
+    @classmethod
+    def finalize(cls, params: ProcessParams[SumAllColumnsFunctionArguments]) -> list[pa.RecordBatch]:
+        """Return single row containing the column sums."""
+        sums: dict[str, pa.Scalar[Any]] = {}
+
+        # Initialize sums to zero in case no data was processed
+        for field in params.output_schema:
+            sums[field.name] = pa.scalar(0, type=field.type)
+
+        # Retrieve the accumulated sums from function storage and merge
+        all_tables = pa.Table.from_batches(
+            [params.storage.deserialize_record_batch(item) for item in params.storage.collect()]
         )
 
+        for field in params.output_schema:
+            col_sum = pc.sum(all_tables.column(field.name))
+            if col_sum.is_valid:
+                sums[field.name] = col_sum
 
-class SumAllColumnsFunctionDistributed(SumAllColumnsFunction):
-    """Distributed aggregation function that computes column-wise sums.
-
-    This function demonstrates the distributed state management framework:
-    - Workers accumulate partial sums during process()
-    - On GeneratorExit, each worker stores its state via store_state()
-    - During finalize(), the primary worker collects all states via collect_states()
-
-    Uses the default max_processes from the base class to enable parallelism.
-
-    """
-
-    class Meta:
-        """Metadata for SumAllColumnsFunctionDistributed."""
-
-        name = "sum_all_columns_distributed"
-        description = "Distributed column-wise sum aggregation"
-        categories = ["aggregation", "numeric", "distributed"]
-        examples = [
-            FunctionExample(
-                sql=(
-                    "SELECT * FROM sum_all_columns_distributed"
-                    "((SELECT * FROM input_table))"
-                ),
-                description="Sum columns using distributed workers",
+        return [
+            pa.RecordBatch.from_pydict(
+                {name: [val] for name, val in sums.items()},
+                schema=params.output_schema,
             )
         ]
 
-    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-        """Accumulate column sums across all batches."""
-        _ = yield None
 
-        sums: dict[str, pa.Scalar[Any]] = {}
-        # Initialize sums to zero for each numeric column
-        for field in self.output_schema:
-            sums[field.name] = pa.scalar(0, type=field.type)
+@dataclass
+class ExceptionProcessState:
+    """Mutable state for ExceptionProcessFunction."""
 
-        # Process all batches
-        try:
-            while True:
-                for name in sums:
-                    col_sum = pc.sum(batch.column(name))
-                    if col_sum.is_valid:
-                        sums[name] = pc.add(sums[name], col_sum)
-
-                received = yield None
-                if received is None:
-                    break
-                batch = received
-        except GeneratorExit:
-            # Generator is being closed - save state with explicit schema
-            state_batch = pa.RecordBatch.from_pydict(
-                {k: [v.as_py()] for k, v in sums.items()},
-                schema=self.output_schema,
-            )
-            self.store_state(RecordBatchState(batch=state_batch))
-            raise
-
-    def finalize(self) -> OutputGenerator:
-        """Emit single row containing the column sums."""
-        _ = yield None
-
-        # Collect all worker states using the framework
-        states = self.collect_states(RecordBatchState)
-
-        if not states:
-            # No data was processed, emit zeros
-            yield Output(
-                pa.RecordBatch.from_pydict(
-                    {field.name: [0] for field in self.output_schema},
-                    schema=self.output_schema,
-                )
-            )
-            return
-
-        # Combine all state batches into a table
-        table = pa.Table.from_batches([s.batch for s in states])
-
-        # Compute sums using output_schema for consistent column ordering
-        sums = {
-            field.name: pc.sum(table.column(field.name)).as_py()
-            for field in self.output_schema
-        }
-
-        # Emit single row with sums
-        yield Output(
-            pa.RecordBatch.from_pydict(
-                {name: [val] for name, val in sums.items()},
-                schema=self.output_schema,
-            )
-        )
-
-
-class SumAllColumnsFunctionWithLogging(SumAllColumnsFunction):
-    """Aggregation function with logging that computes column-wise sums.
-
-    Extends SumAllColumnsFunction to demonstrate logging capabilities.
-    Emits log messages during process() and finalize() phases.
-
-    See SumAllColumnsFunction for full documentation of the aggregation pattern.
-
-    """
-
-    class Meta:
-        """Metadata for SumAllColumnsWithLoggingFunction."""
-
-        name = "sum_all_columns_with_logging"
-        description = "Column-wise sum with logging output"
-        categories = ["aggregation", "numeric", "debug"]
-
-    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-        """Accumulate column sums across all batches with logging."""
-        _ = yield None
-
-        # Initialize sums to zero for each numeric column
-        for field in self.output_schema:
-            self.sums[field.name] = pa.scalar(0, type=field.type)
-
-        # Process all batches with logging
-        while True:
-            yield Message(
-                level=Level.INFO,
-                message=f"Processing batch with {batch.num_rows} rows",
-            )
-
-            for name in self.sums:
-                col_sum = pc.sum(batch.column(name))
-                if col_sum.is_valid:
-                    self.sums[name] = pc.add(self.sums[name], col_sum)
-
-            received = yield None
-            if received is None:
-                break
-            batch = received
-
-    def finalize(self) -> OutputGenerator:
-        """Emit single row containing the column sums with logging."""
-        _ = yield None
-
-        yield Message(
-            level=Level.INFO,
-            message="Finalizing and emitting sums",
-        )
-
-        yield Output(
-            pa.RecordBatch.from_pydict(
-                {name: [val] for name, val in self.sums.items()},
-                schema=self.output_schema,
-            )
-        )
+    batch_count: int = 0
 
 
 class ExceptionProcessFunction(SumAllColumnsFunction):
     """A function that raises an exception on the second batch."""
 
-    class Meta:
+    class Meta(SumAllColumnsFunction.Meta):
         """Metadata for ExceptionProcessFunction."""
 
         name = "exception_process"
         description = "Test function that raises exception during process"
         categories = ["test", "error"]
 
-    def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-        """Raise an exception on the second batch."""
-        _ = yield None  # priming
-        _ = batch  # unused, first batch is passed as parameter
+    @classmethod
+    def initial_state(cls, params: ProcessParams[SumAllColumnsFunctionArguments]) -> ExceptionProcessState:  # type: ignore[override]
+        """Create initial state."""
+        return ExceptionProcessState()
 
-        batch_index = 1  # First batch is from parameter
-        while True:
-            if batch_index % 2 == 0:
-                raise ValueError(f"Intentional exception on batch {batch_index}")
-            received = yield None
-            if received is None:
-                break
-            batch_index += 1
+    @classmethod
+    def process(  # type: ignore[override]
+        cls,
+        params: ProcessParams[SumAllColumnsFunctionArguments],
+        state: ExceptionProcessState,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        """Raise an exception on the second batch."""
+        state.batch_count += 1
+        if state.batch_count % 2 == 0:
+            raise ValueError(f"Intentional exception on batch {state.batch_count}")
+        out.emit(empty_batch(params.output_schema))
 
 
 class ExceptionFinalizeFunction(SumAllColumnsFunction):
-    """A class that demonstrates an exception raised during finalize()."""
+    """Test function that raises an exception during finalize()."""
 
-    class Meta:
+    class Meta(SumAllColumnsFunction.Meta):
         """Metadata for ExceptionFinalizeFunction."""
 
         name = "exception_finalize"
         description = "Test function that raises exception during finalize"
         categories = ["test", "error"]
 
-    def finalize(self) -> OutputGenerator:
-        """Emit single row containing the column sums with logging."""
-        _ = yield None
-
+    @classmethod
+    def finalize(cls, params: ProcessParams[SumAllColumnsFunctionArguments]) -> list[pa.RecordBatch]:
+        """Raise an intentional exception during finalize."""
         raise ValueError("Intentional exception during finalize()")
 
 
-class SumAllColumnsSimpleDistributed(TableInOutFunction):
+@dataclass(slots=True, kw_only=True)
+class SumAllColumnsSimpleDistributedState(ArrowSerializableDataclass):
+    """Partial sum state for distributed aggregation."""
+
+    partial_sum: Annotated[pa.RecordBatch, ArrowType(pa.binary())]
+
+
+class SumAllColumnsSimpleDistributed(TableInOutFunction[SingleTableArguments, SumAllColumnsSimpleDistributedState]):
     """Distributed aggregation using the simple callback API.
 
     This function demonstrates TableInOutFunction with distributed
-    state management using save_state() and load_states(). It's equivalent
-    to SumAllColumnsFunctionDistributed but uses the simpler callback API.
+    state management.
 
-    PATTERN: DISTRIBUTED AGGREGATION WITH SIMPLE API
-    -------------------------------------------------
-    1. Accumulate partial results in transform()
-    2. Override save_state() to serialize partial results
-    3. Override load_states() to merge results from all workers
-    4. Emit final result in finish()
-
-    Unlike single-process aggregations, this function:
-    - Uses default max_processes (allows parallelism)
-    - Stores partial state via save_state() before finalize
-    - Merges all worker states via load_states() before finish()
+    It's equivalent to SumAllColumnsFunctionDistributed but uses
+    the simpler callback API.
 
     Example:
     -------
@@ -651,7 +494,7 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction):
       Worker 1 state: {a: 3, b: 3.0}
       Worker 2 state: {a: 3, b: 3.0}
 
-    Primary worker merges states in load_states():
+    Primary worker merges states in finish():
       Combined: {a: 6, b: 6.0}
 
     Output (single row):
@@ -667,32 +510,22 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction):
         categories = ["aggregation", "numeric", "distributed"]
         examples = [
             FunctionExample(
-                sql=(
-                    "SELECT * FROM sum_all_columns_simple_distributed"
-                    "((SELECT * FROM input_table))"
-                ),
+                sql=("SELECT * FROM sum_all_columns_simple_distributed((SELECT * FROM input_table))"),
                 description="Sum columns using distributed workers with callback API",
             )
         ]
 
-    data: Annotated[TableInput, Arg(0, doc="Input table with numeric columns")]
-
-    def bind(self) -> None:
-        """Initialize with empty sums dict."""
-        self.sums: dict[str, pa.Scalar[Any]] = {}
-
-    @property
-    def cardinality(self) -> TableCardinality | None:
+    @classmethod
+    def cardinality(cls, params: BindParams[SingleTableArguments]) -> TableCardinality | None:
         """Return cardinality estimate of exactly 1 row."""
         return TableCardinality(estimate=1, max=1)
 
-    @property
-    def output_schema(self) -> pa.Schema:
-        """Build schema with only numeric columns promoted to int64/float64."""
-        if self.input_schema is None:
-            raise ValueError("input_schema is required but was None")
-        output_fields = []
-        for field in self.input_schema:
+    @classmethod
+    def on_bind(cls, params: BindParams[SingleTableArguments]) -> BindResponse:
+        """Produce the output schema with only numeric columns."""
+        assert params.bind_call.input_schema is not None
+        output_fields: dict[str, pa.DataType] = {}
+        for field in params.bind_call.input_schema:
             out_type: pa.DataType
             if pa.types.is_integer(field.type):
                 out_type = pa.int64()
@@ -700,65 +533,59 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction):
                 out_type = pa.float64()
             else:
                 continue
-            output_fields.append(pa.field(field.name, out_type))
+            output_fields[field.name] = out_type
 
-        return self.apply_projection(pa.schema(output_fields))
+        return BindResponse(output_schema=schema(output_fields))
 
-    def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
+    @classmethod
+    def initial_state(cls, params: ProcessParams[SingleTableArguments]) -> SumAllColumnsSimpleDistributedState | None:
+        """Create the initial state."""
+        return SumAllColumnsSimpleDistributedState(
+            partial_sum=pa.RecordBatch.from_pylist(
+                [{name: 0 for name in params.output_schema.names}], schema=params.output_schema
+            )
+        )
+
+    @classmethod
+    def transform(
+        cls,
+        batch: pa.RecordBatch,
+        params: ProcessParams[SingleTableArguments],
+        state: SumAllColumnsSimpleDistributedState | None,
+    ) -> pa.RecordBatch:
         """Accumulate column sums. Emit nothing during processing."""
-        # Initialize sums on first batch
-        if not self.sums:
-            for field in self.output_schema:
-                self.sums[field.name] = pa.scalar(0, type=field.type)
-
+        if state is None:
+            raise ValueError("State must not be None in transform()")
         # Add this batch's values to running sums
-        for name in self.sums:
+        sums: dict[str, pa.Scalar[Any]] = {}
+        for name in params.output_schema.names:
             col_sum = pc.sum(batch.column(name))
             if col_sum.is_valid:
-                self.sums[name] = pc.add(self.sums[name], col_sum)
+                sums[name] = pc.add(state.partial_sum.column(name)[0], col_sum)
+            else:
+                sums[name] = state.partial_sum.column(name)[0]
 
-        return self.empty_output_batch
-
-    def save_state(self) -> RecordBatchState | None:
-        """Save partial sums for distributed processing."""
-        if not self.sums:
-            return None
-
-        state_batch = pa.RecordBatch.from_pydict(
-            {k: [v.as_py()] for k, v in self.sums.items()},
-            schema=self.output_schema,
+        state.partial_sum = pa.RecordBatch.from_pylist(
+            [{name: val for name, val in sums.items()}],
+            schema=params.output_schema,
         )
-        return RecordBatchState(batch=state_batch)
 
-    def load_states(self, states: list[RecordBatchState]) -> None:
-        """Merge partial sums from all workers."""
-        if not states:
-            return
+        return empty_batch(params.output_schema)
 
-        # Combine all state batches into a table
-        table = pa.Table.from_batches([s.batch for s in states])
+    @classmethod
+    def finish(
+        cls,
+        params: ProcessParams[SingleTableArguments],
+        states: list[SumAllColumnsSimpleDistributedState],
+    ) -> list[pa.RecordBatch]:
+        """Emit single row containing the column sums."""
+        table = pa.Table.from_batches([state.partial_sum for state in states])
 
-        # Sum each column across all workers
-        for field in self.output_schema:
-            total = pc.sum(table.column(field.name))
-            self.sums[field.name] = pa.scalar(
-                total.as_py() if total.is_valid else 0, type=field.type
-            )
+        sums: dict[str, pa.Scalar[Any]] = {}
+        for field in params.output_schema:
+            sums[field.name] = pa.scalar(0, type=field.type)
 
-    def finish(self) -> list[pa.RecordBatch]:
-        """Emit single row with final sums."""
-        if not self.sums:
-            # No data was processed, emit zeros
-            return [
-                pa.RecordBatch.from_pydict(
-                    {field.name: [0] for field in self.output_schema},
-                    schema=self.output_schema,
-                )
-            ]
+        for field in params.output_schema:
+            sums[field.name] = pc.sum(table.column(field.name))
 
-        return [
-            pa.RecordBatch.from_pydict(
-                {name: [val.as_py()] for name, val in self.sums.items()},
-                schema=self.output_schema,
-            )
-        ]
+        return [pa.RecordBatch.from_pylist([{name: val for name, val in sums.items()}], schema=params.output_schema)]

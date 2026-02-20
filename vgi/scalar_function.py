@@ -6,7 +6,7 @@ input row into exactly one output value, producing a single column of results.
 Key characteristics:
 - **1:1 row mapping**: Output has exactly the same number of rows as input
 - **Single column output**: Output schema has exactly one column named "result"
-- **Finalize message**: Processing ends when client sends finalize (no finish() method)
+- **No finish()**: Processing ends when the caller closes the input stream.
 
 Common use cases:
 - Mathematical operations: multiply, add, abs
@@ -17,43 +17,13 @@ Common use cases:
 This module provides two base classes:
 
     ScalarFunction (recommended)
-        Simple callback-based API. Define Meta.output_type and compute().
-        Override output_type property only if output depends on input schema.
+        Declarative API using Param/ConstParam/Returns annotations on compute().
+        Also supports Setting, Secret, and OutputLength annotations.
+        Override output_type() only if the output type depends on input schema.
 
     ScalarFunctionGenerator (advanced)
-        Generator-based API for fine-grained control over logging.
-        Override output_schema and process().
-
-Example (static output type)::
-
-    from typing import Annotated
-
-    class UpperCase(ScalarFunction):
-        class Meta:
-            output_type = pa.string()  # Always returns string
-
-        column: Annotated[str, Arg(0, doc="String value to uppercase")]
-
-        def compute(self, *, column: pa.Array) -> pa.Array:
-            # Keyword-only params match Arg attribute names
-            return pc.utf8_upper(column)
-
-Example (dynamic output type - depends on input)::
-
-    from typing import Annotated
-
-    class DoubleValue(ScalarFunction):
-        class Meta:
-            output_type = AnyArrow  # Output type depends on input
-
-        column: Annotated[AnyArrowValue, Arg(0, doc="Numeric value to double")]
-
-        @property
-        def output_type(self) -> pa.DataType:
-            return self.input_schema.field(self.column.value).type
-
-        def compute(self, *, column: pa.Array) -> pa.Array:
-            return pc.multiply(column, 2)
+        Per-batch callback API for fine-grained control.
+        Override output_type() and process().
 
 """
 
@@ -61,53 +31,103 @@ from __future__ import annotations
 
 import contextlib
 import inspect
+import uuid
 from abc import abstractmethod
-from collections.abc import Generator
-from typing import TYPE_CHECKING, Any, Final, cast, final, get_args, get_type_hints
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, cast, final, get_args, get_type_hints
 
 import pyarrow as pa
-import structlog
+from vgi_rpc import ArrowSerializableDataclass
 
 import vgi.function
-import vgi.log
 from vgi.arguments import (
     _PYTHON_TO_ARROW,
     ARRAY_CLASS_TO_DATATYPE,
     COMPLEX_ARRAY_CLASSES,
-    AnyArrow,
     Arg,
+    Arguments,
     ConstParam,
+    OutputLength,
     Param,
     Returns,
-    is_polars_type,
-    polars_type_to_arrow,
+    _extract_setting_secret_params,
 )
-from vgi.output_complete import OutputComplete
-from vgi.protocol_types import ProtocolInput
-from vgi.table_function import Output, ProtocolOutput
+from vgi.function_storage import BoundStorage
+from vgi.invocation import (
+    BaseInitResponse,
+    BindResponse,
+    GlobalInitResponse,
+)
+from vgi.schema_utils import schema
+from vgi.table_function import _struct_scalar_to_dict
+
+if TYPE_CHECKING:
+    from vgi.protocol import BindRequest, InitRequest
 
 __all__ = [
-    "ProtocolInput",
+    "BindParameters",
+    "BindResult",
     "RowCountMismatchError",
     "ScalarFunction",
     "ScalarFunctionGenerator",
-    "ScalarOutputGenerator",
-    "ScalarOutputType",
     "TypeMismatchError",
 ]
 
-# Type alias for scalar function output type declarations.
-# Use pa.DataType for static output types, or AnyArrow for dynamic types
-# that depend on input schema.
-ScalarOutputType = pa.DataType | type[AnyArrow]
+
+@dataclass(slots=True, frozen=True)
+class BindResult(ArrowSerializableDataclass):
+    """Result of calling bind() on a scalar function.
+
+    Unlike table functions which return a full schema, scalar functions
+    return a single output type since they produce one value per row.
+
+    Attributes:
+        output_type: Arrow data type for the output value.
+        opaque_data: Optional serialized data, opaque to the caller,
+            that will be passed to global_init() and process().
+
+    """
+
+    output_type: pa.DataType
+    opaque_data: ArrowSerializableDataclass | None = None
 
 
-# =============================================================================
-# Helpers for Param/ConstParam -> Arg Conversion
-# =============================================================================
+@dataclass(slots=True, frozen=True)
+class BindParameters:
+    """Parameters passed to a scalar function's bind() method.
 
-# Sentinel value for positions that will be inferred from compute() signature
-_INFER_POSITION: Final = -1
+    Attributes:
+        constant_arguments: Constant arguments provided at query planning time.
+        arguments_schema: Schema describing the input columns.
+        settings: DuckDB settings as a single-row RecordBatch, or None.
+        secrets: DuckDB secrets as a single-row RecordBatch, or None.
+
+    """
+
+    constant_arguments: Arguments
+    arguments_schema: pa.Schema
+    settings: pa.RecordBatch | None
+    secrets: pa.RecordBatch | None
+
+
+def _resolve_explicit_arrow_type(arrow_type: pa.DataType | type) -> pa.DataType:
+    """Resolve an explicit arrow_type value to a pa.DataType.
+
+    Handles pa.DataType instances and Python types (int/str/float/bool/bytes).
+
+    Raises:
+        TypeError: If the type cannot be converted to Arrow.
+
+    """
+    if isinstance(arrow_type, pa.DataType):
+        return arrow_type
+    if arrow_type in _PYTHON_TO_ARROW:
+        return _PYTHON_TO_ARROW[arrow_type]
+    raise TypeError(
+        f"Cannot convert type '{arrow_type}' to Arrow type. "
+        f"Use pa.DataType, Python type (int/str/float/bool/bytes), "
+        f"or None for AnyArrow."
+    )
 
 
 def _param_to_arg(param: Param, base_type: type, position: int) -> Arg[Any]:
@@ -132,51 +152,22 @@ def _param_to_arg(param: Param, base_type: type, position: int) -> Arg[Any]:
         TypeError: If type cannot be determined (complex type without explicit
             arrow_type).
 
-    Examples:
-        # Explicit arrow_type (always wins)
-        Annotated[pa.Array, Param(pa.int64(), "doc")] -> pa.int64()
-
-        # Inferred from array class
-        Annotated[pa.Int64Array, Param(doc="doc")] -> pa.int64()
-        Annotated[pa.StringArray, Param(doc="doc")] -> pa.string()
-
-        # AnyArrow (dynamic type)
-        Annotated[pa.Array, Param(doc="doc")] -> AnyArrow
-        Annotated[pa.Array[Any], Param(doc="doc")] -> AnyArrow
-
-        # Complex type requires explicit arrow_type
-        Annotated[pa.StructArray, Param(doc="doc")] -> TypeError!
-        Annotated[pa.StructArray, Param(arrow_type=pa.struct([...]), doc="doc")] -> OK
-
     """
     is_any = False
     arrow_type: pa.DataType
 
-    # Priority 1: Explicit arrow_type in Param() always wins
     if param.arrow_type is not None:
-        if isinstance(param.arrow_type, pa.DataType):
-            arrow_type = param.arrow_type
-        elif param.arrow_type in _PYTHON_TO_ARROW:
-            arrow_type = _PYTHON_TO_ARROW[param.arrow_type]
-        elif is_polars_type(param.arrow_type):
-            # Convert Polars type (pl.Utf8, pl.Int64, etc.) to Arrow
-            arrow_type = polars_type_to_arrow(param.arrow_type)
-        else:
-            raise TypeError(
-                f"Cannot convert type '{param.arrow_type}' to Arrow type. "
-                f"Use pa.DataType, Polars type, Python type "
-                f"(int/str/float/bool/bytes), or None for AnyArrow."
-            )
-    # Priority 2: Infer from simple array class (pa.Int64Array -> pa.int64())
+        arrow_type = _resolve_explicit_arrow_type(param.arrow_type)
+    # Infer from simple array class (pa.Int64Array -> pa.int64())
     elif base_type in ARRAY_CLASS_TO_DATATYPE:
         arrow_type = ARRAY_CLASS_TO_DATATYPE[base_type]
-    # Priority 3: Complex types require explicit arrow_type
+    # Complex types require explicit arrow_type
     elif base_type in COMPLEX_ARRAY_CLASSES:
         raise TypeError(
             f"{base_type.__name__} requires explicit arrow_type in Param(). "
             f"Example: Param(arrow_type=pa.list_(pa.int64()), doc='...')"
         )
-    # Priority 4: pa.Array or generic -> AnyArrow
+    # pa.Array or generic -> AnyArrow
     else:
         # Covers pa.Array, pa.Array[Any], Any, and other generic types
         is_any = True
@@ -192,9 +183,7 @@ def _param_to_arg(param: Param, base_type: type, position: int) -> Arg[Any]:
     )
 
 
-def _const_param_to_arg(
-    const_param: ConstParam, base_type: type, position: int
-) -> Arg[Any]:
+def _const_param_to_arg(const_param: ConstParam, base_type: type, position: int) -> Arg[Any]:
     """Convert ConstParam dataclass to internal Arg object.
 
     Args:
@@ -213,15 +202,7 @@ def _const_param_to_arg(
     arrow_type: pa.DataType
 
     if const_param.arrow_type is not None:
-        # Explicit arrow_type specified
-        if isinstance(const_param.arrow_type, pa.DataType):
-            arrow_type = const_param.arrow_type
-        elif const_param.arrow_type in _PYTHON_TO_ARROW:
-            arrow_type = _PYTHON_TO_ARROW[const_param.arrow_type]
-        else:
-            raise TypeError(
-                f"Cannot convert type '{const_param.arrow_type}' to Arrow type."
-            )
+        arrow_type = _resolve_explicit_arrow_type(const_param.arrow_type)
     elif base_type in _PYTHON_TO_ARROW:
         # Infer from Annotated first argument
         arrow_type = _PYTHON_TO_ARROW[base_type]
@@ -240,11 +221,10 @@ def _const_param_to_arg(
 
 
 class _ArgDescriptor:
-    """Descriptor for regular (per-batch) Param arguments.
+    """Descriptor for Param arguments.
 
-    Provides access to the Arg metadata. The actual array value is passed
-    directly to compute() - this descriptor is for accessing the Arg's
-    metadata like position, doc, type_bound, etc.
+    On class access, returns the Arg metadata (position, doc, type_bound, etc.).
+    On instance access, returns the resolved column value via Arg._resolve().
     """
 
     __slots__ = ("arg", "name")
@@ -253,7 +233,7 @@ class _ArgDescriptor:
         self.arg = arg
         self.name = name
 
-    def __get__(self, obj: object | None, objtype: type | None = None) -> Any:
+    def __get__(self, obj: object | None, _objtype: type | None = None) -> Any:
         if obj is None:
             return self.arg
         # For instance access, return the resolved value from arguments
@@ -266,6 +246,10 @@ class _ConstArgDescriptor:
 
     Provides access to the scalar value (not array) for const parameters.
     The value is resolved from invocation.arguments and converted to Python.
+
+    These must be separate classes because their __get__ methods return different types.
+        - _ArgDescriptor returns the column value (array) for regular Param
+        - _ConstArgDescriptor returns the scalar value for ConstParam
     """
 
     __slots__ = ("arg", "name")
@@ -274,7 +258,7 @@ class _ConstArgDescriptor:
         self.arg = arg
         self.name = name
 
-    def __get__(self, obj: object | None, objtype: type | None = None) -> Any:
+    def __get__(self, obj: object | None, _objtype: type | None = None) -> Any:
         if obj is None:
             return self.arg
         # For instance access, return the resolved scalar value
@@ -317,17 +301,13 @@ class RowCountMismatchError(Exception):
         self.function_name = function_name
 
         if input_rows is not None and output_rows is not None:
-            full_message = self._build_detailed_message(
-                message, input_rows, output_rows
-            )
+            full_message = self._build_detailed_message(message, input_rows, output_rows)
         else:
             full_message = message
 
         super().__init__(full_message)
 
-    def _build_detailed_message(
-        self, base_message: str, input_rows: int, output_rows: int
-    ) -> str:
+    def _build_detailed_message(self, base_message: str, input_rows: int, output_rows: int) -> str:
         """Build a detailed, helpful error message."""
         lines = [base_message, ""]
 
@@ -402,9 +382,7 @@ class TypeMismatchError(TypeError):
         self.function_name = function_name
 
         if expected_type is not None and actual_type is not None:
-            full_message = self._build_detailed_message(
-                message, param_name, expected_type, actual_type
-            )
+            full_message = self._build_detailed_message(message, param_name, expected_type, actual_type)
         else:
             full_message = message
 
@@ -431,211 +409,212 @@ class TypeMismatchError(TypeError):
         return "\n".join(lines)
 
 
-# Generator type for scalar function output.
-# Must yield Output or Message (never None) since scalars always produce output.
-ScalarOutputGenerator = Generator[vgi.log.Message | Output, pa.RecordBatch | None, None]
-
-
-# ProtocolInput imported from vgi.protocol_types
-
-
-class ScalarFunctionGenerator(vgi.function.Function[vgi.function.FunctionInitInput]):
-    """Generator-based base class for scalar functions.
+class ScalarFunctionGenerator(vgi.function.Function):
+    """Per-batch callback base class for scalar functions.
 
     This is the advanced API for scalar functions. For most use cases,
     use ScalarFunction instead, which provides a simpler compute() callback.
 
     Scalar functions have these constraints:
     - **1:1 row mapping**: Output row count must equal input row count
-    - **Single column**: Output schema has exactly one column
+    - **Single value output**: Produces one value per input row
     - **No finalization**: Processing ends when input is exhausted
-
-    Override process() to implement the generator protocol:
-
-        def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
-            _ = yield Output(self.empty_output_batch)  # Priming yield
-            while True:
-                # Optional: yield log messages
-                yield Message(Level.INFO, f"Processing {batch.num_rows} rows")
-
-                result_array = compute_result(batch)
-                output_batch = pa.RecordBatch.from_arrays(
-                    [result_array], schema=self.output_schema
-                )
-                batch = yield Output(output_batch)
-                if batch is None:
-                    break
 
     Methods to Override
     -------------------
-    output_schema : pa.Schema (property)
-        Define the single-column output schema.
+    output_type(params) -> pa.DataType
+        Return the Arrow type for the output value. Required.
 
-    process(batch) : ScalarOutputGenerator
-        Generator that processes batches. Must yield Output or Message.
+    process(...) -> pa.RecordBatch
+        Process one input batch. Must return output with same row count.
+        Required.
 
-    setup() : None
-        Called before processing. Acquire resources here.
+    on_bind(params) -> BindResult
+        Optional. Override to perform custom bind-time logic.
 
-    teardown() : None
-        Called after processing. Release resources here.
+    on_init(...) -> GlobalInitResponse
+        Optional. Override to perform custom initialization.
 
-    Available Attributes
-    --------------------
-    self.invocation : Invocation
-        The complete invocation request with function name and arguments.
+    Protocol Entry Points (called by worker, do not override)
+    ---------------------------------------------------------
+    bind(input) -> BindResponse
+        Handles the bind API call
 
-    self.input_schema : pa.Schema
-        Schema of input batches (from invocation).
-
-    self.output_schema : pa.Schema
-        Schema of output batches (single column).
-
-    self.empty_output_batch : pa.RecordBatch
-        Empty batch conforming to output_schema, useful for priming yields.
+    global_init(input) -> GlobalInitResponse
+        Handles the global_init API call
 
     """
 
-    # InitInputType inferred from generic parameter Function[FunctionInitInput]
-
-    def __init__(
-        self,
-        invocation: vgi.invocation.Invocation,
-        logger: structlog.stdlib.BoundLogger,
-    ):
-        """Initialize the scalar function with invocation data and logger."""
-        super().__init__(invocation=invocation, logger=logger)
-
-    def _validate_input_schema_requirement(self) -> None:
-        """Validate that input_schema is provided for scalar functions."""
-        if self.invocation.input_schema is None:
-            raise ValueError(
-                f"{type(self).__name__} requires an input schema, but none was "
-                f"provided. ScalarFunction processes input batches and requires "
-                f"input_schema to be set in the Invocation."
-            )
-
-    # input_schema property and _validate_input_schema inherited from Function
-
     @final
-    def _validate_row_count(
-        self, output_batch: pa.RecordBatch, input_batch: pa.RecordBatch
-    ) -> None:
+    @classmethod
+    def _validate_row_count(cls, output_batch: pa.RecordBatch, input_batch: pa.RecordBatch) -> None:
         """Validate that output row count matches input row count."""
         if output_batch.num_rows != input_batch.num_rows:
             raise RowCountMismatchError(
                 "Scalar function output must have same row count as input.",
                 input_rows=input_batch.num_rows,
                 output_rows=output_batch.num_rows,
-                function_name=type(self).__name__,
+                function_name=cls.__name__,
             )
 
-    @final
-    def _process_and_validate(
-        self,
-        generator: ScalarOutputGenerator,
-        input_batch: pa.RecordBatch,
-    ) -> OutputComplete:
-        """Process a batch and validate schemas and row count.
-
-        Args:
-            generator: The user's process() generator.
-            input_batch: The input RecordBatch to process.
-
-        Returns:
-            OutputComplete with validated output batch.
-
-        Raises:
-            SchemaValidationError: If input or output batch schema doesn't match.
-            RowCountMismatchError: If output row count doesn't match input.
-
-        """
-        self._validate_input_schema(input_batch)
-        result: OutputComplete = OutputComplete.from_process_result(
-            generator.send(input_batch),
-            self.empty_output_batch,
-        )
-        self._validate_output_schema(result.batch)
-        # Validate row count for actual output (not log messages)
-        if result.log_message is None:
-            self._validate_row_count(result.batch, input_batch)
-        return result
-
-    @final
-    def _process_with_exception_handling(
-        self,
-        generator: ScalarOutputGenerator,
-        input_batch: pa.RecordBatch,
-    ) -> OutputComplete:
-        """Process a batch with exception handling.
-
-        Wraps _process_and_validate to catch exceptions and convert them
-        to OutputComplete with an error log message.
-        """
-        try:
-            return self._process_and_validate(generator, input_batch)
-        except Exception as e:
-            return self._create_error_output(e)
-
-    # _should_terminate inherited from Function
-
+    @classmethod
     @abstractmethod
-    def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
-        """Process input batches.
-
-        Override this method to implement your scalar transformation.
+    def output_type(cls, params: BindParameters) -> pa.DataType:
+        """Return the Arrow type for the output value.
 
         Args:
-            batch: First input batch (subsequent batches via yield return).
-
-        Yields:
-            Output: Batch with same row count as input.
-            Message: Log message (input will be re-sent).
+            params: Bind parameters including arguments and input schema.
 
         """
         ...
 
-    @final
-    def run(self) -> Generator[ProtocolOutput, ProtocolInput | None, None]:
-        """Run the scalar function protocol. Do not override.
+    @classmethod
+    def on_bind(
+        cls,
+        params: BindParameters,
+    ) -> BindResult:
+        """Produce the output type during the bind API call.
 
-        This generator implements the SETUP -> DATA -> TEARDOWN lifecycle.
-        The generator is closed by the caller when input is exhausted.
+        Override to perform custom bind-time logic such as validating
+        arguments or computing a dynamic output type.
 
-        Protocol:
-            - Caller primes with next() or send(None)
-            - Caller sends ProtocolInput for each batch
-            - When input exhausted, caller closes the generator
+        Args:
+            params: Bind parameters including arguments and schema.
+
+        Returns:
+            BindResult with output_type and optional opaque_data.
+
         """
-        # Priming yield - caller calls next() or send(None)
-        input: ProtocolInput | None = yield ProtocolOutput(batch=None)
-        if input is None:
-            raise ValueError("Expected ProtocolInput, got None")
+        return BindResult(cls.output_type(params))
 
-        # Acquire resources before processing
-        self.setup()
+    @final
+    @classmethod
+    def _validate_param_type_bounds(cls, input_schema: pa.Schema) -> None:
+        """Validate type bounds for AnyArrow Param parameters at bind time.
 
-        generator = self.process(input.batch)
-        # Prime the process() generator past the initial yield
-        generator.send(None)
+        Checks each Param with type_bound against the input schema field types.
+        This provides early error detection before any data is processed.
 
-        try:
-            # DATA phase - process batches until generator is closed
-            while True:
-                result = self._process_with_exception_handling(generator, input.batch)
+        Only applies to ScalarFunction subclasses that define _compute_params
+        (via the Param/ConstParam annotation API). For ScalarFunctionGenerator
+        subclasses that don't use annotations, this is a no-op.
 
-                input = yield ProtocolOutput(
-                    batch=result.batch,
-                    log_message=result.log_message,
-                )
-                if input is None:
-                    raise ValueError("Expected ProtocolInput, got None")
-                if self._should_terminate(result):
-                    return
-        finally:
-            generator.close()
-            # Release resources after processing completes
-            self.teardown()
+        Args:
+            input_schema: The input schema from the bind call.
+
+        Raises:
+            SchemaValidationError: If any column type fails type_bound.
+
+        """
+        compute_params: dict[str, Arg[Any]] | None = getattr(cls, "_compute_params", None)
+        if not compute_params:
+            return
+        for _name, arg in compute_params.items():
+            if not arg.is_any or arg.type_bound is None:
+                continue
+            col_idx = cast(int, arg._resolution_index)
+            if arg.varargs:
+                for i in range(col_idx, len(input_schema)):
+                    arg.validate_type_bound(input_schema.field(i).type)
+            else:
+                arg.validate_type_bound(input_schema.field(col_idx).type)
+
+    @final
+    @classmethod
+    def bind(
+        cls,
+        input: BindRequest,
+    ) -> BindResponse:
+        """Bind protocol entry point. Do not override; use on_bind() instead.
+
+        Constructs BindParameters, validates type bounds, calls on_bind(),
+        and wraps the result for transmission to global_init.
+
+        """
+        assert input.input_schema is not None
+        cls._validate_param_type_bounds(input.input_schema)
+
+        bind_params = BindParameters(input.arguments, input.input_schema, input.settings, input.secrets)
+        result = cls.on_bind(bind_params)
+
+        return BindResponse(
+            output_schema=pa.schema([pa.field("result", result.output_type)]),
+            opaque_data=result.opaque_data,
+        )
+
+    @classmethod
+    def on_init(
+        cls,
+        *,
+        bind_call: BindRequest,
+        opaque_data: ArrowSerializableDataclass | None,
+        storage: BoundStorage,
+    ) -> GlobalInitResponse:
+        """Initialize the function during the init API call.
+
+        Override to perform one-time setup that should happen after bind
+        but before processing batches. The default returns max_processes=1.
+
+        Args:
+            bind_call: The original BindCall with arguments and schema.
+            opaque_data: Data from on_bind(), if any was returned.
+            storage: BoundStorage for storing data across calls.
+
+        Returns:
+            GlobalInitResponse with max_processes and optional opaque data.
+
+        """
+        return GlobalInitResponse()
+
+    @final
+    @classmethod
+    def global_init(cls, input: InitRequest) -> GlobalInitResponse:
+        """Global init protocol entry point. Do not override; use on_init() instead.
+
+        Deserializes the wrapped bind data, calls on_init(), and
+        wraps the result for transmission to process().
+
+        """
+        execution_id = uuid.uuid4().bytes
+        result = cls.on_init(
+            bind_call=input.bind_call,
+            opaque_data=input.bind_opaque_data,
+            storage=BoundStorage(cls.storage, execution_id),
+        )
+
+        return GlobalInitResponse(
+            max_workers=result.max_workers,
+            execution_id=execution_id,
+            opaque_data=result.opaque_data,
+        )
+
+    @classmethod
+    @abstractmethod
+    def process(
+        cls,
+        *,
+        batch: pa.RecordBatch,
+        init_call: InitRequest,
+        init_response: BaseInitResponse,
+        storage: BoundStorage,
+    ) -> pa.RecordBatch:
+        """Process one input batch.
+
+        Override this method to implement your scalar transformation.
+        Must return an output RecordBatch with exactly the same number
+        of rows as the input batch.
+
+        Args:
+            batch: The input RecordBatch to process.
+            init_call: The parameters from global_init.
+            init_response: The response from the init call.
+            storage: BoundStorage for storing data across calls.
+
+        Returns:
+            Output RecordBatch with same row count as input.
+
+        """
+        ...
 
 
 class ScalarFunction(ScalarFunctionGenerator):
@@ -643,50 +622,6 @@ class ScalarFunction(ScalarFunctionGenerator):
 
     Scalar functions transform each input row to exactly one output value.
     Use Param/ConstParam/Returns annotations on compute() to declare types.
-
-    Minimal Example
-    ---------------
-    ::
-
-        class Upper(ScalarFunction):
-            def compute(
-                self,
-                col: Param(pa.string(), "Input string"),
-            ) -> Returns(pa.string()):
-                return pc.utf8_upper(col)
-
-    With Constant Argument
-    ----------------------
-    Use ConstParam for values known at planning time (not per-row arrays)::
-
-        class Multiply(ScalarFunction):
-            def compute(
-                self,
-                col: Param(pa.int64(), "Column to multiply"),
-                factor: ConstParam(int, "Multiplication factor"),
-            ) -> Returns(pa.int64()):
-                # factor is Python int, not pa.Array
-                return pc.multiply(col, factor)
-
-    With Dynamic Output Type (AnyArrow)
-    -----------------------------------
-    Use AnyArrow when output type depends on input schema::
-
-        class Double(ScalarFunction):
-            _output_type: pa.DataType
-
-            def bind(self) -> None:
-                self._output_type = self.input_schema.field(0).type
-
-            @property
-            def output_type(self) -> pa.DataType:
-                return self._output_type
-
-            def compute(
-                self,
-                column: Param(AnyArrow, "Numeric value"),
-            ) -> Returns(AnyArrow):
-                return pc.multiply(column, 2)
 
     Type Validation
     ---------------
@@ -696,73 +631,35 @@ class ScalarFunction(ScalarFunctionGenerator):
     - AnyArrow parameters skip validation
     - TypeMismatchError is raised on mismatch
 
-    Legacy API (Arg Descriptors)
-    ----------------------------
-    The older Arg descriptor API is still supported::
-
-        class UpperCase(ScalarFunction):
-            class Meta:
-                output_type = pa.string()
-
-            column: Annotated[str, Arg(0, doc="String to uppercase")]
-
-            def compute(self, *, column: pa.Array) -> pa.Array:
-                return pc.utf8_upper(column)
-
     Methods to Override
     -------------------
     compute(self, ...) -> pa.Array
         Transform input arrays to output. Use Param/ConstParam annotations.
 
-    bind(self) -> None
-        Called after init. Use for schema-dependent initialization.
-
-    output_type -> pa.DataType (property)
-        Override when using Returns(AnyArrow) to return actual type.
-
-    setup(self) -> None
-        Called before processing. Acquire resources here.
-
-    teardown(self) -> None
-        Called after processing. Release resources here.
-
-    Available Attributes
-    --------------------
-    self.input_schema : pa.Schema
-        Schema of input batches.
-
-    self.output_schema : pa.Schema
-        Schema of output (single column named "result").
-
-    self.invocation : Invocation
-        The invocation request with function name and arguments.
+    output_type(params) -> pa.DataType (classmethod)
+        Override when output type depends on input schema or arguments.
 
     """
 
     # For TYPE_CHECKING, allow dynamic attribute access for Param/ConstParam
     if TYPE_CHECKING:
 
-        def __getattr__(self, name: str) -> Any:
+        def __getattr__(self, _name: str) -> Any:
             """Allow dynamic attribute access for Param/ConstParam descriptors."""
             ...
 
-    _pending_messages: list[vgi.log.Message]
-    _compute_kwonly_params: dict[str, Arg[Any]]
-    # New API: separate tracking for const params
     _compute_params: dict[str, Arg[Any]]  # Regular Param() arguments (arrays)
     _const_params: dict[str, Arg[Any]]  # ConstParam() arguments (scalars)
+    _setting_params: dict[str, str]  # Setting params: param_name -> setting_key
+    _secret_params: dict[str, str]  # Secret params: param_name -> secret_key
+    _output_length_param: str | None  # OutputLength param name (batch row count)
     _returns_output_type: pa.DataType | None  # Output type from Returns()
-    _uses_new_param_api: bool  # True if using Param/ConstParam annotations
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Extract Param/ConstParam annotations from compute() signature.
+        """Extract annotations from compute() signature.
 
-        Supports two APIs:
-        1. New API: Param/ConstParam annotations on compute() parameters
-        2. Legacy API: Arg descriptors as class attributes
-
-        The new API is detected by checking if any compute() parameter has
-        an Arg annotation from Param() or ConstParam().
+        Extracts Param, ConstParam, Setting, Secret, OutputLength, and
+        Returns type information from compute() parameter annotations.
         """
         super().__init_subclass__(**kwargs)
 
@@ -773,19 +670,7 @@ class ScalarFunction(ScalarFunctionGenerator):
         # Get compute method
         compute_method = getattr(cls, "compute", None)
         if compute_method is None:
-            raise TypeError(
-                f"{cls.__name__} must define a compute() method.\n\n"
-                f"Example using Annotated with Param/ConstParam (recommended):\n"
-                f"    def compute(\n"
-                f"        self,\n"
-                f"        value: Annotated[pa.Array, Param(pa.int64(), 'doc')],\n"
-                f"    ) -> Annotated[pa.Array, Returns(pa.int64())]:\n"
-                f"        return pc.multiply(value, 2)\n\n"
-                f"Example using Arg descriptors (legacy):\n"
-                f"    column: Annotated[str, Arg(0, doc='Column name')]\n"
-                f"    def compute(self, *, column: pa.Array) -> pa.Array:\n"
-                f"        return pc.multiply(column, 2)"
-            )
+            raise TypeError(f"{cls.__name__} must define a compute() method.\n\n")
 
         sig = inspect.signature(compute_method)
 
@@ -806,7 +691,7 @@ class ScalarFunction(ScalarFunctionGenerator):
             # Create a mock pa module with subscriptable Array for eval
             # (pa.Array[Any] isn't subscriptable in PyArrow)
             class _MockArray:
-                def __class_getitem__(cls, item: Any) -> Any:
+                def __class_getitem__(cls, _item: Any) -> Any:
                     return Any
 
             class _MockPa:
@@ -822,6 +707,9 @@ class ScalarFunction(ScalarFunctionGenerator):
                 "Annotated": Annotated,
                 "Param": vgi_args.Param,
                 "ConstParam": vgi_args.ConstParam,
+                "Setting": vgi_args.Setting,
+                "Secret": vgi_args.Secret,
+                "OutputLength": vgi_args.OutputLength,
                 "Returns": vgi_args.Returns,
                 "AnyArrow": vgi_args.AnyArrow,
                 "pa": _MockPa(),
@@ -833,10 +721,9 @@ class ScalarFunction(ScalarFunctionGenerator):
                 else:
                     hints[name] = annotation
 
-        # Check if using new Param/ConstParam API by looking for Arg in annotations
-        uses_new_api = False
         compute_params: dict[str, Arg[Any]] = {}
         const_params: dict[str, Arg[Any]] = {}
+        output_length_param: str | None = None  # param that receives batch row count
         returns_output_type: pa.DataType | None = None
 
         # Check return type for Returns() annotation
@@ -845,7 +732,6 @@ class ScalarFunction(ScalarFunctionGenerator):
             # Extract Returns from Annotated[..., Returns(...)]
             for meta in return_hint.__metadata__:
                 if isinstance(meta, Returns):
-                    uses_new_api = True
                     # Priority 1: Explicit arrow_type in Returns()
                     if meta.arrow_type is not None:
                         returns_output_type = meta.arrow_type
@@ -855,9 +741,7 @@ class ScalarFunction(ScalarFunctionGenerator):
                         if type_args:
                             return_base_type = type_args[0]
                             if return_base_type in ARRAY_CLASS_TO_DATATYPE:
-                                returns_output_type = ARRAY_CLASS_TO_DATATYPE[
-                                    return_base_type
-                                ]
+                                returns_output_type = ARRAY_CLASS_TO_DATATYPE[return_base_type]
                             elif return_base_type in COMPLEX_ARRAY_CLASSES:
                                 raise TypeError(
                                     f"{return_base_type.__name__} requires explicit "
@@ -882,12 +766,11 @@ class ScalarFunction(ScalarFunctionGenerator):
             if hint is None:
                 continue
 
-            # Check for Annotated[..., Param/ConstParam/Arg(...)] pattern
+            # Check for Annotated[..., Param/ConstParam/...] pattern
             if hasattr(hint, "__metadata__"):
                 for meta in hint.__metadata__:
-                    # New API: Param dataclass
+                    # Param: column input (array)
                     if isinstance(meta, Param):
-                        uses_new_api = True
                         # Get base type from Annotated first argument for inference
                         type_args = get_args(hint)
                         base_type = type_args[0] if type_args else pa.Array
@@ -902,12 +785,11 @@ class ScalarFunction(ScalarFunctionGenerator):
                         column_index += 1
                         break
 
-                    # New API: ConstParam dataclass
+                    # ConstParam: constant input (scalar)
                     if isinstance(meta, ConstParam):
-                        uses_new_api = True
                         # Get base type from Annotated first argument
                         type_args = get_args(hint)
-                        base_type = type_args[0] if type_args else Any
+                        base_type = cast(type, type_args[0] if type_args else Any)
                         # Use overall position for metadata
                         arg = _const_param_to_arg(meta, base_type, overall_position)
                         arg._name = name
@@ -919,202 +801,57 @@ class ScalarFunction(ScalarFunctionGenerator):
                         const_index += 1
                         break
 
-                    # Legacy API: Arg instance (still supported for backwards compat)
-                    if isinstance(meta, Arg):
-                        uses_new_api = True
-                        meta._name = name
-
-                        if meta.const:
-                            # Const params: use overall position for metadata,
-                            # _resolution_index for Arguments.positional lookup
-                            if meta.position == _INFER_POSITION:
-                                meta.position = overall_position
-                            meta._resolution_index = const_index
-                            const_params[name] = meta
-                            setattr(cls, name, _ConstArgDescriptor(meta, name))
-                            overall_position += 1
-                            const_index += 1
-                        else:
-                            # Column params: use overall position for metadata,
-                            # _resolution_index for batch column lookup
-                            if meta.position == _INFER_POSITION:
-                                meta.position = overall_position
-                            meta._resolution_index = column_index
-                            compute_params[name] = meta
-                            setattr(cls, name, _ArgDescriptor(meta, name))
-                            overall_position += 1
-                            column_index += 1
-
+                    # OutputLength: receives batch row count
+                    if isinstance(meta, OutputLength):
+                        output_length_param = name
+                        # Don't increment overall_position - not a call argument
                         break
 
-        cls._uses_new_param_api = uses_new_api
+        # Extract Setting/Secret params using shared helper
+        setting_params, secret_params = _extract_setting_secret_params(compute_method)
+
         cls._compute_params = compute_params
         cls._const_params = const_params
+        cls._setting_params = setting_params
+        cls._secret_params = secret_params
+        cls._output_length_param = output_length_param
         cls._returns_output_type = returns_output_type
 
-        if uses_new_api:
-            # New API: combine for _compute_kwonly_params
-            # (used by _extract_compute_kwargs)
-            cls._compute_kwonly_params = {**compute_params, **const_params}
-        else:
-            # Legacy API: validate Arg descriptors match compute() keyword-only params
-            kwonly_params: dict[str, Arg[Any]] = {}
-
-            for name, param in sig.parameters.items():
-                if param.kind == inspect.Parameter.KEYWORD_ONLY:
-                    arg_attr = getattr(cls, name, None)
-                    if not isinstance(arg_attr, Arg):
-                        raise TypeError(
-                            f"{cls.__name__}.compute() has keyword-only parameter "
-                            f"'{name}' but no matching Arg descriptor.\n\n"
-                            f"Option 1 - Add Arg descriptor:\n"
-                            f"    {name}: Annotated[str, Arg(0, doc='...')]\n\n"
-                            f"Option 2 - Use Annotated with Param (recommended):\n"
-                            f"    def compute(\n"
-                            f"        self,\n"
-                            f"        {name}: Annotated[pa.Array, Param(pa.int64())],\n"
-                            f"    ) -> Annotated[pa.Array, Returns(pa.int64())]:\n"
-                            f"        ..."
-                        )
-                    kwonly_params[name] = arg_attr
-
-            # Validate varargs is last if present
-            vararg_names = [n for n, a in kwonly_params.items() if a.varargs]
-            if vararg_names:
-                param_names = list(kwonly_params.keys())
-                if vararg_names[0] != param_names[-1]:
-                    raise TypeError(
-                        f"{cls.__name__}.compute() varargs parameter "
-                        f"'{vararg_names[0]}' must be the last keyword-only parameter"
-                    )
-
-            cls._compute_kwonly_params = kwonly_params
-
-    def __init__(
-        self,
-        invocation: vgi.invocation.Invocation,
-        logger: structlog.stdlib.BoundLogger,
-    ):
-        """Initialize the scalar function."""
-        # Initialize pending messages before super().__init__ because
-        # output_schema property may be accessed during init
-        self._pending_messages = []
-        super().__init__(invocation=invocation, logger=logger)
-
-    def log(self, level: vgi.log.Level, message: str) -> None:
-        """Queue a log message to be emitted with the output.
-
-        Messages are yielded before the compute() result.
-
-        Args:
-            level: Log level (DEBUG, INFO, WARNING, ERROR).
-            message: Log message text.
-
-        Example:
-            def compute(self, batch: pa.RecordBatch) -> pa.Array:
-                self.log(Level.INFO, f"Processing {batch.num_rows} rows")
-                return pc.multiply(batch.column(self.column), 2)
-
-        """
-        self._pending_messages.append(vgi.log.Message(level=level, message=message))
-
-    @classmethod
-    def _get_meta_output_type(cls) -> ScalarOutputType:
-        """Get output_type from Meta class.
-
-        Walks the MRO to find a Meta class with output_type defined.
-
-        Returns:
-            The output_type value from Meta (pa.DataType or AnyArrow).
-
-        Raises:
-            TypeError: If Meta.output_type is not defined in the class hierarchy.
-
-        """
-        for klass in cls.__mro__:
-            if "Meta" in klass.__dict__:
-                meta = klass.__dict__["Meta"]
-                if hasattr(meta, "output_type"):
-                    return meta.output_type  # type: ignore[no-any-return]
-        raise TypeError(
-            f"{cls.__name__} must define Meta.output_type "
-            f"(pa.DataType for static type, or AnyArrow for dynamic)"
-        )
-
-    @classmethod
     @final
+    @classmethod
     def catalog_output_schema(cls) -> pa.Schema:
         """Return output schema for catalog introspection.
 
-        Returns the output schema with a single "result" field.
-
-        For new Param/Returns API:
-        - Uses _returns_output_type from Returns() annotation
-        - None _returns_output_type indicates dynamic type (similar to AnyArrow)
-
-        For legacy API:
-        - Uses Meta.output_type
-        - AnyArrow indicates dynamic type
-
-        Dynamic types return null() with metadata indicating "any" type.
+        Returns the output schema with a single "result" field using the
+        type from the Returns() annotation. If no explicit type was declared
+        (dynamic type), returns null() with metadata indicating "any" type.
         """
-        # Check for new API first: _returns_output_type is set by __init_subclass__
         returns_type = getattr(cls, "_returns_output_type", None)
-        uses_new_api = getattr(cls, "_uses_new_param_api", False)
-
-        if uses_new_api:
-            if returns_type is None:
-                # Dynamic type in new API (no explicit Returns type)
-                field = pa.field("result", pa.null(), metadata={b"vgi:any": b"true"})
-                return pa.schema([field])
-            return pa.schema([pa.field("result", returns_type)])
-
-        # Legacy API: use Meta.output_type
-        output_type = cls._get_meta_output_type()
-        if output_type is AnyArrow:
-            # Use null type with metadata to indicate "any" type
+        if returns_type is None:
+            # Dynamic type (no explicit Returns type)
             field = pa.field("result", pa.null(), metadata={b"vgi:any": b"true"})
             return pa.schema([field])
-        # Type is narrowed to pa.DataType after AnyArrow check
-        assert isinstance(output_type, pa.DataType)
-        return pa.schema([pa.field("result", output_type)])
+        return schema({"result": returns_type})
 
-    @property
-    def output_type(self) -> pa.DataType:
+    @classmethod
+    def output_type(cls, params: BindParameters) -> pa.DataType:
         """Return the Arrow type for the output column.
 
-        Default implementation checks (in order):
-        1. _returns_output_type from Returns() annotation (new API)
-        2. Meta.output_type (legacy API)
+        Default implementation uses _returns_output_type from Returns()
+        annotation. Override when the output type depends on input schema
+        or arguments (use params.arguments_schema, params.constant_arguments).
 
-        Override only if using AnyArrow/dynamic types that depend on input schema.
-
-        Example:
-            @property
-            def output_type(self) -> pa.DataType:
-                return self.input_schema.field(self.column).type
+        Args:
+            params: Bind parameters including arguments and input schema.
 
         """
-        # New API: use _returns_output_type from Returns() annotation
-        if self._uses_new_param_api and self._returns_output_type is not None:
-            return self._returns_output_type
+        if cls._returns_output_type is not None:
+            return cls._returns_output_type
 
-        # Legacy API or AnyArrow: use Meta.output_type
-        result = self._get_meta_output_type()
-        if result is AnyArrow:
-            raise NotImplementedError(
-                f"{type(self).__name__}.output_type must be overridden when "
-                f"Meta.output_type is AnyArrow or Returns(AnyArrow) is used"
-            )
-        # Type is narrowed to pa.DataType after AnyArrow check
-        assert isinstance(result, pa.DataType)
-        return result
-
-    @property
-    @final
-    def output_schema(self) -> pa.Schema:
-        """Return single-column output schema. Do not override."""
-        return pa.schema([pa.field("result", self.output_type)])
+        raise NotImplementedError(
+            f"{cls.__name__}.output_type must be overridden when using Returns() "
+            f"without an explicit type (dynamic output type)."
+        )
 
     # Note: compute() is NOT defined here. Subclasses define it with their own
     # keyword-only signature. This avoids mypy override errors for users.
@@ -1122,68 +859,95 @@ class ScalarFunction(ScalarFunctionGenerator):
     # Validated at class definition time by __init_subclass__.
 
     @final
-    def _extract_compute_kwargs(self, batch: pa.RecordBatch) -> dict[str, Any]:
+    @classmethod
+    def _extract_compute_kwargs(cls, batch: pa.RecordBatch, bind_call: BindRequest) -> dict[str, Any]:
         """Extract columns/values for compute() parameters.
 
-        Handles both APIs:
-        - New API (Param/ConstParam): Extract arrays by position, scalars from args
-        - Legacy API (Arg descriptors): Extract arrays by column name
+        Returns dict[str, Any] because values are a mix of arrays, lists of
+        arrays, and scalar values, keyed by compute() parameter names.
 
         Args:
             batch: Input RecordBatch.
+            bind_call: The BindCall with arguments, settings, and secrets.
 
         Returns:
-            Dict mapping parameter names to arrays, lists of arrays, or scalar values.
+            Dict mapping parameter names to their resolved values.
 
         """
         kwargs: dict[str, Any] = {}
 
-        if self._uses_new_param_api:
-            # New Param/ConstParam API
-            # Regular params: extract arrays by _resolution_index (batch column index)
-            for name, arg in self._compute_params.items():
-                # Use _resolution_index for batch column lookup
-                col_idx = cast(int, arg._resolution_index)
-                if arg.varargs:
-                    # Varargs: collect all remaining columns from position
-                    kwargs[name] = [
-                        batch.column(i) for i in range(col_idx, batch.num_columns)
-                    ]
-                else:
-                    # Regular param: extract column by index
-                    kwargs[name] = batch.column(col_idx)
+        # Regular params: extract arrays by _resolution_index (batch column index)
+        for name, arg in cls._compute_params.items():
+            # Use _resolution_index for batch column lookup
+            col_idx = cast(int, arg._resolution_index)
+            if arg.varargs:
+                # Varargs: collect all remaining columns from position
+                kwargs[name] = [batch.column(i) for i in range(col_idx, batch.num_columns)]
+            else:
+                # Regular param: extract column by index
+                kwargs[name] = batch.column(col_idx)
 
-            # Const params: extract scalar values from arguments
-            for name, arg in self._const_params.items():
-                # Use _resolution_index for Arguments.positional lookup
-                arg_idx = cast(int, arg._resolution_index)
-                # Get the scalar value from invocation arguments
-                scalar = self.invocation.arguments.positional[arg_idx]
-                # Convert to Python value
-                kwargs[name] = scalar.as_py() if scalar is not None else None
-        else:
-            # Legacy Arg descriptor API
-            for name, arg in self._compute_kwonly_params.items():
-                arg_value = getattr(self, name)
+        # Const params: extract scalar values from arguments
+        for name, arg in cls._const_params.items():
+            # Use _resolution_index for Arguments.positional lookup
+            arg_idx = cast(int, arg._resolution_index)
+            # Get the scalar value from arguments
+            scalar = bind_call.arguments.positional[arg_idx]
+            # Convert to Python value
+            kwargs[name] = scalar.as_py() if scalar is not None else None
 
-                if arg.varargs:
-                    # Varargs: tuple of column names -> list of arrays
-                    column_names: tuple[str, ...] = arg_value
-                    kwargs[name] = [batch.column(col) for col in column_names]
-                else:
-                    # Regular arg: column name -> single array
-                    col_name = (
-                        arg_value.value if hasattr(arg_value, "value") else arg_value
-                    )
-                    kwargs[name] = batch.column(col_name)
+        # Setting params: extract pa.Scalar from settings RecordBatch
+        if bind_call.settings is not None and cls._setting_params:
+            settings_schema = bind_call.settings.schema
+            for name, setting_key in cls._setting_params.items():
+                col_idx = settings_schema.get_field_index(setting_key)
+                kwargs[name] = bind_call.settings.column(col_idx)[0] if col_idx >= 0 else None
+
+        # Secret params: extract dict[str, pa.Scalar] from secrets RecordBatch
+        if bind_call.secrets is not None and cls._secret_params:
+            secrets_schema = bind_call.secrets.schema
+            for name, secret_key in cls._secret_params.items():
+                col_idx = secrets_schema.get_field_index(secret_key)
+                kwargs[name] = _struct_scalar_to_dict(bind_call.secrets.column(col_idx)[0]) if col_idx >= 0 else None
+
+        # OutputLength param: pass the batch row count
+        if cls._output_length_param is not None:
+            kwargs[cls._output_length_param] = batch.num_rows
 
         return kwargs
 
     @final
-    def _validate_param_types(self, kwargs: dict[str, Any]) -> None:
+    @classmethod
+    def _validate_single_param_type(cls, arg: Arg[Any], arr: pa.Array[Any], display_name: str) -> None:
+        """Validate a single parameter's array type against its declaration.
+
+        Args:
+            arg: The Arg metadata for the parameter.
+            arr: The actual array to validate.
+            display_name: Name used in error messages (e.g. "x" or "x[0]").
+
+        Raises:
+            TypeMismatchError: If array type doesn't match declared type.
+
+        """
+        if arg.is_any:
+            if arg.type_bound is not None:
+                arg.validate_type_bound(arr.type)
+        elif arg.arrow_type is not None and arr.type != arg.arrow_type:
+            raise TypeMismatchError(
+                f"Input type mismatch for parameter '{display_name}'.",
+                param_name=display_name,
+                expected_type=arg.arrow_type,
+                actual_type=arr.type,
+                function_name=cls.__name__,
+            )
+
+    @final
+    @classmethod
+    def _validate_param_types(cls, kwargs: dict[str, Any]) -> None:
         """Validate that input array types match declared Param types.
 
-        For the new Param/ConstParam API:
+        For the Param/ConstParam API:
         - Validates exact type match for params with declared arrow_type
         - Validates type_bound predicates for AnyArrow params with type_bound
 
@@ -1195,47 +959,17 @@ class ScalarFunction(ScalarFunctionGenerator):
             SchemaValidationError: If any array type fails type_bound validation.
 
         """
-        if not self._uses_new_param_api:
-            return  # Legacy API uses _validate_type_bounds in Function.__init__
-
-        for name, arg in self._compute_params.items():
+        for name, arg in cls._compute_params.items():
             if arg.varargs:
-                # Validate all arrays in varargs
-                arrays = kwargs[name]
-                for i, arr in enumerate(arrays):
-                    if arg.is_any:
-                        # AnyArrow: validate type_bound if specified
-                        if arg.type_bound is not None:
-                            arg.validate_type_bound(arr.type)
-                    elif arg.arrow_type is not None and arr.type != arg.arrow_type:
-                        raise TypeMismatchError(
-                            f"Input type mismatch for vararg parameter '{name}' "
-                            f"at index {i}.",
-                            param_name=f"{name}[{i}]",
-                            expected_type=arg.arrow_type,
-                            actual_type=arr.type,
-                            function_name=type(self).__name__,
-                        )
+                for i, arr in enumerate(kwargs[name]):
+                    cls._validate_single_param_type(arg, arr, f"{name}[{i}]")
             else:
-                arr = kwargs[name]
-                if arg.is_any:
-                    # AnyArrow: validate type_bound if specified
-                    if arg.type_bound is not None:
-                        arg.validate_type_bound(arr.type)
-                elif arg.arrow_type is not None and arr.type != arg.arrow_type:
-                    raise TypeMismatchError(
-                        f"Input type mismatch for parameter '{name}'.",
-                        param_name=name,
-                        expected_type=arg.arrow_type,
-                        actual_type=arr.type,
-                        function_name=type(self).__name__,
-                    )
+                cls._validate_single_param_type(arg, kwargs[name], name)
 
     @final
-    def _validate_output_type(self, result: pa.Array[Any]) -> None:
+    @classmethod
+    def _validate_output_type(cls, result: pa.Array[Any]) -> None:
         """Validate that output array type matches declared Returns type.
-
-        Only validates for the new Param/ConstParam API with explicit Returns().
 
         Args:
             result: The output array from compute().
@@ -1244,60 +978,72 @@ class ScalarFunction(ScalarFunctionGenerator):
             TypeMismatchError: If output type doesn't match declared type.
 
         """
-        if not self._uses_new_param_api:
-            return  # Legacy API uses output_schema validation
-
-        if self._returns_output_type is None:
+        if cls._returns_output_type is None:
             return  # AnyArrow or not specified
 
-        if result.type != self._returns_output_type:
+        if result.type != cls._returns_output_type:
             raise TypeMismatchError(
                 "Output type mismatch.",
                 param_name="return",
-                expected_type=self._returns_output_type,
+                expected_type=cls._returns_output_type,
                 actual_type=result.type,
-                function_name=type(self).__name__,
+                function_name=cls.__name__,
             )
 
-    @final
-    def _yield_pending_messages(self) -> ScalarOutputGenerator:
-        """Yield all pending log messages. Helper for process()."""
-        while self._pending_messages:
-            msg = self._pending_messages.pop(0)
-            _ = yield msg
+    @classmethod
+    def on_bind(cls, params: BindParameters) -> BindResult:
+        """Produce the output type during the bind phase.
 
-    @final
-    def process(self, batch: pa.RecordBatch) -> ScalarOutputGenerator:
-        """Convert compute() to generator protocol. Do not override.
+        Override to perform custom bind-time logic such as validating
+        arguments, examining input schema, or computing a dynamic output type.
 
-        This method implements the generator protocol by calling your compute()
-        method for each input batch. Keyword-only parameters in compute() are
-        automatically populated from the batch columns.
+        Args:
+            params: Bind parameters including arguments, input schema,
+                settings, and secrets.
+
+        Returns:
+            BindResult with output_type and optional opaque_data.
+
+        Note:
+            Constant arguments needed during process() are automatically
+            serialized by the protocol. The opaque_data field is for
+            additional bind-time state you need to pass forward.
+
         """
-        # Priming yield
-        _ = yield Output(self.empty_output_batch)
+        return BindResult(output_type=cls.output_type(params), opaque_data=None)
 
-        while True:
-            # Extract columns for keyword-only parameters
-            kwargs = self._extract_compute_kwargs(batch)
+    @final
+    @classmethod
+    def process(
+        cls,
+        *,
+        batch: pa.RecordBatch,
+        init_call: InitRequest,
+        init_response: BaseInitResponse,
+        storage: BoundStorage,
+    ) -> pa.RecordBatch:
+        """Convert compute() to per-batch callback.
 
-            # Validate input types match declared Param types
-            self._validate_param_types(kwargs)
+        This method calls your compute() method for the input batch.
+        Keyword-only parameters in compute() are automatically populated
+        from the batch columns.
 
-            # Call compute() defined by subclass. Cast to Any to avoid
-            # attr-defined error since compute() isn't on base class.
-            result = cast(Any, self).compute(**kwargs)
+        """
+        output_schema = init_call.output_schema
 
-            # Validate output type matches declared Returns type
-            self._validate_output_type(result)
+        # Extract columns for keyword-only parameters
+        kwargs = cls._extract_compute_kwargs(batch, init_call.bind_call)
 
-            # Yield any pending log messages first
-            yield from self._yield_pending_messages()
+        # Validate input types match declared Param types
+        cls._validate_param_types(kwargs)
 
-            # Create output batch from result array
-            output = pa.RecordBatch.from_arrays([result], schema=self.output_schema)
-            received = yield Output(output)
+        # Call compute() defined by subclass. Cast to Any to avoid
+        # attr-defined error since compute() isn't on base class.
+        # and the arguments of compute() vary by subclass.
+        result = cast(Any, cls).compute(**kwargs)
 
-            if received is None:
-                break
-            batch = received
+        # Validate output type matches declared Returns type
+        cls._validate_output_type(result)
+
+        # Create output batch from result array
+        return pa.RecordBatch.from_arrays([result], schema=output_schema)

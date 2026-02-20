@@ -4,138 +4,10 @@ VGI provides a framework for connecting DuckDB to external programs via
 streaming Arrow IPC. User-defined functions run in worker subprocesses
 and communicate with the database through stdin/stdout.
 
-QUICK START (Simple API - Recommended)
---------------------------------------
-For most use cases, use TableInOutFunction with callback methods:
-
-    from vgi import TableInOutFunction, Invocation
-    import pyarrow as pa
-
-    class MyFunction(TableInOutFunction):
-        def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
-            # Transform each batch here
-            return batch
-
-For advanced streaming control, use TableInOutGenerator with the
-@streaming decorator:
-
-    from vgi import TableInOutGenerator, Output, StreamingGenerator, streaming
-    import pyarrow as pa
-
-    class MyFunction(TableInOutGenerator):
-        @streaming
-        def process(self, batch: pa.RecordBatch) -> StreamingGenerator:
-            # No priming yield needed!
-            while batch is not None:
-                batch = yield Output(batch)  # Your transformation here
-
-Or without the decorator (more verbose):
-
-    from vgi import TableInOutGenerator, Output, OutputGenerator
-    import pyarrow as pa
-
-    class MyFunction(TableInOutGenerator):
-        def process(self, batch: pa.RecordBatch) -> OutputGenerator:
-            _ = yield None  # Required priming yield
-            while True:
-                yield Output(batch)  # Your transformation here
-                batch = yield None
-                if batch is None:
-                    break
-
-To create a worker that hosts functions:
-
-    from vgi import Worker
-
-    class MyWorker(Worker):
-        functions = [MyFunction]
-
-    if __name__ == "__main__":
-        MyWorker().run()
-
-PUBLIC API
-----------
-Classes and functions exported from this module:
-
-    TableInOutFunction       - Callback-based API (recommended)
-    TableInOutGenerator - Generator-based API (advanced)
-    ScalarFunction           - Scalar function with compute() (single-column output)
-    ScalarFunctionGenerator  - Scalar function with generator protocol
-    Output                   - Output batch from process()/finalize()
-    OutputGenerator          - Type alias for process()/finalize()
-    StreamingGenerator       - Type alias for @streaming decorated methods
-    streaming                - Decorator to simplify generator methods
-    Invocation               - Function invocation request
-    Arguments                - Positional and named arguments
-    Arg                      - Descriptor for declarative argument parsing
-    Worker                   - Base class for worker processes
-    Level                    - Log severity enum
-    Message                  - Log message for process()
-    TableInOutFunctionTestClient       - In-process test client
-    schema                   - Build schemas from keyword arguments
-    schema_like              - Derive schemas with modifications
-
-FUNCTION METADATA
------------------
-Functions can define a nested Meta class for introspection and registration:
-
-    class MyFunction(TableInOutFunction):
-        class Meta:
-            name = "my_func"
-            description = "Transform data"
-            max_workers = 4
-            categories = ["transform"]
-
-        count = Arg[int](0, doc="Iteration count")
-
-    # Access metadata
-    meta = MyFunction.get_metadata()
-    print(meta.name, meta.parameters)
-
-See vgi.metadata for complete documentation on available Meta attributes.
-
-SPECIALIZED PATTERNS
---------------------
-For common use cases, use these specialized base classes:
-
-    AggregationFunction - Reduce input to summary (sum, count, mean, etc.)
-    FilterFunction      - Filter rows by boolean predicate
-    MapFunction         - Transform columns row-by-row
-
-ADDITIONAL MODULES
-------------------
-    vgi.client      - Client class for invoking functions on workers
-    vgi.log         - Level and Message for function diagnostics
-    vgi.ipc_utils   - RecordBatchState for distributed function state
-    vgi.table_function - TableCardinality for row count hints
-
-CLASS HIERARCHY
----------------
-    vgi.function.Function                - Base (max_processes, invocation_id)
-    ├─ vgi.table_function.TableFunctionBase - Adds cardinality hints, projection
-    │  ├─ TableFunctionGenerator        - Generate output without input
-    │  └─ TableInOutGenerator   - Full streaming (process/finalize)
-    │     └─ TableInOutFunction         - Callback API (transform/finish)
-    │        ├─ AggregationFunction     - Reduce to summary
-    │        ├─ FilterFunction          - Row filtering
-    │        └─ MapFunction             - Column transformation
-    └─ ScalarFunctionGenerator          - Single-column output (1:1 rows)
-       └─ ScalarFunction                - Callback API (compute)
-
-Examples
---------
-See vgi.examples.table_in_out for example functions:
-    - EchoFunction: Passthrough (no-op)
-    - BufferInputFunction: Collect all input, emit on finalize
-    - RepeatInputsFunction: Duplicate each batch N times
-    - SumAllColumnsFunction: Aggregate numeric columns
-    - SumAllColumnsFunctionDistributed: Parallel aggregation with state sharing
-
 """
 
-from typing import Any
+from vgi_rpc.log import Level, Message
 
-# Re-export commonly used classes for convenient imports
 from vgi.argument_spec import (
     VGI_ARG_KEY,
     VGI_ARG_NAMED,
@@ -161,23 +33,26 @@ from vgi.arguments import (
     Returns,
     TableInput,
 )
-from vgi.invocation import Invocation
-from vgi.log import Level, Message
 from vgi.metadata import (
+    CatalogFunctionType,
     FunctionExample,
     FunctionStability,
-    FunctionType,
     OrderPreservation,
     ParameterInfo,
     ResolvedMetadata,
     TableInputValidationError,
     functions_to_arrow,
 )
+
+# Re-export commonly used protocol types
+from vgi.protocol import (
+    BindRequest,
+    InitRequest,
+)
 from vgi.scalar_function import (
     RowCountMismatchError,
     ScalarFunction,
     ScalarFunctionGenerator,
-    ScalarOutputGenerator,
     TypeMismatchError,
 )
 from vgi.schema_utils import schema, schema_like
@@ -190,45 +65,25 @@ from vgi.table_filter_pushdown import (
     deserialize_filters,
 )
 from vgi.table_in_out_function import (
-    Output,
-    OutputGenerator,
-    StreamingGenerator,
     TableInOutFunction,
     TableInOutGenerator,
-    streaming,
 )
-from vgi.table_in_out_function_patterns import (
-    AggregationFunction,
-    FilterFunction,
-    MapFunction,
-)
-from vgi.testing import TableInOutFunctionTestClient
 from vgi.worker import Worker
 
-# Lazy imports for Polars support (avoids ~32ms startup cost when not used)
-# Access via: from vgi import PolarsScalarFunction, AnyPolars
-# Or directly: from vgi.scalar_function_polars import PolarsScalarFunction, AnyPolars
-_LAZY_IMPORTS = {
-    "PolarsScalarFunction": "vgi.scalar_function_polars",
-    "AnyPolars": "vgi.scalar_function_polars",
-}
-
 __all__ = [
-    "AggregationFunction",
     "AnyArrow",
     "AnyArrowValue",
-    "AnyPolars",
     "Arg",
     "ArgumentSpec",
     "ArgumentValidationError",
     "Arguments",
     "argument_specs_to_schema",
+    "BindRequest",
     "ColumnBounds",
     "ConstParam",
     "deserialize_filters",
     "FilterDeserializationError",
     "FilterError",
-    "FilterFunction",
     "FilterVersionError",
     "Param",
     "PushdownFilters",
@@ -245,23 +100,16 @@ __all__ = [
     "VGI_VARARGS_TRUE",
     "FunctionExample",
     "FunctionStability",
-    "TableInOutFunctionTestClient",
-    "FunctionType",
-    "Invocation",
+    "CatalogFunctionType",
+    "InitRequest",
     "Level",
-    "MapFunction",
     "Message",
     "OrderPreservation",
-    "Output",
-    "OutputGenerator",
     "ParameterInfo",
-    "PolarsScalarFunction",
     "ResolvedMetadata",
     "RowCountMismatchError",
     "ScalarFunction",
     "ScalarFunctionGenerator",
-    "ScalarOutputGenerator",
-    "StreamingGenerator",
     "TableInOutFunction",
     "TableInOutGenerator",
     "TableInput",
@@ -269,24 +117,7 @@ __all__ = [
     "TypeMismatchError",
     "Worker",
     "functions_to_arrow",
-    "hello",
     "schema",
     "schema_like",
     "schema_to_argument_specs",
-    "streaming",
 ]
-
-
-def hello() -> str:
-    """Return a greeting string. Used for basic installation verification."""
-    return "Hello from vgi-python!"
-
-
-def __getattr__(name: str) -> Any:
-    """Lazy import handler for optional dependencies like Polars."""
-    if name in _LAZY_IMPORTS:
-        import importlib
-
-        module = importlib.import_module(_LAZY_IMPORTS[name])
-        return getattr(module, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

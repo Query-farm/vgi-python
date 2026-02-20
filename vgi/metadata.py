@@ -12,18 +12,6 @@ DESIGN
 ------
 Users define a nested `Meta` class with attributes. No inheritance required:
 
-    class MyFunction(TableInOutFunction):
-        class Meta:
-            name = "my_function"
-            description = "Transform data in some way"
-            categories = ["transform"]
-            max_workers = 4
-
-        count = Arg[int](0, doc="Number of iterations")
-
-        def transform(self, batch):
-            ...
-
 The system automatically:
 - Resolves metadata from the class hierarchy (inheritance works)
 - Extracts parameter info from Arg descriptors
@@ -46,7 +34,6 @@ For worker registration, metadata can be serialized to Arrow:
 
 from __future__ import annotations
 
-import contextlib
 import functools
 import json
 import re
@@ -71,7 +58,7 @@ __all__ = [
     "DEFAULT_MAX_WORKERS",
     # Enums
     "FunctionStability",
-    "FunctionType",
+    "CatalogFunctionType",
     "NullHandling",
     "OrderPreservation",
     "OrderDependence",
@@ -103,7 +90,7 @@ __all__ = [
 # =============================================================================
 
 
-class FunctionType(Enum):
+class CatalogFunctionType(Enum):
     """Type of function for DuckDB registration."""
 
     SCALAR = auto()
@@ -220,7 +207,7 @@ class ParameterInfo:
     is_varargs: bool = False
     is_const: bool = False
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, str | int | bool | None]:
         """Convert to dictionary for serialization."""
         return {
             "name": self.name,
@@ -280,7 +267,7 @@ class FunctionExample:
     description: str = ""
     expected_output: str | None = None
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, str | None]:
         """Convert to dictionary for serialization."""
         return {
             "sql": self.sql,
@@ -310,7 +297,7 @@ class ResolvedMetadata:
     # Identity
     name: str
     class_name: str
-    function_type: FunctionType
+    function_type: CatalogFunctionType
 
     # Documentation
     description: str = ""
@@ -325,6 +312,9 @@ class ResolvedMetadata:
 
     # settings required by the function
     required_settings: list[str] = field(default_factory=list)
+
+    # secrets required by the function
+    required_secrets: list[str] = field(default_factory=list)
 
     # Table function specific
     projection_pushdown: bool = False
@@ -350,6 +340,7 @@ class ResolvedMetadata:
             "stability": self.stability.name,
             "null_handling": self.null_handling.name,
             "required_settings": self.required_settings,
+            "required_secrets": self.required_secrets,
             "projection_pushdown": self.projection_pushdown,
             "filter_pushdown": self.filter_pushdown,
             "preserves_order": self.preserves_order.name,
@@ -364,7 +355,7 @@ class ResolvedMetadata:
         return ResolvedMetadata(
             name=d["name"],
             class_name=d["class_name"],
-            function_type=FunctionType[d["function_type"]],
+            function_type=CatalogFunctionType[d["function_type"]],
             description=d.get("description", ""),
             examples=[FunctionExample.from_dict(ex) for ex in d.get("examples", [])],
             categories=d.get("categories", []),
@@ -373,18 +364,13 @@ class ResolvedMetadata:
             stability=FunctionStability[d.get("stability", "CONSISTENT")],
             null_handling=NullHandling[d.get("null_handling", "DEFAULT")],
             required_settings=d.get("required_settings", []),
+            required_secrets=d.get("required_secrets", []),
             projection_pushdown=d.get("projection_pushdown", False),
             filter_pushdown=d.get("filter_pushdown", False),
-            preserves_order=OrderPreservation[
-                d.get("preserves_order", "PRESERVES_ORDER")
-            ],
+            preserves_order=OrderPreservation[d.get("preserves_order", "PRESERVES_ORDER")],
             max_workers=d.get("max_workers"),
-            order_dependent=OrderDependence[
-                d.get("order_dependent", "NOT_ORDER_DEPENDENT")
-            ],
-            distinct_dependent=DistinctDependence[
-                d.get("distinct_dependent", "NOT_DISTINCT_DEPENDENT")
-            ],
+            order_dependent=OrderDependence[d.get("order_dependent", "NOT_ORDER_DEPENDENT")],
+            distinct_dependent=DistinctDependence[d.get("distinct_dependent", "NOT_DISTINCT_DEPENDENT")],
         )
 
 
@@ -454,9 +440,7 @@ def _build_constraints(arg: Arg[Any]) -> dict[str, Any]:
     return constraints
 
 
-def extract_parameters(
-    cls: type, *, validate_table_input: bool = True
-) -> list[ParameterInfo]:
+def extract_parameters(cls: type, *, validate_table_input: bool = True) -> list[ParameterInfo]:
     """Extract parameter information from Arg descriptors on a class.
 
     Walks the class and its bases to find all Arg descriptors and converts
@@ -480,79 +464,6 @@ def extract_parameters(
 
     parameters: list[ParameterInfo] = []
     seen_names: set[str] = set()
-
-    # Extract _polars_params (PolarsScalarFunction subclasses)
-    # Both column bindings (is_const=False) and constant arguments (is_const=True)
-    # are included as function parameters for catalog registration.
-    polars_params = getattr(cls, "_polars_params", {})
-    if polars_params:
-        # Get class annotations to infer types for ConstParam
-        annotations = getattr(cls, "__annotations__", {})
-        for name, param_info in polars_params.items():
-            seen_names.add(name)
-
-            if param_info.is_const:
-                # ConstParam: infer type from annotation (e.g., Annotated[float, ...])
-                type_name = "any"
-                if name in annotations:
-                    hint = annotations[name]
-                    # Handle string annotations (from __future__ import annotations)
-                    if isinstance(hint, str):
-                        import builtins
-
-                        from vgi.arguments import ConstParam
-
-                        eval_ns = dict(vars(builtins))
-                        eval_ns["Annotated"] = Annotated
-                        eval_ns["ConstParam"] = ConstParam
-                        with contextlib.suppress(Exception):
-                            hint = eval(hint, eval_ns)  # noqa: S307
-                    # Extract base type from Annotated[base_type, ...]
-                    base_type = (
-                        get_args(hint)[0] if get_origin(hint) is Annotated else hint
-                    )
-                    # Map Python types to Arrow type names
-                    python_to_arrow = {
-                        float: "double",
-                        int: "int64",
-                        str: "string",
-                        bool: "bool",
-                    }
-                    type_name = python_to_arrow.get(base_type, "any")
-
-                parameters.append(
-                    ParameterInfo(
-                        name=name,
-                        position=param_info.position,
-                        type_name=type_name,
-                        description=param_info.doc,
-                        required=True,
-                        default=None,
-                        constraints={},
-                        is_table_input=False,
-                        is_varargs=False,
-                        is_const=True,
-                    )
-                )
-            else:
-                # Column binding (Param): use Polars type from param_info
-                polars_type_name = (
-                    str(param_info.polars_type) if param_info.polars_type else "any"
-                )
-                parameters.append(
-                    ParameterInfo(
-                        name=name,
-                        position=param_info.position,
-                        type_name=polars_type_name,
-                        description=param_info.doc,
-                        required=True,
-                        default=None,
-                        constraints={},
-                        is_table_input=False,
-                        is_varargs=param_info.varargs,
-                        is_const=False,
-                    )
-                )
 
     # Check for new Param/ConstParam API (ScalarFunction subclasses)
     # These are stored in _compute_params and _const_params class attributes
@@ -598,6 +509,63 @@ def extract_parameters(
                 is_const=arg.const,
             )
         )
+
+    # Check for FunctionArguments dataclass (typed generic pattern)
+    # e.g., class MyFunc(TableFunctionGenerator[MyArgs]):
+    #   where MyArgs has fields like: count: Annotated[int, Arg(0, doc="...")]
+    func_args_class = getattr(cls, "FunctionArguments", None)
+    if func_args_class is not None:
+        try:
+            func_args_hints = get_type_hints(func_args_class, include_extras=True)
+        except (NameError, AttributeError):
+            func_args_hints = {}
+
+        for field_name, field_hint in func_args_hints.items():
+            if field_name.startswith("_") or field_name in seen_names:
+                continue
+
+            if get_origin(field_hint) is not Annotated:
+                continue
+
+            # Extract Arg from Annotated metadata
+            type_args = get_args(field_hint)
+            base_type = type_args[0]
+            arg_instance: Arg[Any] | None = None
+            for meta in type_args[1:]:
+                if isinstance(meta, Arg):
+                    arg_instance = meta
+                    break
+
+            if arg_instance is None:
+                continue
+
+            seen_names.add(field_name)
+
+            is_table_input = base_type is TableInput
+            if base_type is TableInput:
+                type_name = "TableInput"
+            elif base_type is AnyArrow:
+                type_name = "AnyArrow"
+            elif hasattr(base_type, "__name__"):
+                type_name = base_type.__name__
+            else:
+                type_name = str(base_type)
+
+            required = arg_instance.default is _MISSING
+
+            parameters.append(
+                ParameterInfo(
+                    name=field_name,
+                    position=arg_instance.position,
+                    type_name=type_name,
+                    description=arg_instance.doc,
+                    required=required,
+                    default=None if required else arg_instance.default,
+                    constraints=_build_constraints(arg_instance),
+                    is_table_input=is_table_input,
+                    is_varargs=arg_instance.varargs,
+                )
+            )
 
     # Walk MRO to find all Arg descriptors (legacy API)
     for klass in cls.__mro__:
@@ -716,9 +684,7 @@ def _validate_varargs(cls: type, parameters: list[ParameterInfo]) -> None:
     varargs_param = varargs_params[0]
 
     # Get all positional parameters (excluding TableInput)
-    positional_params = [
-        p for p in parameters if isinstance(p.position, int) and not p.is_table_input
-    ]
+    positional_params = [p for p in parameters if isinstance(p.position, int) and not p.is_table_input]
 
     if not positional_params:
         return  # Should not happen if varargs exists, but be safe
@@ -727,9 +693,9 @@ def _validate_varargs(cls: type, parameters: list[ParameterInfo]) -> None:
     # All positions here are int (filtered above), but mypy doesn't know
     non_varargs_positional = [p for p in positional_params if not p.is_varargs]
     if non_varargs_positional:
-        # Extract positions as int (we filtered for isinstance(p.position, int) above)
-        positions = [p.position for p in non_varargs_positional]
-        max_non_varargs_pos = max(pos for pos in positions if isinstance(pos, int))
+        # All positions are int (filtered by isinstance(p.position, int) above)
+        int_positions = [p.position for p in non_varargs_positional if isinstance(p.position, int)]
+        max_non_varargs_pos = max(int_positions)
         # varargs position must be int (enforced by Arg.__init__)
         assert isinstance(varargs_param.position, int)
         if varargs_param.position < max_non_varargs_pos:
@@ -752,17 +718,17 @@ def _normalize_examples(
     return [FunctionExample(sql=ex) if isinstance(ex, str) else ex for ex in examples]
 
 
-# Mapping from base class names to FunctionType.
+# Mapping from base class names to CatalogFunctionType.
 # Using a dict avoids typos and provides O(1) lookup.
 # Class names are used (not classes) to avoid circular imports.
 # Note: Functions with an Arg[TableInput] parameter receive table input.
-_CLASS_NAME_TO_FUNCTION_TYPE: dict[str, FunctionType] = {
+_CLASS_NAME_TO_FUNCTION_TYPE: dict[str, CatalogFunctionType] = {
     # Table functions (including those with table input)
-    "TableFunctionBase": FunctionType.TABLE,
+    "TableFunctionBase": CatalogFunctionType.TABLE,
     # Future function types (not yet implemented)
-    "AggregateFunction": FunctionType.AGGREGATE,
-    "ScalarFunction": FunctionType.SCALAR,
-    "ScalarFunctionGenerator": FunctionType.SCALAR,
+    "AggregateFunction": CatalogFunctionType.AGGREGATE,
+    "ScalarFunction": CatalogFunctionType.SCALAR,
+    "ScalarFunctionGenerator": CatalogFunctionType.SCALAR,
 }
 
 # Valid Meta class attribute names (for typo detection)
@@ -777,6 +743,7 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         "stability",
         "null_handling",
         "required_settings",  # settings/pragmas required by function
+        "required_secrets",  # secrets required by function
         # Table function specific
         "projection_pushdown",
         "filter_pushdown",
@@ -796,7 +763,7 @@ class FunctionTypeError(TypeError):
     """Raised when a function's type cannot be determined from its class hierarchy."""
 
 
-def _infer_function_type(cls: type) -> FunctionType:
+def _infer_function_type(cls: type) -> CatalogFunctionType:
     """Infer the function type from the class hierarchy.
 
     Raises:
@@ -808,8 +775,7 @@ def _infer_function_type(cls: type) -> FunctionType:
             return _CLASS_NAME_TO_FUNCTION_TYPE[klass.__name__]
     recognized_bases = sorted(_CLASS_NAME_TO_FUNCTION_TYPE.keys())
     raise FunctionTypeError(
-        f"Cannot determine function type for {cls.__name__}. "
-        f"Class must inherit from one of: {recognized_bases}"
+        f"Cannot determine function type for {cls.__name__}. Class must inherit from one of: {recognized_bases}"
     )
 
 
@@ -830,19 +796,6 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
 
     Returns:
         ResolvedMetadata with all resolved values.
-
-    Example:
-        class MyFunction(TableInOutFunction):
-            class Meta:
-                description = "My function"
-                max_workers = 2
-
-            count = Arg[int](0, doc="Count parameter")
-
-        meta = resolve_metadata(MyFunction)
-        print(meta.name)  # "my" (snake_case, suffix removed)
-        print(meta.class_name)  # "MyFunction"
-        print(meta.description)  # "My function"
 
     """
     # Collect all attributes from Meta classes in MRO
@@ -904,6 +857,30 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
     # Extract parameters from Arg descriptors
     parameters = extract_parameters(cls)
 
+    # Merge annotation-derived setting/secret keys into required_settings/required_secrets
+    meta_required_settings: list[str] = list(attrs.get("required_settings", []))
+    meta_required_secrets: list[str] = list(attrs.get("required_secrets", []))
+
+    # Auto-populate from _setting_params / _secret_params class vars (set by __init_subclass__)
+    annotation_setting_keys: set[str] = set()
+    annotation_secret_keys: set[str] = set()
+
+    setting_params: dict[str, str] = getattr(cls, "_setting_params", {})
+    secret_params: dict[str, str] = getattr(cls, "_secret_params", {})
+    annotation_setting_keys.update(setting_params.values())
+    annotation_secret_keys.update(secret_params.values())
+
+    # Union with Meta-declared keys, deduped, preserving order
+    existing_settings = set(meta_required_settings)
+    for key in sorted(annotation_setting_keys):
+        if key not in existing_settings:
+            meta_required_settings.append(key)
+
+    existing_secrets = set(meta_required_secrets)
+    for key in sorted(annotation_secret_keys):
+        if key not in existing_secrets:
+            meta_required_secrets.append(key)
+
     return ResolvedMetadata(
         name=name,
         class_name=class_name,
@@ -915,17 +892,14 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         parameters=parameters,
         stability=attrs.get("stability", FunctionStability.CONSISTENT),
         null_handling=attrs.get("null_handling", NullHandling.DEFAULT),
-        required_settings=attrs.get("required_settings", []),
+        required_settings=meta_required_settings,
+        required_secrets=meta_required_secrets,
         projection_pushdown=attrs.get("projection_pushdown", False),
         filter_pushdown=attrs.get("filter_pushdown", False),
         preserves_order=attrs.get("preserves_order", OrderPreservation.PRESERVES_ORDER),
         max_workers=attrs.get("max_workers"),
-        order_dependent=attrs.get(
-            "order_dependent", OrderDependence.NOT_ORDER_DEPENDENT
-        ),
-        distinct_dependent=attrs.get(
-            "distinct_dependent", DistinctDependence.NOT_DISTINCT_DEPENDENT
-        ),
+        order_dependent=attrs.get("order_dependent", OrderDependence.NOT_ORDER_DEPENDENT),
+        distinct_dependent=attrs.get("distinct_dependent", DistinctDependence.NOT_DISTINCT_DEPENDENT),
     )
 
 
@@ -973,6 +947,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("stability", pa.string()),
         pa.field("null_handling", pa.string()),
         pa.field("required_settings", pa.list_(pa.string())),
+        pa.field("required_secrets", pa.list_(pa.string())),
         pa.field("projection_pushdown", pa.bool_()),
         pa.field("filter_pushdown", pa.bool_()),
         pa.field("preserves_order", pa.string()),
@@ -984,7 +959,7 @@ _METADATA_SCHEMA = pa.schema(
 
 # Fields that contain lists and need None -> [] conversion during deserialization
 _LIST_FIELDS: frozenset[str] = frozenset(
-    {"examples", "categories", "parameters", "required_settings"}
+    {"examples", "categories", "parameters", "required_settings", "required_secrets"}
 )
 
 # Fields that contain maps and need None -> {} conversion during deserialization
@@ -1057,9 +1032,7 @@ def metadatas_to_arrow(metadatas: Sequence[ResolvedMetadata]) -> pa.RecordBatch:
 
     """
     if not metadatas:
-        return pa.RecordBatch.from_pydict(
-            {field.name: [] for field in _METADATA_SCHEMA}, schema=_METADATA_SCHEMA
-        )
+        return pa.RecordBatch.from_pydict({field.name: [] for field in _METADATA_SCHEMA}, schema=_METADATA_SCHEMA)
 
     # Collect all data into columnar lists
     data: dict[str, list[Any]] = {field.name: [] for field in _METADATA_SCHEMA}
@@ -1084,11 +1057,6 @@ def functions_to_arrow(function_classes: Sequence[type]) -> pa.RecordBatch:
     Returns:
         RecordBatch with one row per function.
 
-    Example:
-        # Worker registration
-        batch = functions_to_arrow([EchoFunction, SumFunction])
-        # Send batch to client...
-
     """
     return metadatas_to_arrow([resolve_metadata(cls) for cls in function_classes])
 
@@ -1104,10 +1072,7 @@ def arrow_to_functions(batch: pa.RecordBatch) -> list[ResolvedMetadata]:
 
     """
     columns = batch.to_pydict()
-    return [
-        ResolvedMetadata.from_dict(_extract_arrow_row(columns, i))
-        for i in range(batch.num_rows)
-    ]
+    return [ResolvedMetadata.from_dict(_extract_arrow_row(columns, i)) for i in range(batch.num_rows)]
 
 
 # =============================================================================
@@ -1119,20 +1084,6 @@ class MetadataMixin:
     """Mixin that provides metadata access for function classes.
 
     Add this to the base Function class to enable metadata resolution.
-
-    Example:
-        class Function(MetadataMixin):
-            ...
-
-        class MyFunction(Function):
-            class Meta:
-                description = "My function"
-                max_workers = 2
-
-        meta = MyFunction.get_metadata()
-        print(meta.description)  # "My function"
-        print(meta.max_workers)  # 2
-
     """
 
     @classmethod

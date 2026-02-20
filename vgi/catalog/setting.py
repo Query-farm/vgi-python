@@ -3,21 +3,6 @@
 This module provides the Setting descriptor class for defining worker settings
 using Python's Annotated type hints, similar to how Arg works for function arguments.
 
-Example:
-    from typing import Annotated
-    import pyarrow as pa
-    from vgi import Worker
-    from vgi.catalog import Setting
-
-    class MyWorker(Worker):
-        class Settings:
-            # Simple Python types - Arrow type inferred
-            verbose_mode: Annotated[bool, Setting(desc="Enable verbose output")] = False
-            batch_size: Annotated[int, Setting(desc="Batch size")] = 1000
-
-            # Complex Arrow types - specify directly in annotation
-            allowed_ids: Annotated[pa.list_(pa.int64()), Setting(desc="IDs")] = []
-
 """
 
 from dataclasses import dataclass, field
@@ -32,8 +17,7 @@ from typing import (
 )
 
 import pyarrow as pa
-
-import vgi.ipc_utils
+from vgi_rpc.utils import deserialize_record_batch, serialize_record_batch_bytes
 
 if TYPE_CHECKING:
     from typing import Self
@@ -83,10 +67,8 @@ class SettingSpec:
         # Serialize default value if present
         default_bytes: bytes | None = None
         if self.default is not None:
-            default_batch = pa.RecordBatch.from_pydict(
-                {"value": [self.default]}, schema=type_schema
-            )
-            default_bytes = vgi.ipc_utils.serialize_record_batch(default_batch)
+            default_batch = pa.RecordBatch.from_pydict({"value": [self.default]}, schema=type_schema)
+            default_bytes = serialize_record_batch_bytes(default_batch)
 
         batch = pa.RecordBatch.from_pylist(
             [
@@ -99,12 +81,14 @@ class SettingSpec:
             ],
             schema=self.ARROW_SCHEMA,
         )
-        return vgi.ipc_utils.serialize_record_batch(batch)
+        return serialize_record_batch_bytes(batch)
 
     @classmethod
     def deserialize(cls, batch: pa.RecordBatch) -> "Self":
         """Deserialize from Arrow RecordBatch."""
-        row = vgi.ipc_utils.validate_single_row_batch(
+        from vgi_rpc.utils import _validate_single_row_batch
+
+        row = _validate_single_row_batch(
             batch,
             cls.__name__,
             required_fields=["name", "description", "type"],
@@ -116,9 +100,7 @@ class SettingSpec:
         # Deserialize default value if present
         default: Any = None
         if row["default_value"] is not None:
-            default_batch, _ = vgi.ipc_utils.deserialize_record_batch(
-                row["default_value"]
-            )
+            default_batch, _ = deserialize_record_batch(row["default_value"])
             default = default_batch.column("value")[0].as_py()
 
         return cls(
@@ -139,7 +121,7 @@ _PYTHON_TO_ARROW: dict[type, pa.DataType] = {
 }
 
 
-def _resolve_arrow_type(type_hint: Any) -> pa.DataType:
+def _resolve_arrow_type(type_hint: type | pa.DataType) -> pa.DataType:
     """Resolve Arrow type from either a Python type or Arrow DataType.
 
     Args:
@@ -176,16 +158,6 @@ class Setting:
     Attributes:
         desc: Human-readable description of the setting.
         arrow_type: Optional explicit Arrow type (overrides inference from annotation).
-
-    Examples:
-        class MyWorker(Worker):
-            class Settings:
-                # Type inferred from Python type annotation
-                verbose: Annotated[bool, Setting(desc="Enable verbose")] = False
-                count: Annotated[int, Setting(desc="Count")] = 100
-
-                # Complex Arrow type specified directly
-                ids: Annotated[pa.list_(pa.int64()), Setting(desc="IDs")] = []
 
     """
 
@@ -226,14 +198,6 @@ def extract_setting_specs(settings_cls: type) -> list[SettingSpec]:
     Raises:
         TypeError: If a setting's Arrow type cannot be resolved.
 
-    Example:
-        class Settings:
-            verbose: Annotated[bool, Setting(desc="Verbose mode")] = False
-            count: Annotated[int, Setting(desc="Count")] = 10
-
-        specs = extract_setting_specs(Settings)
-        # specs[0].name == "verbose", specs[0].type == pa.bool_()
-
     """
     specs: list[SettingSpec] = []
 
@@ -270,10 +234,7 @@ def extract_setting_specs(settings_cls: type) -> list[SettingSpec]:
 
         # Resolve Arrow type: explicit Setting.type takes precedence,
         # otherwise resolve from base_type (Python type or Arrow DataType)
-        if setting.arrow_type is not None:
-            arrow_type = setting.arrow_type
-        else:
-            arrow_type = _resolve_arrow_type(base_type)
+        arrow_type = setting.arrow_type if setting.arrow_type is not None else _resolve_arrow_type(base_type)
 
         specs.append(
             SettingSpec(

@@ -13,19 +13,13 @@ import pyarrow.compute as pc
 import pytest
 import structlog
 from pytest_examples import CodeExample, EvalExample, find_examples
+from vgi_rpc.log import Level, Message
 
 import vgi
 from vgi import (
-    AggregationFunction,
     Arg,
-    FilterFunction,
-    Invocation,
-    MapFunction,
-    Output,
-    OutputGenerator,
     ScalarFunction,
     ScalarFunctionGenerator,
-    ScalarOutputGenerator,
     TableInOutFunction,
     TableInOutGenerator,
     Worker,
@@ -33,16 +27,10 @@ from vgi import (
     schema_like,
 )
 from vgi.arguments import AnyArrow, Arguments, TableInput
+from vgi.catalog import Catalog, Schema, Table, View
 from vgi.client import Client
-from vgi.function import FunctionInitInput, OutputSpec
-from vgi.log import Level, Message
 from vgi.metadata import OrderPreservation, ResolvedMetadata
 from vgi.table_function import TableCardinality, TableFunctionGenerator
-from vgi.testing import (
-    ScalarFunctionTestClient,
-    TableFunctionTestClient,
-    TableInOutFunctionTestClient,
-)
 
 # Pre-built globals for running documentation examples
 # These provide common imports so partial snippets can run
@@ -53,7 +41,6 @@ DOC_EXAMPLE_GLOBALS: dict[str, Any] = {
     # VGI core
     "vgi": vgi,
     "Arg": Arg,
-    "Output": Output,
     "Worker": Worker,
     "schema": schema,
     "schema_like": schema_like,
@@ -63,36 +50,27 @@ DOC_EXAMPLE_GLOBALS: dict[str, Any] = {
     "TableFunctionGenerator": TableFunctionGenerator,
     "TableInOutFunction": TableInOutFunction,
     "TableInOutGenerator": TableInOutGenerator,
-    # Pattern classes
-    "AggregationFunction": AggregationFunction,
-    "FilterFunction": FilterFunction,
-    "MapFunction": MapFunction,
     # Arguments
     "AnyArrow": AnyArrow,
     "Arguments": Arguments,
     "TableInput": TableInput,
+    # Catalog descriptors
+    "Catalog": Catalog,
+    "Schema": Schema,
+    "Table": Table,
+    "View": View,
     # Other
     "Client": Client,
-    "Invocation": Invocation,
-    "FunctionInitInput": FunctionInitInput,
-    "OutputSpec": OutputSpec,
     "ResolvedMetadata": ResolvedMetadata,
     "TableCardinality": TableCardinality,
     "Level": Level,
     "Message": Message,
     "structlog": structlog,
-    # Test clients
-    "ScalarFunctionTestClient": ScalarFunctionTestClient,
-    "TableFunctionTestClient": TableFunctionTestClient,
-    "TableInOutFunctionTestClient": TableInOutFunctionTestClient,
     # Typing
     "Iterable": Iterable,
     "Iterator": Iterator,
     "Any": Any,
     "dataclass": dataclass,
-    # Generator types
-    "OutputGenerator": OutputGenerator,
-    "ScalarOutputGenerator": ScalarOutputGenerator,
     # Metadata
     "OrderPreservation": OrderPreservation,
 }
@@ -104,8 +82,6 @@ DOC_FILES = [
     "docs/generator-api.md",
     "docs/catalog-interface.md",
     "docs/argument-serialization.md",
-    "docs/design-duckdb-settings.md",
-    "docs/protocol.md",
     "docs/lifecycle.md",
     "docs/metadata.md",
     "docs/cli.md",
@@ -205,9 +181,7 @@ def _is_lint_only(example: CodeExample) -> bool:
 
 
 @pytest.mark.parametrize("example", find_examples(*DOC_FILES), ids=str)
-def test_documentation_examples(
-    example: CodeExample, eval_example: EvalExample
-) -> None:
+def test_documentation_examples(example: CodeExample, eval_example: EvalExample) -> None:
     """Test that documentation examples are valid Python.
 
     - All Python examples are linted for syntax correctness

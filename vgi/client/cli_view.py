@@ -54,20 +54,15 @@ def view_get(
     """
     client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_id, is_stateful = get_attach_id_from_options(
-        client, attach_id, catalog_name, opts
-    )
+    resolved_attach_id, is_stateful = get_attach_id_from_options(client, attach_id, catalog_name, opts)
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-id for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. Consider using --attach-id for session persistence.",
             err=True,
         )
     view_info = client.view_get(
         attach_id=resolved_attach_id,
-        transaction_id=(
-            hex_to_transaction_id(transaction_id) if transaction_id else None
-        ),
+        transaction_id=(hex_to_transaction_id(transaction_id) if transaction_id else None),
         schema_name=schema_name,
         name=name,
     )
@@ -111,20 +106,15 @@ def view_create(
     """
     client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_id, is_stateful = get_attach_id_from_options(
-        client, attach_id, catalog_name, opts
-    )
+    resolved_attach_id, is_stateful = get_attach_id_from_options(client, attach_id, catalog_name, opts)
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-id for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. Consider using --attach-id for session persistence.",
             err=True,
         )
     client.view_create(
         attach_id=resolved_attach_id,
-        transaction_id=(
-            hex_to_transaction_id(transaction_id) if transaction_id else None
-        ),
+        transaction_id=(hex_to_transaction_id(transaction_id) if transaction_id else None),
         schema_name=schema_name,
         name=name,
         definition=definition,
@@ -160,20 +150,15 @@ def view_drop(
     """
     client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_id, is_stateful = get_attach_id_from_options(
-        client, attach_id, catalog_name, opts
-    )
+    resolved_attach_id, is_stateful = get_attach_id_from_options(client, attach_id, catalog_name, opts)
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-id for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. Consider using --attach-id for session persistence.",
             err=True,
         )
     client.view_drop(
         attach_id=resolved_attach_id,
-        transaction_id=(
-            hex_to_transaction_id(transaction_id) if transaction_id else None
-        ),
+        transaction_id=(hex_to_transaction_id(transaction_id) if transaction_id else None),
         schema_name=schema_name,
         name=name,
         ignore_not_found=ignore_not_found,
@@ -211,20 +196,15 @@ def view_rename(
     """
     client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_id, is_stateful = get_attach_id_from_options(
-        client, attach_id, catalog_name, opts
-    )
+    resolved_attach_id, is_stateful = get_attach_id_from_options(client, attach_id, catalog_name, opts)
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-id for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. Consider using --attach-id for session persistence.",
             err=True,
         )
     client.view_rename(
         attach_id=resolved_attach_id,
-        transaction_id=(
-            hex_to_transaction_id(transaction_id) if transaction_id else None
-        ),
+        transaction_id=(hex_to_transaction_id(transaction_id) if transaction_id else None),
         schema_name=schema_name,
         name=name,
         new_name=new_name,
@@ -278,20 +258,15 @@ def view_comment(
 
     client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_id, is_stateful = get_attach_id_from_options(
-        client, attach_id, catalog_name, opts
-    )
+    resolved_attach_id, is_stateful = get_attach_id_from_options(client, attach_id, catalog_name, opts)
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-id for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. Consider using --attach-id for session persistence.",
             err=True,
         )
     client.view_comment_set(
         attach_id=resolved_attach_id,
-        transaction_id=(
-            hex_to_transaction_id(transaction_id) if transaction_id else None
-        ),
+        transaction_id=(hex_to_transaction_id(transaction_id) if transaction_id else None),
         schema_name=schema_name,
         name=name,
         comment=None if clear else comment_text,

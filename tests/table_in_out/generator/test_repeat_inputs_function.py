@@ -12,9 +12,7 @@ from vgi.client import Client
 class TestRepeatInputsFunction:
     """Tests for the repeat_inputs function (explosion)."""
 
-    def test_repeat_custom_count(
-        self, example_worker: str, simple_batches: list[pa.RecordBatch]
-    ) -> None:
+    def test_repeat_custom_count(self, example_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
         """Should respect custom repeat count argument."""
         repeat_count = 3
         with Client(example_worker) as client:
@@ -28,9 +26,7 @@ class TestRepeatInputsFunction:
 
         assert total_rows(output_batches) == total_rows(simple_batches) * repeat_count
 
-    def test_repeat_single_time(
-        self, example_worker: str, simple_batches: list[pa.RecordBatch]
-    ) -> None:
+    def test_repeat_single_time(self, example_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
         """Repeat count of 1 should act like echo."""
         with Client(example_worker) as client:
             output_batches = list(
@@ -59,9 +55,7 @@ class TestRepeatInputsFunction:
             a_values = list(range(start, end))
             b_values = [float(v) * 0.5 for v in a_values]
 
-            batch = pa.RecordBatch.from_pydict(
-                {"a": a_values, "b": b_values}, schema=schema
-            )
+            batch = pa.RecordBatch.from_pydict({"a": a_values, "b": b_values}, schema=schema)
             batches.append(batch)
 
         with Client(example_worker) as client:
@@ -77,21 +71,13 @@ class TestRepeatInputsFunction:
 
     def test_repeat_distributed_preserves_data(self, example_worker: str) -> None:
         """Should preserve data correctly when repeated across workers."""
-        schema = make_schema(
-            [pa.field("id", pa.int64()), pa.field("value", pa.string())]
-        )
+        schema = make_schema([pa.field("id", pa.int64()), pa.field("value", pa.string())])
 
         # Create batches with distinct values to verify data integrity
         batches = [
-            pa.RecordBatch.from_pydict(
-                {"id": [1, 2, 3], "value": ["a", "b", "c"]}, schema=schema
-            ),
-            pa.RecordBatch.from_pydict(
-                {"id": [4, 5, 6], "value": ["d", "e", "f"]}, schema=schema
-            ),
-            pa.RecordBatch.from_pydict(
-                {"id": [7, 8, 9], "value": ["g", "h", "i"]}, schema=schema
-            ),
+            pa.RecordBatch.from_pydict({"id": [1, 2, 3], "value": ["a", "b", "c"]}, schema=schema),
+            pa.RecordBatch.from_pydict({"id": [4, 5, 6], "value": ["d", "e", "f"]}, schema=schema),
+            pa.RecordBatch.from_pydict({"id": [7, 8, 9], "value": ["g", "h", "i"]}, schema=schema),
         ]
 
         repeat_count = 2
@@ -117,6 +103,4 @@ class TestRepeatInputsFunction:
         # Each value should appear exactly repeat_count times
         for expected_value in ["a", "b", "c", "d", "e", "f", "g", "h", "i"]:
             count = result["value"].count(expected_value)
-            assert count == repeat_count, (
-                f"value {expected_value} appeared {count} times"
-            )
+            assert count == repeat_count, f"value {expected_value} appeared {count} times"

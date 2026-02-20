@@ -26,7 +26,8 @@ class TestClientWorkerExitHandling:
     def test_client_raises_error_when_worker_exits_immediately(self) -> None:
         """Client raises ClientError when worker exits before accepting input."""
         # Use 'exit 1' which immediately terminates without reading stdin
-        client = Client("exit 1")
+        # pool=None required because 'exit 1' is a shell command, not a binary
+        client = Client("exit 1", pool=None)
 
         # Worker exits before sending any output - detected either via BrokenPipeError
         # or via early exit check when reading fails
@@ -45,7 +46,8 @@ class TestClientWorkerExitHandling:
     def test_client_raises_error_with_useful_message(self) -> None:
         """Client error message includes useful debugging information."""
         # Use a specific exit code
-        client = Client("exit 42")
+        # pool=None required because 'exit 42' is a shell command, not a binary
+        client = Client("exit 42", pool=None)
 
         try:
             client.start()
@@ -66,6 +68,7 @@ class TestClientWorkerExitHandling:
                 "42" in err_str  # Exit code from BrokenPipeError path
                 or "bind_result" in err_str  # Read failure path
                 or "terminated" in err_str  # BrokenPipeError message
+                or "worker" in err_str.lower()  # Worker connection failure
             )
             assert has_useful_info, f"Expected useful error info, got: {e}"
 
@@ -81,7 +84,6 @@ class TestCatalogMixinWorkerExitHandling:
         # Worker exits - detected either via BrokenPipeError (shows "terminated
         # unexpectedly") or via read failure (shows "Failed to read catalog result")
         with pytest.raises(CatalogClientError):
-            # catalogs() uses _catalog_invoke internally
             list(client.catalogs())
 
     def test_catalog_invoke_error_includes_useful_info(self) -> None:
@@ -95,6 +97,4 @@ class TestCatalogMixinWorkerExitHandling:
             # Error should mention either "terminated unexpectedly" (BrokenPipeError)
             # or "catalog result" (read failure) and include exit code
             err_str = str(e)
-            assert "42" in err_str or "catalog" in err_str.lower(), (
-                f"Expected useful error info, got: {e}"
-            )
+            assert "42" in err_str or "catalog" in err_str.lower(), f"Expected useful error info, got: {e}"

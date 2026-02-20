@@ -92,11 +92,7 @@ class TestExampleWorkerCatalog:
         attach_id = attach_result.attach_id
 
         # Get table functions
-        contents = list(
-            client.schema_contents(
-                attach_id=attach_id, name="main", type=SchemaObjectType.TABLE_FUNCTION
-            )
-        )
+        contents = list(client.schema_contents(attach_id=attach_id, name="main", type=SchemaObjectType.TABLE_FUNCTION))
 
         # Should have functions
         assert len(contents) > 0

@@ -22,7 +22,7 @@ SELECT * FROM information_schema.schemata WHERE catalog_name = 'mydb';
 | Aspect | Functions | Catalog Interface |
 |--------|-----------|-------------------|
 | Purpose | Compute data | Manage metadata |
-| Protocol | Bind → Init → Stream | Invoke → Stream |
+| Protocol | Bind → Init → Stream | `vgi_rpc` typed dispatch |
 | Stateful | Per-invocation | Per-attachment |
 | Discovery | `Worker.functions` list | `CatalogInterface.catalogs()` |
 
@@ -42,11 +42,9 @@ SELECT * FROM information_schema.schemata WHERE catalog_name = 'mydb';
 │                              ▼                                      │
 │  ┌───────────────────────────────────────────────────────────────┐  │
 │  │                      Worker Process                           │  │
-│  │  Invocation(function_type=CATALOG, function_name='...')       │  │
+│  │  vgi_rpc dispatch → CatalogInterface.{method_name}(**kwargs)   │  │
 │  │    ↓                                                          │  │
-│  │  CatalogInterface.{method_name}(**kwargs)                     │  │
-│  │    ↓                                                          │  │
-│  │  Arrow IPC response (streamed)                                │  │
+│  │  Typed response (serialized by vgi_rpc)                       │  │
 │  └───────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -55,77 +53,7 @@ SELECT * FROM information_schema.schemata WHERE catalog_name = 'mydb';
 
 ## Protocol
 
-The catalog protocol is simpler than the function protocol - no bind/init phases.
-
-### Message Flow
-
-```
-Client                                  Worker
-  │                                       │
-  │──── Invocation ───────────────────▶  │  function_type=CATALOG
-  │     (function_name = method name)     │  function_name = "catalog_attach"
-  │                                       │
-  │──── Arguments Batch ──────────────▶  │  Single row with method params
-  │                                       │
-  │◀──── Result Batch(es) ─────────────  │  Serialized result(s)
-  │◀──── Empty Batch (EOF) ────────────  │  For streaming methods
-  │                                       │
-  └───────────────────────────────────────┘
-```
-
-### Invocation Format
-
-Catalog invocations use `InvocationType.CATALOG`:
-
-| Field | Value | Description |
-|-------|-------|-------------|
-| `function_type` | `"catalog"` | Identifies catalog invocation |
-| `function_name` | Method name | e.g., `"catalog_attach"`, `"schemas"` |
-| `arguments` | Empty | Arguments sent in separate batch |
-
-### Arguments Batch
-
-Method arguments are sent as a single-row RecordBatch where column names match parameter names.
-
-**Protocol state:** `catalog_args`
-
-```python
-# For catalog_attach(name='mydb', options={})
-args_batch = pa.RecordBatch.from_pylist([{
-    "name": "mydb",
-    "options": {}
-}])
-```
-
-### Result Serialization
-
-**Protocol state:** `catalog_result`
-
-Results are serialized using `CATALOG_METHOD_SCHEMAS` to determine the appropriate Arrow schema for each method, enabling consistent handling of both populated and empty results.
-
-| Return Type | Serialization |
-|-------------|---------------|
-| `None` | Empty batch with empty schema (DDL operations) |
-| Primitive (`int`, `str`, etc.) | Single-row batch with "value" column |
-| `list[str]` | Multi-row batch with "value" column |
-| Dataclass with `to_row_dict()` | Single-row batch using method's schema |
-| `list[Dataclass]` | Multi-row batch using method's schema |
-
-The schema for each method is defined in `CATALOG_METHOD_SCHEMAS`:
-
-```python
-from vgi.catalog import CATALOG_METHOD_SCHEMAS, get_catalog_method_schema
-
-# Get schema for a specific method
-schema = get_catalog_method_schema("catalog_attach", {})
-# Returns CatalogAttachResult.ARROW_SCHEMA
-
-# For schema_contents, the type parameter determines the schema
-schema = get_catalog_method_schema("schema_contents", {"type": "table"})
-# Returns TableInfo.ARROW_SCHEMA
-```
-
-All result batches include `vgi.protocol_state: catalog_result` in their custom metadata.
+Catalog methods are dispatched via `vgi_rpc` typed protocol methods. Each method has its own typed request/response defined in `vgi.protocol`, with automatic Arrow serialization handled by the RPC layer. This is simpler than the function protocol — no bind/init phases.
 
 ---
 
@@ -372,6 +300,146 @@ class MyReadOnlyCatalog(ReadOnlyCatalogInterface):
 
 ---
 
+## Declarative Catalogs
+
+For most use cases, the declarative catalog API provides a simpler way to define catalogs using Python dataclasses instead of implementing `CatalogInterface` directly.
+
+### Imports
+
+```python
+from vgi import Worker, TableFunctionGenerator
+from vgi.catalog import Catalog, Schema, Table, View
+```
+
+### Function-Backed Tables (Recommended)
+
+The recommended pattern is to back tables with `TableFunctionGenerator` functions. The table schema is automatically derived from the function's `output_schema`, eliminating duplication:
+
+```python test="skip"
+import pyarrow as pa
+from dataclasses import dataclass
+from typing import ClassVar
+from vgi import TableFunctionGenerator
+from vgi.table_function import ProcessParams, OutputCollector
+
+class UsersFunction(TableFunctionGenerator):
+    """Generate user data."""
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([
+        ("id", pa.int64()),
+        ("name", pa.string()),
+        ("active", pa.bool_()),
+    ])
+
+    @classmethod
+    def process(cls, params, state, out: OutputCollector) -> None:
+        out.emit(pa.RecordBatch.from_pydict({
+            "id": [1, 2, 3],
+            "name": ["Alice", "Bob", "Carol"],
+            "active": [True, True, False],
+        }, schema=params.output_schema))
+        out.finish()
+
+# Table with auto-derived schema
+users_table = Table(
+    name="users",
+    function=UsersFunction,  # Schema derived from FIXED_SCHEMA
+    not_null=["id"],         # Constraint column names validated
+    unique=[["id"]],
+    comment="User accounts",
+)
+```
+
+### Full Catalog Definition
+
+```python
+from vgi import Worker
+from vgi.catalog import Catalog, Schema, Table, View
+
+class MyWorker(Worker):
+    catalog = Catalog(
+        name="myapp",
+        default_schema="main",
+        schemas=[
+            Schema(
+                name="main",
+                comment="Main application data",
+                tables=[users_table],
+                views=[
+                    View(
+                        name="active_users",
+                        definition="SELECT * FROM users WHERE active = true",
+                        comment="Active user accounts only",
+                    ),
+                ],
+                functions=[UsersFunction],
+            ),
+            Schema(
+                name="analytics",
+                comment="Analytics data",
+                tables=[events_table],
+                functions=[AggregateFunction],
+            ),
+        ],
+    )
+
+if __name__ == "__main__":
+    MyWorker().run()
+```
+
+### Key Benefits
+
+| Feature | Description |
+|---------|-------------|
+| **No schema duplication** | Function-backed tables derive schema automatically |
+| **Constraint validation** | `not_null`, `unique` column names validated at definition time |
+| **Automatic scan handling** | Function-backed tables don't need `table_scan_function_get()` |
+| **Type safety** | Frozen dataclasses with runtime validation |
+
+### Tables with Explicit Columns
+
+For tables not backed by functions, provide the schema explicitly:
+
+```python
+# Explicit columns - requires table_scan_function_get() implementation
+config_table = Table(
+    name="config",
+    columns=pa.schema([
+        ("key", pa.string()),
+        ("value", pa.string()),
+    ]),
+    not_null=["key"],
+    unique=[["key"]],
+)
+```
+
+**Note:** Tables with explicit columns require the worker to implement `table_scan_function_get()` to tell DuckDB how to scan the data.
+
+### Validation
+
+Declarative catalogs include comprehensive validation:
+
+```python test="skip"
+# Error: missing columns or function
+Table(name="bad")  # ValueError: must specify either 'columns' or 'function'
+
+# Error: invalid constraint column
+Table(
+    name="users",
+    columns=pa.schema([("id", pa.int64())]),
+    not_null=["nonexistent"],  # ValueError: column 'nonexistent' not found
+)
+
+# Error: default_schema not in schemas
+Catalog(
+    name="myapp",
+    default_schema="missing",
+    schemas=[Schema(name="main")],  # ValueError: default_schema 'missing' not found
+)
+```
+
+---
+
 ## Worker Integration
 
 ### Automatic Catalog Interface
@@ -549,73 +617,6 @@ class CatalogStorage(Protocol):
 
 ---
 
-## Wire Format
-
-### Protocol State Metadata
-
-All catalog protocol messages include protocol state metadata in their custom metadata:
-
-| Message | Protocol State |
-|---------|---------------|
-| Invocation | `invocation` |
-| Arguments batch | `catalog_args` |
-| Result batch(es) | `catalog_result` |
-
-See [Protocol State Metadata](protocol.md#protocol-state-metadata) for details.
-
-### Schema Serialization
-
-Table and function schemas are serialized using Arrow IPC:
-
-```python
-import pyarrow as pa
-from vgi.catalog import SerializedSchema
-
-# Serialize
-schema = pa.schema([
-    pa.field("id", pa.int64()),
-    pa.field("name", pa.utf8()),
-])
-serialized: SerializedSchema = SerializedSchema(schema.serialize().to_pybytes())
-
-# Deserialize
-schema = pa.ipc.read_schema(pa.py_buffer(serialized))
-```
-
-### Dataclass Serialization
-
-Catalog dataclasses have `to_row_dict()`, `serialize()`, and `deserialize()` methods:
-
-```python
-from vgi.catalog import CatalogAttachResult, AttachId
-import pyarrow as pa
-
-# Create result
-result = CatalogAttachResult(
-    attach_id=AttachId(b"my-id"),
-    supports_transactions=False,
-    supports_time_travel=False,
-    catalog_version_frozen=True,
-    catalog_version=1,
-    attach_id_required=False,
-)
-
-# Convert to dict for batch construction (used internally by workers)
-row_dict = result.to_row_dict()
-batch = pa.RecordBatch.from_pylist([row_dict], schema=CatalogAttachResult.ARROW_SCHEMA)
-
-# Serialize to bytes (convenience method)
-data = result.serialize()
-
-# Deserialize from RecordBatch
-batch = pa.ipc.open_stream(pa.py_buffer(data)).read_next_batch()
-restored = CatalogAttachResult.deserialize(batch)
-```
-
-The `to_row_dict()` method is used by the worker's `_result_to_batch()` helper for unified result serialization.
-
----
-
 ## Transactions
 
 Catalogs can optionally support transactions:
@@ -770,6 +771,5 @@ The current CatalogInterface has the following limitations:
 
 ## See Also
 
-- [Protocol Specification](protocol.md) - VGI wire protocol details
 - [Function Lifecycle](lifecycle.md) - Function execution phases
 - [Function Metadata](metadata.md) - Function introspection

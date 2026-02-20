@@ -97,7 +97,6 @@ class TestBindExceptionHandling:
             assert "Worker Exception" in error_message
             # Should mention missing/required argument or matching failure
             error_lower = error_message.lower()
-            assert any(
-                term in error_lower
-                for term in ["argument", "required", "missing", "match"]
-            ), f"Expected argument-related error, got: {error_message}"
+            assert any(term in error_lower for term in ["argument", "required", "missing", "match"]), (
+                f"Expected argument-related error, got: {error_message}"
+            )

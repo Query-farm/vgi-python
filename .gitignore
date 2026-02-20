@@ -17,3 +17,4 @@ mypy-html-report/
 .coverage
 .coverage.*
 htmlcov/
+test-data/v.parquet

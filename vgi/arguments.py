@@ -9,40 +9,18 @@ Classes:
     AnyArrow: Sentinel type for arguments accepting multiple Arrow types.
     AnyArrowValue: Wrapper returned when accessing AnyArrow arguments.
 
-Example using Annotated (recommended):
-    from typing import Annotated
-    from vgi import Arg, AnyArrowValue
-
-    class MyFunction(TableInOutFunction):
-        count: Annotated[int, Arg(0)]  # Required positional
-        name: Annotated[str, Arg("name", default="unnamed")]  # Optional named
-        column: Annotated[AnyArrowValue, Arg(0, type_bound=pa.types.is_integer)]
-
-Example using legacy Arg[T] syntax:
-    class MyFunction(TableInOutFunction):
-        count = Arg[int](0)  # Required positional
-        name = Arg[str]("name", default="unnamed")  # Optional named
-
-Example using Arguments.get() for manual parsing:
-    count = args.get(0)
-    name = args.get("name", default="unnamed")
-
 """
 
 import re
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
 
 import pyarrow as pa
 
 if TYPE_CHECKING:
     from pyarrow import Scalar
-
-# Note: Param.arrow_type also accepts Polars types (pl.DataType, pl.Utf8, etc.)
-# These are detected at runtime by is_polars_type() and converted to Arrow types
-
 
 # Python type to Arrow type mapping for Arg type hints
 PYTHON_TO_ARROW: dict[type, pa.DataType] = {
@@ -106,12 +84,6 @@ def _python_to_arrow(py_type: type) -> pa.DataType:
 
     Raises:
         TypeError: If py_type is not a supported Python type.
-
-    Example:
-        >>> _python_to_arrow(int)
-        DataType(int64)
-        >>> _python_to_arrow(str)
-        DataType(string)
 
     """
     if py_type in _PYTHON_TO_ARROW:
@@ -188,88 +160,6 @@ COMPLEX_ARRAY_CLASSES: set[type] = {
 }
 
 
-# =============================================================================
-# Polars Type Detection and Conversion
-# =============================================================================
-
-
-def is_polars_type(obj: Any) -> bool:
-    """Check if an object is a Polars data type.
-
-    Detects both Polars DataType instances (pl.Utf8()) and DataTypeClass
-    (pl.Utf8). Works without importing polars at module level.
-
-    Args:
-        obj: Object to check.
-
-    Returns:
-        True if obj is a Polars DataType or DataTypeClass, False otherwise.
-
-    """
-    # Check by module name to avoid importing polars
-    obj_type = type(obj)
-    module = getattr(obj_type, "__module__", "")
-
-    # DataType instances: polars.datatypes.classes module
-    if module.startswith("polars.datatypes"):
-        return True
-
-    # DataTypeClass (type classes like pl.Utf8): check if it's a class
-    # with a polars module that's callable and returns a DataType
-    if isinstance(obj, type):
-        obj_module = getattr(obj, "__module__", "")
-        if obj_module.startswith("polars.datatypes"):
-            return True
-
-    return False
-
-
-def polars_type_to_arrow(polars_type: Any) -> pa.DataType:
-    """Convert a Polars data type to an Arrow data type.
-
-    Args:
-        polars_type: A Polars DataType instance (pl.Utf8()) or DataTypeClass (pl.Utf8).
-
-    Returns:
-        The equivalent Arrow data type.
-
-    Raises:
-        TypeError: If polars is not installed or conversion fails.
-
-    Example:
-        >>> import polars as pl
-        >>> polars_type_to_arrow(pl.Utf8)
-        DataType(string)
-        >>> polars_type_to_arrow(pl.Int64())
-        DataType(int64)
-
-    """
-    try:
-        import polars as pl
-    except ImportError as e:
-        raise TypeError(
-            f"Cannot convert Polars type '{polars_type}' - polars is not installed"
-        ) from e
-
-    # Normalize DataTypeClass to DataType instance
-    # DataTypeClass types (like pl.Utf8) are callable to produce instances
-    if isinstance(polars_type, type) and getattr(
-        polars_type, "__module__", ""
-    ).startswith("polars.datatypes"):
-        polars_type = polars_type()  # Call to get instance
-
-    if not isinstance(polars_type, pl.DataType):
-        raise TypeError(
-            f"Expected Polars DataType, got {type(polars_type).__name__}: {polars_type}"
-        )
-
-    # Create a minimal series of the given type and convert to Arrow
-    # This lets Polars handle the type mapping correctly
-    dummy = pl.Series("x", [], dtype=polars_type)
-    arrow_array = dummy.to_arrow()
-    return cast(pa.DataType, arrow_array.type)
-
-
 def _arrow_type_to_python(arrow_type: pa.DataType) -> type:
     """Convert an Arrow type to the corresponding Python scalar type.
 
@@ -279,12 +169,6 @@ def _arrow_type_to_python(arrow_type: pa.DataType) -> type:
     Returns:
         Corresponding Python type for scalar values.
         Returns Any (object) for unknown Arrow types.
-
-    Example:
-        >>> _arrow_type_to_python(pa.int64())
-        <class 'int'>
-        >>> _arrow_type_to_python(pa.string())
-        <class 'str'>
 
     """
     arrow_type_class = type(arrow_type)
@@ -323,8 +207,10 @@ __all__ = [
     "Returns",
     "TableInput",
     "TypeBoundPredicate",
-    "is_polars_type",
-    "polars_type_to_arrow",
+    "OutputLength",
+    "Setting",
+    "Secret",
+    "_extract_setting_secret_params",
 ]
 
 
@@ -338,15 +224,6 @@ class TableInput:
     The TableInput argument determines which table expression feeds the function
     when called from SQL. It doesn't correspond to an actual Arrow value - the
     table data arrives as streaming RecordBatches via process().
-
-    Example:
-        class MyFunction(TableInOutFunction):
-            # Other args come first, table input last (by convention)
-            repeat_count = Arg[int](0, doc="Number of repetitions")
-            data = Arg[TableInput](1, doc="Input table to process")
-
-        # SQL: SELECT * FROM my_function(3, input_table)
-        #      repeat_count=3, data receives rows from input_table
 
     """
 
@@ -370,17 +247,16 @@ class AnyArrowValue:
     Example using Annotated (recommended):
         from typing import Annotated
 
-        class MyFunction(ScalarFunction):
+        class MyFunction(TableFunctionGenerator):
             col1: Annotated[AnyArrowValue, Arg(0, doc="First column")]
 
-            def bind(self) -> None:
+            def on_bind(self) -> None:
                 # self.col1 is an AnyArrowValue
-                field = self.input_schema.field(self.col1.position)
-                # Or access the value directly
-                print(self.col1.value)
+                print(self.col1.value)     # The column name
+                print(self.col1.position)  # The positional index
 
     Example using legacy Arg[AnyArrow] syntax:
-        class MyFunction(ScalarFunction):
+        class MyFunction(TableFunctionGenerator):
             col1 = Arg[AnyArrow](0, doc="First column")  # type: ignore[assignment]
 
     """
@@ -415,30 +291,29 @@ class AnyArrow:
         from vgi import Arg, AnyArrowValue
 
         # Single type: function only works with strings
-        class UpperCaseFunction(ScalarFunction):
+        class UpperCaseFunction(TableFunctionGenerator):
             column: Annotated[str, Arg(0, doc="String column to uppercase")]
 
         # Multiple types: function works with any numeric type
-        class DoubleFunction(ScalarFunction):
+        class DoubleFunction(TableFunctionGenerator):
             column: Annotated[
                 AnyArrowValue,
                 Arg(0, type_bound=[pa.types.is_integer, pa.types.is_floating])
             ]
 
-            def bind(self) -> None:
+            def on_bind(self) -> None:
                 # Access column metadata for dynamic output type
-                field = self.input_schema.field(self.column.value)
-                self._output_type = field.type
+                self._output_type = self.column.value
 
         # Any type: function works with all types
-        class IdentityFunction(ScalarFunction):
+        class IdentityFunction(TableFunctionGenerator):
             column: Annotated[AnyArrowValue, Arg(0, doc="Column to pass through")]
 
     Accessing Values:
         When using AnyArrowValue, access the value via the ``.value`` attribute::
 
-            val = self.column.value  # The column name as a string
-            field = self.input_schema.field(self.column.value)
+            val = self.column.value     # The column name as a string
+            pos = self.column.position  # The positional index
 
     Note:
         Unlike TableInput, AnyArrow arguments have actual Arrow values -
@@ -507,20 +382,6 @@ class Arguments:
             ValueError: Argument is null (no default provided).
             TypeError: Argument type doesn't match `type` parameter.
 
-        Examples:
-            # Get required positional argument
-            count = args.get(0)
-
-            # Get optional argument with default
-            separator = args.get("sep", default=",")
-            page_size = args.get(1, default=100)
-
-            # Get with type validation
-            ratio = args.get(0, type=pa.float64())
-
-            # Get optional with type validation
-            limit = args.get("limit", type=pa.int64(), default=1000)
-
         """
         # Get the scalar based on key type
         if isinstance(key, int):
@@ -529,8 +390,7 @@ class Arguments:
                 if default is not _MISSING:
                     return default
                 raise IndexError(
-                    f"Argument {key}: index out of range "
-                    f"(have {len(self.positional)} positional arguments)"
+                    f"Argument {key}: index out of range (have {len(self.positional)} positional arguments)"
                 )
             scalar = self.positional[key]
         else:
@@ -574,13 +434,6 @@ class Arguments:
         Returns:
             Tuple of argument values as Python objects.
 
-        Examples:
-            # Get all args from position 2 onwards
-            extra_values = args.get_varargs(2)  # Returns tuple
-
-            # With type validation
-            numbers = args.get_varargs(1, type=pa.int64())
-
         """
         if start < 0:
             raise ValueError(f"start must be non-negative, got {start}")
@@ -591,9 +444,7 @@ class Arguments:
 
             # Handle null values - varargs don't support nulls
             if scalar is None or not scalar.is_valid:
-                raise ValueError(
-                    f"Argument {i}: value is null (varargs cannot contain nulls)"
-                )
+                raise ValueError(f"Argument {i}: value is null (varargs cannot contain nulls)")
 
             # Type validation (if requested)
             if type is not None and scalar.type != type:
@@ -617,12 +468,8 @@ class Arguments:
             Dictionary mapping argument names to their values.
 
         """
-        return {
-            f"positional_{index}": value for index, value in enumerate(self.positional)
-        } | (
-            {f"named_{name}": value for name, value in self.named.items()}
-            if self.named
-            else {}
+        return {f"positional_{index}": value for index, value in enumerate(self.positional)} | (
+            {f"named_{name}": value for name, value in self.named.items()} if self.named else {}
         )
 
     def schema(self) -> pa.Schema:
@@ -661,6 +508,40 @@ class Arguments:
                 name = key[len("named_") :]
                 named[name] = value
         return Arguments(positional=tuple(positional), named=named or None)
+
+    def serialize_to_bytes(self) -> bytes:
+        """Serialize Arguments to bytes using Arrow IPC format.
+
+        Creates a single-row RecordBatch with the arguments encoded as
+        a struct column, then serializes it to IPC stream bytes.
+
+        Returns:
+            Serialized bytes containing the Arguments.
+
+        """
+        args_dict = self.encoded_dict()
+        batch = pa.RecordBatch.from_pylist([{"args": args_dict}])
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, batch.schema) as writer:
+            writer.write_batch(batch)
+        return sink.getvalue().to_pybytes()
+
+    @staticmethod
+    def deserialize_from_bytes(data: bytes, ipc_validation: Any = None) -> "Arguments":
+        """Deserialize Arguments from bytes.
+
+        Args:
+            data: Bytes serialized via serialize_to_bytes().
+            ipc_validation: Unused, accepted for compatibility with
+                ArrowSerializableDataclass._convert_value_for_deserialization.
+
+        Returns:
+            Deserialized Arguments instance.
+
+        """
+        reader = pa.ipc.open_stream(data)
+        batch = reader.read_next_batch()
+        return Arguments.decode(batch.column("args")[0])
 
 
 class ArgumentValidationError(ValueError):
@@ -764,9 +645,7 @@ class ArgumentValidationError(ValueError):
         # Add default value hint
         if self.default is not _MISSING:
             lines.append("")
-            lines.append(
-                f"  Tip: Omit this argument to use default value: {self.default!r}"
-            )
+            lines.append(f"  Tip: Omit this argument to use default value: {self.default!r}")
 
         return "\n".join(lines)
 
@@ -803,9 +682,7 @@ class ArgumentValidationError(ValueError):
         # For numbers, find closest values
         if isinstance(self.value, int | float):
             try:
-                numeric_choices = [
-                    c for c in self.choices if isinstance(c, int | float)
-                ]
+                numeric_choices = [c for c in self.choices if isinstance(c, int | float)]
                 numeric_choices.sort(key=lambda c: abs(c - self.value))
                 return numeric_choices
             except TypeError:
@@ -861,22 +738,16 @@ class _ArgFactory:
             raise ValueError("Cannot specify both 'le' and 'lt'")
         if varargs:
             if isinstance(position, str):
-                raise ValueError(
-                    "varargs=True requires a positional argument (int), not named"
-                )
+                raise ValueError("varargs=True requires a positional argument (int), not named")
             if default is not _MISSING:
-                raise ValueError(
-                    "varargs=True cannot have a default value "
-                    "(requires at least 1 value)"
-                )
+                raise ValueError("varargs=True cannot have a default value (requires at least 1 value)")
 
         # Warn if type_bound is used with non-AnyArrow type
         # Check both _type_param (legacy API) and is_any (new Param API)
         if type_bound is not None and self._type_param is not AnyArrow and not is_any:
             type_name = getattr(self._type_param, "__name__", str(self._type_param))
             warnings.warn(
-                f"type_bound is only meaningful for Arg[AnyArrow], "
-                f"but was specified for Arg[{type_name}]",
+                f"type_bound is only meaningful for Arg[AnyArrow], but was specified for Arg[{type_name}]",
                 UserWarning,
                 stacklevel=2,
             )
@@ -926,32 +797,6 @@ class Arg[ArgT]:
         lt: Value must be < this (for numeric types).
         choices: Value must be one of these options.
         pattern: Value must match this regex pattern (for strings).
-
-    Examples:
-        class MyFunction(TableInOutFunction):
-            # Required positional argument (index 0)
-            count = Arg[int](0)
-
-            # Optional positional with default
-            multiplier = Arg[int](1, default=1)
-
-            # Required named argument
-            column = Arg[str]("column")
-
-            # Optional named with default
-            format = Arg[str]("format", default="json")
-
-            # With validation constraints
-            count = Arg[int](0, ge=1, le=100, doc="Count must be 1-100")
-            ratio = Arg[float](1, gt=0.0, lt=1.0, doc="Ratio in (0, 1)")
-            mode = Arg[str]("mode", choices=["fast", "slow", "auto"])
-            name = Arg[str]("name", pattern=r"^[a-z_][a-z0-9_]*$")
-
-            def transform(self, batch):
-                # self.count, self.multiplier, etc. are available
-                # IDE knows: self.count is int, self.format is str
-                # Validation happens automatically on first access
-                ...
 
     Note:
         For named arguments (string position), the Python attribute name should
@@ -1047,14 +892,9 @@ class Arg[ArgT]:
         # Validate varargs constraints
         if varargs:
             if isinstance(position, str):
-                raise ValueError(
-                    "varargs=True requires a positional argument (int), not named"
-                )
+                raise ValueError("varargs=True requires a positional argument (int), not named")
             if default is not _MISSING:
-                raise ValueError(
-                    "varargs=True cannot have a default value "
-                    "(requires at least 1 value)"
-                )
+                raise ValueError("varargs=True cannot have a default value (requires at least 1 value)")
 
         self.position = position
         self.default = default
@@ -1102,9 +942,7 @@ class Arg[ArgT]:
     @overload
     def __get__(self, obj: object, objtype: type | None = None) -> ArgT: ...
 
-    def __get__(
-        self, obj: object | None, objtype: type | None = None
-    ) -> "Arg[ArgT] | ArgT":
+    def __get__(self, obj: object | None, objtype: type | None = None) -> "Arg[ArgT] | ArgT":
         """Get the argument value, parsing and caching on first access."""
         if obj is None:
             return self  # Class-level access returns descriptor
@@ -1136,11 +974,7 @@ class Arg[ArgT]:
 
         # Use _resolution_index if set (for const params with separate tracking)
         # Otherwise fall back to position
-        lookup_pos: int | str
-        if self._resolution_index is not None:
-            lookup_pos = self._resolution_index
-        else:
-            lookup_pos = self.position
+        lookup_pos: int | str = self._resolution_index if self._resolution_index is not None else self.position
 
         if self.varargs:
             # Collect all positional arguments from this position onwards
@@ -1422,16 +1256,6 @@ class Arg[ArgT]:
         Returns:
             Formatted error message prefixed with argument context.
 
-        Example:
-            col_arg = type(self).column  # Get the Arg descriptor
-            if not is_valid(self.column):
-                raise SchemaValidationError(
-                    col_arg.format_error("must be numeric")
-                )
-
-            # Output for positional: "Argument 'col1': must be numeric"
-            # Output for named:      "Argument 'column': must be numeric"
-
         """
         # Use the attribute name if available
         name = self._name or str(self.position)
@@ -1467,10 +1291,7 @@ class Arg[ArgT]:
         if not any(predicate(field_type) for predicate in predicates):
             predicate_names = [getattr(p, "__name__", str(p)) for p in predicates]
             raise SchemaValidationError(
-                self.format_error(
-                    f"column type {field_type} does not match any of: "
-                    f"{', '.join(predicate_names)}"
-                )
+                self.format_error(f"column type {field_type} does not match any of: {', '.join(predicate_names)}")
             )
 
     def __repr__(self) -> str:
@@ -1520,8 +1341,9 @@ class Arg[ArgT]:
 # for native mypy support without # type: ignore comments.
 #
 # Example:
+#     @classmethod
 #     def compute(
-#         self,
+#         cls,
 #         column: Annotated[pa.Array, Param(pa.int64(), "Input column")],
 #         factor: Annotated[int, ConstParam("Multiplication factor")],
 #     ) -> Annotated[pa.Array, Returns(pa.int64())]:
@@ -1538,15 +1360,12 @@ class Param:
     argument validation.
 
     For ScalarFunction compute() methods, position is inferred from parameter order.
-    For PolarsScalarFunction class-level attributes, specify position explicitly.
 
     Args:
         position: Explicit column position (for class-level attributes).
             None means position is inferred from method signature order.
-        arrow_type: The Arrow data type, Polars data type, Python type
+        arrow_type: The Arrow data type, Python type
             (int/str/float/bool/bytes), or None for AnyArrow (accepts any type).
-            Polars types (pl.Utf8, pl.Int64, etc.) are automatically converted
-            to Arrow types internally.
         doc: Documentation string describing this parameter.
         type_bound: Type predicate(s) for validating input column types.
             Only meaningful when arrow_type is None (AnyArrow).
@@ -1555,24 +1374,19 @@ class Param:
 
     Example (ScalarFunction compute() - position inferred):
         class AddColumns(ScalarFunction):
+            @classmethod
             def compute(
-                self,
+                cls,
                 left: Annotated[pa.Array, Param(pa.int64(), "First value")],
                 right: Annotated[pa.Array, Param(pa.int64(), "Second value")],
             ) -> Annotated[pa.Array, Returns(pa.int64())]:
                 return pc.add(left, right)
 
-    Example (PolarsScalarFunction class-level - explicit position):
-        class UpperCase(PolarsScalarFunction):
-            text: Annotated[pl.Utf8, Param(position=0, doc="String to uppercase")]
-
-            def compute_polars(self) -> pl.Expr:
-                return pl.col("text").str.to_uppercase()
-
     Example (AnyArrow with type_bound):
         class Double(ScalarFunction):
+            @classmethod
             def compute(
-                self,
+                cls,
                 value: Annotated[pa.Array, Param(doc="Numeric value",
                                                   type_bound=pa.types.is_numeric)],
             ) -> Annotated[pa.Array, Returns()]:
@@ -1581,12 +1395,10 @@ class Param:
     """
 
     # Keep arrow_type first for backwards compatibility with Param(pa.int64(), "doc")
-    # Also accepts Polars types (pl.Utf8, pl.Int64, etc.) - detected at runtime
-    arrow_type: "pa.DataType | type | Any" = None
+    arrow_type: pa.DataType | type | None = None
     doc: str = ""
     type_bound: "TypeBoundPredicate | Sequence[TypeBoundPredicate] | None" = None
     varargs: bool = False
-    # position is keyword-only for class-level attributes (PolarsScalarFunction)
     position: int | None = None
 
 
@@ -1602,34 +1414,145 @@ class ConstParam:
         doc: Documentation string describing this parameter.
         arrow_type: Optional explicit Arrow type. If not provided, type is
             inferred from the Annotated first argument.
-        position: Position in the argument list (required for PolarsScalarFunction,
-            optional for ScalarFunction where position is inferred from signature).
-
-    Example:
-        class FormatNumber(ScalarFunction):
-            def compute(
-                self,
-                value: Annotated[pa.Array, Param(pa.float64(), "Number to format")],
-                precision: Annotated[int, ConstParam("Decimal places")],
-            ) -> Annotated[pa.Array, Returns(pa.string())]:
-                # precision is an int, not an array
-                fmt = f"%.{precision}f"
-                return pa.array([fmt % v for v in value.to_pylist()])
-
-    Example for PolarsScalarFunction:
-        class Multiply(PolarsScalarFunction):
-            value: Annotated[pl.Float64, Param(position=0, doc="Value to multiply")]
-            factor: Annotated[float, ConstParam("Factor", position=0)]
-
-            def compute_polars(self) -> pl.Expr:
-                return pl.col("value") * self.factor
+        position: Position in the argument list
+            (optional for ScalarFunction where position is inferred from signature).
 
     """
 
     doc: str = ""
     arrow_type: pa.DataType | type | None = None
-    # Position in the argument list (for PolarsScalarFunction class-level attributes)
+    # Position in the argument list
     position: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Setting:
+    """Metadata for settings parameter in compute().
+
+    Use with Annotated to declare parameters that receive setting values
+    from the DuckDB session. Settings are string key-value pairs.
+
+    Args:
+        key: The setting key name. If not provided, uses the parameter name.
+
+    """
+
+    key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Secret:
+    """Metadata for secrets parameter in compute().
+
+    Use with Annotated to declare parameters that receive secret values
+    from the DuckDB session. Secrets are sensitive string key-value pairs.
+
+    Args:
+        key: The secret key name. If not provided, uses the parameter name.
+
+    """
+
+    key: str | None = None
+
+
+def _extract_setting_secret_params(
+    method: Any,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Extract Setting/Secret annotations from a method signature.
+
+    Parses the method's type hints to find parameters annotated with
+    Setting() or Secret(), returning mappings from parameter name to key.
+
+    Handles ``from __future__ import annotations`` (string annotations)
+    using an eval-with-namespace fallback.
+
+    Args:
+        method: The method to inspect (e.g., compute, on_bind).
+
+    Returns:
+        Tuple of (setting_params, secret_params) dicts mapping
+        ``param_name -> key``.
+
+    """
+    import contextlib
+    import inspect
+    from typing import get_type_hints
+
+    sig = inspect.signature(method)
+
+    # Try to get type hints (handles PEP 563 string annotations)
+    hints: dict[str, Any] = {}
+    with contextlib.suppress(Exception):
+        hints = get_type_hints(method, include_extras=True)
+
+    # Fallback for `from __future__ import annotations`
+    if not hints:
+        import pyarrow as pa
+
+        raw_annotations = getattr(method, "__annotations__", {})
+        from typing import Annotated
+
+        # Create a mock pa module with subscriptable Scalar for eval
+        # (pa.Scalar[Any] isn't subscriptable in PyArrow at runtime)
+        class _MockScalar:
+            def __class_getitem__(cls, _item: Any) -> Any:
+                return Any
+
+        class _MockPa:
+            Scalar = _MockScalar
+
+            def __getattr__(self, attr_name: str) -> Any:
+                return getattr(pa, attr_name)
+
+        eval_namespace = {
+            **getattr(method, "__globals__", {}),
+            "Annotated": Annotated,
+            "Setting": Setting,
+            "Secret": Secret,
+            "pa": _MockPa(),
+        }
+        for name, annotation in raw_annotations.items():
+            if isinstance(annotation, str):
+                with contextlib.suppress(Exception):
+                    hints[name] = eval(annotation, eval_namespace)  # noqa: S307
+            else:
+                hints[name] = annotation
+
+    setting_params: dict[str, str] = {}
+    secret_params: dict[str, str] = {}
+
+    for name in sig.parameters:
+        if name in ("self", "cls"):
+            continue
+
+        hint = hints.get(name)
+        if hint is None or not hasattr(hint, "__metadata__"):
+            continue
+
+        for meta in hint.__metadata__:
+            if isinstance(meta, Setting):
+                setting_key = meta.key if meta.key is not None else name
+                setting_params[name] = setting_key
+                break
+            if isinstance(meta, Secret):
+                secret_key = meta.key if meta.key is not None else name
+                secret_params[name] = secret_key
+                break
+
+    return setting_params, secret_params
+
+
+@dataclass(frozen=True, slots=True)
+class OutputLength:
+    """Metadata for output length parameter in compute().
+
+    Use with Annotated to declare a parameter that receives the number of rows
+    in the input batch. This is useful for scalar functions that don't take
+    any column arguments but need to know how many output values to produce.
+
+    """
+
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -1642,26 +1565,6 @@ class Returns:
     Args:
         arrow_type: The Arrow data type of the output, or None for AnyArrow
             (dynamic output type determined at bind time).
-
-    Example:
-        class DoubleValue(ScalarFunction):
-            def compute(
-                self,
-                value: Annotated[pa.Array, Param(pa.int64(), "Input value")],
-            ) -> Annotated[pa.Array, Returns(pa.int64())]:
-                return pc.multiply(value, 2)
-
-        # With AnyArrow for dynamic output type (use None or omit arrow_type):
-        class Identity(ScalarFunction):
-            @property
-            def output_type(self) -> pa.DataType:
-                return self.input_schema.field(0).type
-
-            def compute(
-                self,
-                value: Annotated[pa.Array, Param(doc="Value to pass through")],
-            ) -> Annotated[pa.Array, Returns()]:
-                return value
 
     """
 

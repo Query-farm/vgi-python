@@ -1,67 +1,61 @@
-"""Base classes for table functions with cardinality hints and generator support.
+"""Base classes for table functions with cardinality hints and callback-based processing.
 
-This module provides:
-- Output: Simple output container (batch only, no has_more)
-- OutputGenerator: Generator type alias for simple process() methods
-- OutputSpec: OutputSpec subclass with cardinality support
-- ProtocolOutput: Protocol-level output with optional log messages
-- SchemaValidationError: Exception for schema mismatches
-- TableCardinality: Row count estimates for query optimization
-- TableFunctionBase: Base class with cardinality, schema validation, and lifecycle
-- TableFunctionGenerator: Generator-based base class with simple run() loop
-
-Class Hierarchy:
-    Function (vgi.function)
-        └── TableFunctionBase
-                └── TableFunctionGenerator  (simple generator, no input via send)
-                └── TableInOutGenerator (full protocol with input batches)
-
-TableFunctionGenerator is useful for functions that don't need to receive
-input batches via yield - they just produce output batches in a loop until done.
-For functions that transform input batches, use TableInOutGenerator.
+TableFunctionGenerator produces output batches via a per-tick callback. Each call
+to process() either emits a batch via out.emit() or signals completion via out.finish().
 """
 
 from __future__ import annotations
 
-from collections.abc import Generator
-from dataclasses import dataclass
-from functools import cached_property
-from typing import TYPE_CHECKING, Any, Self, final
+import uuid
+from abc import abstractmethod
+from dataclasses import dataclass, is_dataclass
+from enum import Enum, auto
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    ClassVar,
+    TypeVar,
+    final,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 import pyarrow as pa
-import structlog
+from vgi_rpc import ArrowSerializableDataclass
+from vgi_rpc.rpc import OutputCollector
 
 import vgi.function
-import vgi.ipc_utils
-import vgi.log
-from vgi.output_complete import OutputComplete
+from vgi.arguments import Arg, Arguments, TableInput, _extract_setting_secret_params
+from vgi.function_storage import BoundStorage
+from vgi.invocation import (
+    BaseInitResponse,
+    BindResponse,
+    GlobalInitResponse,
+)
 
 if TYPE_CHECKING:
+    from vgi.protocol import BindRequest, InitRequest
     from vgi.table_filter_pushdown import PushdownFilters
-
-
-# Import debug logging from filter module (lazy to avoid circular imports)
-def _filter_log_debug(event: str, **kwargs: Any) -> None:
-    """Forward to filter pushdown debug logging."""
-    from vgi.table_filter_pushdown import _log_debug
-
-    _log_debug(event, **kwargs)
-
 
 __all__ = [
     "TableCardinality",
-    "TableFunctionInitInput",
-    "Output",
-    "OutputGenerator",
-    "OutputSpec",
-    "ProtocolOutput",
+    "BindParams",
+    "InitParams",
+    "ProcessParams",
     "TableFunctionBase",
     "TableFunctionGenerator",
+    "TableInOutFunctionInitPhase",
+    "init_single_worker",
+    "bind_fixed_schema",
+    "_struct_scalar_to_dict",
+    "_batch_to_secret_dict",
 ]
 
 
 @dataclass(frozen=True, slots=True)
-class TableCardinality:
+class TableCardinality(ArrowSerializableDataclass):
     """Cardinality hints for query optimization.
 
     Provides optional row count estimates that can help query planners make
@@ -71,183 +65,103 @@ class TableCardinality:
         estimate: Estimated number of output rows, or None if unknown.
         max: Maximum possible output rows, or None if unbounded.
 
-    Example:
-        # Function that filters ~10% of rows, with known input size
-        TableCardinality(estimate=1000, max=10000)
-
-        # Aggregation that always produces exactly one row
-        TableCardinality(estimate=1, max=1)
-
-        # Unknown output size
-        TableCardinality(estimate=None, max=None)
-
     """
 
     estimate: int | None
     max: int | None
 
 
-@dataclass(frozen=True, slots=True)
-class OutputSpec(vgi.function.OutputSpec):
-    """Extended bind result for table functions with cardinality information.
+def _batch_to_scalar_dict(batch: pa.RecordBatch | None) -> dict[str, pa.Scalar[Any]]:
+    """Extract a single-row RecordBatch into a dict of column-name to scalar value."""
+    if batch is None:
+        return {}
+    return {name: batch.column(i)[0] for i, name in enumerate(batch.schema.names)}
 
-    Extends OutputSpec with optional cardinality estimates that help query
-    planners optimize execution strategies.
 
-    Attributes:
-        cardinality: Optional row count estimates for query optimization.
-            None indicates no cardinality information is available.
+def _struct_scalar_to_dict(scalar: pa.StructScalar) -> dict[str, pa.Scalar[Any]]:
+    """Expand a struct scalar into a dict of field name to scalar."""
+    return {key: scalar[key] for key in scalar}
 
+
+def _batch_to_secret_dict(batch: pa.RecordBatch | None) -> dict[str, dict[str, pa.Scalar[Any]]]:
+    """Extract a single-row secrets RecordBatch into a dict of secret-name to expanded struct dict.
+
+    Each secret column is a struct scalar which is expanded into a dict of
+    field name to pa.Scalar.
+    """
+    if batch is None:
+        return {}
+    return {name: _struct_scalar_to_dict(batch.column(i)[0]) for i, name in enumerate(batch.schema.names)}
+
+
+def project_schema(projection_ids: list[int] | None, schema: pa.Schema) -> pa.Schema:
+    """Create the projected schema if projection_ids are supplied."""
+    if projection_ids is not None:
+        return pa.schema([schema.field(proj_id) for proj_id in projection_ids])
+    return schema
+
+
+class TableInOutFunctionInitPhase(Enum):
+    """Indicate the phase of the init call for TableInOutFunction.
+
+    There are two phases input and finalize.
     """
 
-    cardinality: TableCardinality | None = None
-
-    def serialize_schema(self) -> pa.Schema:
-        """Extend parent schema with cardinality fields."""
-        return (
-            super(OutputSpec, self)
-            .serialize_schema()
-            .append(pa.field("cardinality_estimated", pa.int64(), nullable=True))
-            .append(pa.field("cardinality_max", pa.int64(), nullable=True))
-        )
-
-    def serialize_dict(self) -> dict[str, Any]:
-        """Extend parent dict with cardinality values."""
-        return super(OutputSpec, self).serialize_dict() | {
-            "cardinality_estimated": (
-                self.cardinality.estimate if self.cardinality else None
-            ),
-            "cardinality_max": (self.cardinality.max if self.cardinality else None),
-        }
+    INPUT = auto()
+    FINALIZE = auto()
 
 
-@dataclass(frozen=True, slots=True)
-class Output:
-    """Output yielded by process().
+@dataclass(slots=True, frozen=True, kw_only=True)
+class BindParams[TArgs]:
+    """Parameters passed to on_bind()."""
 
-    Attributes:
-        batch: The output RecordBatch, or None to emit an empty batch.
-
-    Examples:
-        # Normal processing - emit one batch per input
-        yield Output(transformed_batch)
-
-        # For logging, yield Message directly (not via Output):
-        yield Message(Level.INFO, "Processing started")
-        yield Output(transformed_batch)
-
-    """
-
-    batch: pa.RecordBatch | None
+    args: TArgs
+    bind_call: BindRequest
+    # Convenient access to settings and secrets as dicts, extracted from the bind_call.
+    settings: dict[str, pa.Scalar[Any]]
+    secrets: dict[str, dict[str, pa.Scalar[Any]]]
 
 
-# Type alias for process() return type.
-# Receives: pa.RecordBatch in process()
-# Yields:
-#   - Output: Batch
-#   - Message: Log message
-OutputGenerator = Generator[vgi.log.Message | Output, None, None]
+@dataclass(slots=True, frozen=True, kw_only=True)
+class InitParams[TArgs]:
+    """Parameters passed to on_init()."""
+
+    args: TArgs
+    init_call: InitRequest
+
+    execution_id: bytes
+
+    # This is the projected schema based on projection_ids,
+    # which is what the function should produce.
+    output_schema: pa.Schema
+
+    # Convenient access to settings and secrets as dicts, extracted from the bind_call.
+    settings: dict[str, pa.Scalar[Any]]
+    secrets: dict[str, dict[str, pa.Scalar[Any]]]
+
+    storage: BoundStorage
 
 
-@dataclass(frozen=True, slots=True)
-class ProtocolOutput:
-    """Output yielded by the generator after each send().
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ProcessParams[TArgs]:
+    """Parameters passed to process() and finalize()."""
 
-    Attributes:
-        batch: The output RecordBatch. None batches are replaced with empty batches.
-        log_message: Optional log or error message associated with this output.
+    args: TArgs
+    init_call: InitRequest
+    init_response: BaseInitResponse
 
-    """
+    # This is the projected schema based on projection_ids,
+    # which is what the function should produce.
+    output_schema: pa.Schema
 
-    batch: pa.RecordBatch | None
-    log_message: vgi.log.Message | None = None
+    # Convenient access to settings and secrets as dicts, extracted from the bind_call.
+    settings: dict[str, pa.Scalar[Any]]
+    secrets: dict[str, dict[str, pa.Scalar[Any]]]
 
-    def metadata(self, invocation: vgi.invocation.Invocation) -> pa.KeyValueMetadata:
-        """Create metadata for this output based on the status.
-
-        Args:
-            invocation: The Invocation for this function invocation, passed through
-                to Message.add_to_metadata() for correlation information.
-
-        Returns:
-            KeyValueMetadata containing protocol state, status and optional log
-            message fields.
-
-        """
-        # Start with protocol state (required for VGI protocol)
-        protocol_key = vgi.ipc_utils.PROTOCOL_STATE_KEY
-        protocol_state = vgi.ipc_utils.ProtocolState.OUTPUT.encode()
-        metadata_dict: dict[bytes, bytes] = {protocol_key: protocol_state}
-
-        # Add log message metadata if present
-        if self.log_message is not None:
-            for k, v in self.log_message.add_to_metadata(invocation, {}).items():
-                metadata_dict[k.encode()] = v.encode()
-
-        return pa.KeyValueMetadata(metadata_dict)
-
-    @classmethod
-    def from_process_result(cls, process_result: OutputComplete) -> ProtocolOutput:
-        """Create a ProtocolOutput from an Output and status.
-
-        Args:
-            process_result: The result from process() or finalize().
-
-        """
-        return cls(
-            batch=process_result.batch,
-            log_message=process_result.log_message,
-        )
+    storage: BoundStorage
 
 
-@dataclass(frozen=True, slots=True)
-class TableFunctionInitInput(vgi.function.FunctionInitInput):
-    """Input sent to initialize global state for a TableFunction.
-
-    Inherits traceparent and tracestate from FunctionInitInput.
-
-    Attributes:
-        projection_ids: Optional list of column indices to project, or None for all.
-        pushdown_filters: Optional byte string containing filter predicates to push
-            down to the function, or None if no filter pushdown.
-
-    Note:
-        For parallel execution, functions should use the work queue pattern
-        via enqueue_work() and dequeue_work() methods on the Function base class
-        instead of static partitioning.
-
-    """
-
-    projection_ids: list[int] | None = None
-    pushdown_filters: bytes | None = None
-
-    @classmethod
-    def _schema_fields(cls) -> list[pa.Field[Any]]:
-        """Return Arrow schema fields for this class only."""
-        return [
-            pa.field("projection_ids", pa.list_(pa.int32()), nullable=True),
-            pa.field("pushdown_filters", pa.binary(), nullable=True),
-        ]
-
-    def _to_dict(self) -> dict[str, Any]:
-        """Return dict of this class's own field values."""
-        return {
-            "projection_ids": self.projection_ids,
-            "pushdown_filters": self.pushdown_filters,
-        }
-
-    @classmethod
-    def _from_values(cls, values: dict[str, Any]) -> Self:
-        """Create instance from dict, including parent fields."""
-        return cls(
-            traceparent=values.get("traceparent"),
-            tracestate=values.get("tracestate"),
-            projection_ids=values.get("projection_ids"),
-            pushdown_filters=values.get("pushdown_filters"),
-        )
-
-
-class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
+class TableFunctionBase[TArgs](vgi.function.Function):
     """Base class for table functions with cardinality and schema validation.
 
     Extends Function with:
@@ -258,38 +172,181 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
     - TableFunctionGenerator: For simple generators that produce output
     - TableInOutGenerator: For functions that transform input batches
 
-    Attributes:
-        init_input: TableFunctionInitInput with projection info (set after init)
-        empty_output_batch: Cached empty batch conforming to output_schema
-
     See Also:
         TableFunctionGenerator: Simple generator base class
         TableInOutGenerator: Full streaming with input batches
 
     """
 
-    # InitInputType inferred from generic parameter Function[TableFunctionInitInput]
-    init_input: TableFunctionInitInput | None = None
+    FunctionArguments: ClassVar[type]
+    _setting_params: ClassVar[dict[str, str]]
+    _secret_params: ClassVar[dict[str, str]]
 
-    def __init__(
-        self,
-        *,
-        invocation: vgi.invocation.Invocation,
-        logger: structlog.stdlib.BoundLogger,
-    ):
-        """Initialize the table function with call data.
+    def __init_subclass__(cls) -> None:
+        """Validate FunctionArguments, auto-extracting from generic parameter if needed."""
+        super().__init_subclass__()
+
+        # Auto-extract FunctionArguments from generic type parameter if not explicitly set.
+        # e.g., class MyFunc(TableFunctionGenerator[MyArgs]) -> cls.FunctionArguments = MyArgs
+        if not hasattr(cls, "FunctionArguments"):
+            for base in cls.__dict__.get("__orig_bases__", ()):
+                origin = get_origin(base)
+                if origin is not None and issubclass(origin, TableFunctionBase):
+                    type_args = get_args(base)
+                    if type_args and not isinstance(type_args[0], TypeVar):
+                        cls.FunctionArguments = type_args[0]
+                        break
+
+        # Skip validation for abstract base classes
+        is_abstract = any(getattr(getattr(cls, name, None), "__isabstractmethod__", False) for name in dir(cls))
+        if is_abstract:
+            cls._setting_params = {}
+            cls._secret_params = {}
+            return
+
+        # Skip intermediate base classes that still have unresolved type parameters
+        if not hasattr(cls, "FunctionArguments"):
+            has_unresolved = False
+            for base in cls.__dict__.get("__orig_bases__", ()):
+                type_args = get_args(base)
+                if type_args and isinstance(type_args[0], TypeVar):
+                    has_unresolved = True
+                    break
+            if has_unresolved:
+                cls._setting_params = {}
+                cls._secret_params = {}
+                return
+
+        if not hasattr(cls, "FunctionArguments"):
+            # Provide a default empty FunctionArguments for classes that use
+            # class-level Arg descriptors (e.g., TableInOutFunction subclasses
+            # without type parameters). This preserves backward compatibility.
+            from dataclasses import make_dataclass
+
+            cls.FunctionArguments = make_dataclass(f"_{cls.__name__}Args", [])
+        else:
+            args_class = cls.FunctionArguments
+
+            # Validate FunctionArguments is a dataclass
+            if not is_dataclass(args_class):
+                raise TypeError(
+                    f"{cls.__name__}.FunctionArguments must be a dataclass. "
+                    f"Add @dataclass decorator to {args_class.__name__}"
+                )
+
+            # Validate all fields are Annotated with Arg
+            hints = get_type_hints(args_class, include_extras=True)
+            for field_name, hint in hints.items():
+                if get_origin(hint) is not Annotated:
+                    raise TypeError(
+                        f"{cls.__name__}.FunctionArguments.{field_name} must use Annotated[T, Arg(...)], got {hint}"
+                    )
+
+                # Check that Arg is in the metadata
+                metadata = get_args(hint)[1:]
+                has_arg = any(isinstance(meta, Arg) for meta in metadata)
+                if not has_arg:
+                    raise TypeError(
+                        f"{cls.__name__}.FunctionArguments.{field_name} must have Arg(...) in Annotated metadata"
+                    )
+
+        # Parse on_bind() signature for Setting/Secret annotations
+        on_bind_method = getattr(cls, "on_bind", None)
+        if on_bind_method is not None and "on_bind" in cls.__dict__:
+            cls._setting_params, cls._secret_params = _extract_setting_secret_params(on_bind_method)
+        else:
+            cls._setting_params = getattr(cls, "_setting_params", {})
+            cls._secret_params = getattr(cls, "_secret_params", {})
+
+    @final
+    @staticmethod
+    def _parse_arguments(args_class: type[TArgs], arguments: Arguments) -> TArgs:
+        """Convert Arguments to typed FunctionArguments instance."""
+        hints = get_type_hints(args_class, include_extras=True)
+        kwargs: dict[str, Any] = {}
+
+        for attr_name, hint in hints.items():
+            if get_origin(hint) is not Annotated:
+                continue
+            # Check if this is a TableInput parameter (sentinel, no real data)
+            base_type = get_args(hint)[0]
+            if base_type is TableInput:
+                kwargs[attr_name] = TableInput()
+                continue
+            for meta in get_args(hint)[1:]:
+                if isinstance(meta, Arg):
+                    if meta.varargs:
+                        # Varargs: collect remaining positional args as raw pa.Scalar objects
+                        assert isinstance(meta.position, int)
+                        kwargs[attr_name] = tuple(arguments.positional[meta.position :])
+                    else:
+                        kwargs[attr_name] = arguments.get(meta.position, default=meta.default)
+                    break
+
+        return args_class(**kwargs)
+
+    @final
+    @staticmethod
+    def _validate_arg_type_bounds(
+        args_class: type,
+        args: Any,
+        input_schema: pa.Schema,
+    ) -> None:
+        """Validate type bounds for Arg parameters against the input schema.
+
+        Walks the FunctionArguments type hints to find Arg instances with
+        type_bound set. For each, gets the resolved column name from the
+        args dataclass and validates the column's Arrow type against the bound.
 
         Args:
-            invocation: Complete invocation request including function name,
-                arguments, and input schema.
-            logger: Logger instance for structured logging.
+            args_class: The FunctionArguments class with Annotated type hints.
+            args: The resolved FunctionArguments dataclass instance.
+            input_schema: The input schema to validate column types against.
 
         """
-        super().__init__(invocation=invocation, logger=logger)
+        hints = get_type_hints(args_class, include_extras=True)
+        for attr_name, hint in hints.items():
+            if get_origin(hint) is not Annotated:
+                continue
+            for meta in get_args(hint)[1:]:
+                if isinstance(meta, Arg) and meta.type_bound is not None:
+                    value = getattr(args, attr_name)
+                    if isinstance(value, tuple):
+                        for col_name in value:
+                            if isinstance(col_name, str):
+                                meta.validate_type_bound(input_schema.field(col_name).type)
+                    elif isinstance(value, str):
+                        meta.validate_type_bound(input_schema.field(value).type)
+                    break
 
-    @property
-    def cardinality(self) -> TableCardinality | None:
-        """Optional cardinality estimate for the output.
+    @classmethod
+    def _extract_bind_kwargs(cls, input: BindRequest) -> dict[str, Any]:
+        """Extract Setting/Secret kwargs from a BindRequest for on_bind().
+
+        Returns dict of keyword arguments matching Setting/Secret annotations
+        on the on_bind() method.
+        """
+        kwargs: dict[str, Any] = {}
+
+        # Setting params: extract pa.Scalar from settings RecordBatch
+        if input.settings is not None and cls._setting_params:
+            settings_schema = input.settings.schema
+            for name, setting_key in cls._setting_params.items():
+                col_idx = settings_schema.get_field_index(setting_key)
+                kwargs[name] = input.settings.column(col_idx)[0] if col_idx >= 0 else None
+
+        # Secret params: extract dict[str, pa.Scalar] from secrets RecordBatch
+        if input.secrets is not None and cls._secret_params:
+            secrets_schema = input.secrets.schema
+            for name, secret_key in cls._secret_params.items():
+                col_idx = secrets_schema.get_field_index(secret_key)
+                kwargs[name] = _struct_scalar_to_dict(input.secrets.column(col_idx)[0]) if col_idx >= 0 else None
+
+        return kwargs
+
+    @classmethod
+    def cardinality(cls, params: BindParams[TArgs]) -> TableCardinality | None:
+        """Return the cardinality for the output.
 
         Override to provide row count estimates that help query planners
         make better decisions about join ordering and memory allocation.
@@ -300,26 +357,8 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
         """
         return None
 
-    def apply_projection(self, schema: pa.Schema) -> pa.Schema:
-        """Apply any projection specified in the init data to the schema.
-
-        Args:
-            schema: Original output schema before projection.
-
-        Returns:
-            Projected schema according to init data, or original if no projection.
-
-        """
-        if self.init_input and self.init_input.projection_ids is not None:
-            projected_fields = []
-            for proj_id in self.init_input.projection_ids:
-                field = schema.field(proj_id)
-                projected_fields.append(field)
-            return pa.schema(projected_fields)
-        return schema
-
-    @cached_property
-    def pushdown_filters(self) -> PushdownFilters | None:
+    @staticmethod
+    def pushdown_filters(pushdown_filters: pa.RecordBatch) -> PushdownFilters | None:
         """Get deserialized pushdown filters, or None if not present.
 
         Use this property to access the filter AST for:
@@ -333,249 +372,222 @@ class TableFunctionBase(vgi.function.Function[TableFunctionInitInput]):
             PushdownFilters container with parsed filter AST, or None.
 
         """
-        if self.init_input is None or self.init_input.pushdown_filters is None:
-            _filter_log_debug(
-                "pushdown_filters_none",
-                function=self.__class__.__name__,
-                reason="no init_input or no pushdown_filters bytes",
-            )
+        if pushdown_filters is None:
             return None
         from vgi.table_filter_pushdown import deserialize_filters
 
-        _filter_log_debug(
-            "pushdown_filters_deserialize",
-            function=self.__class__.__name__,
-            bytes_size=len(self.init_input.pushdown_filters),
-        )
-        filters = deserialize_filters(self.init_input.pushdown_filters)
-        _filter_log_debug(
-            "pushdown_filters_ready",
-            function=self.__class__.__name__,
-            num_filters=len(filters),
-            filter_summary=[repr(f) for f in filters],
-        )
-        return filters
+        return deserialize_filters(pushdown_filters)
 
-    def _should_auto_apply_filters(self) -> bool:
+    @classmethod
+    def _should_auto_apply_filters(cls) -> bool:
         """Check if auto_apply_filters is enabled in Meta."""
-        meta = getattr(self, "Meta", None)
+        meta = getattr(cls, "Meta", None)
         return bool(getattr(meta, "auto_apply_filters", False))
 
-    def _apply_pushdown_filter(
-        self, batch: pa.RecordBatch | None
-    ) -> pa.RecordBatch | None:
+    @staticmethod
+    def _apply_pushdown_filter(batch: pa.RecordBatch, pushdown_filters: PushdownFilters | None) -> pa.RecordBatch:
         """Apply pushdown filters to a batch if present.
 
         Args:
-            batch: RecordBatch to filter, or None.
+            batch: RecordBatch to filter
+            pushdown_filters: The PushdownFilters to apply or None.
 
         Returns:
             Filtered batch, or original if no filters or batch is None/empty.
 
         """
-        if batch is None or batch.num_rows == 0:
-            _filter_log_debug(
-                "auto_apply_skip",
-                function=self.__class__.__name__,
-                reason="batch is None or empty",
-                batch_rows=batch.num_rows if batch else 0,
-            )
+        if batch.num_rows == 0:
             return batch
-        if self.pushdown_filters:
-            _filter_log_debug(
-                "auto_apply_start",
-                function=self.__class__.__name__,
-                input_rows=batch.num_rows,
-            )
-            result = self.pushdown_filters.apply(batch)
-            _filter_log_debug(
-                "auto_apply_complete",
-                function=self.__class__.__name__,
-                input_rows=batch.num_rows,
-                output_rows=result.num_rows,
-                rows_removed=batch.num_rows - result.num_rows,
-            )
+        if pushdown_filters:
+            result = pushdown_filters.apply(batch)
             return result
         return batch
 
 
-class TableFunctionGenerator(TableFunctionBase):
-    """Generator-based table function with simple run() lifecycle.
+class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
+    """Callback-based table function that produces output batches.
 
-    This base class provides a simplified generator protocol where the process()
-    method yields Output objects without receiving input batches via send().
-    The run() method handles the SETUP -> DATA -> TEARDOWN lifecycle.
+    Each call to process() should either:
+    - Emit a batch via out.emit(batch)
+    - Signal completion via out.finish()
 
-    Use this class for functions that:
-    - Generate output without transforming input batches
-    - Produce a fixed sequence of output batches
-    - Don't need the full DATA/FINALIZE protocol
+    Use TState to persist state between process() calls.
 
     For functions that transform input batches, use TableInOutGenerator.
 
-    LIFECYCLE
-    ---------
-    1. SETUP: setup() is called for resource acquisition
-    2. DATA: process() generator yields Output objects via send(None)
-    3. TEARDOWN: teardown() is called for cleanup (always, even on error)
-
-    METHODS TO OVERRIDE
-    -------------------
-    process() -> OutputGenerator
-        Generator that yields Output objects. Each yield produces one output
-        batch. The generator receives None via send() (no input batches).
-        Default: empty generator (no output)
-
-    output_schema -> pa.Schema (property)
-        Must be implemented by subclasses.
-
-    setup() -> None
-        Optional: Acquire resources before processing.
-
-    teardown() -> None
-        Optional: Release resources after processing.
-
-    Example:
-        class CountFunction(TableFunctionGenerator):
-            @property
-            def output_schema(self) -> pa.Schema:
-                return pa.schema([("n", pa.int64())])
-
-            def process(self) -> OutputGenerator:
-                for i in range(10):
-                    yield Output(pa.RecordBatch.from_pydict(
-                        {"n": [i]}, schema=self.output_schema
-                    ))
-
     """
 
-    @final
-    def _process_and_validate(self, generator: OutputGenerator) -> OutputComplete:
-        """Process a batch and validate the output schema.
+    @classmethod
+    @abstractmethod
+    def on_bind(
+        cls,
+        params: BindParams[TArgs],
+    ) -> BindResponse:
+        """Produce the output schema and perform other bind time logic.
 
-        Converts the result of the generator to OutputComplete, and
-        validates the output schema.
+        Override to perform custom bind-time logic such as validating
+        arguments or computing a dynamic output type.
+
+        Subclasses may declare keyword-only parameters annotated with
+        ``Setting()`` or ``Secret()`` to receive values automatically::
+
+            @classmethod
+            def on_bind(cls, params, *, my_setting: Annotated[pa.Scalar, Setting()] = None):
+                ...
 
         Args:
-            generator: The user's process() or finalize() generator.
+            params: Bind parameters including arguments and schema.
 
         Returns:
-            OutputComplete with validated output batch.
-
-        Raises:
-            SchemaValidationError: If output batch schema doesn't match.
+            BindResponse with output_schema and optional opaque_data.
 
         """
-        result: OutputComplete = OutputComplete.from_process_result(
-            generator.send(None),
-            self.empty_output_batch,
+
+    @final
+    @classmethod
+    def bind(
+        cls,
+        input: BindRequest,
+    ) -> BindResponse:
+        """Bind protocol entry point. Do not override; use on_bind() instead.
+
+        Validates type bounds, constructs BindParameters, calls on_bind(),
+        and wraps the result for transmission to global_init.
+
+        """
+        params = BindParams[TArgs](
+            args=cls._parse_arguments(cls.FunctionArguments, input.arguments),
+            bind_call=input,
+            settings=_batch_to_scalar_dict(input.settings),
+            secrets=_batch_to_secret_dict(input.secrets),
         )
-        self._validate_output_schema(result.batch)
-        return result
 
-    @final
-    def _process_with_exception_handling(
-        self,
-        generator: OutputGenerator,
-    ) -> OutputComplete:
-        """Process a batch with exception handling.
+        return cls.on_bind(params, **cls._extract_bind_kwargs(input))
 
-        Wraps _process_and_validate to catch exceptions and convert them
-        to OutputComplete with an error log message.
+    @classmethod
+    def on_init(
+        cls,
+        params: InitParams[TArgs],
+    ) -> GlobalInitResponse:
+        """Initialize the function during the init API call.
 
-        Note: StopIteration is re-raised, not caught, since it signals
-        the generator is exhausted (not an error condition).
-        """
-        try:
-            return self._process_and_validate(generator)
-        except StopIteration:
-            raise
-        except Exception as e:
-            return self._create_error_output(e)
+        Override to perform one-time setup that should happen after bind
+        but before processing batches.
 
-    # _should_terminate inherited from Function
-
-    def process(self) -> OutputGenerator:
-        """Process batches during the DATA phase.
-
-        Yield Output or Message to control output and logging behavior.
-
-        Yield options:
-            Output: Batch
-            Message: Emit log message directly; current input will be re-sent.
-
-        When yielding Message directly, the framework sends an empty batch
-        with the log information in metadata.
+        Args:
+            params: Init parameters including arguments, schemas, and opaque data from
+                bind.
 
         Returns:
-            Generator yielding Output or Message objects.
+            GlobalInitResponse
 
         """
-        if False:
-            yield
+        return GlobalInitResponse()
 
     @final
-    def run(self) -> Generator[ProtocolOutput, None, None]:
-        """Run the function protocol. Do not override.
+    @classmethod
+    def global_init(cls, input: InitRequest) -> GlobalInitResponse:
+        """Global init protocol entry point. Do not override; use on_init() instead.
 
-        This generator implements the SETUP -> DATA -> TEARDOWN lifecycle:
+        Deserializes the wrapped bind data, calls on_init(), and
+        wraps the result for transmission to process().
 
-        1. SETUP: Calls setup() for resource acquisition.
-
-        2. DATA: Produces output batches via send(None). Continues
-           until the process() generator is exhausted.
-
-        3. TEARDOWN: Calls teardown() for resource cleanup (always, even on error).
         """
-        # Acquire resources before processing
-        self.setup()
+        execution_id = uuid.uuid4().bytes
+        params = InitParams[TArgs](
+            args=cls._parse_arguments(cls.FunctionArguments, input.bind_call.arguments),
+            init_call=input,
+            output_schema=project_schema(input.projection_ids, input.output_schema),
+            settings=_batch_to_scalar_dict(input.bind_call.settings),
+            secrets=_batch_to_secret_dict(input.bind_call.secrets),
+            execution_id=execution_id,
+            storage=BoundStorage(cls.storage, execution_id),
+        )
 
-        generator = self.process()
+        result = cls.on_init(params)
 
-        try:
-            sent_batch: bool = False
-            auto_apply = self._should_auto_apply_filters()
-            # DATA phase - iterate until generator is exhausted
-            while True:
-                try:
-                    result = self._process_with_exception_handling(generator)
-                    sent_batch = True
-                except StopIteration:
-                    if not sent_batch:
-                        # If no batches were sent, emit an empty batch to
-                        # signal completion, otherwise the client may
-                        # block indefinitely waiting for data.
-                        result = OutputComplete(
-                            batch=self.empty_output_batch, log_message=None
-                        )
-                        yield ProtocolOutput.from_process_result(result)
-                    break
+        return GlobalInitResponse(
+            max_workers=result.max_workers,
+            execution_id=execution_id,
+            opaque_data=result.opaque_data,
+        )
 
-                # Apply pushdown filters if enabled
-                if auto_apply and result.batch is not None:
-                    filtered = self._apply_pushdown_filter(result.batch)
-                    # _apply_pushdown_filter returns non-None when given non-None
-                    assert filtered is not None
-                    # Skip batches that became empty due to filtering (no log message)
-                    # to avoid DuckDB interpreting zero-row batch as end-of-data.
-                    # Only skip if filtering actually removed rows (input had rows).
-                    if (
-                        filtered.num_rows == 0
-                        and result.log_message is None
-                        and result.batch.num_rows > 0
-                    ):
-                        continue
-                    result = OutputComplete(
-                        batch=filtered, log_message=result.log_message
-                    )
+    @classmethod
+    def initial_state(cls, params: ProcessParams[TArgs]) -> TState | None:
+        """Create initial processing state. Override when TState is used.
 
-                yield ProtocolOutput.from_process_result(result)
-                if self._should_terminate(result):
-                    break
-        finally:
-            # Ensure the process generator is closed when run() is closed.
-            # This allows functions to catch GeneratorExit for cleanup (e.g.,
-            # saving state in distributed functions).
-            generator.close()
-            # Release resources after processing completes
-            self.teardown()
+        Called once during init to create the state object that will be
+        passed to process() on each tick.
+
+        Args:
+            params: Process parameters including arguments and schemas.
+
+        Returns:
+            Initial state, or None if no state is needed.
+
+        """
+        return None
+
+    @classmethod
+    @abstractmethod
+    def process(
+        cls,
+        params: ProcessParams[TArgs],
+        state: TState,
+        out: OutputCollector,
+    ) -> None:
+        """Produce output for one tick.
+
+        Called repeatedly by the framework. Each call should either:
+        - Call out.emit(batch) to produce one output batch
+        - Call out.finish() to signal that generation is complete
+
+        Use out.client_log(level, message) for in-band logging.
+
+        Args:
+            params: Process parameters including arguments and schemas.
+            state: Mutable state persisted between calls. None if TState not used.
+            out: OutputCollector for emitting batches, logging, and signaling finish.
+
+        """
+
+
+def init_single_worker[T: TableFunctionGenerator[Any, Any]](cls: type[T]) -> type[T]:
+    """Class decorator to set max_workers=1 for a TableFunctionGenerator subclass."""
+    if "on_init" not in cls.__dict__:
+
+        def on_init_impl(cls_: type[T], params: Any) -> GlobalInitResponse:
+            return GlobalInitResponse(max_workers=1)
+
+        cls.on_init = classmethod(on_init_impl)  # type: ignore[assignment]
+
+        # Clear 'on_init' from __abstractmethods__ — the metaclass set it
+        # before decorators ran, so we must update it manually.
+        if hasattr(cls, "__abstractmethods__") and "on_init" in cls.__abstractmethods__:
+            cls.__abstractmethods__ = cls.__abstractmethods__ - {"on_init"}
+
+    return cls
+
+
+def bind_fixed_schema[T: TableFunctionGenerator[Any, Any]](cls: type[T]) -> type[T]:
+    """Class decorator to return FIXED_SCHEMA from on_bind for a TableFunctionGenerator subclass."""
+    if "on_bind" not in cls.__dict__:  # only inject if subclass hasn't overridden
+        if not hasattr(cls, "FIXED_SCHEMA"):
+            raise ValueError(f"Class {cls.__name__} must define FIXED_SCHEMA to use @bind_fixed_schema")
+
+        def on_bind_impl(cls_: type[T], params: Any) -> BindResponse:
+            value = getattr(cls_, "FIXED_SCHEMA", None)
+
+            if value is None or not isinstance(value, pa.Schema):
+                raise TypeError(f"Class {cls_.__name__}.FIXED_SCHEMA must be a pyarrow.Schema")
+            return BindResponse(output_schema=value)
+
+        # assign as classmethod
+        cls.on_bind = classmethod(on_bind_impl)  # type: ignore[assignment]
+
+        # Clear 'on_bind' from __abstractmethods__ — the metaclass set it
+        # before decorators ran, so we must update it manually.
+        if hasattr(cls, "__abstractmethods__") and "on_bind" in cls.__abstractmethods__:
+            cls.__abstractmethods__ = cls.__abstractmethods__ - {"on_bind"}
+
+    return cls

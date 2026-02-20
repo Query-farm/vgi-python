@@ -1,20 +1,21 @@
 """VGI Worker base class for hosting user-defined functions and catalogs.
 
 A worker is a subprocess that communicates via stdin/stdout using Arrow IPC.
-Workers are spawned by Client for each function invocation.
+Workers are spawned by a client as needed and terminate once they detect their
+input stream has been closed.
 
 SUPPORTED FUNCTION TYPES
 ------------------------
 The worker supports three function types, dispatched based on class inheritance:
 
-1. ScalarFunctionGenerator: Transforms input batches to single-column output
-   with 1:1 row mapping. Use for per-row computations like add(), upper(), etc.
+1. ScalarFunction / ScalarFunctionGenerator: Transforms input batches to
+   single-column output with 1:1 row mapping. Use for per-row computations.
 
-2. TableInOutGenerator: Reads input batches, produces output batches.
-   Use for transforming, filtering, or aggregating input data.
+2. TableInOutFunction / TableInOutGenerator: Reads input batches, produces
+   output batches. Use for transforming, filtering, or aggregating input.
 
 3. TableFunctionGenerator: Generates output batches without reading input.
-   Use for data generation functions like sequence(), range(), random_sample().
+   Use for data generation functions like sequence(), range(), etc.
 
 QUICK START
 -----------
@@ -46,33 +47,9 @@ Create a worker by subclassing Worker and listing your functions:
 Function names are derived from metadata (Meta.name or class name converted to
 snake_case). No manual name mapping required.
 
-PROTOCOL FLOW (ScalarFunctionGenerator)
----------------------------------------
-1. Read Invocation: function name, arguments, input schema
-2. Write OutputSpec: output schema, max_processes, invocation_id
-3. Read/write FunctionInitInput/InitResult for initialization
-4. Stream: read input batches -> compute -> write single-column output batches
-   (ends when input exhausted, no FINALIZE phase)
-
-PROTOCOL FLOW (TableInOutGenerator)
--------------------------------------------
-1. Read Invocation: function name, arguments, input schema
-2. Write OutputSpec: output schema, max_processes, invocation_id
-3. Read/write TableFunctionInitInput/InitResult for initialization
-4. Stream: read input batches -> process -> write output batches
-5. Finalize: receive FINALIZE signal -> emit final results
-
-PROTOCOL FLOW (TableFunctionGenerator)
---------------------------------------
-1. Read Invocation: function name, arguments (no input schema)
-2. Write OutputSpec: output schema, max_processes, invocation_id
-3. Read/write TableFunctionInitInput/InitResult for initialization
-4. Generate: produce output batches until generator exhausted
-
 KEY CLASSES
 -----------
     Worker      - Base class to subclass (set functions attribute)
-    WorkerStats - Statistics about processing (batch_count, rows)
 
 See Also
 --------
@@ -82,47 +59,74 @@ vgi.examples.worker : Example worker with built-in functions
 
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
-from io import IOBase
-from typing import IO, Any, cast
+from typing import TYPE_CHECKING, Any, cast, final
 
 import pyarrow as pa
 import structlog
 import structlog.stdlib
-from pyarrow import ipc
+from vgi_rpc.rpc import RpcServer, Stream, serve_stdio
 
-from vgi import tracing
 from vgi.arguments import Arguments
-from vgi.catalog import CatalogInterface, get_catalog_method_schema
+from vgi.catalog import CatalogInterface
+from vgi.catalog.catalog_interface import (
+    AttachId,
+    CatalogAttachResult,
+    OnConflict,
+    SchemaObjectType,
+    SerializedSchema,
+    SqlExpression,
+    TransactionId,
+)
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
-from vgi.exceptions import SchemaValidationError
 from vgi.function import (
     Function,
-    OutputSpec,
 )
-from vgi.invocation import Invocation, InvocationType
-from vgi.ipc_utils import (
-    _IPC_DEBUG,
-    _IPC_STATS,
-    IPCError,
-    _get_ipc_log,
-    read_single_record_batch,
+from vgi.function_storage import BoundStorage
+from vgi.invocation import (
+    BindResponse,
+    GlobalInitResponse,
 )
-from vgi.scalar_function import ProtocolInput as ScalarProtocolInput
+from vgi.protocol import (
+    BindRequest,
+    CatalogAttachRequest,
+    CatalogCreateRequest,
+    CatalogsResponse,
+    CatalogVersionResponse,
+    FunctionsResponse,
+    InitRequest,
+    ProcessState,
+    ScalarExchangeState,
+    SchemasResponse,
+    TableCreateRequest,
+    TableInOutExchangeState,
+    TableInOutFinalizeState,
+    TableProducerState,
+    TablesResponse,
+    TransactionBeginResponse,
+    VgiProtocol,
+    ViewsResponse,
+)
 from vgi.scalar_function import ScalarFunctionGenerator
-from vgi.table_function import OutputSpec as TableFunctionOutputSpec
-from vgi.table_function import TableFunctionGenerator
+from vgi.table_function import (
+    ProcessParams,
+    TableFunctionGenerator,
+    TableInOutFunctionInitPhase,
+    _batch_to_scalar_dict,
+    _batch_to_secret_dict,
+    project_schema,
+)
 from vgi.table_in_out_function import (
-    ProtocolInput,
     TableInOutGenerator,
 )
 
-# Schema for bind-time error batches (zero rows with error metadata)
-_BIND_ERROR_SCHEMA = pa.schema([("_error", pa.null())])
+if TYPE_CHECKING:
+    from vgi.catalog.descriptors import Catalog
 
 
 def _format_arguments_for_error(args: Arguments) -> str:
@@ -169,10 +173,7 @@ def _format_arguments_for_error(args: Arguments) -> str:
 
     # Format named constant arguments
     if args.named:
-        named_strs = [
-            f"{name}: {format_scalar(scalar)}"
-            for name, scalar in sorted(args.named.items())
-        ]
+        named_strs = [f"{name}: {format_scalar(scalar)}" for name, scalar in sorted(args.named.items())]
         parts.append(f"named_args={{{', '.join(named_strs)}}}")
     else:
         parts.append("named_args={}")
@@ -180,70 +181,12 @@ def _format_arguments_for_error(args: Arguments) -> str:
     return ", ".join(parts)
 
 
-def _inject_trace_context(
-    batch: pa.RecordBatch, traceparent: str, tracestate: str | None
-) -> pa.RecordBatch:
-    """Inject trace context into an init batch.
-
-    Updates or adds traceparent/tracestate columns to propagate trace context
-    from primary worker to secondary workers.
-    """
-    columns = {name: batch.column(name) for name in batch.schema.names}
-    columns["traceparent"] = pa.array([traceparent], type=pa.string())
-    columns["tracestate"] = pa.array([tracestate], type=pa.string())
-
-    # Build new schema preserving field order, updating trace fields
-    fields = []
-    for field in batch.schema:
-        if field.name == "traceparent":
-            fields.append(pa.field("traceparent", pa.string()))
-        elif field.name == "tracestate":
-            fields.append(pa.field("tracestate", pa.string()))
-        else:
-            fields.append(field)
-
-    # Add trace fields if not already present
-    field_names = {f.name for f in fields}
-    if "traceparent" not in field_names:
-        fields.append(pa.field("traceparent", pa.string()))
-    if "tracestate" not in field_names:
-        fields.append(pa.field("tracestate", pa.string()))
-
-    new_schema = pa.schema(fields)
-    return pa.RecordBatch.from_pydict(columns, schema=new_schema)
-
-
-@dataclass(frozen=True, slots=True)
-class WorkerStats:
-    """Statistics about a worker's processing run.
-
-    Attributes:
-        batch_count: Number of data batches processed.
-        total_input_rows: Total number of input rows processed.
-        total_output_rows: Total number of output rows produced.
-        reader_num_messages: IPC messages read (from PyArrow stats).
-        reader_num_record_batches: Record batches read (from PyArrow stats).
-        writer_num_messages: IPC messages written (from PyArrow stats).
-        writer_num_record_batches: Record batches written (from PyArrow stats).
-
-    """
-
-    batch_count: int
-    total_input_rows: int
-    total_output_rows: int
-    reader_num_messages: int = 0
-    reader_num_record_batches: int = 0
-    writer_num_messages: int = 0
-    writer_num_record_batches: int = 0
-
-
 class Worker:
     """Base class for VGI workers that host user-defined functions.
 
     Subclass this and define a `functions` class attribute listing your function
     classes. Function names are derived from metadata (Meta.name or snake_case
-    of class name). The worker handles the VGI protocol: reading Invocation,
-    instantiating functions, and streaming batches.
+    of class name). The worker handles the VGI protocol via vgi_rpc.RpcServer.
 
     Multiple functions can share the same name if they have different argument
     signatures (function overloading). The worker will select the appropriate
@@ -259,22 +202,47 @@ class Worker:
         subclass. To disable the catalog entirely, set `catalog_interface = None`
         and `catalog_name = None`.
 
-    Example:
-        class MyWorker(Worker):
-            functions = [EchoFunction, TransformFunction]
-
-        if __name__ == "__main__":
-            MyWorker().run()
-
     """
 
-    functions: Sequence[type[Function[Any]]] = []
+    functions: Sequence[type[Function]] = []
     catalog_interface: type[CatalogInterface] | None = None
     catalog_name: str | None = "functions"  # Set to None to disable default catalog
-    catalog: Any = None  # Optional Catalog object for declarative definition
-    _registry: dict[str, list[type[Function[Any]]]] | None = None
+    catalog: Catalog | None = None
+    _registry: dict[str, list[type[Function]]] | None = None
     _default_catalog_interface: type[CatalogInterface] | None = None
     _setting_specs: list[SettingSpec] = []  # Extracted from Settings inner class
+
+    @final
+    @staticmethod
+    def _validate_required_settings(func_cls: type[Function], request: BindRequest) -> None:
+        """Validate required settings for a bind request."""
+        meta = func_cls.get_metadata()
+        if not meta.required_settings:
+            return
+
+        settings: set[str] = set()
+        if request.settings is not None and request.settings.schema is not None:
+            settings = set(list(request.settings.schema.names))
+
+        missing = [s for s in meta.required_settings if s not in settings]
+        if missing:
+            raise ValueError(f"Function '{request.function_name}' requires settings: {missing}")
+
+    @final
+    @staticmethod
+    def _validate_required_secrets(func_cls: type[Function], request: BindRequest) -> None:
+        """Validate required secrets for a bind request."""
+        meta = func_cls.get_metadata()
+        if not meta.required_secrets:
+            return
+
+        secrets: set[str] = set()
+        if request.secrets is not None and request.secrets.schema is not None:
+            secrets = set(list(request.secrets.schema.names))
+
+        missing = [s for s in meta.required_secrets if s not in secrets]
+        if missing:
+            raise ValueError(f"Function '{request.function_name}' requires secrets: {missing}")
 
     def table_scan_function_get(
         self,
@@ -327,7 +295,7 @@ class Worker:
             cls._setting_specs = []
 
     @classmethod
-    def _build_registry(cls) -> dict[str, list[type[Function[Any]]]]:
+    def _build_registry(cls) -> dict[str, list[type[Function]]]:
         """Build function name -> list of classes mapping from functions list.
 
         Multiple functions can share the same name if they have different
@@ -340,9 +308,9 @@ class Worker:
         if cls._registry is not None:
             return cls._registry
 
-        registry: dict[str, list[type[Function[Any]]]] = {}
+        registry: dict[str, list[type[Function]]] = {}
 
-        def add_function(func_cls: type[Function[Any]]) -> None:
+        def add_function(func_cls: type[Function]) -> None:
             meta = func_cls.get_metadata()
             if meta.name not in registry:
                 registry[meta.name] = []
@@ -397,6 +365,7 @@ class Worker:
 
             if has_catalog:
                 # New pattern: use Catalog object
+                assert catalog_obj is not None
                 attrs["catalog"] = catalog_obj
                 attrs["catalog_name"] = catalog_obj.name
             else:
@@ -423,6 +392,7 @@ class Worker:
 
         return cls._default_catalog_interface
 
+    @final
     @classmethod
     def create_argument_parser(cls) -> argparse.ArgumentParser:
         """Create an argument parser with standard worker options.
@@ -432,16 +402,6 @@ class Worker:
 
         The parser includes:
             --quiet, -q: Suppress startup logging output
-
-        Example:
-            class MyWorker(Worker):
-                functions = [MyFunction]
-
-            if __name__ == "__main__":
-                parser = MyWorker.create_argument_parser()
-                parser.add_argument("--config", help="Config file path")
-                args = parser.parse_args()
-                MyWorker(quiet=args.quiet).run()
 
         Returns:
             Configured ArgumentParser instance.
@@ -460,17 +420,24 @@ class Worker:
         return parser
 
     @staticmethod
-    def _match_function(
-        invocation: Invocation,
-        candidates: Sequence[type[Function[Any]]],
-    ) -> type[Function[Any]]:
+    def _match_function_arguments(
+        *,
+        function_name: str,
+        arguments: Arguments,
+        input_schema: pa.Schema | None,
+        candidates: Sequence[type[Function]],
+    ) -> type[Function]:
         """Find the function that matches the invocation's arguments.
 
-        Compares the invocation's positional and named arguments against each
-        candidate function's parameter metadata to find a match.
+        Compares the positional and named arguments against each
+        the candidate functions' arguments to find a match.  This is
+        useful if a function can take different list of arguments or
+        argument types.
 
         Args:
-            invocation: The invocation with arguments to match.
+            function_name: The name of the candidate function
+            arguments: The arguments that were used to call the function
+            input_schema: The input_schema that is passed to the function,
             candidates: Sequence of function classes with the same name.
 
         Returns:
@@ -480,11 +447,11 @@ class Worker:
             ValueError: If no function matches or multiple functions match.
 
         """
-        args = invocation.arguments
+        args = arguments
         num_positional = len(args.positional)
         named_keys = set(args.named.keys()) if args.named else set()
 
-        matches: list[type[Function[Any]]] = []
+        matches: list[type[Function]] = []
 
         for func_cls in candidates:
             meta = func_cls.get_metadata()
@@ -496,11 +463,7 @@ class Worker:
             is_scalar = issubclass(func_cls, ScalarFunctionGenerator)
 
             # Split parameters into positional and named (excluding TableInput)
-            positional_params = [
-                p
-                for p in meta.parameters
-                if isinstance(p.position, int) and not p.is_table_input
-            ]
+            positional_params = [p for p in meta.parameters if isinstance(p.position, int) and not p.is_table_input]
             named_params = [p for p in meta.parameters if isinstance(p.position, str)]
 
             # Check positional arguments
@@ -579,65 +542,27 @@ class Worker:
                 meta = func_cls.get_metadata()
                 params = [p for p in meta.parameters if not p.is_table_input]
                 param_str = ", ".join(
-                    f"{p.name}: {p.type_name or '?'}"
-                    + ("" if p.required else f" = {p.default}")
-                    for p in params
+                    f"{p.name}: {p.type_name or '?'}" + ("" if p.required else f" = {p.default}") for p in params
                 )
                 param_summaries.append(f"  {func_cls.__name__}({param_str})")
 
             # Format input schema for scalar functions
             input_schema_str = ""
-            if invocation.input_schema is not None:
-                cols = [f"{f.name}: {f.type}" for f in invocation.input_schema]
+            if input_schema is not None:
+                cols = [f"{f.name}: {f.type}" for f in input_schema]
                 input_schema_str = f"input_columns=[{', '.join(cols)}], "
 
             raise ValueError(
-                f"No matching function '{invocation.function_name}' for arguments: "
+                f"No matching function '{function_name}' for arguments: "
                 f"{input_schema_str}{_format_arguments_for_error(args)}. "
                 f"Available overloads:\n" + "\n".join(param_summaries)
             )
 
         if len(matches) > 1:
             match_names = [m.__name__ for m in matches]
-            raise ValueError(
-                f"Ambiguous function call '{invocation.function_name}': "
-                f"multiple overloads match: {match_names}"
-            )
+            raise ValueError(f"Ambiguous function call '{function_name}': multiple overloads match: {match_names}")
 
         return matches[0]
-
-    @staticmethod
-    def _validate_required_settings(
-        func_cls: type[Function[Any]], invocation: "Invocation"
-    ) -> None:
-        """Validate that all required settings are present in invocation.
-
-        Functions can declare required settings via Meta.required_settings.
-        This method checks that all required settings are provided in the
-        invocation.settings dictionary.
-
-        Args:
-            func_cls: The function class to validate settings for.
-            invocation: The invocation containing settings.
-
-        Raises:
-            ValueError: If required settings are missing from the invocation.
-
-        """
-        meta = func_cls.get_metadata()
-        required = set(meta.required_settings)
-
-        if not required:
-            return  # No settings required
-
-        provided = set(invocation.settings.keys()) if invocation.settings else set()
-        missing = required - provided
-
-        if missing:
-            raise ValueError(
-                f"Function '{meta.name}' requires settings {sorted(missing)} "
-                f"but they were not provided. Provided settings: {sorted(provided)}"
-            )
 
     @staticmethod
     def _suggest_similar_names(name: str, candidates: list[str]) -> list[str]:
@@ -683,6 +608,759 @@ class Worker:
         scored.sort(key=lambda x: (x[0], x[1]))
         return [candidate for _, candidate in scored]
 
+    def _resolve_function(self, request: BindRequest) -> type[Function]:
+        """Look up and disambiguate function class from registry.
+
+        Args:
+            request: The BindRequest containing function_name and arguments.
+
+        Returns:
+            The matching function class.
+
+        Raises:
+            ValueError: If function not found or ambiguous.
+
+        """
+        registry = self._build_registry()
+        if request.function_name not in registry:
+            available = sorted(registry.keys())
+            suggestions = self._suggest_similar_names(request.function_name, available)
+            msg_lines = [f"Unknown function: '{request.function_name}'"]
+            if suggestions:
+                msg_lines.append("  Did you mean:")
+                for suggestion in suggestions[:3]:
+                    msg_lines.append(f"    - {suggestion}")
+            msg_lines.append(f"  Available functions: {available}")
+            raise ValueError("\n".join(msg_lines))
+
+        candidates = registry[request.function_name]
+        if len(candidates) == 1:
+            return candidates[0]
+
+        return self._match_function_arguments(
+            function_name=request.function_name,
+            arguments=request.arguments,
+            input_schema=request.input_schema,
+            candidates=candidates,
+        )
+
+    # ---------------------------------------------------------------------------
+    # Catalog helpers
+    # ---------------------------------------------------------------------------
+
+    _catalog_instance: CatalogInterface | None = None
+
+    def _get_catalog(self) -> CatalogInterface:
+        """Get the CatalogInterface instance for this worker.
+
+        The instance is created on first access and cached for the lifetime
+        of the worker, so that state (attach IDs, created schemas, etc.)
+        persists across RPC calls.
+
+        Returns:
+            CatalogInterface instance.
+
+        Raises:
+            ValueError: If no catalog interface is available.
+
+        """
+        if self._catalog_instance is not None:
+            return self._catalog_instance
+        catalog_class = self._get_catalog_interface()
+        if catalog_class is None:
+            raise ValueError(
+                "CatalogInterface invocation received but no catalog is available. "
+                "Either set catalog_interface class attribute to a CatalogInterface "
+                "subclass, or ensure functions are defined and catalog_name is set."
+            )
+        self._catalog_instance = catalog_class()
+        return self._catalog_instance
+
+    @staticmethod
+    def _options_batch_to_dict(batch: pa.RecordBatch | None) -> dict[str, Any]:
+        """Convert an options RecordBatch (1 row, mixed types) to a dict."""
+        if batch is None or batch.num_rows == 0:
+            return {}
+        return batch.to_pylist()[0]
+
+    # ---------------------------------------------------------------------------
+    # VgiProtocol implementation - bind/init
+    # ---------------------------------------------------------------------------
+
+    def bind(self, request: BindRequest) -> BindResponse:
+        """Resolve output schema and validate arguments.
+
+        Implements VgiProtocol.bind().
+        """
+        func_cls = self._resolve_function(request)
+        self._validate_required_settings(func_cls, request)
+        self._validate_required_secrets(func_cls, request)
+
+        instance = func_cls(logger=self.log)
+        return instance.bind(request)  # type: ignore[attr-defined, no-any-return]
+
+    def init(self, request: InitRequest) -> Stream[ProcessState, GlobalInitResponse]:
+        """Initialize a function execution and return a processing stream.
+
+        Implements VgiProtocol.init(). Creates the appropriate state object
+        based on function type and creates the appropriate state object.
+        """
+        func_cls = self._resolve_function(request.bind_call)
+        instance = func_cls(logger=self.log)
+
+        # Determine if this is a secondary init
+        if request.is_secondary:
+            assert request.execution_id is not None
+            init_response = GlobalInitResponse(
+                execution_id=request.execution_id,
+                opaque_data=request.init_opaque_data,
+            )
+        else:
+            init_response = instance.global_init(request)  # type: ignore[attr-defined]
+
+        # Build common ProcessParams for table/table-in-out functions
+        output_schema = project_schema(request.projection_ids, request.output_schema)
+
+        # Determine state and input_schema based on function type
+        state: ProcessState
+        input_schema: pa.Schema | None
+
+        if isinstance(instance, ScalarFunctionGenerator) and not isinstance(instance, TableInOutGenerator):
+            # Scalar function: exchange state with per-batch process()
+            state = ScalarExchangeState(
+                _func_cls=type(instance),
+                _init_call=request,
+                _init_response=init_response,
+            )
+            input_schema = request.bind_call.input_schema
+
+        elif isinstance(instance, TableInOutGenerator):
+            # Table-in-out function: separate INPUT and FINALIZE phases
+            params = ProcessParams(
+                args=type(instance)._parse_arguments(type(instance).FunctionArguments, request.bind_call.arguments),
+                init_call=request,
+                init_response=init_response,
+                output_schema=output_schema,
+                settings=_batch_to_scalar_dict(request.bind_call.settings),
+                secrets=_batch_to_secret_dict(request.bind_call.secrets),
+                storage=BoundStorage(type(instance).storage, init_response.execution_id),
+            )
+
+            if request.phase == TableInOutFunctionInitPhase.INPUT:
+                user_state = type(instance).initial_state(params)
+                state = TableInOutExchangeState(
+                    _func_cls=type(instance),
+                    _params=params,
+                    _user_state=user_state,
+                )
+                input_schema = request.bind_call.input_schema
+            elif request.phase == TableInOutFunctionInitPhase.FINALIZE:
+                # Pre-compute finalize batches
+                finalize_batches = type(instance).finalize(params)
+                state = TableInOutFinalizeState(
+                    _batches=finalize_batches,
+                )
+                input_schema = None  # Producer — no input
+            else:
+                raise ValueError(f"Unknown init phase for table-in-out function: {request.phase}")
+
+        elif isinstance(instance, TableFunctionGenerator):
+            # Table function: producer state with per-tick process()
+            params = ProcessParams(
+                args=type(instance)._parse_arguments(type(instance).FunctionArguments, request.bind_call.arguments),
+                init_call=request,
+                init_response=init_response,
+                output_schema=output_schema,
+                settings=_batch_to_scalar_dict(request.bind_call.settings),
+                secrets=_batch_to_secret_dict(request.bind_call.secrets),
+                storage=BoundStorage(type(instance).storage, init_response.execution_id),
+            )
+            user_state = type(instance).initial_state(params)
+            state = TableProducerState(
+                _func_cls=type(instance),
+                _params=params,
+                _user_state=user_state,
+            )
+            input_schema = None  # Producer — no input
+
+        else:
+            raise ValueError(f"Unknown function type: {type(instance).__name__}")
+
+        return Stream(
+            output_schema=output_schema,
+            state=state,
+            input_schema=input_schema or pa.schema([]),
+            header=init_response,
+        )
+
+    # ---------------------------------------------------------------------------
+    # VgiProtocol implementation - Catalog Discovery
+    # ---------------------------------------------------------------------------
+
+    def catalog_catalogs(self) -> CatalogsResponse:
+        """List available catalog names."""
+        cat = self._get_catalog()
+        return CatalogsResponse(items=cat.catalogs())
+
+    # ---------------------------------------------------------------------------
+    # VgiProtocol implementation - Catalog Lifecycle
+    # ---------------------------------------------------------------------------
+
+    def catalog_attach(self, request: CatalogAttachRequest) -> CatalogAttachResult:
+        """Attach to a catalog with options."""
+        cat = self._get_catalog()
+        options = self._options_batch_to_dict(request.options)
+        return cat.catalog_attach(name=request.name, options=options)
+
+    def catalog_detach(self, attach_id: bytes) -> None:
+        """Detach from a catalog."""
+        cat = self._get_catalog()
+        cat.catalog_detach(attach_id=AttachId(attach_id))
+
+    def catalog_create(self, request: CatalogCreateRequest) -> None:
+        """Create a new catalog."""
+        cat = self._get_catalog()
+        options = self._options_batch_to_dict(request.options)
+        cat.catalog_create(name=request.name, on_conflict=request.on_conflict, options=options)
+
+    def catalog_drop(self, name: str) -> None:
+        """Drop a catalog."""
+        cat = self._get_catalog()
+        cat.catalog_drop(name=name)
+
+    def catalog_version(self, attach_id: bytes, transaction_id: bytes | None = None) -> CatalogVersionResponse:
+        """Get the current catalog version."""
+        cat = self._get_catalog()
+        version = cat.catalog_version(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+        )
+        return CatalogVersionResponse(version=version)
+
+    # ---------------------------------------------------------------------------
+    # VgiProtocol implementation - Catalog Transactions
+    # ---------------------------------------------------------------------------
+
+    def catalog_transaction_begin(self, attach_id: bytes) -> TransactionBeginResponse:
+        """Begin a new transaction."""
+        cat = self._get_catalog()
+        tx_id = cat.catalog_transaction_begin(attach_id=AttachId(attach_id))
+        return TransactionBeginResponse(transaction_id=bytes(tx_id) if tx_id else None)
+
+    def catalog_transaction_commit(self, attach_id: bytes, transaction_id: bytes) -> None:
+        """Commit a transaction."""
+        cat = self._get_catalog()
+        cat.catalog_transaction_commit(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id),
+        )
+
+    def catalog_transaction_rollback(self, attach_id: bytes, transaction_id: bytes) -> None:
+        """Rollback a transaction."""
+        cat = self._get_catalog()
+        cat.catalog_transaction_rollback(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id),
+        )
+
+    # ---------------------------------------------------------------------------
+    # VgiProtocol implementation - Catalog Schemas
+    # ---------------------------------------------------------------------------
+
+    def catalog_schemas(self, attach_id: bytes, transaction_id: bytes | None = None) -> SchemasResponse:
+        """List schemas in the catalog."""
+        cat = self._get_catalog()
+        infos = cat.schemas(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+        )
+        return SchemasResponse.from_schema_infos(list(infos))
+
+    def catalog_schema_get(self, attach_id: bytes, name: str, transaction_id: bytes | None = None) -> SchemasResponse:
+        """Get information about a schema. Returns 0 or 1 items."""
+        cat = self._get_catalog()
+        info = cat.schema_get(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            name=name,
+        )
+        return SchemasResponse.from_optional(info)
+
+    def catalog_schema_create(
+        self,
+        attach_id: bytes,
+        name: str,
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Create a new schema."""
+        cat = self._get_catalog()
+        cat.schema_create(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            name=name,
+            comment=comment,
+            tags=tags or {},
+        )
+
+    def catalog_schema_drop(
+        self,
+        attach_id: bytes,
+        name: str,
+        ignore_not_found: bool = False,
+        cascade: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Drop a schema."""
+        cat = self._get_catalog()
+        cat.schema_drop(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            name=name,
+            ignore_not_found=ignore_not_found,
+            cascade=cascade,
+        )
+
+    def catalog_schema_contents_tables(
+        self,
+        attach_id: bytes,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> TablesResponse:
+        """List tables in a schema."""
+        cat = self._get_catalog()
+        infos = cat.schema_contents(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            name=name,
+            type=SchemaObjectType.TABLE,
+        )
+        return TablesResponse.from_table_infos(list(infos))
+
+    def catalog_schema_contents_views(
+        self,
+        attach_id: bytes,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> ViewsResponse:
+        """List views in a schema."""
+        cat = self._get_catalog()
+        infos = cat.schema_contents(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            name=name,
+            type=SchemaObjectType.VIEW,
+        )
+        return ViewsResponse.from_view_infos(list(infos))
+
+    def catalog_schema_contents_functions(
+        self,
+        attach_id: bytes,
+        name: str,
+        type: SchemaObjectType,
+        transaction_id: bytes | None = None,
+    ) -> FunctionsResponse:
+        """List functions in a schema (scalar or table)."""
+        cat = self._get_catalog()
+        infos = cat.schema_contents(  # type: ignore[call-overload]
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            name=name,
+            type=type,
+        )
+        return FunctionsResponse.from_function_infos(list(infos))
+
+    # ---------------------------------------------------------------------------
+    # VgiProtocol implementation - Catalog Tables
+    # ---------------------------------------------------------------------------
+
+    def catalog_table_get(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> TablesResponse:
+        """Get information about a table. Returns 0 or 1 items."""
+        cat = self._get_catalog()
+        info = cat.table_get(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+        )
+        return TablesResponse.from_optional(info)
+
+    def catalog_table_create(self, request: TableCreateRequest) -> None:
+        """Create a new table."""
+        cat = self._get_catalog()
+        cat.table_create(
+            attach_id=AttachId(request.attach_id),
+            transaction_id=TransactionId(request.transaction_id) if request.transaction_id else None,
+            schema_name=request.schema_name,
+            name=request.name,
+            columns=SerializedSchema(request.columns),
+            on_conflict=request.on_conflict,
+            not_null_constraints=list(request.not_null_constraints),
+            unique_constraints=[list(c) for c in request.unique_constraints],
+            check_constraints=list(request.check_constraints),
+        )
+
+    def catalog_table_drop(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Drop a table."""
+        cat = self._get_catalog()
+        cat.table_drop(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            ignore_not_found=ignore_not_found,
+        )
+
+    def catalog_table_scan_function_get(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
+        transaction_id: bytes | None = None,
+    ) -> bytes:
+        """Get the scan function for a table. Returns ScanFunctionResult as IPC bytes."""
+        cat = self._get_catalog()
+        result = cat.table_scan_function_get(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            at_unit=at_unit,
+            at_value=at_value,
+        )
+        return result.serialize()
+
+    def catalog_table_comment_set(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        comment: str | None = None,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Set or clear the comment on a table."""
+        cat = self._get_catalog()
+        cat.table_comment_set(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            comment=comment,
+            ignore_not_found=ignore_not_found,
+        )
+
+    def catalog_table_rename(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        new_name: str,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Rename a table."""
+        cat = self._get_catalog()
+        cat.table_rename(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            new_name=new_name,
+            ignore_not_found=ignore_not_found,
+        )
+
+    def catalog_table_column_add(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        column_definition: bytes,
+        ignore_not_found: bool = False,
+        if_column_not_exists: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Add a new column to a table."""
+        cat = self._get_catalog()
+        cat.table_column_add(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            column_definition=SerializedSchema(column_definition),
+            ignore_not_found=ignore_not_found,
+            if_column_not_exists=if_column_not_exists,
+        )
+
+    def catalog_table_column_drop(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        column_name: str,
+        ignore_not_found: bool = False,
+        if_column_exists: bool = False,
+        cascade: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Drop a column from a table."""
+        cat = self._get_catalog()
+        cat.table_column_drop(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            column_name=column_name,
+            ignore_not_found=ignore_not_found,
+            if_column_exists=if_column_exists,
+            cascade=cascade,
+        )
+
+    def catalog_table_column_rename(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        column_name: str,
+        new_column_name: str,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Rename a column."""
+        cat = self._get_catalog()
+        cat.table_column_rename(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            column_name=column_name,
+            new_column_name=new_column_name,
+            ignore_not_found=ignore_not_found,
+        )
+
+    def catalog_table_column_default_set(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        column_name: str,
+        expression: str,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Set the default value expression for a column."""
+        cat = self._get_catalog()
+        cat.table_column_default_set(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            column_name=column_name,
+            expression=SqlExpression(expression),
+            ignore_not_found=ignore_not_found,
+        )
+
+    def catalog_table_column_default_drop(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        column_name: str,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Remove the default value from a column."""
+        cat = self._get_catalog()
+        cat.table_column_default_drop(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            column_name=column_name,
+            ignore_not_found=ignore_not_found,
+        )
+
+    def catalog_table_column_type_change(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        column_definition: bytes,
+        expression: str | None = None,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Change the type of a column."""
+        cat = self._get_catalog()
+        cat.table_column_type_change(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            column_definition=SerializedSchema(column_definition),
+            expression=SqlExpression(expression) if expression else None,
+            ignore_not_found=ignore_not_found,
+        )
+
+    def catalog_table_not_null_drop(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        column_name: str,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Remove NOT NULL constraint from a column."""
+        cat = self._get_catalog()
+        cat.table_not_null_drop(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            column_name=column_name,
+            ignore_not_found=ignore_not_found,
+        )
+
+    def catalog_table_not_null_set(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        column_name: str,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Add NOT NULL constraint to a column."""
+        cat = self._get_catalog()
+        cat.table_not_null_set(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            column_name=column_name,
+            ignore_not_found=ignore_not_found,
+        )
+
+    # ---------------------------------------------------------------------------
+    # VgiProtocol implementation - Catalog Views
+    # ---------------------------------------------------------------------------
+
+    def catalog_view_get(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> ViewsResponse:
+        """Get information about a view. Returns 0 or 1 items."""
+        cat = self._get_catalog()
+        info = cat.view_get(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+        )
+        return ViewsResponse.from_optional(info)
+
+    def catalog_view_create(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        definition: str,
+        on_conflict: OnConflict,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Create a new view."""
+        cat = self._get_catalog()
+        cat.view_create(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            definition=definition,
+            on_conflict=on_conflict,
+        )
+
+    def catalog_view_drop(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Drop a view."""
+        cat = self._get_catalog()
+        cat.view_drop(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            ignore_not_found=ignore_not_found,
+        )
+
+    def catalog_view_rename(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        new_name: str,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Rename a view."""
+        cat = self._get_catalog()
+        cat.view_rename(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            new_name=new_name,
+            ignore_not_found=ignore_not_found,
+        )
+
+    def catalog_view_comment_set(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        comment: str | None = None,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Set or clear the comment on a view."""
+        cat = self._get_catalog()
+        cat.view_comment_set(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            comment=comment,
+            ignore_not_found=ignore_not_found,
+        )
+
+    # ---------------------------------------------------------------------------
+    # Lifecycle
+    # ---------------------------------------------------------------------------
+
     def __init__(self, *, quiet: bool = False) -> None:
         """Initialize the worker with structured logging.
 
@@ -692,7 +1370,6 @@ class Worker:
 
         """
         self._quiet = quiet or os.environ.get("VGI_QUIET") == "1"
-        self._tracer_provider: Any = None  # Set by _maybe_configure_tracing
         structlog.configure(
             processors=[
                 structlog.processors.add_log_level,
@@ -702,975 +1379,7 @@ class Worker:
             wrapper_class=structlog.make_filtering_bound_logger(0),
             logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
         )
-        self.log: structlog.stdlib.BoundLogger = structlog.get_logger().bind(
-            component="worker", pid=os.getpid()
-        )
-
-    def _maybe_configure_tracing(self) -> None:
-        """Auto-configure OpenTelemetry SDK if OTEL env vars are set.
-
-        Delegates to the shared tracing.maybe_configure_tracing() function.
-        See that function for environment variables and configuration details.
-        """
-        self._tracer_provider = tracing.maybe_configure_tracing(
-            default_service_name="vgi-worker",
-            log_func=self.log.info,
-        )
-
-    def _shutdown_tracing(self) -> None:
-        """Shutdown the tracer provider to flush pending spans."""
-        tracing.shutdown_tracing(self._tracer_provider, log_func=self.log.debug)
-
-    def _read_single_record_batch(
-        self, context: str
-    ) -> tuple[pa.RecordBatch, pa.KeyValueMetadata | None]:
-        """Read a schema + record batch pair from stdin.
-
-        Args:
-            context: Description for debug logging (e.g., "invocation", "init_input").
-
-        Returns:
-            Tuple of (RecordBatch, custom_metadata). The custom_metadata may be None
-            if no custom metadata was attached to the batch.
-
-        Raises:
-            IPCError: If unexpected message types are received.
-
-        """
-        self.log.debug(f"{context}_reading")
-        return read_single_record_batch(sys.stdin, context)
-
-    def _read_invocation(self) -> Invocation:
-        """Read and parse the call data from stdin."""
-        batch, metadata = self._read_single_record_batch("invocation")
-        return Invocation.deserialize(batch, metadata)
-
-    def _read_init_input(self) -> pa.RecordBatch:
-        """Read and parse the init data from stdin."""
-        batch, _ = self._read_single_record_batch("init_input")
-        return batch
-
-    def _load_init_trace_context(
-        self, invocation: Invocation
-    ) -> tuple[str | None, str | None]:
-        """Load trace context from stored init data for secondary workers.
-
-        Secondary workers need to restore trace context from the GlobalInit
-        (primary worker's init phase) so their spans appear under it.
-
-        Args:
-            invocation: The invocation with global_execution_identifier set.
-
-        Returns:
-            Tuple of (traceparent, tracestate) from stored init data.
-
-        """
-        from vgi.function import FunctionInitInput
-        from vgi.ipc_utils import deserialize_record_batch
-
-        global_exec = invocation.global_execution_identifier
-        if global_exec is None or global_exec.global_execution_identifier is None:
-            return None, None
-
-        # Match the function class to access its storage
-        registry = self._build_registry()
-        if invocation.function_name not in registry:
-            return None, None
-        candidates = registry[invocation.function_name]
-        func_cls = self._match_function(invocation, candidates)
-
-        # Load init bytes from storage and deserialize to get trace context
-        exec_id = global_exec.global_execution_identifier
-        try:
-            raw_bytes = func_cls.storage.global_get(exec_id)
-            # Deserialize just enough to get traceparent/tracestate
-            # FunctionInitInput is the base class with these fields
-            batch, metadata = deserialize_record_batch(raw_bytes)
-            init_input = FunctionInitInput.deserialize(batch, metadata)
-            return init_input.traceparent, init_input.tracestate
-        except Exception:
-            # If loading fails, return None and let normal error handling occur
-            return None, None
-
-    def _create_bind_error_batch(
-        self,
-        exception: Exception,
-        invocation: Invocation,
-    ) -> bytes:
-        """Create a serialized error batch for bind-time exceptions.
-
-        Args:
-            exception: The exception that occurred during bind.
-            invocation: The invocation being processed.
-
-        Returns:
-            Serialized Arrow IPC bytes containing error metadata.
-
-        """
-        import vgi.ipc_utils
-        import vgi.log
-
-        error_message = vgi.log.Message.from_exception(exception)
-
-        # Create zero-row batch with minimal schema
-        batch = pa.RecordBatch.from_pydict(
-            {"_error": pa.nulls(0)},
-            schema=_BIND_ERROR_SCHEMA,
-        )
-
-        # Add error metadata
-        metadata = error_message.add_to_metadata(invocation)
-
-        custom_metadata = pa.KeyValueMetadata(
-            {k.encode(): v.encode() for k, v in metadata.items()}
-        )
-
-        # Serialize as IPC
-        return vgi.ipc_utils.serialize_record_batch(batch, custom_metadata)
-
-    def _write_error_to_stream(
-        self,
-        writer: ipc.RecordBatchStreamWriter,
-        output_schema: pa.Schema,
-        exception: Exception,
-        invocation: Invocation,
-    ) -> None:
-        """Write an exception as an error batch to an open IPC stream.
-
-        This helper is used by processing methods to send errors through their
-        own IPC streams. The batch uses the function's output schema so it's
-        compatible with the already-open stream.
-
-        Args:
-            writer: The open IPC stream writer.
-            output_schema: The function's output schema.
-            exception: The exception that occurred.
-            invocation: The invocation being processed.
-
-        """
-        import vgi.log
-
-        error_message = vgi.log.Message.from_exception(exception)
-
-        # Create zero-row batch with function's output schema
-        empty_batch = pa.RecordBatch.from_arrays(
-            [pa.array([], type=field.type) for field in output_schema],
-            schema=output_schema,
-        )
-
-        # Add error metadata with FINISHED status
-        metadata = error_message.add_to_metadata(invocation)
-        metadata["vgi.status"] = "FINISHED"
-
-        custom_metadata = pa.KeyValueMetadata(
-            {k.encode(): v.encode() for k, v in metadata.items()}
-        )
-
-        writer.write_batch(empty_batch, custom_metadata=custom_metadata)
-
-    def _process_scalar_batches(
-        self,
-        instance: ScalarFunctionGenerator,
-        invocation: Invocation,
-        fn_log: structlog.stdlib.BoundLogger,
-    ) -> WorkerStats:
-        """Process data batches through a scalar function.
-
-        Similar to _process_batches but simplified:
-        - Finalize signaled by empty batch with {type: FINALIZE} metadata
-        - HAVE_MORE_OUTPUT only used for log messages (not multiple output batches)
-        - No output returned after finalize (unlike table-in-out)
-        - Reads end-of-stream marker after finalize before returning
-
-        Returns:
-            WorkerStats with batch_count, total_input_rows, total_output_rows.
-
-        """
-        if invocation.global_execution_identifier is None:
-            raise ValueError(
-                "global_execution_identifier is required but was None. "
-                "This is an internal protocol error - the worker should have set "
-                "global_execution_identifier after initialize_global_state()."
-            )
-        generator = instance.run()
-        next(generator)  # Prime the run() generator
-
-        with (
-            ipc.new_stream(cast(IOBase, sys.stdout), instance.output_schema) as writer,
-            ipc.open_stream(cast(IOBase, sys.stdin)) as data_reader,
-        ):
-            try:
-                # Validate data stream schema matches expected input schema
-                if data_reader.schema != invocation.input_schema:
-                    raise SchemaValidationError(
-                        "Data stream schema does not match expected input schema.",
-                        expected=invocation.input_schema,
-                        actual=data_reader.schema,
-                        context="input stream to scalar function",
-                    )
-
-                batch_count = 0
-                total_input_rows = 0
-                total_output_rows = 0
-                while True:
-                    fn_log.debug("batch_waiting")
-
-                    try:
-                        batch, metadata = (
-                            data_reader.read_next_batch_with_custom_metadata()
-                        )
-                    except StopIteration:
-                        # Fallback for unexpected EOF (should not happen with proper
-                        # finalize protocol, but kept for robustness)
-                        fn_log.debug("input_stream_ended_unexpected")
-                        generator.close()
-                        break
-
-                    # Check for finalize signal before processing
-                    protocol_input = ScalarProtocolInput(batch=batch, metadata=metadata)
-                    if protocol_input.is_finalize:
-                        fn_log.debug("finalize_received")
-                        generator.close()
-                        # Send FINISHED status response (client expects this)
-                        empty_output = pa.RecordBatch.from_pydict(
-                            {
-                                instance.output_schema.field(0).name: pa.array(
-                                    [], type=instance.output_schema.field(0).type
-                                )
-                            },
-                            schema=instance.output_schema,
-                        )
-                        finished_md = pa.KeyValueMetadata({b"vgi.status": b"FINISHED"})
-                        writer.write_batch(empty_output, custom_metadata=finished_md)
-                        fn_log.debug("finished_status_sent")
-                        # Read end-of-stream marker before returning to invocation loop
-                        try:
-                            data_reader.read_next_batch_with_custom_metadata()
-                            fn_log.warning("unexpected_batch_after_finalize")
-                        except StopIteration:
-                            fn_log.debug("end_of_stream_received")
-                        break
-
-                    batch_count += 1
-                    total_input_rows += batch.num_rows
-                    fn_log.debug(
-                        "batch_received",
-                        batch_index=batch_count,
-                        input_rows=batch.num_rows,
-                    )
-
-                    output = generator.send(protocol_input)
-
-                    # Handle log messages (indicated by log_message being set)
-                    while output.log_message is not None:
-                        fn_log.debug("log_message_received", output=output)
-                        assert output.batch is not None
-                        writer.write_batch(
-                            output.batch, custom_metadata=output.metadata(invocation)
-                        )
-                        # Re-send same input to continue
-                        output = generator.send(protocol_input)
-
-                    fn_log.debug("batch_processed", output=output)
-                    assert output.batch is not None
-                    output_rows = output.batch.num_rows
-                    total_output_rows += output_rows
-                    batch_size = pa.ipc.get_record_batch_size(output.batch)
-                    tracing.add_batch_write_event(
-                        invocation.function_name,
-                        invocation.function_type.value,
-                        batch_size,
-                        output_rows,
-                    )
-
-                    writer.write_batch(
-                        output.batch, custom_metadata=output.metadata(invocation)
-                    )
-                    fn_log.debug(
-                        "batch_written",
-                        batch_size=batch_size,
-                        batch_index=batch_count,
-                        output_rows=output_rows,
-                    )
-            except (KeyboardInterrupt, SystemExit):
-                raise  # Let these propagate normally
-            except Exception as e:
-                fn_log.exception("processing_failed", error=str(e))
-                self._write_error_to_stream(
-                    writer, instance.output_schema, e, invocation
-                )
-                raise  # Re-raise so worker exits with error state
-            # Capture IPC stats before exiting context manager
-            reader_stats = data_reader.stats
-            writer_stats = writer.stats
-        return WorkerStats(
-            batch_count=batch_count,
-            total_input_rows=total_input_rows,
-            total_output_rows=total_output_rows,
-            reader_num_messages=reader_stats.num_messages,
-            reader_num_record_batches=reader_stats.num_record_batches,
-            writer_num_messages=writer_stats.num_messages,
-            writer_num_record_batches=writer_stats.num_record_batches,
-        )
-
-    def _process_batches(
-        self,
-        instance: TableInOutGenerator,
-        invocation: Invocation,
-        fn_log: structlog.stdlib.BoundLogger,
-    ) -> WorkerStats:
-        """Process data batches through the function.
-
-        Reads input batches from stdin, sends them through the function's
-        generator, and writes output batches to stdout. Handles the
-        HAVE_MORE_OUTPUT and FINALIZE protocol states.
-
-        Returns:
-            WorkerStats with batch_count, total_input_rows, total_output_rows.
-
-        """
-        if invocation.global_execution_identifier is None:
-            raise ValueError(
-                "global_execution_identifier is required but was None. "
-                "This is an internal protocol error - the worker should have set "
-                "global_execution_identifier after initialize_global_state()."
-            )
-        generator = instance.run()
-        next(generator)  # Prime the run() generator
-
-        with (
-            ipc.new_stream(cast(IOBase, sys.stdout), instance.output_schema) as writer,
-            ipc.open_stream(cast(IOBase, sys.stdin)) as data_reader,
-        ):
-            try:
-                # Validate data stream schema matches expected input schema
-                if data_reader.schema != invocation.input_schema:
-                    raise SchemaValidationError(
-                        "Data stream schema does not match expected input schema.",
-                        expected=invocation.input_schema,
-                        actual=data_reader.schema,
-                        context="input stream to table-in-out function",
-                    )
-
-                batch_count = 0
-                total_input_rows = 0
-                total_output_rows = 0
-                while True:
-                    fn_log.debug("batch_waiting")
-
-                    # The client drives the protocol: it handles HAVE_MORE_OUTPUT by
-                    # re-sending batches, and sends FINALIZE when done.
-                    try:
-                        batch, metadata = (
-                            data_reader.read_next_batch_with_custom_metadata()
-                        )
-                    except StopIteration:
-                        fn_log.debug("input_stream_ended")
-                        # Close the generator to signal that no more input will arrive.
-                        # This allows functions to perform cleanup (e.g., saving state)
-                        # by catching GeneratorExit.
-                        generator.close()
-                        break
-
-                    batch_count += 1
-                    total_input_rows += batch.num_rows
-
-                    # Log input metadata for protocol debugging
-                    input_metadata_dict = (
-                        {
-                            k.decode() if isinstance(k, bytes) else k: (
-                                v.decode() if isinstance(v, bytes) else v
-                            )
-                            for k, v in metadata.items()
-                        }
-                        if metadata
-                        else None
-                    )
-                    fn_log.debug(
-                        "batch_received",
-                        batch_index=batch_count,
-                        input_rows=batch.num_rows,
-                        input_metadata=input_metadata_dict,
-                    )
-
-                    output = generator.send(
-                        ProtocolInput(batch=batch, metadata=metadata)
-                    )
-                    fn_log.debug("batch_processed", output=output)
-                    # After initial priming, batch is always set by the protocol
-                    assert output.batch is not None
-                    output_rows = output.batch.num_rows
-                    total_output_rows += output_rows
-                    batch_size = pa.ipc.get_record_batch_size(output.batch)
-                    tracing.add_batch_write_event(
-                        invocation.function_name,
-                        invocation.function_type.value,
-                        batch_size,
-                        output_rows,
-                    )
-
-                    # Get output metadata for logging
-                    output_custom_metadata = output.metadata(invocation)
-                    writer.write_batch(
-                        output.batch, custom_metadata=output_custom_metadata
-                    )
-
-                    # Log output metadata for protocol debugging
-                    output_metadata_dict = {
-                        k.decode() if isinstance(k, bytes) else k: (
-                            v.decode() if isinstance(v, bytes) else v
-                        )
-                        for k, v in output_custom_metadata.items()
-                    }
-                    fn_log.debug(
-                        "batch_written",
-                        batch_index=batch_count,
-                        batch_size=batch_size,
-                        output_rows=output_rows,
-                        output_metadata=output_metadata_dict,
-                    )
-            except (KeyboardInterrupt, SystemExit):
-                raise  # Let these propagate normally
-            except Exception as e:
-                fn_log.exception("processing_failed", error=str(e))
-                self._write_error_to_stream(
-                    writer, instance.output_schema, e, invocation
-                )
-                raise  # Re-raise so worker exits with error state
-            # Capture IPC stats before exiting context manager
-            reader_stats = data_reader.stats
-            writer_stats = writer.stats
-        return WorkerStats(
-            batch_count=batch_count,
-            total_input_rows=total_input_rows,
-            total_output_rows=total_output_rows,
-            reader_num_messages=reader_stats.num_messages,
-            reader_num_record_batches=reader_stats.num_record_batches,
-            writer_num_messages=writer_stats.num_messages,
-            writer_num_record_batches=writer_stats.num_record_batches,
-        )
-
-    def _generate_batches(
-        self,
-        instance: TableFunctionGenerator,
-        invocation: Invocation,
-        fn_log: structlog.stdlib.BoundLogger,
-    ) -> WorkerStats:
-        """Generate output batches from a TableFunctionGenerator.
-
-        Unlike _process_batches, this method doesn't read input batches.
-        The function generates output independently.
-
-        Returns:
-            WorkerStats with batch_count=0, total_input_rows=0, total_output_rows.
-
-        """
-        generator = instance.run()
-
-        with ipc.new_stream(cast(IOBase, sys.stdout), instance.output_schema) as writer:
-            try:
-                batch_count = 0
-                total_output_rows = 0
-
-                for output in generator:
-                    batch_count += 1
-                    # Table function generator always produces a batch
-                    assert output.batch is not None
-                    output_rows = output.batch.num_rows
-                    total_output_rows += output_rows
-                    batch_size = pa.ipc.get_record_batch_size(output.batch)
-                    tracing.add_batch_write_event(
-                        invocation.function_name,
-                        invocation.function_type.value,
-                        batch_size,
-                        output_rows,
-                    )
-
-                    writer.write_batch(
-                        output.batch, custom_metadata=output.metadata(invocation)
-                    )
-                    fn_log.debug(
-                        "batch_written",
-                        batch_size=batch_size,
-                        batch_index=batch_count,
-                        output_rows=output_rows,
-                    )
-            except (KeyboardInterrupt, SystemExit):
-                raise  # Let these propagate normally
-            except Exception as e:
-                fn_log.exception("processing_failed", error=str(e))
-                self._write_error_to_stream(
-                    writer, instance.output_schema, e, invocation
-                )
-                raise  # Re-raise so worker exits with error state
-            # Capture IPC stats before exiting context manager
-            writer_stats = writer.stats
-
-        return WorkerStats(
-            batch_count=batch_count,
-            total_input_rows=0,
-            total_output_rows=total_output_rows,
-            writer_num_messages=writer_stats.num_messages,
-            writer_num_record_batches=writer_stats.num_record_batches,
-        )
-
-    @staticmethod
-    def _result_to_batch(result: Any, schema: pa.Schema) -> pa.RecordBatch:
-        """Convert a catalog method result to a RecordBatch.
-
-        Args:
-            result: The result from a catalog method. Can be:
-                - None: Returns empty batch with given schema
-                - Primitive (int, str, etc.): Single-row batch with "value" column
-                - list of primitives: Multi-row batch with "value" column
-                - Single object with to_row_dict(): Creates single-row batch
-                - List of objects with to_row_dict(): Creates multi-row batch
-            schema: The Arrow schema for the result.
-
-        Returns:
-            A RecordBatch containing the serialized result.
-
-        Raises:
-            TypeError: If result type is not supported.
-
-        """
-        if result is None:
-            return pa.RecordBatch.from_pylist([], schema=schema)
-
-        if isinstance(result, list):
-            if not result:
-                return pa.RecordBatch.from_pylist([], schema=schema)
-            if hasattr(result[0], "to_row_dict"):
-                rows = [item.to_row_dict() for item in result]
-                return pa.RecordBatch.from_pylist(rows, schema=schema)
-            # Primitives list (e.g., catalogs() -> list[str])
-            return pa.RecordBatch.from_pydict({"value": result}, schema=schema)
-
-        # Single object with to_row_dict
-        if hasattr(result, "to_row_dict"):
-            return pa.RecordBatch.from_pylist([result.to_row_dict()], schema=schema)
-
-        # Primitive scalar (e.g., catalog_version() -> int)
-        if isinstance(result, (int, str, float, bool, bytes)):
-            return pa.RecordBatch.from_pydict({"value": [result]}, schema=schema)
-
-        raise TypeError(f"Unsupported result type: {type(result).__name__}")
-
-    def _handle_catalog_invocation(
-        self,
-        invocation: Invocation,
-        fn_log: structlog.stdlib.BoundLogger,
-    ) -> None:
-        """Handle a CatalogInterface method invocation.
-
-        Catalog invocations use a simplified protocol without bind→init→stream
-        phases. The function_name field contains the method name to call, and
-        the input batch (read from stdin) contains method parameters as columns.
-
-        Args:
-            invocation: The catalog invocation with method name and parameters.
-            fn_log: Logger bound to the function context.
-
-        Raises:
-            ValueError: If catalog_interface is not configured.
-
-        """
-        catalog_class = self._get_catalog_interface()
-        if catalog_class is None:
-            raise ValueError(
-                "CatalogInterface invocation received but no catalog is available. "
-                "Either set catalog_interface class attribute to a CatalogInterface "
-                "subclass, or ensure functions are defined and catalog_name is set."
-            )
-
-        # Instantiate the catalog interface
-        catalog = catalog_class()
-        method_name = invocation.function_name
-
-        # Cast stdout to binary IO (reassigned in run() to binary mode)
-        stdout = cast(IO[bytes], sys.stdout)
-
-        # Get the method
-        if not hasattr(catalog, method_name):
-            raise ValueError(
-                f"Unknown catalog method: '{method_name}'. "
-                f"CatalogInterface does not have a method named '{method_name}'."
-            )
-        method = getattr(catalog, method_name)
-
-        # Read arguments from input batch (1 row with columns matching parameters)
-        # For methods with no arguments, accept 0 rows (empty batch)
-        args_batch, _ = self._read_single_record_batch("catalog_args")
-        if args_batch.num_rows == 0:
-            # No arguments - kwargs is empty
-            kwargs: dict[str, Any] = {}
-        elif args_batch.num_rows == 1:
-            # Convert batch columns to kwargs
-            row = args_batch.to_pylist()[0]
-            kwargs = {name: value for name, value in row.items()}
-        else:
-            raise ValueError(
-                f"Catalog invocation expects 0 or 1 rows in argument batch, "
-                f"got {args_batch.num_rows}"
-            )
-
-        fn_log.debug("catalog_method_call", method=method_name, kwargs=kwargs)
-
-        # Call the method
-        result = method(**kwargs)
-
-        fn_log.debug("catalog_method_result", result=result)
-
-        # Get schema for this method and convert result to batch
-        from vgi.ipc_utils import ProtocolState, protocol_state_metadata
-
-        catalog_result_metadata = protocol_state_metadata(ProtocolState.CATALOG_RESULT)
-        schema = get_catalog_method_schema(method_name, kwargs)
-        batch = self._result_to_batch(result, schema)
-
-        # Write result using IPC stream
-        with ipc.new_stream(cast(IOBase, stdout), schema) as writer:
-            writer.write_batch(batch, custom_metadata=catalog_result_metadata)
-
-        fn_log.info("catalog_invocation_complete", method=method_name)
-
-    def _process_invocation(
-        self,
-        invocation: Invocation,
-        fn_log: structlog.stdlib.BoundLogger,
-        invocation_span: Any,
-        worker_name: str,
-    ) -> None:
-        """Process a single function invocation with tracing.
-
-        Args:
-            invocation: The invocation to process.
-            fn_log: Logger bound to the function context.
-            invocation_span: The parent span for this invocation.
-            worker_name: The name of the worker class for tracing attributes.
-
-        """
-        # Cast stdout to binary (reassigned in run() to binary mode)
-        stdout = cast(IO[bytes], sys.stdout)
-        tracer = tracing.get_tracer("vgi.worker")
-        is_primary = invocation.global_execution_identifier is None
-
-        # Set initial span attributes
-        invocation_span.set_attribute(tracing.VGI_WORKER_NAME, worker_name)
-        invocation_span.set_attribute(
-            tracing.VGI_FUNCTION_NAME, invocation.function_name
-        )
-        invocation_span.set_attribute(
-            tracing.VGI_FUNCTION_TYPE, invocation.function_type.value
-        )
-        invocation_span.set_attribute(
-            tracing.VGI_CORRELATION_ID, invocation.correlation_id
-        )
-        invocation_span.set_attribute(tracing.VGI_WORKER_PID, os.getpid())
-        invocation_span.set_attribute(tracing.VGI_WORKER_IS_PRIMARY, is_primary)
-        if invocation.input_schema is not None:
-            invocation_span.set_attribute(
-                tracing.VGI_INPUT_SCHEMA_COLUMNS, len(invocation.input_schema)
-            )
-
-        # Dispatch catalog invocations separately (simplified protocol)
-        if invocation.function_type == InvocationType.CATALOG:
-            with tracer.start_as_current_span(
-                "vgi.catalog", kind=tracing.get_span_kind_internal()
-            ) as catalog_span:
-                catalog_span.set_attribute(tracing.VGI_PHASE, "catalog")
-                catalog_span.set_attribute(
-                    tracing.VGI_FUNCTION_NAME, invocation.function_name
-                )
-                catalog_span.set_attribute(
-                    tracing.VGI_FUNCTION_TYPE, invocation.function_type.value
-                )
-                catalog_span.set_attribute(
-                    tracing.VGI_CORRELATION_ID, invocation.correlation_id
-                )
-                try:
-                    self._handle_catalog_invocation(invocation, fn_log)
-                except (KeyboardInterrupt, SystemExit):
-                    raise  # Let these propagate normally
-                except Exception as e:
-                    fn_log.exception("catalog_invocation_failed", error=str(e))
-                    tracing.set_span_error(catalog_span, e)
-                    tracing.set_span_error(invocation_span, e)
-                    error_batch_bytes = self._create_bind_error_batch(e, invocation)
-                    stdout.write(error_batch_bytes)
-                    stdout.flush()
-            return
-
-        # Bind phase with tracing
-        with tracer.start_as_current_span(
-            "vgi.bind", kind=tracing.get_span_kind_internal()
-        ) as bind_span:
-            bind_span.set_attribute(tracing.VGI_PHASE, "bind")
-            bind_span.set_attribute(tracing.VGI_FUNCTION_NAME, invocation.function_name)
-            bind_span.set_attribute(
-                tracing.VGI_FUNCTION_TYPE, invocation.function_type.value
-            )
-            bind_span.set_attribute(
-                tracing.VGI_CORRELATION_ID, invocation.correlation_id
-            )
-            try:
-                registry = self._build_registry()
-                if invocation.function_name not in registry:
-                    available = sorted(registry.keys())
-                    suggestions = self._suggest_similar_names(
-                        invocation.function_name, available
-                    )
-
-                    # Build informative error message with catalog context
-                    catalog_name = (
-                        self.catalog.name if self.catalog else self.catalog_name
-                    )
-                    msg_lines = [
-                        f"Unknown function: '{invocation.function_name}'",
-                    ]
-                    if catalog_name:
-                        msg_lines.append(f"  Catalog: {catalog_name}")
-                    msg_lines.append("")
-
-                    if suggestions:
-                        msg_lines.append("  Did you mean:")
-                        for suggestion in suggestions[:3]:
-                            msg_lines.append(f"    - {suggestion}")
-                        msg_lines.append("")
-                    msg_lines.append(f"  Available functions: {available}")
-                    raise ValueError("\n".join(msg_lines))
-
-                candidates = registry[invocation.function_name]
-                func_cls = self._match_function(invocation, candidates)
-
-                # Validate required settings before instantiation
-                self._validate_required_settings(func_cls, invocation)
-
-                # Instantiate the function
-                instance = func_cls(invocation=invocation, logger=fn_log)
-
-                # Determine active features from client features
-                worker_features: frozenset[str] = frozenset()
-                active_features = invocation.client_features & worker_features
-                fn_log.debug(
-                    "features_negotiated",
-                    client_features=invocation.client_features,
-                    active_features=active_features,
-                )
-
-                # Use the appropriate OutputSpec class based on function type
-                invocation_id = instance.create_invocation_id()
-                if isinstance(instance, TableFunctionGenerator):
-                    cardinality = instance.cardinality
-                    bind_result_bytes = TableFunctionOutputSpec(
-                        output_schema=instance.output_schema,
-                        max_processes=instance.max_processes,
-                        invocation_id=invocation_id,
-                        active_features=active_features,
-                        cardinality=cardinality,
-                    ).serialize()
-                    fn_log.debug(
-                        "bind_result",
-                        output_schema={
-                            f.name: str(f.type) for f in instance.output_schema
-                        },
-                        max_processes=instance.max_processes,
-                        invocation_id=invocation_id.hex(),
-                        cardinality_estimate=(
-                            cardinality.estimate if cardinality else None
-                        ),
-                        cardinality_max=cardinality.max if cardinality else None,
-                    )
-                else:
-                    bind_result_bytes = OutputSpec(
-                        output_schema=instance.output_schema,
-                        max_processes=instance.max_processes,
-                        invocation_id=invocation_id,
-                        active_features=active_features,
-                    ).serialize()
-                    fn_log.debug(
-                        "bind_result",
-                        output_schema={
-                            f.name: str(f.type) for f in instance.output_schema
-                        },
-                        max_processes=instance.max_processes,
-                        invocation_id=invocation_id.hex(),
-                    )
-
-                # Set bind span attributes
-                bind_span.set_attribute(tracing.VGI_MAX_WORKERS, instance.max_processes)
-                bind_span.set_attribute(
-                    tracing.VGI_OUTPUT_SCHEMA_COLUMNS, len(instance.output_schema)
-                )
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except Exception as e:
-                fn_log.exception("bind_failed", error=str(e))
-                tracing.set_span_error(bind_span, e)
-                tracing.set_span_error(invocation_span, e)
-                error_batch_bytes = self._create_bind_error_batch(e, invocation)
-                stdout.write(error_batch_bytes)
-                stdout.flush()
-                return
-
-        if stdout.write(bind_result_bytes) != len(bind_result_bytes):
-            raise OSError("Failed to write bind result record batch")
-
-        # Update invocation span with invocation_id after bind
-        if invocation_id is not None:
-            invocation_span.set_attribute(
-                tracing.VGI_INVOCATION_ID, invocation_id.hex()
-            )
-
-        # Init phase with tracing
-        with tracer.start_as_current_span(
-            "vgi.init", kind=tracing.get_span_kind_internal()
-        ) as init_span:
-            init_span.set_attribute(tracing.VGI_PHASE, "init")
-            init_span.set_attribute(tracing.VGI_FUNCTION_NAME, invocation.function_name)
-            init_span.set_attribute(
-                tracing.VGI_FUNCTION_TYPE, invocation.function_type.value
-            )
-            init_span.set_attribute(
-                tracing.VGI_CORRELATION_ID, invocation.correlation_id
-            )
-            if invocation_id is not None:
-                init_span.set_attribute(tracing.VGI_INVOCATION_ID, invocation_id.hex())
-            try:
-                if invocation.global_execution_identifier is None:
-                    # Primary worker: perform init and store in storage
-                    fn_log.info("processing_init")
-                    init_batch = self._read_init_input()
-
-                    # Inject current trace context into init data for secondary workers
-                    traceparent, tracestate = tracing.extract_trace_context()
-                    if traceparent is not None:
-                        init_batch = _inject_trace_context(
-                            init_batch, traceparent, tracestate
-                        )
-
-                    init_result = instance.initialize_global_state(init_batch)
-                    init_result_bytes = init_result.serialize()
-                    if stdout.write(init_result_bytes) != len(init_result_bytes):
-                        raise OSError("Failed to write init result record batch")
-                    fn_log.info("processing_init_complete", init_result=init_result)
-                    invocation = invocation.with_global_execution_identifier(
-                        init_result
-                    )
-                    if init_result.global_execution_identifier is not None:
-                        invocation_span.set_attribute(
-                            tracing.VGI_EXECUTION_ID,
-                            init_result.global_execution_identifier.hex(),
-                        )
-                else:
-                    # Secondary worker: retrieve shared init from storage
-                    fn_log.info("retrieving_init")
-                    global_exec = invocation.global_execution_identifier
-                    instance.load_global_state(global_exec)
-                    exec_id = global_exec.global_execution_identifier
-                    if exec_id is not None:
-                        invocation_span.set_attribute(
-                            tracing.VGI_EXECUTION_ID, exec_id.hex()
-                        )
-
-                    # Note: Trace context for secondary workers is restored in
-                    # _run_loop BEFORE span creation, using init_input.traceparent
-                    # loaded via _load_init_trace_context(). This ensures all
-                    # secondary worker spans are children of the GlobalInit span.
-
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except Exception as e:
-                fn_log.exception("init_failed", error=str(e))
-                tracing.set_span_error(init_span, e)
-                tracing.set_span_error(invocation_span, e)
-                error_batch_bytes = self._create_bind_error_batch(e, invocation)
-                stdout.write(error_batch_bytes)
-                stdout.flush()
-                return
-
-        # Process phase with tracing
-        with tracer.start_as_current_span(
-            "vgi.process", kind=tracing.get_span_kind_internal()
-        ) as process_span:
-            process_span.set_attribute(tracing.VGI_PHASE, "process")
-            process_span.set_attribute(
-                tracing.VGI_FUNCTION_NAME, invocation.function_name
-            )
-            process_span.set_attribute(
-                tracing.VGI_FUNCTION_TYPE, invocation.function_type.value
-            )
-            process_span.set_attribute(
-                tracing.VGI_CORRELATION_ID, invocation.correlation_id
-            )
-            if invocation_id is not None:
-                process_span.set_attribute(
-                    tracing.VGI_INVOCATION_ID, invocation_id.hex()
-                )
-            if (
-                invocation.global_execution_identifier is not None
-                and invocation.global_execution_identifier.global_execution_identifier
-                is not None
-            ):
-                process_span.set_attribute(
-                    tracing.VGI_EXECUTION_ID,
-                    invocation.global_execution_identifier.global_execution_identifier.hex(),
-                )
-            if isinstance(instance, ScalarFunctionGenerator):
-                stats = self._process_scalar_batches(instance, invocation, fn_log)
-            elif isinstance(instance, TableInOutGenerator):
-                stats = self._process_batches(instance, invocation, fn_log)
-            elif isinstance(instance, TableFunctionGenerator):
-                stats = self._generate_batches(instance, invocation, fn_log)
-            else:
-                raise TypeError(
-                    f"Unsupported function type: {type(instance).__name__}. "
-                    f"Functions must inherit from ScalarFunctionGenerator (for "
-                    f"scalar functions), TableInOutGenerator (for functions "
-                    f"that process input batches), or TableFunctionGenerator (for "
-                    f"functions that generate output without input). "
-                    f"See vgi.scalar_function, vgi.table_in_out_function, and "
-                    f"vgi.table_function modules."
-                )
-
-            # Set processing stats on spans
-            process_span.set_attribute(tracing.VGI_TOTAL_BATCHES, stats.batch_count)
-            process_span.set_attribute(
-                tracing.VGI_TOTAL_INPUT_ROWS, stats.total_input_rows
-            )
-            process_span.set_attribute(
-                tracing.VGI_TOTAL_OUTPUT_ROWS, stats.total_output_rows
-            )
-
-        # Set final stats on invocation span
-        invocation_span.set_attribute(tracing.VGI_TOTAL_BATCHES, stats.batch_count)
-        invocation_span.set_attribute(
-            tracing.VGI_TOTAL_INPUT_ROWS, stats.total_input_rows
-        )
-        invocation_span.set_attribute(
-            tracing.VGI_TOTAL_OUTPUT_ROWS, stats.total_output_rows
-        )
-        invocation_span.set_attribute(
-            tracing.VGI_IPC_READER_MESSAGES, stats.reader_num_messages
-        )
-        invocation_span.set_attribute(
-            tracing.VGI_IPC_WRITER_MESSAGES, stats.writer_num_messages
-        )
-
-        fn_log.info("worker_call_complete", stats=stats)
-
-        # Log IPC stream stats when requested
-        if _IPC_STATS or _IPC_DEBUG:
-            _get_ipc_log().info(
-                "ipc_stream_stats",
-                batches=stats.batch_count,
-                input_rows=stats.total_input_rows,
-                output_rows=stats.total_output_rows,
-                reader_messages=stats.reader_num_messages,
-                reader_batches=stats.reader_num_record_batches,
-                writer_messages=stats.writer_num_messages,
-                writer_batches=stats.writer_num_record_batches,
-            )
+        self.log: structlog.stdlib.BoundLogger = structlog.get_logger().bind(component="worker", pid=os.getpid())
 
     def run(self) -> None:
         """Run the worker, reading from stdin and writing to stdout."""
@@ -1690,79 +1399,11 @@ class Worker:
             )
             sys.stderr.flush()
 
-        # Auto-configure tracing from env vars if set
-        self._maybe_configure_tracing()
-
         self.log.info("worker_starting")
-        sys.stdin = os.fdopen(0, "rb")
-        sys.stdout = os.fdopen(1, "wb", buffering=0)
-
-        tracer = tracing.get_tracer("vgi.worker")
 
         try:
-            self._run_loop(tracer)
+            server = RpcServer(VgiProtocol, self)
+            serve_stdio(server)
         except KeyboardInterrupt:
-            # Exit cleanly on Ctrl+C without traceback
-            # Exit code 130 = 128 + SIGINT(2), conventional for interrupted processes
             self.log.debug("worker_interrupted")
             sys.exit(130)
-
-    def _run_loop(self, tracer: Any) -> None:
-        """Run the main worker loop for processing invocations."""
-        try:
-            while True:
-                self.log.info("waiting_for_invocation")
-                try:
-                    invocation = self._read_invocation()
-                except IPCError:
-                    break
-
-                fn_log = self.log.bind(function=invocation.function_name)
-                fn_log.info("init_received", arguments=invocation.arguments)
-                fn_log.debug("input_schema_parsed", schema=str(invocation.input_schema))
-
-                # Restore trace context - source depends on worker type
-                # Primary workers: use invocation.traceparent (from client)
-                # Secondary workers: use init_input.traceparent (from GlobalInit)
-                is_secondary = invocation.global_execution_identifier is not None
-                if is_secondary:
-                    # Secondary worker: load init to get trace context from GlobalInit
-                    init_traceparent, init_tracestate = self._load_init_trace_context(
-                        invocation
-                    )
-                    trace_token = tracing.restore_trace_context(
-                        init_traceparent, init_tracestate
-                    )
-                else:
-                    # Primary worker: use trace context from invocation
-                    trace_token = tracing.restore_trace_context(
-                        invocation.traceparent, invocation.tracestate
-                    )
-
-                try:
-                    if is_secondary:
-                        # Secondary workers: skip vgi.invoke span since
-                        # they're already children of primary's GlobalInit
-                        from vgi.tracing import _NoOpSpan
-
-                        self._process_invocation(
-                            invocation, fn_log, _NoOpSpan(), self.__class__.__name__
-                        )
-                    else:
-                        # Primary workers: create vgi.invoke span
-                        with tracer.start_as_current_span(
-                            "vgi.invoke",
-                            kind=tracing.get_span_kind_server(),
-                        ) as invocation_span:
-                            self._process_invocation(
-                                invocation,
-                                fn_log,
-                                invocation_span,
-                                self.__class__.__name__,
-                            )
-                finally:
-                    # Always detach trace context
-                    tracing.detach_trace_context(trace_token)
-        finally:
-            # Flush any pending spans
-            self._shutdown_tracing()

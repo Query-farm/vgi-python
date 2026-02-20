@@ -10,33 +10,12 @@ The serialization uses a single Arrow schema where:
 - Positional arguments come first (field order = position index)
 - Named arguments follow (marked with metadata)
 - Special types (TableInput, AnyArrow, varargs) use field metadata markers
-
-Example:
-    # Define argument specs
-    specs = [
-        ArgumentSpec(name="count", position=0, arrow_type=pa.int64()),
-        ArgumentSpec(
-            name="data", position=1, arrow_type=pa.null(), is_table_input=True
-        ),
-        ArgumentSpec(name="format", position="format", arrow_type=pa.utf8()),
-    ]
-
-    # Serialize to Arrow schema
-    schema = argument_specs_to_schema(specs)
-
-    # Serialize schema to bytes for IPC
-    schema_bytes = schema.serialize().to_pybytes()
-
-    # Deserialize
-    schema = pa.ipc.read_schema(pa.py_buffer(schema_bytes))
-    specs = schema_to_argument_specs(schema)
-
 """
 
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, get_type_hints
+from typing import Annotated, Any, get_args, get_origin, get_type_hints
 
 import pyarrow as pa
 
@@ -157,10 +136,7 @@ class ArgumentSpec:
 
         flags_str = f", flags=[{', '.join(flags)}]" if flags else ""
 
-        return (
-            f'ArgumentSpec(name="{self.name}", pos={pos}, '
-            f"type={self.arrow_type}{flags_str})"
-        )
+        return f'ArgumentSpec(name="{self.name}", pos={pos}, type={self.arrow_type}{flags_str})'
 
 
 # =============================================================================
@@ -185,21 +161,11 @@ def argument_specs_to_schema(specs: Sequence[ArgumentSpec]) -> pa.Schema:
     Returns:
         Arrow schema with one field per argument.
 
-    Example:
-        specs = [
-            ArgumentSpec(name="count", position=0, arrow_type=pa.int64()),
-            ArgumentSpec(name="format", position="format", arrow_type=pa.utf8()),
-        ]
-        schema = argument_specs_to_schema(specs)
-        # schema has fields: count (int64), format (utf8 with vgi_arg=named)
-
     """
     sorted_specs = sorted(specs, key=_argument_spec_sort_key)
 
     # Validate contiguous positional indices
-    positional_indices = [
-        spec.position for spec in sorted_specs if isinstance(spec.position, int)
-    ]
+    positional_indices = [spec.position for spec in sorted_specs if isinstance(spec.position, int)]
     if positional_indices:
         expected = list(range(len(positional_indices)))
         if positional_indices != expected:
@@ -251,14 +217,6 @@ def schema_to_argument_specs(schema: pa.Schema) -> list[ArgumentSpec]:
 
     Returns:
         List of ArgumentSpec objects in schema field order.
-
-    Example:
-        schema = pa.schema([
-            pa.field("count", pa.int64()),
-            pa.field("format", pa.utf8(), metadata={b"vgi_arg": b"named"}),
-        ])
-        specs = schema_to_argument_specs(schema)
-        # specs[0].position == 0, specs[1].position == "format"
 
     """
     specs: list[ArgumentSpec] = []
@@ -324,13 +282,6 @@ def extract_argument_specs(
         List of ArgumentSpec objects, sorted by position (positional first,
         then named).
 
-    Example:
-        class MyFunction(TableInOutFunction):
-            count: int = Arg[int](0, arrow_type=pa.int64())
-            format: str = Arg[str]("format")  # Inferred from type hint
-
-        specs = extract_argument_specs(MyFunction)
-
     """
     specs: list[ArgumentSpec] = []
     seen_names: set[str] = set()
@@ -349,9 +300,7 @@ def extract_argument_specs(
     for param_name, param_arg in compute_params.items():
         seen_names.add(param_name)
         # Use arrow_type from Param() which stores the pa.DataType
-        param_arrow_type = (
-            param_arg.arrow_type if param_arg.arrow_type is not None else pa.null()
-        )
+        param_arrow_type = param_arg.arrow_type if param_arg.arrow_type is not None else pa.null()
         specs.append(
             ArgumentSpec(
                 name=param_name,
@@ -367,9 +316,7 @@ def extract_argument_specs(
     for const_name, const_arg in const_params.items():
         seen_names.add(const_name)
         # ConstParam stores arrow_type from the Python type mapping
-        const_arrow_type = (
-            const_arg.arrow_type if const_arg.arrow_type is not None else pa.null()
-        )
+        const_arrow_type = const_arg.arrow_type if const_arg.arrow_type is not None else pa.null()
         specs.append(
             ArgumentSpec(
                 name=const_name,
@@ -382,48 +329,60 @@ def extract_argument_specs(
             )
         )
 
-    # Check for PolarsScalarFunction _polars_params API
-    # These are stored as PolarsParamInfo dataclass instances
-    polars_params: dict[str, Any] = getattr(cls, "_polars_params", {})
-    if polars_params:
-        # Import Polars conversion lazily to avoid circular imports
-        _polars_converter: Callable[..., pa.DataType] | None = None
+    # Check for FunctionArguments dataclass (typed generic pattern)
+    # e.g., class MyFunc(TableFunctionGenerator[MyArgs]):
+    #   where MyArgs has fields like: count: Annotated[int, Arg(0, doc="...")]
+    args_class = getattr(cls, "FunctionArguments", None)
+    if args_class is not None:
         try:
-            from vgi.scalar_function_polars import _polars_to_arrow_type
+            args_hints = get_type_hints(args_class, include_extras=True)
+        except (NameError, AttributeError):
+            args_hints = {}
 
-            _polars_converter = _polars_to_arrow_type
-        except ImportError:
-            pass  # Polars not available
+        for field_name, field_hint in args_hints.items():
+            if field_name.startswith("_") or field_name in seen_names:
+                continue
 
-        for param_name, param_info in polars_params.items():
-            seen_names.add(param_name)
+            if get_origin(field_hint) is not Annotated:
+                continue
 
-            # Convert Polars type to Arrow type
-            polars_arrow_type: pa.DataType
-            polars_is_any_type: bool
-            if param_info.is_const:
-                # ConstParam: get type from annotations
-                # The polars_type won't be set for ConstParam; use null
-                # and mark as any_type since it's a Python scalar
-                polars_arrow_type = pa.null()
-                polars_is_any_type = True
-            elif param_info.polars_type is not None and _polars_converter is not None:
-                polars_arrow_type = _polars_converter(param_info.polars_type)
-                polars_is_any_type = False
+            # Extract Arg from Annotated metadata
+            type_args = get_args(field_hint)
+            base_type = type_args[0]
+            arg_instance: Arg[Any] | None = None
+            for meta in type_args[1:]:
+                if isinstance(meta, Arg):
+                    arg_instance = meta
+                    break
+
+            if arg_instance is None:
+                continue
+
+            seen_names.add(field_name)
+
+            is_table_input = base_type is TableInput
+            is_any_type = base_type is AnyArrow or base_type is AnyArrowValue
+
+            # Determine Arrow type
+            arrow_type: pa.DataType
+            if arg_instance.arrow_type is not None:
+                arrow_type = arg_instance.arrow_type
+            elif is_table_input or is_any_type:
+                arrow_type = pa.null()
+            elif base_type in PYTHON_TO_ARROW:
+                arrow_type = PYTHON_TO_ARROW[base_type]
             else:
-                # Dynamic type (Any) - polars_type is None
-                polars_arrow_type = pa.null()
-                polars_is_any_type = True
+                arrow_type = pa.null()
 
             specs.append(
                 ArgumentSpec(
-                    name=param_name,
-                    position=param_info.position,
-                    arrow_type=polars_arrow_type,
-                    is_table_input=False,
-                    is_any_type=polars_is_any_type,
-                    is_varargs=param_info.varargs,
-                    is_const=param_info.is_const,
+                    name=field_name,
+                    position=arg_instance.position,
+                    arrow_type=arrow_type,
+                    is_table_input=is_table_input,
+                    is_any_type=is_any_type,
+                    is_varargs=arg_instance.varargs,
+                    is_const=getattr(arg_instance, "const", False),
                 )
             )
 
@@ -440,19 +399,19 @@ def extract_argument_specs(
 
             if isinstance(attr_value, Arg):
                 seen_names.add(attr_name)
-                arg: Arg[Any] = attr_value
+                arg_legacy: Arg[Any] = attr_value
 
                 # Check for special types (AnyArrow, TableInput)
                 # Priority: Arg subscript type (Arg[AnyArrow]) > class type hint
                 # Also check _returns_any_arrow_value for Annotated[AnyArrowValue, ...]
                 hint = hints.get(attr_name)
-                type_param = getattr(arg, "_type_param", None)
+                type_param = getattr(arg_legacy, "_type_param", None)
                 is_table_input = type_param is TableInput or hint is TableInput
                 is_any_type = (
                     type_param is AnyArrow
                     or hint is AnyArrow
                     or hint is AnyArrowValue
-                    or getattr(arg, "_returns_any_arrow_value", False)
+                    or getattr(arg_legacy, "_returns_any_arrow_value", False)
                 )
 
                 # Determine Arrow type using priority order:
@@ -460,20 +419,20 @@ def extract_argument_specs(
                 # 2. Type parameter from Arg[type] subscript (e.g., Arg[str])
                 # 3. Type hint with PYTHON_TO_ARROW mapping
                 # 4. Default to pa.null() with warning
-                arrow_type: pa.DataType
-                if arg.arrow_type is not None:
-                    arrow_type = arg.arrow_type
+                legacy_arrow_type: pa.DataType
+                if arg_legacy.arrow_type is not None:
+                    legacy_arrow_type = arg_legacy.arrow_type
                 elif is_table_input or is_any_type:
-                    arrow_type = pa.null()
+                    legacy_arrow_type = pa.null()
                 elif (
-                    hasattr(arg, "_type_param")
-                    and arg._type_param is not None
-                    and arg._type_param in PYTHON_TO_ARROW
+                    hasattr(arg_legacy, "_type_param")
+                    and arg_legacy._type_param is not None
+                    and arg_legacy._type_param in PYTHON_TO_ARROW
                 ):
                     # Use type from Arg[type] subscript
-                    arrow_type = PYTHON_TO_ARROW[arg._type_param]
+                    legacy_arrow_type = PYTHON_TO_ARROW[arg_legacy._type_param]
                 elif hint is not None and hint in PYTHON_TO_ARROW:
-                    arrow_type = PYTHON_TO_ARROW[hint]
+                    legacy_arrow_type = PYTHON_TO_ARROW[hint]
                 else:
                     warnings.warn(
                         f"Cannot determine Arrow type for argument '{attr_name}'. "
@@ -481,19 +440,19 @@ def extract_argument_specs(
                         f"Defaulting to pa.null().",
                         stacklevel=2,
                     )
-                    arrow_type = pa.null()
+                    legacy_arrow_type = pa.null()
 
                 # Check varargs flag
-                is_varargs = arg.varargs
+                is_varargs = arg_legacy.varargs
 
                 # Check const flag
-                is_const = getattr(arg, "const", False)
+                is_const = getattr(arg_legacy, "const", False)
 
                 specs.append(
                     ArgumentSpec(
                         name=attr_name,
-                        position=arg.position,
-                        arrow_type=arrow_type,
+                        position=arg_legacy.position,
+                        arrow_type=legacy_arrow_type,
                         is_table_input=is_table_input,
                         is_any_type=is_any_type,
                         is_varargs=is_varargs,

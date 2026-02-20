@@ -141,20 +141,15 @@ def catalog_version(
     """Get the current catalog version."""
     client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_id, is_stateful = get_attach_id_from_options(
-        client, attach_id, catalog_name, opts
-    )
+    resolved_attach_id, is_stateful = get_attach_id_from_options(client, attach_id, catalog_name, opts)
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-id for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. Consider using --attach-id for session persistence.",
             err=True,
         )
     version = client.catalog_version(
         attach_id=resolved_attach_id,
-        transaction_id=(
-            hex_to_transaction_id(transaction_id) if transaction_id else None
-        ),
+        transaction_id=(hex_to_transaction_id(transaction_id) if transaction_id else None),
     )
     output_json({"version": version, "attach_id": bytes_to_hex(resolved_attach_id)})
 

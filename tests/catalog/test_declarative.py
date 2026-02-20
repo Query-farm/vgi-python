@@ -11,10 +11,12 @@ Tests cover:
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, ClassVar
 
 import pyarrow as pa
 import pytest
+from vgi_rpc.rpc import OutputCollector
 
 from vgi import Worker
 from vgi.catalog import (
@@ -31,53 +33,66 @@ from vgi.catalog import (
     View,
     ViewInfo,
 )
-from vgi.table_function import Output, OutputGenerator, TableFunctionGenerator
+from vgi.schema_utils import schema
+from vgi.table_function import (
+    ProcessParams,
+    TableFunctionGenerator,
+    bind_fixed_schema,
+    init_single_worker,
+)
 
 # =============================================================================
 # Test Fixtures: Example Functions for Function-Backed Tables
 # =============================================================================
 
 
-class UsersFunction(TableFunctionGenerator):
+@dataclass(slots=True, frozen=True)
+class EmptyArgs:
+    """No arguments."""
+
+
+@init_single_worker
+@bind_fixed_schema
+class UsersFunction(TableFunctionGenerator[EmptyArgs]):
     """Example table function for testing function-backed tables."""
 
     class Meta:  # noqa: D106
         name = "users"
         description = "Generate user data"
-        max_workers = 1
 
-    @property
-    def output_schema(self) -> pa.Schema:  # noqa: D102
-        return pa.schema([("id", pa.int64()), ("name", pa.string())])  # type: ignore[arg-type]
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema({"id": pa.int64(), "name": pa.string()})
 
-    def process(self) -> OutputGenerator:  # noqa: D102
-        yield Output(
+    @classmethod
+    def process(cls, params: ProcessParams[EmptyArgs], state: None, out: OutputCollector) -> None:  # noqa: D102
+        out.emit(
             pa.RecordBatch.from_pydict(
                 {"id": [1, 2], "name": ["Alice", "Bob"]},
-                schema=self.output_schema,
+                schema=params.output_schema,
             )
         )
+        out.finish()
 
 
-class EventsFunction(TableFunctionGenerator):
+@init_single_worker
+@bind_fixed_schema
+class EventsFunction(TableFunctionGenerator[EmptyArgs]):
     """Another example function for multi-schema tests."""
 
     class Meta:  # noqa: D106
         name = "events"
         description = "Generate event data"
-        max_workers = 1
 
-    @property
-    def output_schema(self) -> pa.Schema:  # noqa: D102
-        return pa.schema([("event_id", pa.int64()), ("timestamp", pa.timestamp("us"))])
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema({"event_id": pa.int64(), "timestamp": pa.timestamp("us")})
 
-    def process(self) -> OutputGenerator:  # noqa: D102
-        yield Output(
+    @classmethod
+    def process(cls, params: ProcessParams[EmptyArgs], state: None, out: OutputCollector) -> None:  # noqa: D102
+        out.emit(
             pa.RecordBatch.from_pydict(
                 {"event_id": [1], "timestamp": [1000000]},
-                schema=self.output_schema,
+                schema=params.output_schema,
             )
         )
+        out.finish()
 
 
 # =============================================================================
@@ -180,16 +195,12 @@ class TestTableValidation:
 
     def test_table_requires_columns_or_function(self) -> None:
         """Table raises ValueError if neither columns nor function provided."""
-        with pytest.raises(
-            ValueError, match="must specify either 'columns' or 'function'"
-        ):
+        with pytest.raises(ValueError, match="must specify either 'columns' or 'function'"):
             Table(name="test")
 
     def test_table_rejects_both_columns_and_function(self) -> None:
         """Table raises ValueError if both columns and function provided."""
-        with pytest.raises(
-            ValueError, match="cannot specify both 'columns' and 'function'"
-        ):
+        with pytest.raises(ValueError, match="cannot specify both 'columns' and 'function'"):
             Table(
                 name="test",
                 columns=pa.schema([("id", pa.int64())]),
@@ -435,9 +446,7 @@ class TestReadOnlyCatalogWithCatalog:
         )
 
     @pytest.fixture
-    def catalog_interface(
-        self, users_table: Table, active_users_view: View
-    ) -> ReadOnlyCatalogInterface:
+    def catalog_interface(self, users_table: Table, active_users_view: View) -> ReadOnlyCatalogInterface:
         """Create a catalog interface with Catalog object."""
 
         class TestCatalog(ReadOnlyCatalogInterface):
@@ -457,21 +466,15 @@ class TestReadOnlyCatalogWithCatalog:
 
         return TestCatalog()
 
-    def test_effective_catalog_name(
-        self, catalog_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_effective_catalog_name(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """Catalog name comes from Catalog object."""
         assert catalog_interface._effective_catalog_name == "testapp"
 
-    def test_default_schema_name(
-        self, catalog_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_default_schema_name(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """Default schema name comes from Catalog object."""
         assert catalog_interface._default_schema_name == "main"
 
-    def test_catalogs_returns_catalog_name(
-        self, catalog_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_catalogs_returns_catalog_name(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """catalogs() returns the catalog name from Catalog object."""
         names = catalog_interface.catalogs()
         assert names == ["testapp"]
@@ -482,77 +485,53 @@ class TestReadOnlyCatalogWithCatalog:
         assert isinstance(result, CatalogAttachResult)
         assert result.default_schema == "main"
 
-    def test_schemas_returns_all(
-        self, catalog_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_schemas_returns_all(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schemas() returns all schemas from Catalog."""
         attach_id = AttachId(b"test")
         schemas = catalog_interface.schemas(attach_id=attach_id, transaction_id=None)
         assert len(schemas) == 1
         assert schemas[0].name == "main"
 
-    def test_schema_get_found(
-        self, catalog_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_schema_get_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_get() finds schema by name."""
         attach_id = AttachId(b"test")
-        info = catalog_interface.schema_get(
-            attach_id=attach_id, transaction_id=None, name="main"
-        )
+        info = catalog_interface.schema_get(attach_id=attach_id, transaction_id=None, name="main")
         assert info is not None
         assert info.name == "main"
         assert info.comment == "Main schema"
 
-    def test_schema_get_case_insensitive(
-        self, catalog_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_schema_get_case_insensitive(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_get() is case-insensitive."""
         attach_id = AttachId(b"test")
-        info = catalog_interface.schema_get(
-            attach_id=attach_id, transaction_id=None, name="MAIN"
-        )
+        info = catalog_interface.schema_get(attach_id=attach_id, transaction_id=None, name="MAIN")
         assert info is not None
         assert info.name == "main"  # Original case preserved
 
-    def test_schema_get_not_found(
-        self, catalog_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_schema_get_not_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_get() returns None for unknown schema."""
         attach_id = AttachId(b"test")
-        info = catalog_interface.schema_get(
-            attach_id=attach_id, transaction_id=None, name="unknown"
-        )
+        info = catalog_interface.schema_get(attach_id=attach_id, transaction_id=None, name="unknown")
         assert info is None
 
     def test_table_get_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """table_get() finds table by schema and name."""
         attach_id = AttachId(b"test")
-        info = catalog_interface.table_get(
-            attach_id=attach_id, transaction_id=None, schema_name="main", name="users"
-        )
+        info = catalog_interface.table_get(attach_id=attach_id, transaction_id=None, schema_name="main", name="users")
         assert info is not None
         assert info.name == "users"
         assert info.comment == "User accounts"
 
-    def test_table_get_case_insensitive(
-        self, catalog_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_table_get_case_insensitive(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """table_get() is case-insensitive for both schema and table."""
         attach_id = AttachId(b"test")
-        info = catalog_interface.table_get(
-            attach_id=attach_id, transaction_id=None, schema_name="MAIN", name="USERS"
-        )
+        info = catalog_interface.table_get(attach_id=attach_id, transaction_id=None, schema_name="MAIN", name="USERS")
         assert info is not None
         assert info.name == "users"
 
-    def test_table_get_not_found(
-        self, catalog_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_table_get_not_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """table_get() returns None for unknown table."""
         attach_id = AttachId(b"test")
-        info = catalog_interface.table_get(
-            attach_id=attach_id, transaction_id=None, schema_name="main", name="unknown"
-        )
+        info = catalog_interface.table_get(attach_id=attach_id, transaction_id=None, schema_name="main", name="unknown")
         assert info is None
 
     def test_view_get_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
@@ -568,9 +547,7 @@ class TestReadOnlyCatalogWithCatalog:
         assert info.name == "active_users"
         assert "WHERE active = true" in info.definition
 
-    def test_view_get_case_insensitive(
-        self, catalog_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_view_get_case_insensitive(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """view_get() is case-insensitive."""
         attach_id = AttachId(b"test")
         info = catalog_interface.view_get(
@@ -582,14 +559,10 @@ class TestReadOnlyCatalogWithCatalog:
         assert info is not None
         assert info.name == "active_users"
 
-    def test_view_get_not_found(
-        self, catalog_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_view_get_not_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """view_get() returns None for unknown view."""
         attach_id = AttachId(b"test")
-        info = catalog_interface.view_get(
-            attach_id=attach_id, transaction_id=None, schema_name="main", name="unknown"
-        )
+        info = catalog_interface.view_get(attach_id=attach_id, transaction_id=None, schema_name="main", name="unknown")
         assert info is None
 
 
@@ -618,9 +591,7 @@ class TestSchemaContentsWithCatalog:
 
         return TestCatalog()
 
-    def test_schema_contents_tables(
-        self, catalog_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_schema_contents_tables(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_contents returns tables for TABLE type."""
         attach_id = AttachId(b"test")
         contents = catalog_interface.schema_contents(
@@ -633,9 +604,7 @@ class TestSchemaContentsWithCatalog:
         names = {c.name for c in contents}
         assert names == {"users", "events"}
 
-    def test_schema_contents_views(
-        self, catalog_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_schema_contents_views(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_contents returns views for VIEW type."""
         attach_id = AttachId(b"test")
         contents = catalog_interface.schema_contents(
@@ -647,9 +616,7 @@ class TestSchemaContentsWithCatalog:
         assert len(contents) == 1
         assert contents[0].name == "active_users"
 
-    def test_schema_contents_unknown_schema(
-        self, catalog_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_schema_contents_unknown_schema(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_contents returns empty for unknown schema."""
         attach_id = AttachId(b"test")
         contents = catalog_interface.schema_contents(
@@ -677,9 +644,7 @@ class TestTableScanFunctionGet:
 
         return TestCatalog()
 
-    def test_function_backed_table_auto_scan(
-        self, catalog_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_function_backed_table_auto_scan(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """Function-backed tables return auto-implemented scan result."""
         attach_id = AttachId(b"test")
         result = catalog_interface.table_scan_function_get(
@@ -705,9 +670,7 @@ class TestTableScanFunctionGet:
 
         interface = TestCatalog()
         attach_id = AttachId(b"test")
-        with pytest.raises(
-            NotImplementedError, match="table_scan_function_get not implemented"
-        ):
+        with pytest.raises(NotImplementedError, match="table_scan_function_get not implemented"):
             interface.table_scan_function_get(
                 attach_id=attach_id,
                 transaction_id=None,
@@ -855,20 +818,14 @@ class TestMultiSchemaCatalog:
 
         return TestCatalog()
 
-    def test_schemas_returns_all(
-        self, multi_schema_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_schemas_returns_all(self, multi_schema_interface: ReadOnlyCatalogInterface) -> None:
         """schemas() returns all schemas."""
         attach_id = AttachId(b"test")
-        schemas = multi_schema_interface.schemas(
-            attach_id=attach_id, transaction_id=None
-        )
+        schemas = multi_schema_interface.schemas(attach_id=attach_id, transaction_id=None)
         names = {s.name for s in schemas}
         assert names == {"analytics", "raw"}
 
-    def test_table_in_correct_schema(
-        self, multi_schema_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_table_in_correct_schema(self, multi_schema_interface: ReadOnlyCatalogInterface) -> None:
         """Tables are found in their correct schemas."""
         attach_id = AttachId(b"test")
 
@@ -899,9 +856,7 @@ class TestMultiSchemaCatalog:
         )
         assert events is not None
 
-    def test_default_schema_in_attach_result(
-        self, multi_schema_interface: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_default_schema_in_attach_result(self, multi_schema_interface: ReadOnlyCatalogInterface) -> None:
         """Attach result has correct default_schema."""
         result = multi_schema_interface.catalog_attach(name="warehouse", options={})
         assert result.default_schema == "analytics"

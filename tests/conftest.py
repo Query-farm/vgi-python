@@ -7,8 +7,6 @@ import pytest
 import structlog
 
 from vgi import schema
-from vgi.arguments import Arguments
-from vgi.invocation import Invocation, InvocationType
 
 # =============================================================================
 # Utility Functions (not fixtures, can be imported directly)
@@ -22,49 +20,6 @@ def make_schema(fields: list[Any]) -> pa.Schema:
     field tuples like [("name", pa.string())].
     """
     return pa.schema(fields)
-
-
-def make_invocation(
-    input_schema: pa.Schema | None = None,
-    function_type: InvocationType = InvocationType.TABLE,
-    arguments: Arguments | None = None,
-    function_name: str = "test",
-    settings: dict[str, str] | None = None,
-) -> Invocation:
-    """Create a test invocation with flexible parameters."""
-    return Invocation(
-        function_name=function_name,
-        input_schema=input_schema,
-        function_type=function_type,
-        correlation_id="test",
-        invocation_id=b"test",
-        arguments=arguments or Arguments(),
-        settings=settings,
-    )
-
-
-def make_scalar_invocation(
-    input_schema: pa.Schema,
-    arguments: Arguments | None = None,
-) -> Invocation:
-    """Create a scalar function test invocation."""
-    return make_invocation(
-        input_schema=input_schema,
-        function_type=InvocationType.SCALAR,
-        arguments=arguments,
-    )
-
-
-def make_table_invocation(
-    input_schema: pa.Schema,
-    arguments: Arguments | None = None,
-) -> Invocation:
-    """Create a table function test invocation."""
-    return make_invocation(
-        input_schema=input_schema,
-        function_type=InvocationType.TABLE,
-        arguments=arguments,
-    )
 
 
 def filter_non_empty(batches: list[pa.RecordBatch]) -> list[pa.RecordBatch]:
@@ -99,9 +54,7 @@ def assert_total_rows(batches: list[pa.RecordBatch], expected: int) -> None:
 
 def empty_batch_from_schema(schema: pa.Schema) -> pa.RecordBatch:
     """Create an empty batch with the given schema."""
-    return pa.RecordBatch.from_pydict(
-        {field.name: [] for field in schema}, schema=schema
-    )
+    return pa.RecordBatch.from_pydict({field.name: [] for field in schema}, schema=schema)
 
 
 # =============================================================================

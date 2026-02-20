@@ -1,6 +1,8 @@
 """Tests for catalog dataclass serialization/deserialization."""
 
 import pyarrow as pa
+import pytest
+from vgi_rpc.utils import deserialize_record_batch
 
 from vgi import schema
 from vgi.catalog import (
@@ -15,7 +17,6 @@ from vgi.catalog import (
     TableInfo,
     ViewInfo,
 )
-from vgi.ipc_utils import deserialize_record_batch
 
 
 class TestCatalogAttachResultSerialization:
@@ -30,9 +31,9 @@ class TestCatalogAttachResultSerialization:
             catalog_version_frozen=False,
             catalog_version=42,
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = CatalogAttachResult.deserialize(batch)
+        restored = CatalogAttachResult.deserialize_from_batch(batch)
 
         assert restored.attach_id == original.attach_id
         assert restored.supports_transactions == original.supports_transactions
@@ -49,9 +50,9 @@ class TestCatalogAttachResultSerialization:
             catalog_version_frozen=True,
             catalog_version=0,
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = CatalogAttachResult.deserialize(batch)
+        restored = CatalogAttachResult.deserialize_from_batch(batch)
 
         assert restored.attach_id == b""
 
@@ -64,9 +65,9 @@ class TestCatalogAttachResultSerialization:
             catalog_version_frozen=True,
             catalog_version=999,
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = CatalogAttachResult.deserialize(batch)
+        restored = CatalogAttachResult.deserialize_from_batch(batch)
 
         assert restored.supports_transactions is True
         assert restored.supports_time_travel is True
@@ -86,9 +87,9 @@ class TestCatalogAttachResultSerialization:
             catalog_version=1,
             settings=[option_bytes_1, option_bytes_2],
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = CatalogAttachResult.deserialize(batch)
+        restored = CatalogAttachResult.deserialize_from_batch(batch)
 
         assert len(restored.settings) == 2
         assert restored.settings[0] == option_bytes_1
@@ -104,9 +105,9 @@ class TestCatalogAttachResultSerialization:
             catalog_version=1,
             settings=[],
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = CatalogAttachResult.deserialize(batch)
+        restored = CatalogAttachResult.deserialize_from_batch(batch)
 
         assert restored.settings == []
 
@@ -122,9 +123,9 @@ class TestSchemaInfoSerialization:
             comment="Test schema",
             tags={"env": "test", "owner": "alice"},
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = SchemaInfo.deserialize(batch)
+        restored = SchemaInfo.deserialize_from_batch(batch)
 
         assert restored.attach_id == original.attach_id
         assert restored.name == original.name
@@ -139,9 +140,9 @@ class TestSchemaInfoSerialization:
             comment=None,
             tags={},
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = SchemaInfo.deserialize(batch)
+        restored = SchemaInfo.deserialize_from_batch(batch)
 
         assert restored.comment is None
 
@@ -153,9 +154,9 @@ class TestSchemaInfoSerialization:
             comment="Comment",
             tags={},
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = SchemaInfo.deserialize(batch)
+        restored = SchemaInfo.deserialize_from_batch(batch)
 
         assert restored.tags == {}
 
@@ -167,9 +168,9 @@ class TestSchemaInfoSerialization:
             comment=None,
             tags={},
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = SchemaInfo.deserialize(batch)
+        restored = SchemaInfo.deserialize_from_batch(batch)
 
         assert restored.name == ""
 
@@ -192,9 +193,9 @@ class TestTableInfoSerialization:
             comment="Users table",
             tags={"category": "core"},
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = TableInfo.deserialize(batch)
+        restored = TableInfo.deserialize_from_batch(batch)
 
         assert restored.name == original.name
         assert restored.schema_name == original.schema_name
@@ -220,9 +221,9 @@ class TestTableInfoSerialization:
             comment=None,
             tags={},
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = TableInfo.deserialize(batch)
+        restored = TableInfo.deserialize_from_batch(batch)
 
         assert restored.not_null_constraints == []
         assert restored.unique_constraints == []
@@ -243,9 +244,9 @@ class TestTableInfoSerialization:
             comment=None,
             tags={},
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = TableInfo.deserialize(batch)
+        restored = TableInfo.deserialize_from_batch(batch)
 
         assert restored.unique_constraints == [[0], [1, 2]]
 
@@ -262,9 +263,9 @@ class TestViewInfoSerialization:
             comment="Summary view",
             tags={"type": "summary"},
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = ViewInfo.deserialize(batch)
+        restored = ViewInfo.deserialize_from_batch(batch)
 
         assert restored.name == original.name
         assert restored.schema_name == original.schema_name
@@ -288,9 +289,9 @@ class TestViewInfoSerialization:
             comment=None,
             tags={},
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = ViewInfo.deserialize(batch)
+        restored = ViewInfo.deserialize_from_batch(batch)
 
         assert restored.definition == original.definition
 
@@ -312,9 +313,9 @@ class TestFunctionInfoSerialization:
             comment="Double the input",
             tags={"category": "math"},
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = FunctionInfo.deserialize(batch)
+        restored = FunctionInfo.deserialize_from_batch(batch)
 
         assert restored.name == original.name
         assert restored.function_type == FunctionType.SCALAR
@@ -335,9 +336,9 @@ class TestFunctionInfoSerialization:
             comment=None,
             tags={},
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = FunctionInfo.deserialize(batch)
+        restored = FunctionInfo.deserialize_from_batch(batch)
 
         assert restored.function_type == FunctionType.TABLE
 
@@ -369,9 +370,9 @@ class TestFunctionInfoSerialization:
                 ),
             ],
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = FunctionInfo.deserialize(batch)
+        restored = FunctionInfo.deserialize_from_batch(batch)
 
         assert len(restored.examples) == 2
         ex0 = restored.examples[0]
@@ -404,9 +405,9 @@ class TestFunctionInfoSerialization:
                 CatalogExample(sql="SELECT echo('hi')", description=""),
             ],
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = FunctionInfo.deserialize(batch)
+        restored = FunctionInfo.deserialize_from_batch(batch)
 
         assert len(restored.examples) == 1
         ex = restored.examples[0]
@@ -429,9 +430,9 @@ class TestFunctionInfoSerialization:
             tags={},
             examples=[],
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = FunctionInfo.deserialize(batch)
+        restored = FunctionInfo.deserialize_from_batch(batch)
 
         assert restored.examples == []
 
@@ -449,9 +450,9 @@ class TestFunctionInfoSerialization:
             comment=None,
             tags={"category": "math", "type": "scalar", "version": "1.0"},
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = FunctionInfo.deserialize(batch)
+        restored = FunctionInfo.deserialize_from_batch(batch)
 
         assert restored.tags == {"category": "math", "type": "scalar", "version": "1.0"}
 
@@ -469,9 +470,9 @@ class TestFunctionInfoSerialization:
             comment=None,
             tags={},
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = FunctionInfo.deserialize(batch)
+        restored = FunctionInfo.deserialize_from_batch(batch)
 
         assert restored.tags == {}
 
@@ -557,98 +558,29 @@ class TestScanFunctionResultSerialization:
 class TestSettingSpecSerialization:
     """Test SettingSpec serialization round-trip."""
 
-    def test_basic_round_trip_explicit_type(self) -> None:
-        """Test with explicit type and no default (required setting)."""
-        original = SettingSpec(
-            name="vgi_api_key",
-            desc="API key for auth",
-            type=pa.string(),
-            default=None,
-        )
+    @pytest.mark.parametrize(
+        ("name", "desc", "arrow_type", "default"),
+        [
+            ("vgi_api_key", "API key for auth", pa.string(), None),
+            ("vgi_log_level", "Logging level", pa.string(), "info"),
+            ("vgi_max_workers", "Maximum worker count", pa.int64(), 4),
+            ("vgi_debug", "Enable debug mode", pa.bool_(), False),
+            ("vgi_timeout", "Timeout in seconds", pa.float64(), 30.5),
+            ("vgi_port", "Port number", pa.int32(), 8080),
+        ],
+        ids=["string_no_default", "string_default", "int64", "bool", "float64", "int32"],
+    )
+    def test_round_trip(self, name: str, desc: str, arrow_type: pa.DataType, default: object) -> None:
+        """Test serialization round-trip for different setting types."""
+        original = SettingSpec(name=name, desc=desc, type=arrow_type, default=default)
         serialized = original.serialize()
         batch, _ = deserialize_record_batch(serialized)
         restored = SettingSpec.deserialize(batch)
 
         assert restored.name == original.name
         assert restored.desc == original.desc
-        assert restored.type == pa.string()
-        assert restored.default is None
-
-    def test_string_default(self) -> None:
-        """Test with string type and default."""
-        original = SettingSpec(
-            name="vgi_log_level",
-            desc="Logging level",
-            type=pa.string(),
-            default="info",
-        )
-        serialized = original.serialize()
-        batch, _ = deserialize_record_batch(serialized)
-        restored = SettingSpec.deserialize(batch)
-
-        assert restored.name == original.name
-        assert restored.type == pa.string()
-        assert restored.default == "info"
-
-    def test_int_default(self) -> None:
-        """Test with int type and default."""
-        original = SettingSpec(
-            name="vgi_max_workers",
-            desc="Maximum worker count",
-            type=pa.int64(),
-            default=4,
-        )
-        serialized = original.serialize()
-        batch, _ = deserialize_record_batch(serialized)
-        restored = SettingSpec.deserialize(batch)
-
-        assert restored.type == pa.int64()
-        assert restored.default == 4
-
-    def test_bool_default(self) -> None:
-        """Test with bool type and default."""
-        original = SettingSpec(
-            name="vgi_debug",
-            desc="Enable debug mode",
-            type=pa.bool_(),
-            default=False,
-        )
-        serialized = original.serialize()
-        batch, _ = deserialize_record_batch(serialized)
-        restored = SettingSpec.deserialize(batch)
-
-        assert restored.type == pa.bool_()
-        assert restored.default is False
-
-    def test_float_default(self) -> None:
-        """Test with float type and default."""
-        original = SettingSpec(
-            name="vgi_timeout",
-            desc="Timeout in seconds",
-            type=pa.float64(),
-            default=30.5,
-        )
-        serialized = original.serialize()
-        batch, _ = deserialize_record_batch(serialized)
-        restored = SettingSpec.deserialize(batch)
-
-        assert restored.type == pa.float64()
-        assert restored.default == 30.5
-
-    def test_int32_type(self) -> None:
-        """Test with int32 type."""
-        original = SettingSpec(
-            name="vgi_port",
-            desc="Port number",
-            type=pa.int32(),
-            default=8080,
-        )
-        serialized = original.serialize()
-        batch, _ = deserialize_record_batch(serialized)
-        restored = SettingSpec.deserialize(batch)
-
-        assert restored.type == pa.int32()
-        assert restored.default == 8080
+        assert restored.type == arrow_type
+        assert restored.default == default
 
 
 class TestFunctionInfoRequiredSettings:
@@ -669,9 +601,9 @@ class TestFunctionInfoRequiredSettings:
             tags={},
             required_settings=[],
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = FunctionInfo.deserialize(batch)
+        restored = FunctionInfo.deserialize_from_batch(batch)
 
         assert restored.required_settings == []
 
@@ -690,9 +622,9 @@ class TestFunctionInfoRequiredSettings:
             tags={},
             required_settings=["vgi_verbose_mode"],
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = FunctionInfo.deserialize(batch)
+        restored = FunctionInfo.deserialize_from_batch(batch)
 
         assert restored.required_settings == ["vgi_verbose_mode"]
 
@@ -711,9 +643,9 @@ class TestFunctionInfoRequiredSettings:
             tags={},
             required_settings=["vgi_log_level", "vgi_log_format"],
         )
-        serialized = original.serialize()
+        serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
-        restored = FunctionInfo.deserialize(batch)
+        restored = FunctionInfo.deserialize_from_batch(batch)
 
         assert restored.required_settings == ["vgi_log_level", "vgi_log_format"]
 

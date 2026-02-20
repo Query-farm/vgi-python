@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import pyarrow as pa
-import structlog
-
 from vgi import (
     AnyArrow,
     Arg,
+    CatalogFunctionType,
     FunctionExample,
-    FunctionType,
     TableInOutFunction,
     TableInput,
     functions_to_arrow,
@@ -27,7 +24,7 @@ class TestResolveMetadata:
     def test_minimal_function(self) -> None:
         """Function with no Meta class uses defaults."""
 
-        class MinimalFunction(TableInOutFunction):
+        class MinimalFunction(TableInOutFunction):  # type: ignore[type-arg]
             """A minimal function."""
 
             data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
@@ -36,14 +33,14 @@ class TestResolveMetadata:
         assert meta.name == "minimal"  # Auto-converted from MinimalFunction
         assert meta.class_name == "MinimalFunction"
         assert meta.description == "A minimal function."  # From docstring
-        assert meta.function_type == FunctionType.TABLE
+        assert meta.function_type == CatalogFunctionType.TABLE
         assert meta.max_workers is None
         assert meta.categories == []
 
     def test_function_with_meta(self) -> None:
         """Function with Meta class uses defined values."""
 
-        class CustomFunction(TableInOutFunction):
+        class CustomFunction(TableInOutFunction):  # type: ignore[type-arg]
             """Docstring description."""
 
             class Meta:
@@ -63,7 +60,7 @@ class TestResolveMetadata:
     def test_name_auto_generation(self) -> None:
         """Function name is auto-generated from class name."""
 
-        class MyAwesomeTransformFunction(TableInOutFunction):
+        class MyAwesomeTransformFunction(TableInOutFunction):  # type: ignore[type-arg]
             data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
 
         meta = MyAwesomeTransformFunction.get_metadata()
@@ -73,7 +70,7 @@ class TestResolveMetadata:
     def test_docstring_fallback(self) -> None:
         """Description falls back to first line of docstring."""
 
-        class DocstringFunction(TableInOutFunction):
+        class DocstringFunction(TableInOutFunction):  # type: ignore[type-arg]
             """First line of docstring.
 
             More detailed description here.
@@ -87,7 +84,7 @@ class TestResolveMetadata:
     def test_examples_normalization(self) -> None:
         """String examples are converted to FunctionExample objects."""
 
-        class ExampleFunction(TableInOutFunction):
+        class ExampleFunction(TableInOutFunction):  # type: ignore[type-arg]
             class Meta:
                 examples = [
                     "SELECT * FROM example_function(data)",
@@ -112,7 +109,7 @@ class TestMetaInheritance:
     def test_inheritance_from_parent(self) -> None:
         """Child inherits Meta attributes from parent."""
 
-        class BaseFunction(TableInOutFunction):
+        class BaseFunction(TableInOutFunction):  # type: ignore[type-arg]
             class Meta:
                 categories = ["base"]
                 max_workers = 2
@@ -131,7 +128,7 @@ class TestMetaInheritance:
     def test_child_overrides_parent(self) -> None:
         """Child Meta attributes override parent."""
 
-        class BaseFunction(TableInOutFunction):
+        class BaseFunction(TableInOutFunction):  # type: ignore[type-arg]
             class Meta:
                 categories = ["base"]
                 max_workers = 2
@@ -153,7 +150,7 @@ class TestExtractParameters:
     def test_positional_arg(self) -> None:
         """Positional Arg descriptor is extracted."""
 
-        class ArgFunction(TableInOutFunction):
+        class ArgFunction(TableInOutFunction):  # type: ignore[type-arg]
             count = Arg[int](0, doc="Number of items")
 
         # Skip TableInput validation since we're testing Arg extraction
@@ -167,7 +164,7 @@ class TestExtractParameters:
     def test_named_arg_with_default(self) -> None:
         """Named Arg with default is optional."""
 
-        class ArgFunction(TableInOutFunction):
+        class ArgFunction(TableInOutFunction):  # type: ignore[type-arg]
             sep = Arg[str]("separator", default=",", doc="Field separator")
 
         # Skip TableInput validation since we're testing Arg extraction
@@ -181,7 +178,7 @@ class TestExtractParameters:
     def test_arg_with_constraints(self) -> None:
         """Arg validation constraints are extracted."""
 
-        class ArgFunction(TableInOutFunction):
+        class ArgFunction(TableInOutFunction):  # type: ignore[type-arg]
             count = Arg[int](0, ge=1, le=100)
             ratio = Arg[float](1, gt=0.0, lt=1.0)
 
@@ -196,7 +193,7 @@ class TestExtractParameters:
     def test_multiple_args_sorted(self) -> None:
         """Multiple Args are sorted by position."""
 
-        class ArgFunction(TableInOutFunction):
+        class ArgFunction(TableInOutFunction):  # type: ignore[type-arg]
             third = Arg[str](2)
             first = Arg[int](0)
             named = Arg[str]("name", default="x")
@@ -210,34 +207,28 @@ class TestExtractParameters:
 
 
 class TestMaxWorkersIntegration:
-    """Tests for max_workers integration with max_processes property."""
+    """Tests for max_workers metadata extraction."""
 
-    def test_max_workers_used(self, test_logger: structlog.stdlib.BoundLogger) -> None:
-        """max_processes returns Meta.max_workers when defined."""
-        from tests.conftest import make_invocation
+    def test_max_workers_used(self) -> None:
+        """max_workers is extracted from Meta when defined."""
 
-        class LimitedFunction(TableInOutFunction):
+        class LimitedFunction(TableInOutFunction):  # type: ignore[type-arg]
             class Meta:
                 max_workers = 2
 
             data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
 
-        invocation = make_invocation(input_schema=pa.schema([]))
-        func = LimitedFunction(invocation=invocation, logger=test_logger)
-        assert func.max_processes == 2
+        meta = LimitedFunction.get_metadata()
+        assert meta.max_workers == 2
 
-    def test_default_max_workers(
-        self, test_logger: structlog.stdlib.BoundLogger
-    ) -> None:
-        """max_processes returns default when max_workers not defined."""
-        from tests.conftest import make_invocation
+    def test_default_max_workers(self) -> None:
+        """max_workers defaults to None when not defined."""
 
-        class UnlimitedFunction(TableInOutFunction):
+        class UnlimitedFunction(TableInOutFunction):  # type: ignore[type-arg]
             data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
 
-        invocation = make_invocation(input_schema=pa.schema([]))
-        func = UnlimitedFunction(invocation=invocation, logger=test_logger)
-        assert func.max_processes == 99999
+        meta = UnlimitedFunction.get_metadata()
+        assert meta.max_workers is None
 
 
 class TestArrowSerialization:
@@ -246,7 +237,7 @@ class TestArrowSerialization:
     def test_single_function_roundtrip(self) -> None:
         """Single function metadata survives Arrow roundtrip."""
 
-        class TestFunction(TableInOutFunction):
+        class TestFunction(TableInOutFunction):  # type: ignore[type-arg]
             """Test function for serialization."""
 
             class Meta:
@@ -277,19 +268,19 @@ class TestArrowSerialization:
     def test_multiple_functions_roundtrip(self) -> None:
         """Multiple functions survive Arrow roundtrip."""
 
-        class Func1(TableInOutFunction):
+        class Func1(TableInOutFunction):  # type: ignore[type-arg]
             class Meta:
                 name = "func_one"
 
             data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
 
-        class Func2(TableInOutFunction):
+        class Func2(TableInOutFunction):  # type: ignore[type-arg]
             class Meta:
                 name = "func_two"
 
             data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
 
-        class Func3(TableInOutFunction):
+        class Func3(TableInOutFunction):  # type: ignore[type-arg]
             class Meta:
                 name = "func_three"
 
@@ -318,7 +309,7 @@ class TestDescribeMethod:
         """describe() returns a JSON-serializable dict."""
         import json
 
-        class DescribeFunction(TableInOutFunction):
+        class DescribeFunction(TableInOutFunction):  # type: ignore[type-arg]
             class Meta:
                 name = "describe_test"
                 description = "Test describe method"
@@ -344,7 +335,7 @@ class TestVarargsMetadata:
     def test_varargs_is_extracted(self) -> None:
         """Varargs parameter should have is_varargs=True in ParameterInfo."""
 
-        class VarargsFunction(TableInOutFunction):
+        class VarargsFunction(TableInOutFunction):  # type: ignore[type-arg]
             name = Arg[str](0, doc="Function name")
             values = Arg[int](1, varargs=True, doc="One or more values")
 
@@ -361,7 +352,7 @@ class TestVarargsMetadata:
 
         from vgi.metadata import VarargsValidationError
 
-        class BadFunction(TableInOutFunction):
+        class BadFunction(TableInOutFunction):  # type: ignore[type-arg]
             values1 = Arg[int](0, varargs=True)
             values2 = Arg[str](1, varargs=True)
             data: TableInput = Arg[TableInput](2, doc="Input")  # type: ignore[assignment]
@@ -375,7 +366,7 @@ class TestVarargsMetadata:
 
         from vgi.metadata import VarargsValidationError
 
-        class BadFunction(TableInOutFunction):
+        class BadFunction(TableInOutFunction):  # type: ignore[type-arg]
             values = Arg[int](0, varargs=True)
             after = Arg[str](1)  # Regular arg after varargs
             data: TableInput = Arg[TableInput](2, doc="Input")  # type: ignore[assignment]
@@ -386,7 +377,7 @@ class TestVarargsMetadata:
     def test_varargs_before_table_input_ok(self) -> None:
         """Varargs can be before TableInput (TableInput is always last)."""
 
-        class GoodFunction(TableInOutFunction):
+        class GoodFunction(TableInOutFunction):  # type: ignore[type-arg]
             name = Arg[str](0, doc="Name")
             columns = Arg[str](1, varargs=True, doc="Column names")
             data: TableInput = Arg[TableInput](2, doc="Input table")  # type: ignore[assignment]
@@ -404,7 +395,7 @@ class TestVarargsMetadata:
     def test_varargs_arrow_roundtrip(self) -> None:
         """Varargs is_varargs survives Arrow serialization."""
 
-        class VarargsFunction(TableInOutFunction):
+        class VarargsFunction(TableInOutFunction):  # type: ignore[type-arg]
             """Test varargs serialization."""
 
             class Meta:
@@ -433,7 +424,7 @@ class TestAnyArrowMetadata:
     def test_any_arrow_type_extracted(self) -> None:
         """AnyArrow type should be extracted as 'AnyArrow' in metadata."""
 
-        class AnyArrowFunction(TableInOutFunction):
+        class AnyArrowFunction(TableInOutFunction):  # type: ignore[type-arg]
             value: AnyArrow = Arg[AnyArrow](0, doc="Any type value")  # type: ignore[assignment]
             data: TableInput = Arg[TableInput](1, doc="Input table")  # type: ignore[assignment]
 
@@ -446,7 +437,7 @@ class TestAnyArrowMetadata:
     def test_any_arrow_arrow_roundtrip(self) -> None:
         """AnyArrow type survives Arrow serialization."""
 
-        class AnyArrowFunction(TableInOutFunction):
+        class AnyArrowFunction(TableInOutFunction):  # type: ignore[type-arg]
             """Test AnyArrow serialization."""
 
             class Meta:
@@ -471,8 +462,8 @@ class TestFunctionTypeInference:
     def test_table_in_out_function_type(self) -> None:
         """TableInOutFunction is detected as TABLE_IN_OUT."""
 
-        class TestFunc(TableInOutFunction):
+        class TestFunc(TableInOutFunction):  # type: ignore[type-arg]
             data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
 
         meta = resolve_metadata(TestFunc)
-        assert meta.function_type == FunctionType.TABLE
+        assert meta.function_type == CatalogFunctionType.TABLE

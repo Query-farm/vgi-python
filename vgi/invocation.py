@@ -1,416 +1,92 @@
-"""Invocation data structures for VGI function calls.
+"""Response types for the VGI protocol.
 
-This module defines the classes used for function invocation requests
-in the VGI protocol.
+This module defines response dataclasses and the FunctionType enum:
 
-Classes:
-    InvocationType: Enum distinguishing scalar, table, and catalog invocation types.
-    InitResult: Result from global initialization phase.
-    Invocation: Complete function invocation request.
+- FunctionType: Enum for scalar, table, and aggregate function types.
+- BindResponse: Result of bind phase with output schema.
+- BaseInitResponse: Base class for init responses.
+- GlobalInitResponse: Result of init phase with max_workers.
+
+Request types (BindRequest, InitRequest) are in ``vgi.protocol``.
 
 """
 
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass, replace
+import uuid
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, ClassVar
+from typing import Annotated
 
 import pyarrow as pa
+from vgi_rpc import ArrowSerializableDataclass, ArrowType
 
-import vgi.ipc_utils
-from vgi.arguments import Arguments
-
-if TYPE_CHECKING:
-    pass
+from vgi.metadata import DEFAULT_MAX_WORKERS
 
 __all__ = [
-    "InitResult",
-    "Invocation",
-    "InvocationType",
+    "FunctionType",
+    "BaseInitResponse",
+    "BindResponse",
+    "GlobalInitResponse",
 ]
 
 
-class InvocationType(Enum):
-    """Type of VGI invocation for protocol dispatch.
+class FunctionType(Enum):
+    """Type of function being invoked.
 
-    Used by the client to determine the correct init data format to send
-    to the worker. Scalar functions use FunctionInitInput (no projection),
-    while table functions use TableFunctionInitInput (with projection support).
-
-    Note: This is distinct from vgi.metadata.FunctionType which is used for
-    DuckDB catalog registration and includes AGGREGATE.
-
-    Attributes:
-        SCALAR: Scalar function that transforms input batches to single-column output.
-        TABLE: Table function (either generator or table-in-out) that produces
-            multi-column output.
-        CATALOG: Catalog interface method invocation. The function_name field
-            contains the CatalogInterface method name (e.g., 'catalog_attach',
-            'schemas', 'table_get'). Uses simplified protocol: invoke → stream
-            (no bind→init→stream phases). Input batch has exactly 1 row with
-            column names matching method parameters.
+    Used in BindRequest to indicate which function category is being bound,
+    allowing the worker to apply appropriate validation and processing.
 
     """
 
+    AGGREGATE = "aggregate"
     SCALAR = "scalar"
     TABLE = "table"
-    CATALOG = "catalog"
 
 
-@dataclass(frozen=True, slots=True)
-class InitResult:
-    """Result from the global initialization phase of a function.
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BindResponse(ArrowSerializableDataclass):
+    """The result of calling bind() on a function.
 
-    When a function supports parallel execution (max_processes > 1), the first
-    worker runs initialize_global_state() which returns a InitResult. This result
-    contains an identifier that is passed to all subsequent parallel workers
-    via load_global_state(), allowing them to share state or coordinate processing.
+    The bind result is created by calling bind() and importantly contains
+    the function's output characteristics. It is serialized and sent to the
+    client before any data processing begins.
 
     Attributes:
-        global_execution_identifier: Opaque bytes that identify the initialized state.
-            None if no global initialization was performed.
+        output_schema: Arrow schema describing the structure of output batches.
+        opaque_data: Serialized data that is opaque to the caller that must
+            be passed to any init() invocations.
 
     """
 
-    global_execution_identifier: bytes | None = None
-
-    _IDENTIFIER_FIELD_NAME: ClassVar[str] = "global_execution_identifier"
-
-    @classmethod
-    def has_identifier(cls, data: pa.RecordBatch) -> bool:
-        """Check if the RecordBatch contains a global_execution_identifier field.
-
-        Args:
-            data: RecordBatch to check for the field.
-
-        Returns:
-            True if the field exists, False otherwise.
-
-        """
-        return cls._IDENTIFIER_FIELD_NAME in data.schema.names
-
-    def schema(self) -> pa.Schema:
-        """Return Arrow schema used when serializing InitResult.
-
-        Returns:
-            Arrow schema with fields for each serialized attribute.
-
-        """
-        return pa.schema(
-            [
-                pa.field(self._IDENTIFIER_FIELD_NAME, pa.binary(), nullable=True),
-            ]
-        )
-
-    def serialize(self) -> bytes:
-        """Serialize InitResult to an Arrow RecordBatch.
-
-        Returns:
-            RecordBatch containing serialized InitResult fields.
-
-        """
-        batch = pa.RecordBatch.from_pylist(
-            [
-                {
-                    self._IDENTIFIER_FIELD_NAME: self.global_execution_identifier,
-                }
-            ],
-            schema=self.schema(),
-        )
-        return vgi.ipc_utils.serialize_record_batch(
-            batch,
-            vgi.ipc_utils.protocol_state_metadata(
-                vgi.ipc_utils.ProtocolState.INIT_RESULT
-            ),
-        )
-
-    @classmethod
-    def deserialize(
-        cls,
-        data: pa.RecordBatch,
-        custom_metadata: pa.KeyValueMetadata | None = None,
-    ) -> InitResult:
-        """Deserialize InitResult from an Arrow RecordBatch.
-
-        Args:
-          data: RecordBatch containing serialized InitResult fields.
-          custom_metadata: Optional batch metadata for protocol state validation.
-
-        Returns:
-          Deserialized InitResult instance.
-
-        """
-        first_row = vgi.ipc_utils.validate_single_row_batch(
-            data,
-            "InitResult",
-            required_fields=[cls._IDENTIFIER_FIELD_NAME],
-            custom_metadata=custom_metadata,
-            expected_protocol_state=vgi.ipc_utils.ProtocolState.INIT_RESULT,
-        )
-        return InitResult(
-            global_execution_identifier=first_row[cls._IDENTIFIER_FIELD_NAME],
-        )
+    output_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
+    opaque_data: Annotated[ArrowSerializableDataclass | None, ArrowType(pa.binary())] = None
 
 
-@dataclass(frozen=True, slots=True)
-class Invocation:
-    """Complete function invocation request sent from client to worker.
-
-    Invocation encapsulates all information needed to bind and execute a function:
-    the function name, its arguments, the expected input schema (for table
-    functions), the function type, and identifiers for logging and correlation.
-
-    This is serialized to Arrow IPC format and sent as the first message when
-    the client connects to a worker subprocess.
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BaseInitResponse(ArrowSerializableDataclass):
+    """The result of calling init() on a function.
 
     Attributes:
-        function_name: Name of the function to invoke, must exist in worker registry.
-        input_schema: Arrow schema of input data. Required for table-in-out and
-            scalar functions that process input batches. None for table functions
-            that generate output without input.
-        function_type: Type of function being invoked (SCALAR or TABLE). Used by
-            the client to determine the correct init data format to send.
-        correlation_id: String identifier for logging and correlation purposes.
-        invocation_id: Unique bytes identifying this function binding. Used to
-            correlate multiple parallel workers processing the same logical call.
-        global_execution_identifier: Optional result from global initialization phase.
-        arguments: Positional and named arguments passed to the function.
-        client_features: Feature flags supported by the client. The worker will
-            respond with active_features in OutputSpec indicating which features
-            will be used for this invocation.
-        attach_id: Optional unique identifier for the DuckDB database attachment.
-            When VGI is used from an attached database, this allows tracing calls
-            back to that specific attachment. None when not using attached databases.
-        settings: Optional dictionary of settings/pragmas to pass
-            to the function. Functions can declare required settings via
-            Meta.required_settings and access them via self.settings or
-            self.get_setting(). Settings are available during bind phase,
-            allowing output schema to depend on settings.
-        transaction_id: Optional unique identifier for the DuckDB transaction.
-            When provided, allows functions to participate in transactional
-            semantics and correlate calls within the same transaction.
-        traceparent: W3C Trace Context traceparent header for distributed tracing.
-            When provided, allows worker spans to be linked to parent traces.
-            Format: "00-{trace_id}-{span_id}-{trace_flags}"
-        tracestate: W3C Trace Context tracestate header for vendor-specific data.
-            Optional companion to traceparent for additional trace context.
-
-    Example:
-        invocation = Invocation(
-            function_name="sum_values",
-            input_schema=pa.schema([pa.field("col1", pa.int64())]),
-            function_type=InvocationType.TABLE,
-            correlation_id="request-123",
-            invocation_id=None,  # Set by worker after binding
-            arguments=Arguments(positional=("col1", "col2")),
-        )
+        execution_id: A unique id for the function execution.
+        opaque_data: Serialized data that is opaque to the caller that must
+            be passed to any init() invocations.
 
     """
 
-    function_name: str
-    input_schema: pa.Schema | None
-    function_type: InvocationType
+    execution_id: bytes = field(default_factory=lambda: uuid.uuid4().bytes)
+    opaque_data: Annotated[ArrowSerializableDataclass | None, ArrowType(pa.binary())] = None
 
-    correlation_id: str
-    # The unique identifier for the call, typically this may be a uuid.
-    invocation_id: bytes | None
 
-    global_execution_identifier: InitResult | None = None
-    arguments: Arguments = Arguments()
-    client_features: frozenset[str] = frozenset()
-    attach_id: bytes | None = None
-    settings: dict[str, str] | None = None
-    transaction_id: bytes | None = None
-    traceparent: str | None = None
-    tracestate: str | None = None
+@dataclass(frozen=True, slots=True, kw_only=True)
+class GlobalInitResponse(BaseInitResponse):
+    """The result of calling init() on a function.
 
-    def with_global_execution_identifier(
-        self, global_execution_identifier: InitResult
-    ) -> Invocation:
-        """Return a new Invocation with the given global_execution_identifier."""
-        return replace(self, global_execution_identifier=global_execution_identifier)
+    Attributes:
+        max_workers: The maximum number of worker processes that may be
+            used for this function execution. This allows the function to control
+            parallelism.
 
-    def serialize(self) -> bytes:
-        """Serialize Invocation to an Arrow RecordBatch.
+    """
 
-        Returns:
-            RecordBatch containing serialized Invocation fields.
-
-        """
-        args_dict = self.arguments.encoded_dict()
-        encoded_batch = pa.RecordBatch.from_pylist([args_dict]).schema
-        args_struct_type = pa.struct(
-            [
-                pa.field(name, encoded_batch.field(name).type)
-                for name in encoded_batch.names
-            ]
-        )
-
-        batch = pa.RecordBatch.from_pylist(
-            [
-                {
-                    "function_name": self.function_name,
-                    "arguments": args_dict,
-                    "input_schema": (
-                        self.input_schema.serialize().to_pybytes()
-                        if self.input_schema
-                        else None
-                    ),
-                    "function_type": self.function_type.value,
-                    "invocation_id": self.invocation_id,
-                    "correlation_id": self.correlation_id,
-                    InitResult._IDENTIFIER_FIELD_NAME: (
-                        self.global_execution_identifier.global_execution_identifier
-                        if self.global_execution_identifier
-                        else None
-                    ),
-                    "client_features": list(self.client_features),
-                    "attach_id": self.attach_id,
-                    "settings": (
-                        list(self.settings.items()) if self.settings else None
-                    ),
-                    "transaction_id": self.transaction_id,
-                    "traceparent": self.traceparent,
-                    "tracestate": self.tracestate,
-                }
-            ],
-            schema=pa.schema(
-                [
-                    pa.field("function_name", pa.string(), nullable=False),
-                    pa.field("arguments", args_struct_type, nullable=True),
-                    pa.field("input_schema", pa.binary(), nullable=True),
-                    pa.field("function_type", pa.string(), nullable=False),
-                    pa.field("invocation_id", pa.binary(), nullable=True),
-                    pa.field("correlation_id", pa.string(), nullable=False),
-                    pa.field(
-                        InitResult._IDENTIFIER_FIELD_NAME,
-                        pa.binary(),
-                        nullable=True,
-                    ),
-                    pa.field("client_features", pa.list_(pa.utf8()), nullable=False),
-                    pa.field("attach_id", pa.binary(), nullable=True),
-                    pa.field(
-                        "settings",
-                        pa.map_(pa.utf8(), pa.utf8()),
-                        nullable=True,
-                    ),
-                    pa.field("transaction_id", pa.binary(), nullable=True),
-                    pa.field("traceparent", pa.string(), nullable=True),
-                    pa.field("tracestate", pa.string(), nullable=True),
-                ]
-            ),
-        )
-        return vgi.ipc_utils.serialize_record_batch(
-            batch,
-            vgi.ipc_utils.protocol_state_metadata(
-                vgi.ipc_utils.ProtocolState.INVOCATION
-            ),
-        )
-
-    @staticmethod
-    def deserialize(
-        data: pa.RecordBatch,
-        custom_metadata: pa.KeyValueMetadata | None = None,
-    ) -> Invocation:
-        """Deserialize Invocation from an Arrow RecordBatch.
-
-        Args:
-          data: RecordBatch containing serialized Invocation fields.
-          custom_metadata: Optional batch metadata for protocol state validation.
-
-        Returns:
-          Deserialized Invocation instance.
-
-        Raises:
-          ValueError: If RecordBatch is empty, has multiple rows, or missing
-              required fields.
-
-        """
-        required_fields = [
-            "function_name",
-            "arguments",
-            "input_schema",
-            "function_type",
-            "invocation_id",
-            "correlation_id",
-        ]
-        first_row = vgi.ipc_utils.validate_single_row_batch(
-            data,
-            "Invocation",
-            required_fields=required_fields,
-            custom_metadata=custom_metadata,
-            expected_protocol_state=vgi.ipc_utils.ProtocolState.INVOCATION,
-        )
-
-        input_schema = None
-        if first_row["input_schema"] is not None:
-            input_schema = pa.ipc.read_schema(pa.py_buffer(first_row["input_schema"]))
-
-        # Parse function_type from string value
-        function_type = InvocationType(first_row["function_type"])
-
-        # Parse global_execution_identifier - only create InitResult if field exists
-        # and has a non-None value
-        global_execution_identifier = None
-        if InitResult._IDENTIFIER_FIELD_NAME in data.schema.names:
-            identifier_value = first_row[InitResult._IDENTIFIER_FIELD_NAME]
-            if identifier_value is not None:
-                global_execution_identifier = InitResult(identifier_value)
-
-        # Parse client_features - default to empty set for backward compatibility
-        client_features: frozenset[str] = frozenset()
-        if "client_features" in data.schema.names:
-            features_list = first_row.get("client_features")
-            if features_list is not None:
-                client_features = frozenset(features_list)
-
-        # Parse attach_id - optional field for database attachment tracking
-        attach_id: bytes | None = None
-        if "attach_id" in data.schema.names:
-            attach_id = first_row.get("attach_id")
-
-        # Parse settings - optional field for settings/pragmas
-        settings: dict[str, str] | None = None
-        if "settings" in data.schema.names:
-            settings_value = first_row.get("settings")
-            if settings_value is not None:
-                # Map type deserializes as list of (key, value) tuples
-                settings = dict(settings_value)
-
-        # Parse transaction_id - optional field for transaction tracking
-        transaction_id: bytes | None = None
-        if "transaction_id" in data.schema.names:
-            transaction_id = first_row.get("transaction_id")
-
-        # Parse traceparent - optional field for W3C Trace Context
-        traceparent: str | None = None
-        if "traceparent" in data.schema.names:
-            traceparent = first_row.get("traceparent")
-
-        # Parse tracestate - optional field for W3C Trace Context
-        tracestate: str | None = None
-        if "tracestate" in data.schema.names:
-            tracestate = first_row.get("tracestate")
-
-        return Invocation(
-            function_name=first_row["function_name"],
-            input_schema=input_schema,
-            function_type=function_type,
-            arguments=Arguments.decode(data.column("arguments")[0]),
-            invocation_id=first_row["invocation_id"],
-            correlation_id=first_row["correlation_id"],
-            global_execution_identifier=global_execution_identifier,
-            client_features=client_features,
-            attach_id=attach_id,
-            settings=settings,
-            transaction_id=transaction_id,
-            traceparent=traceparent,
-            tracestate=tracestate,
-        )
-
-    @staticmethod
-    def pid() -> int:
-        """Return the current process ID."""
-        return os.getpid()
+    max_workers: int = DEFAULT_MAX_WORKERS

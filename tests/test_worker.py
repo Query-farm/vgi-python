@@ -5,7 +5,6 @@ import pytest
 
 from vgi import Arg, TableInOutFunction, TableInput
 from vgi.arguments import Arguments
-from vgi.invocation import Invocation, InvocationType
 from vgi.worker import Worker
 
 
@@ -15,7 +14,7 @@ class TestFunctionOverloading:
     def test_single_candidate_always_matches(self) -> None:
         """With only one candidate, it's always selected."""
 
-        class SingleFunction(TableInOutFunction):
+        class SingleFunction(TableInOutFunction):  # type: ignore[type-arg]
             """Single function."""
 
             class Meta:
@@ -23,22 +22,18 @@ class TestFunctionOverloading:
 
             data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
 
-        invocation = Invocation(
+        result = Worker._match_function_arguments(
             function_name="single",
-            input_schema=pa.schema([]),
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
             arguments=Arguments(),
+            input_schema=pa.schema([]),
+            candidates=[SingleFunction],
         )
-
-        result = Worker._match_function(invocation, [SingleFunction])
         assert result is SingleFunction
 
     def test_match_by_positional_count(self) -> None:
         """Match function by number of positional arguments."""
 
-        class NoArgsFunc(TableInOutFunction):
+        class NoArgsFunc(TableInOutFunction):  # type: ignore[type-arg]
             """No args."""
 
             class Meta:
@@ -46,7 +41,7 @@ class TestFunctionOverloading:
 
             data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
 
-        class OneArgFunc(TableInOutFunction):
+        class OneArgFunc(TableInOutFunction):  # type: ignore[type-arg]
             """One arg."""
 
             class Meta:
@@ -55,7 +50,7 @@ class TestFunctionOverloading:
             count = Arg[int](0, doc="Count")
             data: TableInput = Arg[TableInput](1, doc="Input")  # type: ignore[assignment]
 
-        class TwoArgsFunc(TableInOutFunction):
+        class TwoArgsFunc(TableInOutFunction):  # type: ignore[type-arg]
             """Two args."""
 
             class Meta:
@@ -68,42 +63,42 @@ class TestFunctionOverloading:
         candidates = [NoArgsFunc, OneArgFunc, TwoArgsFunc]
 
         # No arguments -> NoArgsFunc
-        inv0 = Invocation(
-            function_name="func",
-            arguments=Arguments(positional=()),
-            input_schema=pa.schema([]),
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
+        assert (
+            Worker._match_function_arguments(
+                function_name="func",
+                arguments=Arguments(positional=()),
+                input_schema=pa.schema([]),
+                candidates=candidates,
+            )
+            is NoArgsFunc
         )
-        assert Worker._match_function(inv0, candidates) is NoArgsFunc
 
         # One argument -> OneArgFunc
-        inv1 = Invocation(
-            function_name="func",
-            arguments=Arguments(positional=(pa.scalar(5),)),
-            input_schema=pa.schema([]),
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
+        assert (
+            Worker._match_function_arguments(
+                function_name="func",
+                arguments=Arguments(positional=(pa.scalar(5),)),
+                input_schema=pa.schema([]),
+                candidates=candidates,
+            )
+            is OneArgFunc
         )
-        assert Worker._match_function(inv1, candidates) is OneArgFunc
 
         # Two arguments -> TwoArgsFunc
-        inv2 = Invocation(
-            function_name="func",
-            arguments=Arguments(positional=(pa.scalar(5), pa.scalar(10))),
-            input_schema=pa.schema([]),
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
+        assert (
+            Worker._match_function_arguments(
+                function_name="func",
+                arguments=Arguments(positional=(pa.scalar(5), pa.scalar(10))),
+                input_schema=pa.schema([]),
+                candidates=candidates,
+            )
+            is TwoArgsFunc
         )
-        assert Worker._match_function(inv2, candidates) is TwoArgsFunc
 
     def test_match_with_optional_args(self) -> None:
         """Match considers optional arguments with defaults."""
 
-        class RequiredFunc(TableInOutFunction):
+        class RequiredFunc(TableInOutFunction):  # type: ignore[type-arg]
             """Required arg."""
 
             class Meta:
@@ -112,7 +107,7 @@ class TestFunctionOverloading:
             count = Arg[int](0, doc="Count")
             data: TableInput = Arg[TableInput](1, doc="Input")  # type: ignore[assignment]
 
-        class OptionalFunc(TableInOutFunction):
+        class OptionalFunc(TableInOutFunction):  # type: ignore[type-arg]
             """Optional arg."""
 
             class Meta:
@@ -122,33 +117,27 @@ class TestFunctionOverloading:
             data: TableInput = Arg[TableInput](1, doc="Input")  # type: ignore[assignment]
 
         # With argument provided, both match (ambiguous)
-        inv_with = Invocation(
-            function_name="func",
-            arguments=Arguments(positional=(pa.scalar(5),)),
-            input_schema=pa.schema([]),
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
-        )
         with pytest.raises(ValueError, match="Ambiguous"):
-            Worker._match_function(inv_with, [RequiredFunc, OptionalFunc])
+            Worker._match_function_arguments(
+                function_name="func",
+                arguments=Arguments(positional=(pa.scalar(5),)),
+                input_schema=pa.schema([]),
+                candidates=[RequiredFunc, OptionalFunc],
+            )
 
         # Without argument, only OptionalFunc matches
-        inv_without = Invocation(
+        result = Worker._match_function_arguments(
             function_name="func",
             arguments=Arguments(positional=()),
             input_schema=pa.schema([]),
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
+            candidates=[RequiredFunc, OptionalFunc],
         )
-        result = Worker._match_function(inv_without, [RequiredFunc, OptionalFunc])
         assert result is OptionalFunc
 
     def test_match_by_named_args(self) -> None:
         """Match function by named argument keys."""
 
-        class FormatFunc(TableInOutFunction):
+        class FormatFunc(TableInOutFunction):  # type: ignore[type-arg]
             """Format func."""
 
             class Meta:
@@ -157,7 +146,7 @@ class TestFunctionOverloading:
             fmt = Arg[str]("format", doc="Format")
             data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
 
-        class SepFunc(TableInOutFunction):
+        class SepFunc(TableInOutFunction):  # type: ignore[type-arg]
             """Separator func."""
 
             class Meta:
@@ -169,31 +158,31 @@ class TestFunctionOverloading:
         candidates = [FormatFunc, SepFunc]
 
         # Named arg "format" -> FormatFunc
-        inv_format = Invocation(
-            function_name="func",
-            arguments=Arguments(positional=(), named={"format": pa.scalar("json")}),
-            input_schema=pa.schema([]),
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
+        assert (
+            Worker._match_function_arguments(
+                function_name="func",
+                arguments=Arguments(positional=(), named={"format": pa.scalar("json")}),
+                input_schema=pa.schema([]),
+                candidates=candidates,
+            )
+            is FormatFunc
         )
-        assert Worker._match_function(inv_format, candidates) is FormatFunc
 
         # Named arg "separator" -> SepFunc
-        inv_sep = Invocation(
-            function_name="func",
-            arguments=Arguments(positional=(), named={"separator": pa.scalar(",")}),
-            input_schema=pa.schema([]),
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
+        assert (
+            Worker._match_function_arguments(
+                function_name="func",
+                arguments=Arguments(positional=(), named={"separator": pa.scalar(",")}),
+                input_schema=pa.schema([]),
+                candidates=candidates,
+            )
+            is SepFunc
         )
-        assert Worker._match_function(inv_sep, candidates) is SepFunc
 
     def test_no_match_raises_error(self) -> None:
         """ValueError raised when no function matches."""
 
-        class OneArgFunc(TableInOutFunction):
+        class OneArgFunc(TableInOutFunction):  # type: ignore[type-arg]
             """One arg."""
 
             class Meta:
@@ -203,21 +192,18 @@ class TestFunctionOverloading:
             data: TableInput = Arg[TableInput](1, doc="Input")  # type: ignore[assignment]
 
         # Too many positional arguments
-        inv = Invocation(
-            function_name="func",
-            arguments=Arguments(positional=(pa.scalar(1), pa.scalar(2), pa.scalar(3))),
-            input_schema=pa.schema([]),
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
-        )
         with pytest.raises(ValueError, match="No matching function"):
-            Worker._match_function(inv, [OneArgFunc])
+            Worker._match_function_arguments(
+                function_name="func",
+                arguments=Arguments(positional=(pa.scalar(1), pa.scalar(2), pa.scalar(3))),
+                input_schema=pa.schema([]),
+                candidates=[OneArgFunc],
+            )
 
     def test_no_match_error_shows_overloads(self) -> None:
         """Error message lists available overloads."""
 
-        class OneArgFunc(TableInOutFunction):
+        class OneArgFunc(TableInOutFunction):  # type: ignore[type-arg]
             """One arg."""
 
             class Meta:
@@ -226,7 +212,7 @@ class TestFunctionOverloading:
             count = Arg[int](0, doc="Count")
             data: TableInput = Arg[TableInput](1, doc="Input")  # type: ignore[assignment]
 
-        class TwoArgFunc(TableInOutFunction):
+        class TwoArgFunc(TableInOutFunction):  # type: ignore[type-arg]
             """Two args."""
 
             class Meta:
@@ -236,22 +222,19 @@ class TestFunctionOverloading:
             y = Arg[int](1, doc="Y")
             data: TableInput = Arg[TableInput](2, doc="Input")  # type: ignore[assignment]
 
-        inv = Invocation(
-            function_name="func",
-            arguments=Arguments(positional=()),
-            input_schema=pa.schema([]),
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
-        )
         with pytest.raises(ValueError, match="OneArgFunc") as exc_info:
-            Worker._match_function(inv, [OneArgFunc, TwoArgFunc])
+            Worker._match_function_arguments(
+                function_name="func",
+                arguments=Arguments(positional=()),
+                input_schema=pa.schema([]),
+                candidates=[OneArgFunc, TwoArgFunc],
+            )
         assert "TwoArgFunc" in str(exc_info.value)
 
     def test_unknown_named_arg_rejects(self) -> None:
         """Function rejected if invocation has unknown named args."""
 
-        class KnownArgFunc(TableInOutFunction):
+        class KnownArgFunc(TableInOutFunction):  # type: ignore[type-arg]
             """Known arg."""
 
             class Meta:
@@ -261,21 +244,18 @@ class TestFunctionOverloading:
             data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
 
         # Named arg "unknown" not in function
-        inv = Invocation(
-            function_name="func",
-            arguments=Arguments(positional=(), named={"unknown": pa.scalar("x")}),
-            input_schema=pa.schema([]),
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
-        )
         with pytest.raises(ValueError, match="No matching function"):
-            Worker._match_function(inv, [KnownArgFunc])
+            Worker._match_function_arguments(
+                function_name="func",
+                arguments=Arguments(positional=(), named={"unknown": pa.scalar("x")}),
+                input_schema=pa.schema([]),
+                candidates=[KnownArgFunc],
+            )
 
     def test_missing_required_named_rejects(self) -> None:
         """Function rejected if required named arg missing."""
 
-        class RequiredNamedFunc(TableInOutFunction):
+        class RequiredNamedFunc(TableInOutFunction):  # type: ignore[type-arg]
             """Required named arg."""
 
             class Meta:
@@ -285,16 +265,13 @@ class TestFunctionOverloading:
             data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
 
         # Missing required named arg
-        inv = Invocation(
-            function_name="func",
-            arguments=Arguments(positional=(), named=None),
-            input_schema=pa.schema([]),
-            function_type=InvocationType.TABLE,
-            correlation_id="test",
-            invocation_id=b"test",
-        )
         with pytest.raises(ValueError, match="No matching function"):
-            Worker._match_function(inv, [RequiredNamedFunc])
+            Worker._match_function_arguments(
+                function_name="func",
+                arguments=Arguments(positional=(), named=None),
+                input_schema=pa.schema([]),
+                candidates=[RequiredNamedFunc],
+            )
 
 
 class TestWorkerRegistry:
@@ -323,7 +300,7 @@ class TestWorkerRegistry:
     def test_multiple_functions_same_name(self) -> None:
         """Registry allows multiple functions with same name."""
 
-        class Func1(TableInOutFunction):
+        class Func1(TableInOutFunction):  # type: ignore[type-arg]
             """Func1."""
 
             class Meta:
@@ -331,7 +308,7 @@ class TestWorkerRegistry:
 
             data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
 
-        class Func2(TableInOutFunction):
+        class Func2(TableInOutFunction):  # type: ignore[type-arg]
             """Func2."""
 
             class Meta:

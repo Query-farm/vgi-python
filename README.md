@@ -20,21 +20,19 @@
 ```python
 # my_worker.py
 from typing import Annotated
-from vgi import ScalarFunction, Arg, Worker
+from vgi import ScalarFunction, Param, Returns, Worker
 import pyarrow as pa
 import pyarrow.compute as pc
 
 class Greeting(ScalarFunction):
     """Generate a greeting for each name."""
 
-    class Meta:
-        output_type = pa.string()
-
-    col_name: Annotated[str, Arg(0, doc="Column containing names")]
-
-    def compute(self, batch: pa.RecordBatch) -> pa.Array:
-        names = batch.column(self.col_name)
-        return pc.binary_join_element_wise("Hello, ", names, "!")
+    @classmethod
+    def compute(
+        cls,
+        name: Annotated[pa.StringArray, Param(doc="Column containing names")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        return pc.binary_join_element_wise("Hello, ", name, "!")
 
 class MyWorker(Worker):
     functions = [Greeting]
@@ -110,19 +108,18 @@ A worker is a Python script that defines one or more functions:
 from typing import Annotated
 import pyarrow as pa
 import pyarrow.compute as pc
-from vgi import ScalarFunction, Arg, Worker
+from vgi import ScalarFunction, Param, Returns, Worker
 
 
 class UpperCase(ScalarFunction):
     """Convert string values to uppercase."""
 
-    class Meta:
-        output_type = pa.string()
-
-    col_name: Annotated[str, Arg(0, doc="String value to uppercase")]
-
-    def compute(self, batch: pa.RecordBatch) -> pa.Array:
-        return pc.utf8_upper(batch.column(self.col_name))
+    @classmethod
+    def compute(
+        cls,
+        value: Annotated[pa.StringArray, Param(doc="String value to uppercase")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        return pc.utf8_upper(value)
 
 
 class MyWorker(Worker):
@@ -157,11 +154,11 @@ Your function is now available in DuckDB. Ship the Python script to your team, a
 
 ## Going Further: Type-Safe Arguments
 
-For production use, you'll want type validation. Use `AnyArrowValue` with `type_bound` to ensure columns have the correct type:
+For production use, you'll want type validation. Use `Param` with `type_bound` to ensure columns have the correct type:
 
 ```python
 from typing import Annotated
-from vgi import ScalarFunction, Arg, AnyArrowValue, Worker
+from vgi import ScalarFunction, Param, Returns, Worker
 import pyarrow as pa
 import pyarrow.compute as pc
 
@@ -169,17 +166,13 @@ import pyarrow.compute as pc
 class AddValues(ScalarFunction):
     """Add two integer values together."""
 
-    class Meta:
-        output_type = pa.int64()
-
-    left: Annotated[AnyArrowValue, Arg(0, type_bound=pa.types.is_integer, doc="First integer value")]
-    right: Annotated[AnyArrowValue, Arg(1, type_bound=pa.types.is_integer, doc="Second integer value")]
-
-    def compute(self, batch: pa.RecordBatch) -> pa.Array:
-        return pc.add(
-            batch.column(self.left.value),
-            batch.column(self.right.value)
-        )
+    @classmethod
+    def compute(
+        cls,
+        left: Annotated[pa.Int64Array, Param(type_bound=pa.types.is_integer, doc="First integer value")],
+        right: Annotated[pa.Int64Array, Param(type_bound=pa.types.is_integer, doc="Second integer value")],
+    ) -> Annotated[pa.Int64Array, Returns()]:
+        return pc.add(left, right)
 ```
 
 ```sql
@@ -190,10 +183,11 @@ SELECT add_values(price, tax) as total FROM orders;
 -- Error: Column 'name' has type string, expected integer
 ```
 
-Key differences from `Annotated[str, Arg(...)]`:
-- `AnyArrowValue` validates the column's Arrow type at bind time
-- `type_bound` specifies which types are allowed
-- Access the column name via `.value` (e.g., `self.left.value`)
+Key features of the `Param`/`Returns` API:
+- Types are inferred from PyArrow array annotations (`pa.Int64Array` -> `pa.int64()`)
+- `type_bound` validates the column's Arrow type at bind time
+- `ConstParam` receives scalar values (not columns) from SQL arguments
+- `Returns` declares the output type
 
 ---
 
@@ -213,73 +207,84 @@ Transform each row independently. Output has the same number of rows as input.
 
 ```python
 class Double(ScalarFunction):
-    class Meta:
-        output_type = pa.int64()
+    """Double an integer value."""
 
-    col_name: Annotated[str, Arg(0)]
-
-    def compute(self, batch: pa.RecordBatch) -> pa.Array:
-        return pc.multiply(batch.column(self.col_name), 2)
+    @classmethod
+    def compute(
+        cls,
+        value: Annotated[pa.Int64Array, Param(doc="Value to double")],
+    ) -> Annotated[pa.Int64Array, Returns()]:
+        return pc.multiply(value, 2)
 ```
 
 ### Table Functions
 
-Generate data without input. Useful for sequences, reading external sources, etc.
+Generate output data from arguments (no input table). Each call to `process()` emits
+a batch via `out.emit()` or signals completion via `out.finish()`.
 
 ```python
-class Sequence(TableFunctionGenerator):
-    class Meta:
-        max_workers = 1
+from dataclasses import dataclass
+from typing import Annotated, ClassVar
+import pyarrow as pa
+from vgi import TableFunctionGenerator, Arg
+from vgi.table_function import ProcessParams, OutputCollector
 
-    count: Annotated[int, Arg(0)]
 
-    @property
-    def output_schema(self) -> pa.Schema:
-        return pa.schema([("n", pa.int64())])
+@dataclass
+class CounterState:
+    remaining: int
+    current: int = 0
 
-    def process(self):
-        for i in range(0, self.count, 1000):
-            batch = pa.RecordBatch.from_pydict(
-                {"n": list(range(i, min(i + 1000, self.count)))},
-                schema=self.output_schema
-            )
-            yield Output(batch)
-```
 
-```sql
-SELECT * FROM sequence(10000);
+class Counter(TableFunctionGenerator):
+    """Generate a sequence of integers."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate")]
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([("n", pa.int64())])
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams) -> CounterState:
+        return CounterState(remaining=params.args.count)
+
+    @classmethod
+    def process(cls, params: ProcessParams, state: CounterState, out: OutputCollector) -> None:
+        if state.remaining <= 0:
+            out.finish()
+            return
+        batch_size = min(state.remaining, 1000)
+        values = list(range(state.current, state.current + batch_size))
+        out.emit(pa.RecordBatch.from_pydict({"n": values}, schema=params.output_schema))
+        state.current += batch_size
+        state.remaining -= batch_size
 ```
 
 ### Table-In-Out Functions
 
-Transform or aggregate input data. Supports streaming transforms and final aggregation.
+Transform or aggregate input data. Override `transform()` for per-batch processing
+and `finish()` for final output after all input is consumed.
 
 ```python
-class Sum(TableInOutFunction):
-    class Meta:
-        max_workers = 1  # Aggregations need single worker
+import pyarrow as pa
+import pyarrow.compute as pc
+from vgi import TableInOutFunction
 
-    col_name: Annotated[str, Arg(0)]
 
-    def bind(self) -> None:
-        self.total = 0
+class FilterPositive(TableInOutFunction):
+    """Keep only rows where all numeric columns are positive."""
 
     @property
     def output_schema(self) -> pa.Schema:
-        return pa.schema([("sum", pa.int64())])
+        return self.input_schema
 
     def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
-        self.total += pc.sum(batch.column(self.col_name)).as_py()
-        return self.empty_output_batch
-
-    def finish(self) -> list[pa.RecordBatch]:
-        return [pa.RecordBatch.from_pydict(
-            {"sum": [self.total]}, schema=self.output_schema
-        )]
-```
-
-```sql
-SELECT * FROM sum('amount', (SELECT * FROM orders));
+        mask = None
+        for i, field in enumerate(batch.schema):
+            if pa.types.is_integer(field.type) or pa.types.is_floating(field.type):
+                col_mask = pc.greater(batch.column(i), 0)
+                mask = col_mask if mask is None else pc.and_(mask, col_mask)
+        if mask is not None:
+            return pc.filter(batch, mask)
+        return batch
 ```
 
 ---
@@ -314,21 +319,10 @@ See [Catalog Interface](docs/catalog-interface.md) for implementation details.
 
 ## Parallel Execution
 
-Functions can run across multiple worker processes:
+Functions can run across multiple worker processes. The client automatically
+distributes input batches round-robin across workers and collects results.
 
-```python
-class ParallelTransform(TableInOutFunction):
-    class Meta:
-        max_workers = 8  # Up to 8 parallel workers
-
-    def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
-        # Each worker processes different batches
-        return expensive_computation(batch)
-```
-
-For aggregations that accumulate state, use `max_workers = 1`.
-
-See [Generator API](docs/generator-api.md) for advanced patterns like distributed aggregation.
+See [Function API Reference](docs/generator-api.md) for advanced patterns like distributed aggregation.
 
 ---
 
@@ -336,16 +330,15 @@ See [Generator API](docs/generator-api.md) for advanced patterns like distribute
 
 Errors in your functions propagate to DuckDB with clear messages:
 
-```python
-def compute(self, batch: pa.RecordBatch) -> pa.Array:
-    if batch.num_rows == 0:
-        raise ValueError("Empty batch not supported")
-    # ...
+```python test="skip"
+@classmethod
+def compute(cls, value: Annotated[pa.Int64Array, Param()]) -> Annotated[pa.Int64Array, Returns()]:
+    raise ValueError("Something went wrong")
 ```
 
 ```sql
-SELECT my_func(col) FROM empty_table;
--- Error: Empty batch not supported
+SELECT my_func(col) FROM my_table;
+-- Error: Something went wrong
 ```
 
 Type bound violations are caught at bind time (before processing starts):
@@ -360,32 +353,7 @@ SELECT add_values(name, price) FROM orders;
 
 ## Testing Your Functions
 
-Test functions directly in Python without DuckDB:
-
-```python
-import pyarrow as pa
-from my_worker import UpperCase
-
-# Create test input
-batch = pa.RecordBatch.from_pydict({"name": ["alice", "bob"]})
-
-# Create function instance (normally done by the worker)
-from vgi import Invocation, Arguments
-invocation = Invocation(
-    function_name="upper_case",
-    arguments=Arguments(positional=[pa.scalar("name")]),
-    input_schema=batch.schema,
-)
-
-import structlog
-func = UpperCase(invocation=invocation, logger=structlog.get_logger())
-
-# Call compute
-result = func.compute(batch)
-assert result.to_pylist() == ["ALICE", "BOB"]
-```
-
-Or use the VGI client for integration tests:
+Use the VGI client for integration tests:
 
 ```python
 from vgi.client import Client
@@ -408,32 +376,35 @@ assert results[0]["result"].to_pylist() == ["ALICE", "BOB"]
 
 ## Protocol Overview
 
-VGI uses Apache Arrow IPC streaming over stdin/stdout:
+VGI uses `vgi_rpc`, an Apache Arrow IPC-based RPC framework, for all
+client-worker communication over stdin/stdout pipes:
 
 ```
 Client                              Worker
   │                                   │
-  │──── Invocation ────────────────▶  │  Function name, args, input schema
-  │◀─── OutputSpec ─────────────────  │  Output schema, max_workers
+  │──── bind(request) ──────────────▶ │  Function name, args, input schema
+  │◀─── BindResponse ────────────────  │  Output schema, opaque data
   │                                   │
-  │──── Input Batch 1 ──────────────▶ │
-  │◀─── Output Batch 1 ──────────────  │  transform(batch)
+  │──── init(request) ──────────────▶ │  Start processing stream
+  │◀─── Stream header ───────────────  │  execution_id, max_workers
+  │                                   │
+  │──── exchange(batch1) ───────────▶ │
+  │◀─── output batch 1 ──────────────  │  transform(batch)
   │         ...                       │
-  │──── FINALIZE ───────────────────▶ │  Signal end of input
-  │◀─── Final Output ────────────────  │  finish() results
+  │──── [stream close] ─────────────▶ │  Signal end of input
+  │                                   │
+  │──── init(phase=FINALIZE) ───────▶ │  Start finalize stream
+  │◀─── final output batches ────────  │  finish() results
   └───────────────────────────────────┘
 ```
-
-See [Protocol Specification](docs/protocol.md) for details.
 
 ---
 
 ## Documentation
 
-- [Protocol Specification](docs/protocol.md) - Wire format details
-- [Function Lifecycle](docs/lifecycle.md) - Setup, bind, process, teardown
+- [Function Lifecycle](docs/lifecycle.md) - Bind, init, process, finalize
 - [Metadata API](docs/metadata.md) - Function introspection
-- [Generator API](docs/generator-api.md) - Advanced streaming patterns
+- [Function API Reference](docs/generator-api.md) - Advanced function patterns
 - [Catalog Interface](docs/catalog-interface.md) - DuckDB ATTACH integration
 
 ---

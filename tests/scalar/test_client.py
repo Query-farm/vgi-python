@@ -12,6 +12,7 @@ from vgi import schema
 from vgi.arguments import Arguments
 from vgi.client import Client
 from vgi.client.client import ClientError
+from vgi.invocation import BindResponse
 
 
 class TestScalarFunctionClient:
@@ -37,9 +38,7 @@ class TestScalarFunctionClient:
     def test_add_values(self, example_worker: str) -> None:
         """Test add_values scalar function."""
         s = schema(a=pa.int64(), b=pa.int64())
-        batch = pa.RecordBatch.from_pydict(
-            {"a": [1, 2, 3], "b": [10, 20, 30]}, schema=s
-        )
+        batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3], "b": [10, 20, 30]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
@@ -56,9 +55,7 @@ class TestScalarFunctionClient:
     def test_upper_case(self, example_worker: str) -> None:
         """Test upper_case scalar function."""
         s = schema(name=pa.string())
-        batch = pa.RecordBatch.from_pydict(
-            {"name": ["alice", "bob", "charlie"]}, schema=s
-        )
+        batch = pa.RecordBatch.from_pydict({"name": ["alice", "bob", "charlie"]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
@@ -174,9 +171,9 @@ class TestScalarFunctionClient:
         s = schema(x=pa.int64())
         batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=s)
 
-        bind_results: list[pa.RecordBatch] = []
+        bind_results: list[BindResponse] = []
 
-        def capture_bind_result(result: pa.RecordBatch) -> None:
+        def capture_bind_result(result: BindResponse) -> None:
             bind_results.append(result)
 
         with Client(example_worker) as client:
@@ -193,9 +190,8 @@ class TestScalarFunctionClient:
         assert len(bind_results) == 1
         bind_result = bind_results[0]
 
-        # Verify bind result contains expected fields
-        assert "output_schema" in bind_result.schema.names
-        assert "max_processes" in bind_result.schema.names
+        # With BIND/INIT protocol, verify the bind result has the expected fields
+        assert bind_result.output_schema is not None
 
     def test_add_values_accepts_float_columns(self, example_worker: str) -> None:
         """Test that add_values accepts float columns."""
@@ -240,9 +236,7 @@ class TestSumValues:
     def test_sum_two_columns(self, example_worker: str) -> None:
         """Sum of two columns."""
         s = schema(a=pa.int64(), b=pa.int64())
-        batch = pa.RecordBatch.from_pydict(
-            {"a": [1, 2, 3], "b": [10, 20, 30]}, schema=s
-        )
+        batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3], "b": [10, 20, 30]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
@@ -259,18 +253,14 @@ class TestSumValues:
     def test_sum_three_columns(self, example_worker: str) -> None:
         """Sum of three columns using varargs."""
         s = schema(a=pa.int64(), b=pa.int64(), c=pa.int64())
-        batch = pa.RecordBatch.from_pydict(
-            {"a": [1, 2], "b": [10, 20], "c": [100, 200]}, schema=s
-        )
+        batch = pa.RecordBatch.from_pydict({"a": [1, 2], "b": [10, 20], "c": [100, 200]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="sum_values",
                     input=iter([batch]),
-                    arguments=Arguments(
-                        positional=(pa.scalar("a"), pa.scalar("b"), pa.scalar("c"))
-                    ),
+                    arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"), pa.scalar("c"))),
                 )
             )
 
@@ -375,14 +365,9 @@ class TestScalarFunctionParallel:
     def test_parallel_double(self, example_worker: str) -> None:
         """Test scalar function with multiple workers."""
         s = schema(x=pa.int64())
-        batches = [
-            pa.RecordBatch.from_pydict(
-                {"x": list(range(i * 100, (i + 1) * 100))}, schema=s
-            )
-            for i in range(10)
-        ]
+        batches = [pa.RecordBatch.from_pydict({"x": list(range(i * 100, (i + 1) * 100))}, schema=s) for i in range(10)]
 
-        with Client(example_worker, max_workers=4) as client:
+        with Client(example_worker, worker_limit=4) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
@@ -406,13 +391,10 @@ class TestScalarFunctionParallel:
         """Test add_values with multiple workers."""
         s = schema(a=pa.int64(), b=pa.int64())
         batches = [
-            pa.RecordBatch.from_pydict(
-                {"a": [i, i + 1, i + 2], "b": [100, 200, 300]}, schema=s
-            )
-            for i in range(20)
+            pa.RecordBatch.from_pydict({"a": [i, i + 1, i + 2], "b": [100, 200, 300]}, schema=s) for i in range(20)
         ]
 
-        with Client(example_worker, max_workers=3) as client:
+        with Client(example_worker, worker_limit=3) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="add_values",
@@ -435,7 +417,7 @@ class TestScalarFunctionParallel:
             pa.RecordBatch.from_pydict({"x": [4, 5, 6]}, schema=s),
         ]
 
-        with Client(example_worker, max_workers=2) as client:
+        with Client(example_worker, worker_limit=2) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
@@ -458,7 +440,7 @@ class TestScalarFunctionParallel:
         s = schema(x=pa.int64())
         batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=s)
 
-        with Client(example_worker, max_workers=4) as client:
+        with Client(example_worker, worker_limit=4) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
@@ -573,9 +555,7 @@ class TestRandomIntFunction:
         """Test that random values are generated within range from columns."""
         # min/max values come from columns, not arguments
         s = schema(min_val=pa.int64(), max_val=pa.int64())
-        batch = pa.RecordBatch.from_pydict(
-            {"min_val": [10, 10, 10, 10, 10], "max_val": [20, 20, 20, 20, 20]}, schema=s
-        )
+        batch = pa.RecordBatch.from_pydict({"min_val": [10, 10, 10, 10, 10], "max_val": [20, 20, 20, 20, 20]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
@@ -583,9 +563,7 @@ class TestRandomIntFunction:
                     function_name="random_int",
                     input=iter([batch]),
                     # Args are column names, not values
-                    arguments=Arguments(
-                        positional=(pa.scalar("min_val"), pa.scalar("max_val"))
-                    ),
+                    arguments=Arguments(positional=(pa.scalar("min_val"), pa.scalar("max_val"))),
                 )
             )
 
@@ -600,18 +578,14 @@ class TestRandomIntFunction:
     def test_random_int_per_row_range(self, example_worker: str) -> None:
         """Test with different min/max per row."""
         s = schema(min_val=pa.int64(), max_val=pa.int64())
-        batch = pa.RecordBatch.from_pydict(
-            {"min_val": [0, 100, 1000], "max_val": [10, 200, 2000]}, schema=s
-        )
+        batch = pa.RecordBatch.from_pydict({"min_val": [0, 100, 1000], "max_val": [10, 200, 2000]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="random_int",
                     input=iter([batch]),
-                    arguments=Arguments(
-                        positional=(pa.scalar("min_val"), pa.scalar("max_val"))
-                    ),
+                    arguments=Arguments(positional=(pa.scalar("min_val"), pa.scalar("max_val"))),
                 )
             )
 
@@ -625,18 +599,14 @@ class TestRandomIntFunction:
     def test_random_int_empty_batch(self, example_worker: str) -> None:
         """Test with empty batch."""
         s = schema(min_val=pa.int64(), max_val=pa.int64())
-        empty_batch = pa.RecordBatch.from_pydict(
-            {"min_val": [], "max_val": []}, schema=s
-        )
+        empty_batch = pa.RecordBatch.from_pydict({"min_val": [], "max_val": []}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="random_int",
                     input=iter([empty_batch]),
-                    arguments=Arguments(
-                        positional=(pa.scalar("min_val"), pa.scalar("max_val"))
-                    ),
+                    arguments=Arguments(positional=(pa.scalar("min_val"), pa.scalar("max_val"))),
                 )
             )
 
@@ -646,21 +616,15 @@ class TestRandomIntFunction:
     def test_random_int_multiple_batches(self, example_worker: str) -> None:
         """Test with multiple batches."""
         s = schema(min_val=pa.int64(), max_val=pa.int64())
-        batch1 = pa.RecordBatch.from_pydict(
-            {"min_val": [1, 1], "max_val": [5, 5]}, schema=s
-        )
-        batch2 = pa.RecordBatch.from_pydict(
-            {"min_val": [1, 1, 1], "max_val": [5, 5, 5]}, schema=s
-        )
+        batch1 = pa.RecordBatch.from_pydict({"min_val": [1, 1], "max_val": [5, 5]}, schema=s)
+        batch2 = pa.RecordBatch.from_pydict({"min_val": [1, 1, 1], "max_val": [5, 5, 5]}, schema=s)
 
         with Client(example_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="random_int",
                     input=iter([batch1, batch2]),
-                    arguments=Arguments(
-                        positional=(pa.scalar("min_val"), pa.scalar("max_val"))
-                    ),
+                    arguments=Arguments(positional=(pa.scalar("min_val"), pa.scalar("max_val"))),
                 )
             )
 
@@ -688,7 +652,7 @@ class TestScalarMultiWorkerEdgeCases:
         s = schema(x=pa.int64())
         zero_row_batch = pa.RecordBatch.from_pydict({"x": []}, schema=s)
 
-        with Client(example_worker, max_workers=1) as client:
+        with Client(example_worker, worker_limit=1) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
@@ -707,7 +671,7 @@ class TestScalarMultiWorkerEdgeCases:
         zero_row_batch = pa.RecordBatch.from_pydict({"x": []}, schema=s)
 
         # Force 4 workers even though there's only one batch with zero rows
-        with Client(example_worker, max_workers=4) as client:
+        with Client(example_worker, worker_limit=4) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
@@ -726,7 +690,7 @@ class TestScalarMultiWorkerEdgeCases:
         single_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=s)
 
         # Force 4 workers even though there's only 1 batch
-        with Client(example_worker, max_workers=4) as client:
+        with Client(example_worker, worker_limit=4) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
@@ -745,7 +709,7 @@ class TestScalarMultiWorkerEdgeCases:
         batch2 = pa.RecordBatch.from_pydict({"x": [3, 4, 5]}, schema=s)
 
         # Force 4 workers even though there are only 2 batches
-        with Client(example_worker, max_workers=4) as client:
+        with Client(example_worker, worker_limit=4) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="double",

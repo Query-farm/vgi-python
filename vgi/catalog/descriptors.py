@@ -6,47 +6,6 @@ This module provides classes for declaratively defining catalog structure:
 - Table: Table definition with columns and constraints
 - View: View definition with SQL
 
-Example:
-    from vgi import Worker, TableFunctionGenerator, Output
-    from vgi.catalog import Catalog, Schema, Table, View
-    import pyarrow as pa
-
-    class UsersFunction(TableFunctionGenerator):
-        @property
-        def output_schema(self) -> pa.Schema:
-            return pa.schema([("id", pa.int64()), ("name", pa.string())])
-
-        def process(self):
-            yield Output(...)
-
-    # Table with function-backed schema (recommended - no duplication)
-    users_table = Table(
-        name="users",
-        function=UsersFunction,
-        not_null=["id"],
-        unique=[["id"]],
-    )
-
-    # View definition
-    active_users = View(
-        name="active_users",
-        definition="SELECT * FROM users WHERE active = true",
-    )
-
-    class MyWorker(Worker):
-        catalog = Catalog(
-            name="myapp",
-            default_schema="main",
-            schemas=[
-                Schema(
-                    name="main",
-                    tables=[users_table],
-                    views=[active_users],
-                    functions=[UsersFunction],
-                ),
-            ],
-        )
-
 """
 
 from __future__ import annotations
@@ -57,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
+from vgi.arguments import Arguments
 from vgi.catalog.catalog_interface import (
     AttachId,
     SchemaInfo,
@@ -64,6 +24,7 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
+from vgi.invocation import FunctionType
 
 if TYPE_CHECKING:
     from vgi.function import Function
@@ -77,59 +38,37 @@ __all__ = [
 ]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Table:
     """Declarative table definition.
 
     Immutable. Can be defined in two ways:
 
-    1. **Explicit columns**: Provide `columns` schema directly
-    2. **Function-backed**: Provide `function` reference - schema auto-derived
-
-    For function-backed tables, the function must:
-    - Be a TableFunctionGenerator subclass
-    - Have no required arguments (or all with defaults)
-    - Have a static `output_schema` (not dependent on runtime state)
+    1. **Explicit columns**: Provide ``columns`` schema directly.
+    2. **Function-backed**: Provide ``function`` reference — the schema is
+       derived by calling ``bind()`` on the function class. If the function
+       requires arguments, supply them via ``arguments``.
 
     Attributes:
         name: Table name.
         columns: Explicit PyArrow schema (mutually exclusive with function).
         function: TableFunctionGenerator class to derive schema from
             (mutually exclusive with columns).
+        arguments: Arguments to pass when calling ``bind()`` on a
+            function-backed table. Required when the function has
+            mandatory parameters.
         not_null: Tuple of column names with NOT NULL constraints.
         unique: Tuple of column name tuples for UNIQUE constraints.
         check: Tuple of SQL expressions for CHECK constraints.
         comment: Optional table comment.
         tags: Optional metadata tags.
 
-    Example (explicit columns):
-        users = Table(
-            name="users",
-            columns=pa.schema([("id", pa.int64()), ("name", pa.string())]),
-            not_null=["id"],
-            unique=[["id"]],
-        )
-
-    Example (function-backed - schema derived automatically):
-        class UsersFunction(TableFunctionGenerator):
-            @property
-            def output_schema(self) -> pa.Schema:
-                return pa.schema([("id", pa.int64()), ("name", pa.string())])
-            def process(self):
-                yield Output(...)
-
-        users = Table(
-            name="users",
-            function=UsersFunction,  # columns auto-derived from output_schema
-            not_null=["id"],
-            unique=[["id"]],
-        )
-
     """
 
     name: str
     columns: pa.Schema | None = None
-    function: type[TableFunctionGenerator] | None = None
+    function: type[TableFunctionGenerator[Any, Any]] | None = None
+    arguments: Arguments | None = None
     not_null: tuple[str, ...] = ()
     unique: tuple[tuple[str, ...], ...] = ()
     check: tuple[str, ...] = ()
@@ -140,13 +79,9 @@ class Table:
         """Validate configuration and constraint column names."""
         # Validate mutually exclusive options
         if self.columns is None and self.function is None:
-            raise ValueError(
-                f"Table '{self.name}': must specify either 'columns' or 'function'"
-            )
+            raise ValueError(f"Table '{self.name}': must specify either 'columns' or 'function'")
         if self.columns is not None and self.function is not None:
-            raise ValueError(
-                f"Table '{self.name}': cannot specify both 'columns' and 'function'"
-            )
+            raise ValueError(f"Table '{self.name}': cannot specify both 'columns' and 'function'")
 
         # Resolve columns to validate constraints
         resolved = self._get_resolved_columns()
@@ -170,24 +105,32 @@ class Table:
                     )
 
     def _get_resolved_columns(self) -> pa.Schema:
-        """Get the resolved columns schema (explicit or derived from function)."""
+        """Get the resolved columns schema (explicit or derived from function).
+
+        For function-backed tables, calls ``bind()`` on the function class
+        to obtain the output schema.  If the function requires arguments,
+        they must be supplied via the ``arguments`` field.
+        """
         if self.columns is not None:
             return self.columns
 
-        # Derive from function's output_schema
         assert self.function is not None
+        arguments = self.arguments if self.arguments is not None else Arguments()
+        from vgi.protocol import BindRequest
+
+        bind_call = BindRequest(
+            function_name=self.function.Meta.name,  # type: ignore[attr-defined]
+            arguments=arguments,
+            function_type=FunctionType.TABLE,
+        )
         try:
-            # Create instance with empty invocation to get output_schema
-            instance = self.function.__new__(self.function)
-            # Call property directly to get schema
-            schema = instance.output_schema
-            return schema
+            result = self.function.bind(bind_call)
+            return result.output_schema
         except Exception as e:
             raise ValueError(
                 f"Table '{self.name}': failed to derive schema from function "
-                f"'{self.function.__name__}'. Ensure the function has no required "
-                f"arguments and output_schema doesn't depend on runtime state. "
-                f"Error: {e}"
+                f"'{self.function.__name__}' via bind(). If the function requires "
+                f"arguments, pass them via arguments=Arguments(...). Error: {e}"
             ) from e
 
     @property
@@ -232,13 +175,6 @@ class View:
         comment: Optional view comment.
         tags: Optional metadata tags.
 
-    Example:
-        active_users = View(
-            name="active_users",
-            definition="SELECT * FROM users WHERE active = true",
-            comment="Active user accounts",
-        )
-
     """
 
     name: str
@@ -269,15 +205,6 @@ class Schema:
         views: Sequence of View definitions.
         functions: Sequence of Function classes (scalar, table, or aggregate).
 
-    Example:
-        Schema(
-            name="analytics",
-            comment="Analytics data",
-            tables=[users_table, events_table],
-            views=[daily_summary],
-            functions=[AggregateFunction],
-        )
-
     """
 
     name: str
@@ -285,7 +212,7 @@ class Schema:
     tags: dict[str, str] = field(default_factory=dict)
     tables: Sequence[Table] = ()
     views: Sequence[View] = ()
-    functions: Sequence[type[Function[Any]]] = ()
+    functions: Sequence[type[Function]] = ()
 
     def to_schema_info(self, attach_id: AttachId) -> SchemaInfo:
         """Convert to SchemaInfo for catalog response."""
@@ -307,30 +234,6 @@ class Catalog:
         name: The catalog name (used in SQL as the database name).
         default_schema: Schema to use for unqualified table/view/function names.
         schemas: Sequence of Schema objects defining the catalog contents.
-
-    Example:
-        class MyWorker(Worker):
-            catalog = Catalog(
-                name="myapp",
-                default_schema="main",
-                schemas=[
-                    Schema(
-                        name="main",
-                        tables=[users_table, orders_table],
-                        views=[active_users_view],
-                        functions=[MyFunction],
-                    ),
-                    Schema(
-                        name="analytics",
-                        tables=[events_table],
-                        functions=[AggregateFunc],
-                    ),
-                ],
-            )
-
-            def table_scan_function_get(self, *, schema_name, name, **kwargs):
-                # Handle table scanning (not needed for function-backed tables)
-                ...
 
     """
 
@@ -355,7 +258,5 @@ class Catalog:
         for schema in self.schemas:
             key = schema.name.lower()
             if key in seen:
-                raise ValueError(
-                    f"Catalog '{self.name}': duplicate schema name '{schema.name}'"
-                )
+                raise ValueError(f"Catalog '{self.name}': duplicate schema name '{schema.name}'")
             seen.add(key)

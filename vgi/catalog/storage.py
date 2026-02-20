@@ -50,9 +50,7 @@ class CatalogStorage(Protocol):
 
     # --- Attachment State ---
 
-    def attach_put(
-        self, attach_id: AttachId, catalog_name: str, options: dict[str, Any]
-    ) -> None:
+    def attach_put(self, attach_id: AttachId, catalog_name: str, options: dict[str, Any]) -> None:
         """Store attachment state.
 
         Args:
@@ -95,9 +93,7 @@ class CatalogStorage(Protocol):
 
     # --- Transaction State ---
 
-    def transaction_put(
-        self, transaction_id: TransactionId, attach_id: AttachId, state: bytes
-    ) -> None:
+    def transaction_put(self, transaction_id: TransactionId, attach_id: AttachId, state: bytes) -> None:
         """Store transaction state.
 
         Args:
@@ -108,9 +104,7 @@ class CatalogStorage(Protocol):
         """
         ...
 
-    def transaction_get(
-        self, transaction_id: TransactionId
-    ) -> tuple[AttachId, bytes] | None:
+    def transaction_get(self, transaction_id: TransactionId) -> tuple[AttachId, bytes] | None:
         """Retrieve transaction state.
 
         Args:
@@ -193,9 +187,7 @@ class CatalogStorageSqlite:
 
     # --- Attachment State ---
 
-    def attach_put(
-        self, attach_id: AttachId, catalog_name: str, options: dict[str, Any]
-    ) -> None:
+    def attach_put(self, attach_id: AttachId, catalog_name: str, options: dict[str, Any]) -> None:
         """Store attachment state."""
         import json
 
@@ -269,9 +261,7 @@ class CatalogStorageSqlite:
 
     # --- Transaction State ---
 
-    def transaction_put(
-        self, transaction_id: TransactionId, attach_id: AttachId, state: bytes
-    ) -> None:
+    def transaction_put(self, transaction_id: TransactionId, attach_id: AttachId, state: bytes) -> None:
         """Store transaction state."""
         # Opportunistically clean old entries (1% of calls)
         if random.random() < 0.01:
@@ -291,9 +281,7 @@ class CatalogStorageSqlite:
         finally:
             conn.close()
 
-    def transaction_get(
-        self, transaction_id: TransactionId
-    ) -> tuple[AttachId, bytes] | None:
+    def transaction_get(self, transaction_id: TransactionId) -> tuple[AttachId, bytes] | None:
         """Retrieve transaction state."""
         conn = self._connect()
         try:

@@ -5,10 +5,12 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
+from vgi_rpc.utils import deserialize_record_batch
 
 from vgi.catalog import (
     AttachId,
     CatalogAttachResult,
+    CatalogExample,
     CatalogInterface,
     FunctionInfo,
     FunctionType,
@@ -29,7 +31,6 @@ from vgi.catalog.catalog_interface import (
     ReadOnlyCatalogInterface,
 )
 from vgi.exceptions import CatalogReadOnlyError
-from vgi.ipc_utils import deserialize_record_batch
 
 # Common test data
 TEST_ATTACH_ID = AttachId(b"test")
@@ -43,8 +44,8 @@ def empty_schema_bytes() -> SerializedSchema:
 
 def function_info_round_trip(info: FunctionInfo) -> FunctionInfo:
     """Serialize and deserialize FunctionInfo."""
-    batch, _ = deserialize_record_batch(info.serialize())
-    return FunctionInfo.deserialize(batch)
+    batch, _ = deserialize_record_batch(info.serialize_to_bytes())
+    return FunctionInfo.deserialize_from_batch(batch)
 
 
 @pytest.fixture
@@ -66,9 +67,7 @@ class MinimalCatalog(CatalogInterface):
         """Return list of catalogs."""
         return ["test"]
 
-    def catalog_attach(
-        self, *, name: str, options: dict[str, Any]
-    ) -> CatalogAttachResult:
+    def catalog_attach(self, *, name: str, options: dict[str, Any]) -> CatalogAttachResult:
         """Attach to catalog."""
         return CatalogAttachResult(
             attach_id=AttachId(b"test"),
@@ -149,9 +148,7 @@ class TestCatalogInterfaceDefaults:
     def test_catalog_version_returns_zero(self) -> None:
         """Default catalog_version() returns 0."""
         catalog = MinimalCatalog()
-        version = catalog.catalog_version(
-            attach_id=AttachId(b"test"), transaction_id=None
-        )
+        version = catalog.catalog_version(attach_id=AttachId(b"test"), transaction_id=None)
         assert version == 0
 
     def test_catalog_detach_does_nothing(self) -> None:
@@ -166,17 +163,13 @@ class TestCatalogInterfaceDefaults:
         assert catalog.interface_feature_flags == set()
 
 
-def _not_implemented_test_cases() -> list[
-    tuple[str, str, Callable[[MinimalCatalog], Any]]
-]:
+def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatalog], Any]]]:
     """Return test cases for NotImplementedError tests."""
     return [
         (
             "catalog_create",
             "Catalog create not implemented",
-            lambda c: c.catalog_create(
-                name="test", on_conflict=OnConflict.ERROR, options={}
-            ),
+            lambda c: c.catalog_create(name="test", on_conflict=OnConflict.ERROR, options={}),
         ),
         (
             "catalog_drop",
@@ -191,16 +184,12 @@ def _not_implemented_test_cases() -> list[
         (
             "transaction_commit",
             "Catalog transactions not implemented",
-            lambda c: c.catalog_transaction_commit(
-                attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID
-            ),
+            lambda c: c.catalog_transaction_commit(attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID),
         ),
         (
             "transaction_rollback",
             "Catalog transactions not implemented",
-            lambda c: c.catalog_transaction_rollback(
-                attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID
-            ),
+            lambda c: c.catalog_transaction_rollback(attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID),
         ),
         (
             "schema_create",
@@ -291,9 +280,7 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
         """Return list of catalogs."""
         return ["readonly"]
 
-    def catalog_attach(
-        self, *, name: str, options: dict[str, Any]
-    ) -> CatalogAttachResult:
+    def catalog_attach(self, *, name: str, options: dict[str, Any]) -> CatalogAttachResult:
         """Attach to catalog."""
         return CatalogAttachResult(
             attach_id=AttachId(b"readonly"),
@@ -341,9 +328,7 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
     return [
         (
             "catalog_create",
-            lambda c: c.catalog_create(
-                name="test", on_conflict=OnConflict.ERROR, options={}
-            ),
+            lambda c: c.catalog_create(name="test", on_conflict=OnConflict.ERROR, options={}),
         ),
         ("catalog_drop", lambda c: c.catalog_drop(name="test")),
         (
@@ -352,15 +337,11 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
         ),
         (
             "transaction_commit",
-            lambda c: c.catalog_transaction_commit(
-                attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID
-            ),
+            lambda c: c.catalog_transaction_commit(attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID),
         ),
         (
             "transaction_rollback",
-            lambda c: c.catalog_transaction_rollback(
-                attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID
-            ),
+            lambda c: c.catalog_transaction_rollback(attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID),
         ),
         (
             "schema_create",
@@ -515,7 +496,10 @@ class TestFunctionInfoNewFields:
             tags={},
             stability=FunctionStability.VOLATILE,
             null_handling=NullHandling.SPECIAL,
-            examples=["SELECT test_func(1)", "SELECT test_func(2)"],
+            examples=[
+                CatalogExample(sql="SELECT test_func(1)"),
+                CatalogExample(sql="SELECT test_func(2)"),
+            ],
             categories=["math", "utility"],
             projection_pushdown=False,
             filter_pushdown=True,
@@ -541,9 +525,9 @@ class TestFunctionInfoNewFields:
         assert restored.stability == info.stability
         assert restored.null_handling == info.null_handling
         # Examples are deserialized to CatalogExample objects
-        assert [
-            ex.sql for ex in restored.examples if hasattr(ex, "sql")
-        ] == info.examples
+        assert len(restored.examples) == len(info.examples)
+        for restored_ex, orig_ex in zip(restored.examples, info.examples, strict=True):
+            assert restored_ex.sql == orig_ex.sql
         assert restored.categories == info.categories
         assert restored.projection_pushdown == info.projection_pushdown
         assert restored.filter_pushdown == info.filter_pushdown
@@ -572,7 +556,7 @@ class TestFunctionInfoNewFields:
         )
 
         # Serialize and inspect the Arrow data
-        batch, _ = deserialize_record_batch(info.serialize())
+        batch, _ = deserialize_record_batch(info.serialize_to_bytes())
 
         # Verify enums were serialized as strings
         row = batch.to_pydict()
@@ -583,7 +567,7 @@ class TestFunctionInfoNewFields:
         assert row["distinct_dependent"][0] == "DISTINCT_DEPENDENT"
 
         # Verify deserialization produces correct enum values
-        restored = FunctionInfo.deserialize(batch)
+        restored = FunctionInfo.deserialize_from_batch(batch)
         assert restored.stability == FunctionStability.CONSISTENT_WITHIN_QUERY
         assert restored.null_handling == NullHandling.SPECIAL
         assert restored.order_preservation == OrderPreservation.NO_ORDER_GUARANTEE
@@ -623,13 +607,13 @@ class TestFunctionInfoNewFields:
         )
 
         # Deserialize - should use defaults for missing fields
-        restored = FunctionInfo.deserialize(legacy_batch)
+        restored = FunctionInfo.deserialize_from_batch(legacy_batch)
 
         # Core fields should be preserved
         assert restored.name == "legacy_func"
         assert restored.schema_name == "main"
         assert restored.function_type == FunctionType.SCALAR
-        assert restored.comment is None  # FunctionInfo ignores comment field
+        assert restored.comment == "A legacy function"  # Comment is preserved
         assert restored.tags == {"version": "1.0"}
 
         # Optional fields should be None/default when not in legacy data
@@ -676,7 +660,11 @@ class TestFunctionInfoNewFields:
             output_schema=schema_bytes,
             comment=None,
             tags={},
-            examples=["SELECT f(1)", "SELECT f(2)", "SELECT f(3)"],
+            examples=[
+                CatalogExample(sql="SELECT f(1)"),
+                CatalogExample(sql="SELECT f(2)"),
+                CatalogExample(sql="SELECT f(3)"),
+            ],
             categories=["a", "b"],
             required_settings=["setting1"],
         )
@@ -739,11 +727,17 @@ class TestSchemaContentsTypeFilter:
     @pytest.fixture
     def catalog_with_functions(self) -> ReadOnlyCatalogInterface:
         """Create a catalog with scalar and table functions."""
+        from dataclasses import dataclass
+        from typing import ClassVar
+
+        from vgi_rpc.rpc import OutputCollector
+
         from vgi import ScalarFunction
         from vgi.table_function import (
-            Output,
-            OutputGenerator,
+            ProcessParams,
             TableFunctionGenerator,
+            bind_fixed_schema,
+            init_single_worker,
         )
 
         class MyScalarFunction(ScalarFunction):
@@ -755,22 +749,25 @@ class TestSchemaContentsTypeFilter:
             def compute(self, batch: pa.RecordBatch) -> "pa.Array[pa.Int64Scalar]":
                 return pa.array([1] * batch.num_rows, type=pa.int64())
 
-        class MyTableFunction(TableFunctionGenerator):
+        @dataclass(slots=True, frozen=True)
+        class _EmptyArgs:
+            """No arguments."""
+
+        @init_single_worker
+        @bind_fixed_schema
+        class MyTableFunction(TableFunctionGenerator[_EmptyArgs]):
             """A test table function."""
 
             class Meta:
-                max_workers = 1
+                name = "my_table"
+                description = "A test table function"
 
-            @property
-            def output_schema(self) -> pa.Schema:
-                return pa.schema([("value", pa.int64())])
+            FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([("value", pa.int64())])
 
-            def process(self) -> OutputGenerator:
-                yield Output(
-                    pa.RecordBatch.from_pydict(
-                        {"value": [1]}, schema=self.output_schema
-                    )
-                )
+            @classmethod
+            def process(cls, params: ProcessParams[_EmptyArgs], state: None, out: OutputCollector) -> None:
+                out.emit(pa.RecordBatch.from_pydict({"value": [1]}, schema=params.output_schema))
+                out.finish()
 
         class TestCatalog(ReadOnlyCatalogInterface):
             catalog_name = "test"
@@ -778,9 +775,7 @@ class TestSchemaContentsTypeFilter:
 
         return TestCatalog()
 
-    def test_fetch_all_function_types(
-        self, catalog_with_functions: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_fetch_all_function_types(self, catalog_with_functions: ReadOnlyCatalogInterface) -> None:
         """Can fetch both scalar and table functions with separate calls."""
         attach_result = catalog_with_functions.catalog_attach(name="test", options={})
 
@@ -812,9 +807,7 @@ class TestSchemaContentsTypeFilter:
         assert "my_scalar" in names
         assert "my_table" in names
 
-    def test_filter_scalar_function(
-        self, catalog_with_functions: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_filter_scalar_function(self, catalog_with_functions: ReadOnlyCatalogInterface) -> None:
         """schema_contents with SCALAR_FUNCTION filter returns only scalar functions."""
         attach_result = catalog_with_functions.catalog_attach(name="test", options={})
         contents = list(
@@ -831,9 +824,7 @@ class TestSchemaContentsTypeFilter:
         assert func_info.name == "my_scalar"
         assert func_info.function_type == FunctionType.SCALAR
 
-    def test_filter_table_function(
-        self, catalog_with_functions: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_filter_table_function(self, catalog_with_functions: ReadOnlyCatalogInterface) -> None:
         """schema_contents with TABLE_FUNCTION filter returns only table functions."""
         attach_result = catalog_with_functions.catalog_attach(name="test", options={})
         contents = list(
@@ -850,9 +841,7 @@ class TestSchemaContentsTypeFilter:
         assert func_info.name == "my_table"
         assert func_info.function_type == FunctionType.TABLE
 
-    def test_filter_table_returns_empty(
-        self, catalog_with_functions: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_filter_table_returns_empty(self, catalog_with_functions: ReadOnlyCatalogInterface) -> None:
         """schema_contents with TABLE filter returns empty (no tables in catalog)."""
         attach_result = catalog_with_functions.catalog_attach(name="test", options={})
         contents = list(
@@ -865,9 +854,7 @@ class TestSchemaContentsTypeFilter:
         )
         assert len(contents) == 0
 
-    def test_filter_view_returns_empty(
-        self, catalog_with_functions: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_filter_view_returns_empty(self, catalog_with_functions: ReadOnlyCatalogInterface) -> None:
         """schema_contents with VIEW filter returns empty (no views in catalog)."""
         attach_result = catalog_with_functions.catalog_attach(name="test", options={})
         contents = list(
@@ -880,9 +867,7 @@ class TestSchemaContentsTypeFilter:
         )
         assert len(contents) == 0
 
-    def test_wrong_schema_returns_empty(
-        self, catalog_with_functions: ReadOnlyCatalogInterface
-    ) -> None:
+    def test_wrong_schema_returns_empty(self, catalog_with_functions: ReadOnlyCatalogInterface) -> None:
         """schema_contents with non-existent schema returns empty."""
         attach_result = catalog_with_functions.catalog_attach(name="test", options={})
         contents = list(

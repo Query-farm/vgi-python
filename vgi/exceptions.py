@@ -16,10 +16,25 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
 __all__ = [
+    "BindStateNotFoundError",
     "CatalogReadOnlyError",
     "ExecutionIdentifierError",
     "SchemaValidationError",
 ]
+
+
+class BindStateNotFoundError(Exception):
+    """Raised when init is called with invalid or missing bind_data.
+
+    This exception is raised when:
+    - INIT invocation is missing bind_data field
+    - The bind_data is corrupted or cannot be deserialized
+    - The function_name in bind state doesn't match the invocation
+
+    The client should catch this and provide a clear error message indicating
+    that a BIND call must be made before INIT.
+
+    """
 
 
 class CatalogReadOnlyError(Exception):
@@ -107,9 +122,7 @@ class SchemaValidationError(Exception):
 
         super().__init__(full_message)
 
-    def _build_detailed_message(
-        self, base_message: str, expected: pa.Schema, actual: pa.Schema
-    ) -> str:
+    def _build_detailed_message(self, base_message: str, expected: pa.Schema, actual: pa.Schema) -> str:
         """Build a detailed message showing exactly what differs."""
         lines = [base_message, ""]
 

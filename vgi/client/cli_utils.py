@@ -10,12 +10,17 @@ This module provides common utilities used across CLI command groups:
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 import pyarrow as pa
 
 from vgi.catalog import AttachId, TransactionId
+
+if TYPE_CHECKING:
+    from vgi.catalog import CatalogAttachResult, FunctionInfo, SchemaInfo, TableInfo, ViewInfo
+    from vgi.catalog.catalog_interface import ScanFunctionResult
+    from vgi.client import Client
 
 # Map of type names to PyArrow types for JSON schema definitions
 ARROW_TYPE_MAP: dict[str, pa.DataType] = {
@@ -127,7 +132,7 @@ def bytes_to_hex(data: bytes) -> str:
     return data.hex()
 
 
-def json_to_arrow_schema(columns: list[dict[str, Any]]) -> pa.Schema:
+def json_to_arrow_schema(columns: list[dict[str, str]]) -> pa.Schema:
     """Convert JSON column definitions to PyArrow schema.
 
     Args:
@@ -144,20 +149,15 @@ def json_to_arrow_schema(columns: list[dict[str, Any]]) -> pa.Schema:
     fields = []
     for i, col in enumerate(columns):
         if "name" not in col:
-            raise click.ClickException(
-                f"Column {i} missing 'name' field: {json.dumps(col)}"
-            )
+            raise click.ClickException(f"Column {i} missing 'name' field: {json.dumps(col)}")
         if "type" not in col:
-            raise click.ClickException(
-                f"Column {i} missing 'type' field: {json.dumps(col)}"
-            )
+            raise click.ClickException(f"Column {i} missing 'type' field: {json.dumps(col)}")
 
         type_name = col["type"]
         if type_name not in ARROW_TYPE_MAP:
             valid_types = ", ".join(sorted(ARROW_TYPE_MAP.keys()))
             raise click.ClickException(
-                f"Unknown type '{type_name}' for column '{col['name']}'. "
-                f"Valid types: {valid_types}"
+                f"Unknown type '{type_name}' for column '{col['name']}'. Valid types: {valid_types}"
             )
 
         fields.append(pa.field(col["name"], ARROW_TYPE_MAP[type_name]))
@@ -165,7 +165,7 @@ def json_to_arrow_schema(columns: list[dict[str, Any]]) -> pa.Schema:
     return pa.schema(fields)
 
 
-def arrow_schema_to_json(serialized: bytes) -> list[dict[str, Any]]:
+def arrow_schema_to_json(serialized: bytes) -> list[dict[str, str | bool]]:
     """Convert serialized Arrow schema to JSON for display.
 
     Args:
@@ -177,7 +177,7 @@ def arrow_schema_to_json(serialized: bytes) -> list[dict[str, Any]]:
     """
     reader = pa.BufferReader(serialized)
     schema = pa.ipc.read_schema(reader)  # type: ignore[arg-type]
-    result: list[dict[str, Any]] = []
+    result: list[dict[str, str | bool]] = []
     for f in schema:
         type_str = str(f.type)
         is_varargs = False
@@ -198,7 +198,7 @@ def arrow_schema_to_json(serialized: bytes) -> list[dict[str, Any]]:
             if f.metadata.get(b"vgi_const") == b"true":
                 is_const = True
 
-        entry: dict[str, Any] = {"name": f.name, "type": type_str}
+        entry: dict[str, str | bool] = {"name": f.name, "type": type_str}
         if is_varargs:
             entry["varargs"] = True
         if is_const:
@@ -237,7 +237,7 @@ def parse_json_option(value: str, option_name: str) -> Any:
         raise click.ClickException(f"Invalid JSON for {option_name}: {e}") from e
 
 
-def schema_info_to_dict(schema_info: Any) -> dict[str, Any]:
+def schema_info_to_dict(schema_info: SchemaInfo) -> dict[str, Any]:
     """Convert SchemaInfo to a dictionary for JSON output.
 
     Args:
@@ -254,7 +254,7 @@ def schema_info_to_dict(schema_info: Any) -> dict[str, Any]:
     }
 
 
-def table_info_to_dict(table_info: Any) -> dict[str, Any]:
+def table_info_to_dict(table_info: TableInfo) -> dict[str, Any]:
     """Convert TableInfo to a dictionary for JSON output.
 
     Args:
@@ -276,7 +276,7 @@ def table_info_to_dict(table_info: Any) -> dict[str, Any]:
     }
 
 
-def view_info_to_dict(view_info: Any) -> dict[str, Any]:
+def view_info_to_dict(view_info: ViewInfo) -> dict[str, Any]:
     """Convert ViewInfo to a dictionary for JSON output.
 
     Args:
@@ -295,7 +295,7 @@ def view_info_to_dict(view_info: Any) -> dict[str, Any]:
     }
 
 
-def function_info_to_dict(function_info: Any) -> dict[str, Any]:
+def function_info_to_dict(function_info: FunctionInfo) -> dict[str, Any]:
     """Convert FunctionInfo to a dictionary for JSON output.
 
     Args:
@@ -313,12 +313,8 @@ def function_info_to_dict(function_info: Any) -> dict[str, Any]:
         "description": function_info.description,
         "tags": dict(function_info.tags),
         # Scalar function behavior fields (None for non-scalar)
-        "stability": (
-            function_info.stability.name if function_info.stability else None
-        ),
-        "null_handling": (
-            function_info.null_handling.name if function_info.null_handling else None
-        ),
+        "stability": (function_info.stability.name if function_info.stability else None),
+        "null_handling": (function_info.null_handling.name if function_info.null_handling else None),
         # Documentation fields (convert CatalogExample to dict for JSON)
         "examples": [
             {"sql": ex.sql, "description": ex.description} if hasattr(ex, "sql") else ex
@@ -328,11 +324,7 @@ def function_info_to_dict(function_info: Any) -> dict[str, Any]:
         # Table function capabilities (None for scalar)
         "projection_pushdown": function_info.projection_pushdown,
         "filter_pushdown": function_info.filter_pushdown,
-        "order_preservation": (
-            function_info.order_preservation.name
-            if function_info.order_preservation
-            else None
-        ),
+        "order_preservation": (function_info.order_preservation.name if function_info.order_preservation else None),
         "max_workers": function_info.max_workers,
         # Aggregate function fields
         "order_dependent": function_info.order_dependent.name,
@@ -346,7 +338,7 @@ def function_info_to_dict(function_info: Any) -> dict[str, Any]:
     return result
 
 
-def catalog_attach_result_to_dict(result: Any) -> dict[str, Any]:
+def catalog_attach_result_to_dict(result: CatalogAttachResult) -> dict[str, Any]:
     """Convert CatalogAttachResult to a dictionary for JSON output.
 
     Args:
@@ -368,7 +360,7 @@ def catalog_attach_result_to_dict(result: Any) -> dict[str, Any]:
     }
 
 
-def scan_function_result_to_dict(result: Any) -> dict[str, Any]:
+def scan_function_result_to_dict(result: ScanFunctionResult) -> dict[str, Any]:
     """Convert ScanFunctionResult to a dictionary for JSON output.
 
     ScanFunctionResult allows the VGI DuckDB extension to call any DuckDB
@@ -386,15 +378,13 @@ def scan_function_result_to_dict(result: Any) -> dict[str, Any]:
     return {
         "function_name": result.function_name,
         "positional_arguments": [arg.as_py() for arg in result.positional_arguments],
-        "named_arguments": {
-            name: arg.as_py() for name, arg in result.named_arguments.items()
-        },
+        "named_arguments": {name: arg.as_py() for name, arg in result.named_arguments.items()},
         "required_extensions": result.required_extensions,
     }
 
 
 def get_attach_id_from_options(
-    client: Any,
+    client: Client,
     attach_id: str | None,
     catalog: str | None,
     attach_options: dict[str, Any] | None,
@@ -437,6 +427,7 @@ def get_attach_id_from_options(
         return hex_to_attach_id(attach_id), False
 
     # Auto-attach via --catalog
+    assert catalog is not None
     options = attach_options or {}
     result = client.catalog_attach(name=catalog, options=options)
 

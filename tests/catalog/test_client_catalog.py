@@ -1,17 +1,11 @@
 """Tests for Client catalog methods using CatalogClientMixin.
 
 These tests verify that the unified Client class can perform catalog operations
-via the CatalogClientMixin, spawning ephemeral workers for each call.
+via the CatalogClientMixin. The WorkerPool keeps workers alive between calls,
+so state persists within a test.
 
-IMPORTANT: The CatalogClientMixin spawns a NEW worker subprocess for each
-catalog operation. This means:
-- State doesn't persist between calls (each worker gets fresh InMemoryCatalog)
-- Tests requiring attach_id from a previous call will fail
-- Only stateless operations or single-call operations can be tested
-
-For full catalog functionality testing, use the direct InMemoryCatalog tests
-in tests/catalog/test_integration.py which test the catalog implementation
-directly without the subprocess boundary.
+For full catalog CRUD workflows (create/get/drop tables, views, schemas),
+see tests/catalog/test_integration.py which exercises all catalog operations.
 """
 
 from vgi.client import Client
@@ -21,13 +15,7 @@ CATALOG_WORKER = "vgi-example-catalog-worker"
 
 
 class TestClientCatalogStatelessOperations:
-    """Test catalog operations that don't require state persistence.
-
-    These tests work with the ephemeral worker pattern because they either:
-    - Don't require state from a previous call
-    - Complete in a single call
-
-    """
+    """Test catalog operations that work independently."""
 
     def test_catalogs_returns_list(self) -> None:
         """Client.catalogs() returns list of catalog names."""
@@ -48,7 +36,7 @@ class TestClientCatalogStatelessOperations:
     def test_catalogs_works_without_start(self) -> None:
         """Catalog methods work without calling start()."""
         client = Client(CATALOG_WORKER)
-        # Don't call start() - catalog methods spawn ephemeral workers
+        # Don't call start() - catalog methods use WorkerPool independently
         catalogs = client.catalogs()
         assert "memory" in catalogs
 
@@ -62,7 +50,6 @@ class TestClientCatalogStatelessOperations:
         """Multiple catalogs() calls work on same Client instance."""
         client = Client(CATALOG_WORKER)
 
-        # Multiple calls should each spawn new workers and work independently
         catalogs1 = client.catalogs()
         catalogs2 = client.catalogs()
 
@@ -81,31 +68,7 @@ class TestClientCatalogStatelessOperations:
 
 
 class TestClientCatalogProtocolIntegrity:
-    """Test that the catalog protocol is working correctly.
-
-    These tests verify the communication between Client and Worker without
-    requiring state persistence across calls.
-
-    """
-
-    def test_catalog_attach_different_attach_ids(self) -> None:
-        """Each catalog_attach call returns a different attach_id.
-
-        This verifies that the attach process is working, even though
-        the attach_id won't be usable in a subsequent call.
-
-        """
-        client = Client(CATALOG_WORKER)
-
-        # Each attach spawns a new worker, so each gets a unique ID
-        result1 = client.catalog_attach(name="memory", options={})
-        result2 = client.catalog_attach(name="memory", options={})
-
-        # Both should work, but will have different IDs
-        assert result1.attach_id is not None
-        assert result2.attach_id is not None
-        # IDs are randomly generated, so they're very likely different
-        # (not a guaranteed assertion, but useful for protocol verification)
+    """Test that the catalog protocol is working correctly."""
 
     def test_catalogs_returns_correct_format(self) -> None:
         """catalogs() returns a list of strings."""
@@ -115,14 +78,3 @@ class TestClientCatalogProtocolIntegrity:
         assert isinstance(catalogs, list)
         for name in catalogs:
             assert isinstance(name, str)
-
-
-# NOTE: Tests that require state persistence across catalog calls
-# (e.g., attach then use attach_id in subsequent call) are NOT possible
-# with the ephemeral worker pattern. Each call spawns a fresh worker
-# with a fresh InMemoryCatalog instance.
-#
-# To test full catalog workflows:
-# 1. Use tests/catalog/test_integration.py which tests InMemoryCatalog directly
-# 2. Or use a persistent catalog backend (e.g., SQLite-backed CatalogStorage)
-# 3. Or use a long-running worker process (not ephemeral)

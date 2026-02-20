@@ -39,25 +39,31 @@ if TYPE_CHECKING:
 
 # Enable with VGI_FILTER_DEBUG=1 for detailed filter pushdown diagnostics
 _FILTER_DEBUG = os.environ.get("VGI_FILTER_DEBUG", "").lower() in ("1", "true", "yes")
-_filter_log: structlog.stdlib.BoundLogger | None = None
+_filter_log: structlog.BoundLogger | None = None
 
 
-def _get_filter_log() -> structlog.stdlib.BoundLogger:
-    """Get or create the filter debug logger, configured to write to stderr."""
+def _get_filter_log() -> structlog.BoundLogger:
+    """Get or create the filter debug logger, configured to write to stderr.
+
+    Creates a local logger without modifying global structlog configuration.
+    """
     global _filter_log
-    if _filter_log is None:
-        # Configure structlog to write to stderr for filter debugging
-        structlog.configure(
-            processors=[
-                structlog.processors.add_log_level,
-                structlog.processors.TimeStamper(fmt="iso"),
-                structlog.dev.ConsoleRenderer(),
-            ],
-            wrapper_class=structlog.make_filtering_bound_logger(0),
-            logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
-        )
-        _filter_log = structlog.get_logger().bind(component="filter_pushdown")
-    return _filter_log
+    if _filter_log is not None:
+        return _filter_log
+    # Create a local logger without calling structlog.configure()
+    # This avoids modifying global state that could affect other code
+    processors: list[structlog.types.Processor] = [
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.dev.ConsoleRenderer(),
+    ]
+    logger: structlog.BoundLogger = structlog.wrap_logger(
+        structlog.PrintLogger(file=sys.stderr),
+        processors=processors,
+        wrapper_class=structlog.BoundLogger,
+    ).bind(component="filter_pushdown")
+    _filter_log = logger
+    return logger
 
 
 def _log_debug(event: str, **kwargs: Any) -> None:
@@ -66,23 +72,40 @@ def _log_debug(event: str, **kwargs: Any) -> None:
         _get_filter_log().debug(event, **kwargs)
 
 
+# Supported filter protocol version
+_SUPPORTED_VERSION = "1"
+
+
+def _make_bool_array(value: bool, length: int) -> pa.BooleanArray:
+    """Create a boolean array of constant value.
+
+    Used for empty AND (all True) and empty OR (all False) filter results.
+    """
+    return pa.repeat(pa.scalar(value), length)
+
+
 __all__ = [
-    "AndFilter",
-    "ColumnBounds",
-    "ComparisonOp",
-    "ConstantFilter",
-    "deserialize_filters",
-    "Filter",
-    "FilterDeserializationError",
+    # Exceptions
     "FilterError",
-    "FilterType",
+    "FilterDeserializationError",
     "FilterVersionError",
-    "InFilter",
-    "IsNotNullFilter",
+    # Enums
+    "FilterType",
+    "ComparisonOp",
+    # Filter classes
+    "Filter",
+    "ConstantFilter",
     "IsNullFilter",
+    "IsNotNullFilter",
+    "InFilter",
+    "AndFilter",
     "OrFilter",
-    "PushdownFilters",
     "StructFilter",
+    # Helpers
+    "ColumnBounds",
+    "PushdownFilters",
+    # Functions
+    "deserialize_filters",
 ]
 
 
@@ -129,6 +152,12 @@ class ComparisonOp(Enum):
     GE = "ge"  # >=
     LT = "lt"  # <
     LE = "le"  # <=
+
+    @property
+    def symbol(self) -> str:
+        """Return the SQL symbol for this operator."""
+        symbols = {"eq": "=", "ne": "!=", "gt": ">", "ge": ">=", "lt": "<", "le": "<="}
+        return symbols[self.value]
 
 
 # =============================================================================
@@ -200,19 +229,12 @@ class ConstantFilter(Filter):
                 return pc.less(col, self.value)
             case ComparisonOp.LE:
                 return pc.less_equal(col, self.value)
+            case _:
+                raise ValueError(f"Unknown comparison operator: {self.op}")
 
     def __repr__(self) -> str:
         """Return string representation for debugging."""
-        op_symbols = {
-            "eq": "=",
-            "ne": "!=",
-            "gt": ">",
-            "ge": ">=",
-            "lt": "<",
-            "le": "<=",
-        }
-        op_sym = op_symbols[self.op.value]
-        return f"ConstantFilter({self.column_name} {op_sym} {self.value})"
+        return f"ConstantFilter({self.column_name} {self.op.symbol} {self.value})"
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,7 +279,9 @@ class InFilter(Filter):
 
     def __repr__(self) -> str:
         """Return string representation for debugging."""
-        return f"InFilter({self.column_name} IN ({self.values.to_pylist()}))"
+        values = self.values.to_pylist()
+        preview = f"{values[:3]!r}...({len(values)} total)" if len(values) > 5 else repr(values)
+        return f"InFilter({self.column_name} IN {preview})"
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,7 +296,7 @@ class AndFilter(Filter):
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
         """Evaluate AND of all child filters."""
         if not self.children:
-            return pa.array([True] * batch.num_rows, type=pa.bool_())
+            return _make_bool_array(True, batch.num_rows)
         result = self.children[0].evaluate(batch)
         for child in self.children[1:]:
             result = pc.and_(result, child.evaluate(batch))
@@ -296,7 +320,7 @@ class OrFilter(Filter):
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
         """Evaluate OR of all child filters."""
         if not self.children:
-            return pa.array([False] * batch.num_rows, type=pa.bool_())
+            return _make_bool_array(False, batch.num_rows)
         result = self.children[0].evaluate(batch)
         for child in self.children[1:]:
             result = pc.or_(result, child.evaluate(batch))
@@ -306,6 +330,28 @@ class OrFilter(Filter):
         """Return string representation for debugging."""
         children_repr = " OR ".join(repr(c) for c in self.children)
         return f"OrFilter({children_repr})"
+
+
+class _SingleColumnBatch:
+    """Lightweight wrapper providing batch-like interface for a single array.
+
+    Used by StructFilter to avoid creating a full RecordBatch when evaluating
+    child filters on nested struct fields.
+    """
+
+    __slots__ = ("_array",)
+
+    def __init__(self, array: pa.Array[Any]) -> None:
+        self._array = array
+
+    def column(self, _index: int) -> pa.Array[Any]:
+        """Return the wrapped array (index is ignored)."""
+        return self._array
+
+    @property
+    def num_rows(self) -> int:
+        """Return the number of rows in the array."""
+        return len(self._array)
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,11 +370,11 @@ class StructFilter(Filter):
         """Evaluate filter on nested struct field."""
         struct_col = batch.column(self.column_index)
         nested = pc.struct_field(struct_col, self.child_name)
-        # Create temp batch with nested field at index 0
-        temp = pa.RecordBatch.from_arrays([nested], names=[self.column_name])
-        # Adjust child filter to use column_index=0 for temp batch
+        # Use lightweight wrapper instead of creating a full RecordBatch
+        wrapper = _SingleColumnBatch(nested)
+        # Adjust child filter to use column_index=0 for the wrapper
         adjusted_child = dataclasses.replace(self.child_filter, column_index=0)
-        return adjusted_child.evaluate(temp)
+        return adjusted_child.evaluate(wrapper)  # type: ignore[arg-type]
 
     def __repr__(self) -> str:
         """Return string representation for debugging."""
@@ -346,16 +392,6 @@ class ColumnBounds:
     """Numeric/comparable bounds for a column extracted from filters.
 
     Use case: Partition pruning, index range scans, bounded data fetches.
-
-    Example:
-        # WHERE age >= 18 AND age < 65
-        bounds = filters.get_column_bounds("age")
-        # bounds.min_value = 18, bounds.min_inclusive = True
-        # bounds.max_value = 65, bounds.max_inclusive = False
-
-        # Use for data source optimization
-        if bounds.min_value is not None:
-            start_from = bounds.min_value.as_py()
 
     Attributes:
         min_value: Minimum bound value, or None if unbounded below.
@@ -382,21 +418,15 @@ class ColumnBounds:
         """
         if self.min_value is not None:
             min_val = self.min_value.as_py()
-            if self.min_inclusive:
-                if value < min_val:
-                    return False
-            else:
-                if value <= min_val:
-                    return False
+            below_min = value < min_val if self.min_inclusive else value <= min_val
+            if below_min:
+                return False
 
         if self.max_value is not None:
             max_val = self.max_value.as_py()
-            if self.max_inclusive:
-                if value > max_val:
-                    return False
-            else:
-                if value >= max_val:
-                    return False
+            above_max = value > max_val if self.max_inclusive else value >= max_val
+            if above_max:
+                return False
 
         return True
 
@@ -425,7 +455,7 @@ class PushdownFilters:
     """
 
     filters: tuple[Filter, ...]
-    version: str = "1"
+    version: str = _SUPPORTED_VERSION
 
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
         """Evaluate all filters, returning boolean mask.
@@ -449,7 +479,7 @@ class PushdownFilters:
 
         if not self.filters:
             _log_debug("evaluate_no_filters", input_rows=batch.num_rows)
-            return pa.array([True] * batch.num_rows, type=pa.bool_())
+            return _make_bool_array(True, batch.num_rows)
 
         result = self.filters[0].evaluate(batch)
         # pc.sum works on BooleanArray (counts True values) but stubs don't reflect this
@@ -513,12 +543,6 @@ class PushdownFilters:
         """Set of column names that have filters applied.
 
         Use case: Quick check of which columns are constrained.
-
-        Example:
-            if "tenant_id" in filters.filtered_columns:
-                # Optimize for tenant-filtered query
-                ...
-
         """
         return frozenset(f.column_name for f in self.filters)
 
@@ -553,13 +577,6 @@ class PushdownFilters:
 
         Use case: Partition key lookup, exact match optimization.
 
-        Example:
-            # WHERE tenant_id = 'abc123'
-            tenant = filters.get_column_constant("tenant_id")
-            if tenant:
-                # Fetch only from tenant's partition
-                return fetch_partition(tenant.as_py())
-
         Args:
             column_name: Name of the column to check.
 
@@ -568,11 +585,7 @@ class PushdownFilters:
 
         """
         for f in self.filters:
-            if (
-                f.column_name == column_name
-                and isinstance(f, ConstantFilter)
-                and f.op == ComparisonOp.EQ
-            ):
+            if f.column_name == column_name and isinstance(f, ConstantFilter) and f.op == ComparisonOp.EQ:
                 return f.value
         return None
 
@@ -580,12 +593,6 @@ class PushdownFilters:
         """Get IN list values if column has an IN filter.
 
         Use case: Multi-key lookup, batch fetching.
-
-        Example:
-            # WHERE id IN (1, 2, 3)
-            ids = filters.get_column_in_values("id")
-            if ids:
-                return batch_fetch(ids.to_pylist())
 
         Args:
             column_name: Name of the column to check.
@@ -606,20 +613,6 @@ class PushdownFilters:
         Useful for partition pruning when partitions are keyed by specific values.
 
         Use case: Partition key lookup, directory-based partitioning.
-
-        Example:
-            # WHERE tenant_id = 'abc123'  -> returns array with single value
-            # WHERE tenant_id IN ('a', 'b')  -> returns array ['a', 'b']
-            # WHERE tenant_id > 5  -> returns None (not discrete values)
-
-            values = filters.get_column_values("tenant_id")
-            if values:
-                # Scan only relevant partitions
-                for val in values.to_pylist():
-                    yield from scan_partition(f"tenant={val}")
-            else:
-                # Scan all partitions (filter not discrete)
-                yield from scan_all_partitions()
 
         Args:
             column_name: Name of the column to check.
@@ -644,16 +637,6 @@ class PushdownFilters:
         Analyzes gt/ge/lt/le filters to determine value range.
 
         Use case: Range scans, partition pruning, bounded iteration.
-
-        Example:
-            # WHERE timestamp >= '2024-01-01' AND timestamp < '2024-02-01'
-            bounds = filters.get_column_bounds("timestamp")
-            if bounds:
-                for partition in get_partitions_in_range(
-                    bounds.min_value.as_py(),
-                    bounds.max_value.as_py()
-                ):
-                    yield from scan_partition(partition)
 
         Args:
             column_name: Name of the column to extract bounds for.
@@ -690,7 +673,13 @@ class PushdownFilters:
         return ColumnBounds(min_val, min_inc, max_val, max_inc)
 
     def _collect_column_filters(self, column_name: str) -> list[Filter]:
-        """Recursively collect all filters for a column (including in AND)."""
+        """Collect filters for a column from top-level and direct AND children.
+
+        Note: Only descends one level into AndFilter children. Deeply nested
+        AND filters (AND within AND) are not traversed. This is sufficient
+        for most query patterns where bounds filters are either at top level
+        or grouped in a single AND.
+        """
         result: list[Filter] = []
         for f in self.filters:
             if f.column_name == column_name:
@@ -716,13 +705,7 @@ class PushdownFilters:
             placeholder: Parameter placeholder style ("?", "%s", ":name")
 
         Returns:
-            Tuple of (where_clause, params) - clause excludes "WHERE" keyword
-
-        Example:
-            clause, params = filters.to_sql()
-            # clause = '"age" >= ? AND "status" = ?'
-            # params = [18, 'active']
-            cursor.execute(f"SELECT * FROM t WHERE {clause}", params)
+            Tuple of (where_clause, params) - clause excludes "WHERE" keyword.
 
         """
         if not self.filters:
@@ -743,6 +726,11 @@ class PushdownFilters:
     # Dunder Methods
     # =========================================================================
 
+    @classmethod
+    def empty(cls) -> PushdownFilters:
+        """Create an empty PushdownFilters instance (no filters)."""
+        return cls(filters=())
+
     def __bool__(self) -> bool:
         """Return True if there are any filters."""
         return len(self.filters) > 0
@@ -754,6 +742,13 @@ class PushdownFilters:
     def __iter__(self) -> Iterator[Filter]:
         """Iterate over top-level filters."""
         return iter(self.filters)
+
+    def __contains__(self, column_name: str) -> bool:
+        """Check if any filter constrains the given column.
+
+        Allows 'column_name in filters' syntax.
+        """
+        return any(f.column_name == column_name for f in self.filters)
 
     def __repr__(self) -> str:
         """Return string representation for debugging."""
@@ -780,7 +775,7 @@ def _filter_to_sql(
         f: Filter to convert.
         quote: Function to quote identifiers.
         placeholder: Parameter placeholder style.
-        param_offset: Current parameter offset (unused, for future :name style).
+        param_offset: Current parameter offset (for recursive calls).
 
     Returns:
         Tuple of (sql_fragment, params).
@@ -788,57 +783,47 @@ def _filter_to_sql(
     """
     col = quote(f.column_name)
 
-    if isinstance(f, ConstantFilter):
-        op_map = {
-            ComparisonOp.EQ: "=",
-            ComparisonOp.NE: "!=",
-            ComparisonOp.GT: ">",
-            ComparisonOp.GE: ">=",
-            ComparisonOp.LT: "<",
-            ComparisonOp.LE: "<=",
-        }
-        return f"{col} {op_map[f.op]} {placeholder}", [f.value.as_py()]
+    match f:
+        case ConstantFilter(op=op, value=value):
+            return f"{col} {op.symbol} {placeholder}", [value.as_py()]
 
-    elif isinstance(f, IsNullFilter):
-        return f"{col} IS NULL", []
+        case IsNullFilter():
+            return f"{col} IS NULL", []
 
-    elif isinstance(f, IsNotNullFilter):
-        return f"{col} IS NOT NULL", []
+        case IsNotNullFilter():
+            return f"{col} IS NOT NULL", []
 
-    elif isinstance(f, InFilter):
-        placeholders = ", ".join([placeholder] * len(f.values))
-        return f"{col} IN ({placeholders})", f.values.to_pylist()
+        case InFilter(values=values):
+            placeholders = ", ".join([placeholder] * len(values))
+            return f"{col} IN ({placeholders})", values.to_pylist()
 
-    elif isinstance(f, AndFilter):
-        parts: list[str] = []
-        params: list[Any] = []
-        for child in f.children:
-            offset = param_offset + len(params)
-            sql, ps = _filter_to_sql(child, quote, placeholder, offset)
-            parts.append(sql)
-            params.extend(ps)
-        return f"({' AND '.join(parts)})", params
+        case AndFilter(children=children):
+            parts: list[str] = []
+            params: list[Any] = []
+            for child in children:
+                offset = param_offset + len(params)
+                sql, ps = _filter_to_sql(child, quote, placeholder, offset)
+                parts.append(sql)
+                params.extend(ps)
+            return f"({' AND '.join(parts)})", params
 
-    elif isinstance(f, OrFilter):
-        parts = []
-        params = []
-        for child in f.children:
-            offset = param_offset + len(params)
-            sql, ps = _filter_to_sql(child, quote, placeholder, offset)
-            parts.append(sql)
-            params.extend(ps)
-        return f"({' OR '.join(parts)})", params
+        case OrFilter(children=children):
+            parts = []
+            params = []
+            for child in children:
+                offset = param_offset + len(params)
+                sql, ps = _filter_to_sql(child, quote, placeholder, offset)
+                parts.append(sql)
+                params.extend(ps)
+            return f"({' OR '.join(parts)})", params
 
-    elif isinstance(f, StructFilter):
-        # Struct access varies by database - use dot notation as default
-        nested_col = f"{f.column_name}.{f.child_name}"
-        # Replace column name in child filter for SQL generation
-        return _filter_to_sql(
-            f.child_filter, lambda _: quote(nested_col), placeholder, param_offset
-        )
+        case StructFilter(child_name=child_name, child_filter=child_filter):
+            # Struct access varies by database - use dot notation as default
+            nested_col = f"{f.column_name}.{child_name}"
+            return _filter_to_sql(child_filter, lambda _: quote(nested_col), placeholder, param_offset)
 
-    else:
-        raise ValueError(f"Unknown filter type: {type(f)}")
+        case _:
+            raise ValueError(f"Unknown filter type: {type(f)}")
 
 
 # =============================================================================
@@ -846,11 +831,11 @@ def _filter_to_sql(
 # =============================================================================
 
 
-def deserialize_filters(ipc_bytes: bytes) -> PushdownFilters:
+def deserialize_filters(batch: pa.RecordBatch) -> PushdownFilters:
     """Deserialize Arrow IPC bytes to typed AST.
 
     Args:
-        ipc_bytes: Arrow IPC stream bytes from pushdown_filters field.
+        batch: Arrow RecordBatch containing the serialized filters.
 
     Returns:
         PushdownFilters container with parsed filter AST.
@@ -860,27 +845,12 @@ def deserialize_filters(ipc_bytes: bytes) -> PushdownFilters:
         FilterVersionError: If version is unsupported.
 
     """
-    _log_debug("deserialize_start", ipc_bytes_size=len(ipc_bytes))
-
-    try:
-        reader = pa.ipc.open_stream(ipc_bytes)
-        batch = reader.read_next_batch()
-    except Exception as e:
-        _log_debug("deserialize_ipc_error", error=str(e))
-        raise FilterDeserializationError(f"Failed to read IPC stream: {e}") from e
-
-    _log_debug(
-        "deserialize_ipc_read",
-        num_columns=batch.num_columns,
-        schema=[f.name for f in batch.schema],
-    )
-
     # Validate version
     metadata = batch.schema.field(0).metadata
     if metadata is None:
         raise FilterVersionError("Missing vgi_filter_version metadata")
     version = metadata.get(b"vgi_filter_version", b"").decode()
-    if version != "1":
+    if version != _SUPPORTED_VERSION:
         raise FilterVersionError(f"Unsupported filter version: {version!r}")
 
     _log_debug("deserialize_version", version=version)
@@ -923,9 +893,7 @@ def deserialize_filters(ipc_bytes: bytes) -> PushdownFilters:
     return PushdownFilters(filters=filters, version=version)
 
 
-def _parse_filter(
-    spec: dict[str, Any], get_value: Callable[[int], pa.Scalar[Any]]
-) -> Filter:
+def _parse_filter(spec: dict[str, Any], get_value: Callable[[int], pa.Scalar[Any]]) -> Filter:
     """Parse a single filter spec into a typed Filter object.
 
     Args:
@@ -950,7 +918,7 @@ def _parse_filter(
         column_index=column_index,
     )
 
-    if filter_type == "constant":
+    if filter_type == FilterType.CONSTANT.value:
         op = ComparisonOp(spec["op"])
         value = get_value(spec["value_ref"])
         result = ConstantFilter(
@@ -968,15 +936,15 @@ def _parse_filter(
         )
         return result
 
-    elif filter_type == "is_null":
+    elif filter_type == FilterType.IS_NULL.value:
         _log_debug("parse_filter_is_null", column=column_name)
         return IsNullFilter(column_name=column_name, column_index=column_index)
 
-    elif filter_type == "is_not_null":
+    elif filter_type == FilterType.IS_NOT_NULL.value:
         _log_debug("parse_filter_is_not_null", column=column_name)
         return IsNotNullFilter(column_name=column_name, column_index=column_index)
 
-    elif filter_type == "in":
+    elif filter_type == FilterType.IN.value:
         # value_ref points to a list column; extract the list's values as an array
         list_scalar = get_value(spec["value_ref"])
         # ListScalar.values gives us the underlying array
@@ -995,7 +963,7 @@ def _parse_filter(
             values=values_array,
         )
 
-    elif filter_type == "and":
+    elif filter_type == FilterType.AND.value:
         _log_debug(
             "parse_filter_and_start",
             column=column_name,
@@ -1009,7 +977,7 @@ def _parse_filter(
             children=children,
         )
 
-    elif filter_type == "or":
+    elif filter_type == FilterType.OR.value:
         _log_debug(
             "parse_filter_or_start",
             column=column_name,
@@ -1023,7 +991,7 @@ def _parse_filter(
             children=children,
         )
 
-    elif filter_type == "struct":
+    elif filter_type == FilterType.STRUCT.value:
         child_name = spec["child_name"]
         _log_debug(
             "parse_filter_struct_start",

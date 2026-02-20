@@ -1,30 +1,11 @@
 """VGI client for communicating with VGI workers.
 
 This module provides the Client class for programmatic interaction with VGI workers.
-The client manages subprocess lifecycle and Arrow IPC communication.
-
-QUICK START
------------
-Use Client as a context manager to ensure proper cleanup:
-
-    from vgi.client import Client
-    from vgi.arguments import Arguments
-    import pyarrow as pa
-
-    # Create input batches
-    batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
-
-    with Client("vgi-example-worker") as client:
-        for output_batch in client.table_in_out_function(
-            function_name="echo",
-            arguments=Arguments(),
-            input=iter([batch]),
-        ):
-            print(output_batch.to_pydict())
+The client manages subprocess lifecycle and RPC communication via vgi_rpc.
 
 PARALLEL PROCESSING
 -------------------
-When a function returns max_processes > 1, the client automatically spawns
+When a function returns max_workers > 1, the client automatically spawns
 additional workers and distributes batches across them. Output order may
 not match input order in parallel mode.
 
@@ -38,44 +19,59 @@ Methods
 -------
 client.start() : Start the worker subprocess
 client.stop() : Stop the worker subprocess
-client.table_in_out_function() : Invoke a TableInOutGenerator and stream results
-client.table_function() : Invoke a TableFunctionGenerator and stream results
-client.scalar_function() : Invoke a ScalarFunction and stream results
+client.table_in_out_function() : Invoke a table-in-out function and stream results
+client.table_function() : Invoke a table function and stream results
+client.scalar_function() : Invoke a scalar function and stream results
 client.get_worker_stderr() : Get captured stderr from worker
 
 See Also
 --------
 vgi.worker.Worker : Base class for workers that Client spawns
-vgi.invocation.Invocation : Invocation structure sent to workers
-vgi.function.Arguments : Container for function arguments
+vgi.protocol.BindRequest : Request type for bind operations
+vgi.arguments.Arguments : Container for function arguments
 
 """
 
 from __future__ import annotations
 
 import io
-import json
 import os
+import shlex
 import subprocess
 import sys
 import threading
 from collections.abc import Callable, Generator, Iterator
-from dataclasses import dataclass
+from contextlib import AbstractContextManager
+from dataclasses import dataclass, field
 from queue import Queue
 from typing import IO, Any, cast
 
 import pyarrow as pa
 import structlog
 import structlog.stdlib
-from pyarrow import ipc
+from vgi_rpc import ArrowSerializableDataclass, WorkerPool
+from vgi_rpc.log import Message
+from vgi_rpc.rpc import (
+    AnnotatedBatch,
+    PipeTransport,
+    RpcConnection,
+    RpcError,
+    StreamSession,
+)
 
-from vgi import tracing
 from vgi.arguments import Arguments
 from vgi.client.catalog_mixin import CatalogClientMixin
-from vgi.function import FunctionInitInput
-from vgi.invocation import InitResult, Invocation, InvocationType
-from vgi.ipc_utils import IPCError, read_single_record_batch
-from vgi.table_function import TableFunctionInitInput
+from vgi.invocation import (
+    BindResponse,
+    FunctionType,
+    GlobalInitResponse,
+)
+from vgi.protocol import (
+    BindRequest,
+    InitRequest,
+    VgiProtocol,
+)
+from vgi.table_function import TableInOutFunctionInitPhase
 
 # Configure structlog to write to stderr
 structlog.configure(
@@ -90,114 +86,49 @@ structlog.configure(
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger().bind(component="client")
 
-worker_log: structlog.stdlib.BoundLogger = structlog.get_logger().bind(
-    component="worker"
-)
+worker_log: structlog.stdlib.BoundLogger = structlog.get_logger().bind(component="worker")
 
 
 class ClientError(Exception):
     """Error raised by Client operations."""
 
-
-def _safe_write_bytes(
-    sink: pa.PythonFile,
-    data: bytes,
-    proc: subprocess.Popen[bytes],
-    context: str = "write",
-) -> None:
-    """Write bytes to sink, converting BrokenPipeError to ClientError.
-
-    Args:
-        sink: PyArrow file wrapper for stdin.
-        data: Bytes to write.
-        proc: The subprocess to check for exit status on error.
-        context: Description of what's being written (for error messages).
-
-    Raises:
-        ClientError: If BrokenPipeError occurs (worker terminated) or write fails.
-
-    """
-    try:
-        if sink.write(data) != len(data):
-            raise ClientError(f"Failed to {context}: incomplete write")
-    except BrokenPipeError:
-        # Worker process died - get exit status for better error message
-        proc.poll()  # Update returncode without waiting
-        raise ClientError(
-            f"Worker process terminated unexpectedly during {context} "
-            f"(exit code: {proc.returncode})"
-        ) from None
+    @classmethod
+    def from_rpc_error(cls, e: RpcError) -> ClientError:
+        """Create a ClientError from an RpcError, including remote traceback."""
+        msg = f"Worker Exception: {e}"
+        if hasattr(e, "remote_traceback") and e.remote_traceback:
+            msg = f"{msg}\n\nRemote traceback:\n{e.remote_traceback}"
+        return cls(msg)
 
 
-def _safe_write_batch(
-    writer: ipc.RecordBatchStreamWriter,
-    batch: pa.RecordBatch,
-    proc: subprocess.Popen[bytes],
-    context: str = "batch write",
-) -> None:
-    """Write a batch to an IPC writer, converting BrokenPipeError to ClientError.
-
-    Args:
-        writer: Arrow IPC stream writer.
-        batch: RecordBatch to write.
-        proc: The subprocess to check for exit status on error.
-        context: Description of what's being written (for error messages).
-
-    Raises:
-        ClientError: If BrokenPipeError occurs (worker terminated).
-
-    """
-    try:
-        writer.write_batch(batch)
-    except BrokenPipeError:
-        # Worker process died - get exit status for better error message
-        proc.poll()  # Update returncode without waiting
-        raise ClientError(
-            f"Worker process terminated unexpectedly during {context} "
-            f"(exit code: {proc.returncode})"
-        ) from None
+# Module-level worker pool shared across all Client instances.
+# Reuses idle worker subprocesses between Client sessions, avoiding
+# repeated spawn/teardown overhead (especially valuable in tests).
+_default_pool = WorkerPool(max_idle=8, idle_timeout=30.0)
 
 
 @dataclass
 class WorkerConnection:
     """Holds state for a single worker subprocess connection."""
 
-    proc: subprocess.Popen[bytes]
-    stdout_buffered: io.BufferedReader[Any]
-    stdin_sink: pa.PythonFile
-    worker_index: int
-    data_writer: ipc.RecordBatchStreamWriter | None = None
-    output_reader: ipc.RecordBatchStreamReader | None = None
-
-
-@dataclass
-class _BindResult:
-    """Parsed bind result from worker."""
-
-    max_processes: int
-    invocation_id: bytes | None
-    output_schema: pa.Schema
-    active_features: frozenset[str]
-    raw_batch: pa.RecordBatch
+    proxy: VgiProtocol
+    worker_index: int = 0
+    stream: StreamSession | None = None
+    # Direct subprocess management (non-pooled)
+    proc: subprocess.Popen[bytes] | None = None
+    connection: RpcConnection[VgiProtocol] | None = None
+    # Pool management
+    _pool_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
 
 
 class Client(CatalogClientMixin):
     """Client for communicating with VGI workers.
 
-    Manages the subprocess lifecycle and Arrow IPC communication with a VGI
+    Manages the subprocess lifecycle and RPC communication with a VGI
     worker process. Use as a context manager to ensure proper cleanup.
 
     Also provides catalog operations via CatalogClientMixin - these methods
     spawn ephemeral workers and don't require start()/stop().
-
-    Example:
-        with Client("./my_worker.py") as client:
-            for batch in client.table_in_out_function(
-                function_name="echo",
-                arguments=Arguments(positional=[], named={}),
-                input=input_batches,
-            ):
-                process(batch)
 
     """
 
@@ -233,598 +164,103 @@ class Client(CatalogClientMixin):
             return batches[0]
         return combined[0]
 
-    def _handle_log_message(
-        self,
-        output_batch: pa.RecordBatch,
-        output_metadata: pa.KeyValueMetadata | None,
-    ) -> bool:
-        """Handle a log message from the worker if present.
+    @staticmethod
+    def _on_worker_log(msg: Message) -> None:
+        """Forward log messages from vgi_rpc to the worker logger."""
+        worker_log._proxy_to_logger(msg.level.name.lower(), msg.message)
 
-        Detects log messages by checking for zero-row batches with vgi.log_level
-        and vgi.log_message metadata keys. When detected, logs the message using
-        structlog at the appropriate level. If the log level is "exception",
-        raises a ClientError with the message and traceback.
-
-        Args:
-            output_batch: The output batch from the worker. A log message is
-                detected when this has zero rows.
-            output_metadata: Custom metadata dictionary from the batch. Must
-                contain b"vgi.log_level" and b"vgi.log_message" keys for the
-                batch to be treated as a log message. May optionally contain
-                b"vgi.log_extra" with JSON-encoded additional context.
-
-        Returns:
-            True if this was a log message and the caller should continue to
-            the next batch. False if this was a regular data batch.
-
-        Raises:
-            ClientError: If the log message has level "exception", containing
-                the error message and traceback from the worker.
-
-        """
-        if output_metadata is None:
-            return False
-
-        if not (
-            output_batch.num_rows == 0
-            and output_metadata.get(b"vgi.log_level") is not None
-            and output_metadata.get(b"vgi.log_message") is not None
-        ):
-            return False
-
-        extra: dict[str, Any] = {}
-        if output_metadata.get(b"vgi.log_extra") is not None:
-            try:
-                extra = json.loads(output_metadata[b"vgi.log_extra"].decode())
-            except json.JSONDecodeError as e:
-                log.error(
-                    "failed_to_decode_log_extra",
-                    error=str(e),
-                    raw=output_metadata[b"vgi.log_extra"],
-                )
-
-        level_name = output_metadata[b"vgi.log_level"].decode().lower()
-        worker_log._proxy_to_logger(
-            level_name,
-            output_metadata[b"vgi.log_message"].decode(),
-            **extra,
-        )
-
-        if level_name == "exception":
-            message = output_metadata[b"vgi.log_message"].decode()
-            traceback = extra.get("traceback", "")
-            full_message = f"Worker Exception: {message}\n{traceback}"
-            raise ClientError(full_message)
-
-        return True
-
-    def _parse_bind_result(
-        self,
-        batch: pa.RecordBatch,
-        custom_metadata: pa.KeyValueMetadata | None = None,
-    ) -> _BindResult:
-        """Parse the bind result batch from a worker into structured data.
-
-        Extracts function metadata from the worker's bind response, including
-        max_processes (cast to int32), invocation_id, active_features,
-        and the output schema (deserialized from IPC bytes).
-
-        Args:
-            batch: The bind result RecordBatch from the worker. Expected columns:
-                - max_processes: Maximum parallel workers the function supports
-                - invocation_id: Unique identifier for this invocation (bytes)
-                - output_schema: IPC-serialized Arrow schema for output batches
-                - active_features: List of feature flags active for this invocation
-            custom_metadata: Optional batch metadata for protocol state validation.
-
-        Returns:
-            A _BindResult dataclass containing:
-                - max_processes: int, the function's parallelism limit
-                - invocation_id: bytes or None, unique invocation identifier
-                - output_schema: pa.Schema, deserialized output schema
-                - active_features: frozenset[str], features active for this invocation
-                - raw_batch: The original RecordBatch for reference
-
-        """
-        from vgi.ipc_utils import ProtocolState, get_protocol_state
-
-        # Validate protocol state
-        actual_state = get_protocol_state(custom_metadata)
-        if actual_state is None:
-            raise ClientError(
-                "Protocol state mismatch for bind_result: "
-                f"expected '{ProtocolState.BIND_RESULT}', but no protocol state found. "
-                f"Batch fields: {sorted(batch.schema.names)}"
-            )
-        if actual_state != ProtocolState.BIND_RESULT:
-            raise ClientError(
-                f"Protocol state mismatch for bind_result: "
-                f"expected '{ProtocolState.BIND_RESULT}', got '{actual_state}'. "
-                f"Batch fields: {sorted(batch.schema.names)}"
-            )
-
-        if batch.num_rows != 1:
-            raise ClientError(
-                "Expected single-row RecordBatch for bind result,"
-                f" got {batch.num_rows} rows"
-            )
-        max_processes_array = batch.column(
-            batch.schema.get_field_index("max_processes")
-        )
-        max_processes_value = max_processes_array.cast(pa.int32()).to_pylist()[0]
-        # max_processes should always be set in the bind result
-        max_processes: int = (
-            max_processes_value if max_processes_value is not None else 1
-        )
-
-        invocation_id_array = batch.column(
-            batch.schema.get_field_index("invocation_id")
-        )
-        invocation_id = invocation_id_array.to_pylist()[0]
-
-        # Extract active features - default to empty set for backward compatibility
-        active_features: frozenset[str] = frozenset()
-        if "active_features" in batch.schema.names:
-            features_list = batch.column(
-                batch.schema.get_field_index("active_features")
-            ).to_pylist()[0]
-            if features_list is not None:
-                active_features = frozenset(features_list)
-
-        # Extract output schema
-        output_schema_bytes = batch.column(
-            batch.schema.get_field_index("output_schema")
-        ).to_pylist()[0]
-        output_schema = pa.ipc.read_schema(pa.BufferReader(output_schema_bytes))  # type: ignore[arg-type]
-
-        return _BindResult(
-            max_processes=max_processes,
-            invocation_id=invocation_id,
-            output_schema=output_schema,
-            active_features=active_features,
-            raw_batch=batch,
-        )
-
-    def _validate_features(
-        self,
-        requested: frozenset[str],
-        active: frozenset[str],
-    ) -> None:
-        """Validate that the worker activated only features we support.
-
-        Checks that the active features returned by the worker are a subset
-        of the features the client requested. This ensures the worker doesn't
-        activate features the client cannot handle.
-
-        Args:
-            requested: The client_features sent in the Invocation.
-            active: The active_features returned in the OutputSpec.
-
-        Raises:
-            ClientError: If the worker activated features not requested by
-                the client.
-
-        """
-        if not active <= requested:
-            unexpected = active - requested
-            raise ClientError(f"Worker activated unsupported features: {unexpected}")
-
-        log.debug(
-            "features_validated",
-            requested_features=requested,
-            active_features=active,
-        )
-
-    def _determine_max_processes(self, requested: int) -> int:
-        """Apply system and user limits to the function's requested max_processes.
+    def _determine_max_workers(self, requested: int) -> int:
+        """Apply system and user limits to the function's requested max_workers.
 
         Clamps the requested parallelism to the lower of:
         1. The system's CPU count (from os.cpu_count(), defaulting to 1)
-        2. The user-specified max_workers (if set via Client constructor)
+        2. The user-specified worker_limit (if set via Client constructor)
 
         Args:
-            requested: The max_processes value requested by the function,
-                typically from the bind result.
+            requested: The max_workers value requested by the function,
+                typically from the init response header.
 
         Returns:
-            The effective max_processes after applying all limits. Always >= 1.
+            The effective max_workers after applying all limits. Always >= 1.
 
         """
-        max_processes = requested
+        max_workers = requested
 
         # Limit to CPU count
         cpu_count = os.cpu_count() or 1
-        if max_processes > cpu_count:
+        if max_workers > cpu_count:
             log.debug(
-                "limiting_max_processes_to_cpu_count",
-                requested=max_processes,
+                "limiting_max_workers_to_cpu_count",
+                requested=max_workers,
                 cpu_count=cpu_count,
             )
-            max_processes = cpu_count
+            max_workers = cpu_count
 
-        # Limit to user-specified max_workers
-        if self._max_workers is not None and max_processes > self._max_workers:
+        # Limit to user-specified worker_limit
+        if self._worker_limit is not None and max_workers > self._worker_limit:
             log.debug(
-                "limiting_max_processes_to_max_workers",
-                requested=max_processes,
-                max_workers=self._max_workers,
+                "limiting_max_workers_to_worker_limit",
+                requested=max_workers,
+                worker_limit=self._worker_limit,
             )
-            max_processes = self._max_workers
+            max_workers = self._worker_limit
 
-        return max_processes
+        return max_workers
 
-    def _initialize_stream_common(
-        self,
-        *,
-        function_name: str,
-        arguments: Arguments,
-        input_schema: pa.Schema | None,
-        function_type: InvocationType,
-        bind_result_callback: Callable[[pa.RecordBatch], None] | None,
-        projection_ids: list[int] | None,
-        pushdown_filters: bytes | None = None,
-        settings: dict[str, str] | None = None,
-        transaction_id: bytes | None = None,
-    ) -> tuple[_BindResult, InitResult, Invocation]:
-        """Perform the common initialization handshake with the primary worker.
-
-        Executes the VGI protocol initialization sequence:
-        1. Sends Invocation (function name, arguments, input schema)
-        2. Reads and parses the bind result (output schema, max_processes, etc.)
-        3. Invokes bind_result_callback if provided
-        4. Validates protocol version compatibility
-        5. Applies CPU/max_workers limits to max_processes
-        6. Sends init data (FunctionInitInput or TableFunctionInitInput)
-        7. Reads InitResult (shared state identifier for parallel workers)
-        8. Creates an Invocation with global_execution_identifier for additional workers
+    @staticmethod
+    def _settings_to_batch(settings: dict[str, Any] | None) -> pa.RecordBatch | None:
+        """Convert settings dict to RecordBatch for protocol.
 
         Args:
-            function_name: Name of the function to invoke (must exist in worker
-                registry).
-            arguments: Arguments container with positional and named arguments
-                to pass to the function.
-            input_schema: Schema of input batches for table-in-out functions,
-                or None for table functions that generate output without input.
-            function_type: Type of function being invoked (SCALAR or TABLE).
-                Determines what init data format is sent to the worker.
-            bind_result_callback: Optional callback invoked with the raw bind
-                result RecordBatch. Called before further processing.
-            projection_ids: Optional list of column indices to project in the
-                output. Passed to the worker via TableFunctionInitInput (ignored
-                for scalar functions).
-            pushdown_filters: Optional byte string containing filter predicates
-                to push down to the function. Passed to the worker via
-                TableFunctionInitInput (ignored for scalar functions).
-            settings: Optional dictionary of settings/pragmas to
-                pass to the function. Functions that declare required_settings
-                in their Meta class will validate these are present.
-            transaction_id: Optional unique identifier for the DuckDB transaction.
-                When provided, allows functions to participate in transactional
-                semantics and correlate calls within the same transaction.
+            settings: Dictionary of setting name to value pairs.
 
         Returns:
-            A tuple of (bind_result, global_init_result, request_with_init):
-                - bind_result: Parsed _BindResult with output_schema, max_processes
-                - global_init_result: InitResult containing shared state ID
-                - request_with_init: Invocation with global_execution_identifier set,
-                  suitable for initializing additional parallel workers
-
-        Raises:
-            ClientError: If the worker process is not started, or if reading
-                the bind result or init result fails.
-            OSError: If writing the Invocation or init data fails.
-            ClientError: If the worker activated unsupported features.
+            A single-row RecordBatch with one column per setting, or None.
 
         """
-        if (
-            self._stdin_sink is None
-            or self._stdout_buffered is None
-            or self._proc is None
-        ):
-            raise ClientError("Worker process not started. Call start() first.")
+        if settings is None:
+            return None
+        return pa.RecordBatch.from_pydict({k: [v] for k, v in settings.items()})
 
-        # Send initialization batch
-        log.debug("sending_init_batch", function=function_name, arguments=arguments)
-
-        # Client features - currently empty, will be populated as features are added
-        client_features: frozenset[str] = frozenset()
-
-        # Extract trace context for propagation to worker
-        traceparent, tracestate = tracing.extract_trace_context()
-
-        initial_request = Invocation(
-            function_name=function_name,
-            input_schema=input_schema,
-            function_type=function_type,
-            correlation_id=self.correlation_id,
-            invocation_id=None,
-            arguments=arguments,
-            client_features=client_features,
-            attach_id=self._attach_id,
-            settings=settings,
-            transaction_id=transaction_id,
-            traceparent=traceparent,
-            tracestate=tracestate,
-        )
-        call_parameters_batch_bytes = initial_request.serialize()
-
-        _safe_write_bytes(
-            self._stdin_sink,
-            call_parameters_batch_bytes,
-            self._proc,
-            context="call parameters write",
-        )
-
-        # Read and parse bind result
-        log.debug("reading_bind_result")
-        try:
-            bind_result_batch, bind_custom_metadata = read_single_record_batch(
-                self._stdout_buffered, "bind_result"
-            )
-        except IPCError as e:
-            raise ClientError(str(e)) from e
-
-        # Check for bind-time exception (error metadata is in custom_metadata)
-        if (
-            bind_custom_metadata is not None
-            and bind_result_batch.num_rows == 0
-            and self._handle_log_message(bind_result_batch, bind_custom_metadata)
-        ):
-            # _handle_log_message raises ClientError for exceptions
-            # If it returns True (non-exception log), unexpected for bind
-            raise ClientError("Unexpected log message during bind")
-
-        if bind_result_callback is not None:
-            bind_result_callback(bind_result_batch)
-
-        log.debug("bind_result_received", batch=bind_result_batch)
-
-        bind_result = self._parse_bind_result(bind_result_batch, bind_custom_metadata)
-
-        # Validate features
-        self._validate_features(client_features, bind_result.active_features)
-
-        # Apply limits to max_processes
-        bind_result = _BindResult(
-            max_processes=self._determine_max_processes(bind_result.max_processes),
-            invocation_id=bind_result.invocation_id,
-            output_schema=bind_result.output_schema,
-            active_features=bind_result.active_features,
-            raw_batch=bind_result.raw_batch,
-        )
-
-        log.debug(
-            "max_processes_determined",
-            max_processes=bind_result.max_processes,
-            invocation_id=(
-                bind_result.invocation_id.hex() if bind_result.invocation_id else None
-            ),
-        )
-
-        if initial_request.function_type == InvocationType.SCALAR:
-            # Scalar functions use empty init input
-            init_serialized_bytes = FunctionInitInput().serialize()
-        else:
-            # Table functions (generator and table-in-out) use TableFunctionInitInput
-            init_serialized_bytes = TableFunctionInitInput(
-                projection_ids=projection_ids,
-                pushdown_filters=pushdown_filters,
-            ).serialize()
-
-        _safe_write_bytes(
-            self._stdin_sink,
-            init_serialized_bytes,
-            self._proc,
-            context="init input write",
-        )
-
-        # Read init result
-        log.debug("reading_init_result")
-        try:
-            init_result_batch, init_result_metadata = read_single_record_batch(
-                self._stdout_buffered, "init_result"
-            )
-        except IPCError as e:
-            raise ClientError(str(e)) from e
-
-        global_init_result = InitResult.deserialize(
-            init_result_batch, init_result_metadata
-        )
-        log.debug(
-            "init_result_received",
-            has_identifier=global_init_result.global_execution_identifier is not None,
-        )
-
-        # Create request with init for additional workers
-        request_with_init = Invocation(
-            function_name=function_name,
-            input_schema=input_schema,
-            function_type=function_type,
-            correlation_id=self.correlation_id,
-            invocation_id=bind_result.invocation_id,
-            global_execution_identifier=global_init_result,
-            arguments=arguments,
-            transaction_id=transaction_id,
-            traceparent=traceparent,
-            tracestate=tracestate,
-        )
-
-        return bind_result, global_init_result, request_with_init
-
-    def _spawn_additional_workers(
-        self,
-        max_processes: int,
-        request_with_init: Invocation,
-        init_fn: Callable[[WorkerConnection, Invocation], None],
-    ) -> None:
-        """Spawn and initialize additional worker subprocesses in parallel.
-
-        First spawns all worker subprocesses sequentially (fast operation), then
-        initializes all workers in parallel using threads. This overlaps the
-        Python startup time across all workers for better performance.
-
-        The spawned workers are appended to self._additional_workers list.
-
-        If max_processes is 1 or less, this method returns immediately without
-        spawning any workers.
+    @staticmethod
+    def _secrets_to_batch(secrets: dict[str, Any] | None) -> pa.RecordBatch | None:
+        """Convert secrets dict to RecordBatch for protocol.
 
         Args:
-            max_processes: Total number of workers desired (including the primary
-                worker). For example, if max_processes=4, this method spawns
-                3 additional workers (indices 1, 2, 3).
-            request_with_init: The Invocation containing the global_execution_identifier
-                from the primary worker's initialization. This is sent to each
-                additional worker so they share the same global state.
-            init_fn: Callable that initializes a single worker. Called with
-                (worker, request_with_init) for each spawned worker. Typically
-                sends the invocation and reads the bind result.
-
-        Raises:
-            ClientError: If any worker fails to initialize. The exception wraps
-                the first initialization error encountered.
-
-        """
-        if max_processes <= 1:
-            return
-
-        # Spawn all worker subprocesses first (fast)
-        for worker_index in range(1, max_processes):
-            worker = self._spawn_worker(worker_index)
-            self._additional_workers.append(worker)
-
-        # Initialize all workers in parallel (overlaps Python startup time)
-        init_errors: list[Exception] = []
-
-        def do_init(worker: WorkerConnection) -> None:
-            try:
-                init_fn(worker, request_with_init)
-            except Exception as e:
-                init_errors.append(e)
-
-        init_threads: list[threading.Thread] = []
-        for worker in self._additional_workers:
-            t = threading.Thread(target=do_init, args=(worker,))
-            t.start()
-            init_threads.append(t)
-
-        for t in init_threads:
-            t.join()
-
-        if init_errors:
-            error_msgs = [str(e) for e in init_errors]
-            raise ClientError(
-                f"Failed to initialize {len(init_errors)} worker(s):\n"
-                + "\n".join(f"  - {msg}" for msg in error_msgs)
-            ) from init_errors[0]
-
-        log.debug(
-            "additional_workers_spawned",
-            count=len(self._additional_workers),
-        )
-
-    def _initialize_function_stream(
-        self,
-        *,
-        function_name: str,
-        arguments: Arguments,
-        input_schema: pa.Schema | None,
-        function_type: InvocationType,
-        bind_result_callback: Callable[[pa.RecordBatch], None] | None,
-        projection_ids: list[int] | None,
-        pushdown_filters: bytes | None = None,
-        settings: dict[str, str] | None = None,
-        transaction_id: bytes | None = None,
-    ) -> tuple[ipc.RecordBatchStreamWriter | None, ipc.RecordBatchStreamReader | None]:
-        """Initialize the VGI protocol stream and prepare for data transfer.
-
-        Performs the full initialization sequence by calling _initialize_stream_common,
-        then spawns additional workers if max_processes > 1, and finally sets up
-        the appropriate I/O streams:
-
-        For table-in-out functions (input_schema is not None):
-            - Creates an IPC stream writer for sending input batches
-            - Output reader is opened lazily after first input (worker blocks on input)
-
-        For table functions (input_schema is None):
-            - No data writer is created (no input to send)
-            - Opens an IPC stream reader immediately for output
-
-        Args:
-            function_name: Name of the function to invoke (must exist in worker
-                registry).
-            arguments: Arguments container with positional and named arguments.
-            input_schema: Schema of input batches for table-in-out functions,
-                or None for table functions.
-            function_type: Type of function being invoked (SCALAR or TABLE).
-            bind_result_callback: Optional callback invoked with the raw bind
-                result RecordBatch.
-            projection_ids: Optional list of column indices to project.
-            pushdown_filters: Optional byte string containing filter predicates
-                to push down to the function.
-            settings: Optional dictionary of settings/pragmas.
-            transaction_id: Optional unique identifier for the DuckDB transaction.
+            secrets: Dictionary of secret name to value pairs. Values can be
+                simple scalars or dicts (for struct-typed secrets).
 
         Returns:
-            A tuple of (data_writer, output_reader):
-                - data_writer: IPC stream writer for input batches, or None for
-                  table functions
-                - output_reader: IPC stream reader for output batches, or None
-                  for table-in-out functions (opened lazily after sending input)
-
-        Raises:
-            ClientError: If protocol communication fails or worker initialization
-                fails.
-            OSError: If writing to the worker fails.
-            ProtocolVersionError: If the worker's protocol version is incompatible.
+            A single-row RecordBatch with one column per secret, or None.
 
         """
-        bind_result, _, request_with_init = self._initialize_stream_common(
-            function_name=function_name,
-            arguments=arguments,
-            input_schema=input_schema,
-            function_type=function_type,
-            bind_result_callback=bind_result_callback,
-            projection_ids=projection_ids,
-            pushdown_filters=pushdown_filters,
-            settings=settings,
-            transaction_id=transaction_id,
-        )
+        if secrets is None:
+            return None
+        return pa.RecordBatch.from_pydict({k: [v] for k, v in secrets.items()})
 
-        # Spawn additional workers if needed
-        def init_worker(worker: WorkerConnection, request: Invocation) -> None:
-            self._initialize_additional_worker(worker, request, input_schema)
+    @staticmethod
+    def _deserialize_pushdown_filters(filters_bytes: bytes | None) -> pa.RecordBatch | None:
+        """Deserialize pushdown filter bytes to RecordBatch.
 
-        self._spawn_additional_workers(
-            bind_result.max_processes,
-            request_with_init,
-            init_worker,
-        )
+        Args:
+            filters_bytes: IPC-serialized RecordBatch bytes, or None.
 
-        # Create data writer for table-in-out functions
-        data_writer: ipc.RecordBatchStreamWriter | None = None
-        if input_schema is not None:
-            assert self._stdin_sink is not None
-            data_writer = ipc.new_stream(self._stdin_sink, input_schema)
-            log.debug("starting_data_batches")
+        Returns:
+            Deserialized RecordBatch, or None.
 
-        # Open output reader only for table functions (no input).
-        # For table-in-out, output_reader is opened lazily after sending input
-        # because the worker waits for input before writing output.
-        output_reader: ipc.RecordBatchStreamReader | None = None
-        if input_schema is None:
-            assert self._stdout_buffered is not None
-            output_reader = ipc.open_stream(self._stdout_buffered)
-            log.debug("output_stream_opened")
-
-        return data_writer, output_reader
+        """
+        if filters_bytes is None:
+            return None
+        reader = pa.ipc.open_stream(pa.BufferReader(filters_bytes))
+        return reader.read_next_batch()
 
     def __init__(
         self,
         server_path: str,
-        correlation_id: str = "",
         passthrough_stderr: bool = False,
-        max_workers: int | None = None,
+        worker_limit: int | None = None,
         attach_id: bytes | None = None,
+        pool: WorkerPool | None = _default_pool,
     ):
         """Initialize the VGI client.
 
@@ -836,45 +272,41 @@ class Client(CatalogClientMixin):
             server_path: Shell command or path to the VGI worker executable.
                 Executed via shell=True, so can include arguments (e.g.,
                 "python worker.py --debug" or "./my_worker").
-            correlation_id: Identifier attached to all requests for tracing and
-                log correlation across distributed systems. Defaults to empty
-                string.
             passthrough_stderr: If True, worker stderr is passed through to
                 the parent process's stderr in real-time. If False (default),
                 stderr is captured in a buffer and available via
                 get_worker_stderr() after processing completes.
-            max_workers: Maximum number of parallel worker processes. If set,
-                overrides the function's max_processes when that value exceeds
+            worker_limit: Maximum number of parallel worker processes. If set,
+                overrides the function's max_workers when that value exceeds
                 this limit. Also capped by os.cpu_count(). If None, uses the
-                function's max_processes (still capped by CPU count).
+                function's max_workers (still capped by CPU count).
             attach_id: Optional unique identifier for the DuckDB database
                 attachment. When VGI is used from an attached database, this
                 allows tracing calls back to that specific attachment.
-
-        Example:
-            >>> client = Client("vgi-example-worker", max_workers=4)
-            >>> with client:
-            ...     for batch in client.table_in_out_function(...):
-            ...         process(batch)
+            pool: Optional WorkerPool for subprocess reuse. Defaults to a
+                shared module-level pool. Pass None to disable pooling and
+                use direct subprocess management.
 
         """
         self.server_path = server_path
-        self.correlation_id = correlation_id
         self.passthrough_stderr = passthrough_stderr
-        self._max_workers = max_workers
+        self._worker_limit = worker_limit
         self._attach_id = attach_id
-        self._proc: subprocess.Popen[bytes] | None = None
-        self._stdout_buffered: io.BufferedReader[Any] | None = None
-        self._stdin_sink: pa.PythonFile | None = None
-        self._stderr_buffer: list[bytes] = []
-        self._stderr_lock = threading.Lock()
-        self._stderr_thread: threading.Thread | None = None
+        self._pool = pool
+        self._primary: WorkerConnection | None = None
         # For multi-worker support
         self._additional_workers: list[WorkerConnection] = []
+        self._stderr_buffer: list[bytes] = []
+        self._stderr_lock = threading.Lock()
         self._stderr_threads: list[threading.Thread] = []
 
     def _drain_stderr(self, stderr: IO[bytes]) -> None:
-        """Background thread that continuously reads stderr."""
+        """Background thread that continuously reads stderr.
+
+        This is necessary when using pipes because if stderr
+        fills up the entire process will be blocked even writing
+        to stdout.
+        """
         while True:
             line = stderr.readline()
             if not line:
@@ -907,26 +339,38 @@ class Client(CatalogClientMixin):
             return b"".join(self._stderr_buffer).decode("utf-8", errors="replace")
 
     def _spawn_worker(self, worker_index: int) -> WorkerConnection:
-        """Spawn a new worker subprocess and return its connection.
+        """Spawn or borrow a worker subprocess and create an RPC connection.
 
-        Creates a subprocess running the server_path command, sets up stdin/stdout
-        pipes for Arrow IPC communication, and starts a background thread to
-        drain stderr if passthrough_stderr is False.
+        When a pool is configured, borrows an idle worker (or spawns a new one)
+        from the pool. Otherwise creates a subprocess directly.
 
         Args:
             worker_index: Index identifying this worker (0 for primary, 1+ for
                 additional workers). Used for logging and tracking.
 
         Returns:
-            WorkerConnection containing the subprocess handle, buffered stdout
-            reader, stdin sink wrapped as a PyArrow PythonFile, and the worker
-            index. The data_writer and output_reader fields are None and must
-            be initialized separately.
+            WorkerConnection containing the RPC proxy ready for method calls.
 
         Raises:
             ClientError: If stdout or stderr pipes fail to be created.
 
         """
+        if self._pool is not None:
+            log.debug("borrowing_worker", worker_index=worker_index)
+            cmd = shlex.split(self.server_path)
+            ctx = self._pool.connect(
+                VgiProtocol,  # type: ignore[type-abstract]
+                cmd,
+                on_log=self._on_worker_log,
+            )
+            proxy = ctx.__enter__()
+            log.debug("worker_borrowed", worker_index=worker_index)
+            return WorkerConnection(
+                proxy=proxy,
+                worker_index=worker_index,
+                _pool_ctx=ctx,
+            )
+
         log.debug("spawning_worker", worker_index=worker_index)
         proc = subprocess.Popen(
             self.server_path,
@@ -945,132 +389,57 @@ class Client(CatalogClientMixin):
         if not self.passthrough_stderr:
             if proc.stderr is None:
                 raise ClientError("Failed to create stderr pipe for worker subprocess")
-            stderr_thread = threading.Thread(
-                target=self._drain_stderr, args=(proc.stderr,), daemon=True
-            )
+            stderr_thread = threading.Thread(target=self._drain_stderr, args=(proc.stderr,), daemon=True)
             stderr_thread.start()
             self._stderr_threads.append(stderr_thread)
 
-        stdout_buffered = io.BufferedReader(proc.stdout)  # type: ignore[type-var]
         assert proc.stdin is not None, "stdin pipe not created for worker"
-        stdin_sink = pa.PythonFile(cast(io.IOBase, proc.stdin))
+        stdout_buffered = io.BufferedReader(cast(io.RawIOBase, proc.stdout))
+        transport = PipeTransport(reader=stdout_buffered, writer=cast(io.IOBase, proc.stdin))
+        connection: RpcConnection[VgiProtocol] = RpcConnection(
+            VgiProtocol,  # type: ignore[type-abstract]
+            transport,
+            on_log=self._on_worker_log,
+        )
+        proxy = connection.__enter__()
 
         return WorkerConnection(
-            proc=proc,
-            stdout_buffered=stdout_buffered,
-            stdin_sink=stdin_sink,
+            proxy=proxy,
             worker_index=worker_index,
-        )
-
-    def _initialize_additional_worker(
-        self,
-        worker: WorkerConnection,
-        request_with_init: Invocation,
-        input_schema: pa.Schema | None,
-    ) -> None:
-        """Initialize an additional worker with the shared global init state.
-
-        Sends the Invocation (which includes the global_execution_identifier from the
-        primary worker) to this worker, reads and discards the bind result (since
-        the output schema was already obtained from the primary worker), and
-        creates a data_writer on the worker if input_schema is provided.
-
-        After this method returns, the worker is ready to receive input batches
-        (for table-in-out functions) or produce output (for table functions).
-
-        Args:
-            worker: The worker connection to initialize. Must have valid stdin_sink
-                and stdout_buffered handles. The data_writer field will be set
-                if input_schema is not None.
-            request_with_init: Invocation containing the global_execution_identifier
-                from the primary worker's InitResult. This ensures all
-                workers share the same initialization state.
-            input_schema: Schema for the input data stream. If provided, a
-                RecordBatchStreamWriter is created and assigned to worker.data_writer.
-                Pass None for table functions that don't receive input batches.
-
-        Raises:
-            OSError: If writing the request to the worker's stdin fails.
-            ClientError: If reading the bind result fails due to IPC errors.
-
-        """
-        log.debug(
-            "initializing_additional_worker",
-            worker_index=worker.worker_index,
-        )
-
-        # Send the request with global_execution_identifier
-        request_bytes = request_with_init.serialize()
-        _safe_write_bytes(
-            worker.stdin_sink,
-            request_bytes,
-            worker.proc,
-            context=f"request to worker {worker.worker_index}",
-        )
-
-        # Read the bind result (we already have output schema from first worker)
-        try:
-            bind_result_batch, bind_custom_metadata = read_single_record_batch(
-                worker.stdout_buffered, "bind_result"
-            )
-        except IPCError as e:
-            raise ClientError(str(e)) from e
-
-        # Check for bind-time exception (same as primary worker)
-        if (
-            bind_custom_metadata is not None
-            and bind_result_batch.num_rows == 0
-            and self._handle_log_message(bind_result_batch, bind_custom_metadata)
-        ):
-            # _handle_log_message raises ClientError for exceptions
-            # If it returns True (non-exception log), unexpected for bind
-            raise ClientError("Unexpected log message during additional worker bind")
-
-        # Validate protocol state for bind_result
-        from vgi.ipc_utils import ProtocolState, get_protocol_state
-
-        actual_state = get_protocol_state(bind_custom_metadata)
-        if actual_state is None:
-            raise ClientError(
-                "Protocol state mismatch for additional worker bind_result: "
-                f"expected '{ProtocolState.BIND_RESULT}', but no protocol state found. "
-                f"Batch fields: {sorted(bind_result_batch.schema.names)}"
-            )
-        if actual_state != ProtocolState.BIND_RESULT:
-            raise ClientError(
-                f"Protocol state mismatch for additional worker bind_result: "
-                f"expected '{ProtocolState.BIND_RESULT}', got '{actual_state}'. "
-                f"Batch fields: {sorted(bind_result_batch.schema.names)}"
-            )
-
-        # Create data writer for this worker (only for table-in-out functions)
-        if input_schema is not None:
-            worker.data_writer = ipc.new_stream(worker.stdin_sink, input_schema)
-
-        log.debug(
-            "additional_worker_initialized",
-            worker_index=worker.worker_index,
+            proc=proc,
+            connection=connection,
         )
 
     def _stop_worker(self, worker: WorkerConnection) -> int:
-        """Stop a worker subprocess and wait for it to exit.
+        """Stop a worker subprocess or return it to the pool.
 
-        Closes the worker's stdin pipe to signal EOF, then waits for the
-        subprocess to terminate. Logs an error if the worker exits with
-        a non-zero return code.
+        Closes the worker's stream session (if open), then either returns the
+        worker to the pool (pooled) or exits the RPC connection and waits for
+        the subprocess to terminate (direct).
 
         Args:
-            worker: The worker connection to stop. The subprocess will be
-                terminated and the connection should not be used after this call.
+            worker: The worker connection to stop.
 
         Returns:
-            The subprocess exit code. Returns 0 for normal termination,
-            non-zero values indicate errors or abnormal termination.
+            The subprocess exit code. Returns 0 for pooled workers (returned
+            to pool) or normal termination, non-zero for errors.
 
         """
-        if worker.proc.stdin:
-            worker.proc.stdin.close()
-        worker.proc.wait()
+        if worker.stream is not None:
+            worker.stream.close()
+            worker.stream = None
+
+        if worker._pool_ctx is not None:
+            # Return to pool — pool handles subprocess lifecycle
+            worker._pool_ctx.__exit__(None, None, None)
+            log.debug("worker_returned_to_pool", worker_index=worker.worker_index)
+            return 0
+
+        # Direct subprocess management
+        assert worker.connection is not None
+        assert worker.proc is not None
+        worker.connection.__exit__(None, None, None)
+        worker.proc.wait(timeout=self.PROCESS_WAIT_TIMEOUT)
         returncode = worker.proc.returncode
         if returncode != 0:
             log.error(
@@ -1087,6 +456,12 @@ class Client(CatalogClientMixin):
                 returncode=returncode,
             )
         return returncode
+
+    def _close_secondary_workers(self) -> None:
+        """Close and stop all secondary (additional) workers."""
+        for worker in self._additional_workers:
+            self._stop_worker(worker)
+        self._additional_workers = []
 
     def _join_threads(self, threads: list[threading.Thread]) -> None:
         """Wait for all threads to complete with timeout.
@@ -1105,104 +480,283 @@ class Client(CatalogClientMixin):
             if thread.is_alive():
                 log.warning("worker_thread_did_not_terminate")
 
-    def _close_secondary_workers(
-        self,
-        workers: list[WorkerConnection],
-        close_data_writers: bool = False,
-    ) -> None:
-        """Close secondary workers (all except the first) and wait for them to exit.
+    def start(self) -> None:
+        """Start the primary worker subprocess.
 
-        Signals EOF to each secondary worker and waits for them to terminate.
-        The primary worker (index 0) is not affected and remains running.
+        Spawns the worker process using the server_path configured in __init__,
+        sets up RPC transport, and creates a typed VgiProtocol proxy for
+        method calls.
 
-        For table-in-out functions, closing the data_writer sends an IPC stream
-        end marker that triggers the worker to finalize. For table functions,
-        closing stdin signals EOF directly.
+        After this method returns, the client is ready to invoke functions via
+        table_in_out_function(), table_function(), or scalar_function(). When
+        using the context manager protocol (with statement), this method is
+        called automatically.
 
-        Args:
-            workers: List of all workers where workers[0] is the primary worker
-                and workers[1:] are secondary workers. Only secondary workers
-                are closed by this method.
-            close_data_writers: If True, closes each secondary worker's data_writer
-                (used for table-in-out functions where input is streamed via IPC).
-                If False, closes stdin directly (used for table functions that
-                don't receive input batches).
+        The stderr buffer is cleared when start() is called, so any stderr from
+        previous runs is discarded.
 
         Raises:
-            subprocess.TimeoutExpired: If a worker doesn't exit within
-                PROCESS_WAIT_TIMEOUT seconds (propagated from proc.wait()).
+            ClientError: If the client is already started (call stop() first),
+                or if stdout/stderr pipes fail to be created.
 
         """
-        secondary_workers = workers[1:]
+        if self._primary is not None:
+            raise ClientError("Client already started")
 
-        if close_data_writers:
-            # Close data writers first to signal EOF to workers
-            for worker in secondary_workers:
-                if worker.data_writer is not None:
-                    worker.data_writer.close()
-                    log.debug(
-                        "secondary_worker_data_writer_closed",
-                        worker_index=worker.worker_index,
-                    )
-                # Also close stdin to send EOF (data_writer.close() only closes
-                # the IPC stream, not the underlying pipe)
-                if worker.proc.stdin:
-                    worker.proc.stdin.close()
-        else:
-            # Close stdin for table functions
-            for worker in secondary_workers:
-                if worker.proc.stdin:
-                    worker.proc.stdin.close()
+        self._stderr_buffer = []
+        log.debug("starting_server", server_path=self.server_path)
+        self._primary = self._spawn_worker(0)
+        pid = self._primary.proc.pid if self._primary.proc is not None else "pooled"
+        log.debug("server_started", pid=pid)
 
-        # Wait for all secondary workers to exit
-        for worker in secondary_workers:
-            worker.proc.wait(timeout=self.PROCESS_WAIT_TIMEOUT)
-            log.debug(
-                "secondary_worker_exited",
-                worker_index=worker.worker_index,
-                returncode=worker.proc.returncode,
-            )
+    def stop(self) -> int:
+        """Stop all worker subprocesses and clean up resources.
 
-    def _create_primary_worker(
-        self,
-        *,
-        data_writer: ipc.RecordBatchStreamWriter | None = None,
-        output_reader: ipc.RecordBatchStreamReader | None = None,
-    ) -> WorkerConnection:
-        """Create a WorkerConnection wrapper for the primary worker subprocess.
+        Terminates all workers in the following order:
+        1. Stops all additional workers (spawned for parallel processing)
+        2. Stops the primary worker
+        3. Waits for all stderr drain threads to complete (with timeout)
+        4. Resets all internal state
 
-        Wraps the client's existing primary subprocess (self._proc) and I/O
-        handles into a WorkerConnection structure. This allows the primary
-        worker to be used interchangeably with additional workers in parallel
-        processing code.
-
-        The primary worker uses worker_index=0.
-
-        Args:
-            data_writer: RecordBatchStreamWriter for sending input batches to
-                the worker. Used for table-in-out functions. Pass None for
-                table functions that don't receive input.
-            output_reader: RecordBatchStreamReader for receiving output batches
-                from the worker. Used for table functions where output is read
-                immediately. Pass None for table-in-out functions where the
-                reader is opened lazily after sending input.
+        After this method returns, the client can be started again with start().
+        When using the context manager protocol (with statement), this method
+        is called automatically on exit.
 
         Returns:
-            WorkerConnection wrapping the primary subprocess with the provided
-            data_writer and output_reader.
+            The exit code of the primary worker process. Returns 0 for normal
+            termination, non-zero values indicate errors. Exit codes from
+            additional workers are logged but not returned.
+
+        Raises:
+            ClientError: If the client was not started (call start() first).
 
         """
-        assert self._stdout_buffered is not None
-        assert self._stdin_sink is not None
+        if self._primary is None:
+            raise ClientError("Client not started")
 
-        return WorkerConnection(
-            proc=self._proc,  # type: ignore[arg-type]
-            stdout_buffered=self._stdout_buffered,
-            stdin_sink=self._stdin_sink,
-            worker_index=0,
-            data_writer=data_writer,
-            output_reader=output_reader,
+        # Stop additional workers first
+        self._close_secondary_workers()
+
+        # Stop primary worker
+        returncode = self._stop_worker(self._primary)
+        self._primary = None
+
+        # Wait for stderr threads to finish draining
+        for stderr_thread in self._stderr_threads:
+            stderr_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
+            if stderr_thread.is_alive():
+                log.warning("stderr_thread_did_not_terminate")
+        self._stderr_threads = []
+
+        return returncode
+
+    def __enter__(self) -> Client:
+        """Enter the context manager by starting the worker subprocess."""
+        self.start()
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
+        """Exit the context manager by stopping all worker subprocesses."""
+        self.stop()
+
+    # -----------------------------------------------------------------------
+    # RPC helpers
+    # -----------------------------------------------------------------------
+
+    def _make_bind_request(
+        self,
+        *,
+        function_name: str,
+        arguments: Arguments,
+        function_type: FunctionType,
+        input_schema: pa.Schema | None = None,
+        settings: dict[str, Any] | None = None,
+        secrets: dict[str, Any] | None = None,
+        transaction_id: bytes | None = None,
+    ) -> BindRequest:
+        """Create a BindRequest for the given function parameters."""
+        return BindRequest(
+            function_name=function_name,
+            arguments=arguments,
+            function_type=function_type,
+            input_schema=input_schema,
+            settings=self._settings_to_batch(settings),
+            secrets=self._secrets_to_batch(secrets),
+            attach_id=self._attach_id,
+            transaction_id=transaction_id,
         )
+
+    @staticmethod
+    def _do_bind(
+        proxy: VgiProtocol,
+        bind_request: BindRequest,
+        bind_result_callback: Callable[[BindResponse], None] | None = None,
+    ) -> BindResponse:
+        """Call bind on a worker proxy and return BindResponse.
+
+        Args:
+            proxy: VgiProtocol proxy from RpcConnection.
+            bind_request: The bind request to send.
+            bind_result_callback: Optional callback invoked with the
+                BindResponse before returning.
+
+        Returns:
+            BindResponse containing output_schema and opaque_data.
+
+        Raises:
+            ClientError: If the RPC call fails.
+
+        """
+        try:
+            bind_response: BindResponse = proxy.bind(request=bind_request)
+        except RpcError as e:
+            raise ClientError.from_rpc_error(e) from e
+
+        if bind_result_callback is not None:
+            bind_result_callback(bind_response)
+
+        return bind_response
+
+    @staticmethod
+    def _do_init(
+        proxy: VgiProtocol,
+        bind_request: BindRequest,
+        bind_response: BindResponse,
+        *,
+        projection_ids: list[int] | None = None,
+        pushdown_filters_batch: pa.RecordBatch | None = None,
+        phase: TableInOutFunctionInitPhase | None = None,
+        execution_id: bytes | None = None,
+        init_opaque_data: ArrowSerializableDataclass | None = None,
+    ) -> StreamSession:
+        """Call init on a worker proxy and return a StreamSession.
+
+        Args:
+            proxy: VgiProtocol proxy from RpcConnection.
+            bind_request: The original bind request.
+            bind_response: The bind response containing output_schema.
+            projection_ids: Optional column indices for projection.
+            pushdown_filters_batch: Optional deserialized filter predicates.
+            phase: Table-in-out function phase (INPUT or FINALIZE).
+            execution_id: For secondary init, the execution ID from
+                the primary worker's init response.
+            init_opaque_data: For secondary init, the opaque data from
+                the primary worker's init response.
+
+        Returns:
+            StreamSession for data exchange or production.
+
+        Raises:
+            ClientError: If the RPC call fails.
+
+        """
+        init_request = InitRequest(
+            bind_call=bind_request,
+            output_schema=bind_response.output_schema,
+            bind_opaque_data=bind_response.opaque_data,
+            projection_ids=projection_ids,
+            pushdown_filters=pushdown_filters_batch,
+            phase=phase,
+            execution_id=execution_id,
+            init_opaque_data=init_opaque_data,
+        )
+        try:
+            stream: StreamSession = proxy.init(request=init_request)  # type: ignore[assignment]
+            return stream
+        except RpcError as e:
+            raise ClientError.from_rpc_error(e) from e
+
+    def _spawn_additional_workers(
+        self,
+        max_workers: int,
+        bind_request: BindRequest,
+        bind_response: BindResponse,
+        global_init_response: GlobalInitResponse,
+        *,
+        projection_ids: list[int] | None = None,
+        pushdown_filters_batch: pa.RecordBatch | None = None,
+        phase: TableInOutFunctionInitPhase | None = None,
+    ) -> None:
+        """Spawn and initialize additional worker subprocesses in parallel.
+
+        First spawns all worker subprocesses sequentially (fast operation), then
+        initializes all workers in parallel using threads. Each additional worker
+        receives a secondary init with the execution_id from the primary worker.
+
+        The spawned workers are appended to self._additional_workers list.
+
+        If max_workers is 1 or less, this method returns immediately without
+        spawning any workers.
+
+        Args:
+            max_workers: Total number of workers desired (including the primary
+                worker). For example, if max_workers=4, this method spawns
+                3 additional workers (indices 1, 2, 3).
+            bind_request: The original bind request to embed in init.
+            bind_response: The bind response with output schema.
+            global_init_response: The primary worker's init response containing
+                execution_id and opaque_data for secondary init.
+            projection_ids: Optional column indices for projection.
+            pushdown_filters_batch: Optional deserialized filter predicates.
+            phase: Table-in-out function phase (INPUT or FINALIZE).
+
+        Raises:
+            ClientError: If any worker fails to initialize. The exception wraps
+                the first initialization error encountered.
+
+        """
+        if max_workers <= 1:
+            return
+
+        # Spawn all worker subprocesses first (fast)
+        new_workers: list[WorkerConnection] = []
+        for worker_index in range(1, max_workers):
+            worker = self._spawn_worker(worker_index)
+            new_workers.append(worker)
+            self._additional_workers.append(worker)
+
+        # Initialize all workers in parallel (overlaps Python startup time)
+        init_errors: list[Exception] = []
+
+        def do_init(worker: WorkerConnection) -> None:
+            try:
+                stream = self._do_init(
+                    worker.proxy,
+                    bind_request,
+                    bind_response,
+                    projection_ids=projection_ids,
+                    pushdown_filters_batch=pushdown_filters_batch,
+                    phase=phase,
+                    execution_id=global_init_response.execution_id,
+                    init_opaque_data=global_init_response.opaque_data,
+                )
+                worker.stream = stream
+            except Exception as e:
+                init_errors.append(e)
+
+        init_threads: list[threading.Thread] = []
+        for worker in new_workers:
+            t = threading.Thread(target=do_init, args=(worker,))
+            t.start()
+            init_threads.append(t)
+
+        for t in init_threads:
+            t.join()
+
+        if init_errors:
+            error_msgs = [str(e) for e in init_errors]
+            raise ClientError(
+                f"Failed to initialize {len(init_errors)} worker(s):\n" + "\n".join(f"  - {msg}" for msg in error_msgs)
+            ) from init_errors[0]
+
+        log.debug(
+            "additional_workers_spawned",
+            count=len(new_workers),
+        )
+
+    # -----------------------------------------------------------------------
+    # Batch processing helpers
+    # -----------------------------------------------------------------------
 
     def _process_batch_on_worker(
         self,
@@ -1212,34 +766,25 @@ class Client(CatalogClientMixin):
     ) -> list[pa.RecordBatch]:
         """Send a batch to a worker and collect all output batches.
 
-        Writes the input batch to the worker's data_writer, then reads output
-        batches from the worker. If the worker returns HAVE_MORE_OUTPUT status,
-        continues reading until NEED_MORE_INPUT is received. Log messages from
-        the worker are handled via _handle_log_message.
-
-        The output_reader is opened lazily on the first call if not already open.
+        Sends the input batch via stream.exchange(), then checks the vgi.status
+        metadata. If the worker returns HAVE_MORE_OUTPUT, sends the same input
+        again. Continues until NEED_MORE_INPUT or no status (scalar functions).
 
         Args:
-            worker: The worker connection to use. Must have data_writer
-                initialized. The output_reader will be created if None.
+            worker: The worker connection to use. Must have stream initialized.
             input_batch: The input RecordBatch to send to the worker.
             batch_index: Index of this batch in the input sequence (for logging).
 
         Returns:
             List of output RecordBatches produced by processing this input batch.
-            May contain zero or more batches depending on the function's behavior.
 
         Raises:
-            ClientError: If worker.data_writer is None (not initialized), or if
-                the worker returns an unexpected status (neither HAVE_MORE_OUTPUT
-                nor NEED_MORE_INPUT), or if the worker raises an exception
-                (detected via log message handling).
+            ClientError: If worker.stream is None, or if the worker returns
+                an unexpected status, or if the RPC call fails.
 
         """
-        if worker.data_writer is None:
-            raise ClientError(
-                f"Worker {worker.worker_index} data_writer not initialized"
-            )
+        if worker.stream is None:
+            raise ClientError(f"Worker {worker.worker_index} stream not initialized")
 
         output_batches: list[pa.RecordBatch] = []
 
@@ -1250,123 +795,33 @@ class Client(CatalogClientMixin):
                 batch_index=batch_index,
                 num_rows=input_batch.num_rows,
             )
-            _safe_write_batch(
-                worker.data_writer,
-                input_batch,
-                worker.proc,
-                context=f"batch {batch_index} to worker {worker.worker_index}",
-            )
 
-            if worker.output_reader is None:
-                worker.output_reader = ipc.open_stream(worker.stdout_buffered)
-
-            assert worker.output_reader is not None  # for type checker
-            output_batch, output_metadata = (
-                worker.output_reader.read_next_batch_with_custom_metadata()
-            )
-            status = output_metadata.get(b"vgi.status") if output_metadata else None
+            try:
+                output = worker.stream.exchange(AnnotatedBatch(batch=input_batch))
+            except RpcError as e:
+                raise ClientError.from_rpc_error(e) from e
 
             log.debug(
                 "received_output_from_worker",
                 worker_index=worker.worker_index,
-                num_rows=output_batch.num_rows,
-                status=status,
+                num_rows=output.batch.num_rows,
             )
 
-            if self._handle_log_message(output_batch, output_metadata):
-                continue
+            output_batches.append(output.batch)
 
-            output_batches.append(output_batch)
+            # Check vgi.status for table-in-out status
+            status = None
+            if output.custom_metadata:
+                status = output.custom_metadata.get(b"vgi.status")
 
-            # status is None for scalar functions (which don't emit status)
-            # and means we're done with this batch
+            # status is None for scalar functions (no status metadata)
             if status == b"HAVE_MORE_OUTPUT":
                 continue
             elif status == b"NEED_MORE_INPUT" or status is None:
                 break
             else:
-                raise ClientError(
-                    f"Unexpected status from worker {worker.worker_index}: {status!r}"
-                )
+                raise ClientError(f"Unexpected status from worker {worker.worker_index}: {status!r}")
 
-        return output_batches
-
-    def _finalize_worker(
-        self,
-        worker: WorkerConnection,
-        empty_batch: pa.RecordBatch,
-    ) -> list[pa.RecordBatch]:
-        """Send FINALIZE signal to a worker and collect final output batches.
-
-        Writes an empty batch with custom_metadata={"type": "FINALIZE"} to signal
-        the worker that all input has been sent. The worker's finalize() method
-        is then invoked to produce any final aggregated results.
-
-        Continues reading output batches while the worker returns HAVE_MORE_OUTPUT
-        status, until FINISHED status is received. Closes the worker's data_writer
-        after finalization is complete.
-
-        Args:
-            worker: The worker connection to finalize. Must have both data_writer
-                and output_reader initialized.
-            empty_batch: An empty RecordBatch with the correct input schema.
-                Used as the carrier for the FINALIZE signal metadata.
-
-        Returns:
-            List of final output RecordBatches from the worker's finalize() method.
-            May be empty if the function produces no final output.
-
-        Raises:
-            ClientError: If worker.data_writer or worker.output_reader is None,
-                or if the worker returns an unexpected status (neither
-                HAVE_MORE_OUTPUT nor FINISHED), or if the worker raises an
-                exception (detected via log message handling).
-
-        """
-        if worker.data_writer is None or worker.output_reader is None:
-            raise ClientError(f"Worker {worker.worker_index} not properly initialized")
-
-        output_batches: list[pa.RecordBatch] = []
-        while True:
-            log.debug("sending_finalize_to_worker", worker_index=worker.worker_index)
-            try:
-                worker.data_writer.write_batch(
-                    empty_batch, custom_metadata={b"type": b"FINALIZE"}
-                )
-            except BrokenPipeError:
-                worker.proc.poll()
-                raise ClientError(
-                    f"Worker {worker.worker_index} terminated unexpectedly during "
-                    f"finalize (exit code: {worker.proc.returncode})"
-                ) from None
-
-            output_batch, output_metadata = (
-                worker.output_reader.read_next_batch_with_custom_metadata()
-            )
-            status = output_metadata.get(b"vgi.status") if output_metadata else None
-            log.debug(
-                "received_finalize_from_worker",
-                worker_index=worker.worker_index,
-                num_rows=output_batch.num_rows,
-                status=status,
-            )
-
-            if self._handle_log_message(output_batch, output_metadata):
-                continue
-
-            output_batches.append(output_batch)
-
-            if status == b"HAVE_MORE_OUTPUT":
-                continue
-            elif status == b"FINISHED":
-                break
-            else:
-                raise ClientError(
-                    f"Unexpected finalize status from worker "
-                    f"{worker.worker_index}: {status!r}"
-                )
-
-        worker.data_writer.close()
         return output_batches
 
     def _worker_thread_loop(
@@ -1382,22 +837,16 @@ class Client(CatalogClientMixin):
         pushing (batch_index, output_batches) tuples to the output queue.
 
         When None is received from input_queue, signals thread completion by
-        pushing (-1, []) to output_queue and exits. The data_writer is NOT
-        closed here; finalization is handled separately by the main thread
-        after all worker threads complete.
+        pushing (-1, []) to output_queue and exits.
 
         If an exception occurs during processing, it is caught, logged, and
-        pushed to output_queue as the exception object itself (not wrapped
-        in a tuple).
+        pushed to output_queue as the exception object itself.
 
         Args:
             worker: The worker connection to use for processing batches.
             input_queue: Thread-safe queue providing (batch_index, RecordBatch)
                 tuples for processing. A None value signals end of input.
-            output_queue: Thread-safe queue for results. Receives either
-                (batch_index, list[RecordBatch]) tuples for successful processing,
-                (-1, []) to signal thread completion, or a BaseException if
-                processing fails.
+            output_queue: Thread-safe queue for results.
 
         """
         try:
@@ -1405,14 +854,11 @@ class Client(CatalogClientMixin):
                 item = input_queue.get()
                 if item is None:
                     # End of input - signal thread completion
-                    # Don't close data_writer yet - finalization will handle it
                     output_queue.put((-1, []))
                     break
 
                 batch_index, input_batch = item
-                outputs = self._process_batch_on_worker(
-                    worker, input_batch, batch_index
-                )
+                outputs = self._process_batch_on_worker(worker, input_batch, batch_index)
                 output_queue.put((batch_index, outputs))
         except Exception as e:
             log.exception(
@@ -1422,363 +868,40 @@ class Client(CatalogClientMixin):
             )
             output_queue.put(e)
 
-    def start(self) -> None:
-        """Start the primary worker subprocess.
-
-        Spawns the worker process using the server_path configured in __init__,
-        sets up stdin/stdout pipes for Arrow IPC communication, and starts a
-        background thread to drain stderr (if passthrough_stderr is False).
-
-        After this method returns, the client is ready to invoke functions via
-        table_in_out_function() or table_function(). When using the context
-        manager protocol (with statement), this method is called automatically.
-
-        The stderr buffer is cleared when start() is called, so any stderr from
-        previous runs is discarded.
-
-        Raises:
-            ClientError: If the client is already started (call stop() first),
-                or if stdout/stderr pipes fail to be created.
-
-        """
-        if self._proc is not None:
-            raise ClientError("Client already started")
-
-        self._stderr_buffer = []
-
-        log.debug("starting_server", server_path=self.server_path)
-        self._proc = subprocess.Popen(
-            self.server_path,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=None if self.passthrough_stderr else subprocess.PIPE,
-            text=False,
-            bufsize=0,
-            shell=True,
-        )
-        log.debug("server_started", pid=self._proc.pid)
-
-        if self._proc.stdout is None:
-            raise ClientError("Failed to create stdout pipe for worker subprocess")
-
-        if not self.passthrough_stderr:
-            if self._proc.stderr is None:
-                raise ClientError("Failed to create stderr pipe for worker subprocess")
-
-            self._stderr_thread = threading.Thread(
-                target=self._drain_stderr, args=(self._proc.stderr,), daemon=True
-            )
-            self._stderr_thread.start()
-
-        self._stdout_buffered = io.BufferedReader(cast(io.RawIOBase, self._proc.stdout))
-        assert self._proc.stdin is not None, "stdin pipe not created for worker"
-        self._stdin_sink = pa.PythonFile(cast(io.IOBase, self._proc.stdin))
-
-    def stop(self) -> int:
-        """Stop all worker subprocesses and clean up resources.
-
-        Terminates all workers in the following order:
-        1. Stops all additional workers (spawned for parallel processing)
-        2. Closes the primary worker's stdin pipe to signal EOF
-        3. Waits for the primary worker process to terminate
-        4. Waits for all stderr drain threads to complete (with timeout)
-        5. Resets all internal state
-
-        After this method returns, the client can be started again with start().
-        When using the context manager protocol (with statement), this method
-        is called automatically on exit.
-
-        Returns:
-            The exit code of the primary worker process. Returns 0 for normal
-            termination, non-zero values indicate errors. Exit codes from
-            additional workers are logged but not returned.
-
-        Raises:
-            ClientError: If the client was not started (call start() first).
-
-        """
-        if self._proc is None:
-            raise ClientError("Client not started")
-
-        # Stop additional workers first
-        for worker in self._additional_workers:
-            self._stop_worker(worker)
-        self._additional_workers = []
-
-        if self._proc.stdin:
-            self._proc.stdin.close()
-        self._proc.wait()
-        returncode = self._proc.returncode
-        if returncode != 0:
-            log.error("server_exited_with_error", returncode=returncode)
-        else:
-            log.debug("server_exited", returncode=returncode)
-
-        # Wait for stderr thread to finish draining before returning.
-        # The thread will exit naturally when stderr reaches EOF after
-        # the process terminates.
-        if self._stderr_thread is not None:
-            self._stderr_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
-            if self._stderr_thread.is_alive():
-                log.warning("stderr_thread_did_not_terminate")
-
-        # Wait for additional stderr threads
-        for stderr_thread in self._stderr_threads:
-            stderr_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
-            if stderr_thread.is_alive():
-                log.warning("additional_stderr_thread_did_not_terminate")
-        self._stderr_threads = []
-
-        self._proc = None
-        self._stdout_buffered = None
-        self._stdin_sink = None
-        self._stderr_thread = None
-        return returncode
-
-    def __enter__(self) -> Client:
-        """Enter the context manager by starting the worker subprocess.
-
-        Calls start() to spawn the primary worker process and prepare for
-        function invocations. Returns self for use in the with statement.
-
-        Returns:
-            This Client instance, ready to invoke functions.
-
-        Raises:
-            ClientError: If the worker is already started or if subprocess
-                creation fails.
-
-        Example:
-            with Client("vgi-example-worker") as client:
-                for batch in client.table_in_out_function(...):
-                    process(batch)
-
-        """
-        self.start()
-        return self
-
-    def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
-        """Exit the context manager by stopping all worker subprocesses.
-
-        Calls stop() to terminate all workers and clean up resources. This
-        ensures proper cleanup even if an exception occurred within the with
-        block.
-
-        Args:
-            _exc_type: Exception type if an exception was raised, else None.
-            _exc_val: Exception instance if an exception was raised, else None.
-            _exc_tb: Traceback if an exception was raised, else None.
-
-        Returns:
-            None (does not suppress exceptions).
-
-        """
-        self.stop()
-
-    def table_in_out_function(
+    def _distribute_and_collect(
         self,
         *,
-        function_name: str,
-        input: Iterator[pa.RecordBatch],
-        arguments: Arguments | None = None,
-        bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
-        projection_ids: list[int] | None = None,
-        pushdown_filters: bytes | None = None,
-        settings: dict[str, str] | None = None,
-        transaction_id: bytes | None = None,
-    ) -> Generator[pa.RecordBatch, None, None]:
-        """Invoke a table-in-out function on the worker and stream results.
-
-        Implements the full VGI streaming protocol for table-in-out functions:
-        1. Reads the first input batch to determine the input schema
-        2. Sends Invocation to worker and receives bind result
-        3. Spawns additional workers if max_processes > 1
-        4. Distributes input batches to workers (round-robin for parallel mode)
-        5. Collects output batches, handling HAVE_MORE_OUTPUT responses
-        6. Sends FINALIZE signal when input is exhausted
-        7. Yields final output batches from finalize()
-
-        For parallel processing (max_processes > 1), input batches are distributed
-        round-robin across workers using dedicated threads. Output order may not
-        match input order in parallel mode. Only the primary worker receives the
-        FINALIZE signal and produces final aggregated output.
-
-        Args:
-            function_name: Name of the function to invoke. Must exist in the
-                worker's registry.
-            input: Iterator yielding input RecordBatches. Must yield at least one
-                batch. The first batch's schema is used to initialize the IPC
-                stream. Raises ClientError if the iterator is empty.
-            arguments: Optional Arguments container with positional and named
-                arguments to pass to the function. Defaults to empty Arguments().
-            bind_result_callback: Optional callback invoked with the raw bind
-                result RecordBatch before processing begins. Useful for inspecting
-                output schema, max_processes, or cardinality hints.
-            projection_ids: Optional list of column indices for column projection.
-                Passed to the worker via TableFunctionInitInput.
-            pushdown_filters: Optional byte string containing filter predicates
-                to push down to the function. Passed to the worker via
-                TableFunctionInitInput.
-            settings: Optional dictionary of settings/pragmas to
-                pass to the function. Functions that declare required_settings
-                in their Meta class will validate these are present.
-            transaction_id: Optional unique identifier for the DuckDB transaction.
-                When provided, allows functions to participate in transactional
-                semantics and correlate calls within the same transaction.
-
-        Yields:
-            Output RecordBatches from the function. In single-worker mode, output
-            order corresponds to input order. In parallel mode (max_processes > 1),
-            output order is non-deterministic due to round-robin distribution.
-            Final output from finalize() is always yielded last.
-
-        Raises:
-            ClientError: If the client is not started, input iterator is empty,
-                input iterator yields non-RecordBatch objects, communication
-                with the worker fails, or the worker returns an unexpected
-                status or exception.
-
-        Example:
-            >>> with Client("vgi-example-worker") as client:
-            ...     batches = [pa.RecordBatch.from_pydict({"x": [1, 2, 3]})]
-            ...     for output in client.table_in_out_function(
-            ...         function_name="echo",
-            ...         input=iter(batches),
-            ...     ):
-            ...         print(output.to_pydict())
-
-        """
-        if arguments is None:
-            arguments = Arguments()
-
-        if (
-            self._proc is None
-            or self._stdin_sink is None
-            or self._stdout_buffered is None
-        ):
-            raise ClientError(
-                "Client not started. Call start() or use context manager."
-            )
-
-        # Start client span for tracing - manually managed for generator lifecycle
-        tracer = tracing.get_tracer("vgi.client")
-        span = tracer.start_span(
-            f"client.table_in_out.{function_name}",
-            kind=tracing.get_span_kind_client(),
-        )
-        span.set_attribute(tracing.VGI_FUNCTION_NAME, function_name)
-        span.set_attribute(tracing.VGI_FUNCTION_TYPE, "table_in_out")
-        ctx = tracing.set_span_in_context(span)
-        token = tracing.attach_context(ctx)
-
-        try:
-            # Get the first batch to determine schema and initialize
-            for input_batch in input:
-                if not isinstance(input_batch, pa.RecordBatch):
-                    raise ClientError("Input iterator must yield RecordBatches")
-
-                input_schema = input_batch.schema
-                data_writer, _ = self._initialize_function_stream(
-                    function_name=function_name,
-                    arguments=arguments,
-                    input_schema=input_schema,
-                    function_type=InvocationType.TABLE,
-                    bind_result_callback=bind_result_callback,
-                    projection_ids=projection_ids,
-                    pushdown_filters=pushdown_filters,
-                    settings=settings,
-                    transaction_id=transaction_id,
-                )
-
-                # Use parallel processing for all cases (handles both single and
-                # multi-worker)
-                assert data_writer is not None  # set when input_schema is not None
-                yield from self._table_in_out_function_parallel(
-                    input_batch=input_batch,
-                    input_iterator=input,
-                    input_schema=input_schema,
-                    data_writer=data_writer,
-                )
-                return
-
-            # Input iterator was empty - table-in-out functions require input
-            raise ClientError(
-                f"table_in_out_function requires at least one input batch. "
-                f"The input iterator for function '{function_name}' was empty. "
-                f"Use table_function() for functions that generate data without input."
-            )
-        except Exception as e:
-            tracing.set_span_error(span, e)
-            raise
-        finally:
-            span.end()
-            tracing.detach_context(token)
-
-    def _table_in_out_function_parallel(
-        self,
-        *,
-        input_batch: pa.RecordBatch,
-        input_iterator: Iterator[pa.RecordBatch],
-        input_schema: pa.Schema,
-        data_writer: ipc.RecordBatchStreamWriter,
-    ) -> Generator[pa.RecordBatch, None, None]:
-        """Process table-in-out batches across one or more workers using threads.
+        all_workers: list[WorkerConnection],
+        first_batch: pa.RecordBatch,
+        remaining_input: Iterator[pa.RecordBatch],
+    ) -> Generator[pa.RecordBatch]:
+        """Distribute input batches round-robin across workers and collect output.
 
         Handles both single-worker and multi-worker cases uniformly. For each
         worker, spawns a dedicated thread that pulls batches from an input queue,
         sends them to the worker, and pushes results to a shared output queue.
 
-        Processing flow:
-        1. Creates worker connection objects for primary + additional workers
-        2. Starts one thread per worker running _worker_thread_loop
-        3. Distributes input batches round-robin to worker input queues
-        4. Signals end-of-input to all workers via None sentinel
-        5. Collects all output batches from shared output queue
-        6. Waits for worker threads to complete
-        7. Closes secondary workers
-        8. Finalizes primary worker and yields final output
-
-        The primary worker always receives the FINALIZE signal and produces any
-        aggregated final output. Secondary workers only process batches without
-        finalization.
-
         Args:
-            input_batch: The first input batch, already consumed from the
-                iterator by table_in_out_function().
-            input_iterator: Iterator for remaining input batches. May be empty
-                if all input was in the first batch.
-            input_schema: Schema of all input batches. Used to create an empty
-                batch for the FINALIZE signal.
-            data_writer: IPC stream writer for the primary worker, already
-                initialized by _initialize_function_stream().
+            all_workers: List of all workers (primary + additional).
+            first_batch: The first input batch, already consumed from the
+                iterator by the calling method.
+            remaining_input: Iterator for remaining input batches.
 
         Yields:
-            Output RecordBatches from processing, in non-deterministic order for
-            multi-worker mode. When multiple batches are returned for a single
-            input (HAVE_MORE_OUTPUT), they are combined into one batch. Final
-            output from the primary worker's finalize() is yielded last.
+            Output RecordBatches from processing. When multiple batches are
+            returned for a single input (HAVE_MORE_OUTPUT), they are combined
+            into one batch. Order is non-deterministic for multi-worker mode.
 
         Raises:
             ClientError: If a worker thread fails with an exception.
 
         """
-        # Create empty batch for finalize signals
-        empty_batch = pa.RecordBatch.from_arrays(
-            [pa.array([], type=field.type) for field in input_schema],
-            schema=input_schema,
-        )
-
-        primary_worker = self._create_primary_worker(data_writer=data_writer)
-        all_workers = [primary_worker] + self._additional_workers
         num_workers = len(all_workers)
 
         log.debug("starting_parallel_processing", num_workers=num_workers)
 
         # Create queues for each worker
-        # Queue items are (batch_index, batch) tuples
-        input_queues: list[Queue[tuple[int, pa.RecordBatch] | None]] = [
-            Queue() for _ in range(num_workers)
-        ]
+        input_queues: list[Queue[tuple[int, pa.RecordBatch] | None]] = [Queue() for _ in range(num_workers)]
         output_queue: Queue[tuple[int, list[pa.RecordBatch]] | BaseException] = Queue()
 
         # Start worker threads
@@ -1798,20 +921,18 @@ class Client(CatalogClientMixin):
 
         # Send first batch
         worker_idx = batch_index % num_workers
-        input_queues[worker_idx].put((batch_index, input_batch))
+        input_queues[worker_idx].put((batch_index, first_batch))
         batches_sent += 1
         batch_index += 1
 
         # Send remaining batches
-        for input_batch in input_iterator:
+        for input_batch in remaining_input:
             worker_idx = batch_index % num_workers
             input_queues[worker_idx].put((batch_index, input_batch))
             batches_sent += 1
             batch_index += 1
 
         # Signal end of input to all workers
-        # When data_writer is closed, the worker subprocess will receive EOF,
-        # causing the generator to be closed and GeneratorExit to be raised.
         for q in input_queues:
             q.put(None)
 
@@ -1827,14 +948,9 @@ class Client(CatalogClientMixin):
 
             # Check for exceptions from worker threads
             if isinstance(result, BaseException):
-                import traceback
-
-                tb = "".join(
-                    traceback.format_exception(
-                        type(result), result, result.__traceback__
-                    )
-                )
-                raise ClientError(f"Worker thread failed: {result}\n{tb}") from result
+                if isinstance(result, RpcError):
+                    raise ClientError.from_rpc_error(result) from result
+                raise ClientError(f"Worker thread failed: {result}") from result
 
             batch_idx, output_batches = result
             outputs_received += 1
@@ -1854,57 +970,307 @@ class Client(CatalogClientMixin):
         self._join_threads(threads)
         log.debug("all_worker_threads_complete")
 
-        self._close_secondary_workers(all_workers, close_data_writers=True)
+    # -----------------------------------------------------------------------
+    # Function methods
+    # -----------------------------------------------------------------------
 
-        # Now finalize the primary worker - all secondary workers have written state
-        log.debug("finalizing_primary_worker")
-        final_outputs = self._finalize_worker(primary_worker, empty_batch)
-        # Yield finalize batches individually to preserve order
-        yield from final_outputs
-
-        log.debug("parallel_processing_complete")
-
-    def _table_function_parallel(
+    def table_in_out_function(
         self,
         *,
-        primary_output_reader: ipc.RecordBatchStreamReader,
-    ) -> Generator[pa.RecordBatch, None, None]:
+        function_name: str,
+        input: Iterator[pa.RecordBatch],
+        arguments: Arguments | None = None,
+        bind_result_callback: Callable[[BindResponse], None] | None = None,
+        projection_ids: list[int] | None = None,
+        pushdown_filters: bytes | None = None,
+        settings: dict[str, Any] | None = None,
+        transaction_id: bytes | None = None,
+    ) -> Generator[pa.RecordBatch]:
+        """Invoke a table-in-out function on the worker and stream results.
+
+        For parallel processing (max_workers > 1), input batches are distributed
+        round-robin across workers using dedicated threads. Output order may not
+        match input order in parallel mode. Only the primary worker receives the
+        FINALIZE phase and produces final aggregated output.
+
+        Args:
+            function_name: Name of the function to invoke. Must exist in the
+                worker's registry.
+            input: Iterator yielding input RecordBatches. Must yield at least one
+                batch. The first batch's schema is used to initialize the IPC
+                stream. Raises ClientError if the iterator is empty.
+            arguments: Optional Arguments container with positional and named
+                arguments to pass to the function. Defaults to empty Arguments().
+            bind_result_callback: Optional callback invoked with the BindResponse
+                before processing begins.
+            projection_ids: Optional list of column indices for column projection.
+            pushdown_filters: Optional byte string containing filter predicates
+                to push down to the function.
+            settings: Optional dictionary of settings/pragmas to
+                pass to the function.
+            transaction_id: Optional unique identifier for the DuckDB transaction.
+
+        Yields:
+            Output RecordBatches from the function. In single-worker mode, output
+            order corresponds to input order. In parallel mode (max_workers > 1),
+            output order is non-deterministic due to round-robin distribution.
+            Final output from finalize is always yielded last.
+
+        Raises:
+            ClientError: If the client is not started, input iterator is empty,
+                input iterator yields non-RecordBatch objects, communication
+                with the worker fails, or the worker returns an unexpected
+                status or exception.
+
+        """
+        if arguments is None:
+            arguments = Arguments()
+
+        if self._primary is None:
+            raise ClientError("Client not started. Call start() or use context manager.")
+
+        # Get the first batch to determine schema and initialize
+        for first_batch in input:
+            if not isinstance(first_batch, pa.RecordBatch):
+                raise ClientError("Input iterator must yield RecordBatches")
+
+            input_schema = first_batch.schema
+            pushdown_filters_batch = self._deserialize_pushdown_filters(pushdown_filters)
+
+            # Bind
+            bind_request = self._make_bind_request(
+                function_name=function_name,
+                arguments=arguments,
+                function_type=FunctionType.TABLE,
+                input_schema=input_schema,
+                settings=settings,
+                transaction_id=transaction_id,
+            )
+            bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
+
+            # Init (INPUT phase)
+            stream = self._do_init(
+                self._primary.proxy,
+                bind_request,
+                bind_response,
+                projection_ids=projection_ids,
+                pushdown_filters_batch=pushdown_filters_batch,
+                phase=TableInOutFunctionInitPhase.INPUT,
+            )
+            self._primary.stream = stream
+
+            # Get init response header for max_workers
+            init_response = stream.typed_header(GlobalInitResponse)
+            max_workers = self._determine_max_workers(init_response.max_workers)
+
+            # Spawn additional workers if needed
+            self._spawn_additional_workers(
+                max_workers,
+                bind_request,
+                bind_response,
+                init_response,
+                projection_ids=projection_ids,
+                pushdown_filters_batch=pushdown_filters_batch,
+                phase=TableInOutFunctionInitPhase.INPUT,
+            )
+
+            # Process input batches across all workers
+            all_workers = [self._primary] + self._additional_workers
+            yield from self._distribute_and_collect(
+                all_workers=all_workers,
+                first_batch=first_batch,
+                remaining_input=input,
+            )
+
+            # Close all input streams
+            for worker in all_workers:
+                if worker.stream is not None:
+                    worker.stream.close()
+                    worker.stream = None
+
+            # Close secondary workers
+            self._close_secondary_workers()
+
+            # Finalize on primary worker
+            log.debug("finalizing_primary_worker")
+            yield from self._finalize_primary_worker(
+                bind_request,
+                bind_response,
+                input_schema,
+                init_response,
+            )
+            log.debug("parallel_processing_complete")
+            return
+
+        # Input iterator was empty - table-in-out functions require input
+        raise ClientError(
+            f"table_in_out_function requires at least one input batch. "
+            f"The input iterator for function '{function_name}' was empty. "
+            f"Use table_function() for functions that generate data without input."
+        )
+
+    def _finalize_primary_worker(
+        self,
+        bind_request: BindRequest,
+        bind_response: BindResponse,
+        input_schema: pa.Schema,
+        init_response: GlobalInitResponse,
+    ) -> Generator[pa.RecordBatch]:
+        """Send FINALIZE init to the primary worker and collect final output.
+
+        Creates a new init(phase=FINALIZE) stream on the primary worker and
+        iterates the producer stream until it finishes.
+
+        Args:
+            bind_request: The original bind request.
+            bind_response: The bind response with output schema.
+            input_schema: Schema of input batches (unused, kept for API compat).
+            init_response: The init response from the INPUT phase, providing
+                the execution_id needed to access stored worker state.
+
+        Yields:
+            Final output RecordBatches from the worker's finalize phase.
+
+        Raises:
+            ClientError: If the RPC call fails.
+
+        """
+        assert self._primary is not None
+
+        # Start FINALIZE stream (producer — uses tick(), not exchange())
+        # Pass execution_id from INPUT phase so finalize can access stored state
+        finalize_stream = self._do_init(
+            self._primary.proxy,
+            bind_request,
+            bind_response,
+            phase=TableInOutFunctionInitPhase.FINALIZE,
+            execution_id=init_response.execution_id,
+            init_opaque_data=init_response.opaque_data,
+        )
+
+        try:
+            while True:
+                try:
+                    output = finalize_stream.tick()
+                except StopIteration:
+                    break
+                except RpcError as e:
+                    raise ClientError.from_rpc_error(e) from e
+
+                log.debug(
+                    "received_finalize_from_worker",
+                    num_rows=output.batch.num_rows,
+                )
+
+                if output.batch.num_rows > 0:
+                    yield output.batch
+        finally:
+            finalize_stream.close()
+
+    def table_function(
+        self,
+        *,
+        function_name: str,
+        arguments: Arguments | None = None,
+        bind_result_callback: Callable[[BindResponse], None] | None = None,
+        projection_ids: list[int] | None = None,
+        pushdown_filters: bytes | None = None,
+        settings: dict[str, Any] | None = None,
+        transaction_id: bytes | None = None,
+    ) -> Generator[pa.RecordBatch]:
+        """Invoke a table function (source function) and stream output batches.
+
+        Table functions generate output batches without receiving input data.
+        They are useful for data sources, generators, or functions that produce
+        results based solely on their arguments.
+
+        For parallel processing (max_workers > 1), output is read from all
+        workers concurrently using threads. Output order is non-deterministic.
+
+        Args:
+            function_name: Name of the function to invoke. Must exist in the
+                worker's registry and be a table function (not table-in-out).
+            arguments: Optional Arguments container with positional and named
+                arguments to pass to the function. Defaults to empty Arguments().
+            bind_result_callback: Optional callback invoked with the BindResponse
+                before processing begins.
+            projection_ids: Optional list of column indices for column projection.
+            pushdown_filters: Optional byte string containing filter predicates
+                to push down to the function.
+            settings: Optional dictionary of settings/pragmas to
+                pass to the function.
+            transaction_id: Optional unique identifier for the DuckDB transaction.
+
+        Yields:
+            Output RecordBatches from the function. In parallel mode
+            (max_workers > 1), output order is non-deterministic.
+
+        Raises:
+            ClientError: If the client is not started, communication with the
+                worker fails, or the worker returns an exception.
+
+        """
+        if arguments is None:
+            arguments = Arguments()
+
+        if self._primary is None:
+            raise ClientError("Client not started. Call start() or use context manager.")
+
+        pushdown_filters_batch = self._deserialize_pushdown_filters(pushdown_filters)
+
+        # Bind
+        bind_request = self._make_bind_request(
+            function_name=function_name,
+            arguments=arguments,
+            function_type=FunctionType.TABLE,
+            settings=settings,
+            transaction_id=transaction_id,
+        )
+        bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
+
+        # Init
+        stream = self._do_init(
+            self._primary.proxy,
+            bind_request,
+            bind_response,
+            projection_ids=projection_ids,
+            pushdown_filters_batch=pushdown_filters_batch,
+        )
+        self._primary.stream = stream
+
+        # Get init response header for max_workers
+        init_response = stream.typed_header(GlobalInitResponse)
+        max_workers = self._determine_max_workers(init_response.max_workers)
+
+        # Spawn additional workers
+        self._spawn_additional_workers(
+            max_workers,
+            bind_request,
+            bind_response,
+            init_response,
+            projection_ids=projection_ids,
+            pushdown_filters_batch=pushdown_filters_batch,
+        )
+
+        # Read output from all workers in parallel
+        yield from self._table_function_parallel()
+
+    def _table_function_parallel(self) -> Generator[pa.RecordBatch]:
         """Read output from table function workers using parallel threads.
 
         Handles both single-worker and multi-worker cases uniformly. For each
         worker, spawns a dedicated thread that reads output batches and pushes
-        them to a shared output queue. Output is yielded as it becomes available
-        from any worker.
-
-        Processing flow:
-        1. Creates worker connection objects for primary + additional workers
-        2. Starts one thread per worker to read output batches
-        3. Each thread reads until the worker's IPC stream ends (StopIteration)
-        4. Threads push batches to shared output queue, None when complete
-        5. Main thread yields batches as they arrive from the queue
-        6. When all workers finish, joins threads and closes secondary workers
-
-        Unlike table-in-out functions, table functions don't receive input or
-        need finalization - they simply generate output batches until complete.
-
-        Args:
-            primary_output_reader: IPC stream reader for the primary worker,
-                already opened by _initialize_function_stream(). Additional
-                workers open their readers lazily in their threads.
+        them to a shared output queue.
 
         Yields:
             Output RecordBatches from all workers in non-deterministic order.
-            Batches are yielded as soon as they are available from any worker.
 
         Raises:
-            ClientError: If a worker thread fails with an exception, or if
-                a worker sends an exception-level log message.
+            ClientError: If a worker thread fails with an exception.
 
         """
-        primary_worker = self._create_primary_worker(
-            output_reader=primary_output_reader
-        )
-        all_workers = [primary_worker] + self._additional_workers
+        assert self._primary is not None
+        all_workers = [self._primary] + self._additional_workers
         num_workers = len(all_workers)
 
         log.debug("starting_parallel_table_function", num_workers=num_workers)
@@ -1915,32 +1281,22 @@ class Client(CatalogClientMixin):
         def read_worker_output(worker: WorkerConnection) -> None:
             """Thread function that reads all output from a single worker."""
             try:
-                # Open output reader lazily if not already opened
-                if worker.output_reader is None:
-                    worker.output_reader = ipc.open_stream(worker.stdout_buffered)
+                if worker.stream is None:
+                    output_queue.put(None)
+                    return
 
-                while True:
-                    try:
-                        output_batch, output_metadata = (
-                            worker.output_reader.read_next_batch_with_custom_metadata()
-                        )
-                    except StopIteration:
-                        # Worker finished producing output
-                        output_queue.put(None)
-                        break
-
+                for output in worker.stream:
                     log.debug(
                         "received_output_from_worker",
                         worker_index=worker.worker_index,
-                        num_rows=output_batch.num_rows,
+                        num_rows=output.batch.num_rows,
                     )
+                    if output.batch.num_rows > 0:
+                        output_queue.put(output.batch)
 
-                    # Check for log messages (including exceptions)
-                    if self._handle_log_message(output_batch, output_metadata):
-                        continue
-
-                    output_queue.put(output_batch)
-
+                output_queue.put(None)  # Signal completion
+            except StopIteration:
+                output_queue.put(None)
             except Exception as e:
                 log.exception(
                     "table_function_worker_thread_error",
@@ -1967,14 +1323,9 @@ class Client(CatalogClientMixin):
 
             # Check for exceptions from worker threads
             if isinstance(result, BaseException):
-                import traceback
-
-                tb = "".join(
-                    traceback.format_exception(
-                        type(result), result, result.__traceback__
-                    )
-                )
-                raise ClientError(f"Worker thread failed: {result}\n{tb}") from result
+                if isinstance(result, RpcError):
+                    raise ClientError.from_rpc_error(result) from result
+                raise ClientError(f"Worker thread failed: {result}") from result
 
             # None signals a worker finished
             if result is None:
@@ -1986,131 +1337,18 @@ class Client(CatalogClientMixin):
                 )
                 continue
 
-            # Yield the output batch (skip empty batches used for protocol completion)
-            if result.num_rows > 0:
-                yield result
+            yield result
 
         self._join_threads(threads)
         log.debug("all_table_function_workers_complete")
 
-        self._close_secondary_workers(all_workers, close_data_writers=False)
+        # Close streams and secondary workers
+        for worker in all_workers:
+            if worker.stream is not None:
+                worker.stream.close()
+                worker.stream = None
+        self._close_secondary_workers()
         log.debug("parallel_table_function_complete")
-
-    def table_function(
-        self,
-        *,
-        function_name: str,
-        arguments: Arguments | None = None,
-        bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
-        projection_ids: list[int] | None = None,
-        pushdown_filters: bytes | None = None,
-        settings: dict[str, str] | None = None,
-        transaction_id: bytes | None = None,
-    ) -> Generator[pa.RecordBatch, None, None]:
-        """Invoke a table function (source function) and stream output batches.
-
-        Table functions generate output batches without receiving input data.
-        They are useful for data sources, generators, or functions that produce
-        results based solely on their arguments (e.g., sequence generators,
-        file readers, API clients).
-
-        Processing flow:
-        1. Sends Invocation to worker (with input_schema=None)
-        2. Receives bind result with output schema and max_processes
-        3. Spawns additional workers if max_processes > 1
-        4. Reads output batches from all workers in parallel
-        5. Yields batches as they become available
-
-        For parallel processing (max_processes > 1), output is read from all
-        workers concurrently using threads. Output order is non-deterministic.
-
-        Args:
-            function_name: Name of the function to invoke. Must exist in the
-                worker's registry and be a table function (not table-in-out).
-            arguments: Optional Arguments container with positional and named
-                arguments to pass to the function. Defaults to empty Arguments().
-            bind_result_callback: Optional callback invoked with the raw bind
-                result RecordBatch before processing begins. Useful for inspecting
-                output schema, max_processes, or cardinality hints.
-            projection_ids: Optional list of column indices for column projection.
-                Passed to the worker via TableFunctionInitInput.
-            pushdown_filters: Optional byte string containing filter predicates
-                to push down to the function. Passed to the worker via
-                TableFunctionInitInput.
-            settings: Optional dictionary of settings/pragmas to
-                pass to the function. Functions that declare required_settings
-                in their Meta class will validate these are present.
-            transaction_id: Optional unique identifier for the DuckDB transaction.
-                When provided, allows functions to participate in transactional
-                semantics and correlate calls within the same transaction.
-
-        Yields:
-            Output RecordBatches from the function. In parallel mode
-            (max_processes > 1), output order is non-deterministic.
-
-        Raises:
-            ClientError: If the client is not started, communication with the
-                worker fails, or the worker returns an exception.
-
-        Example:
-            >>> with Client("vgi-example-worker") as client:
-            ...     for batch in client.table_function(
-            ...         function_name="generate_sequence",
-            ...         arguments=Arguments(positional=[100]),
-            ...     ):
-            ...         print(batch.to_pydict())
-
-        """
-        if arguments is None:
-            arguments = Arguments()
-
-        if (
-            self._proc is None
-            or self._stdin_sink is None
-            or self._stdout_buffered is None
-        ):
-            raise ClientError(
-                "Client not started. Call start() or use context manager."
-            )
-
-        # Start client span for tracing - manually managed for generator lifecycle
-        tracer = tracing.get_tracer("vgi.client")
-        span = tracer.start_span(
-            f"client.table.{function_name}",
-            kind=tracing.get_span_kind_client(),
-        )
-        span.set_attribute(tracing.VGI_FUNCTION_NAME, function_name)
-        span.set_attribute(tracing.VGI_FUNCTION_TYPE, "table")
-        ctx = tracing.set_span_in_context(span)
-        token = tracing.attach_context(ctx)
-
-        try:
-            _, output_reader = self._initialize_function_stream(
-                function_name=function_name,
-                arguments=arguments,
-                input_schema=None,
-                function_type=InvocationType.TABLE,
-                bind_result_callback=bind_result_callback,
-                projection_ids=projection_ids,
-                pushdown_filters=pushdown_filters,
-                settings=settings,
-                transaction_id=transaction_id,
-            )
-
-            if output_reader is None:
-                raise ClientError("Protocol error: output_reader not initialized")
-
-            # Use parallel processing for all cases (handles both single and
-            # multi-worker)
-            yield from self._table_function_parallel(
-                primary_output_reader=output_reader,
-            )
-        except Exception as e:
-            tracing.set_span_error(span, e)
-            raise
-        finally:
-            span.end()
-            tracing.detach_context(token)
 
     def scalar_function(
         self,
@@ -2118,23 +1356,17 @@ class Client(CatalogClientMixin):
         function_name: str,
         input: Iterator[pa.RecordBatch],
         arguments: Arguments | None = None,
-        bind_result_callback: Callable[[pa.RecordBatch], None] | None = None,
-        settings: dict[str, str] | None = None,
+        bind_result_callback: Callable[[BindResponse], None] | None = None,
+        settings: dict[str, Any] | None = None,
+        secrets: dict[str, Any] | None = None,
         transaction_id: bytes | None = None,
-    ) -> Generator[pa.RecordBatch, None, None]:
+    ) -> Generator[pa.RecordBatch]:
         """Invoke a scalar function on the worker and stream results.
 
         Scalar functions transform input batches to single-column output with
         1:1 row mapping. Processing ends when input is exhausted.
 
-        Processing flow:
-        1. Reads the first input batch to determine the input schema
-        2. Sends Invocation to worker and receives bind result
-        3. Spawns additional workers if max_processes > 1
-        4. Distributes input batches to workers (round-robin for parallel mode)
-        5. Collects and yields output batches
-
-        For parallel processing (max_processes > 1), input batches are distributed
+        For parallel processing (max_workers > 1), input batches are distributed
         round-robin across workers using dedicated threads. Output order may not
         match input order in parallel mode.
 
@@ -2146,21 +1378,19 @@ class Client(CatalogClientMixin):
                 stream. Raises ClientError if the iterator is empty.
             arguments: Optional Arguments container with positional and named
                 arguments to pass to the function. Defaults to empty Arguments().
-            bind_result_callback: Optional callback invoked with the raw bind
-                result RecordBatch before processing begins. Useful for inspecting
-                output schema or max_processes.
+            bind_result_callback: Optional callback invoked with the BindResponse
+                before processing begins.
             settings: Optional dictionary of settings/pragmas to
-                pass to the function. Functions that declare required_settings
-                in their Meta class will validate these are present.
+                pass to the function.
+            secrets: Optional dictionary of secret name to value pairs.
+                Values can be simple scalars or dicts (for struct-typed secrets).
             transaction_id: Optional unique identifier for the DuckDB transaction.
-                When provided, allows functions to participate in transactional
-                semantics and correlate calls within the same transaction.
 
         Yields:
             Output RecordBatches from the function. Each output batch has a single
             column and the same number of rows as its corresponding input batch.
             In single-worker mode, output order corresponds to input order.
-            In parallel mode (max_processes > 1), output order is non-deterministic.
+            In parallel mode (max_workers > 1), output order is non-deterministic.
 
         Raises:
             ClientError: If the client is not started, input iterator is empty,
@@ -2168,230 +1398,71 @@ class Client(CatalogClientMixin):
                 with the worker fails, or the worker returns an unexpected
                 status or exception.
 
-        Example:
-            >>> with Client("vgi-example-worker") as client:
-            ...     batches = [pa.RecordBatch.from_pydict({"x": [1, 2, 3]})]
-            ...     for output in client.scalar_function(
-            ...         function_name="double",
-            ...         input=iter(batches),
-            ...         arguments=Arguments(positional=[pa.scalar("x")]),
-            ...     ):
-            ...         print(output.to_pydict())
-            {'result': [2, 4, 6]}
-
         """
         if arguments is None:
             arguments = Arguments()
 
-        if (
-            self._proc is None
-            or self._stdin_sink is None
-            or self._stdout_buffered is None
-        ):
-            raise ClientError(
-                "Client not started. Call start() or use context manager."
+        if self._primary is None:
+            raise ClientError("Client not started. Call start() or use context manager.")
+
+        # Get the first batch to determine schema and initialize
+        for first_batch in input:
+            if not isinstance(first_batch, pa.RecordBatch):
+                raise ClientError("Input iterator must yield RecordBatches")
+
+            input_schema = first_batch.schema
+
+            # Bind
+            bind_request = self._make_bind_request(
+                function_name=function_name,
+                arguments=arguments,
+                function_type=FunctionType.SCALAR,
+                input_schema=input_schema,
+                settings=settings,
+                secrets=secrets,
+                transaction_id=transaction_id,
+            )
+            bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
+
+            # Init
+            stream = self._do_init(
+                self._primary.proxy,
+                bind_request,
+                bind_response,
+            )
+            self._primary.stream = stream
+
+            # Get init response header for max_workers
+            init_response = stream.typed_header(GlobalInitResponse)
+            max_workers = self._determine_max_workers(init_response.max_workers)
+
+            # Spawn additional workers
+            self._spawn_additional_workers(
+                max_workers,
+                bind_request,
+                bind_response,
+                init_response,
             )
 
-        # Start client span for tracing - manually managed for generator lifecycle
-        tracer = tracing.get_tracer("vgi.client")
-        span = tracer.start_span(
-            f"client.scalar.{function_name}",
-            kind=tracing.get_span_kind_client(),
+            # Process batches across all workers
+            all_workers = [self._primary] + self._additional_workers
+            yield from self._distribute_and_collect(
+                all_workers=all_workers,
+                first_batch=first_batch,
+                remaining_input=input,
+            )
+
+            # Close streams and secondary workers
+            for worker in all_workers:
+                if worker.stream is not None:
+                    worker.stream.close()
+                    worker.stream = None
+            self._close_secondary_workers()
+            return
+
+        # Input iterator was empty - scalar functions require input
+        raise ClientError(
+            f"scalar_function requires at least one input batch. "
+            f"The input iterator for function '{function_name}' was empty. "
+            f"Use table_function() for functions that generate data without input."
         )
-        span.set_attribute(tracing.VGI_FUNCTION_NAME, function_name)
-        span.set_attribute(tracing.VGI_FUNCTION_TYPE, "scalar")
-        ctx = tracing.set_span_in_context(span)
-        token = tracing.attach_context(ctx)
-
-        try:
-            # Get the first batch to determine schema and initialize
-            for input_batch in input:
-                if not isinstance(input_batch, pa.RecordBatch):
-                    raise ClientError("Input iterator must yield RecordBatches")
-
-                input_schema = input_batch.schema
-                data_writer, _ = self._initialize_function_stream(
-                    function_name=function_name,
-                    arguments=arguments,
-                    input_schema=input_schema,
-                    function_type=InvocationType.SCALAR,
-                    bind_result_callback=bind_result_callback,
-                    projection_ids=None,  # Scalar functions don't use projection
-                    settings=settings,
-                    transaction_id=transaction_id,
-                )
-
-                # Use parallel processing for all cases (handles both single and
-                # multi-worker)
-                assert data_writer is not None  # set when input_schema is not None
-                yield from self._scalar_function_parallel(
-                    input_batch=input_batch,
-                    input_iterator=input,
-                    input_schema=input_schema,
-                    data_writer=data_writer,
-                )
-                return
-
-            # Input iterator was empty - scalar functions require input
-            raise ClientError(
-                f"scalar_function requires at least one input batch. "
-                f"The input iterator for function '{function_name}' was empty. "
-                f"Use table_function() for functions that generate data without input."
-            )
-        except Exception as e:
-            tracing.set_span_error(span, e)
-            raise
-        finally:
-            span.end()
-            tracing.detach_context(token)
-
-    def _scalar_function_parallel(
-        self,
-        *,
-        input_batch: pa.RecordBatch,
-        input_iterator: Iterator[pa.RecordBatch],
-        input_schema: pa.Schema,
-        data_writer: ipc.RecordBatchStreamWriter,
-    ) -> Generator[pa.RecordBatch, None, None]:
-        """Process scalar function batches across one or more workers using threads.
-
-        Handles both single-worker and multi-worker cases uniformly.
-
-        Processing flow:
-        1. Creates worker connection objects for primary + additional workers
-        2. Starts one thread per worker running _worker_thread_loop
-        3. Distributes input batches round-robin to worker input queues
-        4. Signals end-of-input to all workers via None sentinel
-        5. Collects all output batches from shared output queue
-        6. Waits for worker threads to complete
-        7. Sends finalize message and closes all workers
-
-        Args:
-            input_batch: The first input batch, already consumed from the
-                iterator by scalar_function().
-            input_iterator: Iterator for remaining input batches. May be empty
-                if all input was in the first batch.
-            input_schema: Schema of input batches, used to create finalize message.
-            data_writer: IPC stream writer for the primary worker, already
-                initialized by _initialize_function_stream().
-
-        Yields:
-            Output RecordBatches from processing, in non-deterministic order for
-            multi-worker mode.
-
-        Raises:
-            ClientError: If a worker thread fails with an exception.
-
-        """
-        primary_worker = self._create_primary_worker(data_writer=data_writer)
-        all_workers = [primary_worker] + self._additional_workers
-        num_workers = len(all_workers)
-
-        log.debug("starting_scalar_parallel_processing", num_workers=num_workers)
-
-        # Create queues for each worker
-        input_queues: list[Queue[tuple[int, pa.RecordBatch] | None]] = [
-            Queue() for _ in range(num_workers)
-        ]
-        output_queue: Queue[tuple[int, list[pa.RecordBatch]] | BaseException] = Queue()
-
-        # Start worker threads
-        threads: list[threading.Thread] = []
-        for i, worker in enumerate(all_workers):
-            thread = threading.Thread(
-                target=self._worker_thread_loop,
-                args=(worker, input_queues[i], output_queue),
-                daemon=True,
-            )
-            thread.start()
-            threads.append(thread)
-
-        # Distribute batches round-robin across workers
-        batch_index = 0
-        batches_sent = 0
-
-        # Send first batch
-        worker_idx = batch_index % num_workers
-        input_queues[worker_idx].put((batch_index, input_batch))
-        batches_sent += 1
-        batch_index += 1
-
-        # Send remaining batches
-        for input_batch in input_iterator:
-            worker_idx = batch_index % num_workers
-            input_queues[worker_idx].put((batch_index, input_batch))
-            batches_sent += 1
-            batch_index += 1
-
-        # Signal end of input to all workers
-        for q in input_queues:
-            q.put(None)
-
-        log.debug("scalar_all_batches_distributed", total_batches=batches_sent)
-
-        # Collect outputs from all workers
-        # We expect batches_sent regular outputs + num_workers thread completion signals
-        outputs_expected = batches_sent + num_workers
-        outputs_received = 0
-
-        while outputs_received < outputs_expected:
-            result = output_queue.get()
-
-            # Check for exceptions from worker threads
-            if isinstance(result, BaseException):
-                import traceback
-
-                tb = "".join(
-                    traceback.format_exception(
-                        type(result), result, result.__traceback__
-                    )
-                )
-                raise ClientError(f"Worker thread failed: {result}\n{tb}") from result
-
-            batch_idx, output_batches = result
-            outputs_received += 1
-
-            # Combine output batches if needed
-            combined = self._combine_batches(output_batches)
-            if combined is not None:
-                yield combined
-
-            log.debug(
-                "scalar_output_received",
-                batch_index=batch_idx,
-                outputs_received=outputs_received,
-                outputs_expected=outputs_expected,
-            )
-
-        self._join_threads(threads)
-        log.debug("all_scalar_worker_threads_complete")
-
-        # Create empty finalize batch
-        empty_batch = pa.RecordBatch.from_arrays(
-            [pa.array([], type=field.type) for field in input_schema],
-            schema=input_schema,
-        )
-
-        # Send finalize to all workers
-        for worker in all_workers:
-            if worker.data_writer is not None:
-                worker.data_writer.write_batch(
-                    empty_batch, custom_metadata={b"type": b"FINALIZE"}
-                )
-                worker.data_writer.close()
-            # Also close stdin to send EOF (data_writer.close() only closes
-            # the IPC stream, not the underlying pipe)
-            if worker.proc.stdin:
-                worker.proc.stdin.close()
-
-        # Wait for secondary workers to exit
-        secondary_workers = all_workers[1:]
-        for worker in secondary_workers:
-            worker.proc.wait(timeout=self.PROCESS_WAIT_TIMEOUT)
-            log.debug(
-                "scalar_secondary_worker_exited",
-                worker_index=worker.worker_index,
-                returncode=worker.proc.returncode,
-            )
-
-        log.debug("scalar_parallel_processing_complete")

@@ -16,33 +16,28 @@ from vgi.catalog.setting import (
 class TestResolveArrowType:
     """Tests for _resolve_arrow_type helper."""
 
-    def test_python_bool(self) -> None:
-        """Test bool maps to pa.bool_()."""
-        assert _resolve_arrow_type(bool) == pa.bool_()
-
-    def test_python_int(self) -> None:
-        """Test int maps to pa.int64()."""
-        assert _resolve_arrow_type(int) == pa.int64()
-
-    def test_python_float(self) -> None:
-        """Test float maps to pa.float64()."""
-        assert _resolve_arrow_type(float) == pa.float64()
-
-    def test_python_str(self) -> None:
-        """Test str maps to pa.string()."""
-        assert _resolve_arrow_type(str) == pa.string()
-
-    def test_python_bytes(self) -> None:
-        """Test bytes maps to pa.binary()."""
-        assert _resolve_arrow_type(bytes) == pa.binary()
+    @pytest.mark.parametrize(
+        ("python_type", "arrow_type"),
+        [
+            (bool, pa.bool_()),
+            (int, pa.int64()),
+            (float, pa.float64()),
+            (str, pa.string()),
+            (bytes, pa.binary()),
+        ],
+        ids=["bool", "int", "float", "str", "bytes"],
+    )
+    def test_python_type_mapping(self, python_type: type, arrow_type: pa.DataType) -> None:
+        """Python types map to expected Arrow types."""
+        assert _resolve_arrow_type(python_type) == arrow_type
 
     def test_arrow_datatype_passthrough(self) -> None:
         """Arrow DataTypes should be returned unchanged."""
         assert _resolve_arrow_type(pa.int32()) == pa.int32()
         assert _resolve_arrow_type(pa.list_(pa.int64())) == pa.list_(pa.int64())
-        assert _resolve_arrow_type(
-            pa.struct([("key", pa.string()), ("value", pa.int64())])
-        ) == pa.struct([("key", pa.string()), ("value", pa.int64())])
+        assert _resolve_arrow_type(pa.struct([("key", pa.string()), ("value", pa.int64())])) == pa.struct(
+            [("key", pa.string()), ("value", pa.int64())]
+        )
 
     def test_unsupported_type_raises(self) -> None:
         """Test that unsupported types raise TypeError."""
@@ -211,80 +206,30 @@ class TestExtractSettingSpecs:
 class TestSettingSpecSerialization:
     """Tests for SettingSpec serialization/deserialization."""
 
-    def test_serialize_deserialize_bool(self) -> None:
-        """Test round-trip serialization for bool setting."""
-        spec = SettingSpec(
-            name="verbose",
-            desc="Enable verbose output",
-            type=pa.bool_(),
-            default=False,
-        )
+    @pytest.mark.parametrize(
+        ("name", "desc", "arrow_type", "default"),
+        [
+            ("verbose", "Enable verbose output", pa.bool_(), False),
+            ("batch_size", "Batch size", pa.int64(), 1000),
+            ("api_key", "API key", pa.string(), None),
+            ("allowed_ids", "Allowed IDs", pa.list_(pa.int64()), [1, 2, 3]),
+        ],
+        ids=["bool", "int", "no_default", "list"],
+    )
+    def test_serialize_deserialize_round_trip(
+        self, name: str, desc: str, arrow_type: pa.DataType, default: object
+    ) -> None:
+        """Test round-trip serialization for different setting types."""
+        from vgi_rpc.utils import deserialize_record_batch
+
+        spec = SettingSpec(name=name, desc=desc, type=arrow_type, default=default)
         serialized = spec.serialize()
         assert isinstance(serialized, bytes)
 
-        # Deserialize
-        import vgi.ipc_utils
-
-        batch, _ = vgi.ipc_utils.deserialize_record_batch(serialized)
+        batch, _ = deserialize_record_batch(serialized)
         deserialized = SettingSpec.deserialize(batch)
 
-        assert deserialized.name == "verbose"
-        assert deserialized.desc == "Enable verbose output"
-        assert deserialized.type == pa.bool_()
-        assert deserialized.default is False
-
-    def test_serialize_deserialize_int(self) -> None:
-        """Test round-trip serialization for int setting."""
-        spec = SettingSpec(
-            name="batch_size",
-            desc="Batch size",
-            type=pa.int64(),
-            default=1000,
-        )
-        serialized = spec.serialize()
-        import vgi.ipc_utils
-
-        batch, _ = vgi.ipc_utils.deserialize_record_batch(serialized)
-        deserialized = SettingSpec.deserialize(batch)
-
-        assert deserialized.name == "batch_size"
-        assert deserialized.type == pa.int64()
-        assert deserialized.default == 1000
-
-    def test_serialize_deserialize_no_default(self) -> None:
-        """Test round-trip serialization for setting without default."""
-        spec = SettingSpec(
-            name="api_key",
-            desc="API key",
-            type=pa.string(),
-            default=None,
-        )
-        serialized = spec.serialize()
-
-        import vgi.ipc_utils
-
-        batch, _ = vgi.ipc_utils.deserialize_record_batch(serialized)
-        deserialized = SettingSpec.deserialize(batch)
-
-        assert deserialized.name == "api_key"
-        assert deserialized.type == pa.string()
-        assert deserialized.default is None
-
-    def test_serialize_deserialize_list_type(self) -> None:
-        """Test round-trip serialization for list type setting."""
-        spec = SettingSpec(
-            name="allowed_ids",
-            desc="Allowed IDs",
-            type=pa.list_(pa.int64()),
-            default=[1, 2, 3],
-        )
-        serialized = spec.serialize()
-
-        import vgi.ipc_utils
-
-        batch, _ = vgi.ipc_utils.deserialize_record_batch(serialized)
-        deserialized = SettingSpec.deserialize(batch)
-
-        assert deserialized.name == "allowed_ids"
-        assert deserialized.type == pa.list_(pa.int64())
-        assert deserialized.default == [1, 2, 3]
+        assert deserialized.name == name
+        assert deserialized.desc == desc
+        assert deserialized.type == arrow_type
+        assert deserialized.default == default
