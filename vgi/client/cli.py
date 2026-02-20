@@ -38,6 +38,7 @@ Usage:
 
 import io
 import json
+import logging
 import sys
 from typing import TYPE_CHECKING, Any, cast
 
@@ -45,7 +46,9 @@ import pyarrow as pa
 from pyarrow import ipc
 
 from vgi.arguments import Arguments
-from vgi.client.client import Client, ClientError, log
+from vgi.client.client import Client, ClientError
+
+_logger = logging.getLogger("vgi.client.cli")
 
 if TYPE_CHECKING:
     import pyarrow.parquet as pq
@@ -98,7 +101,7 @@ class OutputWriter:
         import pyarrow.parquet as pq
 
         if self.output_file is None:
-            log.info("output_batch", num_rows=batch.num_rows, batch=batch)
+            _logger.info("output_batch num_rows=%s batch=%s", batch.num_rows, batch)
             return
 
         if self.format == "parquet":
@@ -398,7 +401,7 @@ def _create_cli() -> Any:
             if not isinstance(args_list, list):
                 raise click.ClickException("--args must be a JSON array")
         except json.JSONDecodeError as e:
-            log.error("invalid_json_arguments", error=str(e))
+            _logger.error("invalid_json_arguments error=%s", e)
             raise click.ClickException(f"Invalid JSON in --args: {e}") from e
 
         # Validate table_input_position
@@ -464,7 +467,7 @@ def _create_cli() -> Any:
             except ValueError as e:
                 raise click.ClickException(f"Invalid --pushdown-filters: must be a valid hex string: {e}") from e
 
-        log.info("starting_worker", function=function_name, worker_path=worker_path)
+        _logger.info("starting_worker function=%s worker_path=%s", function_name, worker_path)
 
         # Validate function_type requirements
         if function_type == "scalar" and input_file is None:
@@ -493,7 +496,7 @@ def _create_cli() -> Any:
 
                 if effective_type == "table":
                     # Table function (no input)
-                    log.info("invoking_table_function", function=function_name)
+                    _logger.info("invoking_table_function function=%s", function_name)
                     output_iterator = client.table_function(
                         function_name=function_name,
                         arguments=func_args,
@@ -505,8 +508,8 @@ def _create_cli() -> Any:
                 elif effective_type == "scalar":
                     # Scalar function (with input, single-column output)
                     assert input_file is not None  # Validated earlier
-                    log.info("invoking_scalar_function", function=function_name)
-                    log.info("reading_input", file=input_file)
+                    _logger.info("invoking_scalar_function function=%s", function_name)
+                    _logger.info("reading_input file=%s", input_file)
                     pf = pq.ParquetFile(input_file)
 
                     output_iterator = client.scalar_function(
@@ -519,8 +522,8 @@ def _create_cli() -> Any:
                 else:
                     # Table-in-out function (with input)
                     assert input_file is not None  # Validated earlier
-                    log.info("invoking_table_in_out_function", function=function_name)
-                    log.info("reading_input", file=input_file)
+                    _logger.info("invoking_table_in_out_function function=%s", function_name)
+                    _logger.info("reading_input file=%s", input_file)
                     pf = pq.ParquetFile(input_file)
 
                     # If table_input_position is specified, log it for debugging
@@ -529,10 +532,10 @@ def _create_cli() -> Any:
                     # table is the second argument). This is purely informational
                     # for the CLI user - the protocol handles table data separately.
                     if table_input_position is not None:
-                        log.debug(
-                            "table_input_position_specified",
-                            position=table_input_position,
-                            num_args=len(positional_args),
+                        _logger.debug(
+                            "table_input_position_specified position=%s num_args=%s",
+                            table_input_position,
+                            len(positional_args),
                         )
 
                     output_iterator = client.table_in_out_function(
@@ -550,7 +553,7 @@ def _create_cli() -> Any:
                         output_writer = OutputWriter(output_file, output_format, output_batch.schema)
                     output_writer.write_batch(output_batch)
 
-            log.info("processing_complete", function=function_name)
+            _logger.info("processing_complete function=%s", function_name)
         except ClientError as e:
             raise click.ClickException(str(e)) from e
         finally:

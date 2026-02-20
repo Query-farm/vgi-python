@@ -37,7 +37,7 @@ from __future__ import annotations
 import shlex
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import Any, Literal, overload
 
 import pyarrow as pa
 from vgi_rpc import WorkerPool
@@ -65,9 +65,6 @@ from vgi.protocol import (
     VgiProtocol,
 )
 
-if TYPE_CHECKING:
-    import structlog.stdlib
-
 # Module-level worker pool shared across all CatalogClientMixin instances.
 # Workers are cached by command and reused across catalog calls, avoiding
 # the overhead of spawning/tearing down a subprocess for each call.
@@ -92,20 +89,6 @@ class CatalogClientMixin:
 
     # Type hints for attributes expected from Client
     server_path: str
-
-    def _get_catalog_logger(self) -> structlog.stdlib.BoundLogger:
-        """Get a logger for catalog operations.
-
-        Returns a structlog logger bound with component="catalog_mixin".
-        Import is done lazily to avoid circular imports.
-
-        """
-        import structlog
-
-        return cast(
-            "structlog.stdlib.BoundLogger",
-            structlog.get_logger().bind(component="catalog_mixin"),
-        )
 
     @contextmanager
     def _catalog_connect(self) -> Iterator[VgiProtocol]:

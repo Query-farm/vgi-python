@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "click",
     "pyarrow",
-    "structlog",
+    "typer>=0.9",
     "platformdirs",
     "numpy>=2.4.1",
     "vgi-rpc @ file:///Users/rusty/Development/vgi-rpc",
@@ -60,7 +60,7 @@ warn_return_any = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = "structlog.*"
+module = "typer.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

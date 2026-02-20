@@ -208,9 +208,7 @@ class ExampleWorker(Worker):
 
 def main() -> None:
     """Run the example worker process."""
-    parser = ExampleWorker.create_argument_parser()
-    args = parser.parse_args()
-    ExampleWorker(quiet=args.quiet).run()
+    ExampleWorker.main()
 
 
 if __name__ == "__main__":

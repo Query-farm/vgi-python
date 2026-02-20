@@ -632,7 +632,7 @@ class InMemoryCatalogWorker(Worker):
 
 def main() -> None:
     """Run the in-memory catalog worker process."""
-    InMemoryCatalogWorker().run()
+    InMemoryCatalogWorker.main()
 
 
 if __name__ == "__main__":

@@ -219,7 +219,7 @@ class TestWorkerStderrCapture:
     def test_captures_worker_stderr(self, example_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
         """Should capture stderr output from the worker process."""
         with Client(example_worker, pool=None) as client:
-            # The example worker uses structlog which writes to stderr
+            # The example worker uses logging which writes to stderr
             list(
                 client.table_in_out_function(
                     function_name="echo",

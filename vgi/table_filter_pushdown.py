@@ -20,15 +20,14 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import os
-import sys
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
-import structlog
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -39,37 +38,14 @@ if TYPE_CHECKING:
 
 # Enable with VGI_FILTER_DEBUG=1 for detailed filter pushdown diagnostics
 _FILTER_DEBUG = os.environ.get("VGI_FILTER_DEBUG", "").lower() in ("1", "true", "yes")
-_filter_log: structlog.BoundLogger | None = None
-
-
-def _get_filter_log() -> structlog.BoundLogger:
-    """Get or create the filter debug logger, configured to write to stderr.
-
-    Creates a local logger without modifying global structlog configuration.
-    """
-    global _filter_log
-    if _filter_log is not None:
-        return _filter_log
-    # Create a local logger without calling structlog.configure()
-    # This avoids modifying global state that could affect other code
-    processors: list[structlog.types.Processor] = [
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.dev.ConsoleRenderer(),
-    ]
-    logger: structlog.BoundLogger = structlog.wrap_logger(
-        structlog.PrintLogger(file=sys.stderr),
-        processors=processors,
-        wrapper_class=structlog.BoundLogger,
-    ).bind(component="filter_pushdown")
-    _filter_log = logger
-    return logger
+_filter_logger = logging.getLogger("vgi.filter_pushdown")
 
 
 def _log_debug(event: str, **kwargs: Any) -> None:
     """Log a debug message if VGI_FILTER_DEBUG is enabled."""
     if _FILTER_DEBUG:
-        _get_filter_log().debug(event, **kwargs)
+        extra = " ".join(f"{k}={v}" for k, v in kwargs.items())
+        _filter_logger.debug("%s %s", event, extra) if extra else _filter_logger.debug("%s", event)
 
 
 # Supported filter protocol version

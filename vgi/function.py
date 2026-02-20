@@ -17,6 +17,7 @@ See Also:
 
 from __future__ import annotations
 
+import logging
 from abc import ABC
 from typing import (
     Annotated,
@@ -28,7 +29,6 @@ from typing import (
 )
 
 import pyarrow as pa
-import structlog
 
 from vgi.exceptions import SchemaValidationError
 from vgi.function_storage import FunctionStorage, FunctionStorageSqlite
@@ -154,12 +154,12 @@ class Function(ABC, MetadataMixin):
     def __init__(
         self,
         *,
-        logger: structlog.stdlib.BoundLogger,
+        logger: logging.Logger,
     ):
         """Initialize the function with invocation data and logger.
 
         Args:
-            logger: Structured logger for function diagnostics.
+            logger: Logger for function diagnostics.
 
         """
         self.logger = logger

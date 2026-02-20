@@ -35,10 +35,10 @@ vgi.arguments.Arguments : Container for function arguments
 from __future__ import annotations
 
 import io
+import logging
 import os
 import shlex
 import subprocess
-import sys
 import threading
 from collections.abc import Callable, Generator, Iterator
 from contextlib import AbstractContextManager
@@ -47,8 +47,6 @@ from queue import Queue
 from typing import IO, Any, cast
 
 import pyarrow as pa
-import structlog
-import structlog.stdlib
 from vgi_rpc import ArrowSerializableDataclass, WorkerPool
 from vgi_rpc.log import Message
 from vgi_rpc.rpc import (
@@ -73,20 +71,8 @@ from vgi.protocol import (
 )
 from vgi.table_function import TableInOutFunctionInitPhase
 
-# Configure structlog to write to stderr
-structlog.configure(
-    processors=[
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.dev.ConsoleRenderer(),
-    ],
-    wrapper_class=structlog.make_filtering_bound_logger(0),
-    logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
-)
-
-log: structlog.stdlib.BoundLogger = structlog.get_logger().bind(component="client")
-
-worker_log: structlog.stdlib.BoundLogger = structlog.get_logger().bind(component="worker")
+_logger = logging.getLogger("vgi.client")
+_worker_logger = logging.getLogger("vgi.client.worker")
 
 
 class ClientError(Exception):
@@ -167,7 +153,8 @@ class Client(CatalogClientMixin):
     @staticmethod
     def _on_worker_log(msg: Message) -> None:
         """Forward log messages from vgi_rpc to the worker logger."""
-        worker_log._proxy_to_logger(msg.level.name.lower(), msg.message)
+        level = getattr(logging, msg.level.name.upper(), logging.INFO)
+        _worker_logger.log(level, "%s", msg.message)
 
     def _determine_max_workers(self, requested: int) -> int:
         """Apply system and user limits to the function's requested max_workers.
@@ -189,19 +176,15 @@ class Client(CatalogClientMixin):
         # Limit to CPU count
         cpu_count = os.cpu_count() or 1
         if max_workers > cpu_count:
-            log.debug(
-                "limiting_max_workers_to_cpu_count",
-                requested=max_workers,
-                cpu_count=cpu_count,
-            )
+            _logger.debug("limiting_max_workers_to_cpu_count requested=%s cpu_count=%s", max_workers, cpu_count)
             max_workers = cpu_count
 
         # Limit to user-specified worker_limit
         if self._worker_limit is not None and max_workers > self._worker_limit:
-            log.debug(
-                "limiting_max_workers_to_worker_limit",
-                requested=max_workers,
-                worker_limit=self._worker_limit,
+            _logger.debug(
+                "limiting_max_workers_to_worker_limit requested=%s worker_limit=%s",
+                max_workers,
+                self._worker_limit,
             )
             max_workers = self._worker_limit
 
@@ -356,7 +339,7 @@ class Client(CatalogClientMixin):
 
         """
         if self._pool is not None:
-            log.debug("borrowing_worker", worker_index=worker_index)
+            _logger.debug("borrowing_worker worker_index=%s", worker_index)
             cmd = shlex.split(self.server_path)
             ctx = self._pool.connect(
                 VgiProtocol,  # type: ignore[type-abstract]
@@ -364,14 +347,14 @@ class Client(CatalogClientMixin):
                 on_log=self._on_worker_log,
             )
             proxy = ctx.__enter__()
-            log.debug("worker_borrowed", worker_index=worker_index)
+            _logger.debug("worker_borrowed worker_index=%s", worker_index)
             return WorkerConnection(
                 proxy=proxy,
                 worker_index=worker_index,
                 _pool_ctx=ctx,
             )
 
-        log.debug("spawning_worker", worker_index=worker_index)
+        _logger.debug("spawning_worker worker_index=%s", worker_index)
         proc = subprocess.Popen(
             self.server_path,
             stdin=subprocess.PIPE,
@@ -381,7 +364,7 @@ class Client(CatalogClientMixin):
             bufsize=0,
             shell=True,
         )
-        log.debug("worker_spawned", worker_index=worker_index, pid=proc.pid)
+        _logger.debug("worker_spawned worker_index=%s pid=%s", worker_index, proc.pid)
 
         if proc.stdout is None:
             raise ClientError("Failed to create stdout pipe for worker subprocess")
@@ -432,7 +415,7 @@ class Client(CatalogClientMixin):
         if worker._pool_ctx is not None:
             # Return to pool — pool handles subprocess lifecycle
             worker._pool_ctx.__exit__(None, None, None)
-            log.debug("worker_returned_to_pool", worker_index=worker.worker_index)
+            _logger.debug("worker_returned_to_pool worker_index=%s", worker.worker_index)
             return 0
 
         # Direct subprocess management
@@ -442,18 +425,18 @@ class Client(CatalogClientMixin):
         worker.proc.wait(timeout=self.PROCESS_WAIT_TIMEOUT)
         returncode = worker.proc.returncode
         if returncode != 0:
-            log.error(
-                "worker_exited_with_error",
-                worker_index=worker.worker_index,
-                pid=worker.proc.pid,
-                returncode=returncode,
+            _logger.error(
+                "worker_exited_with_error worker_index=%s pid=%s returncode=%s",
+                worker.worker_index,
+                worker.proc.pid,
+                returncode,
             )
         else:
-            log.debug(
-                "worker_exited",
-                worker_index=worker.worker_index,
-                pid=worker.proc.pid,
-                returncode=returncode,
+            _logger.debug(
+                "worker_exited worker_index=%s pid=%s returncode=%s",
+                worker.worker_index,
+                worker.proc.pid,
+                returncode,
             )
         return returncode
 
@@ -478,7 +461,7 @@ class Client(CatalogClientMixin):
         for thread in threads:
             thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
             if thread.is_alive():
-                log.warning("worker_thread_did_not_terminate")
+                _logger.warning("worker_thread_did_not_terminate")
 
     def start(self) -> None:
         """Start the primary worker subprocess.
@@ -504,10 +487,10 @@ class Client(CatalogClientMixin):
             raise ClientError("Client already started")
 
         self._stderr_buffer = []
-        log.debug("starting_server", server_path=self.server_path)
+        _logger.debug("starting_server server_path=%s", self.server_path)
         self._primary = self._spawn_worker(0)
         pid = self._primary.proc.pid if self._primary.proc is not None else "pooled"
-        log.debug("server_started", pid=pid)
+        _logger.debug("server_started pid=%s", pid)
 
     def stop(self) -> int:
         """Stop all worker subprocesses and clean up resources.
@@ -545,7 +528,7 @@ class Client(CatalogClientMixin):
         for stderr_thread in self._stderr_threads:
             stderr_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
             if stderr_thread.is_alive():
-                log.warning("stderr_thread_did_not_terminate")
+                _logger.warning("stderr_thread_did_not_terminate")
         self._stderr_threads = []
 
         return returncode
@@ -749,10 +732,7 @@ class Client(CatalogClientMixin):
                 f"Failed to initialize {len(init_errors)} worker(s):\n" + "\n".join(f"  - {msg}" for msg in error_msgs)
             ) from init_errors[0]
 
-        log.debug(
-            "additional_workers_spawned",
-            count=len(new_workers),
-        )
+        _logger.debug("additional_workers_spawned count=%s", len(new_workers))
 
     # -----------------------------------------------------------------------
     # Batch processing helpers
@@ -789,11 +769,11 @@ class Client(CatalogClientMixin):
         output_batches: list[pa.RecordBatch] = []
 
         while True:
-            log.debug(
-                "sending_batch_to_worker",
-                worker_index=worker.worker_index,
-                batch_index=batch_index,
-                num_rows=input_batch.num_rows,
+            _logger.debug(
+                "sending_batch_to_worker worker_index=%s batch_index=%s num_rows=%s",
+                worker.worker_index,
+                batch_index,
+                input_batch.num_rows,
             )
 
             try:
@@ -801,10 +781,10 @@ class Client(CatalogClientMixin):
             except RpcError as e:
                 raise ClientError.from_rpc_error(e) from e
 
-            log.debug(
-                "received_output_from_worker",
-                worker_index=worker.worker_index,
-                num_rows=output.batch.num_rows,
+            _logger.debug(
+                "received_output_from_worker worker_index=%s num_rows=%s",
+                worker.worker_index,
+                output.batch.num_rows,
             )
 
             output_batches.append(output.batch)
@@ -861,11 +841,7 @@ class Client(CatalogClientMixin):
                 outputs = self._process_batch_on_worker(worker, input_batch, batch_index)
                 output_queue.put((batch_index, outputs))
         except Exception as e:
-            log.exception(
-                "worker_thread_error",
-                worker_index=worker.worker_index,
-                error=str(e),
-            )
+            _logger.exception("worker_thread_error worker_index=%s", worker.worker_index)
             output_queue.put(e)
 
     def _distribute_and_collect(
@@ -898,7 +874,7 @@ class Client(CatalogClientMixin):
         """
         num_workers = len(all_workers)
 
-        log.debug("starting_parallel_processing", num_workers=num_workers)
+        _logger.debug("starting_parallel_processing num_workers=%s", num_workers)
 
         # Create queues for each worker
         input_queues: list[Queue[tuple[int, pa.RecordBatch] | None]] = [Queue() for _ in range(num_workers)]
@@ -936,7 +912,7 @@ class Client(CatalogClientMixin):
         for q in input_queues:
             q.put(None)
 
-        log.debug("all_batches_distributed", total_batches=batches_sent)
+        _logger.debug("all_batches_distributed total_batches=%s", batches_sent)
 
         # Collect outputs from all workers
         # We expect batches_sent regular outputs + num_workers thread completion signals
@@ -960,15 +936,15 @@ class Client(CatalogClientMixin):
             if combined is not None:
                 yield combined
 
-            log.debug(
-                "output_received",
-                batch_index=batch_idx,
-                outputs_received=outputs_received,
-                outputs_expected=outputs_expected,
+            _logger.debug(
+                "output_received batch_index=%s outputs_received=%s outputs_expected=%s",
+                batch_idx,
+                outputs_received,
+                outputs_expected,
             )
 
         self._join_threads(threads)
-        log.debug("all_worker_threads_complete")
+        _logger.debug("all_worker_threads_complete")
 
     # -----------------------------------------------------------------------
     # Function methods
@@ -1092,14 +1068,14 @@ class Client(CatalogClientMixin):
             self._close_secondary_workers()
 
             # Finalize on primary worker
-            log.debug("finalizing_primary_worker")
+            _logger.debug("finalizing_primary_worker")
             yield from self._finalize_primary_worker(
                 bind_request,
                 bind_response,
                 input_schema,
                 init_response,
             )
-            log.debug("parallel_processing_complete")
+            _logger.debug("parallel_processing_complete")
             return
 
         # Input iterator was empty - table-in-out functions require input
@@ -1157,10 +1133,7 @@ class Client(CatalogClientMixin):
                 except RpcError as e:
                     raise ClientError.from_rpc_error(e) from e
 
-                log.debug(
-                    "received_finalize_from_worker",
-                    num_rows=output.batch.num_rows,
-                )
+                _logger.debug("received_finalize_from_worker num_rows=%s", output.batch.num_rows)
 
                 if output.batch.num_rows > 0:
                     yield output.batch
@@ -1273,7 +1246,7 @@ class Client(CatalogClientMixin):
         all_workers = [self._primary] + self._additional_workers
         num_workers = len(all_workers)
 
-        log.debug("starting_parallel_table_function", num_workers=num_workers)
+        _logger.debug("starting_parallel_table_function num_workers=%s", num_workers)
 
         # Queue for collecting output from all workers
         output_queue: Queue[pa.RecordBatch | BaseException | None] = Queue()
@@ -1286,10 +1259,10 @@ class Client(CatalogClientMixin):
                     return
 
                 for output in worker.stream:
-                    log.debug(
-                        "received_output_from_worker",
-                        worker_index=worker.worker_index,
-                        num_rows=output.batch.num_rows,
+                    _logger.debug(
+                        "received_output_from_worker worker_index=%s num_rows=%s",
+                        worker.worker_index,
+                        output.batch.num_rows,
                     )
                     if output.batch.num_rows > 0:
                         output_queue.put(output.batch)
@@ -1298,11 +1271,7 @@ class Client(CatalogClientMixin):
             except StopIteration:
                 output_queue.put(None)
             except Exception as e:
-                log.exception(
-                    "table_function_worker_thread_error",
-                    worker_index=worker.worker_index,
-                    error=str(e),
-                )
+                _logger.exception("table_function_worker_thread_error worker_index=%s", worker.worker_index)
                 output_queue.put(e)
 
         # Start reader threads for all workers
@@ -1330,17 +1299,17 @@ class Client(CatalogClientMixin):
             # None signals a worker finished
             if result is None:
                 workers_finished += 1
-                log.debug(
-                    "worker_finished",
-                    workers_finished=workers_finished,
-                    total_workers=num_workers,
+                _logger.debug(
+                    "worker_finished workers_finished=%s total_workers=%s",
+                    workers_finished,
+                    num_workers,
                 )
                 continue
 
             yield result
 
         self._join_threads(threads)
-        log.debug("all_table_function_workers_complete")
+        _logger.debug("all_table_function_workers_complete")
 
         # Close streams and secondary workers
         for worker in all_workers:
@@ -1348,7 +1317,7 @@ class Client(CatalogClientMixin):
                 worker.stream.close()
                 worker.stream = None
         self._close_secondary_workers()
-        log.debug("parallel_table_function_complete")
+        _logger.debug("parallel_table_function_complete")
 
     def scalar_function(
         self,

@@ -61,15 +61,13 @@ vgi.examples.worker : Example worker with built-in functions
 
 from __future__ import annotations
 
-import argparse
+import logging
 import os
 import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, cast, final
 
 import pyarrow as pa
-import structlog
-import structlog.stdlib
 from vgi_rpc.rpc import RpcServer, Stream, serve_stdio
 
 from vgi.arguments import Arguments
@@ -127,6 +125,8 @@ from vgi.table_in_out_function import (
 
 if TYPE_CHECKING:
     from vgi.catalog.descriptors import Catalog
+
+_logger = logging.getLogger("vgi.worker")
 
 
 def _format_arguments_for_error(args: Arguments) -> str:
@@ -394,30 +394,45 @@ class Worker:
 
     @final
     @classmethod
-    def create_argument_parser(cls) -> argparse.ArgumentParser:
-        """Create an argument parser with standard worker options.
+    def main(cls) -> None:
+        """Run this worker as a CLI application with logging options.
 
-        Returns an ArgumentParser configured with common worker flags.
-        Subclasses can extend the returned parser with additional arguments.
-
-        The parser includes:
-            --quiet, -q: Suppress startup logging output
-
-        Returns:
-            Configured ArgumentParser instance.
-
+        Uses typer to provide ``--quiet``, ``--debug``, ``--log-level``,
+        ``--log-logger``, and ``--log-format`` options.
         """
-        parser = argparse.ArgumentParser(
-            description=cls.__doc__,
-            formatter_class=argparse.RawDescriptionHelpFormatter,
-        )
-        parser.add_argument(
-            "-q",
-            "--quiet",
-            action="store_true",
-            help="Suppress startup logging output",
-        )
-        return parser
+        import typer
+
+        from vgi.logging_config import LogFormat, LogLevel, configure_worker_logging
+
+        # Inject types into module globals so typer can resolve stringified
+        # annotations created by ``from __future__ import annotations``.
+        _mod = globals()
+        _mod["LogLevel"] = LogLevel
+        _mod["LogFormat"] = LogFormat
+
+        app = typer.Typer(add_completion=False)
+
+        @app.command()
+        def _run(
+            quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress startup warning"),
+            debug: bool = typer.Option(False, "--debug", help="Enable DEBUG on all vgi + vgi_rpc loggers"),
+            log_level: LogLevel = typer.Option(LogLevel.INFO, "--log-level", help="Set log level"),  # noqa: B008
+            log_logger: list[str] | None = typer.Option(  # noqa: B008
+                None, "--log-logger", help="Target specific logger(s)"
+            ),
+            log_format: LogFormat = typer.Option(  # noqa: B008
+                LogFormat.text, "--log-format", help="Stderr log format"
+            ),
+        ) -> None:
+            effective_level = configure_worker_logging(
+                debug=debug,
+                log_level=log_level,
+                log_loggers=log_logger,
+                log_format=log_format,
+            )
+            cls(quiet=quiet, log_level=effective_level).run()
+
+        app()
 
     @staticmethod
     def _match_function_arguments(
@@ -696,7 +711,7 @@ class Worker:
         self._validate_required_settings(func_cls, request)
         self._validate_required_secrets(func_cls, request)
 
-        instance = func_cls(logger=self.log)
+        instance = func_cls(logger=_logger)
         return instance.bind(request)  # type: ignore[attr-defined, no-any-return]
 
     def init(self, request: InitRequest) -> Stream[ProcessState, GlobalInitResponse]:
@@ -706,7 +721,7 @@ class Worker:
         based on function type and creates the appropriate state object.
         """
         func_cls = self._resolve_function(request.bind_call)
-        instance = func_cls(logger=self.log)
+        instance = func_cls(logger=_logger)
 
         # Determine if this is a secondary init
         if request.is_secondary:
@@ -1361,25 +1376,18 @@ class Worker:
     # Lifecycle
     # ---------------------------------------------------------------------------
 
-    def __init__(self, *, quiet: bool = False) -> None:
-        """Initialize the worker with structured logging.
+    def __init__(self, *, quiet: bool = False, log_level: int = logging.INFO) -> None:
+        """Initialize the worker with logging.
 
         Args:
             quiet: If True, suppress startup logging output. Can also be enabled
                 by setting the VGI_QUIET=1 environment variable.
+            log_level: Numeric logging level for the ``vgi`` logger hierarchy.
 
         """
         self._quiet = quiet or os.environ.get("VGI_QUIET") == "1"
-        structlog.configure(
-            processors=[
-                structlog.processors.add_log_level,
-                structlog.processors.TimeStamper(fmt="iso"),
-                structlog.dev.ConsoleRenderer(),
-            ],
-            wrapper_class=structlog.make_filtering_bound_logger(0),
-            logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
-        )
-        self.log: structlog.stdlib.BoundLogger = structlog.get_logger().bind(component="worker", pid=os.getpid())
+        logging.getLogger("vgi").setLevel(log_level)
+        self.log: logging.Logger = _logger
 
     def run(self) -> None:
         """Run the worker, reading from stdin and writing to stdout."""
@@ -1399,11 +1407,11 @@ class Worker:
             )
             sys.stderr.flush()
 
-        self.log.info("worker_starting")
+        _logger.info("worker_starting")
 
         try:
             server = RpcServer(VgiProtocol, self)
             serve_stdio(server)
         except KeyboardInterrupt:
-            self.log.debug("worker_interrupted")
+            _logger.debug("worker_interrupted")
             sys.exit(130)

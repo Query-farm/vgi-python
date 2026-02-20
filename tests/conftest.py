@@ -1,10 +1,10 @@
 """Shared fixtures for VGI tests."""
 
+import logging
 from typing import Any
 
 import pyarrow as pa
 import pytest
-import structlog
 
 from vgi import schema
 
@@ -63,10 +63,9 @@ def empty_batch_from_schema(schema: pa.Schema) -> pa.RecordBatch:
 
 
 @pytest.fixture
-def test_logger() -> structlog.stdlib.BoundLogger:
+def test_logger() -> logging.Logger:
     """Provide a shared test logger."""
-    logger: structlog.stdlib.BoundLogger = structlog.get_logger().bind(component="test")
-    return logger
+    return logging.getLogger("vgi.test")
 
 
 @pytest.fixture

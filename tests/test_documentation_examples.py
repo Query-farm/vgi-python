@@ -4,6 +4,7 @@ Uses pytest-examples to validate that code examples in markdown files
 are syntactically correct and (where possible) executable.
 """
 
+import logging
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -11,7 +12,6 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
-import structlog
 from pytest_examples import CodeExample, EvalExample, find_examples
 from vgi_rpc.log import Level, Message
 
@@ -65,7 +65,7 @@ DOC_EXAMPLE_GLOBALS: dict[str, Any] = {
     "TableCardinality": TableCardinality,
     "Level": Level,
     "Message": Message,
-    "structlog": structlog,
+    "logging": logging,
     # Typing
     "Iterable": Iterable,
     "Iterator": Iterator,
