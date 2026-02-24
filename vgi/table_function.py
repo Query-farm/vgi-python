@@ -344,8 +344,23 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
         return kwargs
 
+    @final
     @classmethod
-    def cardinality(cls, params: BindParams[TArgs]) -> TableCardinality | None:
+    def _make_bind_params(cls, input: BindRequest) -> BindParams[TArgs]:
+        """Construct BindParams from a BindRequest.
+
+        Shared by bind() and table_function_cardinality() to avoid
+        duplicating BindParams construction logic.
+        """
+        return BindParams[TArgs](
+            args=cls._parse_arguments(cls.FunctionArguments, input.arguments),
+            bind_call=input,
+            settings=_batch_to_scalar_dict(input.settings),
+            secrets=_batch_to_secret_dict(input.secrets),
+        )
+
+    @classmethod
+    def cardinality(cls, params: BindParams[TArgs]) -> TableCardinality:
         """Return the cardinality for the output.
 
         Override to provide row count estimates that help query planners
@@ -355,7 +370,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             TableCardinality with estimate and/or max, or None if unknown.
 
         """
-        return None
+        return TableCardinality(estimate=None, max=None)
 
     @staticmethod
     def pushdown_filters(pushdown_filters: pa.RecordBatch) -> PushdownFilters | None:
@@ -455,13 +470,7 @@ class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
         and wraps the result for transmission to global_init.
 
         """
-        params = BindParams[TArgs](
-            args=cls._parse_arguments(cls.FunctionArguments, input.arguments),
-            bind_call=input,
-            settings=_batch_to_scalar_dict(input.settings),
-            secrets=_batch_to_secret_dict(input.secrets),
-        )
-
+        params = cls._make_bind_params(input)
         return cls.on_bind(params, **cls._extract_bind_kwargs(input))
 
     @classmethod

@@ -1,10 +1,24 @@
-"""Tests for vgi.worker module, including function overloading."""
+"""Tests for vgi.worker module, including function overloading and cardinality."""
+
+from dataclasses import dataclass
+from typing import Annotated
 
 import pyarrow as pa
 import pytest
+from vgi_rpc.rpc import OutputCollector
 
 from vgi import Arg, TableInOutFunction, TableInput
 from vgi.arguments import Arguments
+from vgi.invocation import FunctionType
+from vgi.protocol import BindRequest, TableFunctionCardinalityRequest
+from vgi.table_function import (
+    BindParams,
+    ProcessParams,
+    TableCardinality,
+    TableFunctionGenerator,
+    bind_fixed_schema,
+    init_single_worker,
+)
 from vgi.worker import Worker
 
 
@@ -392,3 +406,186 @@ class TestSuggestSimilarNames:
         result = Worker._suggest_similar_names("xyz", ["abc", "def"])
         # "xyz" has no overlap with "abc" or "def"
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Fixtures: minimal table function definitions for cardinality tests
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True, frozen=True)
+class _CountArgs:
+    count: Annotated[int, Arg(0, doc="Number of rows")]
+
+
+@init_single_worker
+@bind_fixed_schema
+class _FixedCardinalityFunc(TableFunctionGenerator[_CountArgs]):
+    """Table function that returns exact cardinality from count arg."""
+
+    class Meta:
+        name = "fixed_card"
+
+    FIXED_SCHEMA = pa.schema([pa.field("n", pa.int64())])
+
+    @classmethod
+    def cardinality(cls, params: BindParams[_CountArgs]) -> TableCardinality:
+        return TableCardinality(estimate=params.args.count, max=params.args.count)
+
+    @classmethod
+    def process(cls, params: ProcessParams[_CountArgs], state: None, out: OutputCollector) -> None:
+        out.finish()
+
+
+@init_single_worker
+@bind_fixed_schema
+class _DefaultCardinalityFunc(TableFunctionGenerator[_CountArgs]):
+    """Table function that uses the default (unknown) cardinality."""
+
+    class Meta:
+        name = "default_card"
+
+    FIXED_SCHEMA = pa.schema([pa.field("n", pa.int64())])
+
+    @classmethod
+    def process(cls, params: ProcessParams[_CountArgs], state: None, out: OutputCollector) -> None:
+        out.finish()
+
+
+class _ScalarOnlyFunc(TableInOutFunction):  # type: ignore[type-arg]
+    """Non-table-function to test the error path."""
+
+    class Meta:
+        name = "scalar_only"
+
+    data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+def _make_bind_request(function_name: str, *positional: int) -> BindRequest:
+    """Create a BindRequest for a table function."""
+    return BindRequest(
+        function_name=function_name,
+        arguments=Arguments(positional=tuple(pa.scalar(v) for v in positional)),
+        function_type=FunctionType.TABLE,
+    )
+
+
+class TestTableFunctionCardinality:
+    """Tests for Worker.table_function_cardinality()."""
+
+    def test_returns_custom_cardinality(self) -> None:
+        """Cardinality from a function that overrides cardinality()."""
+
+        class MyWorker(Worker):
+            functions = [_FixedCardinalityFunc]
+
+        worker = MyWorker()
+        request = TableFunctionCardinalityRequest(
+            bind_call=_make_bind_request("fixed_card", 42),
+        )
+        result = worker.table_function_cardinality(request)
+
+        assert isinstance(result, TableCardinality)
+        assert result.estimate == 42
+        assert result.max == 42
+
+    def test_returns_default_cardinality(self) -> None:
+        """Default cardinality is (None, None) when not overridden."""
+
+        class MyWorker(Worker):
+            functions = [_DefaultCardinalityFunc]
+
+        worker = MyWorker()
+        request = TableFunctionCardinalityRequest(
+            bind_call=_make_bind_request("default_card", 10),
+        )
+        result = worker.table_function_cardinality(request)
+
+        assert isinstance(result, TableCardinality)
+        assert result.estimate is None
+        assert result.max is None
+
+    def test_rejects_non_table_function(self) -> None:
+        """Raises ValueError for non-TableFunctionGenerator functions."""
+
+        class MyWorker(Worker):
+            functions = [_ScalarOnlyFunc]
+
+        worker = MyWorker()
+        request = TableFunctionCardinalityRequest(
+            bind_call=_make_bind_request("scalar_only"),
+        )
+        with pytest.raises(ValueError, match="not a TableFunctionGenerator"):
+            worker.table_function_cardinality(request)
+
+    def test_unknown_function_raises(self) -> None:
+        """Raises ValueError for unknown function names."""
+
+        class MyWorker(Worker):
+            functions = [_FixedCardinalityFunc]
+
+        worker = MyWorker()
+        request = TableFunctionCardinalityRequest(
+            bind_call=_make_bind_request("nonexistent", 1),
+        )
+        with pytest.raises(ValueError, match="Unknown function"):
+            worker.table_function_cardinality(request)
+
+    def test_passes_bind_opaque_data(self) -> None:
+        """bind_opaque_data on the request is accepted (though unused by default)."""
+
+        class MyWorker(Worker):
+            functions = [_FixedCardinalityFunc]
+
+        worker = MyWorker()
+        request = TableFunctionCardinalityRequest(
+            bind_call=_make_bind_request("fixed_card", 99),
+            bind_opaque_data=None,
+        )
+        result = worker.table_function_cardinality(request)
+        assert result.estimate == 99
+
+    def test_cardinality_with_settings(self) -> None:
+        """Settings from bind_call are forwarded to cardinality()."""
+
+        @init_single_worker
+        @bind_fixed_schema
+        class SettingsCardFunc(TableFunctionGenerator[_CountArgs]):
+            class Meta:
+                name = "settings_card"
+
+            FIXED_SCHEMA = pa.schema([pa.field("n", pa.int64())])
+
+            @classmethod
+            def cardinality(cls, params: BindParams[_CountArgs]) -> TableCardinality:
+                multiplier = params.settings.get("multiplier")
+                mult = multiplier.as_py() if multiplier is not None else 1
+                return TableCardinality(estimate=params.args.count * mult, max=None)
+
+            @classmethod
+            def process(cls, params: ProcessParams[_CountArgs], state: None, out: OutputCollector) -> None:
+                out.finish()
+
+        class MyWorker(Worker):
+            functions = [SettingsCardFunc]
+
+        worker = MyWorker()
+        settings_batch = pa.RecordBatch.from_pydict(
+            {"multiplier": [3]},
+            schema=pa.schema([pa.field("multiplier", pa.int64())]),
+        )
+        request = TableFunctionCardinalityRequest(
+            bind_call=BindRequest(
+                function_name="settings_card",
+                arguments=Arguments(positional=(pa.scalar(10),)),
+                function_type=FunctionType.TABLE,
+                settings=settings_batch,
+            ),
+        )
+        result = worker.table_function_cardinality(request)
+        assert result.estimate == 30

@@ -89,12 +89,7 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
         and wraps the result for transmission to global_init.
 
         """
-        params = BindParams[TArgs](
-            args=cls._parse_arguments(cls.FunctionArguments, input.arguments),
-            bind_call=input,
-            settings=_batch_to_scalar_dict(input.settings),
-            secrets=_batch_to_secret_dict(input.secrets),
-        )
+        params = cls._make_bind_params(input)
 
         if input.input_schema is not None:
             cls._validate_arg_type_bounds(cls.FunctionArguments, params.args, input.input_schema)

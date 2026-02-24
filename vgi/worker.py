@@ -103,6 +103,7 @@ from vgi.protocol import (
     ScalarExchangeState,
     SchemasResponse,
     TableCreateRequest,
+    TableFunctionCardinalityRequest,
     TableInOutExchangeState,
     TableInOutFinalizeState,
     TableProducerState,
@@ -114,6 +115,7 @@ from vgi.protocol import (
 from vgi.scalar_function import ScalarFunctionGenerator
 from vgi.table_function import (
     ProcessParams,
+    TableCardinality,
     TableFunctionGenerator,
     TableInOutFunctionInitPhase,
     _batch_to_scalar_dict,
@@ -710,6 +712,19 @@ class Worker:
 
         instance = func_cls(logger=_logger)
         return instance.bind(request)  # type: ignore[attr-defined, no-any-return]
+
+    def table_function_cardinality(self, request: TableFunctionCardinalityRequest) -> TableCardinality:
+        """Estimate the cardinality of a table function's output.
+
+        Implements VgiProtocol.table_function_cardinality().
+        """
+        func_cls = self._resolve_function(request.bind_call)
+        if not issubclass(func_cls, TableFunctionGenerator):
+            raise ValueError(
+                "Cardinality estimation is only supported for table"
+                f" functions, but '{func_cls.__name__}' is not a TableFunctionGenerator."
+            )
+        return func_cls.cardinality(func_cls._make_bind_params(request.bind_call))
 
     def init(self, request: InitRequest) -> Stream[ProcessState, GlobalInitResponse]:
         """Initialize a function execution and return a processing stream.
