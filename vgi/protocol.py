@@ -557,7 +557,9 @@ class TableInOutFinalizeState(ProducerState):
         self._index += 1
 
 
-# Type alias for the union of all stream state types
+# Type alias for the union of all stream state variants produced by init().
+# vgi-rpc resolves this union using a method-local numeric tag in HTTP state
+# tokens, so state recovery does not depend on Python class names.
 ProcessState = ScalarExchangeState | TableProducerState | TableInOutExchangeState | TableInOutFinalizeState
 
 

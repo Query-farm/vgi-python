@@ -5,18 +5,25 @@ Tests cover Invocation, Arguments, InitResult, and table_function classes.
 
 from __future__ import annotations
 
-from typing import TypeVar
+from typing import TypeVar, get_args, get_origin, get_type_hints
 
 import pyarrow as pa
 import pytest
 from vgi_rpc.log import Level, Message
+from vgi_rpc.rpc import Stream
 from vgi_rpc.utils import deserialize_record_batch
 
 from tests.conftest import make_schema
 from vgi.arguments import Arg, Arguments, ArgumentValidationError
-from vgi.table_function import (
-    TableCardinality,
+from vgi.protocol import (
+    ProcessState,
+    ScalarExchangeState,
+    TableInOutExchangeState,
+    TableInOutFinalizeState,
+    TableProducerState,
+    VgiProtocol,
 )
+from vgi.table_function import TableCardinality
 
 T = TypeVar("T")
 
@@ -258,6 +265,25 @@ class TestTableCardinality:
         """TableCardinality with equal estimate and max indicates exact count."""
         exact = TableCardinality(estimate=1, max=1)
         assert exact.estimate == exact.max == 1
+
+
+class TestProtocolStateTyping:
+    """Tests for VGI protocol stream state typing."""
+
+    def test_init_declares_process_state_union(self) -> None:
+        """VgiProtocol.init() returns Stream with the ProcessState union."""
+        hints = get_type_hints(VgiProtocol.init)
+        return_hint = hints["return"]
+        state_arg = get_args(return_hint)[0]
+        assert state_arg == ProcessState
+        assert set(get_args(state_arg)) == {
+            ScalarExchangeState,
+            TableProducerState,
+            TableInOutExchangeState,
+            TableInOutFinalizeState,
+        }
+        assert get_args(return_hint)[1].__name__ == "GlobalInitResponse"
+        assert get_origin(return_hint) is Stream
 
     def test_frozen(self) -> None:
         """TableCardinality should be immutable (frozen dataclass)."""
