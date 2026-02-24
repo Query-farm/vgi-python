@@ -16,6 +16,7 @@ from typing import (
     Literal,
     NewType,
     Self,
+    cast,
     overload,
 )
 
@@ -312,7 +313,7 @@ class ScanFunctionResult:
         # Deserialize the nested arguments batch.
         # row["arguments"] is already bytes (_validate_single_row_batch returns
         # Python values, not PyArrow scalars).
-        arguments_bytes: bytes = row["arguments"]
+        arguments_bytes = cast(bytes, row["arguments"])
         arguments_batch, _ = deserialize_record_batch(arguments_bytes)
 
         # Extract positional and named arguments from the batch
@@ -327,10 +328,10 @@ class ScanFunctionResult:
                 named_arguments[arg_field.name] = value
 
         return cls(
-            function_name=row["function_name"],
+            function_name=cast(str, row["function_name"]),
             positional_arguments=positional_arguments,
             named_arguments=named_arguments,
-            required_extensions=list(row.get("required_extensions") or []),
+            required_extensions=list(cast("list[str]", row.get("required_extensions") or [])),
         )
 
 

@@ -9,6 +9,7 @@ ConstantColumnsFunction       - Demonstrates varargs with dynamic output schema
 DoubleSequenceFunction        - Generates a sequence of floats 0.0..n-1
 GeneratorExceptionFunction    - Demonstrates exception handling
 LoggingGeneratorFunction      - Demonstrates log message emission
+NestedSequenceFunction        - Generates a sequence with nested struct/list columns
 PartitionedSequenceFunction   - Demonstrates multi-worker parallel execution
 ProjectedDataFunction         - Demonstrates projection pushdown
 SequenceFunction              - Generates a sequence of integers 0..n-1
@@ -46,8 +47,8 @@ __all__ = [
     "DoubleSequenceFunction",
     "GeneratorExceptionFunction",
     "LoggingGeneratorFunction",
-    "PartitionedSequenceFunction",
     "NestedSequenceFunction",
+    "PartitionedSequenceFunction",
     "ProjectedDataFunction",
     "SequenceFunction",
     "SettingsAwareFunction",
@@ -75,22 +76,57 @@ class SequenceFunctionArgs:
     """Arguments for SequenceFunction."""
 
     count: Annotated[int, Arg(0, doc="Number of integers to generate", ge=0)]
-    batch_size: Annotated[int, Arg(1, default=1000, doc="Batch size for output", ge=1)]
+    batch_size: Annotated[int, Arg("batch_size", default=1000, doc="Batch size for output", ge=1)]
     increment: Annotated[int, Arg("increment", default=1, doc="Step between values", ge=1)]
 
 
 @dataclass
-class SequenceState:
-    """Mutable state for SequenceFunction."""
+class CountdownState:
+    """Mutable state tracking remaining rows and current position."""
 
     remaining: int
     current_index: int = 0
 
 
+class _BaseSequenceFunction(TableFunctionGenerator[Any, CountdownState]):
+    """Shared logic for SequenceFunction and DoubleSequenceFunction.
+
+    Subclasses provide NUMPY_DTYPE and FIXED_SCHEMA as class variables.
+    The args class must have count, batch_size, and increment attributes.
+    """
+
+    NUMPY_DTYPE: ClassVar[type[np.generic]]
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[Any]) -> CountdownState:
+        """Create initial state with remaining count."""
+        return CountdownState(remaining=params.args.count)
+
+    @classmethod
+    def process(cls, params: ProcessParams[Any], state: CountdownState, out: OutputCollector) -> None:
+        """Generate the next batch of the sequence."""
+        if state.remaining <= 0:
+            out.finish()
+            return
+
+        size = min(state.remaining, params.args.batch_size)
+        values = np.arange(
+            state.current_index * params.args.increment,
+            (state.current_index + size) * params.args.increment,
+            params.args.increment,
+            dtype=cls.NUMPY_DTYPE,
+        )
+
+        out.emit(pa.RecordBatch.from_arrays([pa.array(values)], schema=params.output_schema))
+
+        state.current_index += size
+        state.remaining -= size
+
+
 @init_single_worker
 @bind_fixed_schema
 @_cardinality_from_count
-class SequenceFunction(TableFunctionGenerator[SequenceFunctionArgs, SequenceState]):
+class SequenceFunction(_BaseSequenceFunction):
     """Generates a sequence of integers from 0 to n-1 with optional increment.
 
     USE CASE
@@ -111,10 +147,12 @@ class SequenceFunction(TableFunctionGenerator[SequenceFunctionArgs, SequenceStat
     SELECT * FROM sequence(5, increment=2)
     Returns: [{"n": 0}, {"n": 2}, {"n": 4}, {"n": 6}, {"n": 8}]
 
-    SELECT * FROM sequence(1000, 100)
+    SELECT * FROM sequence(1000, batch_size := 100)
     Returns: integers 0-999 in batches of 100 rows each
 
     """
+
+    FunctionArguments = SequenceFunctionArgs
 
     class Meta:
         """Metadata for SequenceFunction."""
@@ -132,68 +170,33 @@ class SequenceFunction(TableFunctionGenerator[SequenceFunctionArgs, SequenceStat
                 description="Generate integers 0-9",
             ),
             FunctionExample(
-                sql="SELECT * FROM sequence(1000, 100)",
+                sql="SELECT * FROM sequence(1000, batch_size := 100)",
                 description="Generate integers 0-999 in batches of 100",
             ),
             FunctionExample(
-                sql="SELECT * FROM sequence(5, 10000, increment := 10)",
+                sql="SELECT * FROM sequence(5, batch_size := 10000, increment := 10)",
                 description="Generate 0, 10, 20, 30, 40",
             ),
         ]
 
     # Full schema before projection
     FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.int64())])
-
-    @classmethod
-    def initial_state(cls, params: ProcessParams[SequenceFunctionArgs]) -> SequenceState:
-        """Create initial state with remaining count."""
-        return SequenceState(remaining=params.args.count)
-
-    @classmethod
-    def process(cls, params: ProcessParams[SequenceFunctionArgs], state: SequenceState, out: OutputCollector) -> None:
-        """Generate the next batch of the sequence."""
-        if state.remaining <= 0:
-            out.finish()
-            return
-
-        size = min(state.remaining, params.args.batch_size)
-        values = np.arange(
-            state.current_index * params.args.increment,
-            (state.current_index + size) * params.args.increment,
-            params.args.increment,
-            dtype=np.int64,
-        )
-
-        out.emit(
-            pa.RecordBatch.from_pydict(
-                {"n": values},
-                schema=params.output_schema,
-            )
-        )
-
-        state.current_index += size
-        state.remaining -= size
+    NUMPY_DTYPE: ClassVar[type[np.generic]] = np.int64
 
 
 @dataclass(slots=True, frozen=True)
 class NestedSequenceFunctionArguments:
+    """Arguments for NestedSequenceFunction."""
+
     count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
-    batch_size: Annotated[int, Arg(1, default=1000, doc="Batch size for output", ge=1)]
+    batch_size: Annotated[int, Arg("batch_size", default=1000, doc="Batch size for output", ge=1)]
     history_size: Annotated[int, Arg("history_size", default=20, doc="Max items in history list", ge=1)]
-
-
-@dataclass
-class NestedSequenceState:
-    """Mutable state for NestedSequenceFunction."""
-
-    remaining: int
-    current_index: int = 0
 
 
 @init_single_worker
 @bind_fixed_schema
 @_cardinality_from_count
-class NestedSequenceFunction(TableFunctionGenerator[NestedSequenceFunctionArguments, NestedSequenceState]):
+class NestedSequenceFunction(TableFunctionGenerator[NestedSequenceFunctionArguments, CountdownState]):
     """Generates a sequence with nested struct and list columns.
 
     USE CASE
@@ -266,15 +269,15 @@ class NestedSequenceFunction(TableFunctionGenerator[NestedSequenceFunctionArgume
         return {f.name for f in cls.FIXED_SCHEMA}
 
     @classmethod
-    def initial_state(cls, params: ProcessParams[NestedSequenceFunctionArguments]) -> NestedSequenceState:
+    def initial_state(cls, params: ProcessParams[NestedSequenceFunctionArguments]) -> CountdownState:
         """Create initial state with remaining count."""
-        return NestedSequenceState(remaining=params.args.count)
+        return CountdownState(remaining=params.args.count)
 
     @classmethod
     def process(
         cls,
         params: ProcessParams[NestedSequenceFunctionArguments],
-        state: NestedSequenceState,
+        state: CountdownState,
         out: OutputCollector,
     ) -> None:
         """Generate the next batch of the nested sequence."""
@@ -311,22 +314,14 @@ class DoubleSequenceFunctionArguments:
     """Arguments for DoubleSequenceFunction."""
 
     count: Annotated[int, Arg(0, doc="Number of values to generate", ge=0)]
-    batch_size: Annotated[int, Arg(1, default=1000, doc="Batch size for output", ge=1)]
+    batch_size: Annotated[int, Arg("batch_size", default=1000, doc="Batch size for output", ge=1)]
     increment: Annotated[float, Arg("increment", default=1.0, doc="Step between values", gt=0.0)]
-
-
-@dataclass
-class DoubleSequenceState:
-    """Mutable state for DoubleSequenceFunction."""
-
-    remaining: int
-    current_index: int = 0
 
 
 @init_single_worker
 @bind_fixed_schema
 @_cardinality_from_count
-class DoubleSequenceFunction(TableFunctionGenerator[DoubleSequenceFunctionArguments, DoubleSequenceState]):
+class DoubleSequenceFunction(_BaseSequenceFunction):
     """Generates a sequence of floats from 0.0 to n-1 with optional increment.
 
     USE CASE
@@ -347,10 +342,12 @@ class DoubleSequenceFunction(TableFunctionGenerator[DoubleSequenceFunctionArgume
     SELECT * FROM double_sequence(5, increment=0.5)
     Returns: [{"n": 0.0}, {"n": 0.5}, {"n": 1.0}, {"n": 1.5}, {"n": 2.0}]
 
-    SELECT * FROM double_sequence(1000, 100)
+    SELECT * FROM double_sequence(1000, batch_size := 100)
     Returns: floats 0.0-999.0 in batches of 100 rows each
 
     """
+
+    FunctionArguments = DoubleSequenceFunctionArguments
 
     class Meta:
         """Metadata for DoubleSequenceFunction."""
@@ -365,7 +362,7 @@ class DoubleSequenceFunction(TableFunctionGenerator[DoubleSequenceFunctionArgume
                 description="Generate floats 0.0-9.0",
             ),
             FunctionExample(
-                sql="SELECT * FROM double_sequence(1000, 100)",
+                sql="SELECT * FROM double_sequence(1000, batch_size := 100)",
                 description="Generate floats 0.0-999.0 in batches of 100",
             ),
             FunctionExample(
@@ -375,36 +372,7 @@ class DoubleSequenceFunction(TableFunctionGenerator[DoubleSequenceFunctionArgume
         ]
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.float64())])
-
-    @classmethod
-    def initial_state(cls, params: ProcessParams[DoubleSequenceFunctionArguments]) -> DoubleSequenceState:
-        """Create initial state with remaining count."""
-        return DoubleSequenceState(remaining=params.args.count)
-
-    @classmethod
-    def process(
-        cls,
-        params: ProcessParams[DoubleSequenceFunctionArguments],
-        state: DoubleSequenceState,
-        out: OutputCollector,
-    ) -> None:
-        """Generate the next batch of the sequence."""
-        if state.remaining <= 0:
-            out.finish()
-            return
-
-        size = min(state.remaining, params.args.batch_size)
-        values = np.arange(
-            state.current_index * params.args.increment,
-            (state.current_index + size) * params.args.increment,
-            params.args.increment,
-            dtype=np.float64,
-        )
-
-        out.emit(pa.RecordBatch.from_pydict({"n": values}, schema=params.output_schema))
-
-        state.current_index += size
-        state.remaining -= size
+    NUMPY_DTYPE: ClassVar[type[np.generic]] = np.float64
 
 
 @dataclass(slots=True, frozen=True)
@@ -646,6 +614,7 @@ class PartitionedSequenceFunction(
                 out.finish()
                 return
             state.current_start, state.current_end = struct.unpack(">QQ", work_data)
+            assert state.current_start is not None
             state.current_idx = state.current_start
 
         batch_end_idx = min(state.current_idx + cls.BATCH_SIZE, state.current_end or 0)
@@ -663,18 +632,10 @@ class ProjectedDataFunctionArguments:
     count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
 
 
-@dataclass
-class ProjectedDataState:
-    """Mutable state for ProjectedDataFunction."""
-
-    remaining: int
-    current_id: int = 0
-
-
 @init_single_worker
 @bind_fixed_schema
 @_cardinality_from_count
-class ProjectedDataFunction(TableFunctionGenerator[ProjectedDataFunctionArguments, ProjectedDataState]):
+class ProjectedDataFunction(TableFunctionGenerator[ProjectedDataFunctionArguments, CountdownState]):
     """Generates data with 4 columns, supporting projection pushdown.
 
     USE CASE
@@ -736,15 +697,15 @@ class ProjectedDataFunction(TableFunctionGenerator[ProjectedDataFunctionArgument
         return list(range(len(cls.FIXED_SCHEMA)))
 
     @classmethod
-    def initial_state(cls, params: ProcessParams[ProjectedDataFunctionArguments]) -> ProjectedDataState:
+    def initial_state(cls, params: ProcessParams[ProjectedDataFunctionArguments]) -> CountdownState:
         """Create initial state with remaining count."""
-        return ProjectedDataState(remaining=params.args.count)
+        return CountdownState(remaining=params.args.count)
 
     @classmethod
     def process(
         cls,
         params: ProcessParams[ProjectedDataFunctionArguments],
-        state: ProjectedDataState,
+        state: CountdownState,
         out: OutputCollector,
     ) -> None:
         """Generate data for only the projected columns."""
@@ -761,17 +722,19 @@ class ProjectedDataFunction(TableFunctionGenerator[ProjectedDataFunctionArgument
         for idx in projected_indices:
             f = cls.FIXED_SCHEMA.field(idx)
             if f.name == "id":
-                columns["id"] = list(range(state.current_id, state.current_id + batch_size))
+                columns["id"] = list(range(state.current_index, state.current_index + batch_size))
             elif f.name == "name":
-                columns["name"] = [f"item_{i}" for i in range(state.current_id, state.current_id + batch_size)]
+                columns["name"] = [f"item_{i}" for i in range(state.current_index, state.current_index + batch_size)]
             elif f.name == "value":
-                columns["value"] = [float(i) * 1.5 for i in range(state.current_id, state.current_id + batch_size)]
+                columns["value"] = [
+                    float(i) * 1.5 for i in range(state.current_index, state.current_index + batch_size)
+                ]
             elif f.name == "extra":
-                columns["extra"] = [i * i for i in range(state.current_id, state.current_id + batch_size)]
+                columns["extra"] = [i * i for i in range(state.current_index, state.current_index + batch_size)]
 
         out.emit(pa.RecordBatch.from_pydict(columns, schema=params.output_schema))
 
-        state.current_id += batch_size
+        state.current_index += batch_size
         state.remaining -= batch_size
 
 
@@ -782,17 +745,9 @@ class SettingsAwareFunctionArguments:
     count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
 
 
-@dataclass
-class SettingsAwareState:
-    """Mutable state for SettingsAwareFunction."""
-
-    remaining: int
-    current_id: int = 0
-
-
 @init_single_worker
 @_cardinality_from_count
-class SettingsAwareFunction(TableFunctionGenerator[SettingsAwareFunctionArguments, SettingsAwareState]):
+class SettingsAwareFunction(TableFunctionGenerator[SettingsAwareFunctionArguments, CountdownState]):
     """Generates data demonstrating that settings are passed to functions.
 
     USE CASE
@@ -862,15 +817,15 @@ class SettingsAwareFunction(TableFunctionGenerator[SettingsAwareFunctionArgument
         return BindResponse(output_schema=pa.schema(fields))
 
     @classmethod
-    def initial_state(cls, params: ProcessParams[SettingsAwareFunctionArguments]) -> SettingsAwareState:
+    def initial_state(cls, params: ProcessParams[SettingsAwareFunctionArguments]) -> CountdownState:
         """Create initial state with remaining count."""
-        return SettingsAwareState(remaining=params.args.count)
+        return CountdownState(remaining=params.args.count)
 
     @classmethod
     def process(
         cls,
         params: ProcessParams[SettingsAwareFunctionArguments],
-        state: SettingsAwareState,
+        state: CountdownState,
         out: OutputCollector,
     ) -> None:
         """Generate data based on settings."""
@@ -884,7 +839,7 @@ class SettingsAwareFunction(TableFunctionGenerator[SettingsAwareFunctionArgument
         multiplier = int(multiplier_str)
 
         size = min(state.remaining, cls.BATCH_SIZE)
-        ids = list(range(state.current_id, state.current_id + size))
+        ids = list(range(state.current_index, state.current_index + size))
 
         data: dict[str, list[int] | list[float] | list[str]] = {
             "id": ids,
@@ -897,7 +852,7 @@ class SettingsAwareFunction(TableFunctionGenerator[SettingsAwareFunctionArgument
 
         out.emit(pa.RecordBatch.from_pydict(data, schema=params.output_schema))
 
-        state.current_id += size
+        state.current_index += size
         state.remaining -= size
 
 

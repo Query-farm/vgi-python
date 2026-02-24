@@ -27,30 +27,6 @@ SELECT * FROM information_schema.schemata WHERE catalog_name = 'mydb';
 | Discovery | `Worker.functions` list | `CatalogInterface.catalogs()` |
 
 ---
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                           DuckDB / Client                           │
-│  ┌───────────────────────────────────────────────────────────────┐  │
-│  │  ATTACH 'db1' (TYPE 'vgi', LOCATION './worker')               │  │
-│  │    ↓                                                          │  │
-│  │  CatalogClientMixin.catalog_attach(name='db1')                │  │
-│  └───────────────────────────────────────────────────────────────┘  │
-│                              │ stdin/stdout                         │
-│                              ▼                                      │
-│  ┌───────────────────────────────────────────────────────────────┐  │
-│  │                      Worker Process                           │  │
-│  │  vgi_rpc dispatch → CatalogInterface.{method_name}(**kwargs)   │  │
-│  │    ↓                                                          │  │
-│  │  Typed response (serialized by vgi_rpc)                       │  │
-│  └───────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
----
-
 ## Protocol
 
 Catalog methods are dispatched via `vgi_rpc` typed protocol methods. Each method has its own typed request/response defined in `vgi.protocol`, with automatic Arrow serialization handled by the RPC layer. This is simpler than the function protocol — no bind/init phases.

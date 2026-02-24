@@ -11,6 +11,7 @@ from typing import (
     Annotated,
     Any,
     ClassVar,
+    cast,
     get_args,
     get_origin,
     get_type_hints,
@@ -94,18 +95,18 @@ class SettingSpec:
             required_fields=["name", "description", "type"],
         )
         # Deserialize type from schema bytes
-        type_schema = pa.ipc.read_schema(pa.py_buffer(row["type"]))
+        type_schema = pa.ipc.read_schema(pa.py_buffer(cast(bytes, row["type"])))
         data_type = type_schema.field("value").type
 
         # Deserialize default value if present
         default: Any = None
         if row["default_value"] is not None:
-            default_batch, _ = deserialize_record_batch(row["default_value"])
+            default_batch, _ = deserialize_record_batch(cast(bytes, row["default_value"]))
             default = default_batch.column("value")[0].as_py()
 
         return cls(
-            name=row["name"],
-            desc=row["description"],
+            name=cast(str, row["name"]),
+            desc=cast(str, row["description"]),
             type=data_type,
             default=default,
         )

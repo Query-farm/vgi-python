@@ -21,10 +21,10 @@ StreamState Implementations
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Annotated, Any, Protocol
+from typing import Annotated, Any, Protocol
 
 import pyarrow as pa
-from vgi_rpc import ArrowSerializableDataclass, ArrowType
+from vgi_rpc import ArrowSerializableDataclass, ArrowType, Transient
 from vgi_rpc.rpc import (
     AnnotatedBatch,
     CallContext,
@@ -46,11 +46,18 @@ from vgi.catalog.catalog_interface import (
 )
 from vgi.function_storage import BoundStorage
 from vgi.invocation import BindResponse, FunctionType, GlobalInitResponse
-from vgi.table_function import ProcessParams, TableFunctionGenerator, TableInOutFunctionInitPhase
-
-if TYPE_CHECKING:
-    from vgi.scalar_function import ScalarFunctionGenerator
-    from vgi.table_in_out_function import TableInOutGenerator
+from vgi.scalar_function import ScalarFunctionGenerator
+from vgi.table_function import (
+    ProcessParams,
+    TableCardinality,
+    TableFunctionBase,
+    TableFunctionGenerator,
+    TableInOutFunctionInitPhase,
+    _batch_to_scalar_dict,
+    _batch_to_secret_dict,
+    project_schema,
+)
+from vgi.table_in_out_function import TableInOutGenerator
 
 __all__ = [
     "BindRequest",
@@ -127,6 +134,14 @@ class InitRequest(ArrowSerializableDataclass):
     def is_secondary(self) -> bool:
         """True if this is a secondary init request."""
         return self.execution_id is not None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TableFunctionCardinalityRequest(ArrowSerializableDataclass):
+    """Consolidated request for table function cardinality."""
+
+    bind_call: BindRequest
+    bind_opaque_data: Annotated[ArrowSerializableDataclass | None, ArrowType(pa.binary())] = None
 
 
 # ---------------------------------------------------------------------------
@@ -318,13 +333,22 @@ class ScalarExchangeState(ExchangeState):
     Calls ``ScalarFunctionGenerator.process()`` per batch. Each ``exchange()``
     call sends one input batch and receives one output batch.
 
-    Transient attributes are set after construction by ``Worker.init()``.
+    ``_init_call`` and ``_init_response`` are serialized into the state token
+    so they survive HTTP round-trips.  ``_func_cls`` is transient and restored
+    via ``rehydrate()``.
 
     """
 
-    _func_cls: type[ScalarFunctionGenerator] = field(default=None, repr=False)  # type: ignore[assignment]
-    _init_call: InitRequest = field(default=None, repr=False)  # type: ignore[assignment]
-    _init_response: GlobalInitResponse = field(default=None, repr=False)  # type: ignore[assignment]
+    _init_call: Annotated[InitRequest, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
+    _init_response: Annotated[GlobalInitResponse, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
+    _func_cls: Annotated[type[ScalarFunctionGenerator], Transient()] = field(default=None, repr=False)  # type: ignore[assignment]
+
+    def rehydrate(self, implementation: object) -> None:
+        """Restore ``_func_cls`` from the worker's function registry."""
+        from vgi.worker import Worker
+
+        worker: Worker = implementation  # type: ignore[assignment]
+        self._func_cls = worker._resolve_function(self._init_call.bind_call)  # type: ignore[assignment]
 
     def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Process one input batch through the scalar function."""
@@ -339,6 +363,46 @@ class ScalarExchangeState(ExchangeState):
         out.emit(output)
 
 
+class _FilteringOutputCollector:
+    """Wrapper that applies pushdown filters to emitted data batches.
+
+    Intercepts emit() calls and applies the pushdown filter before
+    delegating to the real OutputCollector.
+    """
+
+    __slots__ = ("_inner", "_func_cls", "_filters")
+
+    def __init__(self, inner: OutputCollector, func_cls: type[TableFunctionBase[Any]], filters: Any) -> None:
+        self._inner = inner
+        self._func_cls = func_cls
+        self._filters = filters
+
+    def emit(self, batch: pa.RecordBatch) -> None:
+        filtered = self._func_cls._apply_pushdown_filter(batch, self._filters)
+        self._inner.emit(filtered)
+
+    def emit_pydict(self, data: dict[str, Any], schema: pa.Schema | None = None) -> None:
+        batch = pa.RecordBatch.from_pydict(data, schema=schema or self._inner.output_schema)
+        self.emit(batch)
+
+    def finish(self) -> None:
+        self._inner.finish()
+
+    @property
+    def finished(self) -> bool:
+        return self._inner.finished
+
+    def emit_client_log_message(self, msg: Any) -> None:
+        self._inner.emit_client_log_message(msg)
+
+    def propagate(self) -> None:
+        """No-op: state already propagated to inner collector."""
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        return self._inner.output_schema
+
+
 @dataclass
 class TableProducerState(ProducerState):
     """Producer state for table function streams.
@@ -346,17 +410,65 @@ class TableProducerState(ProducerState):
     Calls ``TableFunctionGenerator.process()`` per tick. Each ``produce()``
     call delegates to the function's process method which uses ``out`` directly.
 
-    Transient attributes are set after construction by ``Worker.init()``.
+    When ``auto_apply_filters`` is enabled on the function class, pushdown
+    filters from the init request are automatically applied to each output
+    batch after ``process()`` produces it.
+
+    ``_init_call`` and ``_init_response`` are serialized into the state token
+    so they survive HTTP round-trips.  Transient fields are restored via
+    ``rehydrate()``.
 
     """
 
-    _func_cls: type[TableFunctionGenerator[Any]] = field(default=None, repr=False)  # type: ignore[assignment]
-    _params: ProcessParams[Any] = field(default=None, repr=False)  # type: ignore[arg-type]
-    _user_state: Any = field(default=None, repr=False)
+    _init_call: Annotated[InitRequest, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
+    _init_response: Annotated[GlobalInitResponse, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
+    _func_cls: Annotated[type[TableFunctionGenerator[Any]], Transient()] = field(default=None, repr=False)  # type: ignore[assignment]
+    _params: Annotated[ProcessParams[Any], Transient()] = field(default=None, repr=False)  # type: ignore[arg-type]
+    _user_state: Annotated[Any, Transient()] = field(default=None, repr=False)
+    _pushdown_filters: Annotated[Any, Transient()] = field(default=None, repr=False)  # PushdownFilters | None
+    _auto_apply: Annotated[bool, Transient()] = field(default=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Resolve pushdown filters if auto_apply_filters is enabled."""
+        if self._func_cls is not None and self._func_cls._should_auto_apply_filters():
+            self._auto_apply = True
+            if self._params is not None and self._params.init_call.pushdown_filters is not None:
+                self._pushdown_filters = self._func_cls.pushdown_filters(self._params.init_call.pushdown_filters)
+
+    def rehydrate(self, implementation: object) -> None:
+        """Restore transient fields from serialized init data."""
+        from vgi.worker import Worker
+
+        worker: Worker = implementation  # type: ignore[assignment]
+        func_cls = worker._resolve_function(self._init_call.bind_call)
+        assert issubclass(func_cls, TableFunctionGenerator)
+        self._func_cls = func_cls
+        output_schema = project_schema(self._init_call.projection_ids, self._init_call.output_schema)
+        self._params = ProcessParams(
+            args=func_cls._parse_arguments(func_cls.FunctionArguments, self._init_call.bind_call.arguments),
+            init_call=self._init_call,
+            init_response=self._init_response,
+            output_schema=output_schema,
+            settings=_batch_to_scalar_dict(self._init_call.bind_call.settings),
+            secrets=_batch_to_secret_dict(self._init_call.bind_call.secrets),
+            storage=BoundStorage(func_cls.storage, self._init_response.execution_id),
+        )
+        self._user_state = func_cls.initial_state(self._params)
+        # Re-derive pushdown filters (triggers same logic as __post_init__)
+        if func_cls._should_auto_apply_filters():
+            self._auto_apply = True
+            if self._init_call.pushdown_filters is not None:
+                self._pushdown_filters = func_cls.pushdown_filters(self._init_call.pushdown_filters)
 
     def produce(self, out: OutputCollector, ctx: CallContext) -> None:
         """Produce the next output batch from the table function."""
-        self._func_cls.process(self._params, self._user_state, out)
+        if self._auto_apply and self._pushdown_filters is not None:
+            # Wrap the OutputCollector to auto-apply filters to emitted batches
+            filtered_out = _FilteringOutputCollector(out, self._func_cls, self._pushdown_filters)
+            self._func_cls.process(self._params, self._user_state, filtered_out)  # type: ignore[arg-type]
+            filtered_out.propagate()
+        else:
+            self._func_cls.process(self._params, self._user_state, out)
 
 
 @dataclass
@@ -366,17 +478,62 @@ class TableInOutExchangeState(ExchangeState):
     Calls ``TableInOutGenerator.process()`` per input batch. Each
     ``exchange()`` call sends one input batch and receives one output batch.
 
-    Transient attributes are set after construction by ``Worker.init()``.
+    When ``auto_apply_filters`` is enabled, pushdown filters from the init
+    request are automatically applied to each output batch.
+
+    ``_init_call`` and ``_init_response`` are serialized into the state token
+    so they survive HTTP round-trips.  Transient fields are restored via
+    ``rehydrate()``.
 
     """
 
-    _func_cls: type[TableInOutGenerator[Any]] = field(default=None, repr=False)  # type: ignore[assignment]
-    _params: ProcessParams[Any] = field(default=None, repr=False)  # type: ignore[arg-type]
-    _user_state: Any = field(default=None, repr=False)
+    _init_call: Annotated[InitRequest, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
+    _init_response: Annotated[GlobalInitResponse, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
+    _func_cls: Annotated[type[TableInOutGenerator[Any]], Transient()] = field(default=None, repr=False)  # type: ignore[assignment]
+    _params: Annotated[ProcessParams[Any], Transient()] = field(default=None, repr=False)  # type: ignore[arg-type]
+    _user_state: Annotated[Any, Transient()] = field(default=None, repr=False)
+    _pushdown_filters: Annotated[Any, Transient()] = field(default=None, repr=False)  # PushdownFilters | None
+    _auto_apply: Annotated[bool, Transient()] = field(default=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Resolve pushdown filters if auto_apply_filters is enabled."""
+        if self._func_cls is not None and self._func_cls._should_auto_apply_filters():
+            self._auto_apply = True
+            if self._params is not None and self._params.init_call.pushdown_filters is not None:
+                self._pushdown_filters = self._func_cls.pushdown_filters(self._params.init_call.pushdown_filters)
+
+    def rehydrate(self, implementation: object) -> None:
+        """Restore transient fields from serialized init data."""
+        from vgi.worker import Worker
+
+        worker: Worker = implementation  # type: ignore[assignment]
+        func_cls = worker._resolve_function(self._init_call.bind_call)
+        assert issubclass(func_cls, TableInOutGenerator)
+        self._func_cls = func_cls
+        output_schema = project_schema(self._init_call.projection_ids, self._init_call.output_schema)
+        self._params = ProcessParams(
+            args=func_cls._parse_arguments(func_cls.FunctionArguments, self._init_call.bind_call.arguments),
+            init_call=self._init_call,
+            init_response=self._init_response,
+            output_schema=output_schema,
+            settings=_batch_to_scalar_dict(self._init_call.bind_call.settings),
+            secrets=_batch_to_secret_dict(self._init_call.bind_call.secrets),
+            storage=BoundStorage(func_cls.storage, self._init_response.execution_id),
+        )
+        self._user_state = func_cls.initial_state(self._params)
+        if func_cls._should_auto_apply_filters():
+            self._auto_apply = True
+            if self._init_call.pushdown_filters is not None:
+                self._pushdown_filters = func_cls.pushdown_filters(self._init_call.pushdown_filters)
 
     def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Process one input batch through the table-in-out function."""
-        self._func_cls.process(self._params, self._user_state, input.batch, out)
+        if self._auto_apply and self._pushdown_filters is not None:
+            filtered_out = _FilteringOutputCollector(out, self._func_cls, self._pushdown_filters)
+            self._func_cls.process(self._params, self._user_state, input.batch, filtered_out)  # type: ignore[arg-type]
+            filtered_out.propagate()
+        else:
+            self._func_cls.process(self._params, self._user_state, input.batch, out)
 
 
 @dataclass
@@ -388,8 +545,8 @@ class TableInOutFinalizeState(ProducerState):
 
     """
 
-    _batches: list[pa.RecordBatch] = field(default_factory=list, repr=False)
-    _index: int = field(default=0, repr=False)
+    _batches: Annotated[list[pa.RecordBatch], Transient()] = field(default_factory=list, repr=False)
+    _index: Annotated[int, Transient()] = field(default=0, repr=False)
 
     def produce(self, out: OutputCollector, ctx: CallContext) -> None:
         """Emit the next finalize batch, or finish if done."""
@@ -427,6 +584,10 @@ class VgiProtocol(Protocol):
 
     def init(self, request: InitRequest) -> Stream[ProcessState, GlobalInitResponse]:
         """Initialize a function execution and return a processing stream."""
+        ...
+
+    def table_function_cardinality(self, request: TableFunctionCardinalityRequest) -> TableCardinality:
+        """Estimate the cardinality of a table function's output."""
         ...
 
     # ========== Catalog - Discovery ==========

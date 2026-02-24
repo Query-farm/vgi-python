@@ -474,7 +474,7 @@ class Worker:
                 sys.exit(1)
 
             try:
-                import waitress
+                import waitress  # type: ignore[import-untyped]
             except ImportError:
                 sys.stderr.write(
                     "Error: waitress not installed.\nInstall with: pip install vgi[http]  (or: uv sync --extra http)\n"
@@ -845,6 +845,8 @@ class Worker:
             if request.phase == TableInOutFunctionInitPhase.INPUT:
                 user_state = type(instance).initial_state(params)
                 state = TableInOutExchangeState(
+                    _init_call=request,
+                    _init_response=init_response,
                     _func_cls=type(instance),
                     _params=params,
                     _user_state=user_state,
@@ -873,6 +875,8 @@ class Worker:
             )
             user_state = type(instance).initial_state(params)
             state = TableProducerState(
+                _init_call=request,
+                _init_response=init_response,
                 _func_cls=type(instance),
                 _params=params,
                 _user_state=user_state,

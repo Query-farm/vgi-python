@@ -329,7 +329,7 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
         ]
 
     @classmethod
-    def cardinality(cls, params: BindParams[SumAllColumnsFunctionArguments]) -> TableCardinality | None:
+    def cardinality(cls, params: BindParams[SumAllColumnsFunctionArguments]) -> TableCardinality:
         """Return cardinality estimate of exactly 1 row."""
         return TableCardinality(estimate=1, max=1)
 
@@ -516,7 +516,7 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction[SingleTableArguments, Su
         ]
 
     @classmethod
-    def cardinality(cls, params: BindParams[SingleTableArguments]) -> TableCardinality | None:
+    def cardinality(cls, params: BindParams[SingleTableArguments]) -> TableCardinality:
         """Return cardinality estimate of exactly 1 row."""
         return TableCardinality(estimate=1, max=1)
 
