@@ -433,6 +433,75 @@ class Worker:
 
         app()
 
+    @final
+    @classmethod
+    def main_http(cls) -> None:
+        """Run this worker as an HTTP server with logging options.
+
+        Uses typer to provide logging options plus HTTP-specific options
+        (``--host``, ``--port``, ``--prefix``, ``--cors-origins``).
+
+        Requires the ``http`` extra: ``pip install vgi[http]``
+        """
+        import typer
+
+        from vgi.logging_config import configure_worker_logging
+
+        app = typer.Typer(add_completion=False)
+
+        @app.command()
+        def _run(
+            host: str = typer.Option("127.0.0.1", "--host", "-h", help="Bind address"),
+            port: int = typer.Option(8000, "--port", "-p", help="Bind port"),
+            prefix: str = typer.Option("/vgi", "--prefix", help="URL prefix for RPC endpoints"),
+            cors_origins: str = typer.Option("*", "--cors-origins", help="Allowed CORS origins"),
+            debug: bool = typer.Option(False, "--debug", help="Enable DEBUG on all vgi + vgi_rpc loggers"),
+            log_level: LogLevel = typer.Option(LogLevel.INFO, "--log-level", help="Set log level"),  # noqa: B008
+            log_logger: list[str] | None = typer.Option(  # noqa: B008
+                None, "--log-logger", help="Target specific logger(s)"
+            ),
+            log_format: LogFormat = typer.Option(  # noqa: B008
+                LogFormat.text, "--log-format", help="Stderr log format"
+            ),
+        ) -> None:
+            try:
+                from vgi_rpc.http import make_wsgi_app
+            except ImportError:
+                sys.stderr.write(
+                    "Error: HTTP dependencies not installed.\n"
+                    "Install with: pip install vgi[http]  (or: uv sync --extra http)\n"
+                )
+                sys.exit(1)
+
+            try:
+                import waitress
+            except ImportError:
+                sys.stderr.write(
+                    "Error: waitress not installed.\nInstall with: pip install vgi[http]  (or: uv sync --extra http)\n"
+                )
+                sys.exit(1)
+
+            env_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
+            effective_debug = debug or env_debug
+            effective_level = configure_worker_logging(
+                debug=effective_debug,
+                log_level=log_level,
+                log_loggers=log_logger,
+                log_format=log_format,
+            )
+
+            worker = cls(quiet=True, log_level=effective_level)
+            server = RpcServer(VgiProtocol, worker)
+            wsgi_app = make_wsgi_app(server, prefix=prefix, cors_origins=cors_origins)
+
+            _logger.info("http_server_starting host=%s port=%d prefix=%s", host, port, prefix)
+            sys.stderr.write(f"Serving {cls.__name__} on http://{host}:{port}{prefix}\n")
+            sys.stderr.flush()
+
+            waitress.serve(wsgi_app, host=host, port=port, _quiet=True)
+
+        app()
+
     @staticmethod
     def _match_function_arguments(
         *,
