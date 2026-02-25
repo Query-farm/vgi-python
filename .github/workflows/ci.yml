@@ -54,3 +54,95 @@ jobs:
 
       - name: Type check (ty)
         run: uv run ty check vgi/
+
+  s3-offload-localstack:
+    name: S3 Offload Tests (LocalStack)
+    runs-on: ubuntu-latest
+    services:
+      localstack:
+        image: localstack/localstack:3.0
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: s3
+          AWS_DEFAULT_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout vgi-rpc
+        uses: actions/checkout@v4
+        with:
+          repository: Query-farm/vgi-rpc-python
+          path: vgi-rpc
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Install test dependencies
+        run: |
+          uv venv
+          uv pip install \
+            click \
+            pyarrow \
+            typer \
+            platformdirs \
+            numpy \
+            pytest \
+            pytest-mypy \
+            pytest-ruff \
+            mypy \
+            ruff \
+            httpx \
+            backports.zstd \
+            zstandard \
+            boto3 \
+            waitress \
+            aiohttp \
+            tenacity
+          uv pip install -e './vgi-rpc[http,s3,external]'
+
+      - name: Create test bucket in LocalStack
+        env:
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          uv run python - <<'PY'
+          import time
+          import boto3
+          from botocore.exceptions import EndpointConnectionError
+
+          endpoint = "http://127.0.0.1:4566"
+          s3 = boto3.client(
+              "s3",
+              endpoint_url=endpoint,
+              aws_access_key_id="test",
+              aws_secret_access_key="test",
+              region_name="us-east-1",
+          )
+
+          for _ in range(30):
+              try:
+                  s3.list_buckets()
+                  break
+              except EndpointConnectionError:
+                  time.sleep(1)
+          else:
+              raise RuntimeError("LocalStack S3 did not become ready in time")
+
+          s3.create_bucket(Bucket="rusty-vgi-test")
+          PY
+
+      - name: Run HTTP S3 offload tests
+        env:
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+          VGI_RUN_S3_HTTP_TESTS: "1"
+          VGI_HTTP_S3_BUCKET: rusty-vgi-test
+          VGI_HTTP_S3_ENDPOINT_URL: http://127.0.0.1:4566
+          PYTHONPATH: ${{ github.workspace }}
+        run: uv run pytest tests/test_http_s3_offload_output.py tests/test_http_s3_offload_input.py -q

@@ -52,6 +52,7 @@ __all__ = [
     "MultiplyFunction",
     "NullHandlingFunction",
     "RandomIntFunction",
+    "RandomBytesFunction",
     "ReturnSecretValueFunction",
     "SumValuesFunction",
     "UpperCaseFunction",
@@ -591,6 +592,41 @@ class BernoulliFunction(ScalarFunction):
 
         values = [bool(random.randint(0, 1)) for _ in range(_length)]
         return pa.array(values, type=pa.bool_())
+
+
+class RandomBytesFunction(ScalarFunction):
+    """Generates deterministic pseudo-random binary blobs from a seed."""
+
+    class Meta:
+        """Function metadata."""
+
+        name = "random_bytes"
+        description = "Generate pseudo-random binary blobs from seed and length"
+        stability = FunctionStability.CONSISTENT
+        examples = [
+            FunctionExample(
+                sql="SELECT random_bytes(42, 16) FROM data",
+                description="Generate a deterministic 16-byte blob per input row",
+            ),
+        ]
+
+    @classmethod
+    def compute(
+        cls,
+        seed: Annotated[int, ConstParam("Seed for pseudo-random byte generation")],
+        byte_length: Annotated[int, ConstParam("Output blob length in bytes")],
+        _length: Annotated[int, OutputLength()],
+    ) -> Annotated[pa.BinaryArray, Returns()]:
+        """Generate pseudo-random binary blobs for each row."""
+        import random
+
+        if byte_length < 0:
+            raise ValueError("byte_length must be >= 0")
+        rng = random.Random(seed)
+        return pa.array(
+            [bytes(rng.getrandbits(8) for _ in range(byte_length)) for _ in range(_length)],
+            type=pa.binary(),
+        )
 
 
 class MultiplyBySettingFunction(ScalarFunction):
