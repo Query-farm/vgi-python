@@ -9,6 +9,7 @@ ConstantColumnsFunction       - Demonstrates varargs with dynamic output schema
 DoubleSequenceFunction        - Generates a sequence of floats 0.0..n-1
 GeneratorExceptionFunction    - Demonstrates exception handling
 LoggingGeneratorFunction      - Demonstrates log message emission
+NamedParamsEchoFunction       - Echoes named parameter values in output columns
 NestedSequenceFunction        - Generates a sequence with nested struct/list columns
 PartitionedSequenceFunction   - Demonstrates multi-worker parallel execution
 ProjectedDataFunction         - Demonstrates projection pushdown
@@ -47,6 +48,7 @@ __all__ = [
     "DoubleSequenceFunction",
     "GeneratorExceptionFunction",
     "LoggingGeneratorFunction",
+    "NamedParamsEchoFunction",
     "NestedSequenceFunction",
     "PartitionedSequenceFunction",
     "ProjectedDataFunction",
@@ -182,6 +184,110 @@ class SequenceFunction(_BaseSequenceFunction):
     # Full schema before projection
     FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.int64())])
     NUMPY_DTYPE: ClassVar[type[np.generic]] = np.int64
+
+
+@dataclass(slots=True, frozen=True)
+class NamedParamsEchoFunctionArgs:
+    """Arguments for NamedParamsEchoFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+    greeting: Annotated[str, Arg("greeting", default="hello", doc="Greeting text echoed in output")]
+    multiplier: Annotated[int, Arg("multiplier", default=1, doc="Multiplier for value column")]
+    scale: Annotated[float, Arg("scale", default=1.0, doc="Scale factor for float_value column")]
+    enabled: Annotated[bool, Arg("enabled", default=True, doc="Boolean echoed in output")]
+
+
+@init_single_worker
+@bind_fixed_schema
+@_cardinality_from_count
+class NamedParamsEchoFunction(TableFunctionGenerator[NamedParamsEchoFunctionArgs, CountdownState]):
+    """Echoes named parameter values directly in output columns.
+
+    USE CASE
+    --------
+    Testing that named parameters of various types (VARCHAR, BIGINT, DOUBLE,
+    BOOLEAN) are correctly passed from DuckDB to the worker. Each named
+    parameter value is echoed directly in an output column, making it easy
+    to assert correctness.
+
+    SCHEMA
+    ------
+    Output: {"id": int64, "greeting": string, "value": int64, "float_value": float64, "enabled": bool}
+
+    Example:
+    -------
+    SELECT * FROM named_params_echo(3)
+    Returns: rows with id=0..2, greeting='hello', value=id*1, float_value=id*1.0, enabled=true
+
+    SELECT * FROM named_params_echo(3, greeting := 'hi', multiplier := 10)
+    Returns: rows with id=0..2, greeting='hi', value=id*10, float_value=id*1.0, enabled=true
+
+    """
+
+    FunctionArguments = NamedParamsEchoFunctionArgs
+
+    class Meta:
+        """Metadata for NamedParamsEchoFunction."""
+
+        name = "named_params_echo"
+        description = "Echoes named parameter values in output columns"
+        categories = ["generator", "testing"]
+        tags = {"category": "testing", "type": "params"}
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM named_params_echo(3)",
+                description="Echo default parameter values for 3 rows",
+            ),
+            FunctionExample(
+                sql="SELECT * FROM named_params_echo(3, greeting := 'hi', multiplier := 10)",
+                description="Echo custom greeting and multiplier",
+            ),
+        ]
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema(
+        {
+            "id": pa.int64(),
+            "greeting": pa.string(),
+            "value": pa.int64(),
+            "float_value": pa.float64(),
+            "enabled": pa.bool_(),
+        }
+    )
+
+    BATCH_SIZE: ClassVar[int] = 1000
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[NamedParamsEchoFunctionArgs]) -> CountdownState:
+        """Create initial state with remaining count."""
+        return CountdownState(remaining=params.args.count)
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[NamedParamsEchoFunctionArgs],
+        state: CountdownState,
+        out: OutputCollector,
+    ) -> None:
+        """Generate rows echoing named parameter values."""
+        if state.remaining <= 0:
+            out.finish()
+            return
+
+        size = min(state.remaining, cls.BATCH_SIZE)
+        ids = list(range(state.current_index, state.current_index + size))
+
+        data: dict[str, list[int] | list[str] | list[float] | list[bool]] = {
+            "id": ids,
+            "greeting": [params.args.greeting] * size,
+            "value": [i * params.args.multiplier for i in ids],
+            "float_value": [i * params.args.scale for i in ids],
+            "enabled": [params.args.enabled] * size,
+        }
+
+        out.emit(pa.RecordBatch.from_pydict(data, schema=params.output_schema))
+
+        state.current_index += size
+        state.remaining -= size
 
 
 @dataclass(slots=True, frozen=True)
