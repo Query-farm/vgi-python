@@ -75,7 +75,12 @@ def _promote_for_addition(dtype: pa.DataType) -> pa.DataType:
     Adding two values of the same type can overflow, so we promote integers
     to the next larger size. For example, int32 + int32 -> int64.
     """
-    if pa.types.is_floating(dtype) or pa.types.is_temporal(dtype):
+    if pa.types.is_temporal(dtype):
+        return dtype
+    if pa.types.is_floating(dtype):
+        # Promote float32 -> float64 to reduce overflow risk
+        if dtype == pa.float16() or dtype == pa.float32():
+            return pa.float64()
         return dtype
     if pa.types.is_integer(dtype):
         # Promote to a larger integer type since a + b can overflow
