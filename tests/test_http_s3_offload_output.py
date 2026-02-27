@@ -110,9 +110,7 @@ def _wait_for_http_server(base_url: str) -> None:
     os.environ.get(RUN_S3_HTTP_TESTS_ENV) != "1",
     reason=f"Set {RUN_S3_HTTP_TESTS_ENV}=1 to run live S3 HTTP offload tests",
 )
-def test_http_output_offload_random_bytes_large_response(
-    compression: str, expected_extension: str
-) -> None:
+def test_http_output_offload_random_bytes_large_response(compression: str, expected_extension: str) -> None:
     """Large random_bytes output should be externalized to S3 and resolved by HTTP client."""
     pytest.importorskip("vgi_rpc.http")
     pytest.importorskip("vgi_rpc.s3")
