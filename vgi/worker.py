@@ -455,6 +455,9 @@ class Worker:
             port: int = typer.Option(8000, "--port", "-p", help="Bind port"),
             prefix: str = typer.Option("/vgi", "--prefix", help="URL prefix for RPC endpoints"),
             cors_origins: str = typer.Option("*", "--cors-origins", help="Allowed CORS origins"),
+            describe: bool = typer.Option(  # noqa: B008
+                True, "--describe/--no-describe", help="Enable description pages (worker + RPC API)"
+            ),
             debug: bool = typer.Option(False, "--debug", help="Enable DEBUG on all vgi + vgi_rpc loggers"),
             log_level: LogLevel = typer.Option(LogLevel.INFO, "--log-level", help="Set log level"),  # noqa: B008
             log_logger: list[str] | None = typer.Option(  # noqa: B008
@@ -491,8 +494,14 @@ class Worker:
             )
 
             worker = cls(quiet=True, log_level=effective_level)
-            server = RpcServer(VgiProtocol, worker)
+            server = RpcServer(VgiProtocol, worker, enable_describe=describe)
             wsgi_app = make_wsgi_app(server, prefix=prefix, cors_origins=cors_origins)
+
+            if describe:
+                from vgi.http.worker_page import WorkerPageResource, build_worker_page
+
+                worker_page_body = build_worker_page(cls, prefix)
+                wsgi_app.add_route(f"{prefix}/worker", WorkerPageResource(worker_page_body))
 
             _logger.info("http_server_starting host=%s port=%d prefix=%s", host, port, prefix)
             sys.stderr.write(f"Serving {cls.__name__} on http://{host}:{port}{prefix}\n")

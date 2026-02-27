@@ -117,6 +117,9 @@ def main() -> None:
         port: int = typer.Option(8000, "--port", "-p", help="Bind port"),
         prefix: str = typer.Option("/vgi", "--prefix", help="URL prefix for RPC endpoints"),
         cors_origins: str = typer.Option("*", "--cors-origins", help="Allowed CORS origins"),
+        describe: bool = typer.Option(  # noqa: B008
+            True, "--describe/--no-describe", help="Enable description pages (worker + RPC API)"
+        ),
         debug: bool = typer.Option(False, "--debug", help="Enable DEBUG on all vgi + vgi_rpc loggers"),
         log_level: LogLevel = typer.Option(LogLevel.INFO, "--log-level", help="Set log level"),  # noqa: B008
         log_logger: list[str] | None = typer.Option(None, "--log-logger", help="Target specific logger(s)"),  # noqa: B008
@@ -210,7 +213,7 @@ def main() -> None:
         from vgi.protocol import VgiProtocol
 
         worker = ExampleWorker(quiet=True, log_level=effective_level)
-        server = RpcServer(VgiProtocol, worker, external_location=external_location)
+        server = RpcServer(VgiProtocol, worker, external_location=external_location, enable_describe=describe)
         wsgi_app = make_wsgi_app(
             server,
             prefix=prefix,
@@ -218,6 +221,12 @@ def main() -> None:
             upload_url_provider=upload_url_provider,
             max_upload_bytes=max_upload_bytes if upload_url_provider is not None else None,
         )
+
+        if describe:
+            from vgi.http.worker_page import WorkerPageResource, build_worker_page
+
+            worker_page_body = build_worker_page(ExampleWorker, prefix)
+            wsgi_app.add_route(f"{prefix}/worker", WorkerPageResource(worker_page_body))
 
         sys.stderr.write(f"Serving ExampleWorker on http://{host}:{port}{prefix}\n")
         sys.stderr.flush()
