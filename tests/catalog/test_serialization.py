@@ -10,6 +10,8 @@ from vgi.catalog import (
     CatalogAttachResult,
     FunctionInfo,
     FunctionType,
+    MacroInfo,
+    MacroType,
     ScanFunctionResult,
     SchemaInfo,
     SerializedSchema,
@@ -294,6 +296,114 @@ class TestViewInfoSerialization:
         restored = ViewInfo.deserialize_from_batch(batch)
 
         assert restored.definition == original.definition
+
+
+class TestMacroInfoSerialization:
+    """Test MacroInfo serialization round-trip."""
+
+    def test_scalar_macro_round_trip(self) -> None:
+        """Test round-trip with scalar macro and all fields."""
+        original = MacroInfo(
+            name="multiply",
+            schema_name="main",
+            macro_type=MacroType.SCALAR,
+            parameters=["x", "y"],
+            definition="x * y",
+            comment="Multiply two values",
+            tags={"category": "math"},
+        )
+        serialized = original.serialize_to_bytes()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = MacroInfo.deserialize_from_batch(batch)
+
+        assert restored.name == original.name
+        assert restored.schema_name == original.schema_name
+        assert restored.macro_type == MacroType.SCALAR
+        assert restored.parameters == ["x", "y"]
+        assert restored.definition == "x * y"
+        assert restored.comment == "Multiply two values"
+        assert restored.tags == {"category": "math"}
+
+    def test_table_macro_round_trip(self) -> None:
+        """Test round-trip with table macro."""
+        original = MacroInfo(
+            name="my_range",
+            schema_name="main",
+            macro_type=MacroType.TABLE,
+            parameters=["n"],
+            definition="SELECT * FROM range(n)",
+            comment=None,
+            tags={},
+        )
+        serialized = original.serialize_to_bytes()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = MacroInfo.deserialize_from_batch(batch)
+
+        assert restored.macro_type == MacroType.TABLE
+        assert restored.parameters == ["n"]
+        assert restored.definition == "SELECT * FROM range(n)"
+
+    def test_parameter_default_values_round_trip(self) -> None:
+        """Test parameter_default_values RecordBatch survives round-trip with types."""
+        defaults = pa.RecordBatch.from_pydict(
+            {"lo": pa.array([0], type=pa.int64()), "hi": pa.array([100], type=pa.int64())}
+        )
+        original = MacroInfo(
+            name="clamp",
+            schema_name="main",
+            macro_type=MacroType.SCALAR,
+            parameters=["val", "lo", "hi"],
+            parameter_default_values=defaults,
+            definition="GREATEST(lo, LEAST(hi, val))",
+            comment=None,
+            tags={},
+        )
+        serialized = original.serialize_to_bytes()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = MacroInfo.deserialize_from_batch(batch)
+
+        assert restored.parameter_default_values is not None
+        assert restored.parameter_default_values.num_rows == 1
+        assert restored.parameter_default_values.schema.names == ["lo", "hi"]
+        assert restored.parameter_default_values.column("lo").type == pa.int64()
+        assert restored.parameter_default_values.column("hi").type == pa.int64()
+        assert restored.parameter_default_values.column("lo")[0].as_py() == 0
+        assert restored.parameter_default_values.column("hi")[0].as_py() == 100
+
+    def test_none_parameter_default_values(self) -> None:
+        """Test with None parameter_default_values."""
+        original = MacroInfo(
+            name="simple",
+            schema_name="main",
+            macro_type=MacroType.SCALAR,
+            parameters=["x"],
+            parameter_default_values=None,
+            definition="x",
+            comment=None,
+            tags={},
+        )
+        serialized = original.serialize_to_bytes()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = MacroInfo.deserialize_from_batch(batch)
+
+        assert restored.parameter_default_values is None
+
+    def test_macro_type_enum_survival(self) -> None:
+        """MacroType enum survives serialization round-trip."""
+        for macro_type in MacroType:
+            original = MacroInfo(
+                name="test",
+                schema_name="main",
+                macro_type=macro_type,
+                parameters=[],
+                definition="1",
+                comment=None,
+                tags={},
+            )
+            serialized = original.serialize_to_bytes()
+            batch, _ = deserialize_record_batch(serialized)
+            restored = MacroInfo.deserialize_from_batch(batch)
+            assert restored.macro_type == macro_type
 
 
 class TestFunctionInfoSerialization:

@@ -38,6 +38,8 @@ from vgi.arguments import Arguments
 from vgi.catalog.catalog_interface import (
     CatalogAttachResult,
     FunctionInfo,
+    MacroInfo,
+    MacroType,
     OnConflict,
     SchemaInfo,
     SchemaObjectType,
@@ -64,6 +66,8 @@ __all__ = [
     "CatalogAttachRequest",
     "CatalogCreateRequest",
     "CatalogsResponse",
+    "MacroCreateRequest",
+    "MacrosResponse",
     "TableCreateRequest",
     "CatalogVersionResponse",
     "FunctionsResponse",
@@ -319,6 +323,53 @@ class FunctionsResponse(ArrowSerializableDataclass):
     def to_function_infos(self) -> list[FunctionInfo]:
         """Deserialize items to FunctionInfo objects."""
         return [FunctionInfo.deserialize_from_bytes(b) for b in self.items]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MacrosResponse(ArrowSerializableDataclass):
+    """Response wrapping list of MacroInfo.
+
+    Used for schema_contents_macros (0+ items) and macro_get (0 or 1 items).
+    """
+
+    items: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
+
+    @staticmethod
+    def from_macro_infos(infos: list[MacroInfo]) -> MacrosResponse:
+        """Create from a list of MacroInfo objects."""
+        return MacrosResponse(items=[info.serialize_to_bytes() for info in infos])
+
+    @staticmethod
+    def from_optional(info: MacroInfo | None) -> MacrosResponse:
+        """Create from an optional MacroInfo (0 or 1 items)."""
+        if info is None:
+            return MacrosResponse(items=[])
+        return MacrosResponse(items=[info.serialize_to_bytes()])
+
+    def to_macro_infos(self) -> list[MacroInfo]:
+        """Deserialize items to MacroInfo objects."""
+        return [MacroInfo.deserialize_from_bytes(b) for b in self.items]
+
+    def to_optional(self) -> MacroInfo | None:
+        """Deserialize single optional item."""
+        if not self.items:
+            return None
+        return MacroInfo.deserialize_from_bytes(self.items[0])
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MacroCreateRequest(ArrowSerializableDataclass):
+    """Request for catalog_macro_create with RecordBatch for parameter defaults."""
+
+    attach_id: bytes
+    schema_name: str
+    name: str
+    macro_type: MacroType
+    parameters: list[str]
+    definition: str
+    on_conflict: OnConflict
+    parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
+    transaction_id: bytes | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -916,4 +967,41 @@ class VgiProtocol(Protocol):
         transaction_id: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a view."""
+        ...
+
+    # ========== Catalog - Macros ===========
+
+    def catalog_macro_get(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> MacrosResponse:
+        """Get information about a macro. Returns 0 or 1 items."""
+        ...
+
+    def catalog_macro_create(self, request: MacroCreateRequest) -> None:
+        """Create a new macro."""
+        ...
+
+    def catalog_macro_drop(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Drop a macro."""
+        ...
+
+    def catalog_schema_contents_macros(
+        self,
+        attach_id: bytes,
+        name: str,
+        type: SchemaObjectType,
+        transaction_id: bytes | None = None,
+    ) -> MacrosResponse:
+        """List macros in a schema (scalar or table)."""
         ...

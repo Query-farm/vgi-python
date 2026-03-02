@@ -19,6 +19,8 @@ import pyarrow as pa
 from vgi.arguments import Arguments
 from vgi.catalog.catalog_interface import (
     AttachId,
+    MacroInfo,
+    MacroType,
     SchemaInfo,
     SerializedSchema,
     TableInfo,
@@ -32,6 +34,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Catalog",
+    "Macro",
     "Schema",
     "Table",
     "View",
@@ -193,9 +196,65 @@ class View:
         )
 
 
+@dataclass(frozen=True)
+class Macro:
+    """Declarative macro definition.
+
+    Attributes:
+        name: Macro name.
+        macro_type: Whether this is a scalar or table macro.
+        parameters: Ordered list of parameter names.
+        parameter_default_values: One-row RecordBatch where columns are parameter
+            names and values are typed defaults. None if no defaults.
+            Example: pa.RecordBatch.from_pydict({"b": [5]}) for b := 5.
+        definition: SQL expression (scalar) or query (table).
+        comment: Optional macro comment.
+        tags: Optional metadata tags.
+
+    """
+
+    name: str
+    macro_type: MacroType
+    parameters: list[str] = field(default_factory=list)
+    parameter_default_values: pa.RecordBatch | None = None
+    definition: str = ""
+    comment: str | None = None
+    tags: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Validate macro configuration."""
+        if self.parameter_default_values is not None:
+            if self.parameter_default_values.num_rows != 1:
+                raise ValueError(
+                    f"Macro '{self.name}': parameter_default_values must have exactly 1 row, "
+                    f"got {self.parameter_default_values.num_rows}"
+                )
+            # Validate that default param column names exist in parameters list
+            param_set = set(self.parameters)
+            for col_name in self.parameter_default_values.schema.names:
+                if col_name not in param_set:
+                    raise ValueError(
+                        f"Macro '{self.name}': default parameter '{col_name}' not found "
+                        f"in parameters list {self.parameters}"
+                    )
+
+    def to_macro_info(self, schema_name: str) -> MacroInfo:
+        """Convert to MacroInfo for catalog response."""
+        return MacroInfo(
+            name=self.name,
+            schema_name=schema_name,
+            macro_type=self.macro_type,
+            parameters=list(self.parameters),
+            parameter_default_values=self.parameter_default_values,
+            definition=self.definition,
+            comment=self.comment,
+            tags=dict(self.tags),
+        )
+
+
 @dataclass
 class Schema:
-    """Declarative schema definition grouping tables, views, and functions.
+    """Declarative schema definition grouping tables, views, functions, and macros.
 
     Attributes:
         name: Schema name.
@@ -204,6 +263,7 @@ class Schema:
         tables: Sequence of Table definitions.
         views: Sequence of View definitions.
         functions: Sequence of Function classes (scalar, table, or aggregate).
+        macros: Sequence of Macro definitions.
 
     """
 
@@ -213,6 +273,7 @@ class Schema:
     tables: Sequence[Table] = ()
     views: Sequence[View] = ()
     functions: Sequence[type[Function]] = ()
+    macros: Sequence[Macro] = ()
 
     def to_schema_info(self, attach_id: AttachId) -> SchemaInfo:
         """Convert to SchemaInfo for catalog response."""

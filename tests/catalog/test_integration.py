@@ -14,7 +14,7 @@ import pytest
 from vgi_rpc import WorkerPool
 
 from vgi import schema
-from vgi.catalog import OnConflict, SchemaObjectType, SerializedSchema
+from vgi.catalog import MacroType, OnConflict, SchemaObjectType, SerializedSchema
 from vgi.client import Client
 from vgi.client import catalog_mixin as _cm
 from vgi.client.catalog_mixin import CatalogClientError
@@ -542,3 +542,159 @@ class TestCatalogOnConflict:
         )
         assert table is not None
         assert table.columns == columns2
+
+
+class TestCatalogMacros:
+    """Test macro CRUD operations via client→worker round-trip."""
+
+    def test_macro_create_and_get(self) -> None:
+        """Can create and retrieve a macro."""
+        client = Client(CATALOG_WORKER)
+        result = client.catalog_attach(name="memory", options={})
+
+        client.macro_create(
+            attach_id=result.attach_id,
+            schema_name="main",
+            name="double",
+            macro_type=MacroType.SCALAR,
+            parameters=["x"],
+            definition="x * 2",
+        )
+
+        macro = client.macro_get(
+            attach_id=result.attach_id,
+            schema_name="main",
+            name="double",
+        )
+
+        assert macro is not None
+        assert macro.name == "double"
+        assert macro.schema_name == "main"
+        assert macro.macro_type == MacroType.SCALAR
+        assert macro.parameters == ["x"]
+        assert macro.definition == "x * 2"
+
+    def test_macro_drop(self) -> None:
+        """Can create and drop a macro."""
+        client = Client(CATALOG_WORKER)
+        result = client.catalog_attach(name="memory", options={})
+
+        client.macro_create(
+            attach_id=result.attach_id,
+            schema_name="main",
+            name="to_drop",
+            macro_type=MacroType.SCALAR,
+            parameters=["x"],
+            definition="x",
+        )
+
+        client.macro_drop(
+            attach_id=result.attach_id,
+            schema_name="main",
+            name="to_drop",
+        )
+
+        macro = client.macro_get(
+            attach_id=result.attach_id,
+            schema_name="main",
+            name="to_drop",
+        )
+        assert macro is None
+
+    def test_macro_drop_nonexistent_raises(self) -> None:
+        """Dropping nonexistent macro raises CatalogClientError."""
+        client = Client(CATALOG_WORKER)
+        result = client.catalog_attach(name="memory", options={})
+
+        with pytest.raises(CatalogClientError, match="not found"):
+            client.macro_drop(
+                attach_id=result.attach_id,
+                schema_name="main",
+                name="nonexistent",
+            )
+
+    def test_macro_drop_nonexistent_ignore(self) -> None:
+        """Dropping nonexistent macro with ignore_not_found=True succeeds."""
+        client = Client(CATALOG_WORKER)
+        result = client.catalog_attach(name="memory", options={})
+
+        # Should not raise
+        client.macro_drop(
+            attach_id=result.attach_id,
+            schema_name="main",
+            name="nonexistent",
+            ignore_not_found=True,
+        )
+
+    def test_schema_contents_filters_by_type(self) -> None:
+        """schema_contents correctly filters scalar vs table macros."""
+        client = Client(CATALOG_WORKER)
+        result = client.catalog_attach(name="memory", options={})
+
+        client.macro_create(
+            attach_id=result.attach_id,
+            schema_name="main",
+            name="scalar_one",
+            macro_type=MacroType.SCALAR,
+            parameters=["x"],
+            definition="x",
+        )
+        client.macro_create(
+            attach_id=result.attach_id,
+            schema_name="main",
+            name="table_one",
+            macro_type=MacroType.TABLE,
+            parameters=["n"],
+            definition="SELECT * FROM range(n)",
+        )
+
+        scalar_macros = client.schema_contents(
+            attach_id=result.attach_id,
+            name="main",
+            type=SchemaObjectType.SCALAR_MACRO,
+        )
+        table_macros = client.schema_contents(
+            attach_id=result.attach_id,
+            name="main",
+            type=SchemaObjectType.TABLE_MACRO,
+        )
+
+        assert len(scalar_macros) == 1
+        assert scalar_macros[0].name == "scalar_one"
+        assert len(table_macros) == 1
+        assert table_macros[0].name == "table_one"
+
+    def test_parameter_default_values_preserved(self) -> None:
+        """RecordBatch defaults survive create/get round-trip."""
+        client = Client(CATALOG_WORKER)
+        result = client.catalog_attach(name="memory", options={})
+
+        defaults = pa.RecordBatch.from_pydict(
+            {"lo": pa.array([0], type=pa.int64()), "hi": pa.array([100], type=pa.int64())}
+        )
+
+        client.macro_create(
+            attach_id=result.attach_id,
+            schema_name="main",
+            name="clamp",
+            macro_type=MacroType.SCALAR,
+            parameters=["val", "lo", "hi"],
+            definition="GREATEST(lo, LEAST(hi, val))",
+            parameter_default_values=defaults,
+        )
+
+        macro = client.macro_get(
+            attach_id=result.attach_id,
+            schema_name="main",
+            name="clamp",
+        )
+
+        assert macro is not None
+        assert macro.parameter_default_values is not None
+        restored = macro.parameter_default_values
+        assert restored.num_rows == 1
+        assert set(restored.schema.names) == {"lo", "hi"}
+        assert restored.column("lo").type == pa.int64()
+        assert restored.column("hi").type == pa.int64()
+        assert restored.column("lo")[0].as_py() == 0
+        assert restored.column("hi")[0].as_py() == 100

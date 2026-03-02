@@ -26,11 +26,14 @@ from vgi.arguments import Arguments
 from vgi.catalog import (
     AttachId,
     Catalog,
+    Macro,
+    MacroType,
     ScanFunctionResult,
     Schema,
     Setting,
     Table,
     TransactionId,
+    View,
 )
 from vgi.examples.scalar import (
     AddValuesFunction,
@@ -134,6 +137,45 @@ class ExampleWorker(Worker):
                     SumValuesFunction,
                     UpperCaseFunction,
                 ],
+                views=[
+                    View(
+                        name="first_ten",
+                        definition="SELECT * FROM sequence(10)",
+                        comment="First 10 integers",
+                    ),
+                    View(
+                        name="even_numbers",
+                        definition="SELECT * FROM sequence(100) WHERE n % 2 = 0",
+                        comment="Even numbers from 0 to 98",
+                    ),
+                ],
+                macros=[
+                    Macro(
+                        name="vgi_multiply",
+                        macro_type=MacroType.SCALAR,
+                        parameters=["x", "y"],
+                        definition="x * y",
+                        comment="Multiply two values",
+                    ),
+                    Macro(
+                        name="vgi_clamp",
+                        macro_type=MacroType.SCALAR,
+                        parameters=["val", "lo", "hi"],
+                        parameter_default_values=pa.RecordBatch.from_pydict(
+                            {"lo": [pa.scalar(0).as_py()], "hi": [pa.scalar(100).as_py()]},
+                            schema=pa.schema([("lo", pa.int64()), ("hi", pa.int64())]),
+                        ),
+                        definition="GREATEST(lo, LEAST(hi, val))",
+                        comment="Clamp a value between lo and hi (defaults: 0..100)",
+                    ),
+                    Macro(
+                        name="vgi_range_table",
+                        macro_type=MacroType.TABLE,
+                        parameters=["n"],
+                        definition="SELECT * FROM range(n)",
+                        comment="Table macro returning range of values",
+                    ),
+                ],
             ),
             Schema(
                 name="data",
@@ -151,6 +193,13 @@ class ExampleWorker(Worker):
                         name="numbers",
                         columns=pa.schema([("value", pa.int64())]),
                         comment="First 100 integers (demonstrates explicit columns)",
+                    ),
+                ],
+                views=[
+                    View(
+                        name="small_numbers",
+                        definition="SELECT * FROM numbers WHERE value < 10",
+                        comment="Numbers less than 10",
                     ),
                 ],
             ),

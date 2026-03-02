@@ -99,6 +99,8 @@ from vgi.protocol import (
     CatalogVersionResponse,
     FunctionsResponse,
     InitRequest,
+    MacroCreateRequest,
+    MacrosResponse,
     ProcessState,
     ScalarExchangeState,
     SchemasResponse,
@@ -1465,6 +1467,77 @@ class Worker:
             comment=comment,
             ignore_not_found=ignore_not_found,
         )
+
+    # ---------------------------------------------------------------------------
+    # VgiProtocol implementation - Catalog Macros
+    # ---------------------------------------------------------------------------
+
+    def catalog_macro_get(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> MacrosResponse:
+        """Get information about a macro. Returns 0 or 1 items."""
+        cat = self._get_catalog()
+        info = cat.macro_get(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+        )
+        return MacrosResponse.from_optional(info)
+
+    def catalog_macro_create(self, request: MacroCreateRequest) -> None:
+        """Create a new macro."""
+        cat = self._get_catalog()
+        cat.macro_create(
+            attach_id=AttachId(request.attach_id),
+            transaction_id=TransactionId(request.transaction_id) if request.transaction_id else None,
+            schema_name=request.schema_name,
+            name=request.name,
+            macro_type=request.macro_type,
+            parameters=request.parameters,
+            definition=request.definition,
+            on_conflict=request.on_conflict,
+            parameter_default_values=request.parameter_default_values,
+        )
+
+    def catalog_macro_drop(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Drop a macro."""
+        cat = self._get_catalog()
+        cat.macro_drop(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            ignore_not_found=ignore_not_found,
+        )
+
+    def catalog_schema_contents_macros(
+        self,
+        attach_id: bytes,
+        name: str,
+        type: SchemaObjectType,
+        transaction_id: bytes | None = None,
+    ) -> MacrosResponse:
+        """List macros in a schema (scalar or table)."""
+        cat = self._get_catalog()
+        infos = cat.schema_contents(  # type: ignore[call-overload]
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            name=name,
+            type=type,
+        )
+        return MacrosResponse.from_macro_infos(list(infos))
 
     # ---------------------------------------------------------------------------
     # Lifecycle

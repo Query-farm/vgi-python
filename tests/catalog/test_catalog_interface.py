@@ -14,6 +14,7 @@ from vgi.catalog import (
     CatalogInterface,
     FunctionInfo,
     FunctionType,
+    MacroInfo,
     OnConflict,
     SchemaInfo,
     SchemaObjectType,
@@ -25,6 +26,7 @@ from vgi.catalog import (
 from vgi.catalog.catalog_interface import (
     DistinctDependence,
     FunctionStability,
+    MacroType,
     NullHandling,
     OrderDependence,
     OrderPreservation,
@@ -114,6 +116,17 @@ class MinimalCatalog(CatalogInterface):
         name: str,
     ) -> ViewInfo | None:
         """Get view info."""
+        return None
+
+    def macro_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> MacroInfo | None:
+        """Get macro info."""
         return None
 
 
@@ -250,6 +263,31 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
                 on_conflict=OnConflict.ERROR,
             ),
         ),
+        (
+            "macro_create",
+            "Macro create not implemented",
+            lambda c: c.macro_create(
+                attach_id=TEST_ATTACH_ID,
+                transaction_id=None,
+                schema_name="main",
+                name="my_macro",
+                macro_type=MacroType.SCALAR,
+                parameters=["x"],
+                definition="x * 2",
+                on_conflict=OnConflict.ERROR,
+            ),
+        ),
+        (
+            "macro_drop",
+            "Macro drop not implemented",
+            lambda c: c.macro_drop(
+                attach_id=TEST_ATTACH_ID,
+                transaction_id=None,
+                schema_name="main",
+                name="my_macro",
+                ignore_not_found=False,
+            ),
+        ),
     ]
 
 
@@ -320,6 +358,17 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
         name: str,
     ) -> ViewInfo | None:
         """Get view info."""
+        return None
+
+    def macro_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> MacroInfo | None:
+        """Get macro info."""
         return None
 
 
@@ -416,6 +465,29 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
                 transaction_id=None,
                 schema_name="main",
                 name="view",
+                ignore_not_found=False,
+            ),
+        ),
+        (
+            "macro_create",
+            lambda c: c.macro_create(
+                attach_id=TEST_ATTACH_ID,
+                transaction_id=None,
+                schema_name="main",
+                name="my_macro",
+                macro_type=MacroType.SCALAR,
+                parameters=["x"],
+                definition="x * 2",
+                on_conflict=OnConflict.ERROR,
+            ),
+        ),
+        (
+            "macro_drop",
+            lambda c: c.macro_drop(
+                attach_id=TEST_ATTACH_ID,
+                transaction_id=None,
+                schema_name="main",
+                name="my_macro",
                 ignore_not_found=False,
             ),
         ),
@@ -712,6 +784,8 @@ class TestSchemaObjectType:
         assert SchemaObjectType.VIEW.value == "view"
         assert SchemaObjectType.SCALAR_FUNCTION.value == "scalar_function"
         assert SchemaObjectType.TABLE_FUNCTION.value == "table_function"
+        assert SchemaObjectType.SCALAR_MACRO.value == "scalar_macro"
+        assert SchemaObjectType.TABLE_MACRO.value == "table_macro"
 
     def test_enum_from_string(self) -> None:
         """Verify enum can be created from string values."""
@@ -719,6 +793,8 @@ class TestSchemaObjectType:
         assert SchemaObjectType("view") == SchemaObjectType.VIEW
         assert SchemaObjectType("scalar_function") == SchemaObjectType.SCALAR_FUNCTION
         assert SchemaObjectType("table_function") == SchemaObjectType.TABLE_FUNCTION
+        assert SchemaObjectType("scalar_macro") == SchemaObjectType.SCALAR_MACRO
+        assert SchemaObjectType("table_macro") == SchemaObjectType.TABLE_MACRO
 
 
 class TestSchemaContentsTypeFilter:

@@ -23,6 +23,9 @@ from vgi.catalog import (
     AttachId,
     Catalog,
     CatalogAttachResult,
+    Macro,
+    MacroInfo,
+    MacroType,
     ReadOnlyCatalogInterface,
     ScanFunctionResult,
     Schema,
@@ -310,6 +313,143 @@ class TestViewDescriptor:
 
 
 # =============================================================================
+# Macro Descriptor Tests
+# =============================================================================
+
+
+class TestMacroDescriptor:
+    """Tests for Macro descriptor."""
+
+    def test_macro_basic(self) -> None:
+        """Macro stores name, type, parameters, and definition."""
+        macro = Macro(
+            name="multiply",
+            macro_type=MacroType.SCALAR,
+            parameters=["x", "y"],
+            definition="x * y",
+        )
+        assert macro.name == "multiply"
+        assert macro.macro_type == MacroType.SCALAR
+        assert macro.parameters == ["x", "y"]
+        assert macro.definition == "x * y"
+
+    def test_macro_with_metadata(self) -> None:
+        """Macro stores optional comment and tags."""
+        macro = Macro(
+            name="multiply",
+            macro_type=MacroType.SCALAR,
+            parameters=["x", "y"],
+            definition="x * y",
+            comment="Multiply two values",
+            tags={"category": "math"},
+        )
+        assert macro.comment == "Multiply two values"
+        assert macro.tags == {"category": "math"}
+
+    def test_macro_with_defaults(self) -> None:
+        """Macro stores parameter_default_values as RecordBatch."""
+        defaults = pa.RecordBatch.from_pydict({"lo": [0], "hi": [100]})
+        macro = Macro(
+            name="clamp",
+            macro_type=MacroType.SCALAR,
+            parameters=["val", "lo", "hi"],
+            parameter_default_values=defaults,
+            definition="GREATEST(lo, LEAST(hi, val))",
+        )
+        assert macro.parameter_default_values is not None
+        assert macro.parameter_default_values.num_rows == 1
+        assert macro.parameter_default_values.schema.names == ["lo", "hi"]
+
+    def test_macro_table_type(self) -> None:
+        """Macro can be a table macro."""
+        macro = Macro(
+            name="my_range",
+            macro_type=MacroType.TABLE,
+            parameters=["n"],
+            definition="SELECT * FROM range(n)",
+        )
+        assert macro.macro_type == MacroType.TABLE
+
+    def test_macro_zero_parameters(self) -> None:
+        """Macro can have zero parameters."""
+        macro = Macro(
+            name="one",
+            macro_type=MacroType.SCALAR,
+            parameters=[],
+            definition="1",
+        )
+        assert macro.parameters == []
+
+    def test_macro_to_macro_info(self) -> None:
+        """Macro converts to MacroInfo correctly."""
+        defaults = pa.RecordBatch.from_pydict({"y": [42]})
+        macro = Macro(
+            name="add",
+            macro_type=MacroType.SCALAR,
+            parameters=["x", "y"],
+            parameter_default_values=defaults,
+            definition="x + y",
+            comment="Add two values",
+            tags={"type": "math"},
+        )
+        info = macro.to_macro_info("main")
+        assert isinstance(info, MacroInfo)
+        assert info.name == "add"
+        assert info.schema_name == "main"
+        assert info.macro_type == MacroType.SCALAR
+        assert info.parameters == ["x", "y"]
+        assert info.parameter_default_values is not None
+        assert info.definition == "x + y"
+        assert info.comment == "Add two values"
+        assert info.tags == {"type": "math"}
+
+    def test_macro_validation_invalid_default_param_name(self) -> None:
+        """Macro raises ValueError for default param not in parameters list."""
+        defaults = pa.RecordBatch.from_pydict({"z": [1]})
+        with pytest.raises(ValueError, match="default parameter 'z' not found"):
+            Macro(
+                name="bad",
+                macro_type=MacroType.SCALAR,
+                parameters=["x", "y"],
+                parameter_default_values=defaults,
+                definition="x + y",
+            )
+
+    def test_macro_validation_recordbatch_multiple_rows(self) -> None:
+        """Macro raises ValueError if RecordBatch has more than 1 row."""
+        defaults = pa.RecordBatch.from_pydict({"x": [1, 2]})
+        with pytest.raises(ValueError, match="must have exactly 1 row"):
+            Macro(
+                name="bad",
+                macro_type=MacroType.SCALAR,
+                parameters=["x"],
+                parameter_default_values=defaults,
+                definition="x",
+            )
+
+
+class TestSchemaWithMacros:
+    """Tests for Schema containing macros."""
+
+    def test_schema_with_macros(self) -> None:
+        """Schema can contain macros."""
+        macro = Macro(
+            name="multiply",
+            macro_type=MacroType.SCALAR,
+            parameters=["x", "y"],
+            definition="x * y",
+        )
+        s = Schema(name="main", macros=[macro])
+        assert len(s.macros) == 1
+        assert s.macros[0].name == "multiply"
+
+    def test_schema_default_empty_macros(self) -> None:
+        """Schema defaults to empty macros."""
+        s = Schema(name="main")
+        assert s.macros == ()
+
+
+# =============================================================================
 # Schema Descriptor Tests
 # =============================================================================
 
@@ -446,7 +586,31 @@ class TestReadOnlyCatalogWithCatalog:
         )
 
     @pytest.fixture
-    def catalog_interface(self, users_table: Table, active_users_view: View) -> ReadOnlyCatalogInterface:
+    def scalar_macro(self) -> Macro:
+        """Create a scalar macro for testing."""
+        return Macro(
+            name="multiply",
+            macro_type=MacroType.SCALAR,
+            parameters=["x", "y"],
+            definition="x * y",
+            comment="Multiply two values",
+        )
+
+    @pytest.fixture
+    def table_macro(self) -> Macro:
+        """Create a table macro for testing."""
+        return Macro(
+            name="my_range",
+            macro_type=MacroType.TABLE,
+            parameters=["n"],
+            definition="SELECT * FROM range(n)",
+            comment="Table macro range",
+        )
+
+    @pytest.fixture
+    def catalog_interface(
+        self, users_table: Table, active_users_view: View, scalar_macro: Macro, table_macro: Macro
+    ) -> ReadOnlyCatalogInterface:
         """Create a catalog interface with Catalog object."""
 
         class TestCatalog(ReadOnlyCatalogInterface):
@@ -459,6 +623,7 @@ class TestReadOnlyCatalogWithCatalog:
                         tables=[users_table],
                         views=[active_users_view],
                         functions=[UsersFunction],
+                        macros=[scalar_macro, table_macro],
                         comment="Main schema",
                     ),
                 ],
@@ -565,6 +730,43 @@ class TestReadOnlyCatalogWithCatalog:
         info = catalog_interface.view_get(attach_id=attach_id, transaction_id=None, schema_name="main", name="unknown")
         assert info is None
 
+    def test_macro_get_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
+        """macro_get() finds macro by schema and name."""
+        attach_id = AttachId(b"test")
+        info = catalog_interface.macro_get(
+            attach_id=attach_id,
+            transaction_id=None,
+            schema_name="main",
+            name="multiply",
+        )
+        assert info is not None
+        assert info.name == "multiply"
+        assert info.macro_type == MacroType.SCALAR
+        assert info.comment == "Multiply two values"
+
+    def test_macro_get_case_insensitive(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
+        """macro_get() is case-insensitive."""
+        attach_id = AttachId(b"test")
+        info = catalog_interface.macro_get(
+            attach_id=attach_id,
+            transaction_id=None,
+            schema_name="MAIN",
+            name="MULTIPLY",
+        )
+        assert info is not None
+        assert info.name == "multiply"
+
+    def test_macro_get_not_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
+        """macro_get() returns None for unknown macro."""
+        attach_id = AttachId(b"test")
+        info = catalog_interface.macro_get(
+            attach_id=attach_id,
+            transaction_id=None,
+            schema_name="main",
+            name="unknown",
+        )
+        assert info is None
+
 
 class TestSchemaContentsWithCatalog:
     """Tests for schema_contents() with Catalog object."""
@@ -575,6 +777,18 @@ class TestSchemaContentsWithCatalog:
         users_table = Table(name="users", function=UsersFunction)
         events_table = Table(name="events", function=EventsFunction)
         users_view = View(name="active_users", definition="SELECT * FROM users")
+        scalar_macro = Macro(
+            name="multiply",
+            macro_type=MacroType.SCALAR,
+            parameters=["x", "y"],
+            definition="x * y",
+        )
+        table_macro = Macro(
+            name="my_range",
+            macro_type=MacroType.TABLE,
+            parameters=["n"],
+            definition="SELECT * FROM range(n)",
+        )
 
         class TestCatalog(ReadOnlyCatalogInterface):
             catalog = Catalog(
@@ -585,6 +799,7 @@ class TestSchemaContentsWithCatalog:
                         tables=[users_table, events_table],
                         views=[users_view],
                         functions=[UsersFunction],
+                        macros=[scalar_macro, table_macro],
                     )
                 ],
             )
@@ -626,6 +841,32 @@ class TestSchemaContentsWithCatalog:
             type=SchemaObjectType.TABLE,
         )
         assert contents == []
+
+    def test_schema_contents_scalar_macros(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
+        """schema_contents returns scalar macros for SCALAR_MACRO type."""
+        attach_id = AttachId(b"test")
+        contents = catalog_interface.schema_contents(
+            attach_id=attach_id,
+            transaction_id=None,
+            name="main",
+            type=SchemaObjectType.SCALAR_MACRO,
+        )
+        assert len(contents) == 1
+        assert contents[0].name == "multiply"
+        assert contents[0].macro_type == MacroType.SCALAR
+
+    def test_schema_contents_table_macros(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
+        """schema_contents returns table macros for TABLE_MACRO type."""
+        attach_id = AttachId(b"test")
+        contents = catalog_interface.schema_contents(
+            attach_id=attach_id,
+            transaction_id=None,
+            name="main",
+            type=SchemaObjectType.TABLE_MACRO,
+        )
+        assert len(contents) == 1
+        assert contents[0].name == "my_range"
+        assert contents[0].macro_type == MacroType.TABLE
 
 
 class TestTableScanFunctionGet:

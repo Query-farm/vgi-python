@@ -10,6 +10,8 @@ from vgi.catalog import (
     AttachId,
     FunctionInfo,
     FunctionType,
+    MacroInfo,
+    MacroType,
     SchemaObjectType,
     TableInfo,
     ViewInfo,
@@ -289,3 +291,160 @@ class TestExampleWorkerCatalog:
 
         # Table functions don't have catalog_output_schema, so it's empty
         assert len(output_schema) == 0
+
+
+class TestExampleWorkerViews:
+    """Test ExampleWorker's view catalog entries."""
+
+    def test_schema_contents_returns_views_in_main(self) -> None:
+        """Main schema has 2 views (first_ten, even_numbers)."""
+        client = Client(EXAMPLE_WORKER)
+        attach_result = client.catalog_attach(name="example", options={})
+
+        views = list(
+            client.schema_contents(
+                attach_id=attach_result.attach_id,
+                name="main",
+                type=SchemaObjectType.VIEW,
+            )
+        )
+
+        view_names = {v.name for v in views}
+        assert "first_ten" in view_names
+        assert "even_numbers" in view_names
+        assert len(views) == 2
+
+    def test_schema_contents_returns_views_in_data(self) -> None:
+        """Data schema has 1 view (small_numbers)."""
+        client = Client(EXAMPLE_WORKER)
+        attach_result = client.catalog_attach(name="example", options={})
+
+        views = list(
+            client.schema_contents(
+                attach_id=attach_result.attach_id,
+                name="data",
+                type=SchemaObjectType.VIEW,
+            )
+        )
+
+        assert len(views) == 1
+        assert views[0].name == "small_numbers"
+
+    def test_view_get_returns_correct_info(self) -> None:
+        """view_get returns correct definition, comment, and tags."""
+        client = Client(EXAMPLE_WORKER)
+        attach_result = client.catalog_attach(name="example", options={})
+
+        view = client.view_get(
+            attach_id=attach_result.attach_id,
+            schema_name="main",
+            name="first_ten",
+        )
+
+        assert view is not None
+        assert isinstance(view, ViewInfo)
+        assert view.name == "first_ten"
+        assert "sequence(10)" in view.definition
+        assert view.comment is not None
+
+
+class TestExampleWorkerMacros:
+    """Test ExampleWorker's macro catalog entries."""
+
+    def test_schema_contents_returns_macros_in_main(self) -> None:
+        """Main schema has 3 macros."""
+        client = Client(EXAMPLE_WORKER)
+        attach_result = client.catalog_attach(name="example", options={})
+
+        scalar_macros = list(
+            client.schema_contents(
+                attach_id=attach_result.attach_id,
+                name="main",
+                type=SchemaObjectType.SCALAR_MACRO,
+            )
+        )
+        table_macros = list(
+            client.schema_contents(
+                attach_id=attach_result.attach_id,
+                name="main",
+                type=SchemaObjectType.TABLE_MACRO,
+            )
+        )
+
+        all_macros = scalar_macros + table_macros
+        macro_names = {m.name for m in all_macros}
+        assert macro_names == {"vgi_multiply", "vgi_clamp", "vgi_range_table"}
+
+    def test_macro_get_returns_correct_info(self) -> None:
+        """macro_get returns a MacroInfo with correct fields."""
+        client = Client(EXAMPLE_WORKER)
+        attach_result = client.catalog_attach(name="example", options={})
+
+        info = client.macro_get(
+            attach_id=attach_result.attach_id,
+            schema_name="main",
+            name="vgi_multiply",
+        )
+
+        assert info is not None
+        assert isinstance(info, MacroInfo)
+        assert info.name == "vgi_multiply"
+        assert info.schema_name == "main"
+        assert info.definition == "x * y"
+        assert info.comment == "Multiply two values"
+
+    def test_macro_info_has_correct_types(self) -> None:
+        """Macro type correctly distinguishes scalar vs table."""
+        client = Client(EXAMPLE_WORKER)
+        attach_result = client.catalog_attach(name="example", options={})
+
+        multiply = client.macro_get(
+            attach_id=attach_result.attach_id,
+            schema_name="main",
+            name="vgi_multiply",
+        )
+        range_table = client.macro_get(
+            attach_id=attach_result.attach_id,
+            schema_name="main",
+            name="vgi_range_table",
+        )
+
+        assert multiply is not None
+        assert multiply.macro_type == MacroType.SCALAR
+
+        assert range_table is not None
+        assert range_table.macro_type == MacroType.TABLE
+
+    def test_macro_info_has_parameters(self) -> None:
+        """Parameter list survives round-trip."""
+        client = Client(EXAMPLE_WORKER)
+        attach_result = client.catalog_attach(name="example", options={})
+
+        info = client.macro_get(
+            attach_id=attach_result.attach_id,
+            schema_name="main",
+            name="vgi_multiply",
+        )
+
+        assert info is not None
+        assert info.parameters == ["x", "y"]
+
+    def test_macro_info_has_parameter_default_values(self) -> None:
+        """RecordBatch parameter defaults survive round-trip with types."""
+        client = Client(EXAMPLE_WORKER)
+        attach_result = client.catalog_attach(name="example", options={})
+
+        info = client.macro_get(
+            attach_id=attach_result.attach_id,
+            schema_name="main",
+            name="vgi_clamp",
+        )
+
+        assert info is not None
+        assert info.parameters == ["val", "lo", "hi"]
+        assert info.parameter_default_values is not None
+        defaults = info.parameter_default_values
+        assert defaults.num_rows == 1
+        assert set(defaults.schema.names) == {"lo", "hi"}
+        assert defaults.column("lo")[0].as_py() == 0
+        assert defaults.column("hi")[0].as_py() == 100

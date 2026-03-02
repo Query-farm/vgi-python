@@ -48,6 +48,8 @@ from vgi.catalog import (
     AttachId,
     CatalogAttachResult,
     FunctionInfo,
+    MacroInfo,
+    MacroType,
     OnConflict,
     ScanFunctionResult,
     SchemaInfo,
@@ -61,6 +63,7 @@ from vgi.catalog import (
 from vgi.protocol import (
     CatalogAttachRequest,
     CatalogCreateRequest,
+    MacroCreateRequest,
     TableCreateRequest,
     VgiProtocol,
 )
@@ -395,8 +398,18 @@ class CatalogClientMixin:
         attach_id: AttachId,
         transaction_id: TransactionId | None = None,
         name: str,
+        type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
+    ) -> Sequence[MacroInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None = None,
+        name: str,
         type: SchemaObjectType,
-    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo]: ...
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo]: ...
 
     def schema_contents(
         self,
@@ -405,8 +418,8 @@ class CatalogClientMixin:
         transaction_id: TransactionId | None = None,
         name: str,
         type: SchemaObjectType,
-    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo]:
-        """List contents of a schema (tables, views, functions).
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo]:
+        """List contents of a schema (tables, views, functions, macros).
 
         Args:
             attach_id: The attachment ID from catalog_attach.
@@ -417,9 +430,11 @@ class CatalogClientMixin:
                 - SchemaObjectType.VIEW: Return only views
                 - SchemaObjectType.SCALAR_FUNCTION: Return only scalar functions
                 - SchemaObjectType.TABLE_FUNCTION: Return only table functions
+                - SchemaObjectType.SCALAR_MACRO: Return only scalar macros
+                - SchemaObjectType.TABLE_MACRO: Return only table macros
 
         Returns:
-            List of TableInfo, ViewInfo, or FunctionInfo depending on the type.
+            List of TableInfo, ViewInfo, FunctionInfo, or MacroInfo depending on the type.
 
         """
         with self._catalog_connect() as proxy:
@@ -435,6 +450,13 @@ class CatalogClientMixin:
                     name=name,
                     transaction_id=transaction_id,
                 ).to_view_infos()
+            elif type in (SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO):
+                return proxy.catalog_schema_contents_macros(
+                    attach_id=attach_id,
+                    name=name,
+                    type=type,
+                    transaction_id=transaction_id,
+                ).to_macro_infos()
             else:
                 return proxy.catalog_schema_contents_functions(
                     attach_id=attach_id,
@@ -1061,6 +1083,106 @@ class CatalogClientMixin:
                 schema_name=schema_name,
                 name=name,
                 comment=comment,
+                ignore_not_found=ignore_not_found,
+                transaction_id=transaction_id,
+            )
+
+    # ========== Macro Methods ==========
+
+    def macro_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None = None,
+        schema_name: str,
+        name: str,
+    ) -> MacroInfo | None:
+        """Get information about a macro.
+
+        Args:
+            attach_id: The attachment ID from catalog_attach.
+            transaction_id: Optional transaction ID for transactional reads.
+            schema_name: The schema containing the macro.
+            name: The macro name.
+
+        Returns:
+            MacroInfo for the macro, or None if not found.
+
+        """
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_macro_get(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
+                transaction_id=transaction_id,
+            ).to_optional()
+
+    def macro_create(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None = None,
+        schema_name: str,
+        name: str,
+        macro_type: MacroType,
+        parameters: list[str],
+        definition: str,
+        on_conflict: OnConflict = OnConflict.ERROR,
+        parameter_default_values: pa.RecordBatch | None = None,
+    ) -> None:
+        """Create a new macro.
+
+        Args:
+            attach_id: The attachment ID from catalog_attach.
+            transaction_id: Optional transaction ID.
+            schema_name: The schema to create the macro in.
+            name: The name for the new macro.
+            macro_type: Whether this is a scalar or table macro.
+            parameters: Ordered list of parameter names.
+            definition: SQL expression (scalar) or query (table).
+            on_conflict: Behavior if macro already exists.
+            parameter_default_values: One-row RecordBatch with typed defaults.
+
+        """
+        with self._catalog_connect() as proxy:
+            proxy.catalog_macro_create(
+                request=MacroCreateRequest(
+                    attach_id=attach_id,
+                    schema_name=schema_name,
+                    name=name,
+                    macro_type=macro_type,
+                    parameters=parameters,
+                    definition=definition,
+                    on_conflict=on_conflict,
+                    parameter_default_values=parameter_default_values,
+                    transaction_id=transaction_id,
+                )
+            )
+
+    def macro_drop(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None = None,
+        schema_name: str,
+        name: str,
+        ignore_not_found: bool = False,
+    ) -> None:
+        """Drop a macro.
+
+        Args:
+            attach_id: The attachment ID from catalog_attach.
+            transaction_id: Optional transaction ID.
+            schema_name: The schema containing the macro.
+            name: The name of the macro to drop.
+            ignore_not_found: If True, don't error if macro doesn't exist.
+
+        """
+        with self._catalog_connect() as proxy:
+            proxy.catalog_macro_drop(
+                attach_id=attach_id,
+                schema_name=schema_name,
+                name=name,
                 ignore_not_found=ignore_not_found,
                 transaction_id=transaction_id,
             )

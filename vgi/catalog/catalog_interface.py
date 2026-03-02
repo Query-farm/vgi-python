@@ -21,7 +21,7 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from vgi.catalog.descriptors import Catalog, Schema, Table, View
+    from vgi.catalog.descriptors import Catalog, Macro, Schema, Table, View
     from vgi.catalog.setting import SettingSpec
 
 import pyarrow as pa
@@ -46,6 +46,7 @@ __all__ = [
     "OrderPreservation",
     # Catalog-specific
     "CatalogExample",
+    "MacroType",
     "SchemaObjectType",
 ]
 
@@ -153,12 +154,39 @@ class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     definition: str
 
 
+@dataclass(frozen=True)
+class MacroInfo(CatalogSchemaObject, ArrowSerializableDataclass):
+    """Information about a macro in a schema.
+
+    Attributes:
+        macro_type: Whether this is a scalar or table macro.
+        parameters: Ordered list of parameter names.
+        parameter_default_values: One-row RecordBatch where column names are parameter
+            names and values are typed defaults. None if no defaults.
+            Serialized as IPC bytes over the wire.
+        definition: The SQL expression (scalar) or query (table).
+
+    """
+
+    macro_type: "MacroType"
+    parameters: list[str]
+    parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
+    definition: str = ""
+
+
 class FunctionType(Enum):
     """The type of function in a schema."""
 
     SCALAR = "scalar"
     TABLE = "table"
     AGGREGATE = "aggregate"
+
+
+class MacroType(Enum):
+    """The type of macro in a schema."""
+
+    SCALAR = "scalar"
+    TABLE = "table"
 
 
 class SchemaObjectType(Enum):
@@ -171,6 +199,8 @@ class SchemaObjectType(Enum):
     VIEW = "view"
     SCALAR_FUNCTION = "scalar_function"
     TABLE_FUNCTION = "table_function"
+    SCALAR_MACRO = "scalar_macro"
+    TABLE_MACRO = "table_macro"
 
 
 class OnConflict(Enum):
@@ -511,6 +541,16 @@ class CatalogInterface(ABC):
         type: Literal[SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION],
     ) -> Sequence[FunctionInfo]: ...
 
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
+    ) -> Sequence[MacroInfo]: ...
+
     def schema_contents(
         self,
         *,
@@ -518,10 +558,10 @@ class CatalogInterface(ABC):
         transaction_id: TransactionId | None,
         name: str,
         type: SchemaObjectType,
-    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo]:
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo]:
         """Get the contents of the schema with the given name.
 
-        Schemas can contain tables, views, and various types of functions.
+        Schemas can contain tables, views, functions, and macros.
 
         Args:
             attach_id: The attachment identifier.
@@ -532,9 +572,11 @@ class CatalogInterface(ABC):
                 - SchemaObjectType.VIEW: Return only views
                 - SchemaObjectType.SCALAR_FUNCTION: Scalar functions
                 - SchemaObjectType.TABLE_FUNCTION: Table functions
+                - SchemaObjectType.SCALAR_MACRO: Scalar macros
+                - SchemaObjectType.TABLE_MACRO: Table macros
 
         Returns:
-            A list of TableInfo, ViewInfo, or FunctionInfo objects
+            A list of TableInfo, ViewInfo, FunctionInfo, or MacroInfo objects
             depending on the type parameter.
 
         """
@@ -829,6 +871,50 @@ class CatalogInterface(ABC):
         """Set the comment for the view with the given name."""
         raise NotImplementedError("View comment set not implemented.")
 
+    # ---- Macros ----
+
+    @abstractmethod
+    def macro_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> MacroInfo | None:
+        """Get information about the macro with the given name.
+
+        Returns a MacroInfo object if the macro exists, or None if it does not.
+        """
+
+    def macro_create(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        macro_type: "MacroType",
+        parameters: list[str],
+        definition: str,
+        on_conflict: OnConflict,
+        parameter_default_values: pa.RecordBatch | None = None,
+    ) -> None:
+        """Create a new macro with the given definition."""
+        raise NotImplementedError("Macro create not implemented.")
+
+    def macro_drop(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        ignore_not_found: bool,
+    ) -> None:
+        """Drop the macro with the given name."""
+        raise NotImplementedError("Macro drop not implemented.")
+
 
 def _read_only(operation: str) -> Any:
     """Create a CatalogInterface method that raises CatalogReadOnlyError."""
@@ -894,6 +980,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     _table_registry: "dict[tuple[str, str], Table] | None" = None
     _view_registry: "dict[tuple[str, str], View] | None" = None
     _function_registry: "dict[tuple[str, str], type] | None" = None
+    _macro_registry: "dict[tuple[str, str], Macro] | None" = None
 
     def _build_registries(self) -> None:
         """Build lookup dicts from Catalog or legacy patterns.
@@ -911,6 +998,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         self._table_registry = {}
         self._view_registry = {}
         self._function_registry = {}
+        self._macro_registry = {}
 
         def _register_table(schema_key: str, table: "Table") -> None:
             key = (schema_key, table.name.lower())
@@ -931,6 +1019,12 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                 raise ValueError(f"Duplicate function '{meta.name}' in schema '{schema_key}'")
             self._function_registry[key] = func_cls  # type: ignore[index]
 
+        def _register_macro(schema_key: str, macro: "Macro") -> None:
+            key = (schema_key, macro.name.lower())
+            if key in self._macro_registry:  # type: ignore[operator]
+                raise ValueError(f"Duplicate macro '{macro.name}' in schema '{schema_key}'")
+            self._macro_registry[key] = macro  # type: ignore[index]
+
         if self.catalog is not None:
             # Build from Catalog object
             for schema in self.catalog.schemas:
@@ -943,6 +1037,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                     _register_view(schema_key, view)
                 for func_cls in schema.functions:
                     _register_function(schema_key, func_cls)
+                for macro in schema.macros:
+                    _register_macro(schema_key, macro)
         else:
             # Backward compat: create "main" schema from legacy `functions` list
             main_schema = Schema(name="main", tables=(), views=(), functions=())
@@ -1044,6 +1140,24 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             return view.to_view_info(schema.name if schema else schema_name)
         return None
 
+    def macro_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> MacroInfo | None:
+        """Get information about a macro (case-insensitive lookup)."""
+        self._build_registries()
+        assert self._macro_registry is not None
+        assert self._schema_registry is not None
+        macro = self._macro_registry.get((schema_name.lower(), name.lower()))
+        if macro:
+            schema = self._schema_registry.get(schema_name.lower())
+            return macro.to_macro_info(schema.name if schema else schema_name)
+        return None
+
     def table_scan_function_get(
         self,
         *,
@@ -1124,6 +1238,16 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         type: Literal[SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION],
     ) -> Sequence[FunctionInfo]: ...
 
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
+    ) -> Sequence[MacroInfo]: ...
+
     def schema_contents(
         self,
         *,
@@ -1131,10 +1255,10 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         transaction_id: TransactionId | None,
         name: str,
         type: SchemaObjectType,
-    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo]:
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo]:
         """List contents of a schema.
 
-        Returns tables, views, or functions based on the type parameter.
+        Returns tables, views, functions, or macros based on the type parameter.
         Uses case-insensitive schema name lookup.
 
         Args:
@@ -1144,7 +1268,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             type: The type of objects to return. Must be a SchemaObjectType enum.
 
         Returns:
-            A list of TableInfo, ViewInfo, or FunctionInfo objects.
+            A list of TableInfo, ViewInfo, FunctionInfo, or MacroInfo objects.
 
         """
         self._build_registries()
@@ -1152,6 +1276,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         assert self._table_registry is not None
         assert self._view_registry is not None
         assert self._function_registry is not None
+        assert self._macro_registry is not None
 
         # Case-insensitive schema lookup
         name_lower = name.lower()
@@ -1164,7 +1289,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         # Normalize type parameter (may be string from wire protocol)
         type_enum = type if isinstance(type, SchemaObjectType) else SchemaObjectType(type)
 
-        results: list[TableInfo | ViewInfo | FunctionInfo] = []
+        results: list[TableInfo | ViewInfo | FunctionInfo | MacroInfo] = []
 
         if type_enum == SchemaObjectType.TABLE:
             for (sn, _), table in self._table_registry.items():
@@ -1174,6 +1299,11 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             for (sn, _), view in self._view_registry.items():
                 if sn == name_lower:
                     results.append(view.to_view_info(schema_name))
+        elif type_enum in (SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO):
+            target_macro_type = MacroType.SCALAR if type_enum == SchemaObjectType.SCALAR_MACRO else MacroType.TABLE
+            for (sn, _), macro in self._macro_registry.items():
+                if sn == name_lower and macro.macro_type == target_macro_type:
+                    results.append(macro.to_macro_info(schema_name))
         else:
             # SCALAR_FUNCTION or TABLE_FUNCTION
             for (sn, _), func_cls in self._function_registry.items():
@@ -1285,3 +1415,5 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     view_drop = _read_only("drop view")
     view_rename = _read_only("rename view")
     view_comment_set = _read_only("set view comment")
+    macro_create = _read_only("create macro")
+    macro_drop = _read_only("drop macro")

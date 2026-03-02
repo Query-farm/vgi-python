@@ -9,13 +9,18 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 from vgi.catalog import (
     AttachId,
     CatalogAttachResult,
     CatalogInterface,
     FunctionInfo,
+    MacroInfo,
+    MacroType,
     OnConflict,
     SchemaInfo,
     SchemaObjectType,
@@ -42,12 +47,20 @@ class ViewData:
 
 
 @dataclass
+class MacroData:
+    """In-memory storage for macro metadata."""
+
+    info: MacroInfo
+
+
+@dataclass
 class SchemaData:
     """In-memory storage for schema metadata."""
 
     info: SchemaInfo
     tables: dict[str, TableData] = field(default_factory=dict)
     views: dict[str, ViewData] = field(default_factory=dict)
+    macros: dict[str, MacroData] = field(default_factory=dict)
 
 
 @dataclass
@@ -204,6 +217,24 @@ class InMemoryCatalog(CatalogInterface):
             return None
         return view_data.info
 
+    def macro_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> MacroInfo | None:
+        """Get information about a macro."""
+        catalog = self._get_catalog(attach_id)
+        schema_data = catalog.schemas.get(schema_name)
+        if schema_data is None:
+            return None
+        macro_data = schema_data.macros.get(name)
+        if macro_data is None:
+            return None
+        return macro_data.info
+
     # Optional methods with implementations
 
     def catalog_version(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> int:
@@ -302,7 +333,7 @@ class InMemoryCatalog(CatalogInterface):
             msg = f"Schema {name!r} not found"
             raise ValueError(msg)
         schema_data = catalog.schemas[name]
-        if not cascade and (schema_data.tables or schema_data.views):
+        if not cascade and (schema_data.tables or schema_data.views or schema_data.macros):
             msg = f"Schema {name!r} is not empty, use CASCADE to drop"
             raise ValueError(msg)
         del catalog.schemas[name]
@@ -338,6 +369,16 @@ class InMemoryCatalog(CatalogInterface):
         type: Literal[SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION],
     ) -> Sequence[FunctionInfo]: ...
 
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
+    ) -> Sequence[MacroInfo]: ...
+
     def schema_contents(
         self,
         *,
@@ -345,7 +386,7 @@ class InMemoryCatalog(CatalogInterface):
         transaction_id: TransactionId | None,
         name: str,
         type: SchemaObjectType,
-    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo]:
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo]:
         """Get the contents of a schema.
 
         Args:
@@ -355,12 +396,12 @@ class InMemoryCatalog(CatalogInterface):
             type: The type of objects to return. Must be a SchemaObjectType enum.
 
         Returns:
-            An iterable of TableInfo, ViewInfo, or FunctionInfo objects
+            An iterable of TableInfo, ViewInfo, FunctionInfo, or MacroInfo objects
             depending on the type parameter.
 
         """
         schema_data = self._get_schema(attach_id, name)
-        result: list[TableInfo | ViewInfo | FunctionInfo] = []
+        result: list[TableInfo | ViewInfo | FunctionInfo | MacroInfo] = []
 
         # Normalize type parameter (may be string from wire protocol)
         type_enum = type if isinstance(type, SchemaObjectType) else SchemaObjectType(type)
@@ -374,6 +415,13 @@ class InMemoryCatalog(CatalogInterface):
         elif type_enum == SchemaObjectType.VIEW:
             for view_data in schema_data.views.values():
                 result.append(view_data.info)
+
+        # Return macros for SCALAR_MACRO or TABLE_MACRO type
+        elif type_enum in (SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO):
+            target_macro_type = MacroType.SCALAR if type_enum == SchemaObjectType.SCALAR_MACRO else MacroType.TABLE
+            for macro_data in schema_data.macros.values():
+                if macro_data.info.macro_type == target_macro_type:
+                    result.append(macro_data.info)
 
         # Note: This example catalog doesn't store functions,
         # so SCALAR_FUNCTION and TABLE_FUNCTION types return nothing
@@ -620,6 +668,62 @@ class InMemoryCatalog(CatalogInterface):
                 tags=old_info.tags,
             )
         )
+        self._increment_version(attach_id)
+
+    def macro_create(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        macro_type: MacroType,
+        parameters: list[str],
+        definition: str,
+        on_conflict: OnConflict,
+        parameter_default_values: pa.RecordBatch | None = None,
+    ) -> None:
+        """Create a new macro."""
+        schema_data = self._get_schema(attach_id, schema_name)
+        if name in schema_data.macros:
+            if on_conflict == OnConflict.ERROR:
+                msg = f"Macro {name!r} already exists in schema {schema_name!r}"
+                raise ValueError(msg)
+            if on_conflict == OnConflict.IGNORE:
+                return
+            # REPLACE: fall through to create
+
+        schema_data.macros[name] = MacroData(
+            info=MacroInfo(
+                name=name,
+                schema_name=schema_name,
+                macro_type=macro_type,
+                parameters=parameters,
+                parameter_default_values=parameter_default_values,
+                definition=definition,
+                comment=None,
+                tags={},
+            )
+        )
+        self._increment_version(attach_id)
+
+    def macro_drop(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        ignore_not_found: bool,
+    ) -> None:
+        """Drop a macro."""
+        schema_data = self._get_schema(attach_id, schema_name)
+        if name not in schema_data.macros:
+            if ignore_not_found:
+                return
+            msg = f"Macro {name!r} not found in schema {schema_name!r}"
+            raise ValueError(msg)
+        del schema_data.macros[name]
         self._increment_version(attach_id)
 
 
