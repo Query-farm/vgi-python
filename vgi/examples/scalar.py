@@ -228,7 +228,7 @@ class BinaryPacketFunction(ScalarFunction):
         description = "Build binary packets with header, payload, and config"
         examples = [
             FunctionExample(
-                sql="SELECT binary_packet(x'FF', payload, {'tag': 'msg', 1}) FROM t",
+                sql="SELECT binary_packet(x'FF', payload, {label: 'msg', version: 1}) FROM t",
                 description="Build packets with 0xFF header",
             ),
         ]

@@ -45,9 +45,6 @@ vgi-client [OPTIONS]
 # Generate a sequence of 100 integers
 vgi-client --function sequence --args '[100]'
 
-# Generate a range from 0 to 10
-vgi-client --function range --args '[0, 10]'
-
 # Output as CSV
 vgi-client --function sequence --args '[10]' --format csv
 ```
@@ -68,8 +65,8 @@ vgi-client --input data.parquet --function repeat_inputs --args '[3]'
 **Scalar function (per-row transform):**
 
 ```bash
-# Double values in column "x"
-vgi-client --input data.parquet --function double --args '["x"]' --type scalar
+# Multiply values in column "price" by 2
+vgi-client --input data.parquet --function multiply --args '["price", 2]' --type scalar
 ```
 
 **Output to file:**
@@ -566,10 +563,24 @@ vgi-example-worker
 | `echo` | table-in-out | Pass through input unchanged |
 | `sum_all_columns` | table-in-out | Sum all numeric columns |
 | `repeat_inputs` | table-in-out | Repeat each row N times |
+| `buffer_input` | table-in-out | Collect all input, emit on finalize |
 | `sequence` | table | Generate sequence of integers |
-| `range` | table | Generate range of integers |
-| `double` | scalar | Double values in a column |
+| `double_sequence` | table | Generate sequence of floats |
+| `nested_sequence` | table | Generate sequence with nested struct/list columns |
+| `partitioned_sequence` | table | Generate sequence across multiple workers |
+| `projected_data` | table | Generate data with projection pushdown |
+| `ten_thousand` | table | Generate 10000 integers |
+| `constant_columns` | table | Generate rows with constant values from varargs |
+| `named_params_echo` | table | Echo named parameter values in output columns |
+| `multiply` | scalar | Multiply values by a constant factor |
+| `double` | scalar | Double numeric values |
 | `add_values` | scalar | Add two columns together |
+| `sum_values` | scalar | Sum multiple numeric values (varargs) |
+| `upper_case` | scalar | Convert string values to uppercase |
+| `null_handling` | scalar | Returns value or -5000 if null |
+| `random_int` | scalar | Generate random integers (VOLATILE) |
+| `bernoulli` | scalar | Generate random booleans (VOLATILE) |
+| `random_bytes` | scalar | Generate pseudo-random binary blobs |
 
 ### vgi-example-catalog-worker
 

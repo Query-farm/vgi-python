@@ -7,47 +7,54 @@ Functions can define a nested `Meta` class to provide introspection metadata. No
 Metadata works with all function types: `ScalarFunction`, `TableFunctionGenerator`, and `TableInOutFunction`.
 
 ```python
-from typing import Annotated
-from vgi import TableInOutFunction, Arg
-
-class SumValuesFunction(TableInOutFunction):
-    """Sum all numeric columns in the input."""
-
-    class Meta:
-        name = "sum_values"  # Registration name (default: snake_case of class)
-        description = "Sum all numeric columns and return a single row"
-        categories = ["aggregation", "numeric"]
-        max_workers = 1  # Single-threaded (used by max_processes property)
-
-    column_name: Annotated[str | None, Arg("column", default=None, doc="Value to sum")]
-
-    def transform(self, batch):
-        ...
-```
-
-```python
-from typing import Annotated
-from vgi import ScalarFunction, Arg
-from vgi.arguments import AnyArrow
+from typing import Annotated, Any
+from vgi import ScalarFunction, Param, Returns
 import pyarrow as pa
 import pyarrow.compute as pc
 
-class DoubleValues(ScalarFunction):
+class MultiplyFunction(ScalarFunction):
+    """Multiplies a value by a constant factor."""
+
+    class Meta:
+        name = "multiply"
+        description = "Multiplies a value by a constant factor"
+        categories = ["numeric", "transform"]
+
+    @classmethod
+    def compute(
+        cls,
+        value: Annotated[pa.Int64Array, Param(doc="Integer value to multiply")],
+        factor: Annotated[int, ConstParam("Multiplication factor")],
+    ) -> Annotated[pa.Int64Array, Returns()]:
+        return pc.multiply(value, factor)
+```
+
+```python
+from typing import Annotated, Any
+from vgi import ScalarFunction, Param, Returns
+from vgi.scalar_function import BindParameters, BindResult
+import pyarrow as pa
+import pyarrow.compute as pc
+
+class DoubleFunction(ScalarFunction):
     """Double numeric values."""
 
     class Meta:
         name = "double"
-        output_type = AnyArrow  # Dynamic type - depends on input
+        description = "Doubles numeric values"
         categories = ["numeric", "transform"]
 
-    col_name: Annotated[str, Arg(0, doc="Numeric value to double")]
+    @classmethod
+    def on_bind(cls, params: BindParameters) -> BindResult:
+        field = params.arguments_schema.field(0)
+        return BindResult(field.type)
 
-    @property
-    def output_type(self) -> pa.DataType:
-        return self.input_schema.field(self.col_name).type
-
-    def compute(self, batch):
-        return pc.multiply(batch.column(self.col_name), 2)
+    @classmethod
+    def compute(
+        cls,
+        value: Annotated[pa.Array[Any], Param(doc="Numeric value to double")],
+    ) -> Annotated[pa.Array[Any], Returns()]:
+        return pc.multiply(value, 2)
 ```
 
 ## Accessing Metadata

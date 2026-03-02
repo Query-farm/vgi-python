@@ -73,23 +73,37 @@ import pyarrow as pa
 from vgi import TableFunctionGenerator, Arg
 from vgi.table_function import TableCardinality
 
-class MyTableFunction(TableFunctionGenerator):
+from dataclasses import dataclass
+from typing import ClassVar
+
+@dataclass(slots=True, frozen=True)
+class MyTableFunctionArgs:
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+
+@dataclass
+class MyTableState:
+    remaining: int
+    offset: int = 0
+
+class MyTableFunction(TableFunctionGenerator[MyTableFunctionArgs, MyTableState]):
     """Generate data without input."""
+
+    FunctionArguments = MyTableFunctionArgs
 
     class Meta:
         name = "my_table_function"
 
-    count: Annotated[int, Arg(0, doc="Number of rows to generate")]
-    BATCH_SIZE = 1000
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([("value", pa.int64())])
+    BATCH_SIZE: ClassVar[int] = 1000
 
-    @property
-    def output_schema(self) -> pa.Schema:
-        return pa.schema([("value", pa.int64())])
+    @classmethod
+    def cardinality(cls, params) -> TableCardinality:
+        """Provide row count estimate."""
+        return TableCardinality(estimate=params.args.count, max=params.args.count)
 
-    @property
-    def cardinality(self) -> TableCardinality:
-        """Optional: provide row count estimate."""
-        return TableCardinality(estimate=self.count, max=self.count)
+    @classmethod
+    def initial_state(cls, params) -> MyTableState:
+        return MyTableState(remaining=params.args.count)
 
     @classmethod
     def process(cls, params, state, out) -> None:
@@ -112,8 +126,8 @@ class MyTableFunction(TableFunctionGenerator):
 |--------|------------------|---------|
 | `process(params, state, out)` | Always - generate output | Required |
 | `initial_state(params)` | Initialize per-worker state | Returns None |
-| `output_schema` or `FIXED_SCHEMA` | Define output columns | Required |
-| `cardinality` | Provide row count estimates | Returns None |
+| `FIXED_SCHEMA` or `on_bind(params)` | Define output columns | Required |
+| `cardinality(params)` | Provide row count estimates | Returns None |
 
 ### Table Function Patterns
 
@@ -172,19 +186,36 @@ The simplest API with `transform()` and `finish()` callbacks and explicit `TStat
 ```python
 import pyarrow as pa
 from vgi import TableInOutFunction
+from vgi.table_function import BindParams, ProcessParams
 
-class MyFunction(TableInOutFunction):
+class MyFunction(TableInOutFunction[MyArgs, MyState]):
     """Transform input batches."""
 
-    @property
-    def output_schema(self) -> pa.Schema:
-        return self.input_schema
+    @classmethod
+    def on_bind(cls, params: BindParams[MyArgs]) -> BindResponse:
+        assert params.bind_call.input_schema is not None
+        return BindResponse(output_schema=params.bind_call.input_schema)
 
-    def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
+    @classmethod
+    def initial_state(cls, params: ProcessParams[MyArgs]) -> MyState | None:
+        return MyState(...)
+
+    @classmethod
+    def transform(
+        cls,
+        batch: pa.RecordBatch,
+        params: ProcessParams[MyArgs],
+        state: MyState | None,
+    ) -> pa.RecordBatch:
         """Transform one input batch. Return output batch."""
         return batch
 
-    def finish(self) -> list[pa.RecordBatch]:
+    @classmethod
+    def finish(
+        cls,
+        params: ProcessParams[MyArgs],
+        states: list[MyState],
+    ) -> list[pa.RecordBatch]:
         """Emit final output after all input is processed."""
         return []
 ```
@@ -196,23 +227,26 @@ For full control over per-batch processing with `OutputCollector`:
 ```python
 import pyarrow as pa
 from vgi import TableInOutGenerator
+from vgi.table_function import BindParams, ProcessParams
+from vgi_rpc.rpc import OutputCollector
 
-class MyFunction(TableInOutGenerator):
+class MyFunction(TableInOutGenerator[MyArgs, MyState]):
     """Advanced table-in-out with OutputCollector."""
 
-    @property
-    def output_schema(self) -> pa.Schema:
-        return self.input_schema
+    @classmethod
+    def on_bind(cls, params: BindParams[MyArgs]) -> BindResponse:
+        assert params.bind_call.input_schema is not None
+        return BindResponse(output_schema=params.bind_call.input_schema)
 
     @classmethod
-    def process(cls, params, state, batch, out) -> None:
+    def process(cls, params: ProcessParams[MyArgs], state: MyState | None, batch: pa.RecordBatch, out: OutputCollector) -> None:
         """Process one input batch. Call out.emit() for output."""
         out.emit(batch)
 
     @classmethod
-    def finalize(cls, params, states, out) -> None:
-        """Produce final output. Call out.emit() and out.finish()."""
-        out.finish()
+    def finalize(cls, params: ProcessParams[MyArgs]) -> list[pa.RecordBatch]:
+        """Produce final output. Return list of batches."""
+        return []
 ```
 
 ### Key Patterns

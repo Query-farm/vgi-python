@@ -146,7 +146,7 @@ class SequenceFunction(_BaseSequenceFunction):
     SELECT * FROM sequence(5)
     Returns: [{"n": 0}, {"n": 1}, {"n": 2}, {"n": 3}, {"n": 4}]
 
-    SELECT * FROM sequence(5, increment=2)
+    SELECT * FROM sequence(5, increment := 2)
     Returns: [{"n": 0}, {"n": 2}, {"n": 4}, {"n": 6}, {"n": 8}]
 
     SELECT * FROM sequence(1000, batch_size := 100)
@@ -445,7 +445,7 @@ class DoubleSequenceFunction(_BaseSequenceFunction):
     SELECT * FROM double_sequence(5)
     Returns: [{"n": 0.0}, {"n": 1.0}, {"n": 2.0}, {"n": 3.0}, {"n": 4.0}]
 
-    SELECT * FROM double_sequence(5, increment=0.5)
+    SELECT * FROM double_sequence(5, increment := 0.5)
     Returns: [{"n": 0.0}, {"n": 0.5}, {"n": 1.0}, {"n": 1.5}, {"n": 2.0}]
 
     SELECT * FROM double_sequence(1000, batch_size := 100)
@@ -472,7 +472,7 @@ class DoubleSequenceFunction(_BaseSequenceFunction):
                 description="Generate floats 0.0-999.0 in batches of 100",
             ),
             FunctionExample(
-                sql="SELECT * FROM double_sequence(5, increment=0.5)",
+                sql="SELECT * FROM double_sequence(5, increment := 0.5)",
                 description="Generate 0.0, 0.5, 1.0, 1.5, 2.0",
             ),
         ]
@@ -671,7 +671,7 @@ class PartitionedSequenceFunction(
                 description="Generate 0-99 in parallel across workers",
             ),
             FunctionExample(
-                sql="SELECT * FROM partitioned_sequence(5, increment=10)",
+                sql="SELECT * FROM partitioned_sequence(5, increment := 10)",
                 description="Generate 0, 10, 20, 30, 40 in parallel",
             ),
         ]
