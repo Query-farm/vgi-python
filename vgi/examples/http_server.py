@@ -16,10 +16,13 @@ from __future__ import annotations
 import os
 import sys
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
 from vgi.examples.worker import ExampleWorker
-from vgi.logging_config import configure_worker_logging
-from vgi.worker import LogFormat, LogLevel
+from vgi.logging_config import LogFormat, LogLevel, configure_worker_logging
+
+if TYPE_CHECKING:
+    from vgi_rpc.external import UploadUrl
 
 
 class _SigV4S3Storage:
@@ -41,10 +44,10 @@ class _SigV4S3Storage:
         self.presign_expiry_seconds = presign_expiry_seconds
         self._client = None
 
-    def _get_client(self):  # type: ignore[no-untyped-def]
+    def _get_client(self) -> Any:
         if self._client is None:
-            import boto3
-            from botocore.config import Config
+            import boto3  # type: ignore[import-untyped]
+            from botocore.config import Config  # type: ignore[import-untyped]
 
             self._client = boto3.client(
                 "s3",
@@ -54,7 +57,7 @@ class _SigV4S3Storage:
             )
         return self._client
 
-    def upload(self, data: bytes, schema, *, content_encoding: str | None = None) -> str:  # type: ignore[no-untyped-def]
+    def upload(self, data: bytes, schema: Any, *, content_encoding: str | None = None) -> str:
         import uuid
 
         client = self._get_client()
@@ -71,13 +74,14 @@ class _SigV4S3Storage:
             put_kwargs["ContentEncoding"] = content_encoding
         client.put_object(**put_kwargs)
 
-        return client.generate_presigned_url(
+        url: str = client.generate_presigned_url(
             "get_object",
             Params={"Bucket": self.bucket, "Key": key},
             ExpiresIn=self.presign_expiry_seconds,
         )
+        return url
 
-    def generate_upload_url(self, schema):  # type: ignore[no-untyped-def]
+    def generate_upload_url(self, schema: Any) -> UploadUrl:
         import uuid
 
         from vgi_rpc.external import UploadUrl
