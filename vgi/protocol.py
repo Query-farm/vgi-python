@@ -20,8 +20,9 @@ StreamState Implementations
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Protocol
+from typing import Annotated, Any, Protocol, get_args, get_origin
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType, Transient
@@ -414,6 +415,33 @@ class ScalarExchangeState(ExchangeState):
         out.emit(output)
 
 
+_log = logging.getLogger(__name__)
+
+
+def _resolve_state_type(func_cls: type) -> type[ArrowSerializableDataclass] | None:
+    """Extract the TState type parameter from a TableFunctionGenerator or TableInOutGenerator.
+
+    Walks the MRO looking for ``TableFunctionGenerator[TArgs, TState]`` or
+    ``TableInOutGenerator[TArgs, TState]`` and returns ``TState`` if it is a
+    concrete ``ArrowSerializableDataclass`` subclass.
+    """
+    for klass in func_cls.__mro__:
+        for base in getattr(klass, "__orig_bases__", ()):
+            origin = get_origin(base)
+            if origin is None:
+                continue
+            if issubclass(origin, (TableFunctionGenerator, TableInOutGenerator)):
+                args = get_args(base)
+                if len(args) >= 2:
+                    state_type = args[1]
+                    if (
+                        isinstance(state_type, type)
+                        and issubclass(state_type, ArrowSerializableDataclass)
+                    ):
+                        return state_type
+    return None
+
+
 class _FilteringOutputCollector:
     """Wrapper that applies pushdown filters to emitted data batches.
 
@@ -469,10 +497,15 @@ class TableProducerState(ProducerState):
     so they survive HTTP round-trips.  Transient fields are restored via
     ``rehydrate()``.
 
+    ``_user_state`` is serialized when it is an ``ArrowSerializableDataclass``,
+    allowing iteration state to survive HTTP round-trips.  When the state type
+    is not serializable, it falls back to ``initial_state()`` on rehydration.
+
     """
 
     _init_call: Annotated[InitRequest, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
     _init_response: Annotated[GlobalInitResponse, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
+    _user_state_bytes: bytes | None = field(default=None, repr=False)
     _func_cls: Annotated[type[TableFunctionGenerator[Any]], Transient()] = field(default=None, repr=False)  # type: ignore[assignment]
     _params: Annotated[ProcessParams[Any], Transient()] = field(default=None, repr=False)  # type: ignore[arg-type]
     _user_state: Annotated[Any, Transient()] = field(default=None, repr=False)
@@ -485,6 +518,12 @@ class TableProducerState(ProducerState):
             self._auto_apply = True
             if self._params is not None and self._params.init_call.pushdown_filters is not None:
                 self._pushdown_filters = self._func_cls.pushdown_filters(self._params.init_call.pushdown_filters)
+
+    def _to_row_dict(self) -> dict[str, object]:
+        """Serialize _user_state into _user_state_bytes before standard serialization."""
+        if self._user_state is not None and isinstance(self._user_state, ArrowSerializableDataclass):
+            self._user_state_bytes = self._user_state.serialize_to_bytes()
+        return super()._to_row_dict()
 
     def rehydrate(self, implementation: object) -> None:
         """Restore transient fields from serialized init data."""
@@ -504,7 +543,17 @@ class TableProducerState(ProducerState):
             secrets=_batch_to_secret_dict(self._init_call.bind_call.secrets),
             storage=BoundStorage(func_cls.storage, self._init_response.execution_id),
         )
-        self._user_state = func_cls.initial_state(self._params)
+        # Restore _user_state from serialized bytes if available
+        if self._user_state_bytes is not None:
+            state_type = _resolve_state_type(func_cls)
+            if state_type is not None:
+                self._user_state = state_type.deserialize_from_bytes(self._user_state_bytes)
+                _log.debug("Restored user state from token: %s", type(self._user_state).__name__)
+            else:
+                _log.debug("State type not serializable, falling back to initial_state()")
+                self._user_state = func_cls.initial_state(self._params)
+        else:
+            self._user_state = func_cls.initial_state(self._params)
         # Re-derive pushdown filters (triggers same logic as __post_init__)
         if func_cls._should_auto_apply_filters():
             self._auto_apply = True
@@ -536,10 +585,14 @@ class TableInOutExchangeState(ExchangeState):
     so they survive HTTP round-trips.  Transient fields are restored via
     ``rehydrate()``.
 
+    ``_user_state`` is serialized when it is an ``ArrowSerializableDataclass``,
+    allowing iteration state to survive HTTP round-trips.
+
     """
 
     _init_call: Annotated[InitRequest, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
     _init_response: Annotated[GlobalInitResponse, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
+    _user_state_bytes: bytes | None = field(default=None, repr=False)
     _func_cls: Annotated[type[TableInOutGenerator[Any]], Transient()] = field(default=None, repr=False)  # type: ignore[assignment]
     _params: Annotated[ProcessParams[Any], Transient()] = field(default=None, repr=False)  # type: ignore[arg-type]
     _user_state: Annotated[Any, Transient()] = field(default=None, repr=False)
@@ -552,6 +605,12 @@ class TableInOutExchangeState(ExchangeState):
             self._auto_apply = True
             if self._params is not None and self._params.init_call.pushdown_filters is not None:
                 self._pushdown_filters = self._func_cls.pushdown_filters(self._params.init_call.pushdown_filters)
+
+    def _to_row_dict(self) -> dict[str, object]:
+        """Serialize _user_state into _user_state_bytes before standard serialization."""
+        if self._user_state is not None and isinstance(self._user_state, ArrowSerializableDataclass):
+            self._user_state_bytes = self._user_state.serialize_to_bytes()
+        return super()._to_row_dict()
 
     def rehydrate(self, implementation: object) -> None:
         """Restore transient fields from serialized init data."""
@@ -571,7 +630,15 @@ class TableInOutExchangeState(ExchangeState):
             secrets=_batch_to_secret_dict(self._init_call.bind_call.secrets),
             storage=BoundStorage(func_cls.storage, self._init_response.execution_id),
         )
-        self._user_state = func_cls.initial_state(self._params)
+        # Restore _user_state from serialized bytes if available
+        if self._user_state_bytes is not None:
+            state_type = _resolve_state_type(func_cls)
+            if state_type is not None:
+                self._user_state = state_type.deserialize_from_bytes(self._user_state_bytes)
+            else:
+                self._user_state = func_cls.initial_state(self._params)
+        else:
+            self._user_state = func_cls.initial_state(self._params)
         if func_cls._should_auto_apply_filters():
             self._auto_apply = True
             if self._init_call.pushdown_filters is not None:
