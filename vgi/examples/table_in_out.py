@@ -19,12 +19,15 @@ AVAILABLE FUNCTIONS
 -------------------
 EchoFunction                   - Passthrough, no transformation
 BufferInputFunction            - Collects all input, emits on finalize
+FilterBySettingFunction        - Filters rows by threshold setting
 RepeatInputsFunction           - Duplicates each input batch N times
 SumAllColumnsFunction          - Aggregates numeric columns into sums
 ExceptionProcessFunction       - Raises exception during process (test)
 ExceptionFinalizeFunction      - Raises exception during finalize (test)
 SumAllColumnsSimpleDistributed - Distributed aggregation via callback API
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Annotated, Any
@@ -36,7 +39,7 @@ from vgi_rpc.log import Level
 from vgi_rpc.rpc import OutputCollector
 from vgi_rpc.utils import empty_batch
 
-from vgi.arguments import Arg, TableInput
+from vgi.arguments import Arg, Setting, TableInput
 from vgi.invocation import BindResponse, GlobalInitResponse
 from vgi.metadata import FunctionExample
 from vgi.schema_utils import schema
@@ -49,6 +52,7 @@ from vgi.table_in_out_function import (
 __all__ = [
     "EchoFunction",
     "BufferInputFunction",
+    "FilterBySettingFunction",
     "RepeatInputsFunction",
     "SumAllColumnsFunction",
     "SumAllColumnsSimpleDistributed",
@@ -182,6 +186,69 @@ class BufferInputFunction(TableInOutGenerator[SingleTableArguments]):
         while batch := params.storage.queue_pop_batch():
             batches.append(batch)
         return batches
+
+
+class FilterBySettingFunction(TableInOutGenerator[SingleTableArguments]):
+    """Filters input rows where the value column meets a threshold setting.
+
+    USE CASE
+    --------
+    Demonstrates how table-in-out functions can use DuckDB settings to control
+    behavior. The threshold setting determines which rows pass through: only
+    rows where the "value" column >= threshold are emitted.
+
+    The Setting() on on_bind() serves solely to register ``threshold`` in
+    required_settings metadata. The actual filtering uses params.settings
+    in process().
+
+    SCHEMA TRANSFORMATION
+    ---------------------
+    Input:  any schema (must contain a "value" column)
+    Output: same schema (rows filtered by threshold)
+
+    Example:
+    -------
+    With threshold=5 and input [{"value": 3}, {"value": 7}]:
+    Output: [{"value": 7}]
+
+    """
+
+    class Meta:
+        """Metadata for FilterBySettingFunction."""
+
+        name = "filter_by_setting"
+        description = "Filter rows where value column >= threshold setting"
+        categories = ["transform", "settings"]
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM filter_by_setting((SELECT * FROM input_table))",
+                description="Filter rows using the threshold setting",
+            )
+        ]
+
+    @classmethod
+    def on_bind(
+        cls,
+        params: BindParams[SingleTableArguments],
+        *,
+        threshold: Annotated[pa.Scalar[Any] | None, Setting()] = None,
+    ) -> BindResponse:
+        """Return input schema unchanged. Threshold declared for required_settings."""
+        assert params.bind_call.input_schema is not None
+        return BindResponse(output_schema=params.bind_call.input_schema)
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[SingleTableArguments],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        """Filter rows where value >= threshold."""
+        threshold = params.settings["threshold"]  # pa.Scalar (int64)
+        mask = pc.greater_equal(batch.column("value"), threshold)
+        out.emit(batch.filter(mask))
 
 
 @dataclass(slots=True, frozen=True)

@@ -13,6 +13,8 @@ Settings:
 - vgi_verbose_mode: Enable verbose output with extra columns (bool, default: false)
 - greeting: Custom greeting message (str, default: "Hello")
 - multiplier: Value multiplier (int, default: 1)
+- threshold: Filter threshold for filter_by_setting (int, default: 0)
+- config: Sequence configuration struct for struct_settings (struct, default: None)
 
 Usage:
     vgi-example-worker
@@ -61,6 +63,7 @@ from vgi.examples.table import (
     ProjectedDataFunction,
     SequenceFunction,
     SettingsAwareFunction,
+    StructSettingsFunction,
     TenThousandFunction,
 )
 from vgi.examples.table_in_out import (
@@ -68,6 +71,7 @@ from vgi.examples.table_in_out import (
     EchoFunction,
     ExceptionFinalizeFunction,
     ExceptionProcessFunction,
+    FilterBySettingFunction,
     RepeatInputsFunction,
     SumAllColumnsFunction,
     SumAllColumnsSimpleDistributed,
@@ -84,7 +88,9 @@ class ExampleWorker(Worker):
     Settings exposed via catalog_attach:
     - vgi_verbose_mode: Enable verbose output (used by SettingsAwareFunction)
     - greeting: Custom greeting message (used by SettingsAwareFunction)
-    - multiplier: Value multiplier (used by SettingsAwareFunction)
+    - multiplier: Value multiplier (used by SettingsAwareFunction, MultiplyBySettingFunction)
+    - threshold: Filter threshold (used by FilterBySettingFunction)
+    - config: Sequence configuration struct (used by StructSettingsFunction)
     """
 
     class Settings:
@@ -93,6 +99,11 @@ class ExampleWorker(Worker):
         vgi_verbose_mode: Annotated[bool, Setting(desc="Enable verbose output")] = False
         greeting: Annotated[str, Setting(desc="Custom greeting message")] = "Hello"
         multiplier: Annotated[int, Setting(desc="Value multiplier")] = 1
+        threshold: Annotated[int, Setting(desc="Filter threshold")] = 0
+        config: Annotated[  # type: ignore[valid-type]
+            pa.struct([("start", pa.int64()), ("step", pa.int64()), ("label", pa.string())]),
+            Setting(desc="Sequence configuration struct"),
+        ] = None
 
     catalog = Catalog(
         name="example",
@@ -105,6 +116,7 @@ class ExampleWorker(Worker):
                     # TableInOutGenerator - transform input batches
                     EchoFunction,
                     BufferInputFunction,
+                    FilterBySettingFunction,
                     RepeatInputsFunction,
                     SumAllColumnsFunction,
                     SumAllColumnsSimpleDistributed,
@@ -121,6 +133,7 @@ class ExampleWorker(Worker):
                     ProjectedDataFunction,
                     SequenceFunction,
                     SettingsAwareFunction,
+                    StructSettingsFunction,
                     TenThousandFunction,
                     # ScalarFunctionGenerator - transform to single-column output
                     AddValuesFunction,

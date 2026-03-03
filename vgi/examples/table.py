@@ -15,6 +15,7 @@ PartitionedSequenceFunction   - Demonstrates multi-worker parallel execution
 ProjectedDataFunction         - Demonstrates projection pushdown
 SequenceFunction              - Generates a sequence of integers 0..n-1
 SettingsAwareFunction         - Demonstrates settings-aware output schema
+StructSettingsFunction        - Demonstrates struct settings for sequence config
 TenThousandFunction           - Generates 10000 integers 0..9999 (no args)
 """
 
@@ -54,6 +55,7 @@ __all__ = [
     "ProjectedDataFunction",
     "SequenceFunction",
     "SettingsAwareFunction",
+    "StructSettingsFunction",
     "TenThousandFunction",
 ]
 
@@ -851,16 +853,27 @@ class SettingsAwareFunctionArguments:
     count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
 
 
+@dataclass
+class SettingsAwareState:
+    """Mutable state for SettingsAwareFunction with typed settings."""
+
+    remaining: int
+    current_index: int = 0
+    verbose: bool = False
+    greeting: str = "Hello"
+    multiplier: int = 1
+
+
 @init_single_worker
 @_cardinality_from_count
-class SettingsAwareFunction(TableFunctionGenerator[SettingsAwareFunctionArguments, CountdownState]):
+class SettingsAwareFunction(TableFunctionGenerator[SettingsAwareFunctionArguments, SettingsAwareState]):
     """Generates data demonstrating that settings are passed to functions.
 
     USE CASE
     --------
     Demonstrates how functions can declare required settings via
-    Meta.required_settings and access them via self.settings or
-    self.get_setting(). The output includes columns showing the actual
+    Setting() annotations and access them via state (resolved once
+    in initial_state()). The output includes columns showing the actual
     setting values that were passed.
 
     This function uses three settings:
@@ -868,14 +881,18 @@ class SettingsAwareFunction(TableFunctionGenerator[SettingsAwareFunctionArgument
     - greeting: str - a custom greeting message echoed in output
     - multiplier: int - multiplies the value column
 
+    Settings are typed: the C++ extension sends Arrow scalars with proper
+    types (bool, int64, string). For backward compatibility, string values
+    like "true" are also accepted for vgi_verbose_mode.
+
     SCHEMA
     ------
     Base output: {"id": int64, "greeting": string, "value": float64}
-    With vgi_verbose_mode="true": adds "details": string column
+    With vgi_verbose_mode=true: adds "details": string column
 
     Example:
     -------
-    With settings={"vgi_verbose_mode": "true", "greeting": "Hi", "multiplier": "2"}:
+    With settings={vgi_verbose_mode: true, greeting: "Hi", multiplier: 2}:
     Returns: [{"id": 0, "greeting": "Hi", "value": 0.0, "details": "row_0"}, ...]
 
     """
@@ -895,6 +912,11 @@ class SettingsAwareFunction(TableFunctionGenerator[SettingsAwareFunctionArgument
 
     BATCH_SIZE: ClassVar[int] = 1000
 
+    @staticmethod
+    def _is_verbose(val: object) -> bool:
+        """Check if verbose mode is enabled, handling both bool and string values."""
+        return val is True or val == "true"
+
     @classmethod
     def on_bind(
         cls,
@@ -907,7 +929,7 @@ class SettingsAwareFunction(TableFunctionGenerator[SettingsAwareFunctionArgument
         """Return output schema based on vgi_verbose_mode setting.
 
         Always includes id, greeting (from setting), and value (multiplied).
-        When vgi_verbose_mode is "true", includes an extra "details" column.
+        When vgi_verbose_mode is true, includes an extra "details" column.
         """
         fields: list[pa.Field[pa.DataType]] = [
             pa.field("id", pa.int64()),
@@ -915,49 +937,153 @@ class SettingsAwareFunction(TableFunctionGenerator[SettingsAwareFunctionArgument
             pa.field("value", pa.float64()),
         ]
 
-        # Add details column if verbose mode is enabled
-        verbose_value = vgi_verbose_mode.as_py() if vgi_verbose_mode is not None else "false"
-        if verbose_value == "true":
+        # Add details column if verbose mode is enabled (handles bool and string)
+        if vgi_verbose_mode is not None and cls._is_verbose(vgi_verbose_mode.as_py()):
             fields.append(pa.field("details", pa.string()))
 
         return BindResponse(output_schema=pa.schema(fields))
 
     @classmethod
-    def initial_state(cls, params: ProcessParams[SettingsAwareFunctionArguments]) -> CountdownState:
-        """Create initial state with remaining count."""
-        return CountdownState(remaining=params.args.count)
+    def initial_state(cls, params: ProcessParams[SettingsAwareFunctionArguments]) -> SettingsAwareState:
+        """Create initial state with typed settings resolved once."""
+        verbose_val = params.settings.get("vgi_verbose_mode", pa.scalar(False)).as_py()
+        greeting_val = params.settings.get("greeting", pa.scalar("Hello")).as_py()
+        multiplier_val = params.settings.get("multiplier", pa.scalar(1)).as_py()
+
+        return SettingsAwareState(
+            remaining=params.args.count,
+            verbose=cls._is_verbose(verbose_val),
+            greeting=str(greeting_val),
+            multiplier=int(multiplier_val),
+        )
 
     @classmethod
     def process(
         cls,
         params: ProcessParams[SettingsAwareFunctionArguments],
-        state: CountdownState,
+        state: SettingsAwareState,
         out: OutputCollector,
     ) -> None:
-        """Generate data based on settings."""
+        """Generate data based on settings stored in state."""
         if state.remaining <= 0:
             out.finish()
             return
-
-        verbose = params.settings.get("vgi_verbose_mode", pa.scalar("false")).as_py() == "true"
-        greeting = params.settings.get("greeting", pa.scalar("Hello")).as_py()
-        multiplier_str = params.settings.get("multiplier", pa.scalar("1")).as_py()
-        multiplier = int(multiplier_str)
 
         size = min(state.remaining, cls.BATCH_SIZE)
         ids = list(range(state.current_index, state.current_index + size))
 
         data: dict[str, list[int] | list[float] | list[str]] = {
             "id": ids,
-            "greeting": [greeting] * size,
-            "value": [float(i) * 2.5 * multiplier for i in ids],
+            "greeting": [state.greeting] * size,
+            "value": [float(i) * 2.5 * state.multiplier for i in ids],
         }
 
-        if verbose:
+        if state.verbose:
             data["details"] = [f"row_{i}" for i in ids]
 
         out.emit(pa.RecordBatch.from_pydict(data, schema=params.output_schema))
 
+        state.current_index += size
+        state.remaining -= size
+
+
+@dataclass(slots=True, frozen=True)
+class StructSettingsFunctionArguments:
+    """Arguments for StructSettingsFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+
+
+@dataclass
+class StructSettingsState:
+    """Mutable state for StructSettingsFunction."""
+
+    remaining: int
+    current_index: int = 0
+    start: int = 0
+    step: int = 1
+    label: str = "item"
+
+
+@init_single_worker
+@_cardinality_from_count
+class StructSettingsFunction(TableFunctionGenerator[StructSettingsFunctionArguments, StructSettingsState]):
+    """Generates a sequence configured by a struct setting.
+
+    USE CASE
+    --------
+    Demonstrates how a single struct setting can configure multiple aspects
+    of a function's behavior. The config setting is a struct with fields:
+    - start: int64 - starting value for the sequence
+    - step: int64 - step between values
+    - label: string - prefix for label column
+
+    SCHEMA
+    ------
+    Output: {"n": int64, "label": string}
+
+    Example:
+    -------
+    With config={'start': 10, 'step': 5, 'label': 'item'} and count=3:
+    Returns: [{"n": 10, "label": "item_0"}, {"n": 15, "label": "item_1"}, {"n": 20, "label": "item_2"}]
+
+    """
+
+    class Meta:
+        """Metadata for StructSettingsFunction."""
+
+        name = "struct_settings"
+        description = "Generate a sequence configured by a struct setting"
+        categories = ["generator", "settings"]
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM struct_settings(5)",
+                description="Generate 5 rows configured by the config setting",
+            )
+        ]
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema({"n": pa.int64(), "label": pa.string()})
+
+    @classmethod
+    def on_bind(
+        cls,
+        params: BindParams[StructSettingsFunctionArguments],
+        *,
+        config: Annotated[pa.Scalar[Any] | None, Setting()] = None,
+    ) -> BindResponse:
+        """Return output schema. Config declared here for required_settings registration."""
+        return BindResponse(output_schema=cls.FIXED_SCHEMA)
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[StructSettingsFunctionArguments]) -> StructSettingsState:
+        """Create initial state with struct setting values resolved once."""
+        config = params.settings["config"]  # pa.StructScalar
+        cfg = config.as_py()  # dict
+        return StructSettingsState(
+            remaining=params.args.count,
+            start=cfg["start"],
+            step=cfg["step"],
+            label=cfg["label"],
+        )
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[StructSettingsFunctionArguments],
+        state: StructSettingsState,
+        out: OutputCollector,
+    ) -> None:
+        """Generate rows with values derived from the struct setting."""
+        if state.remaining <= 0:
+            out.finish()
+            return
+
+        size = min(state.remaining, 1000)
+        data: dict[str, list[int] | list[str]] = {
+            "n": [state.start + (state.current_index + i) * state.step for i in range(size)],
+            "label": [f"{state.label}_{state.current_index + i}" for i in range(size)],
+        }
+        out.emit(pa.RecordBatch.from_pydict(data, schema=params.output_schema))
         state.current_index += size
         state.remaining -= size
 

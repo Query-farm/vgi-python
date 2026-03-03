@@ -4,6 +4,7 @@ from typing import Annotated
 
 import pyarrow as pa
 import pytest
+from vgi_rpc.utils import deserialize_record_batch
 
 from vgi.catalog.setting import (
     Setting,
@@ -233,3 +234,63 @@ class TestSettingSpecSerialization:
         assert deserialized.desc == desc
         assert deserialized.type == arrow_type
         assert deserialized.default == default
+
+
+class TestCatalogAttachSettingsRoundTrip:
+    """Tests that Worker.Settings survive catalog_attach serialization."""
+
+    def test_worker_settings_in_catalog_attach(self) -> None:
+        """All ExampleWorker settings should be present in catalog_attach result."""
+        from vgi.examples.worker import ExampleWorker
+
+        catalog_interface_cls = ExampleWorker._get_catalog_interface()
+        assert catalog_interface_cls is not None
+        catalog_interface = catalog_interface_cls()
+
+        result = catalog_interface.catalog_attach(name="example", options={})
+
+        # Deserialize settings from the result
+        assert result.settings is not None
+        specs_by_name: dict[str, SettingSpec] = {}
+        for setting_bytes in result.settings:
+            batch, _ = deserialize_record_batch(setting_bytes)
+            spec = SettingSpec.deserialize(batch)
+            specs_by_name[spec.name] = spec
+
+        # Verify all expected settings are present
+        expected_names = {"vgi_verbose_mode", "greeting", "multiplier", "threshold", "config"}
+        assert set(specs_by_name.keys()) == expected_names
+
+        # Check types and defaults
+        assert specs_by_name["vgi_verbose_mode"].type == pa.bool_()
+        assert specs_by_name["vgi_verbose_mode"].default is False
+
+        assert specs_by_name["greeting"].type == pa.string()
+        assert specs_by_name["greeting"].default == "Hello"
+
+        assert specs_by_name["multiplier"].type == pa.int64()
+        assert specs_by_name["multiplier"].default == 1
+
+        assert specs_by_name["threshold"].type == pa.int64()
+        assert specs_by_name["threshold"].default == 0
+
+        assert specs_by_name["config"].type == pa.struct(
+            [("start", pa.int64()), ("step", pa.int64()), ("label", pa.string())]
+        )
+        assert specs_by_name["config"].default is None
+
+    def test_struct_setting_round_trip(self) -> None:
+        """Struct-typed SettingSpec should survive serialize/deserialize."""
+        spec = SettingSpec(
+            name="config",
+            desc="Configuration struct",
+            type=pa.struct([("start", pa.int64()), ("step", pa.int64()), ("label", pa.string())]),
+            default=None,
+        )
+        serialized = spec.serialize()
+        batch, _ = deserialize_record_batch(serialized)
+        deserialized = SettingSpec.deserialize(batch)
+
+        assert deserialized.name == "config"
+        assert deserialized.type == pa.struct([("start", pa.int64()), ("step", pa.int64()), ("label", pa.string())])
+        assert deserialized.default is None

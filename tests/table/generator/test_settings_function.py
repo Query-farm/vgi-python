@@ -12,16 +12,16 @@ class TestSettingsViaClient:
     """Tests using the full Client subprocess."""
 
     def test_settings_passed_to_function_verbose_false(self) -> None:
-        """Settings should be passed through Client to function."""
+        """Settings should be passed through Client to function (typed values)."""
         with Client("vgi-example-worker") as client:
             outputs = list(
                 client.table_function(
                     function_name="settings_aware",
                     arguments=Arguments(positional=(pa.scalar(3),)),
                     settings={
-                        "vgi_verbose_mode": "false",
+                        "vgi_verbose_mode": False,
                         "greeting": "Hi",
-                        "multiplier": "2",
+                        "multiplier": 2,
                     },
                 )
             )
@@ -35,16 +35,16 @@ class TestSettingsViaClient:
         assert table.column("value").to_pylist() == [0.0, 5.0, 10.0]
 
     def test_settings_passed_to_function_verbose_true(self) -> None:
-        """Verbose mode should add details column."""
+        """Verbose mode should add details column (typed bool)."""
         with Client("vgi-example-worker") as client:
             outputs = list(
                 client.table_function(
                     function_name="settings_aware",
                     arguments=Arguments(positional=(pa.scalar(3),)),
                     settings={
-                        "vgi_verbose_mode": "true",
+                        "vgi_verbose_mode": True,
                         "greeting": "Hello World",
-                        "multiplier": "1",
+                        "multiplier": 1,
                     },
                 )
             )
@@ -55,6 +55,29 @@ class TestSettingsViaClient:
         assert table.column("id").to_pylist() == [0, 1, 2]
         assert table.column("greeting").to_pylist() == ["Hello World"] * 3
         assert table.column("value").to_pylist() == [0.0, 2.5, 5.0]
+        assert table.column("details").to_pylist() == ["row_0", "row_1", "row_2"]
+
+    def test_settings_as_strings_backward_compat(self) -> None:
+        """String settings should still work for backward compatibility."""
+        with Client("vgi-example-worker") as client:
+            outputs = list(
+                client.table_function(
+                    function_name="settings_aware",
+                    arguments=Arguments(positional=(pa.scalar(3),)),
+                    settings={
+                        "vgi_verbose_mode": "true",
+                        "greeting": "Hi",
+                        "multiplier": "2",
+                    },
+                )
+            )
+
+        table = pa.Table.from_batches(outputs)
+        assert table.num_rows == 3
+        assert table.schema.names == ["id", "greeting", "value", "details"]
+        assert table.column("greeting").to_pylist() == ["Hi", "Hi", "Hi"]
+        # Values are multiplied by 2: 0*2.5*2=0, 1*2.5*2=5, 2*2.5*2=10
+        assert table.column("value").to_pylist() == [0.0, 5.0, 10.0]
         assert table.column("details").to_pylist() == ["row_0", "row_1", "row_2"]
 
     def test_missing_required_setting_fails(self) -> None:

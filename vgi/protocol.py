@@ -434,10 +434,7 @@ def _resolve_state_type(func_cls: type) -> type[ArrowSerializableDataclass] | No
                 args = get_args(base)
                 if len(args) >= 2:
                     state_type = args[1]
-                    if (
-                        isinstance(state_type, type)
-                        and issubclass(state_type, ArrowSerializableDataclass)
-                    ):
+                    if isinstance(state_type, type) and issubclass(state_type, ArrowSerializableDataclass):
                         return state_type
     return None
 
