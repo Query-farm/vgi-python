@@ -246,8 +246,11 @@ class FilterBySettingFunction(TableInOutGenerator[SingleTableArguments]):
         out: OutputCollector,
     ) -> None:
         """Filter rows where value >= threshold."""
-        threshold = params.settings["threshold"]  # pa.Scalar (int64)
-        mask = pc.greater_equal(batch.column("value"), threshold)
+        raw_threshold = params.settings["threshold"]
+        # Cast to column type for compatibility (C++ extension may send as string)
+        col = batch.column("value")
+        threshold = pa.scalar(int(raw_threshold.as_py()), type=col.type)
+        mask = pc.greater_equal(col, threshold)
         out.emit(batch.filter(mask))
 
 
