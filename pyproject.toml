@@ -27,6 +27,7 @@ dev = [
     "ruff",
 ]
 [project.scripts]
+vgi-serve = "vgi.serve:main"
 vgi-client = "vgi.client.cli:main"
 vgi-example-worker = "vgi.examples.worker:main"
 vgi-example-http = "vgi.examples.http_server:main"

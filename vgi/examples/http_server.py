@@ -118,7 +118,7 @@ def main() -> None:
     @app.command()
     def _run(
         host: str = typer.Option("127.0.0.1", "--host", "-h", help="Bind address"),
-        port: int = typer.Option(8000, "--port", "-p", help="Bind port"),
+        port: int = typer.Option(0, "--port", "-p", help="Bind port (0 = auto-select)"),
         prefix: str = typer.Option("/vgi", "--prefix", help="URL prefix for RPC endpoints"),
         cors_origins: str = typer.Option("*", "--cors-origins", help="Allowed CORS origins"),
         describe: bool = typer.Option(  # noqa: B008
@@ -214,7 +214,14 @@ def main() -> None:
             )
             sys.stderr.flush()
 
+        import socket
+
         from vgi.protocol import VgiProtocol
+
+        if port == 0:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind((host, 0))
+                port = int(s.getsockname()[1])
 
         worker = ExampleWorker(quiet=True, log_level=effective_level)
         server = RpcServer(VgiProtocol, worker, external_location=external_location, enable_describe=describe)
@@ -232,6 +239,7 @@ def main() -> None:
             worker_page_body = build_worker_page(ExampleWorker, prefix)
             wsgi_app.add_route(f"{prefix}/worker", WorkerPageResource(worker_page_body))
 
+        print(f"PORT:{port}", flush=True)
         sys.stderr.write(f"Serving ExampleWorker on http://{host}:{port}{prefix}\n")
         sys.stderr.flush()
         waitress.serve(wsgi_app, host=host, port=port, _quiet=True)

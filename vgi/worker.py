@@ -402,8 +402,17 @@ class Worker:
     def main(cls) -> None:
         """Run this worker as a CLI application with logging options.
 
-        Uses typer to provide ``--quiet``, ``--debug``, ``--log-level``,
-        ``--log-logger``, and ``--log-format`` options.
+        By default, serves over stdin/stdout (pipe transport).
+        Pass ``--http`` to serve over HTTP instead.
+
+        Supports ``--quiet``, ``--debug``, ``--log-level``,
+        ``--log-logger``, and ``--log-format`` for logging control.
+
+        HTTP-specific options (only used with ``--http``):
+        ``--host``, ``--port``, ``--prefix``, ``--cors-origins``,
+        ``--describe/--no-describe``.
+
+        Requires the ``http`` extra for HTTP mode: ``pip install vgi[http]``
         """
         import typer
 
@@ -422,6 +431,15 @@ class Worker:
             log_format: LogFormat = typer.Option(  # noqa: B008
                 LogFormat.text, "--log-format", help="Stderr log format"
             ),
+            # HTTP transport options
+            http: bool = typer.Option(False, "--http", help="Serve over HTTP instead of stdin/stdout"),
+            host: str = typer.Option("127.0.0.1", "--host", help="HTTP bind address"),
+            port: int = typer.Option(0, "--port", "-p", help="HTTP port (0 = auto-select)"),
+            prefix: str = typer.Option("/vgi", "--prefix", help="URL prefix for RPC endpoints"),
+            cors_origins: str = typer.Option("*", "--cors-origins", help="Allowed CORS origins"),
+            describe: bool = typer.Option(  # noqa: B008
+                True, "--describe/--no-describe", help="Enable description pages (worker + RPC API)"
+            ),
         ) -> None:
             env_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
             effective_debug = debug or env_debug
@@ -431,17 +449,30 @@ class Worker:
                 log_loggers=log_logger,
                 log_format=log_format,
             )
-            cls(quiet=quiet, log_level=effective_level).run()
+
+            if http:
+                cls._run_http(
+                    effective_level=effective_level,
+                    host=host,
+                    port=port,
+                    prefix=prefix,
+                    cors_origins=cors_origins,
+                    describe=describe,
+                )
+            else:
+                cls(quiet=quiet, log_level=effective_level).run()
 
         app()
 
     @final
     @classmethod
     def main_http(cls) -> None:
-        """Run this worker as an HTTP server with logging options.
+        """Run this worker as a dedicated HTTP server with logging options.
 
-        Uses typer to provide logging options plus HTTP-specific options
-        (``--host``, ``--port``, ``--prefix``, ``--cors-origins``).
+        Prefer using ``main()`` with ``--http`` instead — it provides the
+        same HTTP capabilities while also supporting pipe transport as the
+        default.  This method is kept for backward compatibility and for
+        entry points that are always HTTP-only.
 
         Requires the ``http`` extra: ``pip install vgi[http]``
         """
@@ -454,7 +485,7 @@ class Worker:
         @app.command()
         def _run(
             host: str = typer.Option("127.0.0.1", "--host", "-h", help="Bind address"),
-            port: int = typer.Option(8000, "--port", "-p", help="Bind port"),
+            port: int = typer.Option(0, "--port", "-p", help="Bind port (0 = auto-select)"),
             prefix: str = typer.Option("/vgi", "--prefix", help="URL prefix for RPC endpoints"),
             cors_origins: str = typer.Option("*", "--cors-origins", help="Allowed CORS origins"),
             describe: bool = typer.Option(  # noqa: B008
@@ -469,23 +500,6 @@ class Worker:
                 LogFormat.text, "--log-format", help="Stderr log format"
             ),
         ) -> None:
-            try:
-                from vgi_rpc.http import make_wsgi_app
-            except ImportError:
-                sys.stderr.write(
-                    "Error: HTTP dependencies not installed.\n"
-                    "Install with: pip install vgi[http]  (or: uv sync --extra http)\n"
-                )
-                sys.exit(1)
-
-            try:
-                import waitress  # type: ignore[import-untyped]
-            except ImportError:
-                sys.stderr.write(
-                    "Error: waitress not installed.\nInstall with: pip install vgi[http]  (or: uv sync --extra http)\n"
-                )
-                sys.exit(1)
-
             env_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
             effective_debug = debug or env_debug
             effective_level = configure_worker_logging(
@@ -495,23 +509,61 @@ class Worker:
                 log_format=log_format,
             )
 
-            worker = cls(quiet=True, log_level=effective_level)
-            server = RpcServer(VgiProtocol, worker, enable_describe=describe)
-            wsgi_app = make_wsgi_app(server, prefix=prefix, cors_origins=cors_origins)
-
-            if describe:
-                from vgi.http.worker_page import WorkerPageResource, build_worker_page
-
-                worker_page_body = build_worker_page(cls, prefix)
-                wsgi_app.add_route(f"{prefix}/worker", WorkerPageResource(worker_page_body))
-
-            _logger.info("http_server_starting host=%s port=%d prefix=%s", host, port, prefix)
-            sys.stderr.write(f"Serving {cls.__name__} on http://{host}:{port}{prefix}\n")
-            sys.stderr.flush()
-
-            waitress.serve(wsgi_app, host=host, port=port, _quiet=True)
+            cls._run_http(
+                effective_level=effective_level,
+                host=host,
+                port=port,
+                prefix=prefix,
+                cors_origins=cors_origins,
+                describe=describe,
+            )
 
         app()
+
+    @classmethod
+    def _run_http(
+        cls,
+        *,
+        effective_level: int,
+        host: str,
+        port: int,
+        prefix: str,
+        cors_origins: str,
+        describe: bool,
+    ) -> None:
+        """Start the worker as an HTTP server (shared by ``main`` and ``main_http``)."""
+        import socket
+
+        try:
+            import waitress  # type: ignore[import-untyped]
+        except ImportError:
+            sys.stderr.write(
+                "Error: waitress not installed.\nInstall with: pip install vgi[http]  (or: uv sync --extra http)\n"
+            )
+            sys.exit(1)
+
+        if port == 0:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind((host, 0))
+                port = int(s.getsockname()[1])
+
+        from vgi.serve import create_app
+
+        wsgi_app = create_app(
+            cls,
+            prefix=prefix,
+            cors_origins=cors_origins,
+            describe=describe,
+            log_level=effective_level,
+        )
+
+        # Machine-readable port for process managers and test harnesses
+        print(f"PORT:{port}", flush=True)
+        _logger.info("http_server_starting host=%s port=%d prefix=%s", host, port, prefix)
+        sys.stderr.write(f"Serving {cls.__name__} on http://{host}:{port}{prefix}\n")
+        sys.stderr.flush()
+
+        waitress.serve(wsgi_app, host=host, port=port, _quiet=True)
 
     @staticmethod
     def _match_function_arguments(
