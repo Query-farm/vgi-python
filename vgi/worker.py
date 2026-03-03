@@ -547,13 +547,17 @@ class Worker:
                 s.bind((host, 0))
                 port = int(s.getsockname()[1])
 
-        from vgi.serve import create_app
+        from vgi.serve import _resolve_describe, _resolve_signing_key, create_app
+
+        describe = _resolve_describe(describe)
+        signing_key = _resolve_signing_key()
 
         wsgi_app = create_app(
             cls,
             prefix=prefix,
             cors_origins=cors_origins,
             describe=describe,
+            signing_key=signing_key,
             log_level=effective_level,
         )
 

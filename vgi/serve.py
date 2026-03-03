@@ -154,6 +154,7 @@ def create_app(
     prefix: str = "/vgi",
     cors_origins: str = "*",
     describe: bool = True,
+    signing_key: bytes | None = None,
     log_level: int = logging.INFO,
 ) -> falcon.App[Any, Any]:
     """Create a WSGI app for a VGI worker.
@@ -166,6 +167,10 @@ def create_app(
         prefix: URL prefix for RPC endpoints.
         cors_origins: Allowed CORS origins.
         describe: Enable worker + API description pages.
+        signing_key: Shared signing key for state tokens.  When ``None``,
+            a random per-process key is generated (tokens are invalid
+            across workers).  Set via ``VGI_SIGNING_KEY`` env var or
+            pass explicitly for multi-process deployments.
         log_level: Logging level for the worker instance.
 
     Returns:
@@ -186,7 +191,7 @@ def create_app(
 
     worker = worker_cls(quiet=True, log_level=log_level)
     server = RpcServer(VgiProtocol, worker, enable_describe=describe)
-    wsgi_app = make_wsgi_app(server, prefix=prefix, cors_origins=cors_origins)
+    wsgi_app = make_wsgi_app(server, prefix=prefix, cors_origins=cors_origins, signing_key=signing_key)
 
     if describe:
         from vgi.http.worker_page import WorkerPageResource, build_worker_page
@@ -241,6 +246,10 @@ def main() -> None:
             log_format=log_format,
         )
 
+        # Resolve env var overrides
+        describe = _resolve_describe(describe)
+        signing_key = _resolve_signing_key()
+
         worker_cls = load_worker_class(worker_ref)
 
         if http:
@@ -252,11 +261,36 @@ def main() -> None:
                 prefix=prefix,
                 cors_origins=cors_origins,
                 describe=describe,
+                signing_key=signing_key,
             )
         else:
             worker_cls(quiet=quiet, log_level=effective_level).run()
 
     app()
+
+
+def _resolve_signing_key() -> bytes | None:
+    """Read ``VGI_SIGNING_KEY`` from the environment."""
+    raw = os.environ.get("VGI_SIGNING_KEY")
+    if raw:
+        return raw.encode()
+    return None
+
+
+def _resolve_describe(cli_value: bool) -> bool:
+    """Apply ``VGI_ENABLE_DESCRIBE`` env var override.
+
+    The env var only takes effect when it is explicitly set.  Accepts
+    ``1``/``true``/``yes`` (enable) and ``0``/``false``/``no`` (disable),
+    case-insensitive.  The CLI flag (``--describe`` / ``--no-describe``)
+    wins when Typer reports a non-default value, but since we cannot
+    distinguish "user passed --describe" from "default True", the env var
+    always overrides when present.
+    """
+    raw = os.environ.get("VGI_ENABLE_DESCRIBE")
+    if raw is None:
+        return cli_value
+    return raw.lower() in ("1", "true", "yes")
 
 
 def _serve_http(
@@ -268,6 +302,7 @@ def _serve_http(
     prefix: str,
     cors_origins: str,
     describe: bool,
+    signing_key: bytes | None,
 ) -> None:
     """Start the worker as an HTTP server."""
     import socket
@@ -295,6 +330,7 @@ def _serve_http(
         prefix=prefix,
         cors_origins=cors_origins,
         describe=describe,
+        signing_key=signing_key,
         log_level=effective_level,
     )
 

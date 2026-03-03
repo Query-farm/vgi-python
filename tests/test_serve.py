@@ -13,7 +13,7 @@ import pyarrow as pa
 import pytest
 
 from vgi.scalar_function import ScalarFunction
-from vgi.serve import create_app, load_worker_class
+from vgi.serve import _resolve_describe, _resolve_signing_key, create_app, load_worker_class
 from vgi.worker import Worker
 
 # ---------------------------------------------------------------------------
@@ -198,6 +198,64 @@ class TestCreateApp:
 
         assert isinstance(app, falcon.App)
 
+    def test_signing_key_passed(self) -> None:
+        """Explicit signing_key is accepted without warning."""
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            app = create_app(_SingleWorker, signing_key=b"test-secret-key-1234")
+
+        import falcon
+
+        assert isinstance(app, falcon.App)
+
+
+# ---------------------------------------------------------------------------
+# Tests: env var helpers
+# ---------------------------------------------------------------------------
+
+
+class TestResolveSigningKey:
+    """Tests for _resolve_signing_key()."""
+
+    def test_unset_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No env var returns None."""
+        monkeypatch.delenv("VGI_SIGNING_KEY", raising=False)
+        assert _resolve_signing_key() is None
+
+    def test_empty_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Empty string returns None."""
+        monkeypatch.setenv("VGI_SIGNING_KEY", "")
+        assert _resolve_signing_key() is None
+
+    def test_value_returns_bytes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Non-empty value returns UTF-8 encoded bytes."""
+        monkeypatch.setenv("VGI_SIGNING_KEY", "my-secret")
+        assert _resolve_signing_key() == b"my-secret"
+
+
+class TestResolveDescribe:
+    """Tests for _resolve_describe()."""
+
+    def test_unset_uses_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No env var passes through CLI value."""
+        monkeypatch.delenv("VGI_ENABLE_DESCRIBE", raising=False)
+        assert _resolve_describe(True) is True
+        assert _resolve_describe(False) is False
+
+    def test_env_true_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Truthy env values enable describe regardless of CLI."""
+        for val in ("1", "true", "yes", "True", "YES"):
+            monkeypatch.setenv("VGI_ENABLE_DESCRIBE", val)
+            assert _resolve_describe(False) is True
+
+    def test_env_false_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Falsy env values disable describe regardless of CLI."""
+        for val in ("0", "false", "no", "False", "NO"):
+            monkeypatch.setenv("VGI_ENABLE_DESCRIBE", val)
+            assert _resolve_describe(True) is False
+
 
 # ---------------------------------------------------------------------------
 # Tests: CLI integration
@@ -319,3 +377,77 @@ class TestCLI:
         finally:
             proc.terminate()
             proc.wait(timeout=5)
+
+    def test_describe_env_var_disables_worker_page(self) -> None:
+        """VGI_ENABLE_DESCRIBE=0 disables the worker description page."""
+        import urllib.error
+        import urllib.request
+
+        port = _free_port()
+        env = os.environ.copy()
+        env["VGI_ENABLE_DESCRIBE"] = "0"
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "vgi.serve",
+                "vgi.examples.worker:ExampleWorker",
+                "--http",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        try:
+            assert proc.stdout is not None
+            port_line = proc.stdout.readline()
+            assert port_line.strip() == f"PORT:{port}"
+
+            time.sleep(0.5)
+
+            # Worker page should not be served (404 or 405, not 200)
+            url = f"http://127.0.0.1:{port}/vgi/worker"
+            with pytest.raises(urllib.error.HTTPError) as exc_info:
+                urllib.request.urlopen(url, timeout=5)
+            assert exc_info.value.code in (404, 405)
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+
+    def test_signing_key_env_var(self) -> None:
+        """VGI_SIGNING_KEY suppresses the random key warning."""
+        port = _free_port()
+        env = os.environ.copy()
+        env["VGI_SIGNING_KEY"] = "test-key-for-ci"
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "vgi.serve",
+                "vgi.examples.worker:ExampleWorker",
+                "--http",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        try:
+            assert proc.stdout is not None
+            port_line = proc.stdout.readline()
+            assert port_line.strip() == f"PORT:{port}"
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+            assert proc.stderr is not None
+            stderr = proc.stderr.read()
+            assert "No signing_key provided" not in stderr
