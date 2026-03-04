@@ -683,7 +683,7 @@ class ReturnSecretValueFunction(ScalarFunction):
     @classmethod
     def compute(
         cls,
-        vgi_example_secret: Annotated[dict[str, pa.Scalar[Any]], Secret()],
+        vgi_example_secret: Annotated[dict[str, pa.Scalar[Any]], Secret("vgi_example")],
         _length: Annotated[int, OutputLength()],
     ) -> Annotated[pa.StringArray, Returns()]:
         """Generate the result for each row."""

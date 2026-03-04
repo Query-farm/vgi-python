@@ -26,7 +26,7 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
-from vgi.invocation import FunctionType
+from vgi.invocation import BindResponse, FunctionType
 
 if TYPE_CHECKING:
     from vgi.function import Function
@@ -128,6 +128,11 @@ class Table:
         )
         try:
             result = self.function.bind(bind_call)
+            if not isinstance(result, BindResponse):
+                raise ValueError(
+                    f"Table '{self.name}': function '{self.function.__name__}' returned "
+                    f"unexpected bind result type: {type(result).__name__}"
+                )
             return result.output_schema
         except Exception as e:
             raise ValueError(

@@ -37,6 +37,49 @@ uv run ruff check --fix . && uv run ruff format .
 
 When making changes, we don't need to worry about backward compatibility, make the changes and change the import references.
 
+## Integration Testing
+
+Integration tests live in the `vgi` C++ repo (sibling directory) at `test/sql/integration/`.
+They run DuckDB's sqllogictest framework against a real VGI worker. Run from the `vgi` directory.
+
+**Subprocess transport** (worker spawned as a child process):
+```bash
+cd ~/Development/vgi
+VGI_TEST_WORKER="uv run --project ~/Development/vgi-python vgi-example-worker" \
+    ./build/release/test/unittest "test/sql/integration/*"
+```
+
+**HTTP transport** (worker as an HTTP server):
+```bash
+cd ~/Development/vgi
+./test/run_http_integration.sh "test/sql/integration/*"
+```
+
+The HTTP script (`test/run_http_integration.sh`) starts the HTTP server, waits for it to be
+ready, runs the tests, and cleans up. Always use this script instead of manually managing
+the server. Server logs are at `/tmp/vgi-http-test-server.log`.
+
+**Filter by test subset:**
+```bash
+./test/run_http_integration.sh "test/sql/integration/secret/*"
+./test/run_http_integration.sh "test/sql/integration/table/countdown*"
+```
+
+**Running ad-hoc SQL against DuckDB CLI:**
+Use `-f` to supply SQL files to DuckDB, not stdin redirection. Do not redirect stderr to stdout.
+```bash
+# Correct:
+~/Development/vgi/build/debug/duckdb -f /tmp/my_test.sql
+
+# Wrong:
+~/Development/vgi/build/debug/duckdb < /tmp/my_test.sql 2>&1
+```
+
+**Known HTTP limitations** (4 tests fail, not regressions):
+- `logging_generator.test` — inline log streaming not supported over HTTP
+- `partitioned_sequence.test` — partition-local state not preserved across HTTP exchanges
+- `buffer_input/sizes.test`, `buffer_input/scale.test_slow` — input buffering semantics differ
+
 ## Project Overview
 
 VGI (Vector Gateway Interface) provides an Apache Arrow-based protocol for connecting DuckDB to external programs. It enables user-defined functions to run in separate processes, communicating via stdin/stdout using Arrow IPC streaming.

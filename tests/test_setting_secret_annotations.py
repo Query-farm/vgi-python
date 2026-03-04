@@ -11,6 +11,7 @@ import pyarrow as pa
 from vgi.arguments import (
     Arg,
     Secret,
+    SecretLookupEntry,
     Setting,
     _extract_setting_secret_params,
 )
@@ -18,8 +19,8 @@ from vgi.invocation import BindResponse
 from vgi.metadata import resolve_metadata
 from vgi.table_function import (
     BindParams,
+    SecretsAccessor,
     TableFunctionGenerator,
-    _batch_to_secret_dict,
     _struct_scalar_to_dict,
 )
 
@@ -63,28 +64,32 @@ class TestExtractSettingSecretParams:
         settings, secrets = _extract_setting_secret_params(method)
         assert settings == {"verbose": "vgi_verbose_mode"}
 
-    def test_secret_with_default_key(self) -> None:
-        """Secret() without explicit key uses parameter name."""
+    def test_secret_with_type(self) -> None:
+        """Secret(secret_type) is extracted as Secret instance."""
 
         def method(
             cls: Any,
-            my_secret: Annotated[dict[str, pa.Scalar[Any]], Secret()],
+            my_secret: Annotated[dict[str, pa.Scalar[Any]], Secret("vgi_example")],
         ) -> None: ...
 
         settings, secrets = _extract_setting_secret_params(method)
         assert settings == {}
-        assert secrets == {"my_secret": "my_secret"}
+        assert "my_secret" in secrets
+        assert secrets["my_secret"].secret_type == "vgi_example"
 
-    def test_secret_with_explicit_key(self) -> None:
-        """Secret(key=...) uses the explicit key."""
+    def test_secret_with_name_and_scope(self) -> None:
+        """Secret() with name and scope preserves all fields."""
 
         def method(
             cls: Any,
-            creds: Annotated[dict[str, pa.Scalar[Any]], Secret(key="my_credentials")],
+            creds: Annotated[dict[str, pa.Scalar[Any]], Secret("s3", name="my_cred", scope="s3://bucket/")],
         ) -> None: ...
 
         settings, secrets = _extract_setting_secret_params(method)
-        assert secrets == {"creds": "my_credentials"}
+        assert "creds" in secrets
+        assert secrets["creds"].secret_type == "s3"
+        assert secrets["creds"].name == "my_cred"
+        assert secrets["creds"].scope == "s3://bucket/"
 
     def test_mixed_setting_and_secret(self) -> None:
         """Both Setting and Secret in the same method."""
@@ -94,12 +99,13 @@ class TestExtractSettingSecretParams:
             params: Any,
             *,
             verbose: Annotated[pa.Scalar[Any] | None, Setting()] = None,
-            credentials: Annotated[dict[str, pa.Scalar[Any]] | None, Secret(key="creds")] = None,
+            credentials: Annotated[dict[str, pa.Scalar[Any]] | None, Secret("vgi_example")] = None,
         ) -> None: ...
 
         settings, secrets = _extract_setting_secret_params(method)
         assert settings == {"verbose": "verbose"}
-        assert secrets == {"credentials": "creds"}
+        assert "credentials" in secrets
+        assert secrets["credentials"].secret_type == "vgi_example"
 
     def test_skips_self_and_cls(self) -> None:
         """Parameters named 'self' or 'cls' are skipped."""
@@ -116,7 +122,7 @@ class TestExtractSettingSecretParams:
 
 
 class TestSecretConversionHelpers:
-    """Tests for _struct_scalar_to_dict and _batch_to_secret_dict."""
+    """Tests for _struct_scalar_to_dict and SecretsAccessor.to_dict()."""
 
     def test_struct_scalar_to_dict(self) -> None:
         """StructScalar is expanded to dict of field name -> scalar."""
@@ -127,15 +133,15 @@ class TestSecretConversionHelpers:
         assert result["key1"].as_py() == "hello"
         assert result["key2"].as_py() == 42
 
-    def test_batch_to_secret_dict_none(self) -> None:
+    def test_secrets_accessor_to_dict_none(self) -> None:
         """None batch returns empty dict."""
-        assert _batch_to_secret_dict(None) == {}
+        assert SecretsAccessor(None).to_dict() == {}
 
-    def test_batch_to_secret_dict(self) -> None:
+    def test_secrets_accessor_to_dict(self) -> None:
         """Single-row batch with struct columns is expanded."""
         secret_data = {"type": "test", "provider": "config", "value": "s3cr3t"}
         batch = pa.RecordBatch.from_pydict({"my_secret": [secret_data]})
-        result = _batch_to_secret_dict(batch)
+        result = SecretsAccessor(batch).to_dict()
         assert "my_secret" in result
         inner = result["my_secret"]
         assert inner["type"].as_py() == "test"
@@ -186,7 +192,7 @@ class TestScalarFunctionSettingTypes:
                 client.scalar_function(
                     function_name="return_secret_value",
                     input=iter([batch]),
-                    secrets={"vgi_example_secret": secret_value},
+                    secrets={"vgi_example": secret_value},
                 )
             )
 
@@ -249,7 +255,8 @@ class TestAutoPopulateMetadata:
         from vgi.examples.scalar import ReturnSecretValueFunction
 
         meta = ReturnSecretValueFunction.get_metadata()
-        assert "vgi_example_secret" in meta.required_secrets
+        secret_types = [entry.secret_type for entry in meta.required_secrets]
+        assert "vgi_example" in secret_types
 
     def test_table_function_auto_populates_required_settings(self) -> None:
         """TableFunctionGenerator with Setting() on on_bind() auto-populates required_settings."""
@@ -340,3 +347,153 @@ class TestSecretsTypeInParams:
             )
         # If we get here without error, the type handling works correctly
         assert len(outputs) > 0
+
+
+# ---------------------------------------------------------------------------
+# Tests for SecretsAccessor
+# ---------------------------------------------------------------------------
+
+
+class TestSecretsAccessor:
+    """Tests for SecretsAccessor get, scoped, needs_resolution, to_dict."""
+
+    def test_unscoped_get(self) -> None:
+        """Unscoped secret is returned by type."""
+        secret_data = {"key": "value", "token": "abc"}
+        batch = pa.RecordBatch.from_pydict({"my_type": [secret_data]})
+        accessor = SecretsAccessor(batch, is_retry=True)
+        result = accessor.get("my_type")
+        assert result is not None
+        assert result["key"].as_py() == "value"
+
+    def test_unscoped_get_missing_first_call(self) -> None:
+        """First call for missing unscoped secret registers pending lookup."""
+        accessor = SecretsAccessor(None)
+        result = accessor.get("missing_type")
+        assert result is None
+        assert accessor.needs_resolution
+        assert len(accessor.pending_lookups) == 1
+        assert accessor.pending_lookups[0].secret_type == "missing_type"
+
+    def test_unscoped_get_missing_retry(self) -> None:
+        """Retry with missing unscoped secret returns None (genuinely missing)."""
+        accessor = SecretsAccessor(None, is_retry=True)
+        result = accessor.get("missing_type")
+        assert result is None
+        assert not accessor.needs_resolution
+
+    def test_scoped_get_registers_pending(self) -> None:
+        """First call with scope registers a pending lookup."""
+        accessor = SecretsAccessor(None)
+        result = accessor.get("s3", scope="s3://bucket/")
+        assert result is None
+        assert accessor.needs_resolution
+        entry = accessor.pending_lookups[0]
+        assert entry.secret_type == "s3"
+        assert entry.scope == "s3://bucket/"
+
+    def test_to_dict_combines_unscoped_and_scoped(self) -> None:
+        """to_dict() includes both unscoped and scoped entries."""
+        # Build a batch with an unscoped column and a scoped column
+        struct_type = pa.struct([("k", pa.string())])
+        unscoped_arr = pa.array([{"k": "unscoped_val"}], type=struct_type)
+
+        scoped_field = pa.field(
+            "secret_0",
+            struct_type,
+            metadata={"secret_type": "scoped_type", "scope": "s3://x/"},
+        )
+        scoped_arr = pa.array([{"k": "scoped_val"}], type=struct_type)
+
+        batch = pa.RecordBatch.from_arrays(
+            [unscoped_arr, scoped_arr],
+            schema=pa.schema([pa.field("my_type", struct_type), scoped_field]),
+        )
+        result = SecretsAccessor(batch).to_dict()
+        assert "my_type" in result
+        assert result["my_type"]["k"].as_py() == "unscoped_val"
+        assert "scoped_type" in result
+        assert result["scoped_type"]["k"].as_py() == "scoped_val"
+
+    def test_to_dict_skips_null_scoped(self) -> None:
+        """to_dict() skips scoped entries with null values."""
+        struct_type = pa.struct([("k", pa.string())])
+        scoped_field = pa.field(
+            "secret_0",
+            struct_type,
+            metadata={"secret_type": "null_type"},
+        )
+        scoped_arr = pa.array([None], type=struct_type)
+        batch = pa.RecordBatch.from_arrays(
+            [scoped_arr],
+            schema=pa.schema([scoped_field]),
+        )
+        result = SecretsAccessor(batch).to_dict()
+        assert "null_type" not in result
+
+    def test_required_raises_on_retry(self) -> None:
+        """required=True raises ValueError when secret is genuinely missing on retry."""
+        import pytest
+
+        accessor = SecretsAccessor(None, is_retry=True)
+        with pytest.raises(ValueError, match="Required secret"):
+            accessor.get("missing_type", required=True)
+
+    def test_scoped_required_raises_on_retry(self) -> None:
+        """required=True with scope raises ValueError on retry when not found."""
+        import pytest
+
+        accessor = SecretsAccessor(None, is_retry=True)
+        with pytest.raises(ValueError, match="Required secret"):
+            accessor.get("s3", scope="s3://bucket/", required=True)
+
+
+# ---------------------------------------------------------------------------
+# Tests for BindResponse.secret_scope_request round-trip
+# ---------------------------------------------------------------------------
+
+
+class TestBindResponseSecretScopeRequest:
+    """Test BindResponse.secret_scope_request() creates proper response."""
+
+    def test_secret_scope_request_round_trip(self) -> None:
+        """secret_scope_request encodes lookups that can be recovered via secret_scope_entries."""
+        lookups = [
+            SecretLookupEntry(secret_type="s3", scope="s3://bucket/"),
+            SecretLookupEntry(secret_type="gcs", secret_name="my_cred"),
+        ]
+        response = BindResponse.secret_scope_request(lookups)
+        assert response.is_secret_scope_request
+        entries = response.secret_scope_entries()
+        assert len(entries) == 2
+        assert entries[0].secret_type == "s3"
+        assert entries[0].scope == "s3://bucket/"
+        assert entries[1].secret_type == "gcs"
+        assert entries[1].secret_name == "my_cred"
+
+
+# ---------------------------------------------------------------------------
+# Tests for TState validation in __init_subclass__
+# ---------------------------------------------------------------------------
+
+
+class TestTStateValidation:
+    """Verify __init_subclass__ rejects non-serializable TState types."""
+
+    def test_non_serializable_state_raises(self) -> None:
+        """TState that doesn't extend ArrowSerializableDataclass raises TypeError."""
+        import pytest
+
+        @dataclass
+        class BadState:
+            x: int = 0
+
+        with pytest.raises(TypeError, match="must extend ArrowSerializableDataclass"):
+
+            class _BadFunc(TableFunctionGenerator[None, BadState]):
+                @classmethod
+                def on_bind(cls, params: Any) -> BindResponse:
+                    return BindResponse(output_schema=pa.schema([("x", pa.int64())]))
+
+                @classmethod
+                def process(cls, params: Any, state: Any, out: Any) -> None: ...

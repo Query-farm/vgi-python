@@ -336,11 +336,11 @@ class SumAllColumnsFunctionArguments:
     logging: Annotated[bool, Arg("logging", doc="Whether to log during processing", default=False)] = False
 
 
-@dataclass
-class SumAllColumnsState:
+@dataclass(kw_only=True)
+class SumAllColumnsState(ArrowSerializableDataclass):
     """Mutable state for SumAllColumnsFunction - tracks running sums."""
 
-    sums: dict[str, Any]  # name -> pa.Scalar
+    partial_sums: Annotated[pa.RecordBatch, ArrowType(pa.binary())]
 
 
 class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, SumAllColumnsState]):
@@ -428,10 +428,11 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
     @classmethod
     def initial_state(cls, params: ProcessParams[SumAllColumnsFunctionArguments]) -> SumAllColumnsState:
         """Initialize running sums to zero."""
-        sums: dict[str, Any] = {}
-        for field in params.output_schema:
-            sums[field.name] = pa.scalar(0, type=field.type)
-        return SumAllColumnsState(sums=sums)
+        return SumAllColumnsState(
+            partial_sums=pa.RecordBatch.from_pylist(
+                [{name: 0 for name in params.output_schema.names}], schema=params.output_schema
+            )
+        )
 
     @classmethod
     def process(
@@ -448,13 +449,19 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
                 f"Processing batch with {batch.num_rows} rows",
             )
 
-        for name in state.sums:
+        sums: dict[str, pa.Scalar[Any]] = {}
+        for name in params.output_schema.names:
             col_sum = pc.sum(batch.column(name))
+            prev = state.partial_sums.column(name)[0]
             if col_sum.is_valid:
-                state.sums[name] = pc.add(state.sums[name], col_sum)
+                sums[name] = pc.add(prev, col_sum)
+            else:
+                sums[name] = prev
+
+        state.partial_sums = cls._scalars_to_single_row_batch(sums)
 
         # Save running sums to storage for finalize (upsert per worker)
-        params.storage.put(params.storage.serialize_record_batch(cls._scalars_to_single_row_batch(state.sums)))
+        params.storage.put(params.storage.serialize_record_batch(state.partial_sums))
 
         out.emit(empty_batch(params.output_schema))
 
@@ -485,14 +492,16 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
         ]
 
 
-@dataclass
-class ExceptionProcessState:
+@dataclass(kw_only=True)
+class ExceptionProcessState(ArrowSerializableDataclass):
     """Mutable state for ExceptionProcessFunction."""
 
     batch_count: int = 0
 
 
-class ExceptionProcessFunction(SumAllColumnsFunction):
+class ExceptionProcessFunction(
+    SumAllColumnsFunction, TableInOutGenerator[SumAllColumnsFunctionArguments, ExceptionProcessState]
+):
     """A function that raises an exception on the second batch."""
 
     class Meta(SumAllColumnsFunction.Meta):

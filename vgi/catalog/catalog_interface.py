@@ -22,12 +22,14 @@ from typing import (
 
 if TYPE_CHECKING:
     from vgi.catalog.descriptors import Catalog, Macro, Schema, Table, View
+    from vgi.catalog.secret_type import SecretTypeSpec
     from vgi.catalog.setting import SettingSpec
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
 from vgi_rpc.utils import deserialize_record_batch, serialize_record_batch_bytes
 
+from vgi.arguments import SecretLookupEntry
 from vgi.exceptions import CatalogReadOnlyError
 from vgi.metadata import (
     DistinctDependence,
@@ -46,6 +48,7 @@ __all__ = [
     "OrderPreservation",
     # Catalog-specific
     "CatalogExample",
+    "SecretLookupEntry",
     "MacroType",
     "SchemaObjectType",
 ]
@@ -102,6 +105,9 @@ class CatalogAttachResult(ArrowSerializableDataclass):
     # Extension options (settings) exposed by this catalog/worker.
     # Each ExtensionOption is serialized as bytes for Arrow compatibility.
     settings: list[bytes] = field(default_factory=list)
+    # Secret types registered with DuckDB's SecretManager.
+    # Each SecretTypeSpec is serialized as bytes for Arrow compatibility.
+    secret_types: list[bytes] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -255,6 +261,9 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
     # Settings required by the function
     required_settings: list[str] = field(default_factory=list)
+
+    # Secrets required by the function (each entry has secret_type, optional secret_name, optional scope)
+    required_secrets: list[SecretLookupEntry] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -967,6 +976,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     catalog_name: str = "functions"
     functions: list[type] = []
     settings: list["SettingSpec"] = []
+    secret_types: list["SecretTypeSpec"] = []
 
     # NEW: Optional Catalog object for declarative definition
     catalog: "Catalog | None" = None
@@ -1071,8 +1081,9 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         if name != effective_name:
             raise ValueError(f"Unknown catalog: {name!r}. Available: {effective_name}")
 
-        # Serialize settings for the attach result
+        # Serialize settings and secret types for the attach result
         serialized_settings = [s.serialize() for s in self.settings]
+        serialized_secret_types = [st.serialize() for st in self.secret_types]
 
         return CatalogAttachResult(
             attach_id=self._FIXED_ATTACH_ID,
@@ -1083,6 +1094,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             attach_id_required=False,
             default_schema=self._default_schema_name,
             settings=serialized_settings,
+            secret_types=serialized_secret_types,
         )
 
     def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> list[SchemaInfo]:
@@ -1388,6 +1400,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             distinct_dependent=meta.distinct_dependent,
             # Settings
             required_settings=meta.required_settings,
+            # Secrets
+            required_secrets=list(meta.required_secrets),
         )
 
     # ========== DDL operations (not supported — read-only catalog) ==========

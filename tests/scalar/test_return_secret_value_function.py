@@ -25,7 +25,7 @@ class TestReturnSecretValueFunction:
                 client.scalar_function(
                     function_name="return_secret_value",
                     input=iter([batch]),
-                    secrets={"vgi_example_secret": secret_value},
+                    secrets={"vgi_example": secret_value},
                 )
             )
 

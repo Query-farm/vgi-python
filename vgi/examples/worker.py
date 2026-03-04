@@ -32,6 +32,7 @@ from vgi.catalog import (
     MacroType,
     ScanFunctionResult,
     Schema,
+    SecretTypeSpec,
     Setting,
     Table,
     TransactionId,
@@ -61,6 +62,8 @@ from vgi.examples.table import (
     NestedSequenceFunction,
     PartitionedSequenceFunction,
     ProjectedDataFunction,
+    ScopedSecretDemoFunction,
+    SecretDemoFunction,
     SequenceFunction,
     SettingsAwareFunction,
     StructSettingsFunction,
@@ -105,6 +108,22 @@ class ExampleWorker(Worker):
             Setting(desc="Sequence configuration struct"),
         ] = None
 
+    secret_types = [
+        SecretTypeSpec(
+            name="vgi_example",
+            description="Example VGI secret for testing",
+            schema=pa.schema(
+                [
+                    pa.field("secret_string", pa.string(), metadata={"redact": "true"}),
+                    pa.field("api_key", pa.string(), metadata={"redact": "true"}),
+                    pa.field("port", pa.int32()),
+                    pa.field("use_ssl", pa.bool_()),
+                    pa.field("timeout", pa.float64()),
+                ]  # type: ignore[arg-type]  # PyArrow field metadata typing limitation
+            ),
+        ),
+    ]
+
     catalog = Catalog(
         name="example",
         default_schema="main",
@@ -131,6 +150,8 @@ class ExampleWorker(Worker):
                     NestedSequenceFunction,
                     PartitionedSequenceFunction,
                     ProjectedDataFunction,
+                    SecretDemoFunction,
+                    ScopedSecretDemoFunction,
                     SequenceFunction,
                     SettingsAwareFunction,
                     StructSettingsFunction,

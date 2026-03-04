@@ -81,6 +81,7 @@ from vgi.catalog.catalog_interface import (
     SqlExpression,
     TransactionId,
 )
+from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
 from vgi.function import (
     Function,
@@ -117,11 +118,11 @@ from vgi.protocol import (
 from vgi.scalar_function import ScalarFunctionGenerator
 from vgi.table_function import (
     ProcessParams,
+    SecretsAccessor,
     TableCardinality,
     TableFunctionGenerator,
     TableInOutFunctionInitPhase,
     _batch_to_scalar_dict,
-    _batch_to_secret_dict,
     project_schema,
 )
 from vgi.table_in_out_function import (
@@ -216,6 +217,7 @@ class Worker:
     _registry: dict[str, list[type[Function]]] | None = None
     _default_catalog_interface: type[CatalogInterface] | None = None
     _setting_specs: list[SettingSpec] = []  # Extracted from Settings inner class
+    _secret_type_specs: list[SecretTypeSpec] = []  # Secret types to register
 
     @final
     @staticmethod
@@ -232,22 +234,6 @@ class Worker:
         missing = [s for s in meta.required_settings if s not in settings]
         if missing:
             raise ValueError(f"Function '{request.function_name}' requires settings: {missing}")
-
-    @final
-    @staticmethod
-    def _validate_required_secrets(func_cls: type[Function], request: BindRequest) -> None:
-        """Validate required secrets for a bind request."""
-        meta = func_cls.get_metadata()
-        if not meta.required_secrets:
-            return
-
-        secrets: set[str] = set()
-        if request.secrets is not None and request.secrets.schema is not None:
-            secrets = set(list(request.secrets.schema.names))
-
-        missing = [s for s in meta.required_secrets if s not in secrets]
-        if missing:
-            raise ValueError(f"Function '{request.function_name}' requires secrets: {missing}")
 
     def table_scan_function_get(
         self,
@@ -298,6 +284,12 @@ class Worker:
             cls._setting_specs = extract_setting_specs(cls.Settings)
         else:
             cls._setting_specs = []
+
+        # Process secret_types class attribute if present
+        if hasattr(cls, "secret_types") and isinstance(cls.secret_types, list):
+            cls._secret_type_specs = list(cls.secret_types)
+        else:
+            cls._secret_type_specs = []
 
     @classmethod
     def _build_registry(cls) -> dict[str, list[type[Function]]]:
@@ -366,6 +358,7 @@ class Worker:
 
             attrs: dict[str, Any] = {
                 "settings": list(cls._setting_specs),
+                "secret_types": list(cls._secret_type_specs),
             }
 
             if has_catalog:
@@ -844,7 +837,6 @@ class Worker:
         """
         func_cls = self._resolve_function(request)
         self._validate_required_settings(func_cls, request)
-        self._validate_required_secrets(func_cls, request)
 
         instance = func_cls(logger=_logger)
         return instance.bind(request)  # type: ignore[attr-defined, no-any-return]
@@ -905,7 +897,7 @@ class Worker:
                 init_response=init_response,
                 output_schema=output_schema,
                 settings=_batch_to_scalar_dict(request.bind_call.settings),
-                secrets=_batch_to_secret_dict(request.bind_call.secrets),
+                secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
                 storage=BoundStorage(type(instance).storage, init_response.execution_id),
             )
 
@@ -937,7 +929,7 @@ class Worker:
                 init_response=init_response,
                 output_schema=output_schema,
                 settings=_batch_to_scalar_dict(request.bind_call.settings),
-                secrets=_batch_to_secret_dict(request.bind_call.secrets),
+                secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
                 storage=BoundStorage(type(instance).storage, init_response.execution_id),
             )
             user_state = type(instance).initial_state(params)

@@ -52,12 +52,12 @@ from vgi.invocation import BindResponse, FunctionType, GlobalInitResponse
 from vgi.scalar_function import ScalarFunctionGenerator
 from vgi.table_function import (
     ProcessParams,
+    SecretsAccessor,
     TableCardinality,
     TableFunctionBase,
     TableFunctionGenerator,
     TableInOutFunctionInitPhase,
     _batch_to_scalar_dict,
-    _batch_to_secret_dict,
     project_schema,
 )
 from vgi.table_in_out_function import TableInOutGenerator
@@ -108,6 +108,7 @@ class BindRequest(ArrowSerializableDataclass):
     secrets: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     attach_id: bytes | None = None
     transaction_id: bytes | None = None
+    resolved_secrets_provided: bool = False
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -405,13 +406,28 @@ class ScalarExchangeState(ExchangeState):
     def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Process one input batch through the scalar function."""
         cls = self._func_cls
+        batch = input.batch
+
+        # Workaround: over HTTP, 0-column batches lose their row count because
+        # Arrow IPC RecordBatch messages with no arrays default to length 0.
+        # When a scalar function has no column inputs (e.g. "SELECT func()"),
+        # the caller expects 1 output row but sends num_rows=0. Add a dummy
+        # column so PyArrow preserves the row count, then strip it before
+        # validation.
+        inject_row = batch.num_columns == 0 and batch.num_rows == 0
+        if inject_row:
+            batch = pa.record_batch({"__row": pa.array([True])})
+
         output = cls.process(
-            batch=input.batch,
+            batch=batch,
             init_call=self._init_call,
             init_response=self._init_response,
             storage=BoundStorage(cls.storage, self._init_response.execution_id),
         )
-        cls._validate_row_count(output, input.batch)
+        if inject_row:
+            cls._validate_row_count(output, batch)
+        else:
+            cls._validate_row_count(output, input.batch)
         out.emit(output)
 
 
@@ -424,6 +440,10 @@ def _resolve_state_type(func_cls: type) -> type[ArrowSerializableDataclass] | No
     Walks the MRO looking for ``TableFunctionGenerator[TArgs, TState]`` or
     ``TableInOutGenerator[TArgs, TState]`` and returns ``TState`` if it is a
     concrete ``ArrowSerializableDataclass`` subclass.
+
+    Raises TypeError if the state type is a concrete class that does not
+    extend ArrowSerializableDataclass — this catches the problem early
+    rather than silently falling back to initial_state() on each HTTP exchange.
     """
     for klass in func_cls.__mro__:
         for base in getattr(klass, "__orig_bases__", ()):
@@ -436,6 +456,15 @@ def _resolve_state_type(func_cls: type) -> type[ArrowSerializableDataclass] | No
                     state_type = args[1]
                     if isinstance(state_type, type) and issubclass(state_type, ArrowSerializableDataclass):
                         return state_type
+                    if (
+                        isinstance(state_type, type)
+                        and state_type is not type(None)
+                        and not issubclass(state_type, ArrowSerializableDataclass)
+                    ):
+                        raise TypeError(
+                            f"{func_cls.__name__}: TState type {state_type.__name__} must extend "
+                            f"ArrowSerializableDataclass for HTTP state serialization."
+                        )
     return None
 
 
@@ -537,7 +566,7 @@ class TableProducerState(ProducerState):
             init_response=self._init_response,
             output_schema=output_schema,
             settings=_batch_to_scalar_dict(self._init_call.bind_call.settings),
-            secrets=_batch_to_secret_dict(self._init_call.bind_call.secrets),
+            secrets=SecretsAccessor(self._init_call.bind_call.secrets).to_dict(),
             storage=BoundStorage(func_cls.storage, self._init_response.execution_id),
         )
         # Restore _user_state from serialized bytes if available
@@ -624,7 +653,7 @@ class TableInOutExchangeState(ExchangeState):
             init_response=self._init_response,
             output_schema=output_schema,
             settings=_batch_to_scalar_dict(self._init_call.bind_call.settings),
-            secrets=_batch_to_secret_dict(self._init_call.bind_call.secrets),
+            secrets=SecretsAccessor(self._init_call.bind_call.secrets).to_dict(),
             storage=BoundStorage(func_cls.storage, self._init_response.execution_id),
         )
         # Restore _user_state from serialized bytes if available

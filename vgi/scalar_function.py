@@ -50,6 +50,8 @@ from vgi.arguments import (
     OutputLength,
     Param,
     Returns,
+    Secret,
+    SecretLookupEntry,
     _extract_setting_secret_params,
 )
 from vgi.function_storage import BoundStorage
@@ -59,7 +61,7 @@ from vgi.invocation import (
     GlobalInitResponse,
 )
 from vgi.schema_utils import schema
-from vgi.table_function import _struct_scalar_to_dict
+from vgi.table_function import SecretsAccessor, _struct_scalar_to_dict
 
 if TYPE_CHECKING:
     from vgi.protocol import BindRequest, InitRequest
@@ -100,14 +102,14 @@ class BindParameters:
         constant_arguments: Constant arguments provided at query planning time.
         arguments_schema: Schema describing the input columns.
         settings: DuckDB settings as a single-row RecordBatch, or None.
-        secrets: DuckDB secrets as a single-row RecordBatch, or None.
+        secrets: SecretsAccessor for accessing resolved and dynamic secrets.
 
     """
 
     constant_arguments: Arguments
     arguments_schema: pa.Schema
     settings: pa.RecordBatch | None
-    secrets: pa.RecordBatch | None
+    secrets: SecretsAccessor
 
 
 def _resolve_explicit_arrow_type(arrow_type: pa.DataType | type) -> pa.DataType:
@@ -528,14 +530,36 @@ class ScalarFunctionGenerator(vgi.function.Function):
         """Bind protocol entry point. Do not override; use on_bind() instead.
 
         Constructs BindParameters, validates type bounds, calls on_bind(),
-        and wraps the result for transmission to global_init.
+        and wraps the result for transmission to global_init. If on_bind()
+        triggers dynamic secret lookups or if compute() declares Secret()
+        annotations that haven't been resolved, returns a secret scope request.
 
         """
         assert input.input_schema is not None
         cls._validate_param_type_bounds(input.input_schema)
 
-        bind_params = BindParameters(input.arguments, input.input_schema, input.settings, input.secrets)
+        # Auto-request secrets declared via Secret() annotations on compute()
+        # when they haven't been resolved yet (first bind call).
+        # _secret_params is only defined on ScalarFunction, not ScalarFunctionGenerator.
+        secret_params: dict[str, Secret] = getattr(cls, "_secret_params", {})
+        if secret_params and not input.resolved_secrets_provided and input.secrets is None:
+            entries = [
+                SecretLookupEntry(
+                    secret_type=secret.secret_type,
+                    scope=secret.scope,
+                    secret_name=secret.name,
+                )
+                for secret in secret_params.values()
+            ]
+            return BindResponse.secret_scope_request(entries)
+
+        secrets_accessor = SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided)
+        bind_params = BindParameters(input.arguments, input.input_schema, input.settings, secrets_accessor)
         result = cls.on_bind(bind_params)
+
+        # Check if on_bind() registered pending secret lookups
+        if secrets_accessor.needs_resolution:
+            return BindResponse.secret_scope_request(secrets_accessor.pending_lookups)
 
         return BindResponse(
             output_schema=pa.schema([pa.field("result", result.output_type)]),
@@ -651,7 +675,7 @@ class ScalarFunction(ScalarFunctionGenerator):
     _compute_params: dict[str, Arg[Any]]  # Regular Param() arguments (arrays)
     _const_params: dict[str, Arg[Any]]  # ConstParam() arguments (scalars)
     _setting_params: dict[str, str]  # Setting params: param_name -> setting_key
-    _secret_params: dict[str, str]  # Secret params: param_name -> secret_key
+    _secret_params: dict[str, Secret]  # Secret params: param_name -> Secret instance
     _output_length_param: str | None  # OutputLength param name (batch row count)
     _returns_output_type: pa.DataType | None  # Output type from Returns()
 
@@ -906,8 +930,8 @@ class ScalarFunction(ScalarFunctionGenerator):
         # Secret params: extract dict[str, pa.Scalar] from secrets RecordBatch
         if bind_call.secrets is not None and cls._secret_params:
             secrets_schema = bind_call.secrets.schema
-            for name, secret_key in cls._secret_params.items():
-                col_idx = secrets_schema.get_field_index(secret_key)
+            for name, secret in cls._secret_params.items():
+                col_idx = secrets_schema.get_field_index(secret.secret_type)
                 kwargs[name] = _struct_scalar_to_dict(bind_call.secrets.column(col_idx)[0]) if col_idx >= 0 else None
 
         # OutputLength param: pass the batch row count

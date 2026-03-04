@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
 
 import pyarrow as pa
+from vgi_rpc import ArrowSerializableDataclass
 
 if TYPE_CHECKING:
     from pyarrow import Scalar
@@ -210,6 +211,7 @@ __all__ = [
     "OutputLength",
     "Setting",
     "Secret",
+    "SecretLookupEntry",
     "_extract_setting_secret_params",
 ]
 
@@ -477,13 +479,20 @@ class Arguments:
 
         Creates a schema with one field per argument: "positional_0", "positional_1",
         etc. for positional args, and "named_<name>" for named args. Field types
-        are inferred from the argument values.
+        are taken directly from scalar values to handle Arrow extension types.
 
         Returns:
             Arrow schema matching the structure returned by encoded_dict().
 
         """
-        return pa.RecordBatch.from_pylist([self.encoded_dict()]).schema
+        args_dict = self.encoded_dict()
+        fields: list[pa.Field[Any]] = []
+        for key, scalar in args_dict.items():
+            if scalar is None:
+                fields.append(pa.field(key, pa.null()))
+            else:
+                fields.append(pa.field(key, scalar.type))
+        return pa.schema(fields)
 
     @staticmethod
     def decode(data: pa.StructScalar) -> "Arguments":
@@ -515,12 +524,30 @@ class Arguments:
         Creates a single-row RecordBatch with the arguments encoded as
         a struct column, then serializes it to IPC stream bytes.
 
+        Builds the batch with explicit types from scalar values to handle
+        Arrow extension types (e.g., HUGEINT) that ``from_pylist()`` cannot infer.
+
         Returns:
             Serialized bytes containing the Arguments.
 
         """
         args_dict = self.encoded_dict()
-        batch = pa.RecordBatch.from_pylist([{"args": args_dict}])
+        fields: list[pa.Field[Any]] = []
+        arrays: list[pa.Array[Any]] = []
+        for key, scalar in args_dict.items():
+            if scalar is None:
+                fields.append(pa.field(key, pa.null()))
+                arrays.append(pa.nulls(1))
+            else:
+                fields.append(pa.field(key, scalar.type))
+                arrays.append(pa.repeat(scalar, 1))  # type: ignore[call-overload]
+        if fields:
+            struct_array: pa.StructArray = pa.StructArray.from_arrays(arrays, fields=fields)
+        else:
+            # Empty args: create a length-1 struct array with no fields
+            struct_type = pa.struct([])
+            struct_array = pa.array([{}], type=struct_type)  # type: ignore[assignment]
+        batch = pa.RecordBatch.from_arrays([struct_array], names=["args"])
         sink = pa.BufferOutputStream()
         with pa.ipc.new_stream(sink, batch.schema) as writer:
             writer.write_batch(batch)
@@ -1442,26 +1469,81 @@ class Setting:
 
 @dataclass(frozen=True, slots=True)
 class Secret:
-    """Metadata for secrets parameter in compute().
+    """Metadata for secrets parameter in compute() or on_bind().
 
     Use with Annotated to declare parameters that receive secret values
-    from the DuckDB session. Secrets are sensitive string key-value pairs.
+    from the DuckDB SecretManager. Secrets contain multiple key-value pairs
+    where keys are strings and values can be any DuckDB type.
 
     Args:
-        key: The secret key name. If not provided, uses the parameter name.
+        secret_type: The secret type to look up (e.g., "vgi_example", "s3").
+            Required — C++ enforces type matching.
+        name: Optional secret name for name-based lookup.
+        scope: Optional static scope for pre-resolution (resolved before first bind call).
+
+    Examples:
+        Secret("vgi_example")                    — unscoped lookup by type
+        Secret("s3", name="my_cred")             — type + name-based lookup
+        Secret("s3", scope="s3://bucket/")       — type + scope (pre-resolved)
+        Secret("s3", name="my_cred", scope="s3://bucket/")  — all three
 
     """
 
-    key: str | None = None
+    secret_type: str
+    name: str | None = None
+    scope: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SecretLookupEntry(ArrowSerializableDataclass):
+    """A request to look up a specific secret.
+
+    Used both in function metadata (static requirements from annotations)
+    and in runtime requests (dynamic scoped lookups).  Also used directly
+    as the catalog-level secret requirement type (replacing the former
+    ``CatalogSecretRequirement`` which had identical fields).
+
+    Extends ``ArrowSerializableDataclass`` so it can be serialized in
+    catalog ``FunctionInfo`` payloads.
+
+    secret_type is required — C++ enforces type matching.
+
+    Supported lookup patterns:
+    - By type only:           SecretLookupEntry(secret_type="s3")
+    - By type + scope:        SecretLookupEntry(secret_type="s3", scope="s3://bucket/")
+    - By type + name:         SecretLookupEntry(secret_type="s3", secret_name="my_cred")
+    - By type + scope + name: all three fields set
+    """
+
+    secret_type: str
+    scope: str | None = None
+    secret_name: str | None = None
+
+    def to_dict(self) -> dict[str, str | None]:
+        """Convert to dictionary for serialization."""
+        return {
+            "secret_type": self.secret_type,
+            "secret_name": self.secret_name,
+            "scope": self.scope,
+        }
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "SecretLookupEntry":
+        """Create from dictionary."""
+        return SecretLookupEntry(
+            secret_type=d["secret_type"],
+            secret_name=d.get("secret_name"),
+            scope=d.get("scope"),
+        )
 
 
 def _extract_setting_secret_params(
     method: Any,
-) -> tuple[dict[str, str], dict[str, str]]:
+) -> tuple[dict[str, str], dict[str, Secret]]:
     """Extract Setting/Secret annotations from a method signature.
 
     Parses the method's type hints to find parameters annotated with
-    Setting() or Secret(), returning mappings from parameter name to key.
+    Setting() or Secret(), returning mappings from parameter name to key/Secret.
 
     Handles ``from __future__ import annotations`` (string annotations)
     using an eval-with-namespace fallback.
@@ -1470,8 +1552,9 @@ def _extract_setting_secret_params(
         method: The method to inspect (e.g., compute, on_bind).
 
     Returns:
-        Tuple of (setting_params, secret_params) dicts mapping
-        ``param_name -> key``.
+        Tuple of (setting_params, secret_params) where:
+        - setting_params: dict mapping ``param_name -> setting_key``
+        - secret_params: dict mapping ``param_name -> Secret`` instance
 
     """
     import contextlib
@@ -1519,7 +1602,7 @@ def _extract_setting_secret_params(
                 hints[name] = annotation
 
     setting_params: dict[str, str] = {}
-    secret_params: dict[str, str] = {}
+    secret_params: dict[str, Secret] = {}
 
     for name in sig.parameters:
         if name in ("self", "cls"):
@@ -1535,8 +1618,7 @@ def _extract_setting_secret_params(
                 setting_params[name] = setting_key
                 break
             if isinstance(meta, Secret):
-                secret_key = meta.key if meta.key is not None else name
-                secret_params[name] = secret_key
+                secret_params[name] = meta
                 break
 
     return setting_params, secret_params

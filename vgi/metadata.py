@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING, Annotated, Any, get_args, get_origin, get_type
 
 import pyarrow as pa
 
-from vgi.arguments import _MISSING, AnyArrow, TableInput
+from vgi.arguments import _MISSING, AnyArrow, Secret, SecretLookupEntry, TableInput
 
 if TYPE_CHECKING:
     from vgi.arguments import Arg
@@ -313,8 +313,8 @@ class ResolvedMetadata:
     # settings required by the function
     required_settings: list[str] = field(default_factory=list)
 
-    # secrets required by the function
-    required_secrets: list[str] = field(default_factory=list)
+    # secrets required by the function (each entry has secret_type, secret_name, scope)
+    required_secrets: list[SecretLookupEntry] = field(default_factory=list)
 
     # Table function specific
     projection_pushdown: bool = False
@@ -340,7 +340,7 @@ class ResolvedMetadata:
             "stability": self.stability.name,
             "null_handling": self.null_handling.name,
             "required_settings": self.required_settings,
-            "required_secrets": self.required_secrets,
+            "required_secrets": [e.to_dict() for e in self.required_secrets],
             "projection_pushdown": self.projection_pushdown,
             "filter_pushdown": self.filter_pushdown,
             "preserves_order": self.preserves_order.name,
@@ -364,7 +364,7 @@ class ResolvedMetadata:
             stability=FunctionStability[d.get("stability", "CONSISTENT")],
             null_handling=NullHandling[d.get("null_handling", "DEFAULT")],
             required_settings=d.get("required_settings", []),
-            required_secrets=d.get("required_secrets", []),
+            required_secrets=[SecretLookupEntry.from_dict(e) for e in d.get("required_secrets", [])],
             projection_pushdown=d.get("projection_pushdown", False),
             filter_pushdown=d.get("filter_pushdown", False),
             preserves_order=OrderPreservation[d.get("preserves_order", "PRESERVES_ORDER")],
@@ -859,16 +859,22 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
 
     # Merge annotation-derived setting/secret keys into required_settings/required_secrets
     meta_required_settings: list[str] = list(attrs.get("required_settings", []))
-    meta_required_secrets: list[str] = list(attrs.get("required_secrets", []))
+
+    # Build required_secrets from Meta and annotations
+    meta_required_secrets_raw = attrs.get("required_secrets", [])
+    meta_required_secrets: list[SecretLookupEntry] = []
+    for entry in meta_required_secrets_raw:
+        if isinstance(entry, SecretLookupEntry):
+            meta_required_secrets.append(entry)
+        elif isinstance(entry, dict):
+            meta_required_secrets.append(SecretLookupEntry.from_dict(entry))
 
     # Auto-populate from _setting_params / _secret_params class vars (set by __init_subclass__)
     annotation_setting_keys: set[str] = set()
-    annotation_secret_keys: set[str] = set()
 
     setting_params: dict[str, str] = getattr(cls, "_setting_params", {})
-    secret_params: dict[str, str] = getattr(cls, "_secret_params", {})
+    secret_params: dict[str, Secret] = getattr(cls, "_secret_params", {})
     annotation_setting_keys.update(setting_params.values())
-    annotation_secret_keys.update(secret_params.values())
 
     # Union with Meta-declared keys, deduped, preserving order
     existing_settings = set(meta_required_settings)
@@ -876,10 +882,18 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         if key not in existing_settings:
             meta_required_settings.append(key)
 
-    existing_secrets = set(meta_required_secrets)
-    for key in sorted(annotation_secret_keys):
-        if key not in existing_secrets:
-            meta_required_secrets.append(key)
+    # Add annotation-derived secret requirements
+    existing_secret_types = {e.secret_type for e in meta_required_secrets}
+    for secret in secret_params.values():
+        if secret.secret_type not in existing_secret_types:
+            meta_required_secrets.append(
+                SecretLookupEntry(
+                    secret_type=secret.secret_type,
+                    secret_name=secret.name,
+                    scope=secret.scope,
+                )
+            )
+            existing_secret_types.add(secret.secret_type)
 
     return ResolvedMetadata(
         name=name,
@@ -916,6 +930,15 @@ _EXAMPLE_STRUCT = pa.struct(
     ]
 )
 
+# Nested struct type for secret requirements
+_SECRET_REQUIREMENT_STRUCT = pa.struct(
+    [
+        pa.field("secret_type", pa.string()),
+        pa.field("secret_name", pa.string(), nullable=True),
+        pa.field("scope", pa.string(), nullable=True),
+    ]
+)
+
 # Nested struct type for function parameters
 _PARAMETER_STRUCT = pa.struct(
     [
@@ -947,7 +970,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("stability", pa.string()),
         pa.field("null_handling", pa.string()),
         pa.field("required_settings", pa.list_(pa.string())),
-        pa.field("required_secrets", pa.list_(pa.string())),
+        pa.field("required_secrets", pa.list_(_SECRET_REQUIREMENT_STRUCT)),
         pa.field("projection_pushdown", pa.bool_()),
         pa.field("filter_pushdown", pa.bool_()),
         pa.field("preserves_order", pa.string()),

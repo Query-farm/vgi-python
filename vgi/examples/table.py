@@ -27,10 +27,11 @@ from typing import Annotated, Any, ClassVar
 
 import numpy as np
 import pyarrow as pa
+from vgi_rpc import ArrowSerializableDataclass, Transient
 from vgi_rpc.log import Level
 from vgi_rpc.rpc import OutputCollector
 
-from vgi.arguments import Arg, Setting
+from vgi.arguments import Arg, Secret, Setting
 from vgi.invocation import BindResponse, GlobalInitResponse
 from vgi.metadata import FunctionExample
 from vgi.schema_utils import schema
@@ -53,6 +54,8 @@ __all__ = [
     "NestedSequenceFunction",
     "PartitionedSequenceFunction",
     "ProjectedDataFunction",
+    "ScopedSecretDemoFunction",
+    "SecretDemoFunction",
     "SequenceFunction",
     "SettingsAwareFunction",
     "StructSettingsFunction",
@@ -84,8 +87,8 @@ class SequenceFunctionArgs:
     increment: Annotated[int, Arg("increment", default=1, doc="Step between values", ge=1)]
 
 
-@dataclass
-class CountdownState:
+@dataclass(kw_only=True)
+class CountdownState(ArrowSerializableDataclass):
     """Mutable state tracking remaining rows and current position."""
 
     remaining: int
@@ -490,8 +493,8 @@ class GeneratorExceptionFunctionArguments:
     fail_after: Annotated[int, Arg(0, doc="Number of batches before failure", ge=0)]
 
 
-@dataclass
-class GeneratorExceptionState:
+@dataclass(kw_only=True)
+class GeneratorExceptionState(ArrowSerializableDataclass):
     """Mutable state for GeneratorExceptionFunction."""
 
     batch_count: int = 0
@@ -549,8 +552,8 @@ class LoggingGeneratorFunctionArguments:
     count: Annotated[int, Arg(0, doc="Number of values to generate", ge=0)]
 
 
-@dataclass
-class LoggingGeneratorState:
+@dataclass(kw_only=True)
+class LoggingGeneratorState(ArrowSerializableDataclass):
     """Mutable state for LoggingGeneratorFunction."""
 
     index: int = 0
@@ -613,8 +616,8 @@ class PartitionedSequenceFunctionArguments:
     increment: Annotated[int, Arg("increment", default=1, doc="Step between values", ge=1)]
 
 
-@dataclass
-class PartitionedSequenceState:
+@dataclass(kw_only=True)
+class PartitionedSequenceState(ArrowSerializableDataclass):
     """Mutable state for PartitionedSequenceFunction."""
 
     current_start: int | None = None
@@ -853,8 +856,8 @@ class SettingsAwareFunctionArguments:
     count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
 
 
-@dataclass
-class SettingsAwareState:
+@dataclass(kw_only=True)
+class SettingsAwareState(ArrowSerializableDataclass):
     """Mutable state for SettingsAwareFunction with typed settings."""
 
     remaining: int
@@ -994,8 +997,8 @@ class StructSettingsFunctionArguments:
     count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
 
 
-@dataclass
-class StructSettingsState:
+@dataclass(kw_only=True)
+class StructSettingsState(ArrowSerializableDataclass):
     """Mutable state for StructSettingsFunction."""
 
     remaining: int
@@ -1093,8 +1096,8 @@ class TenThousandFunctionArguments:
     """Arguments for TenThousandFunction."""
 
 
-@dataclass
-class TenThousandState:
+@dataclass(kw_only=True)
+class TenThousandState(ArrowSerializableDataclass):
     """Mutable state for TenThousandFunction."""
 
     start: int = 0
@@ -1182,12 +1185,12 @@ class ConstantColumnsFunctionArguments:
     ]
 
 
-@dataclass
-class ConstantColumnsState:
+@dataclass(kw_only=True)
+class ConstantColumnsState(ArrowSerializableDataclass):
     """Mutable state for ConstantColumnsFunction."""
 
     remaining: int
-    full_batch: pa.RecordBatch = field(repr=False, default=None)  # type: ignore[assignment]
+    full_batch: Annotated[pa.RecordBatch | None, Transient()] = field(repr=False, default=None)
 
 
 @init_single_worker
@@ -1268,9 +1271,172 @@ class ConstantColumnsFunction(TableFunctionGenerator[ConstantColumnsFunctionArgu
             out.finish()
             return
 
+        if state.full_batch is None:
+            arrays = [pa.repeat(scalar, cls.BATCH_SIZE) for scalar in params.args.values]
+            state.full_batch = pa.RecordBatch.from_arrays(arrays, schema=params.output_schema)
         if state.remaining >= cls.BATCH_SIZE:
             out.emit(state.full_batch)
             state.remaining -= cls.BATCH_SIZE
         else:
             out.emit(state.full_batch.slice(0, state.remaining))
             state.remaining = 0
+
+
+# =============================================================================
+# Secret Demo Functions
+# =============================================================================
+
+
+@dataclass(kw_only=True)
+class SecretDemoState(ArrowSerializableDataclass):
+    """State for SecretDemoFunction."""
+
+    keys: list[str] = field(default_factory=list)
+    values: list[str] = field(default_factory=list)
+    types: list[str] = field(default_factory=list)
+
+
+@init_single_worker
+class SecretDemoFunction(TableFunctionGenerator[None, SecretDemoState]):
+    """Table function that outputs secret key-value pairs as rows.
+
+    Demonstrates basic secret access via Secret() annotation.
+    """
+
+    class Meta:
+        """Metadata for SecretDemoFunction."""
+
+        name = "secret_demo"
+        description = "Outputs secret contents as key-value rows"
+
+    @classmethod
+    def on_bind(
+        cls,
+        params: BindParams[None],
+    ) -> BindResponse:
+        """Bind with secret request via SecretsAccessor."""
+        # Request the secret via the accessor — triggers two-phase bind
+        # so the resolved secret is available in initial_state().
+        params.secrets.get("vgi_example")
+        return BindResponse(
+            output_schema=schema(
+                {
+                    "key": pa.string(),
+                    "value": pa.string(),
+                    "arrow_type": pa.string(),
+                }
+            )
+        )
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[None]) -> SecretDemoState:
+        """Build initial state from secret key-value pairs."""
+        secret = params.secrets.get("vgi_example", {})
+        keys = list(secret.keys())
+        values = [str(v.as_py()) for v in secret.values()]
+        types = [str(v.type) for v in secret.values()]
+        return SecretDemoState(keys=keys, values=values, types=types)
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[None],
+        state: SecretDemoState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit secret entries as rows."""
+        if not state.keys:
+            out.finish()
+            return
+        batch = pa.RecordBatch.from_pydict(
+            {"key": state.keys, "value": state.values, "arrow_type": state.types},
+            schema=params.output_schema,
+        )
+        out.emit(batch)
+        state.keys = []
+        state.values = []
+        state.types = []
+
+
+@dataclass(frozen=True)
+class ScopedSecretDemoArgs:
+    """Arguments for ScopedSecretDemoFunction."""
+
+    path: Annotated[str, Arg(0, doc="Scope path for secret lookup")]
+
+
+@dataclass(kw_only=True)
+class ScopedSecretDemoState(ArrowSerializableDataclass):
+    """State for ScopedSecretDemoFunction."""
+
+    found: bool = False
+    secret_keys: str = ""
+
+
+@init_single_worker
+class ScopedSecretDemoFunction(TableFunctionGenerator[ScopedSecretDemoArgs, ScopedSecretDemoState]):
+    """Demonstrates automatic two-phase bind with scoped secrets.
+
+    Requests a secret with a dynamic scope computed from the function argument.
+    The framework automatically handles the two-phase bind retry.
+    """
+
+    class Meta:
+        """Metadata for ScopedSecretDemoFunction."""
+
+        name = "scoped_secret_demo"
+        description = "Demo: resolves scoped secret based on argument"
+
+    @classmethod
+    def on_bind(
+        cls,
+        params: BindParams[ScopedSecretDemoArgs],
+        *,
+        vgi_example: Annotated[dict[str, pa.Scalar[Any]] | None, Secret("vgi_example")] = None,
+    ) -> BindResponse:
+        """Bind with dynamic scoped secret lookup."""
+        # Request secret with dynamic scope — framework handles retry automatically.
+        # The get() call registers a pending scoped lookup; the return value is
+        # unused because the framework will trigger a two-phase bind retry.
+        params.secrets.get("vgi_example", scope=params.args.path)
+
+        # On first call: secret is None (pending), framework triggers retry
+        # On retry: secret is dict (found) or None (genuinely not found)
+
+        return BindResponse(
+            output_schema=schema(
+                {
+                    "scope": pa.string(),
+                    "found": pa.bool_(),
+                    "secret_keys": pa.string(),
+                }
+            )
+        )
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[ScopedSecretDemoArgs]) -> ScopedSecretDemoState:
+        """Build state from resolved secrets."""
+        secret = params.secrets.get("vgi_example", {})
+        return ScopedSecretDemoState(
+            found=bool(secret),
+            secret_keys=",".join(secret.keys()) if secret else "",
+        )
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[ScopedSecretDemoArgs],
+        state: ScopedSecretDemoState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit scope info and resolved secret keys."""
+        batch = pa.RecordBatch.from_pydict(
+            {
+                "scope": [params.args.path],
+                "found": [state.found],
+                "secret_keys": [state.secret_keys],
+            },
+            schema=params.output_schema,
+        )
+        out.emit(batch)
+        out.finish()

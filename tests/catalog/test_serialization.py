@@ -766,7 +766,7 @@ class TestArrowSchemaCorrectness:
     def test_catalog_attach_result_schema(self) -> None:
         """Verify CatalogAttachResult Arrow schema."""
         schema = CatalogAttachResult.ARROW_SCHEMA
-        assert len(schema) == 8
+        assert len(schema) == 9
         assert schema.field("attach_id").type == pa.binary()
         assert schema.field("supports_transactions").type == pa.bool_()
         assert schema.field("supports_time_travel").type == pa.bool_()
@@ -775,6 +775,7 @@ class TestArrowSchemaCorrectness:
         assert schema.field("attach_id_required").type == pa.bool_()
         assert schema.field("default_schema").type == pa.string()
         assert schema.field("settings").type == pa.list_(pa.binary())
+        assert schema.field("secret_types").type == pa.list_(pa.binary())
 
     def test_schema_info_schema(self) -> None:
         """Verify SchemaInfo Arrow schema."""
@@ -816,3 +817,33 @@ class TestArrowSchemaCorrectness:
         assert schema.field("function_name").type == pa.string()
         assert schema.field("arguments").type == pa.binary()
         assert schema.field("required_extensions").type == pa.list_(pa.string())
+
+
+class TestSecretTypeSpecSerialization:
+    """Test SecretTypeSpec serialization round-trip."""
+
+    def test_round_trip(self) -> None:
+        """Test basic serialization and deserialization."""
+        from vgi.catalog.secret_type import SecretTypeSpec
+
+        original = SecretTypeSpec(
+            name="vgi_example",
+            description="Example VGI secret for testing",
+            schema=pa.schema(
+                [
+                    pa.field("secret_string", pa.string(), metadata={"redact": "true"}),
+                    pa.field("api_key", pa.string(), metadata={"redact": "true"}),
+                    pa.field("port", pa.int32()),
+                ]  # type: ignore[arg-type]  # PyArrow field metadata typing limitation
+            ),
+        )
+        serialized = original.serialize()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = SecretTypeSpec.deserialize(batch)
+
+        assert restored.name == original.name
+        assert restored.description == original.description
+        assert restored.schema.names == original.schema.names
+        # Verify field metadata survives round-trip
+        assert restored.schema.field("secret_string").metadata == {b"redact": b"true"}
+        assert restored.schema.field("port").metadata is None

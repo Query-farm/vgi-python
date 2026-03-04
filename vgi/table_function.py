@@ -27,7 +27,7 @@ from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import OutputCollector
 
 import vgi.function
-from vgi.arguments import Arg, Arguments, TableInput, _extract_setting_secret_params
+from vgi.arguments import Arg, Arguments, Secret, SecretLookupEntry, TableInput, _extract_setting_secret_params
 from vgi.function_storage import BoundStorage
 from vgi.invocation import (
     BaseInitResponse,
@@ -44,13 +44,13 @@ __all__ = [
     "BindParams",
     "InitParams",
     "ProcessParams",
+    "SecretsAccessor",
     "TableFunctionBase",
     "TableFunctionGenerator",
     "TableInOutFunctionInitPhase",
     "init_single_worker",
     "bind_fixed_schema",
     "_struct_scalar_to_dict",
-    "_batch_to_secret_dict",
 ]
 
 
@@ -83,15 +83,144 @@ def _struct_scalar_to_dict(scalar: pa.StructScalar) -> dict[str, pa.Scalar[Any]]
     return {key: scalar[key] for key in scalar}
 
 
-def _batch_to_secret_dict(batch: pa.RecordBatch | None) -> dict[str, dict[str, pa.Scalar[Any]]]:
-    """Extract a single-row secrets RecordBatch into a dict of secret-name to expanded struct dict.
+class SecretsAccessor:
+    """Unified access to secrets — pre-resolved and dynamically requested.
 
-    Each secret column is a struct scalar which is expanded into a dict of
-    field name to pa.Scalar.
+    Pre-resolved secrets (from Secret() annotations with static scope/name, or
+    unscoped lookups) are available immediately. Dynamic lookups (computed scope
+    from function arguments) register pending requests — the framework
+    automatically triggers a two-phase bind retry to resolve them.
     """
-    if batch is None:
-        return {}
-    return {name: _struct_scalar_to_dict(batch.column(i)[0]) for i, name in enumerate(batch.schema.names)}
+
+    __slots__ = ("_unscoped", "_scoped", "_is_retry", "_pending_lookups")
+
+    def __init__(self, secrets_batch: pa.RecordBatch | None, *, is_retry: bool = False) -> None:
+        """Initialize from a secrets RecordBatch."""
+        self._is_retry = is_retry
+        self._pending_lookups: list[SecretLookupEntry] = []
+
+        # Parse unscoped secrets (columns named by secret_type)
+        self._unscoped: dict[str, dict[str, pa.Scalar[Any]]] = {}
+        # Parse scoped secrets (columns named "secret_N" with field metadata)
+        self._scoped: list[tuple[dict[str, str], dict[str, pa.Scalar[Any]] | None]] = []
+
+        if secrets_batch is not None:
+            for i, name in enumerate(secrets_batch.schema.names):
+                col_field = secrets_batch.schema.field(i)
+                scalar = secrets_batch.column(i)[0]
+
+                if name.startswith("secret_"):
+                    # Scoped secret with metadata on the Arrow field
+                    raw_meta = col_field.metadata or {}
+                    entry_meta = {
+                        (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
+                        for k, v in raw_meta.items()
+                    }
+                    if scalar.is_valid:
+                        self._scoped.append((entry_meta, _struct_scalar_to_dict(scalar)))
+                    else:
+                        self._scoped.append((entry_meta, None))
+                else:
+                    # Unscoped secret (column name = secret_type)
+                    if scalar.is_valid:
+                        self._unscoped[name] = _struct_scalar_to_dict(scalar)
+
+    def get(
+        self,
+        secret_type: str,
+        *,
+        name: str | None = None,
+        scope: str | None = None,
+        required: bool = False,
+    ) -> dict[str, pa.Scalar[Any]] | None:
+        """Get a secret by type, with optional name and/or scope.
+
+        Args:
+            secret_type: The secret type (e.g., "vgi_example", "s3").
+            name: Optional secret name for name-based lookup.
+            scope: Optional scope for scoped lookup (longest-prefix match).
+            required: If True, raises ValueError when the secret is genuinely
+                not found (after resolution).
+
+        Returns:
+            dict of string keys to Arrow scalars, or None if not found.
+
+        """
+        # Simple unscoped lookup (no dynamic scope/name)
+        if not scope and not name:
+            result = self._unscoped.get(secret_type)
+            if result is not None:
+                return result
+            if self._is_retry:
+                # Retry but still not found — genuinely missing
+                if required:
+                    raise ValueError(f"Required secret '{secret_type}' not found")
+                return None
+            # First call, not found — register pending lookup for two-phase bind
+            self._pending_lookups.append(SecretLookupEntry(secret_type=secret_type))
+            return None
+
+        # Check resolved scoped secrets (from retry)
+        if self._is_retry:
+            result = self._find_scoped(secret_type, name, scope)
+            if required and result is None:
+                raise ValueError(f"Required secret '{secret_type}' not found (scope={scope!r}, name={name!r})")
+            return result
+
+        # First call, dynamic scope/name — register pending lookup
+        self._pending_lookups.append(SecretLookupEntry(secret_type=secret_type, scope=scope, secret_name=name))
+        return None
+
+    @property
+    def all_resolved(self) -> bool:
+        """True if all requested secrets have been resolved (no pending lookups).
+
+        Use this to distinguish 'not yet resolved' from 'genuinely not found'
+        when not using required=True on get().
+        """
+        return len(self._pending_lookups) == 0
+
+    @property
+    def needs_resolution(self) -> bool:
+        """True if there are pending lookups that need resolution."""
+        return len(self._pending_lookups) > 0
+
+    @property
+    def pending_lookups(self) -> list[SecretLookupEntry]:
+        """Return the list of pending secret lookups."""
+        return list(self._pending_lookups)
+
+    def to_dict(self) -> dict[str, dict[str, pa.Scalar[Any]]]:
+        """Return all resolved secrets as a flat dict keyed by secret_type.
+
+        Combines unscoped entries (column name = secret_type) with scoped
+        entries (``secret_N`` columns, keyed by ``secret_type`` from Arrow
+        field metadata).  Null/unresolved entries are omitted.
+        """
+        result = dict(self._unscoped)
+        for meta, secret_dict in self._scoped:
+            if secret_dict is not None:
+                key = meta.get("secret_type", "")
+                if key:
+                    result[key] = secret_dict
+        return result
+
+    def _find_scoped(
+        self,
+        secret_type: str,
+        name: str | None,
+        scope: str | None,
+    ) -> dict[str, pa.Scalar[Any]] | None:
+        """Find a resolved scoped secret matching the given criteria."""
+        for meta, secret_dict in self._scoped:
+            if meta.get("secret_type") != secret_type:
+                continue
+            if scope is not None and meta.get("scope") != scope:
+                continue
+            if name is not None and meta.get("secret_name") != name:
+                continue
+            return secret_dict
+        return None
 
 
 def project_schema(projection_ids: list[int] | None, schema: pa.Schema) -> pa.Schema:
@@ -117,9 +246,9 @@ class BindParams[TArgs]:
 
     args: TArgs
     bind_call: BindRequest
-    # Convenient access to settings and secrets as dicts, extracted from the bind_call.
+    # Convenient access to settings and secrets, extracted from the bind_call.
     settings: dict[str, pa.Scalar[Any]]
-    secrets: dict[str, dict[str, pa.Scalar[Any]]]
+    secrets: SecretsAccessor
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -180,7 +309,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
     FunctionArguments: ClassVar[type]
     _setting_params: ClassVar[dict[str, str]]
-    _secret_params: ClassVar[dict[str, str]]
+    _secret_params: ClassVar[dict[str, Secret]]
 
     def __init_subclass__(cls) -> None:
         """Validate FunctionArguments, auto-extracting from generic parameter if needed."""
@@ -194,7 +323,29 @@ class TableFunctionBase[TArgs](vgi.function.Function):
                 if origin is not None and issubclass(origin, TableFunctionBase):
                     type_args = get_args(base)
                     if type_args and not isinstance(type_args[0], TypeVar):
-                        cls.FunctionArguments = type_args[0]
+                        if type_args[0] is type(None):
+                            # None means no arguments — create empty dataclass
+                            from dataclasses import make_dataclass
+
+                            cls.FunctionArguments = make_dataclass(f"_{cls.__name__}Args", [])
+                        else:
+                            cls.FunctionArguments = type_args[0]
+
+                        # Validate TState (second type parameter) is serializable
+                        if len(type_args) >= 2:
+                            state_type = type_args[1]
+                            if (
+                                state_type is not None
+                                and state_type is not type(None)
+                                and not isinstance(state_type, TypeVar)
+                                and isinstance(state_type, type)
+                                and not issubclass(state_type, ArrowSerializableDataclass)
+                            ):
+                                raise TypeError(
+                                    f"{cls.__name__}: TState type {state_type.__name__} must extend "
+                                    f"ArrowSerializableDataclass for HTTP state serialization. "
+                                    f"Use @dataclass(kw_only=True) and inherit from ArrowSerializableDataclass."
+                                )
                         break
 
         # Skip validation for abstract base classes
@@ -338,8 +489,8 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         # Secret params: extract dict[str, pa.Scalar] from secrets RecordBatch
         if input.secrets is not None and cls._secret_params:
             secrets_schema = input.secrets.schema
-            for name, secret_key in cls._secret_params.items():
-                col_idx = secrets_schema.get_field_index(secret_key)
+            for name, secret in cls._secret_params.items():
+                col_idx = secrets_schema.get_field_index(secret.secret_type)
                 kwargs[name] = _struct_scalar_to_dict(input.secrets.column(col_idx)[0]) if col_idx >= 0 else None
 
         return kwargs
@@ -356,7 +507,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             args=cls._parse_arguments(cls.FunctionArguments, input.arguments),
             bind_call=input,
             settings=_batch_to_scalar_dict(input.settings),
-            secrets=_batch_to_secret_dict(input.secrets),
+            secrets=SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided),
         )
 
     @classmethod
@@ -467,11 +618,24 @@ class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
         """Bind protocol entry point. Do not override; use on_bind() instead.
 
         Validates type bounds, constructs BindParameters, calls on_bind(),
-        and wraps the result for transmission to global_init.
+        and wraps the result for transmission to global_init. If on_bind()
+        triggers dynamic secret lookups via SecretsAccessor, returns a
+        secret scope request to trigger two-phase bind.
+
+        Note: unlike ScalarFunction.bind(), we do NOT auto-request secrets
+        before on_bind(). Table functions handle secrets via on_bind()
+        kwargs (Secret() annotations) and SecretsAccessor.get() calls,
+        which may use dynamic scopes computed from function arguments.
 
         """
         params = cls._make_bind_params(input)
-        return cls.on_bind(params, **cls._extract_bind_kwargs(input))
+        result = cls.on_bind(params, **cls._extract_bind_kwargs(input))
+
+        # Check if on_bind() registered pending secret lookups
+        if params.secrets.needs_resolution:
+            return BindResponse.secret_scope_request(params.secrets.pending_lookups)
+
+        return result
 
     @classmethod
     def on_init(
@@ -508,7 +672,7 @@ class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
             init_call=input,
             output_schema=project_schema(input.projection_ids, input.output_schema),
             settings=_batch_to_scalar_dict(input.bind_call.settings),
-            secrets=_batch_to_secret_dict(input.bind_call.secrets),
+            secrets=SecretsAccessor(input.bind_call.secrets).to_dict(),
             execution_id=execution_id,
             storage=BoundStorage(cls.storage, execution_id),
         )

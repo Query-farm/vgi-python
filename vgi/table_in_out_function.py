@@ -27,9 +27,9 @@ from vgi.table_function import (
     BindParams,
     InitParams,
     ProcessParams,
+    SecretsAccessor,
     TableFunctionBase,
     _batch_to_scalar_dict,
-    _batch_to_secret_dict,
     project_schema,
 )
 
@@ -86,7 +86,8 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
         """Bind protocol entry point. Do not override; use on_bind() instead.
 
         Validates type bounds, constructs BindParameters, calls on_bind(),
-        and wraps the result for transmission to global_init.
+        and wraps the result for transmission to global_init. If on_bind()
+        triggers dynamic secret lookups, returns a secret scope request.
 
         """
         params = cls._make_bind_params(input)
@@ -94,7 +95,13 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
         if input.input_schema is not None:
             cls._validate_arg_type_bounds(cls.FunctionArguments, params.args, input.input_schema)
 
-        return cls.on_bind(params, **cls._extract_bind_kwargs(input))
+        result = cls.on_bind(params, **cls._extract_bind_kwargs(input))
+
+        # Check if on_bind() registered pending secret lookups
+        if params.secrets.needs_resolution:
+            return BindResponse.secret_scope_request(params.secrets.pending_lookups)
+
+        return result
 
     @classmethod
     def on_init(
@@ -131,7 +138,7 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
             init_call=input,
             output_schema=project_schema(input.projection_ids, input.output_schema),
             settings=_batch_to_scalar_dict(input.bind_call.settings),
-            secrets=_batch_to_secret_dict(input.bind_call.secrets),
+            secrets=SecretsAccessor(input.bind_call.secrets).to_dict(),
             execution_id=execution_id,
             storage=BoundStorage(cls.storage, execution_id),
         )

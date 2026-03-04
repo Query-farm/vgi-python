@@ -115,7 +115,7 @@ def test_http_output_offload_random_bytes_large_response(compression: str, expec
     pytest.importorskip("vgi_rpc.http")
     pytest.importorskip("vgi_rpc.s3")
     if compression == "zstd":
-        import aiohttp.http_parser as http_parser
+        import aiohttp.http_parser as http_parser  # type: ignore[import-not-found]
 
         if not bool(getattr(http_parser, "HAS_ZSTD", False)):
             pytest.skip("zstd externalization test requires aiohttp zstd decode support (backports.zstd)")

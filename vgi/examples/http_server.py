@@ -46,8 +46,8 @@ class _SigV4S3Storage:
 
     def _get_client(self) -> Any:
         if self._client is None:
-            import boto3  # type: ignore[import-untyped]
-            from botocore.config import Config  # type: ignore[import-untyped]
+            import boto3  # type: ignore[import-not-found]
+            from botocore.config import Config  # type: ignore[import-not-found]
 
             self._client = boto3.client(
                 "s3",
