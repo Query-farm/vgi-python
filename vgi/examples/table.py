@@ -7,6 +7,7 @@ AVAILABLE FUNCTIONS
 -------------------
 ConstantColumnsFunction       - Demonstrates varargs with dynamic output schema
 DoubleSequenceFunction        - Generates a sequence of floats 0.0..n-1
+FilterEchoFunction            - Echoes pushed-down filter predicates in output
 GeneratorExceptionFunction    - Demonstrates exception handling
 LoggingGeneratorFunction      - Demonstrates log message emission
 NamedParamsEchoFunction       - Echoes named parameter values in output columns
@@ -35,6 +36,7 @@ from vgi.arguments import Arg, Secret, Setting
 from vgi.invocation import BindResponse, GlobalInitResponse
 from vgi.metadata import FunctionExample
 from vgi.schema_utils import schema
+from vgi.table_filter_pushdown import PushdownFilters
 from vgi.table_function import (
     BindParams,
     InitParams,
@@ -48,6 +50,7 @@ from vgi.table_function import (
 __all__ = [
     "ConstantColumnsFunction",
     "DoubleSequenceFunction",
+    "FilterEchoFunction",
     "GeneratorExceptionFunction",
     "LoggingGeneratorFunction",
     "NamedParamsEchoFunction",
@@ -1440,3 +1443,131 @@ class ScopedSecretDemoFunction(TableFunctionGenerator[ScopedSecretDemoArgs, Scop
         )
         out.emit(batch)
         out.finish()
+
+
+# =============================================================================
+# FilterEchoFunction — diagnostic: echoes pushed-down filter predicates
+# =============================================================================
+
+
+def _format_pushed_filters(filters: PushdownFilters | None) -> str:
+    """Format pushed-down filters as a human-readable SQL-like string."""
+    if not filters:
+        return "(none)"
+    sql, params = filters.to_sql(quote_identifier=lambda s: s)
+    if not sql:
+        return "(none)"
+    # Replace ?-placeholders positionally to avoid issues if param values contain "?"
+    parts: list[str] = []
+    param_iter = iter(params)
+    for chunk in sql.split("?"):
+        parts.append(chunk)
+        try:
+            p = next(param_iter)
+            parts.append(repr(p) if isinstance(p, str) else str(p))
+        except StopIteration:
+            pass
+    return "".join(parts)
+
+
+@dataclass(slots=True, frozen=True)
+class FilterEchoFunctionArgs:
+    """Arguments for FilterEchoFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0, default=10)]
+    batch_size: Annotated[int, Arg("batch_size", default=2048, doc="Batch size for output", ge=1)]
+
+
+@dataclass(kw_only=True)
+class FilterEchoState(ArrowSerializableDataclass):
+    """Mutable state tracking remaining rows, position, and cached filter string."""
+
+    remaining: int
+    current_index: int = 0
+    filter_str: Annotated[str, Transient()] = "(none)"
+
+
+@init_single_worker
+@bind_fixed_schema
+@_cardinality_from_count
+class FilterEchoFunction(TableFunctionGenerator[FilterEchoFunctionArgs, FilterEchoState]):
+    """Echoes pushed-down filter predicates in output for diagnostic purposes.
+
+    USE CASE
+    --------
+    Verify which filters DuckDB pushes down to the VGI worker. The
+    ``pushed_filters`` column shows the SQL-like representation of all
+    filters the engine sent. Filters are auto-applied by the worker so
+    the result set is always correct.
+
+    SCHEMA
+    ------
+    Output: {"n": int64, "s": string, "pushed_filters": string}
+
+    Example:
+    -------
+    SELECT * FROM filter_echo(10) WHERE n >= 8
+    Returns: rows 8-9 with pushed_filters showing "n >= 8"
+
+    """
+
+    class Meta:
+        """Metadata for FilterEchoFunction."""
+
+        name = "filter_echo"
+        description = "Echoes pushed-down filter predicates in output"
+        categories = ["generator", "diagnostic"]
+        filter_pushdown = True
+        auto_apply_filters = True
+        projection_pushdown = True
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM filter_echo(10)",
+                description="Generate 10 rows showing pushed filters",
+            ),
+            FunctionExample(
+                sql="SELECT pushed_filters FROM filter_echo(10) WHERE n >= 8",
+                description="See which filters were pushed down",
+            ),
+        ]
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema({"n": pa.int64(), "s": pa.utf8(), "pushed_filters": pa.utf8()})
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[FilterEchoFunctionArgs]) -> FilterEchoState:
+        """Create initial state with remaining count and cached filter string."""
+        pf = params.init_call.pushdown_filters
+        filters = cls.pushdown_filters(pf) if pf is not None else None
+        return FilterEchoState(
+            remaining=params.args.count,
+            filter_str=_format_pushed_filters(filters),
+        )
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[FilterEchoFunctionArgs],
+        state: FilterEchoState,
+        out: OutputCollector,
+    ) -> None:
+        """Generate rows with n, s, and pushed_filters columns."""
+        if state.remaining <= 0:
+            out.finish()
+            return
+
+        size = min(state.remaining, params.args.batch_size)
+        start = state.current_index
+
+        n_values = list(range(start, start + size))
+        s_values = [f"row_{i}" for i in n_values]
+        filter_values = [state.filter_str] * size
+
+        out.emit(
+            pa.RecordBatch.from_pydict(
+                {"n": n_values, "s": s_values, "pushed_filters": filter_values},
+                schema=params.output_schema,
+            )
+        )
+
+        state.current_index += size
+        state.remaining -= size

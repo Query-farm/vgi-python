@@ -57,6 +57,7 @@ from vgi.examples.scalar import (
 from vgi.examples.table import (
     ConstantColumnsFunction,
     DoubleSequenceFunction,
+    FilterEchoFunction,
     GeneratorExceptionFunction,
     LoggingGeneratorFunction,
     NamedParamsEchoFunction,
@@ -144,6 +145,7 @@ class ExampleWorker(Worker):
                     ExceptionProcessFunction,
                     # TableFunctionGenerator - generate output without input
                     ConstantColumnsFunction,
+                    FilterEchoFunction,
                     DoubleSequenceFunction,
                     GeneratorExceptionFunction,
                     LoggingGeneratorFunction,
