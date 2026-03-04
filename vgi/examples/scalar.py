@@ -18,6 +18,7 @@ BinaryPacketFunction        - Complex ConstParam types (binary, struct)
 UpperCaseFunction           - Converts string value to uppercase
 NullHandlingFunction        - Demonstrates special null handling (NullHandling.SPECIAL)
 RandomIntFunction           - Generates random integers (VOLATILE stability)
+HashSeedFunction            - Generates deterministic integers from constant seed (1 ConstParam, 0 Params)
 BernoulliFunction           - Generates random booleans (no-input VOLATILE example)
 MultiplyBySettingFunction   - Multiplies value by a DuckDB setting
 ReturnSecretValueFunction   - Returns a secret value as string
@@ -45,6 +46,7 @@ from vgi.scalar_function import BindParameters, BindResult, ScalarFunction
 __all__ = [
     "AddValuesFunction",
     "BernoulliFunction",
+    "HashSeedFunction",
     "BinaryPacketFunction",
     "ConditionalMessageFunction",
     "DoubleFunction",
@@ -597,6 +599,43 @@ class BernoulliFunction(ScalarFunction):
 
         values = [bool(random.randint(0, 1)) for _ in range(_length)]
         return pa.array(values, type=pa.bool_())
+
+
+class HashSeedFunction(ScalarFunction):
+    """Generates deterministic integers from a constant seed.
+
+    Demonstrates the single-ConstParam pattern: one constant argument
+    folded at plan time, no column parameters.
+
+    Example:
+        SQL:    SELECT hash_seed(42) FROM data
+        Input:  (no column input)
+        Args:   seed=42
+        Output: result=[42, 43, 44, ...]  (seed + row_index)
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "hash_seed"
+        description = "Generate deterministic integers from a constant seed"
+        stability = FunctionStability.CONSISTENT
+        examples = [
+            FunctionExample(
+                sql="SELECT hash_seed(42) FROM data",
+                description="Generate deterministic integers seeded at 42",
+            ),
+        ]
+
+    @classmethod
+    def compute(
+        cls,
+        seed: Annotated[int, ConstParam("Seed value")],
+        _length: Annotated[int, OutputLength()],
+    ) -> Annotated[pa.Int64Array, Returns()]:
+        """Generate deterministic integers: seed + row_index for each row."""
+        return pa.array([seed + i for i in range(_length)], type=pa.int64())
 
 
 class RandomBytesFunction(ScalarFunction):

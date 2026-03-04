@@ -42,6 +42,10 @@ When making changes, we don't need to worry about backward compatibility, make t
 Integration tests live in the `vgi` C++ repo (sibling directory) at `test/sql/integration/`.
 They run DuckDB's sqllogictest framework against a real VGI worker. Run from the `vgi` directory.
 
+**Important:** When adding or modifying integration tests, always run the **full** test suite
+(`test/sql/integration/*`) to ensure all tests pass — not just the new/changed test file.
+Adding a function can break `function_registration.test` counts, for example.
+
 **Subprocess transport** (worker spawned as a child process):
 ```bash
 cd ~/Development/vgi
