@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import contextlib
 import inspect
+import logging
 import uuid
 from abc import abstractmethod
 from dataclasses import dataclass
@@ -65,6 +66,8 @@ from vgi.table_function import SecretsAccessor, _struct_scalar_to_dict
 
 if TYPE_CHECKING:
     from vgi.protocol import BindRequest, InitRequest
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "BindParameters",
@@ -942,29 +945,42 @@ class ScalarFunction(ScalarFunctionGenerator):
 
     @final
     @classmethod
-    def _validate_single_param_type(cls, arg: Arg[Any], arr: pa.Array[Any], display_name: str) -> None:
+    def _validate_single_param_type(cls, arg: Arg[Any], arr: pa.Array[Any], display_name: str) -> pa.Array[Any]:
         """Validate a single parameter's array type against its declaration.
+
+        If the array type doesn't match exactly but is castable (e.g. int32→int64,
+        decimal128→double), the array is cast to the expected type and returned.
 
         Args:
             arg: The Arg metadata for the parameter.
             arr: The actual array to validate.
             display_name: Name used in error messages (e.g. "x" or "x[0]").
 
+        Returns:
+            The (possibly cast) array.
+
         Raises:
-            TypeMismatchError: If array type doesn't match declared type.
+            TypeMismatchError: If array type doesn't match and cannot be cast.
 
         """
         if arg.is_any:
             if arg.type_bound is not None:
                 arg.validate_type_bound(arr.type)
-        elif arg.arrow_type is not None and arr.type != arg.arrow_type:
-            raise TypeMismatchError(
-                f"Input type mismatch for parameter '{display_name}'.",
-                param_name=display_name,
-                expected_type=arg.arrow_type,
-                actual_type=arr.type,
-                function_name=cls.__name__,
-            )
+            return arr
+        if arg.arrow_type is not None and arr.type != arg.arrow_type:
+            try:
+                casted = arr.cast(arg.arrow_type)
+                logger.debug("Cast parameter '%s' from %s to %s", display_name, arr.type, arg.arrow_type)
+                return casted
+            except (pa.ArrowInvalid, pa.ArrowNotImplementedError):
+                raise TypeMismatchError(
+                    f"Input type mismatch for parameter '{display_name}'.",
+                    param_name=display_name,
+                    expected_type=arg.arrow_type,
+                    actual_type=arr.type,
+                    function_name=cls.__name__,
+                ) from None
+        return arr
 
     @final
     @classmethod
@@ -985,10 +1001,11 @@ class ScalarFunction(ScalarFunctionGenerator):
         """
         for name, arg in cls._compute_params.items():
             if arg.varargs:
-                for i, arr in enumerate(kwargs[name]):
-                    cls._validate_single_param_type(arg, arr, f"{name}[{i}]")
+                kwargs[name] = [
+                    cls._validate_single_param_type(arg, arr, f"{name}[{i}]") for i, arr in enumerate(kwargs[name])
+                ]
             else:
-                cls._validate_single_param_type(arg, kwargs[name], name)
+                kwargs[name] = cls._validate_single_param_type(arg, kwargs[name], name)
 
     @final
     @classmethod

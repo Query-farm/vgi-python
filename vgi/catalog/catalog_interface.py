@@ -989,7 +989,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     _schema_registry: "dict[str, Schema] | None" = None
     _table_registry: "dict[tuple[str, str], Table] | None" = None
     _view_registry: "dict[tuple[str, str], View] | None" = None
-    _function_registry: "dict[tuple[str, str], type] | None" = None
+    _function_registry: "dict[tuple[str, str], list[type]] | None" = None
     _macro_registry: "dict[tuple[str, str], Macro] | None" = None
 
     def _build_registries(self) -> None:
@@ -1025,9 +1025,9 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         def _register_function(schema_key: str, func_cls: type) -> None:
             meta = func_cls.get_metadata()  # type: ignore[attr-defined]
             key = (schema_key, meta.name.lower())
-            if key in self._function_registry:  # type: ignore[operator]
-                raise ValueError(f"Duplicate function '{meta.name}' in schema '{schema_key}'")
-            self._function_registry[key] = func_cls  # type: ignore[index]
+            if key not in self._function_registry:  # type: ignore[operator]
+                self._function_registry[key] = []  # type: ignore[index]
+            self._function_registry[key].append(func_cls)  # type: ignore[index]
 
         def _register_macro(schema_key: str, macro: "Macro") -> None:
             key = (schema_key, macro.name.lower())
@@ -1318,19 +1318,20 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                     results.append(macro.to_macro_info(schema_name))
         else:
             # SCALAR_FUNCTION or TABLE_FUNCTION
-            for (sn, _), func_cls in self._function_registry.items():
+            for (sn, _), func_classes in self._function_registry.items():
                 if sn != name_lower:
                     continue
-                func_info = self._function_to_info(func_cls, schema_name)
-                # Filter by function type
-                if type_enum == SchemaObjectType.SCALAR_FUNCTION and func_info.function_type != FunctionType.SCALAR:
-                    continue
-                if type_enum == SchemaObjectType.TABLE_FUNCTION and func_info.function_type not in (
-                    FunctionType.TABLE,
-                    FunctionType.AGGREGATE,
-                ):
-                    continue
-                results.append(func_info)
+                for func_cls in func_classes:
+                    func_info = self._function_to_info(func_cls, schema_name)
+                    # Filter by function type
+                    if type_enum == SchemaObjectType.SCALAR_FUNCTION and func_info.function_type != FunctionType.SCALAR:
+                        continue
+                    if type_enum == SchemaObjectType.TABLE_FUNCTION and func_info.function_type not in (
+                        FunctionType.TABLE,
+                        FunctionType.AGGREGATE,
+                    ):
+                        continue
+                    results.append(func_info)
 
         return results
 

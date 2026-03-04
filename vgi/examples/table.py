@@ -53,6 +53,9 @@ __all__ = [
     "FilterEchoFunction",
     "GeneratorExceptionFunction",
     "LoggingGeneratorFunction",
+    "MakeSeriesCountFunction",
+    "MakeSeriesRangeFunction",
+    "MakeSeriesStepFunction",
     "NamedParamsEchoFunction",
     "NestedSequenceFunction",
     "PartitionedSequenceFunction",
@@ -1571,3 +1574,160 @@ class FilterEchoFunction(TableFunctionGenerator[FilterEchoFunctionArgs, FilterEc
 
         state.current_index += size
         state.remaining -= size
+
+
+# ============================================================================
+# make_series — overloaded table function (3 overloads by positional arg count)
+# ============================================================================
+
+MAKE_SERIES_SCHEMA = pa.schema([("value", pa.int64())])
+
+
+@dataclass(kw_only=True)
+class MakeSeriesCountArgs:
+    """Arguments for MakeSeriesCountFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of values to generate", ge=0)]
+
+
+@dataclass(kw_only=True)
+class MakeSeriesRangeArgs:
+    """Arguments for MakeSeriesRangeFunction."""
+
+    start: Annotated[int, Arg(0, doc="Start value (inclusive)")]
+    stop: Annotated[int, Arg(1, doc="Stop value (exclusive)")]
+
+
+@dataclass(kw_only=True)
+class MakeSeriesStepArgs:
+    """Arguments for MakeSeriesStepFunction."""
+
+    start: Annotated[int, Arg(0, doc="Start value (inclusive)")]
+    stop: Annotated[int, Arg(1, doc="Stop value (exclusive)")]
+    step: Annotated[int, Arg(2, doc="Step between values", ge=1)]
+
+
+@dataclass(kw_only=True)
+class MakeSeriesState(ArrowSerializableDataclass):
+    """Mutable state for make_series functions."""
+
+    values: list[int]
+    offset: int = 0
+
+
+def _make_series_emit(state: MakeSeriesState, out: OutputCollector) -> None:
+    """Shared process logic for all make_series overloads."""
+    if state.offset >= len(state.values):
+        out.finish()
+        return
+    batch_values = state.values[state.offset : state.offset + 1024]
+    out.emit(pa.RecordBatch.from_pydict({"value": batch_values}, schema=MAKE_SERIES_SCHEMA))
+    state.offset += len(batch_values)
+
+
+@init_single_worker
+@bind_fixed_schema
+class MakeSeriesCountFunction(TableFunctionGenerator[MakeSeriesCountArgs, MakeSeriesState]):
+    """Generate a series of integers from 0 to count-1.
+
+    Example:
+        SELECT * FROM make_series(5)
+        Returns: 0, 1, 2, 3, 4
+
+    """
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = MAKE_SERIES_SCHEMA
+
+    class Meta:
+        """Function metadata."""
+
+        name = "make_series"
+        description = "Generate integers from 0 to count-1"
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM make_series(5)",
+                description="Generate 0..4",
+            ),
+        ]
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[MakeSeriesCountArgs]) -> MakeSeriesState:
+        """Build the full value list."""
+        return MakeSeriesState(values=list(range(params.args.count)))
+
+    @classmethod
+    def process(cls, params: ProcessParams[MakeSeriesCountArgs], state: MakeSeriesState, out: OutputCollector) -> None:
+        """Emit values in batches."""
+        _make_series_emit(state, out)
+
+
+@init_single_worker
+@bind_fixed_schema
+class MakeSeriesRangeFunction(TableFunctionGenerator[MakeSeriesRangeArgs, MakeSeriesState]):
+    """Generate a series of integers from start to stop-1.
+
+    Example:
+        SELECT * FROM make_series(3, 7)
+        Returns: 3, 4, 5, 6
+
+    """
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = MAKE_SERIES_SCHEMA
+
+    class Meta:
+        """Function metadata."""
+
+        name = "make_series"
+        description = "Generate integers from start to stop-1"
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM make_series(3, 7)",
+                description="Generate 3..6",
+            ),
+        ]
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[MakeSeriesRangeArgs]) -> MakeSeriesState:
+        """Build the value list from start..stop."""
+        return MakeSeriesState(values=list(range(params.args.start, params.args.stop)))
+
+    @classmethod
+    def process(cls, params: ProcessParams[MakeSeriesRangeArgs], state: MakeSeriesState, out: OutputCollector) -> None:
+        """Emit values in batches."""
+        _make_series_emit(state, out)
+
+
+@init_single_worker
+@bind_fixed_schema
+class MakeSeriesStepFunction(TableFunctionGenerator[MakeSeriesStepArgs, MakeSeriesState]):
+    """Generate a series of integers from start to stop-1 with step.
+
+    Example:
+        SELECT * FROM make_series(0, 10, 3)
+        Returns: 0, 3, 6, 9
+
+    """
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = MAKE_SERIES_SCHEMA
+
+    class Meta:
+        """Function metadata."""
+
+        name = "make_series"
+        description = "Generate integers from start to stop-1 with step"
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM make_series(0, 10, 3)",
+                description="Generate 0, 3, 6, 9",
+            ),
+        ]
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[MakeSeriesStepArgs]) -> MakeSeriesState:
+        """Build the value list with step."""
+        return MakeSeriesState(values=list(range(params.args.start, params.args.stop, params.args.step)))
+
+    @classmethod
+    def process(cls, params: ProcessParams[MakeSeriesStepArgs], state: MakeSeriesState, out: OutputCollector) -> None:
+        """Emit values in batches."""
+        _make_series_emit(state, out)

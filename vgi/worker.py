@@ -625,19 +625,11 @@ class Worker:
                 # All scalar params are always required (no defaults).
                 # Scalar functions don't support named arguments.
 
-                # Check if function uses new Param/ConstParam API
+                # Only ConstParams come from arguments
+                # Column params come from input batch
                 const_params = [p for p in positional_params if p.is_const]
-                has_const_params = len(const_params) > 0
-
-                if has_const_params:
-                    # New API: only ConstParams come from arguments
-                    # Column params come from input batch
-                    expected_positional = len(const_params)
-                    has_varargs = any(p.is_varargs for p in const_params)
-                else:
-                    # Legacy API: all params (column names) come from arguments
-                    expected_positional = len(positional_params)
-                    has_varargs = any(p.is_varargs for p in positional_params)
+                expected_positional = len(const_params)
+                has_varargs = any(p.is_varargs for p in const_params)
 
                 if has_varargs:
                     # With varargs, need at least expected params

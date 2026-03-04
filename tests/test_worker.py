@@ -8,9 +8,10 @@ import pytest
 from vgi_rpc.rpc import OutputCollector
 
 from vgi import Arg, TableInOutFunction, TableInput
-from vgi.arguments import Arguments
+from vgi.arguments import Arguments, ConstParam, Param, Returns
 from vgi.invocation import FunctionType
 from vgi.protocol import BindRequest, TableFunctionCardinalityRequest
+from vgi.scalar_function import ScalarFunction
 from vgi.table_function import (
     BindParams,
     ProcessParams,
@@ -589,3 +590,104 @@ class TestTableFunctionCardinality:
         )
         result = worker.table_function_cardinality(request)
         assert result.estimate == 30
+
+
+class TestScalarOverloading:
+    """Tests for scalar function overloading by ConstParam count."""
+
+    def _make_scalar_candidates(self) -> list[type]:
+        """Create three scalar overloads with 0, 1, and 2 ConstParams."""
+
+        class ZeroConst(ScalarFunction):
+            class Meta:
+                name = "fmt"
+
+            @classmethod
+            def compute(
+                cls,
+                val: Annotated[pa.DoubleArray, Param(doc="Value")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array([str(v) for v in val.to_pylist()], type=pa.string())
+
+        class OneConst(ScalarFunction):
+            class Meta:
+                name = "fmt"
+
+            @classmethod
+            def compute(
+                cls,
+                prec: Annotated[int, ConstParam("Precision")],
+                val: Annotated[pa.DoubleArray, Param(doc="Value")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array([f"{v:.{prec}f}" for v in val.to_pylist()], type=pa.string())
+
+        class TwoConst(ScalarFunction):
+            class Meta:
+                name = "fmt"
+
+            @classmethod
+            def compute(
+                cls,
+                prec: Annotated[int, ConstParam("Precision")],
+                pfx: Annotated[str, ConstParam("Prefix")],
+                val: Annotated[pa.DoubleArray, Param(doc="Value")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array([f"{pfx}{v:.{prec}f}" for v in val.to_pylist()], type=pa.string())
+
+        return [ZeroConst, OneConst, TwoConst]
+
+    def test_match_by_const_param_count(self) -> None:
+        """Scalar overloads are matched by ConstParam count."""
+        candidates = self._make_scalar_candidates()
+
+        # 0 const args -> ZeroConst
+        result = Worker._match_function_arguments(
+            function_name="fmt",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("val", pa.float64())]),
+            candidates=candidates,
+        )
+        assert result is candidates[0]
+
+        # 1 const arg -> OneConst
+        result = Worker._match_function_arguments(
+            function_name="fmt",
+            arguments=Arguments(positional=(pa.scalar(2),)),
+            input_schema=pa.schema([("val", pa.float64())]),
+            candidates=candidates,
+        )
+        assert result is candidates[1]
+
+        # 2 const args -> TwoConst
+        result = Worker._match_function_arguments(
+            function_name="fmt",
+            arguments=Arguments(positional=(pa.scalar(2), pa.scalar("$"))),
+            input_schema=pa.schema([("val", pa.float64())]),
+            candidates=candidates,
+        )
+        assert result is candidates[2]
+
+    def test_zero_const_params_matches(self) -> None:
+        """A scalar function with 0 ConstParams correctly matches 0 positional args."""
+        candidates = self._make_scalar_candidates()
+
+        result = Worker._match_function_arguments(
+            function_name="fmt",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("val", pa.float64())]),
+            candidates=candidates,
+        )
+        # Should match ZeroConst (0 ConstParams), not fail
+        assert result is candidates[0]
+
+    def test_no_match_error_scalar(self) -> None:
+        """Too many const args gives helpful error for scalar overloads."""
+        candidates = self._make_scalar_candidates()
+
+        with pytest.raises(ValueError, match="No matching function"):
+            Worker._match_function_arguments(
+                function_name="fmt",
+                arguments=Arguments(positional=(pa.scalar(1), pa.scalar(2), pa.scalar(3))),
+                input_schema=pa.schema([("val", pa.float64())]),
+                candidates=candidates,
+            )
