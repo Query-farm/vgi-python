@@ -29,6 +29,7 @@ with contextlib.suppress(ImportError):
         bearer_authenticate,
         bearer_authenticate_static,
         chain_authenticate,
+        parse_client_id,
     )
 
     __all__ += [
@@ -36,6 +37,7 @@ with contextlib.suppress(ImportError):
         "bearer_authenticate",
         "bearer_authenticate_static",
         "chain_authenticate",
+        "parse_client_id",
     ]
 
 # JWT auth — available when vgi[oauth] is installed (requires authlib).

@@ -175,6 +175,7 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-example-
 | `VGI_JWT_JWKS_URI` | JWKS endpoint URL (auto-discovered if omitted) |
 | `VGI_OAUTH_RESOURCE` | OAuth resource URL for RFC 9728 metadata |
 | `VGI_OAUTH_AUTH_SERVERS` | Comma-separated authorization server URLs |
+| `VGI_OAUTH_CLIENT_ID` | Client ID for MCP compatibility (optional, URL-safe chars only) |
 
 ### Worker Debug Mode
 

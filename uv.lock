@@ -966,7 +966,7 @@ dev = [
 
 [[package]]
 name = "vgi-rpc"
-version = "0.1.17"
+version = "0.1.19"
 source = { directory = "../vgi-rpc" }
 dependencies = [
     { name = "docstring-parser" },
@@ -990,6 +990,7 @@ requires-dist = [
     { name = "aiohttp", marker = "extra == 'external'", specifier = ">=3.9" },
     { name = "authlib", marker = "extra == 'oauth'", specifier = ">=1.3" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.28" },
+    { name = "cryptography", marker = "extra == 'mtls'", specifier = ">=41.0" },
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "falcon", marker = "extra == 'http'", specifier = ">=3.0" },
     { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=2.10" },
@@ -1006,13 +1007,14 @@ requires-dist = [
     { name = "zstandard", marker = "extra == 'external'", specifier = ">=0.20" },
     { name = "zstandard", marker = "extra == 'http'", specifier = ">=0.20" },
 ]
-provides-extras = ["http", "s3", "gcs", "cli", "external", "otel", "oauth", "sentry"]
+provides-extras = ["http", "s3", "gcs", "cli", "external", "otel", "oauth", "mtls", "sentry"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "aioresponses", specifier = ">=0.7" },
     { name = "authlib", specifier = ">=1.3" },
     { name = "boto3", specifier = ">=1.28" },
+    { name = "cryptography", specifier = ">=41.0" },
     { name = "falcon", specifier = ">=3.0" },
     { name = "google-cloud-storage", specifier = ">=2.10" },
     { name = "httpx", specifier = ">=0.24" },

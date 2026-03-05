@@ -31,6 +31,7 @@ the principal in the `AuthContext` available to functions.
 | `VGI_OAUTH_AUTH_SERVERS` | Comma-separated authorization server URLs |
 | `VGI_OAUTH_SCOPES` | Comma-separated supported scopes (optional) |
 | `VGI_OAUTH_RESOURCE_NAME` | Human-readable resource name (optional) |
+| `VGI_OAUTH_CLIENT_ID` | Client ID for MCP compatibility (optional, URL-safe chars only) |
 
 When both `VGI_BEARER_TOKENS` and `VGI_JWT_ISSUER` are set, they are
 chained — JWT validation is attempted first, falling back to bearer token
@@ -55,6 +56,7 @@ app = create_app(
     oauth_resource_metadata=OAuthResourceMetadata(
         resource="https://api.example.com",
         authorization_servers=("https://auth.example.com",),
+        client_id="my-client-id",
     ),
 )
 ```

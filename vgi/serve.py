@@ -409,6 +409,7 @@ def _resolve_oauth_resource_metadata() -> Any:
     - ``VGI_OAUTH_AUTH_SERVERS``: comma-separated authorization server URLs.
     - ``VGI_OAUTH_SCOPES``: comma-separated supported scopes (optional).
     - ``VGI_OAUTH_RESOURCE_NAME``: human-readable name (optional).
+    - ``VGI_OAUTH_CLIENT_ID``: client ID for MCP compatibility (optional, URL-safe chars only).
 
     Returns:
         OAuthResourceMetadata instance, or None if not configured.
@@ -436,13 +437,19 @@ def _resolve_oauth_resource_metadata() -> Any:
     scopes_raw = os.environ.get("VGI_OAUTH_SCOPES")
     scopes = tuple(s.strip() for s in scopes_raw.split(",") if s.strip()) if scopes_raw else ()
     resource_name = os.environ.get("VGI_OAUTH_RESOURCE_NAME")
+    client_id = os.environ.get("VGI_OAUTH_CLIENT_ID")
 
-    return OAuthResourceMetadata(
-        resource=resource,
-        authorization_servers=auth_servers,
-        scopes_supported=scopes,
-        resource_name=resource_name,
-    )
+    try:
+        return OAuthResourceMetadata(
+            resource=resource,
+            authorization_servers=auth_servers,
+            scopes_supported=scopes,
+            resource_name=resource_name,
+            client_id=client_id,
+        )
+    except ValueError as exc:
+        sys.stderr.write(f"Error: invalid VGI_OAUTH_CLIENT_ID: {exc}\n")
+        sys.exit(1)
 
 
 def _serve_http(

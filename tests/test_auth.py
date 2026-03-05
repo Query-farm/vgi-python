@@ -356,6 +356,38 @@ class TestResolveOAuthResourceMetadata:
         assert result.scopes_supported == ("read", "write")
         assert result.resource_name == "My API"
 
+    def test_client_id_passed_through(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """VGI_OAUTH_CLIENT_ID is forwarded to OAuthResourceMetadata."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth.example.com")
+        monkeypatch.setenv("VGI_OAUTH_CLIENT_ID", "my-client-id")
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        result = _resolve_oauth_resource_metadata()
+        assert result is not None
+        assert result.client_id == "my-client-id"
+
+    def test_client_id_absent_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Omitting VGI_OAUTH_CLIENT_ID leaves client_id as None."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth.example.com")
+        monkeypatch.delenv("VGI_OAUTH_CLIENT_ID", raising=False)
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        result = _resolve_oauth_resource_metadata()
+        assert result is not None
+        assert result.client_id is None
+
+    def test_invalid_client_id_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Invalid client_id causes SystemExit with friendly message."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth.example.com")
+        monkeypatch.setenv("VGI_OAUTH_CLIENT_ID", 'bad "id')
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        with pytest.raises(SystemExit):
+            _resolve_oauth_resource_metadata()
+
 
 # ---------------------------------------------------------------------------
 # Import tests
