@@ -1625,6 +1625,17 @@ def _extract_setting_secret_params(
 
 
 @dataclass(frozen=True, slots=True)
+class Auth:
+    """Metadata for auth context parameter in compute().
+
+    Use with Annotated to declare a parameter that receives the AuthContext
+    for the current request. Returns AuthContext.anonymous() when no
+    authentication is configured (including stdio transport).
+
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class OutputLength:
     """Metadata for output length parameter in compute().
 

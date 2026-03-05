@@ -20,6 +20,7 @@ StreamState Implementations
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Protocol, get_args, get_origin
@@ -424,6 +425,7 @@ class ScalarExchangeState(ExchangeState):
             init_call=self._init_call,
             init_response=self._init_response,
             storage=BoundStorage(cls.storage, self._init_response.execution_id),
+            auth_context=ctx.auth,
         )
         if inject_row:
             cls._validate_row_count(output, batch)
@@ -590,13 +592,14 @@ class TableProducerState(ProducerState):
 
     def produce(self, out: OutputCollector, ctx: CallContext) -> None:
         """Produce the next output batch from the table function."""
+        params = dataclasses.replace(self._params, auth_context=ctx.auth)
         if self._auto_apply and self._pushdown_filters is not None:
             # Wrap the OutputCollector to auto-apply filters to emitted batches
             filtered_out = _FilteringOutputCollector(out, self._func_cls, self._pushdown_filters)
-            self._func_cls.process(self._params, self._user_state, filtered_out)  # type: ignore[arg-type]
+            self._func_cls.process(params, self._user_state, filtered_out)  # type: ignore[arg-type]
             filtered_out.propagate()
         else:
-            self._func_cls.process(self._params, self._user_state, out)
+            self._func_cls.process(params, self._user_state, out)
 
 
 @dataclass
@@ -675,12 +678,13 @@ class TableInOutExchangeState(ExchangeState):
 
     def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Process one input batch through the table-in-out function."""
+        params = dataclasses.replace(self._params, auth_context=ctx.auth)
         if self._auto_apply and self._pushdown_filters is not None:
             filtered_out = _FilteringOutputCollector(out, self._func_cls, self._pushdown_filters)
-            self._func_cls.process(self._params, self._user_state, input.batch, filtered_out)  # type: ignore[arg-type]
+            self._func_cls.process(params, self._user_state, input.batch, filtered_out)  # type: ignore[arg-type]
             filtered_out.propagate()
         else:
-            self._func_cls.process(self._params, self._user_state, input.batch, out)
+            self._func_cls.process(params, self._user_state, input.batch, out)
 
 
 @dataclass

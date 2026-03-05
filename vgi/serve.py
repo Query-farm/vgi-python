@@ -28,6 +28,7 @@ import importlib.util
 import logging
 import os
 import sys
+from collections.abc import Callable
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
@@ -35,6 +36,7 @@ from vgi.logging_config import LogFormat, LogLevel
 
 if TYPE_CHECKING:
     import falcon
+    from vgi_rpc.rpc import AuthContext
 
     from vgi.worker import Worker
 
@@ -156,6 +158,8 @@ def create_app(
     describe: bool = True,
     signing_key: bytes | None = None,
     log_level: int = logging.INFO,
+    authenticate: Callable[[falcon.Request], AuthContext] | None = None,
+    oauth_resource_metadata: Any = None,
 ) -> falcon.App[Any, Any]:
     """Create a WSGI app for a VGI worker.
 
@@ -172,6 +176,11 @@ def create_app(
             across workers).  Set via ``VGI_SIGNING_KEY`` env var or
             pass explicitly for multi-process deployments.
         log_level: Logging level for the worker instance.
+        authenticate: Optional callback that validates each HTTP request
+            and returns an AuthContext. When ``None``, all requests are
+            anonymous.
+        oauth_resource_metadata: Optional OAuthResourceMetadata for
+            RFC 9728 discovery endpoint.
 
     Returns:
         A Falcon WSGI application.
@@ -191,7 +200,14 @@ def create_app(
 
     worker = worker_cls(quiet=True, log_level=log_level)
     server = RpcServer(VgiProtocol, worker, enable_describe=describe)
-    wsgi_app = make_wsgi_app(server, prefix=prefix, cors_origins=cors_origins, signing_key=signing_key)
+    wsgi_app = make_wsgi_app(
+        server,
+        prefix=prefix,
+        cors_origins=cors_origins,
+        signing_key=signing_key,
+        authenticate=authenticate,
+        oauth_resource_metadata=oauth_resource_metadata,
+    )
 
     if describe:
         from vgi.http.worker_page import WorkerPageResource, build_worker_page
@@ -253,6 +269,8 @@ def main() -> None:
         worker_cls = load_worker_class(worker_ref)
 
         if http:
+            authenticate = _resolve_authenticate()
+            oauth_metadata = _resolve_oauth_resource_metadata()
             _serve_http(
                 worker_cls,
                 effective_level=effective_level,
@@ -262,6 +280,8 @@ def main() -> None:
                 cors_origins=cors_origins,
                 describe=describe,
                 signing_key=signing_key,
+                authenticate=authenticate,
+                oauth_resource_metadata=oauth_metadata,
             )
         else:
             worker_cls(quiet=quiet, log_level=effective_level).run()
@@ -293,6 +313,132 @@ def _resolve_describe(cli_value: bool) -> bool:
     return raw.lower() in ("1", "true", "yes")
 
 
+def _resolve_authenticate() -> Callable[..., Any] | None:
+    """Build an authenticate callback from environment variables.
+
+    Supported env vars:
+
+    - ``VGI_BEARER_TOKENS``: comma-separated ``token=principal`` pairs
+      for static bearer token auth.
+    - ``VGI_JWT_ISSUER`` + ``VGI_JWT_AUDIENCE``: JWT/JWKS auth
+      (requires ``vgi[oauth]`` extra). Optional ``VGI_JWT_JWKS_URI``.
+    - When both bearer and JWT are set, they are chained (JWT first).
+
+    Returns:
+        An authenticate callback, or None if no auth env vars are set.
+
+    Raises:
+        SystemExit: If env vars are malformed (e.g. bearer token without ``=``,
+            JWT issuer without audience).
+
+    """
+    bearer_auth = _resolve_bearer_authenticate()
+    jwt_auth = _resolve_jwt_authenticate()
+
+    if bearer_auth is not None and jwt_auth is not None:
+        from vgi_rpc.http import chain_authenticate
+
+        return chain_authenticate(jwt_auth, bearer_auth)
+    return jwt_auth or bearer_auth
+
+
+def _resolve_bearer_authenticate() -> Callable[..., Any] | None:
+    """Build a bearer_authenticate_static callback from VGI_BEARER_TOKENS."""
+    raw = os.environ.get("VGI_BEARER_TOKENS")
+    if not raw:
+        return None
+
+    from vgi_rpc.http import bearer_authenticate_static
+    from vgi_rpc.rpc import AuthContext
+
+    tokens: dict[str, AuthContext] = {}
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if "=" not in entry:
+            sys.stderr.write(
+                f"Error: malformed VGI_BEARER_TOKENS entry: {entry!r}\n"
+                "Expected format: token=principal (e.g. 'mytoken=alice')\n"
+            )
+            sys.exit(1)
+        token, principal = entry.split("=", 1)
+        tokens[token] = AuthContext(principal=principal, authenticated=True, domain="bearer")
+
+    if not tokens:
+        return None
+    return bearer_authenticate_static(tokens=tokens)
+
+
+def _resolve_jwt_authenticate() -> Callable[..., Any] | None:
+    """Build a jwt_authenticate callback from VGI_JWT_ISSUER + VGI_JWT_AUDIENCE."""
+    issuer = os.environ.get("VGI_JWT_ISSUER")
+    if not issuer:
+        return None
+
+    audience = os.environ.get("VGI_JWT_AUDIENCE")
+    if not audience:
+        sys.stderr.write("Error: VGI_JWT_ISSUER is set but VGI_JWT_AUDIENCE is missing\n")
+        sys.exit(1)
+
+    try:
+        from vgi_rpc.http._oauth_jwt import jwt_authenticate
+    except ImportError:
+        sys.stderr.write(
+            "Error: JWT auth requires the oauth extra.\n"
+            "Install with: pip install vgi[oauth]  (or: uv sync --extra oauth)\n"
+        )
+        sys.exit(1)
+
+    jwks_uri = os.environ.get("VGI_JWT_JWKS_URI")
+    return jwt_authenticate(issuer=issuer, audience=audience, jwks_uri=jwks_uri)
+
+
+def _resolve_oauth_resource_metadata() -> Any:
+    """Build OAuthResourceMetadata from environment variables.
+
+    Supported env vars:
+
+    - ``VGI_OAUTH_RESOURCE``: canonical resource URL (required to enable).
+    - ``VGI_OAUTH_AUTH_SERVERS``: comma-separated authorization server URLs.
+    - ``VGI_OAUTH_SCOPES``: comma-separated supported scopes (optional).
+    - ``VGI_OAUTH_RESOURCE_NAME``: human-readable name (optional).
+
+    Returns:
+        OAuthResourceMetadata instance, or None if not configured.
+
+    """
+    resource = os.environ.get("VGI_OAUTH_RESOURCE")
+    if not resource:
+        return None
+
+    auth_servers_raw = os.environ.get("VGI_OAUTH_AUTH_SERVERS")
+    if not auth_servers_raw:
+        sys.stderr.write("Error: VGI_OAUTH_RESOURCE is set but VGI_OAUTH_AUTH_SERVERS is missing\n")
+        sys.exit(1)
+
+    try:
+        from vgi_rpc.http import OAuthResourceMetadata
+    except ImportError:
+        sys.stderr.write(
+            "Error: OAuth metadata requires the http extra.\n"
+            "Install with: pip install vgi[http]  (or: uv sync --extra http)\n"
+        )
+        sys.exit(1)
+
+    auth_servers = tuple(s.strip() for s in auth_servers_raw.split(",") if s.strip())
+    scopes_raw = os.environ.get("VGI_OAUTH_SCOPES")
+    scopes = tuple(s.strip() for s in scopes_raw.split(",") if s.strip()) if scopes_raw else ()
+    resource_name = os.environ.get("VGI_OAUTH_RESOURCE_NAME")
+
+    return OAuthResourceMetadata(
+        resource=resource,
+        authorization_servers=auth_servers,
+        scopes_supported=scopes,
+        resource_name=resource_name,
+    )
+
+
 def _serve_http(
     worker_cls: type[Worker],
     *,
@@ -303,6 +449,8 @@ def _serve_http(
     cors_origins: str,
     describe: bool,
     signing_key: bytes | None,
+    authenticate: Callable[..., Any] | None = None,
+    oauth_resource_metadata: Any = None,
 ) -> None:
     """Start the worker as an HTTP server."""
     import socket
@@ -332,6 +480,8 @@ def _serve_http(
         describe=describe,
         signing_key=signing_key,
         log_level=effective_level,
+        authenticate=authenticate,
+        oauth_resource_metadata=oauth_resource_metadata,
     )
 
     # Machine-readable port for process managers and test harnesses

@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 http = ["vgi-rpc[http]"]
+oauth = ["vgi-rpc[oauth]"]
 dev = [
     "mypy",
     "pyarrow-stubs",

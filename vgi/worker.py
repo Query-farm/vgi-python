@@ -68,7 +68,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, cast, final
 
 import pyarrow as pa
-from vgi_rpc.rpc import RpcServer, Stream, serve_stdio
+from vgi_rpc.rpc import CallContext, RpcServer, Stream, serve_stdio
 
 from vgi.argument_spec import ArgumentSpec, extract_argument_specs
 from vgi.arguments import Arguments
@@ -446,6 +446,10 @@ class Worker:
             )
 
             if http:
+                from vgi.serve import _resolve_authenticate, _resolve_oauth_resource_metadata
+
+                authenticate = _resolve_authenticate()
+                oauth_metadata = _resolve_oauth_resource_metadata()
                 cls._run_http(
                     effective_level=effective_level,
                     host=host,
@@ -453,6 +457,8 @@ class Worker:
                     prefix=prefix,
                     cors_origins=cors_origins,
                     describe=describe,
+                    authenticate=authenticate,
+                    oauth_resource_metadata=oauth_metadata,
                 )
             else:
                 cls(quiet=quiet, log_level=effective_level).run()
@@ -504,6 +510,10 @@ class Worker:
                 log_format=log_format,
             )
 
+            from vgi.serve import _resolve_authenticate, _resolve_oauth_resource_metadata
+
+            authenticate = _resolve_authenticate()
+            oauth_metadata = _resolve_oauth_resource_metadata()
             cls._run_http(
                 effective_level=effective_level,
                 host=host,
@@ -511,6 +521,8 @@ class Worker:
                 prefix=prefix,
                 cors_origins=cors_origins,
                 describe=describe,
+                authenticate=authenticate,
+                oauth_resource_metadata=oauth_metadata,
             )
 
         app()
@@ -525,6 +537,8 @@ class Worker:
         prefix: str,
         cors_origins: str,
         describe: bool,
+        authenticate: Any = None,
+        oauth_resource_metadata: Any = None,
     ) -> None:
         """Start the worker as an HTTP server (shared by ``main`` and ``main_http``)."""
         import socket
@@ -554,6 +568,8 @@ class Worker:
             describe=describe,
             signing_key=signing_key,
             log_level=effective_level,
+            authenticate=authenticate,
+            oauth_resource_metadata=oauth_resource_metadata,
         )
 
         # Machine-readable port for process managers and test harnesses
@@ -1010,7 +1026,7 @@ class Worker:
     # VgiProtocol implementation - bind/init
     # ---------------------------------------------------------------------------
 
-    def bind(self, request: BindRequest) -> BindResponse:
+    def bind(self, request: BindRequest, ctx: CallContext) -> BindResponse:
         """Resolve output schema and validate arguments.
 
         Implements VgiProtocol.bind().
@@ -1019,7 +1035,7 @@ class Worker:
         self._validate_required_settings(func_cls, request)
 
         instance = func_cls(logger=_logger)
-        return instance.bind(request)  # type: ignore[attr-defined, no-any-return]
+        return instance.bind(request, ctx=ctx)  # type: ignore[attr-defined, no-any-return]
 
     def table_function_cardinality(self, request: TableFunctionCardinalityRequest) -> TableCardinality:
         """Estimate the cardinality of a table function's output.
@@ -1034,7 +1050,7 @@ class Worker:
             )
         return func_cls.cardinality(func_cls._make_bind_params(request.bind_call))
 
-    def init(self, request: InitRequest) -> Stream[ProcessState, GlobalInitResponse]:
+    def init(self, request: InitRequest, ctx: CallContext) -> Stream[ProcessState, GlobalInitResponse]:
         """Initialize a function execution and return a processing stream.
 
         Implements VgiProtocol.init(). Creates the appropriate state object
@@ -1080,6 +1096,7 @@ class Worker:
                 settings=_batch_to_scalar_dict(request.bind_call.settings),
                 secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
                 storage=BoundStorage(type(instance).storage, init_response.execution_id),
+                auth_context=ctx.auth,
             )
 
             if request.phase == TableInOutFunctionInitPhase.INPUT:
@@ -1112,6 +1129,7 @@ class Worker:
                 settings=_batch_to_scalar_dict(request.bind_call.settings),
                 secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
                 storage=BoundStorage(type(instance).storage, init_response.execution_id),
+                auth_context=ctx.auth,
             )
             user_state = type(instance).initial_state(params)
             state = TableProducerState(

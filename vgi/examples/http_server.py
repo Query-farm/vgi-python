@@ -223,6 +223,11 @@ def main() -> None:
                 s.bind((host, 0))
                 port = int(s.getsockname()[1])
 
+        from vgi.serve import _resolve_authenticate, _resolve_oauth_resource_metadata
+
+        authenticate = _resolve_authenticate()
+        oauth_metadata = _resolve_oauth_resource_metadata()
+
         worker = ExampleWorker(quiet=True, log_level=effective_level)
         server = RpcServer(VgiProtocol, worker, external_location=external_location, enable_describe=describe)
         wsgi_app = make_wsgi_app(
@@ -231,6 +236,8 @@ def main() -> None:
             cors_origins=cors_origins,
             upload_url_provider=upload_url_provider,
             max_upload_bytes=max_upload_bytes if upload_url_provider is not None else None,
+            authenticate=authenticate,
+            oauth_resource_metadata=oauth_metadata,
         )
 
         if describe:

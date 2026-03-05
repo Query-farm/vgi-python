@@ -24,7 +24,7 @@ from typing import (
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
-from vgi_rpc.rpc import OutputCollector
+from vgi_rpc.rpc import AuthContext, CallContext, OutputCollector
 
 import vgi.function
 from vgi.arguments import Arg, Arguments, Secret, SecretLookupEntry, TableInput, _extract_setting_secret_params
@@ -256,6 +256,7 @@ class BindParams[TArgs]:
     # Convenient access to settings and secrets, extracted from the bind_call.
     settings: dict[str, pa.Scalar[Any]]
     secrets: SecretsAccessor
+    auth_context: AuthContext = AuthContext.anonymous()
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -276,6 +277,7 @@ class InitParams[TArgs]:
     secrets: dict[str, dict[str, pa.Scalar[Any]]]
 
     storage: BoundStorage
+    auth_context: AuthContext = AuthContext.anonymous()
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -295,6 +297,7 @@ class ProcessParams[TArgs]:
     secrets: dict[str, dict[str, pa.Scalar[Any]]]
 
     storage: BoundStorage
+    auth_context: AuthContext = AuthContext.anonymous()
 
 
 class TableFunctionBase[TArgs](vgi.function.Function):
@@ -504,7 +507,12 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
     @final
     @classmethod
-    def _make_bind_params(cls, input: BindRequest) -> BindParams[TArgs]:
+    def _make_bind_params(
+        cls,
+        input: BindRequest,
+        *,
+        auth_context: AuthContext | None = None,
+    ) -> BindParams[TArgs]:
         """Construct BindParams from a BindRequest.
 
         Shared by bind() and table_function_cardinality() to avoid
@@ -515,6 +523,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             bind_call=input,
             settings=_batch_to_scalar_dict(input.settings),
             secrets=SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided),
+            auth_context=auth_context if auth_context is not None else AuthContext.anonymous(),
         )
 
     @classmethod
@@ -621,6 +630,8 @@ class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
     def bind(
         cls,
         input: BindRequest,
+        *,
+        ctx: CallContext | None = None,
     ) -> BindResponse:
         """Bind protocol entry point. Do not override; use on_bind() instead.
 
@@ -635,7 +646,8 @@ class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
         which may use dynamic scopes computed from function arguments.
 
         """
-        params = cls._make_bind_params(input)
+        auth = ctx.auth if ctx is not None else AuthContext.anonymous()
+        params = cls._make_bind_params(input, auth_context=auth)
         result = cls.on_bind(params, **cls._extract_bind_kwargs(input))
 
         # Check if on_bind() registered pending secret lookups

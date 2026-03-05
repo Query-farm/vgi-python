@@ -28,11 +28,13 @@ from vgi.arguments import (
     Arg,
     Arguments,
     ArgumentValidationError,
+    Auth,
     ConstParam,
     Param,
     Returns,
     TableInput,
 )
+from vgi.auth import AuthContext, CallContext
 from vgi.metadata import (
     CatalogFunctionType,
     FunctionExample,
@@ -77,6 +79,9 @@ __all__ = [
     "ArgumentSpec",
     "ArgumentValidationError",
     "Arguments",
+    "Auth",
+    "AuthContext",
+    "CallContext",
     "argument_specs_to_schema",
     "BindRequest",
     "ColumnBounds",

@@ -1,0 +1,390 @@
+"""Tests for auth context support in VGI functions."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Annotated, Any
+from unittest.mock import patch
+
+import pyarrow as pa
+import pytest
+from vgi_rpc.rpc import AuthContext
+
+from vgi.arguments import Auth, Param, Returns
+from vgi.function_storage import BoundStorage
+from vgi.invocation import FunctionType, GlobalInitResponse
+from vgi.scalar_function import ScalarFunction
+
+if TYPE_CHECKING:
+    pass
+
+# ---------------------------------------------------------------------------
+# Test functions
+# ---------------------------------------------------------------------------
+
+
+class _AuthEchoFunction(ScalarFunction):
+    """Test function that echoes auth principal."""
+
+    class Meta:
+        """Test metadata."""
+
+        name = "auth_echo"
+
+    @classmethod
+    def compute(
+        cls,
+        x: Annotated[pa.Int64Array, Param(doc="input")],
+        auth: Annotated[AuthContext, Auth()],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Echo the auth principal."""
+        name = auth.principal or "anonymous"
+        return pa.array([name] * len(x))
+
+
+class _NoAuthFunction(ScalarFunction):
+    """Test function without Auth param."""
+
+    class Meta:
+        """Test metadata."""
+
+        name = "no_auth"
+
+    @classmethod
+    def compute(
+        cls,
+        x: Annotated[pa.Int64Array, Param(doc="input")],
+    ) -> Annotated[pa.Int64Array, Returns()]:
+        """Double the input."""
+        return pa.array([v.as_py() * 2 for v in x])
+
+
+def _make_scalar_test_context(
+    func_name: str,
+    input_schema: pa.Schema,
+    output_schema: pa.Schema,
+) -> tuple[Any, Any]:
+    """Create BindRequest/InitRequest for testing scalar functions."""
+    from vgi.arguments import Arguments
+    from vgi.protocol import BindRequest, InitRequest
+
+    bind_call = BindRequest(
+        function_name=func_name,
+        arguments=Arguments(),
+        function_type=FunctionType.SCALAR,
+        input_schema=input_schema,
+    )
+    init_call = InitRequest(
+        bind_call=bind_call,
+        output_schema=output_schema,
+    )
+    return bind_call, init_call
+
+
+# ---------------------------------------------------------------------------
+# Auth annotation tests
+# ---------------------------------------------------------------------------
+
+
+class TestAuthAnnotation:
+    """Tests for Auth annotation detection and injection."""
+
+    def test_auth_param_detected(self) -> None:
+        """Auth param is detected by __init_subclass__."""
+        assert _AuthEchoFunction._auth_param == "auth"
+
+    def test_no_auth_param(self) -> None:
+        """Functions without Auth have _auth_param = None."""
+        assert _NoAuthFunction._auth_param is None
+
+    def test_auth_injected_into_compute(self) -> None:
+        """Auth context is injected when processing batches."""
+        _, init_call = _make_scalar_test_context(
+            "auth_echo",
+            pa.schema([("x", pa.int64())]),
+            pa.schema([("result", pa.string())]),
+        )
+        batch = pa.record_batch({"x": [1, 2, 3]})
+        auth = AuthContext(principal="alice", authenticated=True, domain="bearer")
+        storage = BoundStorage(_AuthEchoFunction.storage, b"\x00" * 16)
+
+        result = _AuthEchoFunction.process(
+            batch=batch,
+            init_call=init_call,
+            init_response=GlobalInitResponse(),
+            storage=storage,
+            auth_context=auth,
+        )
+        assert result.column("result").to_pylist() == ["alice", "alice", "alice"]
+
+    def test_auth_defaults_to_anonymous(self) -> None:
+        """When anonymous auth is passed, principal is None -> 'anonymous'."""
+        _, init_call = _make_scalar_test_context(
+            "auth_echo",
+            pa.schema([("x", pa.int64())]),
+            pa.schema([("result", pa.string())]),
+        )
+        batch = pa.record_batch({"x": [1]})
+        storage = BoundStorage(_AuthEchoFunction.storage, b"\x00" * 16)
+
+        result = _AuthEchoFunction.process(
+            batch=batch,
+            init_call=init_call,
+            init_response=GlobalInitResponse(),
+            storage=storage,
+            auth_context=AuthContext.anonymous(),
+        )
+        assert result.column("result").to_pylist() == ["anonymous"]
+
+    def test_no_auth_function_ignores_auth(self) -> None:
+        """Functions without Auth param still work with auth_context kwarg."""
+        _, init_call = _make_scalar_test_context(
+            "no_auth",
+            pa.schema([("x", pa.int64())]),
+            pa.schema([("result", pa.int64())]),
+        )
+        batch = pa.record_batch({"x": [5]})
+        auth = AuthContext(principal="alice", authenticated=True, domain="bearer")
+        storage = BoundStorage(_NoAuthFunction.storage, b"\x00" * 16)
+
+        result = _NoAuthFunction.process(
+            batch=batch,
+            init_call=init_call,
+            init_response=GlobalInitResponse(),
+            storage=storage,
+            auth_context=auth,
+        )
+        assert result.column("result").to_pylist() == [10]
+
+
+# ---------------------------------------------------------------------------
+# Table function auth tests
+# ---------------------------------------------------------------------------
+
+
+class TestTableFunctionAuth:
+    """Tests for auth in table function ProcessParams."""
+
+    def test_process_params_default_anonymous(self) -> None:
+        """ProcessParams defaults to anonymous auth."""
+        from vgi.table_function import ProcessParams
+
+        params = ProcessParams(
+            args=None,
+            init_call=None,  # type: ignore[arg-type]
+            init_response=None,  # type: ignore[arg-type]
+            output_schema=pa.schema([]),
+            settings={},
+            secrets={},
+            storage=None,  # type: ignore[arg-type]
+        )
+        assert params.auth_context.authenticated is False
+        assert params.auth_context.principal is None
+
+    def test_process_params_with_auth(self) -> None:
+        """ProcessParams accepts explicit auth context."""
+        from vgi.table_function import ProcessParams
+
+        auth = AuthContext(principal="bob", authenticated=True, domain="jwt")
+        params = ProcessParams(
+            args=None,
+            init_call=None,  # type: ignore[arg-type]
+            init_response=None,  # type: ignore[arg-type]
+            output_schema=pa.schema([]),
+            settings={},
+            secrets={},
+            storage=None,  # type: ignore[arg-type]
+            auth_context=auth,
+        )
+        assert params.auth_context.principal == "bob"
+        assert params.auth_context.domain == "jwt"
+
+    def test_bind_params_default_anonymous(self) -> None:
+        """BindParams defaults to anonymous auth."""
+        from vgi.table_function import BindParams, SecretsAccessor
+
+        params = BindParams(
+            args=None,
+            bind_call=None,  # type: ignore[arg-type]
+            settings={},
+            secrets=SecretsAccessor(None),
+        )
+        assert params.auth_context.authenticated is False
+
+    def test_bind_params_with_auth(self) -> None:
+        """BindParams accepts explicit auth context."""
+        from vgi.table_function import BindParams, SecretsAccessor
+
+        auth = AuthContext(principal="carol", authenticated=True, domain="bearer")
+        params = BindParams(
+            args=None,
+            bind_call=None,  # type: ignore[arg-type]
+            settings={},
+            secrets=SecretsAccessor(None),
+            auth_context=auth,
+        )
+        assert params.auth_context.principal == "carol"
+
+    def test_init_params_default_anonymous(self) -> None:
+        """InitParams defaults to anonymous auth."""
+        from vgi.table_function import InitParams
+
+        params = InitParams(
+            args=None,
+            init_call=None,  # type: ignore[arg-type]
+            execution_id=b"\x00" * 16,
+            output_schema=pa.schema([]),
+            settings={},
+            secrets={},
+            storage=None,  # type: ignore[arg-type]
+        )
+        assert params.auth_context.authenticated is False
+
+
+# ---------------------------------------------------------------------------
+# Env-var resolver tests
+# ---------------------------------------------------------------------------
+
+
+class TestResolveAuthenticate:
+    """Tests for _resolve_authenticate() env var parsing."""
+
+    def test_unset_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No env vars -> None."""
+        monkeypatch.delenv("VGI_BEARER_TOKENS", raising=False)
+        monkeypatch.delenv("VGI_JWT_ISSUER", raising=False)
+        from vgi.serve import _resolve_authenticate
+
+        assert _resolve_authenticate() is None
+
+    def test_bearer_tokens_single(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Single bearer token parsed correctly."""
+        monkeypatch.setenv("VGI_BEARER_TOKENS", "tok123=alice")
+        monkeypatch.delenv("VGI_JWT_ISSUER", raising=False)
+        from vgi.serve import _resolve_authenticate
+
+        result = _resolve_authenticate()
+        assert result is not None
+        assert callable(result)
+
+    def test_bearer_tokens_multiple(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Multiple bearer tokens parsed correctly."""
+        monkeypatch.setenv("VGI_BEARER_TOKENS", "tok1=alice,tok2=bob")
+        monkeypatch.delenv("VGI_JWT_ISSUER", raising=False)
+        from vgi.serve import _resolve_authenticate
+
+        result = _resolve_authenticate()
+        assert result is not None
+
+    def test_bearer_tokens_malformed_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Malformed token entry (no '=') causes SystemExit."""
+        monkeypatch.setenv("VGI_BEARER_TOKENS", "badformat")
+        monkeypatch.delenv("VGI_JWT_ISSUER", raising=False)
+        from vgi.serve import _resolve_authenticate
+
+        with pytest.raises(SystemExit):
+            _resolve_authenticate()
+
+    def test_bearer_tokens_empty_principal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Token with empty principal is allowed."""
+        monkeypatch.setenv("VGI_BEARER_TOKENS", "tok=")
+        monkeypatch.delenv("VGI_JWT_ISSUER", raising=False)
+        from vgi.serve import _resolve_authenticate
+
+        result = _resolve_authenticate()
+        assert result is not None
+
+    def test_jwt_missing_audience_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """JWT issuer without audience causes SystemExit."""
+        monkeypatch.setenv("VGI_JWT_ISSUER", "https://issuer.example.com")
+        monkeypatch.delenv("VGI_JWT_AUDIENCE", raising=False)
+        monkeypatch.delenv("VGI_BEARER_TOKENS", raising=False)
+        from vgi.serve import _resolve_authenticate
+
+        with pytest.raises(SystemExit):
+            _resolve_authenticate()
+
+    def test_both_bearer_and_jwt(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Both bearer and JWT -> chain_authenticate."""
+        monkeypatch.setenv("VGI_BEARER_TOKENS", "tok=alice")
+        monkeypatch.setenv("VGI_JWT_ISSUER", "https://issuer.example.com")
+        monkeypatch.setenv("VGI_JWT_AUDIENCE", "my-api")
+        from vgi.serve import _resolve_authenticate
+
+        # Mock jwt_authenticate since authlib may not be installed
+        with patch("vgi.serve._resolve_jwt_authenticate", return_value=lambda req: AuthContext.anonymous()):
+            result = _resolve_authenticate()
+        assert result is not None
+
+
+class TestResolveOAuthResourceMetadata:
+    """Tests for _resolve_oauth_resource_metadata() env var parsing."""
+
+    def test_unset_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No env vars -> None."""
+        monkeypatch.delenv("VGI_OAUTH_RESOURCE", raising=False)
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        assert _resolve_oauth_resource_metadata() is None
+
+    def test_valid_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Valid config produces OAuthResourceMetadata."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth.example.com")
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        result = _resolve_oauth_resource_metadata()
+        assert result is not None
+        assert result.resource == "https://api.example.com"
+
+    def test_missing_auth_servers_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Resource without auth servers causes SystemExit."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.delenv("VGI_OAUTH_AUTH_SERVERS", raising=False)
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        with pytest.raises(SystemExit):
+            _resolve_oauth_resource_metadata()
+
+    def test_with_optional_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Optional scopes and resource name are passed through."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth1.example.com,https://auth2.example.com")
+        monkeypatch.setenv("VGI_OAUTH_SCOPES", "read,write")
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE_NAME", "My API")
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        result = _resolve_oauth_resource_metadata()
+        assert result is not None
+        assert len(result.authorization_servers) == 2
+        assert result.scopes_supported == ("read", "write")
+        assert result.resource_name == "My API"
+
+
+# ---------------------------------------------------------------------------
+# Import tests
+# ---------------------------------------------------------------------------
+
+
+class TestAuthImports:
+    """Tests for auth-related imports."""
+
+    def test_auth_module_imports(self) -> None:
+        """vgi.auth imports core types."""
+        from vgi.auth import AuthContext, CallContext
+
+        assert AuthContext is not None
+        assert CallContext is not None
+
+    def test_authcontext_in_vgi_init(self) -> None:
+        """AuthContext and Auth are accessible from vgi top-level."""
+        from vgi import Auth, AuthContext, CallContext
+
+        assert Auth is not None
+        assert AuthContext is not None
+        assert CallContext is not None
+
+    def test_auth_annotation_in_arguments(self) -> None:
+        """Auth annotation is in vgi.arguments."""
+        from vgi.arguments import Auth
+
+        assert Auth is not None

@@ -47,7 +47,8 @@ from typing import Annotated, Any
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from vgi.arguments import ConstParam, OutputLength, Param, Returns, Secret, Setting
+from vgi.arguments import Auth, ConstParam, OutputLength, Param, Returns, Secret, Setting
+from vgi.auth import AuthContext
 from vgi.exceptions import SchemaValidationError
 from vgi.metadata import FunctionExample, FunctionStability, NullHandling
 from vgi.scalar_function import BindParameters, BindResult, ScalarFunction
@@ -90,6 +91,7 @@ __all__ = [
     "TypeInfoUInt32Function",
     "TypeInfoUInt64Function",
     "UpperCaseFunction",
+    "WhoAmIFunction",
 ]
 
 
@@ -1539,3 +1541,28 @@ class GeoCentroidFixedFunction(ScalarFunction):
             [pc.list_element(p, 0) for p in points],
             [pc.list_element(p, 1) for p in points],
         )
+
+
+class WhoAmIFunction(ScalarFunction):
+    """Return the authenticated principal name.
+
+    Demonstrates the Auth annotation for accessing auth context in compute().
+    Over stdio transport (or when no auth is configured), returns "anonymous".
+
+    SQL: ``SELECT whoami(1)``
+    """
+
+    class Meta:
+        """Metadata for the whoami function."""
+
+        name = "whoami"
+
+    @classmethod
+    def compute(
+        cls,
+        x: Annotated[pa.Int64Array, Param(doc="dummy input")],
+        auth: Annotated[AuthContext, Auth()],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Return the authenticated principal name."""
+        name = auth.principal or "anonymous"
+        return pa.array([name] * len(x))

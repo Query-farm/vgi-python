@@ -76,6 +76,7 @@ from vgi.examples.scalar import (
     TypeInfoUInt32Function,
     TypeInfoUInt64Function,
     UpperCaseFunction,
+    WhoAmIFunction,
 )
 from vgi.examples.table import (
     ConstantColumnsFunction,
@@ -242,6 +243,7 @@ class ExampleWorker(Worker):
                     AnyMixedIntFunction,
                     AnyMixedStrFunction,
                     UpperCaseFunction,
+                    WhoAmIFunction,
                 ],
                 views=[
                     View(

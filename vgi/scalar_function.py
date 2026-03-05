@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any, cast, final, get_args, get_origin, get_ty
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
+from vgi_rpc.rpc import AuthContext, CallContext
 
 import vgi.function
 from vgi.arguments import (
@@ -47,6 +48,7 @@ from vgi.arguments import (
     COMPLEX_ARRAY_CLASSES,
     Arg,
     Arguments,
+    Auth,
     ConstParam,
     OutputLength,
     Param,
@@ -106,6 +108,7 @@ class BindParameters:
         arguments_schema: Schema describing the input columns.
         settings: DuckDB settings as a single-row RecordBatch, or None.
         secrets: SecretsAccessor for accessing resolved and dynamic secrets.
+        auth_context: Authentication context for the current request.
 
     """
 
@@ -113,6 +116,7 @@ class BindParameters:
     arguments_schema: pa.Schema
     settings: pa.RecordBatch | None
     secrets: SecretsAccessor
+    auth_context: AuthContext = AuthContext.anonymous()
 
 
 def _resolve_explicit_arrow_type(arrow_type: pa.DataType | type) -> pa.DataType:
@@ -536,6 +540,8 @@ class ScalarFunctionGenerator(vgi.function.Function):
     def bind(
         cls,
         input: BindRequest,
+        *,
+        ctx: CallContext | None = None,
     ) -> BindResponse:
         """Bind protocol entry point. Do not override; use on_bind() instead.
 
@@ -563,8 +569,9 @@ class ScalarFunctionGenerator(vgi.function.Function):
             ]
             return BindResponse.secret_scope_request(entries)
 
+        auth = ctx.auth if ctx is not None else AuthContext.anonymous()
         secrets_accessor = SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided)
-        bind_params = BindParameters(input.arguments, input.input_schema, input.settings, secrets_accessor)
+        bind_params = BindParameters(input.arguments, input.input_schema, input.settings, secrets_accessor, auth)
         result = cls.on_bind(bind_params)
 
         # Check if on_bind() registered pending secret lookups
@@ -631,6 +638,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
         init_call: InitRequest,
         init_response: BaseInitResponse,
         storage: BoundStorage,
+        auth_context: AuthContext,
     ) -> pa.RecordBatch:
         """Process one input batch.
 
@@ -643,6 +651,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
             init_call: The parameters from global_init.
             init_response: The response from the init call.
             storage: BoundStorage for storing data across calls.
+            auth_context: Authentication context for the current request.
 
         Returns:
             Output RecordBatch with same row count as input.
@@ -687,6 +696,7 @@ class ScalarFunction(ScalarFunctionGenerator):
     _setting_params: dict[str, str]  # Setting params: param_name -> setting_key
     _secret_params: dict[str, Secret]  # Secret params: param_name -> Secret instance
     _output_length_param: str | None  # OutputLength param name (batch row count)
+    _auth_param: str | None  # Auth param name (receives AuthContext)
     _returns_output_type: pa.DataType | None  # Output type from Returns()
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -743,6 +753,7 @@ class ScalarFunction(ScalarFunctionGenerator):
                 "ConstParam": vgi_args.ConstParam,
                 "Setting": vgi_args.Setting,
                 "Secret": vgi_args.Secret,
+                "Auth": vgi_args.Auth,
                 "OutputLength": vgi_args.OutputLength,
                 "Returns": vgi_args.Returns,
                 "AnyArrow": vgi_args.AnyArrow,
@@ -758,6 +769,7 @@ class ScalarFunction(ScalarFunctionGenerator):
         compute_params: dict[str, Arg[Any]] = {}
         const_params: dict[str, Arg[Any]] = {}
         output_length_param: str | None = None  # param that receives batch row count
+        auth_param: str | None = None  # param that receives AuthContext
         returns_output_type: pa.DataType | None = None
 
         # Check return type for Returns() annotation
@@ -841,6 +853,12 @@ class ScalarFunction(ScalarFunctionGenerator):
                         # Don't increment overall_position - not a call argument
                         break
 
+                    # Auth: receives AuthContext
+                    if isinstance(meta, Auth):
+                        auth_param = name
+                        # Don't increment overall_position - not a call argument
+                        break
+
         # Extract Setting/Secret params using shared helper
         setting_params, secret_params = _extract_setting_secret_params(compute_method)
 
@@ -849,6 +867,7 @@ class ScalarFunction(ScalarFunctionGenerator):
         cls._setting_params = setting_params
         cls._secret_params = secret_params
         cls._output_length_param = output_length_param
+        cls._auth_param = auth_param
         cls._returns_output_type = returns_output_type
 
     @final
@@ -894,7 +913,12 @@ class ScalarFunction(ScalarFunctionGenerator):
 
     @final
     @classmethod
-    def _extract_compute_kwargs(cls, batch: pa.RecordBatch, bind_call: BindRequest) -> dict[str, Any]:
+    def _extract_compute_kwargs(
+        cls,
+        batch: pa.RecordBatch,
+        bind_call: BindRequest,
+        auth_context: AuthContext,
+    ) -> dict[str, Any]:
         """Extract columns/values for compute() parameters.
 
         Returns dict[str, Any] because values are a mix of arrays, lists of
@@ -903,6 +927,7 @@ class ScalarFunction(ScalarFunctionGenerator):
         Args:
             batch: Input RecordBatch.
             bind_call: The BindCall with arguments, settings, and secrets.
+            auth_context: Authentication context for the current request.
 
         Returns:
             Dict mapping parameter names to their resolved values.
@@ -947,6 +972,10 @@ class ScalarFunction(ScalarFunctionGenerator):
         # OutputLength param: pass the batch row count
         if cls._output_length_param is not None:
             kwargs[cls._output_length_param] = batch.num_rows
+
+        # Auth param: pass the AuthContext
+        if cls._auth_param is not None:
+            kwargs[cls._auth_param] = auth_context
 
         return kwargs
 
@@ -1069,6 +1098,7 @@ class ScalarFunction(ScalarFunctionGenerator):
         init_call: InitRequest,
         init_response: BaseInitResponse,
         storage: BoundStorage,
+        auth_context: AuthContext,
     ) -> pa.RecordBatch:
         """Convert compute() to per-batch callback.
 
@@ -1080,7 +1110,7 @@ class ScalarFunction(ScalarFunctionGenerator):
         output_schema = init_call.output_schema
 
         # Extract columns for keyword-only parameters
-        kwargs = cls._extract_compute_kwargs(batch, init_call.bind_call)
+        kwargs = cls._extract_compute_kwargs(batch, init_call.bind_call, auth_context)
 
         # Validate input types match declared Param types
         cls._validate_param_types(kwargs)

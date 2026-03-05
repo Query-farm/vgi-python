@@ -121,6 +121,12 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-example-
 | `VGI_WORKER_DEBUG=1` | Enable DEBUG logging on worker and stderr passthrough on client (see below) |
 | `VGI_FILTER_DEBUG=1` | Enable filter pushdown debug logging (see below) |
 | `VGI_QUIET=1` | Suppress worker startup logging |
+| `VGI_BEARER_TOKENS` | Comma-separated `token=principal` pairs for static bearer auth (HTTP only) |
+| `VGI_JWT_ISSUER` | JWT issuer URL (requires `[oauth]` extra) |
+| `VGI_JWT_AUDIENCE` | JWT audience string |
+| `VGI_JWT_JWKS_URI` | JWKS endpoint URL (auto-discovered if omitted) |
+| `VGI_OAUTH_RESOURCE` | OAuth resource URL for RFC 9728 metadata |
+| `VGI_OAUTH_AUTH_SERVERS` | Comma-separated authorization server URLs |
 
 ### Worker Debug Mode
 

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, final, get_args, get_origin
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
-from vgi_rpc.rpc import OutputCollector
+from vgi_rpc.rpc import AuthContext, CallContext, OutputCollector
 from vgi_rpc.utils import empty_batch
 
 from vgi.function_storage import BoundStorage
@@ -83,6 +83,8 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
     def bind(
         cls,
         input: BindRequest,
+        *,
+        ctx: CallContext | None = None,
     ) -> BindResponse:
         """Bind protocol entry point. Do not override; use on_bind() instead.
 
@@ -91,7 +93,8 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
         triggers dynamic secret lookups, returns a secret scope request.
 
         """
-        params = cls._make_bind_params(input)
+        auth = ctx.auth if ctx is not None else AuthContext.anonymous()
+        params = cls._make_bind_params(input, auth_context=auth)
 
         if input.input_schema is not None:
             cls._validate_arg_type_bounds(cls.FunctionArguments, params.args, input.input_schema)
