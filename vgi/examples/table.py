@@ -55,9 +55,11 @@ __all__ = [
     "LoggingGeneratorFunction",
     "MakeSeriesCountFunction",
     "MakeSeriesCsvFunction",
+    "MakeSeriesFloatFunction",
     "MakeSeriesRangeFunction",
     "MakeSeriesStepFunction",
     "MakePairsIntFunction",
+    "MakePairsIntStrFunction",
     "MakePairsStrFunction",
     "NamedParamsEchoFunction",
     "NestedSequenceFunction",
@@ -1780,7 +1782,68 @@ class MakeSeriesCsvFunction(TableFunctionGenerator[MakeSeriesCsvArgs, MakeSeries
 
 
 # ============================================================================
-# make_pairs — overloaded table function (2 overloads by argument type)
+# make_series — float overload (same 1-arg count as int and string overloads)
+# ============================================================================
+
+MAKE_SERIES_FLOAT_SCHEMA = pa.schema([("value", pa.float64())])
+
+
+@dataclass(kw_only=True)
+class MakeSeriesFloatArgs:
+    """Arguments for MakeSeriesFloatFunction."""
+
+    step: Annotated[float, Arg(0, doc="Step size between values")]
+
+
+@dataclass(kw_only=True)
+class MakeSeriesFloatState(ArrowSerializableDataclass):
+    """State for float make_series."""
+
+    values: list[float] = field(default_factory=list)
+    offset: int = 0
+
+
+@init_single_worker
+@bind_fixed_schema
+class MakeSeriesFloatFunction(TableFunctionGenerator[MakeSeriesFloatArgs, MakeSeriesFloatState]):
+    """Generate 10 float values: 0.0, step, 2*step, ..., 9*step.
+
+    Example:
+        SELECT * FROM make_series(0.5)
+        Returns: 0.0, 0.5, 1.0, ..., 4.5
+
+    """
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = MAKE_SERIES_FLOAT_SCHEMA
+
+    class Meta:
+        """Function metadata."""
+
+        name = "make_series"
+        description = "Generate 10 float values with given step size"
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[MakeSeriesFloatArgs]) -> MakeSeriesFloatState:
+        """Build float value list."""
+        return MakeSeriesFloatState(values=[i * params.args.step for i in range(10)])
+
+    @classmethod
+    def process(
+        cls, params: ProcessParams[MakeSeriesFloatArgs], state: MakeSeriesFloatState, out: OutputCollector
+    ) -> None:
+        """Emit values in batches."""
+        if state.offset >= len(state.values):
+            out.finish()
+            return
+        batch_size = 1024
+        end = min(state.offset + batch_size, len(state.values))
+        chunk = state.values[state.offset : end]
+        state.offset = end
+        out.emit(pa.RecordBatch.from_pydict({"value": chunk}, schema=MAKE_SERIES_FLOAT_SCHEMA))
+
+
+# ============================================================================
+# make_pairs — overloaded table function (3 overloads by argument type)
 # ============================================================================
 
 MAKE_PAIRS_INT_SCHEMA = pa.schema([("a", pa.int64()), ("b", pa.int64())])
@@ -1891,6 +1954,71 @@ class MakePairsStrFunction(TableFunctionGenerator[MakePairsStrArgs, MakePairsStr
             return
         state.done = True
         out.emit(pa.RecordBatch.from_pydict({"a": state.a_vals, "b": state.b_vals}, schema=MAKE_PAIRS_STR_SCHEMA))
+
+
+# ============================================================================
+# make_pairs — mixed-type overload: int + str (mirrors scalar pair_type int+str)
+# ============================================================================
+
+MAKE_PAIRS_MIXED_SCHEMA = pa.schema(
+    [("a", pa.int64()), ("b", pa.string())]  # type: ignore[arg-type]  # PyArrow mixed-type tuple typing
+)
+
+
+@dataclass(kw_only=True)
+class MakePairsIntStrArgs:
+    """Arguments for mixed-type make_pairs."""
+
+    start: Annotated[int, Arg(0, doc="Start integer value")]
+    label: Annotated[str, Arg(1, doc="Label prefix for string column")]
+
+
+@dataclass(kw_only=True)
+class MakePairsIntStrState(ArrowSerializableDataclass):
+    """State for mixed-type make_pairs."""
+
+    a_vals: list[int] = field(default_factory=list)
+    b_vals: list[str] = field(default_factory=list)
+    done: bool = False
+
+
+@init_single_worker
+@bind_fixed_schema
+class MakePairsIntStrFunction(TableFunctionGenerator[MakePairsIntStrArgs, MakePairsIntStrState]):
+    """Generate mixed int/string pairs (start+i, label+str(i)) for i in 0..4.
+
+    Example:
+        SELECT * FROM make_pairs(10, 'item_')
+        Returns: (10, 'item_0'), (11, 'item_1'), ..., (14, 'item_4')
+
+    """
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = MAKE_PAIRS_MIXED_SCHEMA
+
+    class Meta:
+        """Function metadata."""
+
+        name = "make_pairs"
+        description = "Generate mixed int/string pairs"
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[MakePairsIntStrArgs]) -> MakePairsIntStrState:
+        """Build mixed-type pairs."""
+        return MakePairsIntStrState(
+            a_vals=[params.args.start + i for i in range(5)],
+            b_vals=[f"{params.args.label}{i}" for i in range(5)],
+        )
+
+    @classmethod
+    def process(
+        cls, params: ProcessParams[MakePairsIntStrArgs], state: MakePairsIntStrState, out: OutputCollector
+    ) -> None:
+        """Emit pairs batch."""
+        if state.done:
+            out.finish()
+            return
+        state.done = True
+        out.emit(pa.RecordBatch.from_pydict({"a": state.a_vals, "b": state.b_vals}, schema=MAKE_PAIRS_MIXED_SCHEMA))
 
 
 # ============================================================================
