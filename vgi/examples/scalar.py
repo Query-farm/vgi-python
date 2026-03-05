@@ -28,6 +28,15 @@ DYNAMIC OUTPUT TYPE (with type_bound)
 DoubleFunction              - Doubles numeric values (AnyArrow + type_bound)
 AddValuesFunction           - Adds two numeric values (type promotion)
 SumValuesFunction           - Sums multiple values (varargs example)
+
+COMPLEX ARROW TYPES (struct, list, fixed-size list)
+---------------------------------------------------
+GeoDistanceStructFunction   - Euclidean distance between struct points
+GeoDistanceListFunction     - Euclidean distance between list points
+GeoDistanceFixedFunction    - Euclidean distance between fixed-size list points
+GeoCentroidStructFunction   - Centroid of N struct points (varargs)
+GeoCentroidListFunction     - Centroid of N list points (varargs)
+GeoCentroidFixedFunction    - Centroid of N fixed-size list points (varargs)
 """
 
 from __future__ import annotations
@@ -45,10 +54,20 @@ from vgi.scalar_function import BindParameters, BindResult, ScalarFunction
 
 __all__ = [
     "AddValuesFunction",
+    "AnyMixedIntFunction",
+    "AnyMixedStrFunction",
     "BernoulliFunction",
+    "ConcatValuesIntFunction",
+    "ConcatValuesStrFunction",
     "FormatNumberDefaultFunction",
     "FormatNumberFullFunction",
     "FormatNumberPrecisionFunction",
+    "GeoCentroidFixedFunction",
+    "GeoCentroidListFunction",
+    "GeoCentroidStructFunction",
+    "GeoDistanceFixedFunction",
+    "GeoDistanceListFunction",
+    "GeoDistanceStructFunction",
     "HashSeedFunction",
     "BinaryPacketFunction",
     "ConditionalMessageFunction",
@@ -56,10 +75,20 @@ __all__ = [
     "MultiplyBySettingFunction",
     "MultiplyFunction",
     "NullHandlingFunction",
+    "PairTypeIntIntFunction",
+    "PairTypeIntStrFunction",
+    "PairTypeStrStrFunction",
     "RandomIntFunction",
     "RandomBytesFunction",
     "ReturnSecretValueFunction",
+    "SmartFormatPrefixFunction",
+    "SmartFormatWidthFunction",
     "SumValuesFunction",
+    "TypeInfoInt32Function",
+    "TypeInfoInt64Function",
+    "TypeInfoStringFunction",
+    "TypeInfoUInt32Function",
+    "TypeInfoUInt64Function",
     "UpperCaseFunction",
 ]
 
@@ -852,4 +881,661 @@ class FormatNumberFullFunction(ScalarFunction):
         return pa.array(
             [f"{prefix}{v:.{precision}f}" if v is not None else None for v in value.to_pylist()],
             type=pa.string(),
+        )
+
+
+# ============================================================================
+# type_info — overloaded scalar function (5 overloads by column type)
+#
+# Each overload is a separate class because ScalarFunction.__init_subclass__
+# introspects compute() annotations at class definition time to determine
+# Arrow types. The shared logic is in _type_info_result().
+# ============================================================================
+
+
+def _type_info_result(label: str, v: pa.Array) -> pa.StringArray:  # type: ignore[type-arg]
+    """Shared compute logic for all type_info overloads."""
+    return pa.array([label if x is not None else None for x in v.to_pylist()], type=pa.string())
+
+
+class TypeInfoInt32Function(ScalarFunction):
+    """Return type name for int32 input."""
+
+    class Meta:
+        """Function metadata."""
+
+        name = "type_info"
+        description = "Return type name for int32 input"
+
+    @classmethod
+    def compute(
+        cls,
+        v: Annotated[pa.Int32Array, Param(doc="Input value")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Return 'int32' for each row."""
+        return _type_info_result("int32", v)
+
+
+class TypeInfoInt64Function(ScalarFunction):
+    """Return type name for int64 input."""
+
+    class Meta:
+        """Function metadata."""
+
+        name = "type_info"
+        description = "Return type name for int64 input"
+
+    @classmethod
+    def compute(
+        cls,
+        v: Annotated[pa.Int64Array, Param(doc="Input value")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Return 'int64' for each row."""
+        return _type_info_result("int64", v)
+
+
+class TypeInfoUInt32Function(ScalarFunction):
+    """Return type name for uint32 input."""
+
+    class Meta:
+        """Function metadata."""
+
+        name = "type_info"
+        description = "Return type name for uint32 input"
+
+    @classmethod
+    def compute(
+        cls,
+        v: Annotated[pa.UInt32Array, Param(doc="Input value")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Return 'uint32' for each row."""
+        return _type_info_result("uint32", v)
+
+
+class TypeInfoUInt64Function(ScalarFunction):
+    """Return type name for uint64 input."""
+
+    class Meta:
+        """Function metadata."""
+
+        name = "type_info"
+        description = "Return type name for uint64 input"
+
+    @classmethod
+    def compute(
+        cls,
+        v: Annotated[pa.UInt64Array, Param(doc="Input value")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Return 'uint64' for each row."""
+        return _type_info_result("uint64", v)
+
+
+class TypeInfoStringFunction(ScalarFunction):
+    """Return type name for string input."""
+
+    class Meta:
+        """Function metadata."""
+
+        name = "type_info"
+        description = "Return type name for string input"
+
+    @classmethod
+    def compute(
+        cls,
+        v: Annotated[pa.StringArray, Param(doc="Input value")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Return 'varchar' for each row."""
+        return _type_info_result("varchar", v)
+
+
+# ============================================================================
+# smart_format — overloaded scalar function (2 overloads by ConstParam type)
+# ============================================================================
+
+
+class SmartFormatWidthFunction(ScalarFunction):
+    """Right-align a double in a field of given width.
+
+    Overload with int ConstParam.
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "smart_format"
+        description = "Right-align value in field of given width"
+
+    @classmethod
+    def compute(
+        cls,
+        width: Annotated[int, ConstParam("Field width")],
+        value: Annotated[pa.DoubleArray, Param(doc="Value to format")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Right-align value in field of given width."""
+        return pa.array(
+            [f"{v:>{width}}" if v is not None else None for v in value.to_pylist()],
+            type=pa.string(),
+        )
+
+
+class SmartFormatPrefixFunction(ScalarFunction):
+    """Prepend a prefix string to a formatted double.
+
+    Overload with str ConstParam.
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "smart_format"
+        description = "Prepend prefix to formatted value"
+
+    @classmethod
+    def compute(
+        cls,
+        prefix: Annotated[str, ConstParam("Prefix string")],
+        value: Annotated[pa.DoubleArray, Param(doc="Value to format")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Prepend prefix to formatted value."""
+        return pa.array(
+            [f"{prefix}{v}" if v is not None else None for v in value.to_pylist()],
+            type=pa.string(),
+        )
+
+
+# ============================================================================
+# pair_type — overloaded scalar function (3 overloads by multi-column type)
+#
+# Each overload needs separate annotations for dispatch. Shared logic in
+# _pair_type_result().
+# ============================================================================
+
+
+def _pair_type_result(label: str, a: pa.Array, b: pa.Array) -> pa.StringArray:  # type: ignore[type-arg]
+    """Shared compute logic for all pair_type overloads."""
+    return pa.array(
+        [
+            label if (x is not None and y is not None) else None
+            for x, y in zip(a.to_pylist(), b.to_pylist(), strict=True)
+        ],
+        type=pa.string(),
+    )
+
+
+class PairTypeIntIntFunction(ScalarFunction):
+    """Return 'int+int' for two int64 columns."""
+
+    class Meta:
+        """Function metadata."""
+
+        name = "pair_type"
+        description = "Return type pair name for int+int"
+
+    @classmethod
+    def compute(
+        cls,
+        a: Annotated[pa.Int64Array, Param(doc="First value")],
+        b: Annotated[pa.Int64Array, Param(doc="Second value")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Return 'int+int' for each row."""
+        return _pair_type_result("int+int", a, b)
+
+
+class PairTypeStrStrFunction(ScalarFunction):
+    """Return 'str+str' for two string columns."""
+
+    class Meta:
+        """Function metadata."""
+
+        name = "pair_type"
+        description = "Return type pair name for str+str"
+
+    @classmethod
+    def compute(
+        cls,
+        a: Annotated[pa.StringArray, Param(doc="First value")],
+        b: Annotated[pa.StringArray, Param(doc="Second value")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Return 'str+str' for each row."""
+        return _pair_type_result("str+str", a, b)
+
+
+class PairTypeIntStrFunction(ScalarFunction):
+    """Return 'int+str' for int64 + string columns."""
+
+    class Meta:
+        """Function metadata."""
+
+        name = "pair_type"
+        description = "Return type pair name for int+str"
+
+    @classmethod
+    def compute(
+        cls,
+        a: Annotated[pa.Int64Array, Param(doc="First value")],
+        b: Annotated[pa.StringArray, Param(doc="Second value")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Return 'int+str' for each row."""
+        return _pair_type_result("int+str", a, b)
+
+
+# ============================================================================
+# concat_values — overloaded scalar function (2 overloads by varargs column type)
+# ============================================================================
+
+
+class ConcatValuesIntFunction(ScalarFunction):
+    """Concatenate integer column values as their string sum.
+
+    Varargs overload for integer columns: sums all values per row and
+    returns the result as a string.
+
+    Example:
+        SQL:    SELECT concat_values(a, b, c) FROM t
+        Input:  a=[1, 2], b=[10, 20], c=[100, 200]
+        Output: result=['111', '222']
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "concat_values"
+        description = "Sum integer varargs and return as string"
+
+    @classmethod
+    def on_bind(cls, params: BindParameters) -> BindResult:
+        """Output is always string."""
+        return BindResult(pa.string())
+
+    @classmethod
+    def compute(
+        cls,
+        values: Annotated[
+            list[pa.Int64Array],
+            Param(doc="Integer values to sum", varargs=True),
+        ],
+    ) -> Annotated[pa.Array[Any], Returns()]:
+        """Sum all integer columns and return as string."""
+        result: pa.Array[Any] = values[0]
+        for val in values[1:]:
+            result = pc.add(result, val)
+        return pc.cast(result, pa.string())
+
+
+class ConcatValuesStrFunction(ScalarFunction):
+    """Concatenate string column values.
+
+    Varargs overload for string columns: concatenates all string values per row.
+
+    Example:
+        SQL:    SELECT concat_values(a, b) FROM t
+        Input:  a=['hello', 'foo'], b=[' world', 'bar']
+        Output: result=['hello world', 'foobar']
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "concat_values"
+        description = "Concatenate string varargs"
+
+    @classmethod
+    def on_bind(cls, params: BindParameters) -> BindResult:
+        """Output is always string."""
+        return BindResult(pa.string())
+
+    @classmethod
+    def compute(
+        cls,
+        values: Annotated[
+            list[pa.StringArray],
+            Param(doc="String values to concatenate", varargs=True),
+        ],
+    ) -> Annotated[pa.Array[Any], Returns()]:
+        """Concatenate all string columns."""
+        result: pa.StringArray = values[0]
+        for val in values[1:]:
+            result = pc.binary_join_element_wise(result, val, "")  # type: ignore[call-overload]
+        return result
+
+
+# ============================================================================
+# any_mixed — overloaded scalar function (2 overloads, AnyArrow + fixed type)
+# ============================================================================
+
+
+class AnyMixedIntFunction(ScalarFunction):
+    """AnyArrow first param, Int64 second param."""
+
+    class Meta:
+        """Function metadata."""
+
+        name = "any_mixed"
+        description = "Any+int dispatch"
+
+    @classmethod
+    def compute(
+        cls,
+        a: Annotated[pa.Array, Param(doc="Any type value")],  # type: ignore[type-arg]
+        b: Annotated[pa.Int64Array, Param(doc="Int value")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Return 'any+int: {b}' for each row."""
+        return pa.array(
+            [f"any+int: {y}" if y is not None else None for y in b.to_pylist()],
+            type=pa.string(),
+        )
+
+
+class AnyMixedStrFunction(ScalarFunction):
+    """AnyArrow first param, String second param."""
+
+    class Meta:
+        """Function metadata."""
+
+        name = "any_mixed"
+        description = "Any+str dispatch"
+
+    @classmethod
+    def compute(
+        cls,
+        a: Annotated[pa.Array, Param(doc="Any type value")],  # type: ignore[type-arg]
+        b: Annotated[pa.StringArray, Param(doc="String value")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """Return 'any+str: {b}' for each row."""
+        return pa.array(
+            [f"any+str: {y}" if y is not None else None for y in b.to_pylist()],
+            type=pa.string(),
+        )
+
+
+# ============================================================================
+# Geo functions — Complex Arrow types (struct, list, fixed-size list)
+# ============================================================================
+
+_POINT_STRUCT_TYPE = pa.struct([("lat", pa.float64()), ("lon", pa.float64())])
+
+
+def _euclidean_distance(
+    lat1: pa.Array[Any], lon1: pa.Array[Any], lat2: pa.Array[Any], lon2: pa.Array[Any]
+) -> pa.DoubleArray:
+    """Compute Euclidean distance: sqrt((lat2-lat1)^2 + (lon2-lon1)^2)."""
+    dlat = pc.subtract(lat2, lat1)
+    dlon = pc.subtract(lon2, lon1)
+    return pc.sqrt(pc.add(pc.multiply(dlat, dlat), pc.multiply(dlon, dlon)))  # type: ignore[return-value]
+
+
+def _compute_centroid(lat_arrays: list[pa.Array[Any]], lon_arrays: list[pa.Array[Any]]) -> pa.StructArray:
+    """Compute centroid (average lat, average lon) from parallel lat/lon arrays."""
+    n = len(lat_arrays)
+    lat_sum: pa.Array[Any] = lat_arrays[0]
+    lon_sum: pa.Array[Any] = lon_arrays[0]
+    for i in range(1, n):
+        lat_sum = pc.add(lat_sum, lat_arrays[i])
+        lon_sum = pc.add(lon_sum, lon_arrays[i])
+    divisor = pa.scalar(n, type=pa.float64())
+    avg_lat = pc.divide(lat_sum, divisor)
+    avg_lon = pc.divide(lon_sum, divisor)
+    return pa.StructArray.from_arrays([avg_lat, avg_lon], names=["lat", "lon"])
+
+
+class GeoDistanceStructFunction(ScalarFunction):
+    """Euclidean distance between two struct points.
+
+    Each point is a struct with lat and lon fields.
+
+    Example:
+        SQL:    SELECT geo_distance_struct(p1, p2) FROM points
+        Input:  p1={lat: 0.0, lon: 0.0}, p2={lat: 3.0, lon: 4.0}
+        Output: result=5.0
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "geo_distance_struct"
+        description = "Euclidean distance between two struct points"
+        examples = [
+            FunctionExample(
+                sql="SELECT geo_distance_struct({lat: 0, lon: 0}, {lat: 3, lon: 4})",
+                description="Distance between origin and (3, 4)",
+            ),
+        ]
+
+    @classmethod
+    def compute(
+        cls,
+        p1: Annotated[
+            pa.StructArray,
+            Param(doc="First point {lat, lon}", arrow_type=_POINT_STRUCT_TYPE),
+        ],
+        p2: Annotated[
+            pa.StructArray,
+            Param(doc="Second point {lat, lon}", arrow_type=_POINT_STRUCT_TYPE),
+        ],
+    ) -> Annotated[pa.DoubleArray, Returns()]:
+        """Compute Euclidean distance between two points."""
+        return _euclidean_distance(p1.field("lat"), p1.field("lon"), p2.field("lat"), p2.field("lon"))
+
+
+class GeoDistanceListFunction(ScalarFunction):
+    """Euclidean distance between two list points.
+
+    Each point is a list of two float64 values [lat, lon].
+
+    Example:
+        SQL:    SELECT geo_distance_list(p1, p2) FROM points
+        Input:  p1=[0.0, 0.0], p2=[3.0, 4.0]
+        Output: result=5.0
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "geo_distance_list"
+        description = "Euclidean distance between two list points"
+        examples = [
+            FunctionExample(
+                sql="SELECT geo_distance_list([0, 0], [3, 4])",
+                description="Distance between origin and (3, 4)",
+            ),
+        ]
+
+    @classmethod
+    def compute(
+        cls,
+        p1: Annotated[  # type: ignore[type-arg]
+            pa.ListArray,
+            Param(doc="First point [lat, lon]", arrow_type=pa.list_(pa.float64())),
+        ],
+        p2: Annotated[  # type: ignore[type-arg]
+            pa.ListArray,
+            Param(doc="Second point [lat, lon]", arrow_type=pa.list_(pa.float64())),
+        ],
+    ) -> Annotated[pa.DoubleArray, Returns()]:
+        """Compute Euclidean distance between two points."""
+        return _euclidean_distance(
+            pc.list_element(p1, 0),
+            pc.list_element(p1, 1),
+            pc.list_element(p2, 0),
+            pc.list_element(p2, 1),
+        )
+
+
+class GeoDistanceFixedFunction(ScalarFunction):
+    """Euclidean distance between two fixed-size list points.
+
+    Each point is a fixed-size list of two float64 values [lat, lon].
+
+    Example:
+        SQL:    SELECT geo_distance_fixed(p1, p2) FROM points
+        Input:  p1=[0.0, 0.0], p2=[3.0, 4.0]
+        Output: result=5.0
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "geo_distance_fixed"
+        description = "Euclidean distance between two fixed-size list points"
+        examples = [
+            FunctionExample(
+                sql="SELECT geo_distance_fixed([0, 0], [3, 4])",
+                description="Distance between origin and (3, 4)",
+            ),
+        ]
+
+    @classmethod
+    def compute(
+        cls,
+        p1: Annotated[  # type: ignore[type-arg]
+            pa.FixedSizeListArray,
+            Param(doc="First point [lat, lon]", arrow_type=pa.list_(pa.float64(), 2)),
+        ],
+        p2: Annotated[  # type: ignore[type-arg]
+            pa.FixedSizeListArray,
+            Param(doc="Second point [lat, lon]", arrow_type=pa.list_(pa.float64(), 2)),
+        ],
+    ) -> Annotated[pa.DoubleArray, Returns()]:
+        """Compute Euclidean distance between two points."""
+        return _euclidean_distance(
+            pc.list_element(p1, 0),
+            pc.list_element(p1, 1),
+            pc.list_element(p2, 0),
+            pc.list_element(p2, 1),
+        )
+
+
+class GeoCentroidStructFunction(ScalarFunction):
+    """Centroid of N struct points (varargs).
+
+    Computes the average lat and average lon across all input point columns.
+
+    Example:
+        SQL:    SELECT geo_centroid_struct(p1, p2) FROM points
+        Input:  p1={lat: 0.0, lon: 0.0}, p2={lat: 4.0, lon: 6.0}
+        Output: result={lat: 2.0, lon: 3.0}
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "geo_centroid_struct"
+        description = "Centroid of N struct points"
+        examples = [
+            FunctionExample(
+                sql="SELECT geo_centroid_struct(p1, p2) FROM points",
+                description="Compute centroid of two struct points",
+            ),
+        ]
+
+    @classmethod
+    def compute(
+        cls,
+        points: Annotated[
+            list[pa.StructArray],
+            Param(
+                doc="Point columns {lat, lon}",
+                arrow_type=_POINT_STRUCT_TYPE,
+                varargs=True,
+            ),
+        ],
+    ) -> Annotated[pa.StructArray, Returns(arrow_type=_POINT_STRUCT_TYPE)]:
+        """Compute centroid of all points."""
+        return _compute_centroid(
+            [p.field("lat") for p in points],
+            [p.field("lon") for p in points],
+        )
+
+
+class GeoCentroidListFunction(ScalarFunction):
+    """Centroid of N list points (varargs).
+
+    Computes the average lat and average lon across all input point columns,
+    where each point is a list of [lat, lon].
+
+    Example:
+        SQL:    SELECT geo_centroid_list(p1, p2) FROM points
+        Input:  p1=[0.0, 0.0], p2=[4.0, 6.0]
+        Output: result={lat: 2.0, lon: 3.0}
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "geo_centroid_list"
+        description = "Centroid of N list points"
+        examples = [
+            FunctionExample(
+                sql="SELECT geo_centroid_list(p1, p2) FROM points",
+                description="Compute centroid of two list points",
+            ),
+        ]
+
+    @classmethod
+    def compute(
+        cls,
+        points: Annotated[  # type: ignore[type-arg]
+            list[pa.ListArray],
+            Param(
+                doc="Point columns [lat, lon]",
+                arrow_type=pa.list_(pa.float64()),
+                varargs=True,
+            ),
+        ],
+    ) -> Annotated[pa.StructArray, Returns(arrow_type=_POINT_STRUCT_TYPE)]:
+        """Compute centroid of all points."""
+        return _compute_centroid(
+            [pc.list_element(p, 0) for p in points],
+            [pc.list_element(p, 1) for p in points],
+        )
+
+
+class GeoCentroidFixedFunction(ScalarFunction):
+    """Centroid of N fixed-size list points (varargs).
+
+    Computes the average lat and average lon across all input point columns,
+    where each point is a fixed-size list of [lat, lon].
+
+    Example:
+        SQL:    SELECT geo_centroid_fixed(p1, p2) FROM points
+        Input:  p1=[0.0, 0.0], p2=[4.0, 6.0]
+        Output: result={lat: 2.0, lon: 3.0}
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "geo_centroid_fixed"
+        description = "Centroid of N fixed-size list points"
+        examples = [
+            FunctionExample(
+                sql="SELECT geo_centroid_fixed(p1, p2) FROM points",
+                description="Compute centroid of two fixed-size list points",
+            ),
+        ]
+
+    @classmethod
+    def compute(
+        cls,
+        points: Annotated[  # type: ignore[type-arg]
+            list[pa.FixedSizeListArray],
+            Param(
+                doc="Point columns [lat, lon]",
+                arrow_type=pa.list_(pa.float64(), 2),
+                varargs=True,
+            ),
+        ],
+    ) -> Annotated[pa.StructArray, Returns(arrow_type=_POINT_STRUCT_TYPE)]:
+        """Compute centroid of all points."""
+        return _compute_centroid(
+            [pc.list_element(p, 0) for p in points],
+            [pc.list_element(p, 1) for p in points],
         )

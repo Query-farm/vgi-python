@@ -374,7 +374,7 @@ class TestExtractArgumentSpecs:
         """Extract specs should detect varargs=True."""
 
         class FunctionWithVarargs(TableInOutFunction):  # type: ignore[type-arg]
-            columns: str = Arg[str](0, varargs=True)  # type: ignore[assignment]
+            columns: str = Arg[str](0, varargs=True, arrow_type=pa.utf8())  # type: ignore[assignment]
 
         specs = extract_argument_specs(FunctionWithVarargs)
 
@@ -403,7 +403,7 @@ class TestExtractArgumentSpecs:
         class ComplexFunction(TableInOutFunction):  # type: ignore[type-arg]
             count: int = Arg[int](0)  # type: ignore[assignment]
             data: TableInput = Arg[TableInput](1)  # type: ignore[assignment]
-            extra: float = Arg[float](2, varargs=True)  # type: ignore[assignment]
+            extra: float = Arg[float](2, varargs=True, arrow_type=pa.float64())  # type: ignore[assignment]
             format: str = Arg[str]("format")  # type: ignore[assignment]
             threshold: AnyArrow = Arg[AnyArrow]("threshold")  # type: ignore[assignment]
 

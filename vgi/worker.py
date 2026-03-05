@@ -70,6 +70,7 @@ from typing import TYPE_CHECKING, Any, cast, final
 import pyarrow as pa
 from vgi_rpc.rpc import RpcServer, Stream, serve_stdio
 
+from vgi.argument_spec import ArgumentSpec, extract_argument_specs
 from vgi.arguments import Arguments
 from vgi.catalog import CatalogInterface
 from vgi.catalog.catalog_interface import (
@@ -670,6 +671,12 @@ class Worker:
 
             matches.append(func_cls)
 
+        # Secondary type-based filtering when multiple overloads match by count
+        if len(matches) > 1:
+            matches = Worker._filter_by_argument_types(
+                matches, args, input_schema, is_scalar=issubclass(matches[0], ScalarFunctionGenerator)
+            )
+
         if len(matches) == 0:
             # Build helpful error message
             param_summaries = []
@@ -698,6 +705,186 @@ class Worker:
             raise ValueError(f"Ambiguous function call '{function_name}': multiple overloads match: {match_names}")
 
         return matches[0]
+
+    @staticmethod
+    def _types_compatible(actual: pa.DataType, declared: pa.DataType) -> bool:
+        """Check if an actual argument type is compatible with a declared type.
+
+        Uses type-family matching: integers match integers, strings match strings,
+        etc. This handles DuckDB sending narrower types (e.g., int32 for a literal
+        that fits, decimal for numeric literals) when the function declares a wider
+        type.
+
+        """
+        if actual == declared:
+            return True
+        # Integer family: int8/16/32/64/uint8/16/32/64
+        if pa.types.is_integer(actual) and pa.types.is_integer(declared):
+            return True
+        # Float/decimal family: float16/32/64, decimal
+        if (pa.types.is_floating(actual) or pa.types.is_decimal(actual)) and (
+            pa.types.is_floating(declared) or pa.types.is_decimal(declared)
+        ):
+            return True
+        # String family: string, large_string, utf8
+        if (pa.types.is_string(actual) or pa.types.is_large_string(actual)) and (
+            pa.types.is_string(declared) or pa.types.is_large_string(declared)
+        ):
+            return True
+        # Binary family: binary, large_binary
+        if (pa.types.is_binary(actual) or pa.types.is_large_binary(actual)) and (
+            pa.types.is_binary(declared) or pa.types.is_large_binary(declared)
+        ):
+            return True
+        # Boolean
+        return pa.types.is_boolean(actual) and pa.types.is_boolean(declared)
+
+    _EXACT_MATCH_SCORE = 2
+    _FAMILY_MATCH_SCORE = 1
+
+    @staticmethod
+    def _score_types(
+        specs: list[ArgumentSpec],
+        actual_types: Sequence[pa.DataType | None],
+    ) -> tuple[int, bool]:
+        """Score how well actual argument types match declared specs.
+
+        Compares each spec's declared arrow_type against the corresponding
+        actual type.  Elements beyond ``len(specs)`` are scored against the
+        varargs spec (if any).
+
+        Args:
+            specs: Declared argument specs (ordered by position).
+            actual_types: Actual types aligned 1-to-1 with *specs*, with any
+                additional varargs tail elements appended.
+
+        Returns:
+            ``(score, matched)`` — cumulative score and whether all types
+            were compatible.
+
+        """
+        score = 0
+        varargs_spec: ArgumentSpec | None = None
+
+        for i, spec in enumerate(specs):
+            if spec.is_varargs:
+                varargs_spec = spec
+            if i >= len(actual_types):
+                break
+            if spec.is_any_type or spec.arrow_type == pa.null():
+                continue
+            actual = actual_types[i]
+            if actual is None:
+                continue
+            if actual == spec.arrow_type:
+                score += Worker._EXACT_MATCH_SCORE
+            elif Worker._types_compatible(actual, spec.arrow_type):
+                score += Worker._FAMILY_MATCH_SCORE
+            else:
+                return score, False
+
+        # Score remaining varargs tail elements beyond declared specs
+        if varargs_spec is not None and not varargs_spec.is_any_type and varargs_spec.arrow_type != pa.null():
+            for i in range(len(specs), len(actual_types)):
+                actual = actual_types[i]
+                if actual is None:
+                    continue
+                if actual == varargs_spec.arrow_type:
+                    score += Worker._EXACT_MATCH_SCORE
+                elif Worker._types_compatible(actual, varargs_spec.arrow_type):
+                    score += Worker._FAMILY_MATCH_SCORE
+                else:
+                    return score, False
+
+        return score, True
+
+    @staticmethod
+    def _filter_by_argument_types(
+        matches: list[type[Function]],
+        arguments: Arguments,
+        input_schema: pa.Schema | None,
+        *,
+        is_scalar: bool,
+    ) -> list[type[Function]]:
+        """Narrow overload candidates by comparing argument types.
+
+        Called when count-based filtering leaves multiple matches.
+        Uses extract_argument_specs to get declared arrow_type for each
+        parameter and compares against actual argument types.
+
+        Args:
+            matches: Candidate function classes (same arg count).
+            arguments: The invocation arguments.
+            input_schema: Input schema for scalar functions (column types).
+            is_scalar: Whether the candidates are scalar functions.
+
+        Returns:
+            Filtered list of matching candidates.
+
+        """
+        scored: list[tuple[int, type[Function]]] = []
+
+        for func_cls in matches:
+            specs = extract_argument_specs(func_cls)
+            score = 0
+            matched = True
+
+            if is_scalar:
+                # For scalar functions:
+                # - ConstParam specs: compare against arguments.positional types
+                # - Column Param specs: compare against input_schema field types
+                const_specs = [s for s in specs if s.is_const]
+                col_specs = [s for s in specs if not s.is_const and isinstance(s.position, int)]
+
+                # Score ConstParam types against positional arguments
+                const_types: list[pa.DataType | None] = [
+                    arg.type if arg is not None else None for arg in arguments.positional
+                ]
+                delta, matched = Worker._score_types(const_specs, const_types)
+                score += delta
+
+                # Score column Param types against input_schema
+                if matched and input_schema is not None:
+                    col_types: list[pa.DataType | None] = []
+                    varargs_col_spec: ArgumentSpec | None = None
+                    for spec in col_specs:
+                        if spec.is_varargs:
+                            varargs_col_spec = spec
+                        pos = spec.position
+                        assert isinstance(pos, int)
+                        if pos < len(input_schema):
+                            col_types.append(input_schema.field(pos).type)
+                        else:
+                            col_types.append(None)
+                    # Append varargs tail from input_schema
+                    if varargs_col_spec is not None:
+                        assert isinstance(varargs_col_spec.position, int)
+                        varargs_start = varargs_col_spec.position + 1
+                        for i in range(varargs_start, len(input_schema)):
+                            col_types.append(input_schema.field(i).type)
+                    delta, matched = Worker._score_types(col_specs, col_types)
+                    score += delta
+            else:
+                # For table functions: compare arguments.positional types
+                pos_specs = sorted(
+                    [s for s in specs if isinstance(s.position, int) and not s.is_table_input],
+                    key=lambda s: s.position,
+                )
+                pos_types: list[pa.DataType | None] = [
+                    arg.type if arg is not None else None for arg in arguments.positional
+                ]
+                delta, matched = Worker._score_types(pos_specs, pos_types)
+                score += delta
+
+            if matched:
+                scored.append((score, func_cls))
+
+        if not scored:
+            return []
+
+        # Prefer candidates with highest score (most exact type matches)
+        max_score = max(s for s, _ in scored)
+        return [func_cls for s, func_cls in scored if s == max_score]
 
     @staticmethod
     def _suggest_similar_names(name: str, candidates: list[str]) -> list[str]:

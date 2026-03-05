@@ -811,7 +811,7 @@ class TestArgVarargs:
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar(1), pa.scalar(2), pa.scalar(3))))
-            values = Arg[int](0, varargs=True)
+            values = Arg[int](0, varargs=True, arrow_type=pa.int64())
 
         obj = MyClass()
         assert obj.values == (1, 2, 3)  # type: ignore[comparison-overlap]
@@ -821,7 +821,7 @@ class TestArgVarargs:
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar("only"),)))
-            values = Arg[str](0, varargs=True)
+            values = Arg[str](0, varargs=True, arrow_type=pa.string())
 
         obj = MyClass()
         assert obj.values == ("only",)  # type: ignore[comparison-overlap]
@@ -841,7 +841,7 @@ class TestArgVarargs:
                 )
             )
             name = Arg[str](0)
-            numbers = Arg[int](1, varargs=True)
+            numbers = Arg[int](1, varargs=True, arrow_type=pa.int64())
 
         obj = MyClass()
         assert obj.name == "prefix"
@@ -852,7 +852,7 @@ class TestArgVarargs:
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=()))
-            values = Arg[int](0, varargs=True)
+            values = Arg[int](0, varargs=True, arrow_type=pa.int64())
 
         obj = MyClass()
         with pytest.raises(ArgumentValidationError, match="requires at least 1 value"):
@@ -864,7 +864,7 @@ class TestArgVarargs:
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar("only"),)))
             name = Arg[str](0)
-            values = Arg[int](1, varargs=True)
+            values = Arg[int](1, varargs=True, arrow_type=pa.int64())
 
         obj = MyClass()
         assert obj.name == "only"
@@ -876,7 +876,7 @@ class TestArgVarargs:
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar(5), pa.scalar(10), pa.scalar(15))))
-            values = Arg[int](0, varargs=True, ge=1)
+            values = Arg[int](0, varargs=True, ge=1, arrow_type=pa.int64())
 
         obj = MyClass()
         assert obj.values == (5, 10, 15)  # type: ignore[comparison-overlap]
@@ -886,7 +886,7 @@ class TestArgVarargs:
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar(5), pa.scalar(0), pa.scalar(10))))
-            values = Arg[int](0, varargs=True, ge=1)
+            values = Arg[int](0, varargs=True, ge=1, arrow_type=pa.int64())
 
         obj = MyClass()
         with pytest.raises(ArgumentValidationError, match="'values' element 1"):
@@ -897,7 +897,7 @@ class TestArgVarargs:
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar(5), pa.scalar(10), pa.scalar(150))))
-            values = Arg[int](0, varargs=True, le=100)
+            values = Arg[int](0, varargs=True, le=100, arrow_type=pa.int64())
 
         obj = MyClass()
         with pytest.raises(ArgumentValidationError, match="'values' element 2"):
@@ -908,7 +908,7 @@ class TestArgVarargs:
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar("a"), pa.scalar("b"), pa.scalar("a"))))
-            values = Arg[str](0, varargs=True, choices=["a", "b", "c"])
+            values = Arg[str](0, varargs=True, choices=["a", "b", "c"], arrow_type=pa.string())
 
         obj = MyClass()
         assert obj.values == ("a", "b", "a")  # type: ignore[comparison-overlap]
@@ -918,7 +918,7 @@ class TestArgVarargs:
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar("a"), pa.scalar("invalid"))))
-            values = Arg[str](0, varargs=True, choices=["a", "b", "c"])
+            values = Arg[str](0, varargs=True, choices=["a", "b", "c"], arrow_type=pa.string())
 
         obj = MyClass()
         with pytest.raises(ArgumentValidationError, match="'values' element 1"):
@@ -929,7 +929,7 @@ class TestArgVarargs:
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar("foo"), pa.scalar("bar"), pa.scalar("baz"))))
-            values = Arg[str](0, varargs=True, pattern=r"^[a-z]+$")
+            values = Arg[str](0, varargs=True, pattern=r"^[a-z]+$", arrow_type=pa.string())
 
         obj = MyClass()
         assert obj.values == ("foo", "bar", "baz")  # type: ignore[comparison-overlap]
@@ -939,7 +939,7 @@ class TestArgVarargs:
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar("foo"), pa.scalar("123"))))
-            values = Arg[str](0, varargs=True, pattern=r"^[a-z]+$")
+            values = Arg[str](0, varargs=True, pattern=r"^[a-z]+$", arrow_type=pa.string())
 
         obj = MyClass()
         with pytest.raises(ArgumentValidationError, match="element 1.*does not match pattern"):
@@ -948,16 +948,16 @@ class TestArgVarargs:
     def test_varargs_must_be_positional(self) -> None:
         """Varargs with named argument should raise ValueError at definition."""
         with pytest.raises(ValueError, match="varargs=True requires a positional argument"):
-            Arg[int]("named", varargs=True)
+            Arg[int]("named", varargs=True, arrow_type=pa.int64())
 
     def test_varargs_cannot_have_default(self) -> None:
         """Varargs with default should raise ValueError at definition."""
         with pytest.raises(ValueError, match="varargs=True cannot have a default"):
-            Arg[int](0, varargs=True, default=(1, 2, 3))
+            Arg[int](0, varargs=True, default=(1, 2, 3), arrow_type=pa.int64())
 
     def test_varargs_repr(self) -> None:
         """Arg repr should include varargs=True when set."""
-        arg = Arg[int](0, varargs=True)
+        arg = Arg[int](0, varargs=True, arrow_type=pa.int64())
         assert "varargs=True" in repr(arg)
 
     def test_varargs_is_cached(self) -> None:
@@ -965,7 +965,7 @@ class TestArgVarargs:
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(pa.scalar(1), pa.scalar(2))))
-            values = Arg[int](0, varargs=True)
+            values = Arg[int](0, varargs=True, arrow_type=pa.int64())
 
         obj = MyClass()
         _ = obj.values

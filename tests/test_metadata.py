@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pyarrow as pa
+
 from vgi import (
     AnyArrow,
     Arg,
@@ -337,7 +339,7 @@ class TestVarargsMetadata:
 
         class VarargsFunction(TableInOutFunction):  # type: ignore[type-arg]
             name = Arg[str](0, doc="Function name")
-            values = Arg[int](1, varargs=True, doc="One or more values")
+            values = Arg[int](1, varargs=True, doc="One or more values", arrow_type=pa.int64())
 
         params = extract_parameters(VarargsFunction, validate_table_input=False)
         name_param = next(p for p in params if p.name == "name")
@@ -353,8 +355,8 @@ class TestVarargsMetadata:
         from vgi.metadata import VarargsValidationError
 
         class BadFunction(TableInOutFunction):  # type: ignore[type-arg]
-            values1 = Arg[int](0, varargs=True)
-            values2 = Arg[str](1, varargs=True)
+            values1 = Arg[int](0, varargs=True, arrow_type=pa.int64())
+            values2 = Arg[str](1, varargs=True, arrow_type=pa.string())
             data: TableInput = Arg[TableInput](2, doc="Input")  # type: ignore[assignment]
 
         with pytest.raises(VarargsValidationError, match="at most one varargs"):
@@ -367,7 +369,7 @@ class TestVarargsMetadata:
         from vgi.metadata import VarargsValidationError
 
         class BadFunction(TableInOutFunction):  # type: ignore[type-arg]
-            values = Arg[int](0, varargs=True)
+            values = Arg[int](0, varargs=True, arrow_type=pa.int64())
             after = Arg[str](1)  # Regular arg after varargs
             data: TableInput = Arg[TableInput](2, doc="Input")  # type: ignore[assignment]
 
@@ -379,7 +381,7 @@ class TestVarargsMetadata:
 
         class GoodFunction(TableInOutFunction):  # type: ignore[type-arg]
             name = Arg[str](0, doc="Name")
-            columns = Arg[str](1, varargs=True, doc="Column names")
+            columns = Arg[str](1, varargs=True, doc="Column names", arrow_type=pa.string())
             data: TableInput = Arg[TableInput](2, doc="Input table")  # type: ignore[assignment]
 
         # Should not raise
@@ -401,7 +403,7 @@ class TestVarargsMetadata:
             class Meta:
                 name = "varargs_test"
 
-            columns = Arg[str](0, varargs=True, doc="Column names")
+            columns = Arg[str](0, varargs=True, doc="Column names", arrow_type=pa.string())
             data: TableInput = Arg[TableInput](1, doc="Input table")  # type: ignore[assignment]
 
         batch = functions_to_arrow([VarargsFunction])

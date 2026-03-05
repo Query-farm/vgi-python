@@ -35,7 +35,7 @@ import logging
 import uuid
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast, final, get_args, get_type_hints
+from typing import TYPE_CHECKING, Any, cast, final, get_args, get_origin, get_type_hints
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
@@ -161,13 +161,20 @@ def _param_to_arg(param: Param, base_type: type, position: int) -> Arg[Any]:
     is_any = False
     arrow_type: pa.DataType
 
+    # For varargs params, unwrap list[X] to get the element type X
+    infer_type = base_type
+    if param.varargs and get_origin(base_type) is list:
+        type_args = get_args(base_type)
+        if type_args:
+            infer_type = type_args[0]
+
     if param.arrow_type is not None:
         arrow_type = _resolve_explicit_arrow_type(param.arrow_type)
     # Infer from simple array class (pa.Int64Array -> pa.int64())
-    elif base_type in ARRAY_CLASS_TO_DATATYPE:
-        arrow_type = ARRAY_CLASS_TO_DATATYPE[base_type]
+    elif infer_type in ARRAY_CLASS_TO_DATATYPE:
+        arrow_type = ARRAY_CLASS_TO_DATATYPE[infer_type]
     # Complex types require explicit arrow_type
-    elif base_type in COMPLEX_ARRAY_CLASSES:
+    elif infer_type in COMPLEX_ARRAY_CLASSES:
         raise TypeError(
             f"{base_type.__name__} requires explicit arrow_type in Param(). "
             f"Example: Param(arrow_type=pa.list_(pa.int64()), doc='...')"

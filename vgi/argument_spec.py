@@ -360,8 +360,15 @@ def extract_argument_specs(
 
             seen_names.add(field_name)
 
-            is_table_input = base_type is TableInput
-            is_any_type = base_type is AnyArrow or base_type is AnyArrowValue
+            # For varargs, unwrap list[T] to get the element type T for inference
+            infer_type = base_type
+            if arg_instance.varargs and get_origin(base_type) is list:
+                type_args = get_args(base_type)
+                if type_args:
+                    infer_type = type_args[0]
+
+            is_table_input = infer_type is TableInput
+            is_any_type = infer_type is AnyArrow or infer_type is AnyArrowValue
 
             # Determine Arrow type
             arrow_type: pa.DataType
@@ -369,8 +376,8 @@ def extract_argument_specs(
                 arrow_type = arg_instance.arrow_type
             elif is_table_input or is_any_type:
                 arrow_type = pa.null()
-            elif base_type in PYTHON_TO_ARROW:
-                arrow_type = PYTHON_TO_ARROW[base_type]
+            elif infer_type in PYTHON_TO_ARROW:
+                arrow_type = PYTHON_TO_ARROW[infer_type]
             else:
                 arrow_type = pa.null()
 

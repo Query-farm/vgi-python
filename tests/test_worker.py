@@ -691,3 +691,684 @@ class TestScalarOverloading:
                 input_schema=pa.schema([("val", pa.float64())]),
                 candidates=candidates,
             )
+
+
+class TestTypeBasedOverloading:
+    """Tests for type-based function overloading dispatch."""
+
+    def test_scalar_single_column_type_dispatch(self) -> None:
+        """Scalar overloads with same arg count but different column types."""
+
+        class IntFunc(ScalarFunction):
+            class Meta:
+                name = "info"
+
+            @classmethod
+            def compute(
+                cls,
+                v: Annotated[pa.Int64Array, Param(doc="v")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["int64"], type=pa.string())
+
+        class StrFunc(ScalarFunction):
+            class Meta:
+                name = "info"
+
+            @classmethod
+            def compute(
+                cls,
+                v: Annotated[pa.StringArray, Param(doc="v")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["varchar"], type=pa.string())
+
+        candidates = [IntFunc, StrFunc]
+
+        # int64 input -> IntFunc
+        result = Worker._match_function_arguments(
+            function_name="info",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("v", pa.int64())]),
+            candidates=candidates,
+        )
+        assert result is IntFunc
+
+        # string input -> StrFunc
+        result = Worker._match_function_arguments(
+            function_name="info",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("v", pa.string())]),
+            candidates=candidates,
+        )
+        assert result is StrFunc
+
+    def test_scalar_multi_column_type_dispatch(self) -> None:
+        """Scalar overloads disambiguated by multiple column types."""
+
+        class IntIntFunc(ScalarFunction):
+            class Meta:
+                name = "pair"
+
+            @classmethod
+            def compute(
+                cls,
+                a: Annotated[pa.Int64Array, Param(doc="a")],
+                b: Annotated[pa.Int64Array, Param(doc="b")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["ii"], type=pa.string())
+
+        class StrStrFunc(ScalarFunction):
+            class Meta:
+                name = "pair"
+
+            @classmethod
+            def compute(
+                cls,
+                a: Annotated[pa.StringArray, Param(doc="a")],
+                b: Annotated[pa.StringArray, Param(doc="b")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["ss"], type=pa.string())
+
+        class IntStrFunc(ScalarFunction):
+            class Meta:
+                name = "pair"
+
+            @classmethod
+            def compute(
+                cls,
+                a: Annotated[pa.Int64Array, Param(doc="a")],
+                b: Annotated[pa.StringArray, Param(doc="b")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["is"], type=pa.string())
+
+        candidates = [IntIntFunc, StrStrFunc, IntStrFunc]
+
+        result = Worker._match_function_arguments(
+            function_name="pair",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("a", pa.int64()), ("b", pa.int64())]),
+            candidates=candidates,
+        )
+        assert result is IntIntFunc
+
+        result = Worker._match_function_arguments(
+            function_name="pair",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("a", pa.string()), ("b", pa.string())]),
+            candidates=candidates,
+        )
+        assert result is StrStrFunc
+
+        result = Worker._match_function_arguments(
+            function_name="pair",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("a", pa.int64()), ("b", pa.string())]),  # type: ignore[arg-type]
+            candidates=candidates,
+        )
+        assert result is IntStrFunc
+
+    def test_scalar_constparam_type_dispatch(self) -> None:
+        """Scalar overloads with same ConstParam count but different types."""
+
+        class IntConstFunc(ScalarFunction):
+            class Meta:
+                name = "fmt"
+
+            @classmethod
+            def compute(
+                cls,
+                width: Annotated[int, ConstParam("Width")],
+                val: Annotated[pa.DoubleArray, Param(doc="v")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["int"], type=pa.string())
+
+        class StrConstFunc(ScalarFunction):
+            class Meta:
+                name = "fmt"
+
+            @classmethod
+            def compute(
+                cls,
+                prefix: Annotated[str, ConstParam("Prefix")],
+                val: Annotated[pa.DoubleArray, Param(doc="v")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["str"], type=pa.string())
+
+        candidates = [IntConstFunc, StrConstFunc]
+
+        # int ConstParam -> IntConstFunc
+        result = Worker._match_function_arguments(
+            function_name="fmt",
+            arguments=Arguments(positional=(pa.scalar(10),)),
+            input_schema=pa.schema([("val", pa.float64())]),
+            candidates=candidates,
+        )
+        assert result is IntConstFunc
+
+        # str ConstParam -> StrConstFunc
+        result = Worker._match_function_arguments(
+            function_name="fmt",
+            arguments=Arguments(positional=(pa.scalar("$"),)),
+            input_schema=pa.schema([("val", pa.float64())]),
+            candidates=candidates,
+        )
+        assert result is StrConstFunc
+
+    def test_scalar_any_arrow_mixed_dispatch(self) -> None:
+        """AnyArrow params are skipped; dispatch on fixed-type params."""
+
+        class AnyIntFunc(ScalarFunction):
+            class Meta:
+                name = "mix"
+
+            @classmethod
+            def compute(
+                cls,
+                a: Annotated[pa.Array, Param(doc="any")],  # type: ignore[type-arg]
+                b: Annotated[pa.Int64Array, Param(doc="int")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["ai"], type=pa.string())
+
+        class AnyStrFunc(ScalarFunction):
+            class Meta:
+                name = "mix"
+
+            @classmethod
+            def compute(
+                cls,
+                a: Annotated[pa.Array, Param(doc="any")],  # type: ignore[type-arg]
+                b: Annotated[pa.StringArray, Param(doc="str")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["as"], type=pa.string())
+
+        candidates = [AnyIntFunc, AnyStrFunc]
+
+        # Second col is int64 -> AnyIntFunc
+        result = Worker._match_function_arguments(
+            function_name="mix",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("a", pa.float32()), ("b", pa.int64())]),  # type: ignore[arg-type]
+            candidates=candidates,
+        )
+        assert result is AnyIntFunc
+
+        # Second col is string -> AnyStrFunc
+        result = Worker._match_function_arguments(
+            function_name="mix",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("a", pa.float32()), ("b", pa.string())]),  # type: ignore[arg-type]
+            candidates=candidates,
+        )
+        assert result is AnyStrFunc
+
+    def test_table_function_type_dispatch(self) -> None:
+        """Table function overloads with same arg count but different types."""
+
+        @dataclass(kw_only=True)
+        class IntArgs:
+            start: Annotated[int, Arg(0, doc="start")]
+            stop: Annotated[int, Arg(1, doc="stop")]
+
+        @dataclass(kw_only=True)
+        class StrArgs:
+            prefix: Annotated[str, Arg(0, doc="prefix")]
+            suffix: Annotated[str, Arg(1, doc="suffix")]
+
+        @init_single_worker
+        @bind_fixed_schema
+        class IntPairFunc(TableFunctionGenerator[IntArgs, None]):
+            FIXED_SCHEMA = pa.schema([("a", pa.int64())])
+
+            class Meta:
+                name = "pairs"
+
+            @classmethod
+            def process(cls, params: ProcessParams[IntArgs], state: None, out: OutputCollector) -> None:
+                out.finish()
+
+        @init_single_worker
+        @bind_fixed_schema
+        class StrPairFunc(TableFunctionGenerator[StrArgs, None]):
+            FIXED_SCHEMA = pa.schema([("a", pa.string())])
+
+            class Meta:
+                name = "pairs"
+
+            @classmethod
+            def process(cls, params: ProcessParams[StrArgs], state: None, out: OutputCollector) -> None:
+                out.finish()
+
+        candidates: list[type] = [IntPairFunc, StrPairFunc]
+
+        # int args -> IntPairFunc
+        result = Worker._match_function_arguments(
+            function_name="pairs",
+            arguments=Arguments(positional=(pa.scalar(1), pa.scalar(5))),
+            input_schema=None,
+            candidates=candidates,
+        )
+        assert result is IntPairFunc
+
+        # str args -> StrPairFunc
+        result = Worker._match_function_arguments(
+            function_name="pairs",
+            arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
+            input_schema=None,
+            candidates=candidates,
+        )
+        assert result is StrPairFunc
+
+
+class TestTypesCompatible:
+    """Direct tests for Worker._types_compatible."""
+
+    def test_exact_match(self) -> None:
+        """Same type is always compatible."""
+        assert Worker._types_compatible(pa.int64(), pa.int64()) is True
+
+    def test_integer_family(self) -> None:
+        """All integer types are compatible with each other."""
+        assert Worker._types_compatible(pa.int32(), pa.int64()) is True
+        assert Worker._types_compatible(pa.uint8(), pa.int64()) is True
+        assert Worker._types_compatible(pa.int16(), pa.uint32()) is True
+
+    def test_float_decimal_family(self) -> None:
+        """Float and decimal types are compatible."""
+        assert Worker._types_compatible(pa.decimal128(10, 2), pa.float64()) is True
+        assert Worker._types_compatible(pa.float32(), pa.float64()) is True
+        assert Worker._types_compatible(pa.float64(), pa.decimal128(5, 3)) is True
+
+    def test_string_family(self) -> None:
+        """String and large_string are in the same family."""
+        assert Worker._types_compatible(pa.string(), pa.string()) is True
+        assert Worker._types_compatible(pa.string(), pa.large_string()) is True
+        assert Worker._types_compatible(pa.large_string(), pa.string()) is True
+
+    def test_binary_family(self) -> None:
+        """Binary and large_binary are in the same family."""
+        assert Worker._types_compatible(pa.binary(), pa.large_binary()) is True
+
+    def test_boolean(self) -> None:
+        """Boolean matches boolean."""
+        assert Worker._types_compatible(pa.bool_(), pa.bool_()) is True
+
+    def test_cross_family_rejected(self) -> None:
+        """Types from different families are incompatible."""
+        assert Worker._types_compatible(pa.int64(), pa.string()) is False
+        assert Worker._types_compatible(pa.int32(), pa.float64()) is False
+        assert Worker._types_compatible(pa.string(), pa.bool_()) is False
+        assert Worker._types_compatible(pa.binary(), pa.string()) is False
+
+
+class TestTypeDispatchEdgeCases:
+    """Edge cases for type-based overload dispatch."""
+
+    def test_family_match_int32_to_int64(self) -> None:
+        """int32 arg matches int64 declared param via family matching."""
+
+        class Int64Func(ScalarFunction):
+            class Meta:
+                name = "f"
+
+            @classmethod
+            def compute(
+                cls,
+                v: Annotated[pa.Int64Array, Param(doc="v")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["ok"], type=pa.string())
+
+        class StrFunc(ScalarFunction):
+            class Meta:
+                name = "f"
+
+            @classmethod
+            def compute(
+                cls,
+                v: Annotated[pa.StringArray, Param(doc="v")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["ok"], type=pa.string())
+
+        # int32 input should match Int64Func via family, not StrFunc
+        result = Worker._match_function_arguments(
+            function_name="f",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("v", pa.int32())]),
+            candidates=[Int64Func, StrFunc],
+        )
+        assert result is Int64Func
+
+    def test_type_filter_eliminates_all_raises_error(self) -> None:
+        """When type filtering eliminates all candidates, error is raised."""
+
+        class IntFunc(ScalarFunction):
+            class Meta:
+                name = "f"
+
+            @classmethod
+            def compute(
+                cls,
+                v: Annotated[pa.Int64Array, Param(doc="v")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["ok"], type=pa.string())
+
+        class StrFunc(ScalarFunction):
+            class Meta:
+                name = "f"
+
+            @classmethod
+            def compute(
+                cls,
+                v: Annotated[pa.StringArray, Param(doc="v")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["ok"], type=pa.string())
+
+        # bool input matches neither int64 nor string
+        with pytest.raises(ValueError, match="No matching function"):
+            Worker._match_function_arguments(
+                function_name="f",
+                arguments=Arguments(positional=()),
+                input_schema=pa.schema([("v", pa.bool_())]),
+                candidates=[IntFunc, StrFunc],
+            )
+
+    def test_ambiguous_type_dispatch_raises_error(self) -> None:
+        """When type filtering leaves multiple candidates, error is raised."""
+
+        class Int32Func(ScalarFunction):
+            class Meta:
+                name = "f"
+
+            @classmethod
+            def compute(
+                cls,
+                v: Annotated[pa.Int32Array, Param(doc="v")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["ok"], type=pa.string())
+
+        class Int64Func(ScalarFunction):
+            class Meta:
+                name = "f"
+
+            @classmethod
+            def compute(
+                cls,
+                v: Annotated[pa.Int64Array, Param(doc="v")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["ok"], type=pa.string())
+
+        # int16 input family-matches both with same score -> ambiguous
+        with pytest.raises(ValueError, match="Ambiguous function call"):
+            Worker._match_function_arguments(
+                function_name="f",
+                arguments=Arguments(positional=()),
+                input_schema=pa.schema([("v", pa.int16())]),
+                candidates=[Int32Func, Int64Func],
+            )
+
+    def test_exact_match_preferred_over_family(self) -> None:
+        """Exact type match scores higher than family match."""
+
+        class Int32Func(ScalarFunction):
+            class Meta:
+                name = "f"
+
+            @classmethod
+            def compute(
+                cls,
+                v: Annotated[pa.Int32Array, Param(doc="v")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["int32"], type=pa.string())
+
+        class Int64Func(ScalarFunction):
+            class Meta:
+                name = "f"
+
+            @classmethod
+            def compute(
+                cls,
+                v: Annotated[pa.Int64Array, Param(doc="v")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["int64"], type=pa.string())
+
+        # int32 input exactly matches Int32Func (score 2) vs family-matches Int64Func (score 1)
+        result = Worker._match_function_arguments(
+            function_name="f",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("v", pa.int32())]),
+            candidates=[Int32Func, Int64Func],
+        )
+        assert result is Int32Func
+
+        # int64 input exactly matches Int64Func
+        result = Worker._match_function_arguments(
+            function_name="f",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("v", pa.int64())]),
+            candidates=[Int32Func, Int64Func],
+        )
+        assert result is Int64Func
+
+
+class TestVarargsOverloading:
+    """Tests for varargs type-based overload dispatch."""
+
+    def test_scalar_varargs_type_dispatch(self) -> None:
+        """Scalar varargs overloads dispatched by column type."""
+
+        class IntVarargs(ScalarFunction):
+            class Meta:
+                name = "cv"
+
+            @classmethod
+            def compute(
+                cls,
+                values: Annotated[list[pa.Int64Array], Param(doc="ints", varargs=True)],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["int"], type=pa.string())
+
+        class StrVarargs(ScalarFunction):
+            class Meta:
+                name = "cv"
+
+            @classmethod
+            def compute(
+                cls,
+                values: Annotated[list[pa.StringArray], Param(doc="strs", varargs=True)],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["str"], type=pa.string())
+
+        candidates: list[type] = [IntVarargs, StrVarargs]
+
+        # int64 columns -> IntVarargs
+        result = Worker._match_function_arguments(
+            function_name="cv",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("a", pa.int64()), ("b", pa.int64())]),
+            candidates=candidates,
+        )
+        assert result is IntVarargs
+
+        # string columns -> StrVarargs
+        result = Worker._match_function_arguments(
+            function_name="cv",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("a", pa.string()), ("b", pa.string())]),
+            candidates=candidates,
+        )
+        assert result is StrVarargs
+
+    def test_scalar_varargs_all_elements_checked(self) -> None:
+        """ALL varargs elements are checked, not just the first one."""
+
+        class IntVarargs(ScalarFunction):
+            class Meta:
+                name = "cv"
+
+            @classmethod
+            def compute(
+                cls,
+                values: Annotated[list[pa.Int64Array], Param(doc="ints", varargs=True)],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["int"], type=pa.string())
+
+        class StrVarargs(ScalarFunction):
+            class Meta:
+                name = "cv"
+
+            @classmethod
+            def compute(
+                cls,
+                values: Annotated[list[pa.StringArray], Param(doc="strs", varargs=True)],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["str"], type=pa.string())
+
+        candidates: list[type] = [IntVarargs, StrVarargs]
+
+        # Mixed types: first is int64, second is string -> neither should match
+        with pytest.raises(ValueError, match="No matching function"):
+            Worker._match_function_arguments(
+                function_name="cv",
+                arguments=Arguments(positional=()),
+                input_schema=pa.schema([("a", pa.int64()), ("b", pa.string())]),  # type: ignore[arg-type]
+                candidates=candidates,
+            )
+
+    def test_table_varargs_type_dispatch(self) -> None:
+        """Table function varargs overloads dispatched by argument type."""
+
+        @dataclass(kw_only=True)
+        class IntRepeatArgs:
+            count: Annotated[int, Arg(0, doc="count")]
+            values: Annotated[list[int], Arg(1, varargs=True, arrow_type=pa.int64(), doc="vals")]
+
+        @dataclass(kw_only=True)
+        class StrRepeatArgs:
+            count: Annotated[int, Arg(0, doc="count")]
+            values: Annotated[list[str], Arg(1, varargs=True, arrow_type=pa.string(), doc="vals")]
+
+        @init_single_worker
+        @bind_fixed_schema
+        class IntRepeatFunc(TableFunctionGenerator[IntRepeatArgs, None]):
+            FIXED_SCHEMA = pa.schema([("v", pa.int64())])
+
+            class Meta:
+                name = "rv"
+
+            @classmethod
+            def process(cls, params: ProcessParams[IntRepeatArgs], state: None, out: OutputCollector) -> None:
+                out.finish()
+
+        @init_single_worker
+        @bind_fixed_schema
+        class StrRepeatFunc(TableFunctionGenerator[StrRepeatArgs, None]):
+            FIXED_SCHEMA = pa.schema([("v", pa.string())])
+
+            class Meta:
+                name = "rv"
+
+            @classmethod
+            def process(cls, params: ProcessParams[StrRepeatArgs], state: None, out: OutputCollector) -> None:
+                out.finish()
+
+        candidates: list[type] = [IntRepeatFunc, StrRepeatFunc]
+
+        # int varargs -> IntRepeatFunc
+        result = Worker._match_function_arguments(
+            function_name="rv",
+            arguments=Arguments(positional=(pa.scalar(3), pa.scalar(10), pa.scalar(20))),
+            input_schema=None,
+            candidates=candidates,
+        )
+        assert result is IntRepeatFunc
+
+        # string varargs -> StrRepeatFunc
+        result = Worker._match_function_arguments(
+            function_name="rv",
+            arguments=Arguments(positional=(pa.scalar(3), pa.scalar("a"), pa.scalar("b"))),
+            input_schema=None,
+            candidates=candidates,
+        )
+        assert result is StrRepeatFunc
+
+    def test_varargs_any_type_matches_all(self) -> None:
+        """AnyArrow varargs should still match any type without scoring."""
+
+        class AnyVarargs(ScalarFunction):
+            class Meta:
+                name = "av"
+
+            @classmethod
+            def compute(
+                cls,
+                values: Annotated[  # type: ignore[type-arg]
+                    list[pa.Array],
+                    Param(doc="any", varargs=True),
+                ],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.array(["any"], type=pa.string())
+
+        # Should match any column types
+        result = Worker._match_function_arguments(
+            function_name="av",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("a", pa.int64()), ("b", pa.string())]),  # type: ignore[arg-type]
+            candidates=[AnyVarargs],
+        )
+        assert result is AnyVarargs
+
+
+class TestGeoFunctions:
+    """Tests for geo scalar functions with complex Arrow types."""
+
+    @pytest.mark.parametrize(
+        ("func_name", "func_cls_name", "col_type"),
+        [
+            ("geo_distance_struct", "GeoDistanceStructFunction", "struct"),
+            ("geo_distance_list", "GeoDistanceListFunction", "list"),
+            ("geo_distance_fixed", "GeoDistanceFixedFunction", "fixed"),
+        ],
+    )
+    def test_distance_resolves(self, func_name: str, func_cls_name: str, col_type: str) -> None:
+        """GeoDistance functions resolve with their respective point column types."""
+        import vgi.examples.scalar as geo
+
+        func_cls = getattr(geo, func_cls_name)
+        point_type = {
+            "struct": geo._POINT_STRUCT_TYPE,
+            "list": pa.list_(pa.float64()),
+            "fixed": pa.list_(pa.float64(), 2),
+        }[col_type]
+
+        result = Worker._match_function_arguments(
+            function_name=func_name,
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("p1", point_type), ("p2", point_type)]),
+            candidates=[func_cls],
+        )
+        assert result is func_cls
+
+    @pytest.mark.parametrize(
+        ("func_name", "func_cls_name", "col_type", "num_points"),
+        [
+            ("geo_centroid_struct", "GeoCentroidStructFunction", "struct", 3),
+            ("geo_centroid_list", "GeoCentroidListFunction", "list", 2),
+            ("geo_centroid_fixed", "GeoCentroidFixedFunction", "fixed", 2),
+        ],
+    )
+    def test_centroid_resolves(self, func_name: str, func_cls_name: str, col_type: str, num_points: int) -> None:
+        """GeoCentroid functions resolve with varargs point columns."""
+        import vgi.examples.scalar as geo
+
+        func_cls = getattr(geo, func_cls_name)
+        point_type = {
+            "struct": geo._POINT_STRUCT_TYPE,
+            "list": pa.list_(pa.float64()),
+            "fixed": pa.list_(pa.float64(), 2),
+        }[col_type]
+
+        result = Worker._match_function_arguments(
+            function_name=func_name,
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([(f"p{i}", point_type) for i in range(num_points)]),
+            candidates=[func_cls],
+        )
+        assert result is func_cls

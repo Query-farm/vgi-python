@@ -110,6 +110,7 @@ class TestValidateTypeBound:
             doc="Integer columns",
             type_bound=pa.types.is_integer,
             varargs=True,
+            arrow_type=pa.int64(),
         )
         arg._name = "values"
 
@@ -128,6 +129,7 @@ class TestValidateTypeBound:
             doc="Numeric columns",
             type_bound=[pa.types.is_integer, pa.types.is_floating],
             varargs=True,
+            arrow_type=pa.int64(),
         )
         arg._name = "values"
 

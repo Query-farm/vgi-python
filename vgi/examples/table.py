@@ -54,12 +54,17 @@ __all__ = [
     "GeneratorExceptionFunction",
     "LoggingGeneratorFunction",
     "MakeSeriesCountFunction",
+    "MakeSeriesCsvFunction",
     "MakeSeriesRangeFunction",
     "MakeSeriesStepFunction",
+    "MakePairsIntFunction",
+    "MakePairsStrFunction",
     "NamedParamsEchoFunction",
     "NestedSequenceFunction",
     "PartitionedSequenceFunction",
     "ProjectedDataFunction",
+    "RepeatValueIntFunction",
+    "RepeatValueStrFunction",
     "ScopedSecretDemoFunction",
     "SecretDemoFunction",
     "SequenceFunction",
@@ -1186,7 +1191,6 @@ class ConstantColumnsFunctionArguments:
             1,
             varargs=True,
             doc="Values to fill each column (at least one required)",
-            arrow_type=pa.null(),  # Type is dynamic based on actual values provided
         ),
     ]
 
@@ -1731,3 +1735,284 @@ class MakeSeriesStepFunction(TableFunctionGenerator[MakeSeriesStepArgs, MakeSeri
     def process(cls, params: ProcessParams[MakeSeriesStepArgs], state: MakeSeriesState, out: OutputCollector) -> None:
         """Emit values in batches."""
         _make_series_emit(state, out)
+
+
+# ============================================================================
+# make_series — string overload (same 1-arg count as MakeSeriesCountFunction)
+# ============================================================================
+
+
+@dataclass(kw_only=True)
+class MakeSeriesCsvArgs:
+    """Arguments for MakeSeriesCsvFunction."""
+
+    values: Annotated[str, Arg(0, doc="Comma-separated integers")]
+
+
+@init_single_worker
+@bind_fixed_schema
+class MakeSeriesCsvFunction(TableFunctionGenerator[MakeSeriesCsvArgs, MakeSeriesState]):
+    """Parse a CSV string of integers into rows.
+
+    Example:
+        SELECT * FROM make_series('10,20,30')
+        Returns: 10, 20, 30
+
+    """
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = MAKE_SERIES_SCHEMA
+
+    class Meta:
+        """Function metadata."""
+
+        name = "make_series"
+        description = "Parse comma-separated integers into rows"
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[MakeSeriesCsvArgs]) -> MakeSeriesState:
+        """Parse CSV string into value list."""
+        return MakeSeriesState(values=[int(x.strip()) for x in params.args.values.split(",")])
+
+    @classmethod
+    def process(cls, params: ProcessParams[MakeSeriesCsvArgs], state: MakeSeriesState, out: OutputCollector) -> None:
+        """Emit values in batches."""
+        _make_series_emit(state, out)
+
+
+# ============================================================================
+# make_pairs — overloaded table function (2 overloads by argument type)
+# ============================================================================
+
+MAKE_PAIRS_INT_SCHEMA = pa.schema([("a", pa.int64()), ("b", pa.int64())])
+MAKE_PAIRS_STR_SCHEMA = pa.schema([("a", pa.string()), ("b", pa.string())])
+
+
+@dataclass(kw_only=True)
+class MakePairsIntArgs:
+    """Arguments for integer make_pairs."""
+
+    start: Annotated[int, Arg(0, doc="Start value")]
+    stop: Annotated[int, Arg(1, doc="Stop value")]
+
+
+@dataclass(kw_only=True)
+class MakePairsStrArgs:
+    """Arguments for string make_pairs."""
+
+    prefix: Annotated[str, Arg(0, doc="Prefix for column a")]
+    suffix: Annotated[str, Arg(1, doc="Suffix for column b")]
+
+
+@dataclass(kw_only=True)
+class MakePairsIntState(ArrowSerializableDataclass):
+    """State for integer make_pairs."""
+
+    a_vals: list[int] = field(default_factory=list)
+    b_vals: list[int] = field(default_factory=list)
+    done: bool = False
+
+
+@dataclass(kw_only=True)
+class MakePairsStrState(ArrowSerializableDataclass):
+    """State for string make_pairs."""
+
+    a_vals: list[str] = field(default_factory=list)
+    b_vals: list[str] = field(default_factory=list)
+    done: bool = False
+
+
+@init_single_worker
+@bind_fixed_schema
+class MakePairsIntFunction(TableFunctionGenerator[MakePairsIntArgs, MakePairsIntState]):
+    """Generate integer pairs (i, i*2) from start to stop-1.
+
+    Example:
+        SELECT * FROM make_pairs(1, 4)
+        Returns: (1,2), (2,4), (3,6)
+
+    """
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = MAKE_PAIRS_INT_SCHEMA
+
+    class Meta:
+        """Function metadata."""
+
+        name = "make_pairs"
+        description = "Generate integer pairs (i, i*2)"
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[MakePairsIntArgs]) -> MakePairsIntState:
+        """Build integer pairs."""
+        vals = list(range(params.args.start, params.args.stop))
+        return MakePairsIntState(a_vals=vals, b_vals=[v * 2 for v in vals])
+
+    @classmethod
+    def process(cls, params: ProcessParams[MakePairsIntArgs], state: MakePairsIntState, out: OutputCollector) -> None:
+        """Emit pairs batch."""
+        if state.done:
+            out.finish()
+            return
+        state.done = True
+        out.emit(pa.RecordBatch.from_pydict({"a": state.a_vals, "b": state.b_vals}, schema=MAKE_PAIRS_INT_SCHEMA))
+
+
+@init_single_worker
+@bind_fixed_schema
+class MakePairsStrFunction(TableFunctionGenerator[MakePairsStrArgs, MakePairsStrState]):
+    """Generate string pairs (prefix+i, suffix+i) for i in 0..4.
+
+    Example:
+        SELECT * FROM make_pairs('row_', '_end')
+        Returns: ('row_0','_end0'), ('row_1','_end1'), ...
+
+    """
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = MAKE_PAIRS_STR_SCHEMA
+
+    class Meta:
+        """Function metadata."""
+
+        name = "make_pairs"
+        description = "Generate string pairs with prefix and suffix"
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[MakePairsStrArgs]) -> MakePairsStrState:
+        """Build string pairs."""
+        return MakePairsStrState(
+            a_vals=[f"{params.args.prefix}{i}" for i in range(5)],
+            b_vals=[f"{params.args.suffix}{i}" for i in range(5)],
+        )
+
+    @classmethod
+    def process(cls, params: ProcessParams[MakePairsStrArgs], state: MakePairsStrState, out: OutputCollector) -> None:
+        """Emit pairs batch."""
+        if state.done:
+            out.finish()
+            return
+        state.done = True
+        out.emit(pa.RecordBatch.from_pydict({"a": state.a_vals, "b": state.b_vals}, schema=MAKE_PAIRS_STR_SCHEMA))
+
+
+# ============================================================================
+# repeat_value — overloaded table function (2 overloads by varargs arg type)
+# ============================================================================
+
+
+@dataclass(kw_only=True)
+class RepeatValueIntArgs:
+    """Arguments for integer repeat_value."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate")]
+    values: Annotated[list[int], Arg(1, varargs=True, arrow_type=pa.int64(), doc="Integer values to repeat")]
+
+
+@dataclass(kw_only=True)
+class RepeatValueStrArgs:
+    """Arguments for string repeat_value."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate")]
+    values: Annotated[list[str], Arg(1, varargs=True, arrow_type=pa.string(), doc="String values to repeat")]
+
+
+@dataclass(kw_only=True)
+class RepeatValueIntState(ArrowSerializableDataclass):
+    """State for integer repeat_value."""
+
+    rows: list[list[int]] = field(default_factory=list)
+    done: bool = False
+
+
+@dataclass(kw_only=True)
+class RepeatValueStrState(ArrowSerializableDataclass):
+    """State for string repeat_value."""
+
+    rows: list[list[str]] = field(default_factory=list)
+    done: bool = False
+
+
+@init_single_worker
+class RepeatValueIntFunction(TableFunctionGenerator[RepeatValueIntArgs, RepeatValueIntState]):
+    """Repeat integer values for count rows.
+
+    Example:
+        SELECT * FROM repeat_value(3, 10, 20)
+        Returns 3 rows with columns v0=10, v1=20
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "repeat_value"
+        description = "Repeat integer values for N rows"
+
+    @classmethod
+    def on_bind(cls, params: BindParams[RepeatValueIntArgs]) -> BindResponse:
+        """Build output schema from varargs count."""
+        num_values = len(params.args.values)
+        fields = [pa.field(f"v{i}", pa.int64()) for i in range(num_values)]
+        return BindResponse(output_schema=pa.schema(fields))
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[RepeatValueIntArgs]) -> RepeatValueIntState:
+        """Build repeated rows."""
+        return RepeatValueIntState(
+            rows=[[v] * params.args.count for v in params.args.values],
+        )
+
+    @classmethod
+    def process(
+        cls, params: ProcessParams[RepeatValueIntArgs], state: RepeatValueIntState, out: OutputCollector
+    ) -> None:
+        """Emit repeated values."""
+        if state.done:
+            out.finish()
+            return
+        state.done = True
+        data = {f"v{i}": col for i, col in enumerate(state.rows)}
+        schema = pa.schema([pa.field(f"v{i}", pa.int64()) for i in range(len(state.rows))])
+        out.emit(pa.RecordBatch.from_pydict(data, schema=schema))
+
+
+@init_single_worker
+class RepeatValueStrFunction(TableFunctionGenerator[RepeatValueStrArgs, RepeatValueStrState]):
+    """Repeat string values for count rows.
+
+    Example:
+        SELECT * FROM repeat_value(3, 'a', 'b')
+        Returns 3 rows with columns v0='a', v1='b'
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "repeat_value"
+        description = "Repeat string values for N rows"
+
+    @classmethod
+    def on_bind(cls, params: BindParams[RepeatValueStrArgs]) -> BindResponse:
+        """Build output schema from varargs count."""
+        num_values = len(params.args.values)
+        fields = [pa.field(f"v{i}", pa.string()) for i in range(num_values)]
+        return BindResponse(output_schema=pa.schema(fields))
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[RepeatValueStrArgs]) -> RepeatValueStrState:
+        """Build repeated rows."""
+        return RepeatValueStrState(
+            rows=[[v] * params.args.count for v in params.args.values],
+        )
+
+    @classmethod
+    def process(
+        cls, params: ProcessParams[RepeatValueStrArgs], state: RepeatValueStrState, out: OutputCollector
+    ) -> None:
+        """Emit repeated values."""
+        if state.done:
+            out.finish()
+            return
+        state.done = True
+        data = {f"v{i}": col for i, col in enumerate(state.rows)}
+        schema = pa.schema([pa.field(f"v{i}", pa.string()) for i in range(len(state.rows))])
+        out.emit(pa.RecordBatch.from_pydict(data, schema=schema))
