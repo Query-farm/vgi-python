@@ -97,6 +97,7 @@ from vgi.examples.table import (
     ProjectedDataFunction,
     RepeatValueIntFunction,
     RepeatValueStrFunction,
+    RowIdSequenceFunction,
     ScopedSecretDemoFunction,
     SecretDemoFunction,
     SequenceFunction,
@@ -196,6 +197,7 @@ class ExampleWorker(Worker):
                     NestedSequenceFunction,
                     PartitionedSequenceFunction,
                     ProjectedDataFunction,
+                    RowIdSequenceFunction,
                     SecretDemoFunction,
                     ScopedSecretDemoFunction,
                     SequenceFunction,
@@ -298,6 +300,65 @@ class ExampleWorker(Worker):
                         columns=pa.schema([("value", pa.int64())]),
                         comment="First 100 integers (demonstrates explicit columns)",
                     ),
+                    # Row ID position tests (int64 row_id)
+                    Table(
+                        name="rowid_first",
+                        columns=pa.schema(
+                            [
+                                pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
+                                pa.field("name", pa.string()),
+                                pa.field("value", pa.string()),
+                            ]
+                        ),
+                        comment="Table with row_id at column index 0",
+                    ),
+                    Table(
+                        name="rowid_middle",
+                        columns=pa.schema(
+                            [
+                                pa.field("name", pa.string()),
+                                pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
+                                pa.field("value", pa.string()),
+                            ]
+                        ),
+                        comment="Table with row_id at column index 1",
+                    ),
+                    Table(
+                        name="rowid_last",
+                        columns=pa.schema(
+                            [
+                                pa.field("name", pa.string()),
+                                pa.field("value", pa.string()),
+                                pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
+                            ]
+                        ),
+                        comment="Table with row_id at column index 2",
+                    ),
+                    # Row ID type tests (row_id at index 0)
+                    Table(
+                        name="rowid_string",
+                        columns=pa.schema(
+                            [
+                                pa.field("row_id", pa.string(), metadata={b"is_row_id": b""}),
+                                pa.field("value", pa.int64()),
+                            ]
+                        ),
+                        comment="Table with string row_id",
+                    ),
+                    Table(
+                        name="rowid_struct",
+                        columns=pa.schema(
+                            [
+                                pa.field(
+                                    "row_id",
+                                    pa.struct([("a", pa.int64()), ("b", pa.string())]),
+                                    metadata={b"is_row_id": b""},
+                                ),
+                                pa.field("value", pa.string()),
+                            ]
+                        ),
+                        comment="Table with struct row_id",
+                    ),
                 ],
                 views=[
                     View(
@@ -345,6 +406,25 @@ class ExampleWorker(Worker):
                 function_name="sequence",
                 positional_arguments=[pa.scalar(100)],  # Generate 100 numbers
                 named_arguments={},
+            )
+
+        # Row ID test tables — route to rowid_sequence with appropriate layout/type
+        rowid_tables: dict[str, dict[str, str]] = {
+            "rowid_first": {"layout": "first", "row_id_type": "int64"},
+            "rowid_middle": {"layout": "middle", "row_id_type": "int64"},
+            "rowid_last": {"layout": "last", "row_id_type": "int64"},
+            "rowid_string": {"layout": "first", "row_id_type": "string"},
+            "rowid_struct": {"layout": "first", "row_id_type": "struct"},
+        }
+        if schema_name.lower() == "data" and name.lower() in rowid_tables:
+            opts = rowid_tables[name.lower()]
+            return ScanFunctionResult(
+                function_name="rowid_sequence",
+                positional_arguments=[pa.scalar(20)],
+                named_arguments={
+                    "layout": pa.scalar(opts["layout"]),
+                    "row_id_type": pa.scalar(opts["row_id_type"]),
+                },
             )
 
         # For function-backed tables, delegate to the catalog interface

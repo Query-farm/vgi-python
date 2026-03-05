@@ -71,6 +71,7 @@ __all__ = [
     "SecretDemoFunction",
     "SequenceFunction",
     "SettingsAwareFunction",
+    "RowIdSequenceFunction",
     "StructSettingsFunction",
     "TenThousandFunction",
 ]
@@ -2144,3 +2145,107 @@ class RepeatValueStrFunction(TableFunctionGenerator[RepeatValueStrArgs, RepeatVa
         data = {f"v{i}": col for i, col in enumerate(state.rows)}
         schema = pa.schema([pa.field(f"v{i}", pa.string()) for i in range(len(state.rows))])
         out.emit(pa.RecordBatch.from_pydict(data, schema=schema))
+
+
+# ============================================================================
+# RowIdSequenceFunction - Generates rows with a row_id column
+# ============================================================================
+
+
+@dataclass(slots=True, frozen=True)
+class RowIdSequenceFunctionArgs:
+    """Arguments for RowIdSequenceFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+    layout: Annotated[str, Arg("layout", default="first", doc="Row ID column position: first, middle, last")]
+    row_id_type: Annotated[str, Arg("row_id_type", default="int64", doc="Row ID type: int64, string, struct")]
+
+
+@init_single_worker
+class RowIdSequenceFunction(TableFunctionGenerator[RowIdSequenceFunctionArgs, CountdownState]):
+    """Generates a sequence with a row_id column for testing row_id support.
+
+    The layout argument controls where the row_id column appears in the schema,
+    and row_id_type controls the type of the row_id column.
+
+    """
+
+    class Meta:
+        """Metadata for RowIdSequenceFunction."""
+
+        name = "rowid_sequence"
+        description = "Sequence with row_id column"
+        projection_pushdown = True
+
+    BATCH_SIZE: ClassVar[int] = 1000
+
+    @classmethod
+    def on_bind(cls, params: BindParams[RowIdSequenceFunctionArgs]) -> BindResponse:
+        """Build schema with is_row_id metadata on the appropriate field."""
+        layout = params.args.layout
+        row_id_type = params.args.row_id_type
+
+        # Build the row_id field with is_row_id metadata
+        rid_metadata = {b"is_row_id": b""}
+        if row_id_type == "string":
+            rid_field = pa.field("row_id", pa.string(), metadata=rid_metadata)
+        elif row_id_type == "struct":
+            rid_field = pa.field(
+                "row_id",
+                pa.struct([("a", pa.int64()), ("b", pa.string())]),
+                metadata=rid_metadata,
+            )
+        else:  # int64
+            rid_field = pa.field("row_id", pa.int64(), metadata=rid_metadata)
+
+        name_field = pa.field("name", pa.string())
+        value_field = pa.field("value", pa.string())
+
+        if layout == "middle":
+            fields = [name_field, rid_field, value_field]
+        elif layout == "last":
+            fields = [name_field, value_field, rid_field]
+        else:  # first
+            fields = [rid_field, name_field, value_field]
+
+        return BindResponse(output_schema=pa.schema(fields))
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[RowIdSequenceFunctionArgs]) -> CountdownState:
+        """Create initial state with remaining count."""
+        return CountdownState(remaining=params.args.count)
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[RowIdSequenceFunctionArgs],
+        state: CountdownState,
+        out: OutputCollector,
+    ) -> None:
+        """Generate batch with row_id and data columns."""
+        if state.remaining <= 0:
+            out.finish()
+            return
+
+        size = min(state.remaining, cls.BATCH_SIZE)
+        start = state.current_index
+
+        # Build columns matching the output schema field order
+        columns: dict[str, Any] = {}
+        for f in params.output_schema:
+            if f.name == "row_id":
+                if pa.types.is_string(f.type):
+                    columns["row_id"] = [f"rid_{i}" for i in range(start, start + size)]
+                elif pa.types.is_struct(f.type):
+                    columns["row_id"] = [{"a": i, "b": f"s_{i}"} for i in range(start, start + size)]
+                else:
+                    columns["row_id"] = list(range(start, start + size))
+            elif f.name == "name":
+                columns["name"] = [f"item_{i}" for i in range(start, start + size)]
+            elif f.name == "value":
+                columns["value"] = [f"val_{i}" for i in range(start, start + size)]
+
+        out.emit(pa.RecordBatch.from_pydict(columns, schema=params.output_schema))
+
+        state.current_index += size
+        state.remaining -= size
