@@ -58,6 +58,7 @@ from vgi.table_function import (
     TableFunctionGenerator,
     TableInOutFunctionInitPhase,
     _batch_to_scalar_dict,
+    _effective_projection_ids,
     project_schema,
 )
 from vgi.table_in_out_function import TableInOutGenerator
@@ -559,7 +560,8 @@ class TableProducerState(ProducerState):
         func_cls = worker._resolve_function(self._init_call.bind_call)
         assert issubclass(func_cls, TableFunctionGenerator)
         self._func_cls = func_cls
-        output_schema = project_schema(self._init_call.projection_ids, self._init_call.output_schema)
+        proj_ids = _effective_projection_ids(func_cls, self._init_call.projection_ids)
+        output_schema = project_schema(proj_ids, self._init_call.output_schema)
         self._params = ProcessParams(
             args=func_cls._parse_arguments(func_cls.FunctionArguments, self._init_call.bind_call.arguments),
             init_call=self._init_call,
@@ -646,7 +648,8 @@ class TableInOutExchangeState(ExchangeState):
         func_cls = worker._resolve_function(self._init_call.bind_call)
         assert issubclass(func_cls, TableInOutGenerator)
         self._func_cls = func_cls
-        output_schema = project_schema(self._init_call.projection_ids, self._init_call.output_schema)
+        proj_ids = _effective_projection_ids(func_cls, self._init_call.projection_ids)
+        output_schema = project_schema(proj_ids, self._init_call.output_schema)
         self._params = ProcessParams(
             args=func_cls._parse_arguments(func_cls.FunctionArguments, self._init_call.bind_call.arguments),
             init_call=self._init_call,

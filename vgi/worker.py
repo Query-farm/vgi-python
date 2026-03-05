@@ -124,6 +124,7 @@ from vgi.table_function import (
     TableFunctionGenerator,
     TableInOutFunctionInitPhase,
     _batch_to_scalar_dict,
+    _effective_projection_ids,
     project_schema,
 )
 from vgi.table_in_out_function import (
@@ -1053,7 +1054,8 @@ class Worker:
             init_response = instance.global_init(request)  # type: ignore[attr-defined]
 
         # Build common ProcessParams for table/table-in-out functions
-        output_schema = project_schema(request.projection_ids, request.output_schema)
+        proj_ids = _effective_projection_ids(func_cls, request.projection_ids)
+        output_schema = project_schema(proj_ids, request.output_schema)
 
         # Determine state and input_schema based on function type
         state: ProcessState

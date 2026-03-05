@@ -230,6 +230,13 @@ def project_schema(projection_ids: list[int] | None, schema: pa.Schema) -> pa.Sc
     return schema
 
 
+def _effective_projection_ids(func_cls: Any, projection_ids: list[int] | None) -> list[int] | None:
+    """Return projection_ids only if the function supports projection pushdown."""
+    if projection_ids is not None and func_cls.get_metadata().projection_pushdown:
+        return projection_ids
+    return None
+
+
 class TableInOutFunctionInitPhase(Enum):
     """Indicate the phase of the init call for TableInOutFunction.
 
@@ -670,7 +677,7 @@ class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
         params = InitParams[TArgs](
             args=cls._parse_arguments(cls.FunctionArguments, input.bind_call.arguments),
             init_call=input,
-            output_schema=project_schema(input.projection_ids, input.output_schema),
+            output_schema=project_schema(_effective_projection_ids(cls, input.projection_ids), input.output_schema),
             settings=_batch_to_scalar_dict(input.bind_call.settings),
             secrets=SecretsAccessor(input.bind_call.secrets).to_dict(),
             execution_id=execution_id,
