@@ -343,7 +343,13 @@ def _resolve_authenticate() -> Callable[..., Any] | None:
 
 
 def _resolve_bearer_authenticate() -> Callable[..., Any] | None:
-    """Build a bearer_authenticate_static callback from VGI_BEARER_TOKENS."""
+    """Build a bearer_authenticate_static callback from VGI_BEARER_TOKENS.
+
+    Format: ``token=principal`` pairs separated by commas.  Each entry is
+    split on the *first* ``=`` only, so principals may contain ``=``
+    (e.g. base64-encoded values).  However, tokens themselves **must not**
+    contain ``=`` or ``,`` because those characters are used as delimiters.
+    """
     raw = os.environ.get("VGI_BEARER_TOKENS")
     if not raw:
         return None

@@ -71,6 +71,52 @@ the server. Server logs are at `/tmp/vgi-http-test-server.log`.
 ./test/run_http_integration.sh "test/sql/integration/table/countdown*"
 ```
 
+**Combined coverage** (pytest + subprocess + HTTP integration):
+
+The integration tests exercise real protocol paths that unit tests don't cover:
+subprocess tests hit filter pushdown and parallel workers; HTTP tests additionally
+hit state serialization (`rehydrate`), `_resolve_state_type`, and `_to_row_dict`.
+
+```bash
+# 1. Clean old data
+find . -name '.coverage*' -not -path './.venv/*' -delete
+
+# 2. Run pytest with coverage
+uv run coverage run -m pytest --no-cov -n auto
+
+# 3. Run DuckDB subprocess integration tests with coverage
+cd ~/Development/vgi
+VGI_TEST_WORKER="/tmp/vgi-coverage-worker.sh" \
+    ./build/release/test/unittest "test/sql/integration/*"
+
+# 4. Run DuckDB HTTP integration tests with coverage
+cd ~/Development/vgi
+VGI_PYTHON_DIR=/Users/rusty/Development/vgi-python \
+    ./test/run_http_integration_coverage.sh "test/sql/integration/*"
+
+# 5. Combine and report
+cd ~/Development/vgi-python
+uv run coverage combine
+uv run coverage report --show-missing --skip-covered
+```
+
+**Wrapper scripts** — needed because the C++ test binary spawns the Python worker
+as a subprocess, so `coverage`'s `patch = ["subprocess"]` (which patches Python's
+`subprocess.Popen`) has no effect. The wrappers `cd` to the project so `pyproject.toml`
+coverage settings are found.
+
+Subprocess worker wrapper (`/tmp/vgi-coverage-worker.sh`):
+```bash
+#!/bin/bash
+cd /Users/rusty/Development/vgi-python
+exec uv run coverage run --parallel-mode -m vgi.examples.worker "$@"
+```
+
+HTTP server wrapper (`~/Development/vgi/test/run_http_integration_coverage.sh`):
+Same as `run_http_integration.sh` but replaces the `uv run ... vgi-serve` line with
+`uv run ... coverage run --parallel-mode -m vgi.serve` so the HTTP server process
+writes coverage data. See the script for details.
+
 **Running ad-hoc SQL against DuckDB CLI:**
 Use `-f` to supply SQL files to DuckDB, not stdin redirection. Do not redirect stderr to stdout.
 ```bash
@@ -81,10 +127,12 @@ Use `-f` to supply SQL files to DuckDB, not stdin redirection. Do not redirect s
 ~/Development/vgi/build/debug/duckdb < /tmp/my_test.sql 2>&1
 ```
 
-**Known HTTP limitations** (4 tests fail, not regressions):
-- `logging_generator.test` — inline log streaming not supported over HTTP
-- `partitioned_sequence.test` — partition-local state not preserved across HTTP exchanges
-- `buffer_input/sizes.test`, `buffer_input/scale.test_slow` — input buffering semantics differ
+**Known HTTP failures** (3 tests fail, not regressions):
+- `table/partitioned_sequence.test` — partition-local state not preserved across HTTP exchanges
+- `table_in_out/buffer_input/sizes.test` — input buffering semantics differ over HTTP
+- `table_in_out/buffer_input/scale.test_slow` — input buffering semantics differ over HTTP
+
+Two assertions are also skipped (via `skip on error_message matching 'HTTP'`).
 
 ## Project Overview
 

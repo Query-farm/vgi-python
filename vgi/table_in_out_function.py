@@ -129,7 +129,7 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
 
     @final
     @classmethod
-    def global_init(cls, input: InitRequest) -> GlobalInitResponse:
+    def global_init(cls, input: InitRequest, *, ctx: CallContext | None = None) -> GlobalInitResponse:
         """Global init protocol entry point. Do not override; use on_init() instead.
 
         Deserializes the wrapped bind data, calls on_init(), and
@@ -137,6 +137,7 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
 
         """
         execution_id = uuid.uuid4().bytes
+        auth = ctx.auth if ctx is not None else AuthContext.anonymous()
         params = InitParams[TArgs](
             args=cls._parse_arguments(cls.FunctionArguments, input.bind_call.arguments),
             init_call=input,
@@ -145,6 +146,7 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
             secrets=SecretsAccessor(input.bind_call.secrets).to_dict(),
             execution_id=execution_id,
             storage=BoundStorage(cls.storage, execution_id),
+            auth_context=auth,
         )
 
         result = cls.on_init(params)

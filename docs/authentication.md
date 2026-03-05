@@ -12,6 +12,10 @@ The simplest auth setup uses static bearer tokens via environment variable:
 VGI_BEARER_TOKENS="token1=alice,token2=bob" vgi-serve my_worker.py --http
 ```
 
+Each entry is split on the first `=`, so principals may contain `=` (e.g.
+base64 values). However, **tokens must not contain `=` or `,`** because
+those characters are used as delimiters.
+
 Unauthenticated requests receive HTTP 401. Authenticated requests include
 the principal in the `AuthContext` available to functions.
 

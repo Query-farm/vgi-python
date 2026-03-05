@@ -5,7 +5,7 @@ from typing import Annotated
 
 import pyarrow as pa
 import pytest
-from vgi_rpc.rpc import OutputCollector
+from vgi_rpc.rpc import AuthContext, CallContext, OutputCollector
 
 from vgi import Arg, TableInOutFunction, TableInput
 from vgi.arguments import Arguments, ConstParam, Param, Returns
@@ -476,6 +476,10 @@ def _make_bind_request(function_name: str, *positional: int) -> BindRequest:
     )
 
 
+def _anon_ctx() -> CallContext:
+    return CallContext(auth=AuthContext.anonymous(), emit_client_log=lambda *a, **kw: None)
+
+
 class TestTableFunctionCardinality:
     """Tests for Worker.table_function_cardinality()."""
 
@@ -489,7 +493,7 @@ class TestTableFunctionCardinality:
         request = TableFunctionCardinalityRequest(
             bind_call=_make_bind_request("fixed_card", 42),
         )
-        result = worker.table_function_cardinality(request)
+        result = worker.table_function_cardinality(request, _anon_ctx())
 
         assert isinstance(result, TableCardinality)
         assert result.estimate == 42
@@ -505,7 +509,7 @@ class TestTableFunctionCardinality:
         request = TableFunctionCardinalityRequest(
             bind_call=_make_bind_request("default_card", 10),
         )
-        result = worker.table_function_cardinality(request)
+        result = worker.table_function_cardinality(request, _anon_ctx())
 
         assert isinstance(result, TableCardinality)
         assert result.estimate is None
@@ -522,7 +526,7 @@ class TestTableFunctionCardinality:
             bind_call=_make_bind_request("scalar_only"),
         )
         with pytest.raises(ValueError, match="not a TableFunctionGenerator"):
-            worker.table_function_cardinality(request)
+            worker.table_function_cardinality(request, _anon_ctx())
 
     def test_unknown_function_raises(self) -> None:
         """Raises ValueError for unknown function names."""
@@ -535,7 +539,7 @@ class TestTableFunctionCardinality:
             bind_call=_make_bind_request("nonexistent", 1),
         )
         with pytest.raises(ValueError, match="Unknown function"):
-            worker.table_function_cardinality(request)
+            worker.table_function_cardinality(request, _anon_ctx())
 
     def test_passes_bind_opaque_data(self) -> None:
         """bind_opaque_data on the request is accepted (though unused by default)."""
@@ -548,7 +552,7 @@ class TestTableFunctionCardinality:
             bind_call=_make_bind_request("fixed_card", 99),
             bind_opaque_data=None,
         )
-        result = worker.table_function_cardinality(request)
+        result = worker.table_function_cardinality(request, _anon_ctx())
         assert result.estimate == 99
 
     def test_cardinality_with_settings(self) -> None:
@@ -588,7 +592,7 @@ class TestTableFunctionCardinality:
                 settings=settings_batch,
             ),
         )
-        result = worker.table_function_cardinality(request)
+        result = worker.table_function_cardinality(request, _anon_ctx())
         assert result.estimate == 30
 
 

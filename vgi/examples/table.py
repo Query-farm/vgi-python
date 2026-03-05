@@ -2187,6 +2187,7 @@ class RowIdSequenceFunction(TableFunctionGenerator[RowIdSequenceFunctionArgs, Co
 
         # Build the row_id field with is_row_id metadata
         rid_metadata = {b"is_row_id": b""}
+        rid_field: pa.Field[Any]
         if row_id_type == "string":
             rid_field = pa.field("row_id", pa.string(), metadata=rid_metadata)
         elif row_id_type == "struct":

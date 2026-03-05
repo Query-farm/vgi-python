@@ -306,7 +306,7 @@ class ExampleWorker(Worker):
                     Table(
                         name="rowid_first",
                         columns=pa.schema(
-                            [
+                            [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
                                 pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
                                 pa.field("name", pa.string()),
                                 pa.field("value", pa.string()),
@@ -317,7 +317,7 @@ class ExampleWorker(Worker):
                     Table(
                         name="rowid_middle",
                         columns=pa.schema(
-                            [
+                            [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
                                 pa.field("name", pa.string()),
                                 pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
                                 pa.field("value", pa.string()),
@@ -328,7 +328,7 @@ class ExampleWorker(Worker):
                     Table(
                         name="rowid_last",
                         columns=pa.schema(
-                            [
+                            [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
                                 pa.field("name", pa.string()),
                                 pa.field("value", pa.string()),
                                 pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
@@ -340,7 +340,7 @@ class ExampleWorker(Worker):
                     Table(
                         name="rowid_string",
                         columns=pa.schema(
-                            [
+                            [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
                                 pa.field("row_id", pa.string(), metadata={b"is_row_id": b""}),
                                 pa.field("value", pa.int64()),
                             ]

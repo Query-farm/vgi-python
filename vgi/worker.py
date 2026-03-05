@@ -1037,7 +1037,9 @@ class Worker:
         instance = func_cls(logger=_logger)
         return instance.bind(request, ctx=ctx)  # type: ignore[attr-defined, no-any-return]
 
-    def table_function_cardinality(self, request: TableFunctionCardinalityRequest) -> TableCardinality:
+    def table_function_cardinality(
+        self, request: TableFunctionCardinalityRequest, ctx: CallContext
+    ) -> TableCardinality:
         """Estimate the cardinality of a table function's output.
 
         Implements VgiProtocol.table_function_cardinality().
@@ -1048,7 +1050,7 @@ class Worker:
                 "Cardinality estimation is only supported for table"
                 f" functions, but '{func_cls.__name__}' is not a TableFunctionGenerator."
             )
-        return func_cls.cardinality(func_cls._make_bind_params(request.bind_call))
+        return func_cls.cardinality(func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth))
 
     def init(self, request: InitRequest, ctx: CallContext) -> Stream[ProcessState, GlobalInitResponse]:
         """Initialize a function execution and return a processing stream.
@@ -1067,7 +1069,10 @@ class Worker:
                 opaque_data=request.init_opaque_data,
             )
         else:
-            init_response = instance.global_init(request)  # type: ignore[attr-defined]
+            if isinstance(instance, (TableFunctionGenerator, TableInOutGenerator)):
+                init_response = instance.global_init(request, ctx=ctx)
+            else:
+                init_response = instance.global_init(request)  # type: ignore[attr-defined]
 
         # Build common ProcessParams for table/table-in-out functions
         proj_ids = _effective_projection_ids(func_cls, request.projection_ids)

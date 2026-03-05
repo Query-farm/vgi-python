@@ -855,6 +855,10 @@ class ScalarFunction(ScalarFunctionGenerator):
 
                     # Auth: receives AuthContext
                     if isinstance(meta, Auth):
+                        if auth_param is not None:
+                            raise TypeError(
+                                f"{cls.__name__}.compute() has multiple Auth parameters: {auth_param!r} and {name!r}"
+                            )
                         auth_param = name
                         # Don't increment overall_position - not a call argument
                         break

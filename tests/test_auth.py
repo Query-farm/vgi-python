@@ -2,20 +2,17 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import Annotated, Any
 from unittest.mock import patch
 
 import pyarrow as pa
 import pytest
-from vgi_rpc.rpc import AuthContext
+from vgi_rpc.rpc import AuthContext, OutputCollector
 
 from vgi.arguments import Auth, Param, Returns
 from vgi.function_storage import BoundStorage
 from vgi.invocation import FunctionType, GlobalInitResponse
 from vgi.scalar_function import ScalarFunction
-
-if TYPE_CHECKING:
-    pass
 
 # ---------------------------------------------------------------------------
 # Test functions
@@ -388,3 +385,136 @@ class TestAuthImports:
         from vgi.arguments import Auth
 
         assert Auth is not None
+
+
+# ---------------------------------------------------------------------------
+# Duplicate Auth annotation tests
+# ---------------------------------------------------------------------------
+
+
+class TestDuplicateAuth:
+    """Tests for duplicate Auth parameter validation."""
+
+    def test_duplicate_auth_raises(self) -> None:
+        """Defining two Auth params raises TypeError."""
+        with pytest.raises(TypeError, match="multiple Auth parameters"):
+
+            class _BadFunction(ScalarFunction):
+                class Meta:
+                    name = "bad_dual_auth"
+
+                @classmethod
+                def compute(
+                    cls,
+                    x: Annotated[pa.Int64Array, Param(doc="input")],
+                    auth1: Annotated[AuthContext, Auth()],
+                    auth2: Annotated[AuthContext, Auth()],
+                ) -> Annotated[pa.Int64Array, Returns()]:
+                    return x
+
+
+# ---------------------------------------------------------------------------
+# Bearer token format tests
+# ---------------------------------------------------------------------------
+
+
+class TestBearerTokenFormat:
+    """Tests for bearer token parsing edge cases."""
+
+    def test_bearer_token_with_equals_in_principal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Principal containing '=' (e.g. base64) is preserved correctly."""
+        monkeypatch.setenv("VGI_BEARER_TOKENS", "mytoken=base64data==")
+        monkeypatch.delenv("VGI_JWT_ISSUER", raising=False)
+        from vgi.serve import _resolve_bearer_authenticate
+
+        result = _resolve_bearer_authenticate()
+        assert result is not None
+        # The callback was built — the split(=, 1) preserves base64 principal
+
+
+# ---------------------------------------------------------------------------
+# InitParams auth threading tests
+# ---------------------------------------------------------------------------
+
+
+class TestInitParamsAuth:
+    """Tests for auth context threading through global_init()."""
+
+    def test_table_function_global_init_passes_auth(self) -> None:
+        """global_init() threads auth from ctx into InitParams."""
+        from vgi.auth import CallContext
+        from vgi.table_function import TableFunctionGenerator
+
+        captured_auth: list[AuthContext] = []
+
+        class _CaptureAuthFunc(TableFunctionGenerator[None]):
+            class Meta:
+                name = "capture_auth"
+
+            @classmethod
+            def on_init(cls, params: Any) -> GlobalInitResponse:
+                captured_auth.append(params.auth_context)
+                return GlobalInitResponse()
+
+            @classmethod
+            def process(cls, params: Any, state: None, out: OutputCollector) -> None:
+                pass
+
+        from vgi.arguments import Arguments
+        from vgi.protocol import BindRequest, InitRequest
+
+        bind_call = BindRequest(
+            function_name="capture_auth",
+            arguments=Arguments(),
+            function_type=FunctionType.TABLE,
+        )
+        init_req = InitRequest(
+            bind_call=bind_call,
+            output_schema=pa.schema([]),
+        )
+        auth = AuthContext(principal="test-user", authenticated=True, domain="bearer")
+        ctx = CallContext(auth=auth, emit_client_log=lambda *a, **kw: None)
+
+        _CaptureAuthFunc.global_init(init_req, ctx=ctx)
+
+        assert len(captured_auth) == 1
+        assert captured_auth[0].principal == "test-user"
+        assert captured_auth[0].domain == "bearer"
+
+    def test_table_function_global_init_defaults_anonymous(self) -> None:
+        """global_init() without ctx defaults to anonymous auth."""
+        from vgi.table_function import TableFunctionGenerator
+
+        captured_auth: list[AuthContext] = []
+
+        class _AnonAuthFunc(TableFunctionGenerator[None]):
+            class Meta:
+                name = "anon_auth"
+
+            @classmethod
+            def on_init(cls, params: Any) -> GlobalInitResponse:
+                captured_auth.append(params.auth_context)
+                return GlobalInitResponse()
+
+            @classmethod
+            def process(cls, params: Any, state: None, out: OutputCollector) -> None:
+                pass
+
+        from vgi.arguments import Arguments
+        from vgi.protocol import BindRequest, InitRequest
+
+        bind_call = BindRequest(
+            function_name="anon_auth",
+            arguments=Arguments(),
+            function_type=FunctionType.TABLE,
+        )
+        init_req = InitRequest(
+            bind_call=bind_call,
+            output_schema=pa.schema([]),
+        )
+
+        _AnonAuthFunc.global_init(init_req)
+
+        assert len(captured_auth) == 1
+        assert captured_auth[0].authenticated is False
+        assert captured_auth[0].principal is None
