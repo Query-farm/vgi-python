@@ -382,9 +382,14 @@ def _resolve_jwt_authenticate() -> Callable[..., Any] | None:
     if not issuer:
         return None
 
-    audience = os.environ.get("VGI_JWT_AUDIENCE")
-    if not audience:
+    audience_raw = os.environ.get("VGI_JWT_AUDIENCE")
+    if not audience_raw:
         sys.stderr.write("Error: VGI_JWT_ISSUER is set but VGI_JWT_AUDIENCE is missing\n")
+        sys.exit(1)
+
+    audiences = tuple(s.strip() for s in audience_raw.split(",") if s.strip())
+    if not audiences:
+        sys.stderr.write("Error: VGI_JWT_AUDIENCE is set but contains no valid values\n")
         sys.exit(1)
 
     try:
@@ -397,7 +402,7 @@ def _resolve_jwt_authenticate() -> Callable[..., Any] | None:
         sys.exit(1)
 
     jwks_uri = os.environ.get("VGI_JWT_JWKS_URI")
-    return jwt_authenticate(issuer=issuer, audience=audience, jwks_uri=jwks_uri)
+    return jwt_authenticate(issuer=issuer, audience=audiences, jwks_uri=jwks_uri)
 
 
 def _resolve_oauth_resource_metadata() -> Any:

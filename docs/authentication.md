@@ -25,7 +25,7 @@ the principal in the `AuthContext` available to functions.
 |----------|-------------|
 | `VGI_BEARER_TOKENS` | Comma-separated `token=principal` pairs for static bearer auth |
 | `VGI_JWT_ISSUER` | JWT issuer URL (requires `vgi[oauth]` extra) |
-| `VGI_JWT_AUDIENCE` | JWT audience string (required when `VGI_JWT_ISSUER` is set) |
+| `VGI_JWT_AUDIENCE` | JWT audience string, comma-separated for multiple audiences (required when `VGI_JWT_ISSUER` is set) |
 | `VGI_JWT_JWKS_URI` | JWKS endpoint URL (auto-discovered from issuer if omitted) |
 | `VGI_OAUTH_RESOURCE` | OAuth resource URL for RFC 9728 metadata |
 | `VGI_OAUTH_AUTH_SERVERS` | Comma-separated authorization server URLs |

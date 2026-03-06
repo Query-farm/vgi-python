@@ -312,6 +312,41 @@ class TestResolveAuthenticate:
             result = _resolve_authenticate()
         assert result is not None
 
+    def test_jwt_comma_separated_audience(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Comma-separated VGI_JWT_AUDIENCE is parsed into a tuple."""
+        monkeypatch.setenv("VGI_JWT_ISSUER", "https://issuer.example.com")
+        monkeypatch.setenv("VGI_JWT_AUDIENCE", "aud1, aud2 , aud3")
+        monkeypatch.delenv("VGI_BEARER_TOKENS", raising=False)
+        from vgi.serve import _resolve_jwt_authenticate
+
+        with patch("vgi_rpc.http._oauth_jwt.jwt_authenticate") as mock_jwt:
+            mock_jwt.return_value = lambda req: AuthContext.anonymous()
+            _resolve_jwt_authenticate()
+            mock_jwt.assert_called_once()
+            assert mock_jwt.call_args.kwargs["audience"] == ("aud1", "aud2", "aud3")
+
+    def test_jwt_single_audience_becomes_tuple(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Single VGI_JWT_AUDIENCE value is still passed as a tuple."""
+        monkeypatch.setenv("VGI_JWT_ISSUER", "https://issuer.example.com")
+        monkeypatch.setenv("VGI_JWT_AUDIENCE", "my-api")
+        monkeypatch.delenv("VGI_BEARER_TOKENS", raising=False)
+        from vgi.serve import _resolve_jwt_authenticate
+
+        with patch("vgi_rpc.http._oauth_jwt.jwt_authenticate") as mock_jwt:
+            mock_jwt.return_value = lambda req: AuthContext.anonymous()
+            _resolve_jwt_authenticate()
+            assert mock_jwt.call_args.kwargs["audience"] == ("my-api",)
+
+    def test_jwt_empty_audience_after_split_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """VGI_JWT_AUDIENCE with only commas/whitespace causes SystemExit."""
+        monkeypatch.setenv("VGI_JWT_ISSUER", "https://issuer.example.com")
+        monkeypatch.setenv("VGI_JWT_AUDIENCE", " , , ")
+        monkeypatch.delenv("VGI_BEARER_TOKENS", raising=False)
+        from vgi.serve import _resolve_jwt_authenticate
+
+        with pytest.raises(SystemExit):
+            _resolve_jwt_authenticate()
+
 
 class TestResolveOAuthResourceMetadata:
     """Tests for _resolve_oauth_resource_metadata() env var parsing."""
