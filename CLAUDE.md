@@ -177,6 +177,8 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-example-
 | `VGI_OAUTH_AUTH_SERVERS` | Comma-separated authorization server URLs |
 | `VGI_OAUTH_CLIENT_ID` | Client ID for MCP compatibility (optional, URL-safe chars only) |
 | `VGI_OAUTH_CLIENT_SECRET` | Client secret for OAuth (optional, URL-safe chars only; for public/PKCE clients) |
+| `VGI_OAUTH_DEVICE_CODE_CLIENT_ID` | Client ID for device-code flow (optional, URL-safe chars only) |
+| `VGI_OAUTH_DEVICE_CODE_CLIENT_SECRET` | Client secret for device-code flow (optional, URL-safe chars only) |
 | `VGI_OAUTH_USE_ID_TOKEN` | When `1`/`true`/`yes`, clients use OIDC `id_token` as Bearer instead of `access_token` |
 
 ### Worker Debug Mode

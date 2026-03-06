@@ -31,6 +31,8 @@ with contextlib.suppress(ImportError):
         chain_authenticate,
         parse_client_id,
         parse_client_secret,
+        parse_device_code_client_id,
+        parse_device_code_client_secret,
     )
 
     __all__ += [
@@ -40,6 +42,8 @@ with contextlib.suppress(ImportError):
         "chain_authenticate",
         "parse_client_id",
         "parse_client_secret",
+        "parse_device_code_client_id",
+        "parse_device_code_client_secret",
     ]
 
 # JWT auth — available when vgi[oauth] is installed (requires authlib).

@@ -421,6 +421,71 @@ class TestResolveOAuthResourceMetadata:
         with pytest.raises(SystemExit):
             _resolve_oauth_resource_metadata()
 
+    def test_device_code_client_id_passed_through(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """VGI_OAUTH_DEVICE_CODE_CLIENT_ID is forwarded to OAuthResourceMetadata."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth.example.com")
+        monkeypatch.setenv("VGI_OAUTH_DEVICE_CODE_CLIENT_ID", "my-device-client-id")
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        result = _resolve_oauth_resource_metadata()
+        assert result is not None
+        assert result.device_code_client_id == "my-device-client-id"
+
+    def test_device_code_client_id_absent_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Omitting VGI_OAUTH_DEVICE_CODE_CLIENT_ID leaves device_code_client_id as None."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth.example.com")
+        monkeypatch.delenv("VGI_OAUTH_DEVICE_CODE_CLIENT_ID", raising=False)
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        result = _resolve_oauth_resource_metadata()
+        assert result is not None
+        assert result.device_code_client_id is None
+
+    def test_invalid_device_code_client_id_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Invalid device_code_client_id causes SystemExit with friendly message."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth.example.com")
+        monkeypatch.setenv("VGI_OAUTH_DEVICE_CODE_CLIENT_ID", 'bad "id')
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        with pytest.raises(SystemExit):
+            _resolve_oauth_resource_metadata()
+
+    def test_device_code_client_secret_passed_through(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """VGI_OAUTH_DEVICE_CODE_CLIENT_SECRET is forwarded to OAuthResourceMetadata."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth.example.com")
+        monkeypatch.setenv("VGI_OAUTH_DEVICE_CODE_CLIENT_SECRET", "my-device-secret")
+        monkeypatch.delenv("VGI_OAUTH_DEVICE_CODE_CLIENT_ID", raising=False)
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        result = _resolve_oauth_resource_metadata()
+        assert result is not None
+        assert result.device_code_client_secret == "my-device-secret"
+
+    def test_device_code_client_secret_absent_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Omitting VGI_OAUTH_DEVICE_CODE_CLIENT_SECRET leaves device_code_client_secret as None."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth.example.com")
+        monkeypatch.delenv("VGI_OAUTH_DEVICE_CODE_CLIENT_SECRET", raising=False)
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        result = _resolve_oauth_resource_metadata()
+        assert result is not None
+        assert result.device_code_client_secret is None
+
+    def test_invalid_device_code_client_secret_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Invalid device_code_client_secret causes SystemExit."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth.example.com")
+        monkeypatch.setenv("VGI_OAUTH_DEVICE_CODE_CLIENT_SECRET", 'bad "secret')
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        with pytest.raises(SystemExit):
+            _resolve_oauth_resource_metadata()
+
     def test_use_id_token_as_bearer_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """VGI_OAUTH_USE_ID_TOKEN=1 sets use_id_token_as_bearer."""
         monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
