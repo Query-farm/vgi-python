@@ -388,6 +388,39 @@ class TestResolveOAuthResourceMetadata:
         with pytest.raises(SystemExit):
             _resolve_oauth_resource_metadata()
 
+    def test_client_secret_passed_through(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """VGI_OAUTH_CLIENT_SECRET is forwarded to OAuthResourceMetadata."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth.example.com")
+        monkeypatch.setenv("VGI_OAUTH_CLIENT_SECRET", "my-client-secret")
+        monkeypatch.delenv("VGI_OAUTH_CLIENT_ID", raising=False)
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        result = _resolve_oauth_resource_metadata()
+        assert result is not None
+        assert result.client_secret == "my-client-secret"
+
+    def test_client_secret_absent_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Omitting VGI_OAUTH_CLIENT_SECRET leaves client_secret as None."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth.example.com")
+        monkeypatch.delenv("VGI_OAUTH_CLIENT_SECRET", raising=False)
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        result = _resolve_oauth_resource_metadata()
+        assert result is not None
+        assert result.client_secret is None
+
+    def test_invalid_client_secret_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Invalid client_secret causes SystemExit."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth.example.com")
+        monkeypatch.setenv("VGI_OAUTH_CLIENT_SECRET", 'bad "secret')
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        with pytest.raises(SystemExit):
+            _resolve_oauth_resource_metadata()
+
 
 # ---------------------------------------------------------------------------
 # Import tests

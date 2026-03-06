@@ -438,6 +438,7 @@ def _resolve_oauth_resource_metadata() -> Any:
     scopes = tuple(s.strip() for s in scopes_raw.split(",") if s.strip()) if scopes_raw else ()
     resource_name = os.environ.get("VGI_OAUTH_RESOURCE_NAME")
     client_id = os.environ.get("VGI_OAUTH_CLIENT_ID")
+    client_secret = os.environ.get("VGI_OAUTH_CLIENT_SECRET")
 
     try:
         return OAuthResourceMetadata(
@@ -446,9 +447,10 @@ def _resolve_oauth_resource_metadata() -> Any:
             scopes_supported=scopes,
             resource_name=resource_name,
             client_id=client_id,
+            client_secret=client_secret,
         )
     except ValueError as exc:
-        sys.stderr.write(f"Error: invalid VGI_OAUTH_CLIENT_ID: {exc}\n")
+        sys.stderr.write(f"Error: invalid OAuth config: {exc}\n")
         sys.exit(1)
 
 
