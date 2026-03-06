@@ -410,6 +410,8 @@ def _resolve_oauth_resource_metadata() -> Any:
     - ``VGI_OAUTH_SCOPES``: comma-separated supported scopes (optional).
     - ``VGI_OAUTH_RESOURCE_NAME``: human-readable name (optional).
     - ``VGI_OAUTH_CLIENT_ID``: client ID for MCP compatibility (optional, URL-safe chars only).
+    - ``VGI_OAUTH_USE_ID_TOKEN``: when set to ``1``/``true``/``yes``, tells clients
+      to use the OIDC ``id_token`` as Bearer instead of the ``access_token``.
 
     Returns:
         OAuthResourceMetadata instance, or None if not configured.
@@ -439,6 +441,7 @@ def _resolve_oauth_resource_metadata() -> Any:
     resource_name = os.environ.get("VGI_OAUTH_RESOURCE_NAME")
     client_id = os.environ.get("VGI_OAUTH_CLIENT_ID")
     client_secret = os.environ.get("VGI_OAUTH_CLIENT_SECRET")
+    use_id_token = os.environ.get("VGI_OAUTH_USE_ID_TOKEN", "").lower() in ("1", "true", "yes")
 
     try:
         return OAuthResourceMetadata(
@@ -448,6 +451,7 @@ def _resolve_oauth_resource_metadata() -> Any:
             resource_name=resource_name,
             client_id=client_id,
             client_secret=client_secret,
+            use_id_token_as_bearer=use_id_token,
         )
     except ValueError as exc:
         sys.stderr.write(f"Error: invalid OAuth config: {exc}\n")

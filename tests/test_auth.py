@@ -421,6 +421,28 @@ class TestResolveOAuthResourceMetadata:
         with pytest.raises(SystemExit):
             _resolve_oauth_resource_metadata()
 
+    def test_use_id_token_as_bearer_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """VGI_OAUTH_USE_ID_TOKEN=1 sets use_id_token_as_bearer."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth.example.com")
+        monkeypatch.setenv("VGI_OAUTH_USE_ID_TOKEN", "1")
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        result = _resolve_oauth_resource_metadata()
+        assert result is not None
+        assert result.use_id_token_as_bearer is True
+
+    def test_use_id_token_as_bearer_false_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Omitting VGI_OAUTH_USE_ID_TOKEN leaves use_id_token_as_bearer as False."""
+        monkeypatch.setenv("VGI_OAUTH_RESOURCE", "https://api.example.com")
+        monkeypatch.setenv("VGI_OAUTH_AUTH_SERVERS", "https://auth.example.com")
+        monkeypatch.delenv("VGI_OAUTH_USE_ID_TOKEN", raising=False)
+        from vgi.serve import _resolve_oauth_resource_metadata
+
+        result = _resolve_oauth_resource_metadata()
+        assert result is not None
+        assert result.use_id_token_as_bearer is False
+
 
 # ---------------------------------------------------------------------------
 # Import tests

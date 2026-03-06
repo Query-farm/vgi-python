@@ -32,6 +32,8 @@ the principal in the `AuthContext` available to functions.
 | `VGI_OAUTH_SCOPES` | Comma-separated supported scopes (optional) |
 | `VGI_OAUTH_RESOURCE_NAME` | Human-readable resource name (optional) |
 | `VGI_OAUTH_CLIENT_ID` | Client ID for MCP compatibility (optional, URL-safe chars only) |
+| `VGI_OAUTH_CLIENT_SECRET` | Client secret for OAuth (optional, URL-safe chars only) |
+| `VGI_OAUTH_USE_ID_TOKEN` | When `1`/`true`/`yes`, clients use OIDC `id_token` as Bearer instead of `access_token` |
 
 When both `VGI_BEARER_TOKENS` and `VGI_JWT_ISSUER` are set, they are
 chained — JWT validation is attempted first, falling back to bearer token
@@ -57,6 +59,7 @@ app = create_app(
         resource="https://api.example.com",
         authorization_servers=("https://auth.example.com",),
         client_id="my-client-id",
+        use_id_token_as_bearer=True,  # use OIDC id_token as Bearer
     ),
 )
 ```
