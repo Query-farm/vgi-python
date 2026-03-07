@@ -180,6 +180,11 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-example-
 | `VGI_OAUTH_DEVICE_CODE_CLIENT_ID` | Client ID for device-code flow (optional, URL-safe chars only) |
 | `VGI_OAUTH_DEVICE_CODE_CLIENT_SECRET` | Client secret for device-code flow (optional, URL-safe chars only) |
 | `VGI_OAUTH_USE_ID_TOKEN` | When `1`/`true`/`yes`, clients use OIDC `id_token` as Bearer instead of `access_token` |
+| `VGI_OTEL_ENABLED` | Enable OpenTelemetry instrumentation (`1`/`true`/`yes`) |
+| `VGI_OTEL_CUSTOM_ATTRIBUTES` | Comma-separated `key=value` pairs for custom span/metric attributes |
+| `VGI_OTEL_CLAIM_ATTRIBUTES` | Comma-separated `claim_key=span_attr_name` pairs for claim extraction |
+| `VGI_OTEL_DISABLE_TRACING` | Disable tracing only (`1`/`true`/`yes`) |
+| `VGI_OTEL_DISABLE_METRICS` | Disable metrics only (`1`/`true`/`yes`) |
 
 ### Worker Debug Mode
 

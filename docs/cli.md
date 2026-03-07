@@ -550,6 +550,45 @@ vgi-example-worker --log-format json
 | `VGI_OAUTH_RESOURCE` | OAuth resource URL for RFC 9728 metadata |
 | `VGI_OAUTH_AUTH_SERVERS` | Comma-separated authorization server URLs |
 | `VGI_OAUTH_CLIENT_ID` | Client ID for MCP compatibility (optional, URL-safe chars only) |
+| `VGI_OTEL_ENABLED` | Enable OpenTelemetry instrumentation (`1`/`true`/`yes`) |
+| `VGI_OTEL_CUSTOM_ATTRIBUTES` | Comma-separated `key=value` pairs for custom span/metric attributes |
+| `VGI_OTEL_CLAIM_ATTRIBUTES` | Comma-separated `claim_key=span_attr_name` pairs for claim extraction |
+| `VGI_OTEL_DISABLE_TRACING` | Disable tracing only (`1`/`true`/`yes`) |
+| `VGI_OTEL_DISABLE_METRICS` | Disable metrics only (`1`/`true`/`yes`) |
+
+> **Note:** Service name, exporters, and endpoints are configured via standard `OTEL_*` SDK
+> env vars (e.g. `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`).
+
+**OTEL usage examples:**
+
+```bash
+# Enable OTEL with standard SDK configuration
+VGI_OTEL_ENABLED=1 \
+OTEL_SERVICE_NAME=my-vgi-worker \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+    vgi-serve my_worker.py --http
+
+# With custom attributes and claim extraction
+VGI_OTEL_ENABLED=1 \
+VGI_OTEL_CUSTOM_ATTRIBUTES="deployment=prod,region=us-east-1" \
+VGI_OTEL_CLAIM_ATTRIBUTES="tenant_id=rpc.vgi_rpc.auth.claim.tenant_id" \
+    vgi-serve my_worker.py --http
+```
+
+Programmatic usage:
+
+```python test="skip"
+from vgi_rpc.otel import OtelConfig
+from vgi.serve import create_app, load_worker_class
+
+app = create_app(
+    load_worker_class("my_worker:MyWorker"),
+    otel_config=OtelConfig(
+        custom_attributes={"deployment": "prod"},
+        claim_attributes={"tenant_id": "rpc.vgi_rpc.auth.claim.tenant_id"},
+    ),
+)
+```
 
 ---
 

@@ -13,7 +13,13 @@ import pyarrow as pa
 import pytest
 
 from vgi.scalar_function import ScalarFunction
-from vgi.serve import _resolve_describe, _resolve_signing_key, create_app, load_worker_class
+from vgi.serve import (
+    _resolve_describe,
+    _resolve_otel_config,
+    _resolve_signing_key,
+    create_app,
+    load_worker_class,
+)
 from vgi.worker import Worker
 
 # ---------------------------------------------------------------------------
@@ -255,6 +261,134 @@ class TestResolveDescribe:
         for val in ("0", "false", "no", "False", "NO"):
             monkeypatch.setenv("VGI_ENABLE_DESCRIBE", val)
             assert _resolve_describe(True) is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: _resolve_otel_config
+# ---------------------------------------------------------------------------
+
+
+class TestResolveOtelConfig:
+    """Tests for _resolve_otel_config()."""
+
+    def test_unset_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No env var returns None."""
+        monkeypatch.delenv("VGI_OTEL_ENABLED", raising=False)
+        assert _resolve_otel_config() is None
+
+    def test_falsy_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Falsy values return None."""
+        for val in ("0", "false", "no", ""):
+            monkeypatch.setenv("VGI_OTEL_ENABLED", val)
+            assert _resolve_otel_config() is None
+
+    def test_enabled_returns_otel_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Truthy value returns OtelConfig with defaults."""
+        from vgi_rpc.otel import OtelConfig
+
+        monkeypatch.setenv("VGI_OTEL_ENABLED", "1")
+        monkeypatch.delenv("VGI_OTEL_CUSTOM_ATTRIBUTES", raising=False)
+        monkeypatch.delenv("VGI_OTEL_CLAIM_ATTRIBUTES", raising=False)
+        monkeypatch.delenv("VGI_OTEL_DISABLE_TRACING", raising=False)
+        monkeypatch.delenv("VGI_OTEL_DISABLE_METRICS", raising=False)
+        result = _resolve_otel_config()
+        assert isinstance(result, OtelConfig)
+        assert result.enable_tracing is True
+        assert result.enable_metrics is True
+        assert dict(result.custom_attributes) == {}
+        assert dict(result.claim_attributes) == {}
+
+    def test_custom_attributes_parsed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Custom attributes are parsed from comma-separated key=value pairs."""
+        monkeypatch.setenv("VGI_OTEL_ENABLED", "1")
+        monkeypatch.setenv("VGI_OTEL_CUSTOM_ATTRIBUTES", "deployment=prod,region=us-east-1")
+        monkeypatch.delenv("VGI_OTEL_CLAIM_ATTRIBUTES", raising=False)
+        monkeypatch.delenv("VGI_OTEL_DISABLE_TRACING", raising=False)
+        monkeypatch.delenv("VGI_OTEL_DISABLE_METRICS", raising=False)
+        result = _resolve_otel_config()
+        assert dict(result.custom_attributes) == {"deployment": "prod", "region": "us-east-1"}
+
+    def test_custom_attributes_malformed_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Malformed custom attributes (missing =) exit with error."""
+        monkeypatch.setenv("VGI_OTEL_ENABLED", "1")
+        monkeypatch.setenv("VGI_OTEL_CUSTOM_ATTRIBUTES", "bad_entry")
+        with pytest.raises(SystemExit):
+            _resolve_otel_config()
+
+    def test_claim_attributes_parsed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Claim attributes are parsed from comma-separated pairs."""
+        monkeypatch.setenv("VGI_OTEL_ENABLED", "1")
+        monkeypatch.setenv("VGI_OTEL_CLAIM_ATTRIBUTES", "tenant_id=rpc.vgi_rpc.auth.claim.tenant_id")
+        monkeypatch.delenv("VGI_OTEL_CUSTOM_ATTRIBUTES", raising=False)
+        monkeypatch.delenv("VGI_OTEL_DISABLE_TRACING", raising=False)
+        monkeypatch.delenv("VGI_OTEL_DISABLE_METRICS", raising=False)
+        result = _resolve_otel_config()
+        assert dict(result.claim_attributes) == {"tenant_id": "rpc.vgi_rpc.auth.claim.tenant_id"}
+
+    def test_claim_attributes_malformed_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Malformed claim attributes (missing =) exit with error."""
+        monkeypatch.setenv("VGI_OTEL_ENABLED", "1")
+        monkeypatch.setenv("VGI_OTEL_CLAIM_ATTRIBUTES", "no_equals_sign")
+        with pytest.raises(SystemExit):
+            _resolve_otel_config()
+
+    def test_disable_tracing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """VGI_OTEL_DISABLE_TRACING disables tracing."""
+        monkeypatch.setenv("VGI_OTEL_ENABLED", "1")
+        monkeypatch.setenv("VGI_OTEL_DISABLE_TRACING", "1")
+        monkeypatch.delenv("VGI_OTEL_CUSTOM_ATTRIBUTES", raising=False)
+        monkeypatch.delenv("VGI_OTEL_CLAIM_ATTRIBUTES", raising=False)
+        monkeypatch.delenv("VGI_OTEL_DISABLE_METRICS", raising=False)
+        result = _resolve_otel_config()
+        assert result.enable_tracing is False
+        assert result.enable_metrics is True
+
+    def test_disable_metrics(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """VGI_OTEL_DISABLE_METRICS disables metrics."""
+        monkeypatch.setenv("VGI_OTEL_ENABLED", "1")
+        monkeypatch.setenv("VGI_OTEL_DISABLE_METRICS", "yes")
+        monkeypatch.delenv("VGI_OTEL_CUSTOM_ATTRIBUTES", raising=False)
+        monkeypatch.delenv("VGI_OTEL_CLAIM_ATTRIBUTES", raising=False)
+        monkeypatch.delenv("VGI_OTEL_DISABLE_TRACING", raising=False)
+        result = _resolve_otel_config()
+        assert result.enable_tracing is True
+        assert result.enable_metrics is False
+
+    def test_empty_attributes_returns_empty_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Empty string for attributes results in empty dict."""
+        monkeypatch.setenv("VGI_OTEL_ENABLED", "1")
+        monkeypatch.setenv("VGI_OTEL_CUSTOM_ATTRIBUTES", "")
+        monkeypatch.setenv("VGI_OTEL_CLAIM_ATTRIBUTES", "")
+        monkeypatch.delenv("VGI_OTEL_DISABLE_TRACING", raising=False)
+        monkeypatch.delenv("VGI_OTEL_DISABLE_METRICS", raising=False)
+        result = _resolve_otel_config()
+        assert dict(result.custom_attributes) == {}
+        assert dict(result.claim_attributes) == {}
+
+    def test_import_error_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Missing otel extra exits with helpful message."""
+        from unittest.mock import patch
+
+        monkeypatch.setenv("VGI_OTEL_ENABLED", "1")
+        # Remove cached module so the import in _resolve_otel_config actually fires
+        monkeypatch.delitem(sys.modules, "vgi_rpc.otel", raising=False)
+        with patch.dict("sys.modules", {"vgi_rpc.otel": None}), pytest.raises(SystemExit):
+            _resolve_otel_config()
+
+
+class TestCreateAppOtel:
+    """Tests for create_app() with otel_config."""
+
+    def test_otel_config_accepted(self) -> None:
+        """create_app accepts otel_config parameter."""
+        import falcon
+        from vgi_rpc.otel import OtelConfig
+
+        app = create_app(
+            _SingleWorker,
+            otel_config=OtelConfig(custom_attributes={"env": "test"}),
+        )
+        assert isinstance(app, falcon.App)
 
 
 # ---------------------------------------------------------------------------

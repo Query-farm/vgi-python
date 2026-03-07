@@ -36,6 +36,7 @@ from vgi.logging_config import LogFormat, LogLevel
 
 if TYPE_CHECKING:
     import falcon
+    from vgi_rpc.otel import OtelConfig
     from vgi_rpc.rpc import AuthContext
 
     from vgi.worker import Worker
@@ -160,6 +161,7 @@ def create_app(
     log_level: int = logging.INFO,
     authenticate: Callable[[falcon.Request], AuthContext] | None = None,
     oauth_resource_metadata: Any = None,
+    otel_config: OtelConfig | None = None,
 ) -> falcon.App[Any, Any]:
     """Create a WSGI app for a VGI worker.
 
@@ -181,6 +183,8 @@ def create_app(
             anonymous.
         oauth_resource_metadata: Optional OAuthResourceMetadata for
             RFC 9728 discovery endpoint.
+        otel_config: Optional OpenTelemetry configuration.  When provided,
+            instruments the RPC server with tracing and/or metrics.
 
     Returns:
         A Falcon WSGI application.
@@ -207,6 +211,7 @@ def create_app(
         signing_key=signing_key,
         authenticate=authenticate,
         oauth_resource_metadata=oauth_resource_metadata,
+        otel_config=otel_config,
     )
 
     if describe:
@@ -271,6 +276,7 @@ def main() -> None:
         if http:
             authenticate = _resolve_authenticate()
             oauth_metadata = _resolve_oauth_resource_metadata()
+            otel_config = _resolve_otel_config()
             _serve_http(
                 worker_cls,
                 effective_level=effective_level,
@@ -282,6 +288,7 @@ def main() -> None:
                 signing_key=signing_key,
                 authenticate=authenticate,
                 oauth_resource_metadata=oauth_metadata,
+                otel_config=otel_config,
             )
         else:
             worker_cls(quiet=quiet, log_level=effective_level).run()
@@ -469,6 +476,77 @@ def _resolve_oauth_resource_metadata() -> Any:
         sys.exit(1)
 
 
+def _resolve_otel_config() -> Any:
+    """Build an ``OtelConfig`` from environment variables.
+
+    Supported env vars:
+
+    - ``VGI_OTEL_ENABLED``: enable OTEL (``1``/``true``/``yes``).
+    - ``VGI_OTEL_CUSTOM_ATTRIBUTES``: comma-separated ``key=value`` pairs.
+    - ``VGI_OTEL_CLAIM_ATTRIBUTES``: comma-separated ``claim_key=span_attr_name`` pairs.
+    - ``VGI_OTEL_DISABLE_TRACING``: disable tracing only (``1``/``true``/``yes``).
+    - ``VGI_OTEL_DISABLE_METRICS``: disable metrics only (``1``/``true``/``yes``).
+
+    Returns:
+        OtelConfig instance, or None if not enabled.
+
+    """
+    enabled = os.environ.get("VGI_OTEL_ENABLED", "").lower() in ("1", "true", "yes")
+    if not enabled:
+        return None
+
+    try:
+        from vgi_rpc.otel import OtelConfig
+    except ImportError:
+        sys.stderr.write(
+            "Error: OTEL support requires the otel extra.\n"
+            "Install with: pip install vgi[otel]  (or: uv sync --extra otel)\n"
+        )
+        sys.exit(1)
+
+    custom_attributes: dict[str, str] = {}
+    raw_custom = os.environ.get("VGI_OTEL_CUSTOM_ATTRIBUTES", "")
+    if raw_custom:
+        for entry in raw_custom.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            if "=" not in entry:
+                sys.stderr.write(
+                    f"Error: malformed VGI_OTEL_CUSTOM_ATTRIBUTES entry: {entry!r}\n"
+                    "Expected format: key=value (e.g. 'deployment=prod')\n"
+                )
+                sys.exit(1)
+            key, value = entry.split("=", 1)
+            custom_attributes[key.strip()] = value.strip()
+
+    claim_attributes: dict[str, str] = {}
+    raw_claims = os.environ.get("VGI_OTEL_CLAIM_ATTRIBUTES", "")
+    if raw_claims:
+        for entry in raw_claims.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            if "=" not in entry:
+                sys.stderr.write(
+                    f"Error: malformed VGI_OTEL_CLAIM_ATTRIBUTES entry: {entry!r}\n"
+                    "Expected format: claim_key=span_attr_name (e.g. 'tenant_id=rpc.vgi_rpc.auth.claim.tenant_id')\n"
+                )
+                sys.exit(1)
+            key, value = entry.split("=", 1)
+            claim_attributes[key.strip()] = value.strip()
+
+    disable_tracing = os.environ.get("VGI_OTEL_DISABLE_TRACING", "").lower() in ("1", "true", "yes")
+    disable_metrics = os.environ.get("VGI_OTEL_DISABLE_METRICS", "").lower() in ("1", "true", "yes")
+
+    return OtelConfig(
+        enable_tracing=not disable_tracing,
+        enable_metrics=not disable_metrics,
+        custom_attributes=custom_attributes,
+        claim_attributes=claim_attributes,
+    )
+
+
 def _serve_http(
     worker_cls: type[Worker],
     *,
@@ -481,6 +559,7 @@ def _serve_http(
     signing_key: bytes | None,
     authenticate: Callable[..., Any] | None = None,
     oauth_resource_metadata: Any = None,
+    otel_config: Any = None,
 ) -> None:
     """Start the worker as an HTTP server."""
     import socket
@@ -512,6 +591,7 @@ def _serve_http(
         log_level=effective_level,
         authenticate=authenticate,
         oauth_resource_metadata=oauth_resource_metadata,
+        otel_config=otel_config,
     )
 
     # Machine-readable port for process managers and test harnesses
