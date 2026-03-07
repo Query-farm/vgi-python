@@ -446,10 +446,15 @@ class Worker:
             )
 
             if http:
-                from vgi.serve import _resolve_authenticate, _resolve_oauth_resource_metadata
+                from vgi.serve import (
+                    _resolve_authenticate,
+                    _resolve_oauth_resource_metadata,
+                    _resolve_otel_config,
+                )
 
                 authenticate = _resolve_authenticate()
                 oauth_metadata = _resolve_oauth_resource_metadata()
+                otel_config = _resolve_otel_config()
                 cls._run_http(
                     effective_level=effective_level,
                     host=host,
@@ -459,6 +464,7 @@ class Worker:
                     describe=describe,
                     authenticate=authenticate,
                     oauth_resource_metadata=oauth_metadata,
+                    otel_config=otel_config,
                 )
             else:
                 cls(quiet=quiet, log_level=effective_level).run()
@@ -510,10 +516,15 @@ class Worker:
                 log_format=log_format,
             )
 
-            from vgi.serve import _resolve_authenticate, _resolve_oauth_resource_metadata
+            from vgi.serve import (
+                _resolve_authenticate,
+                _resolve_oauth_resource_metadata,
+                _resolve_otel_config,
+            )
 
             authenticate = _resolve_authenticate()
             oauth_metadata = _resolve_oauth_resource_metadata()
+            otel_config = _resolve_otel_config()
             cls._run_http(
                 effective_level=effective_level,
                 host=host,
@@ -523,6 +534,7 @@ class Worker:
                 describe=describe,
                 authenticate=authenticate,
                 oauth_resource_metadata=oauth_metadata,
+                otel_config=otel_config,
             )
 
         app()
@@ -539,6 +551,7 @@ class Worker:
         describe: bool,
         authenticate: Any = None,
         oauth_resource_metadata: Any = None,
+        otel_config: Any = None,
     ) -> None:
         """Start the worker as an HTTP server (shared by ``main`` and ``main_http``)."""
         import socket
@@ -570,6 +583,7 @@ class Worker:
             log_level=effective_level,
             authenticate=authenticate,
             oauth_resource_metadata=oauth_resource_metadata,
+            otel_config=otel_config,
         )
 
         # Machine-readable port for process managers and test harnesses
