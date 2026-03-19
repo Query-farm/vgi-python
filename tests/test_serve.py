@@ -448,7 +448,7 @@ class TestCLI:
             # Hit the worker description page
             import urllib.request
 
-            url = f"http://127.0.0.1:{port}/vgi/worker"
+            url = f"http://127.0.0.1:{port}/worker"
             with urllib.request.urlopen(url, timeout=5) as resp:
                 body = resp.read()
                 assert resp.status == 200
@@ -545,7 +545,7 @@ class TestCLI:
             time.sleep(0.5)
 
             # Worker page should not be served (404 or 405, not 200)
-            url = f"http://127.0.0.1:{port}/vgi/worker"
+            url = f"http://127.0.0.1:{port}/worker"
             with pytest.raises(urllib.error.HTTPError) as exc_info:
                 urllib.request.urlopen(url, timeout=5)
             assert exc_info.value.code in (404, 405)

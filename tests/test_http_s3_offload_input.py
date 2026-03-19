@@ -45,8 +45,6 @@ def _run_example_http_server(*, port: int, bucket: str, threshold_bytes: int) ->
         "127.0.0.1",
         "--port",
         str(port),
-        "--prefix",
-        "/vgi",
         "--externalize-threshold-bytes",
         str(threshold_bytes),
         "--max-upload-bytes",
@@ -87,7 +85,7 @@ def _wait_for_http_server(base_url: str) -> None:
     deadline = time.time() + 30
     while time.time() < deadline:
         try:
-            http_capabilities(base_url=base_url, prefix="/vgi")
+            http_capabilities(base_url=base_url)
             return
         except Exception:
             time.sleep(0.25)
@@ -132,11 +130,11 @@ def test_http_input_upload_url_then_external_location_scalar_exchange(compressio
     with _run_example_http_server(port=port, bucket=bucket, threshold_bytes=threshold_bytes):
         _wait_for_http_server(base_url)
 
-        caps = http_capabilities(base_url=base_url, prefix="/vgi")
+        caps = http_capabilities(base_url=base_url)
         assert caps.upload_url_support
         assert caps.max_upload_bytes == threshold_bytes
 
-        urls = request_upload_urls(base_url=base_url, prefix="/vgi", count=1)
+        urls = request_upload_urls(base_url=base_url, count=1)
         assert len(urls) == 1
         upload = urls[0]
 
@@ -156,7 +154,6 @@ def test_http_input_upload_url_then_external_location_scalar_exchange(compressio
         with http_connect(
             VgiProtocol,  # type: ignore[type-abstract]
             base_url=base_url,
-            prefix="/vgi",
             external_location=ExternalLocationConfig(),
         ) as proxy:
             bind_request = BindRequest(

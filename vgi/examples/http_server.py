@@ -119,7 +119,7 @@ def main() -> None:
     def _run(
         host: str = typer.Option("127.0.0.1", "--host", "-h", help="Bind address"),
         port: int = typer.Option(0, "--port", "-p", help="Bind port (0 = auto-select)"),
-        prefix: str = typer.Option("/vgi", "--prefix", help="URL prefix for RPC endpoints"),
+        prefix: str = typer.Option("", "--prefix", help="URL prefix for RPC endpoints"),
         cors_origins: str = typer.Option("*", "--cors-origins", help="Allowed CORS origins"),
         describe: bool = typer.Option(  # noqa: B008
             True, "--describe/--no-describe", help="Enable description pages (worker + RPC API)"

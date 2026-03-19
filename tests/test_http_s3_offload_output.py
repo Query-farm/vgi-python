@@ -51,8 +51,6 @@ def _run_example_http_server(
         "127.0.0.1",
         "--port",
         str(port),
-        "--prefix",
-        "/vgi",
         "--externalize-threshold-bytes",
         str(threshold_bytes),
         "--max-upload-bytes",
@@ -95,7 +93,7 @@ def _wait_for_http_server(base_url: str) -> None:
     deadline = time.time() + 30
     while time.time() < deadline:
         try:
-            http_capabilities(base_url=base_url, prefix="/vgi")
+            http_capabilities(base_url=base_url)
             return
         except Exception:
             time.sleep(0.25)
@@ -141,14 +139,13 @@ def test_http_output_offload_random_bytes_large_response(compression: str, expec
     ):
         _wait_for_http_server(base_url)
 
-        caps = http_capabilities(base_url=base_url, prefix="/vgi")
+        caps = http_capabilities(base_url=base_url)
         assert caps.upload_url_support
         assert caps.max_upload_bytes == threshold_bytes
 
         with http_connect(
             VgiProtocol,  # type: ignore[type-abstract]
             base_url=base_url,
-            prefix="/vgi",
             external_location=ExternalLocationConfig(),
         ) as proxy:
             input_schema = pa.schema([("dummy", pa.int64())])

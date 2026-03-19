@@ -255,7 +255,7 @@ def build_worker_page(worker_cls: type[Worker], prefix: str) -> bytes:
 
     Args:
         worker_cls: The Worker subclass to describe.
-        prefix: URL prefix (e.g. ``/vgi``).
+        prefix: URL prefix (e.g. ``/api``).
 
     Returns:
         UTF-8 encoded HTML bytes.

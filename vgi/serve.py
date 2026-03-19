@@ -154,7 +154,7 @@ def _load_module(module_ref: str) -> ModuleType:
 def create_app(
     worker_cls: type[Worker],
     *,
-    prefix: str = "/vgi",
+    prefix: str = "",
     cors_origins: str = "*",
     describe: bool = True,
     signing_key: bytes | None = None,
@@ -254,7 +254,7 @@ def main() -> None:
         # HTTP-only options
         host: str = typer.Option("0.0.0.0", "--host", help="HTTP bind address"),
         port: int | None = typer.Option(None, "--port", "-p", help="HTTP port (default: $PORT or 8080)"),  # noqa: B008
-        prefix: str = typer.Option("/vgi", "--prefix", help="URL prefix for RPC endpoints"),
+        prefix: str = typer.Option("", "--prefix", help="URL prefix for RPC endpoints"),
         cors_origins: str = typer.Option("*", "--cors-origins", help="Allowed CORS origins"),
         describe: bool = typer.Option(  # noqa: B008
             True, "--describe/--no-describe", help="Enable description pages (worker + RPC API)"
