@@ -919,6 +919,8 @@ class VgiProtocol(Protocol):
         attach_id: bytes,
         schema_name: str,
         name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
         transaction_id: bytes | None = None,
     ) -> TablesResponse:
         """Get information about a table. Returns 0 or 1 items."""

@@ -103,6 +103,8 @@ class MinimalCatalog(CatalogInterface):
         transaction_id: TransactionId | None,
         schema_name: str,
         name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
     ) -> TableInfo | None:
         """Get table info."""
         return None
@@ -345,6 +347,8 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
         transaction_id: TransactionId | None,
         schema_name: str,
         name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
     ) -> TableInfo | None:
         """Get table info."""
         return None

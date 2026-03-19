@@ -278,6 +278,23 @@ class Worker:
             f"subclass to provide scan functions for tables with explicit columns."
         )
 
+    def table_get(
+        self,
+        *,
+        attach_id: Any,
+        transaction_id: Any,
+        schema_name: str,
+        name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
+    ) -> Any:
+        """Override to return version-specific table schemas for time travel.
+
+        This is called by ``catalog_table_get`` when an AT clause is present.
+        The default delegates to the catalog interface's ``table_get``.
+        """
+        raise NotImplementedError
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Process Settings inner class when subclassing Worker."""
         super().__init_subclass__(**kwargs)
@@ -381,6 +398,11 @@ class Worker:
                 and cls.table_scan_function_get is not Worker.table_scan_function_get
             ):
                 attrs["table_scan_function_get"] = cls.table_scan_function_get
+
+            # Copy table_get from Worker if overridden
+            # This allows Worker subclasses to return version-specific schemas
+            if hasattr(cls, "table_get") and cls.table_get is not Worker.table_get:
+                attrs["table_get"] = cls.table_get
 
             cls._default_catalog_interface = cast(
                 type[CatalogInterface],
@@ -1402,9 +1424,13 @@ class Worker:
         attach_id: bytes,
         schema_name: str,
         name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
         transaction_id: bytes | None = None,
     ) -> TablesResponse:
         """Get information about a table. Returns 0 or 1 items."""
+        if bool(at_unit) != bool(at_value):
+            raise ValueError("at_unit and at_value must both be provided or both be None")
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         info = cat.table_get(
@@ -1412,6 +1438,8 @@ class Worker:
             transaction_id=TransactionId(transaction_id) if transaction_id else None,
             schema_name=schema_name,
             name=name,
+            at_unit=at_unit,
+            at_value=at_value,
         )
         return TablesResponse.from_optional(info)
 
@@ -1460,6 +1488,8 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> bytes:
         """Get the scan function for a table. Returns ScanFunctionResult as IPC bytes."""
+        if bool(at_unit) != bool(at_value):
+            raise ValueError("at_unit and at_value must both be provided or both be None")
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_scan_function_get(

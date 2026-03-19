@@ -20,7 +20,7 @@ Usage:
     vgi-example-worker
 """
 
-from typing import Annotated, Any
+from typing import Annotated
 
 import pyarrow as pa
 
@@ -33,8 +33,10 @@ from vgi.catalog import (
     ScanFunctionResult,
     Schema,
     SecretTypeSpec,
+    SerializedSchema,
     Setting,
     Table,
+    TableInfo,
     TransactionId,
     View,
 )
@@ -79,6 +81,7 @@ from vgi.examples.scalar import (
     WhoAmIFunction,
 )
 from vgi.examples.table import (
+    _VERSIONED_SCHEMAS,
     ConstantColumnsFunction,
     DoubleSequenceFunction,
     FilterEchoFunction,
@@ -105,6 +108,8 @@ from vgi.examples.table import (
     SettingsAwareFunction,
     StructSettingsFunction,
     TenThousandFunction,
+    VersionedDataFunction,
+    resolve_version,
 )
 from vgi.examples.table_in_out import (
     BufferInputFunction,
@@ -205,6 +210,7 @@ class ExampleWorker(Worker):
                     SettingsAwareFunction,
                     StructSettingsFunction,
                     TenThousandFunction,
+                    VersionedDataFunction,
                     # ScalarFunctionGenerator - transform to single-column output
                     AddValuesFunction,
                     BernoulliFunction,
@@ -296,6 +302,18 @@ class ExampleWorker(Worker):
                         arguments=Arguments(positional=(pa.scalar(1_000_000),)),
                         comment="A large sequence of integers from 0 to 1,000,000",
                     ),
+                    # Time-travel table: version-specific schema
+                    Table(
+                        name="versioned_data",
+                        columns=pa.schema(
+                            [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+                                pa.field("id", pa.int64()),
+                                pa.field("score", pa.float64()),
+                            ]
+                        ),
+                        supports_time_travel=True,
+                        comment="Versioned data table demonstrating time travel with schema evolution",
+                    ),
                     # Explicit columns table: requires table_scan_function_get
                     Table(
                         name="numbers",
@@ -373,6 +391,45 @@ class ExampleWorker(Worker):
         ],
     )
 
+    def table_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
+    ) -> TableInfo | None:
+        """Return version-specific schema for time-travel tables."""
+        if bool(at_unit) != bool(at_value):
+            raise ValueError("at_unit and at_value must both be provided or both be None")
+        if schema_name.lower() == "data" and name.lower() == "versioned_data" and at_unit:
+            version = resolve_version(at_unit, at_value)
+            cols = _VERSIONED_SCHEMAS[version]
+            return TableInfo(
+                name=name,
+                schema_name=schema_name,
+                columns=SerializedSchema(cols.serialize().to_pybytes()),
+                not_null_constraints=[],
+                unique_constraints=[],
+                check_constraints=[],
+                comment="Versioned data table demonstrating time travel with schema evolution",
+                tags={},
+            )
+        # Delegate to ReadOnlyCatalogInterface for all other cases
+        from vgi.catalog.catalog_interface import ReadOnlyCatalogInterface
+
+        return ReadOnlyCatalogInterface.table_get(
+            self,  # type: ignore[arg-type]
+            attach_id=attach_id,
+            transaction_id=transaction_id,
+            schema_name=schema_name,
+            name=name,
+            at_unit=at_unit,
+            at_value=at_value,
+        )
+
     def table_scan_function_get(
         self,
         *,
@@ -381,7 +438,7 @@ class ExampleWorker(Worker):
         schema_name: str,
         name: str,
         at_unit: str | None,
-        at_value: Any,
+        at_value: str | None,
     ) -> ScanFunctionResult:
         """Return scan function for tables with explicit columns.
 
@@ -401,6 +458,22 @@ class ExampleWorker(Worker):
             ScanFunctionResult specifying the function to call for scanning.
 
         """
+        if bool(at_unit) != bool(at_value):
+            raise ValueError("at_unit and at_value must both be provided or both be None")
+
+        # Handle the "versioned_data" table with time travel
+        if schema_name.lower() == "data" and name.lower() == "versioned_data":
+            version = resolve_version(at_unit, at_value)
+            return ScanFunctionResult(
+                function_name="versioned_data_scan",
+                positional_arguments=[pa.scalar(version)],
+                named_arguments={},
+            )
+
+        # Reject AT clause on tables that don't support time travel
+        if at_unit:
+            raise ValueError(f"Table '{schema_name}.{name}' does not support time travel queries")
+
         # Handle the "numbers" table with explicit columns
         if schema_name.lower() == "data" and name.lower() == "numbers":
             # Scan using the sequence function with count=100

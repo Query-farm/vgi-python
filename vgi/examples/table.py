@@ -74,6 +74,7 @@ __all__ = [
     "RowIdSequenceFunction",
     "StructSettingsFunction",
     "TenThousandFunction",
+    "VersionedDataFunction",
 ]
 
 
@@ -2250,3 +2251,136 @@ class RowIdSequenceFunction(TableFunctionGenerator[RowIdSequenceFunctionArgs, Co
 
         state.current_index += size
         state.remaining -= size
+
+
+# ============================================================================
+# VersionedDataFunction — time travel with schema evolution
+# ============================================================================
+
+# Version definitions: schema and data per version
+_VERSIONED_SCHEMAS: dict[int, pa.Schema] = {
+    1: pa.schema([pa.field("id", pa.int64())]),
+    2: pa.schema(
+        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+            pa.field("id", pa.int64()),
+            pa.field("name", pa.string()),
+            pa.field("score", pa.float64()),
+            pa.field("active", pa.bool_()),
+        ]
+    ),
+    3: pa.schema(
+        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+            pa.field("id", pa.int64()),
+            pa.field("score", pa.float64()),
+        ]
+    ),
+}
+
+_VERSIONED_DATA: dict[int, dict[str, list[Any]]] = {
+    1: {"id": [1, 2, 3]},
+    2: {
+        "id": [1, 2, 3, 4, 5],
+        "name": ["alice", "bob", "carol", "dave", "eve"],
+        "score": [10.0, 20.0, 30.0, 40.0, 50.0],
+        "active": [True, False, True, False, True],
+    },
+    3: {"id": [1, 2, 3, 4], "score": [15.0, 25.0, 35.0, 45.0]},
+}
+
+# Current version (default when no AT clause)
+_CURRENT_VERSION = 3
+
+
+def resolve_version(at_unit: str | None, at_value: str | None) -> int:
+    """Resolve AT clause to a version number.
+
+    - ``VERSION``: direct integer version (must exist in ``_VERSIONED_SCHEMAS``)
+    - ``TIMESTAMP``: year-based mapping (<=2020→1, <=2021→2, >=2022→3)
+    - ``None``: current version (3)
+
+    Raises ``ValueError`` for unknown versions or unsupported AT units.
+    """
+    if not at_unit:
+        return _CURRENT_VERSION
+
+    if at_unit.upper() == "VERSION":
+        version = int(at_value)  # type: ignore[arg-type]
+        if version not in _VERSIONED_SCHEMAS:
+            raise ValueError(f"Unknown version: {version}. Valid versions: {sorted(_VERSIONED_SCHEMAS)}")
+        return version
+
+    if at_unit.upper() == "TIMESTAMP":
+        # Parse year from timestamp string (e.g. "2020-06-15 00:00:00")
+        year = int(str(at_value)[:4])
+        if year < 2020:
+            raise ValueError(f"No version exists at timestamp {at_value!r}: table did not exist before 2020")
+        if year <= 2020:
+            return 1
+        if year <= 2021:
+            return 2
+        return 3
+
+    raise ValueError(f"Unsupported at_unit: {at_unit!r}")
+
+
+@dataclass(slots=True, frozen=True)
+class VersionedDataFunctionArgs:
+    """Arguments for VersionedDataFunction."""
+
+    version: Annotated[int, Arg(0, doc="Data version to return", default=_CURRENT_VERSION)]
+
+
+@dataclass(kw_only=True)
+class VersionedDataState(ArrowSerializableDataclass):
+    """State for VersionedDataFunction."""
+
+    done: bool = False
+
+
+@init_single_worker
+class VersionedDataFunction(TableFunctionGenerator[VersionedDataFunctionArgs, VersionedDataState]):
+    """Returns version-specific data demonstrating time travel with schema evolution.
+
+    Each version has a different schema and different data:
+
+    - **Version 1**: ``(id int64)`` — 3 rows
+    - **Version 2**: ``(id int64, name string, score double, active bool)`` — 5 rows
+    - **Version 3** (current): ``(id int64, score double)`` — 4 rows
+
+    """
+
+    class Meta:
+        """Metadata for VersionedDataFunction."""
+
+        name = "versioned_data_scan"
+        description = "Returns versioned data with schema evolution"
+        categories = ["generator", "testing"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[VersionedDataFunctionArgs]) -> BindResponse:
+        """Return version-specific output schema."""
+        version = params.args.version
+        if version not in _VERSIONED_SCHEMAS:
+            raise ValueError(f"Unknown version: {version}. Valid versions: {sorted(_VERSIONED_SCHEMAS)}")
+        return BindResponse(output_schema=_VERSIONED_SCHEMAS[version])
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[VersionedDataFunctionArgs]) -> VersionedDataState:
+        """Create initial state."""
+        return VersionedDataState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[VersionedDataFunctionArgs],
+        state: VersionedDataState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit all rows for the requested version in one batch."""
+        if state.done:
+            out.finish()
+            return
+        state.done = True
+        version = params.args.version
+        data = _VERSIONED_DATA[version]
+        out.emit(pa.RecordBatch.from_pydict(data, schema=params.output_schema))

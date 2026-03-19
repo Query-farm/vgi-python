@@ -188,6 +188,8 @@ class InMemoryCatalog(CatalogInterface):
         transaction_id: TransactionId | None,
         schema_name: str,
         name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
     ) -> TableInfo | None:
         """Get information about a table."""
         catalog = self._get_catalog(attach_id)

@@ -72,6 +72,7 @@ class Table:
     columns: pa.Schema | None = None
     function: type[TableFunctionGenerator[Any, Any]] | None = None
     arguments: Arguments | None = None
+    supports_time_travel: bool = False
     not_null: tuple[str, ...] = ()
     unique: tuple[tuple[str, ...], ...] = ()
     check: tuple[str, ...] = ()

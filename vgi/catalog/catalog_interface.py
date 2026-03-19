@@ -612,8 +612,13 @@ class CatalogInterface(ABC):
         transaction_id: TransactionId | None,
         schema_name: str,
         name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
     ) -> TableInfo | None:
         """Get information about the table with the given name in the specified schema.
+
+        When ``at_unit`` / ``at_value`` are provided the implementation should
+        return the table schema for the requested point in time (time travel).
 
         Returns a TableInfo object if the table exists, or None if it does not.
         """
@@ -1085,10 +1090,15 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         serialized_settings = [s.serialize() for s in self.settings]
         serialized_secret_types = [st.serialize() for st in self.secret_types]
 
+        # Auto-derive supports_time_travel from tables
+        self._build_registries()
+        assert self._table_registry is not None
+        has_time_travel = any(t.supports_time_travel for t in self._table_registry.values())
+
         return CatalogAttachResult(
             attach_id=self._FIXED_ATTACH_ID,
             supports_transactions=False,
-            supports_time_travel=False,
+            supports_time_travel=has_time_travel,
             catalog_version_frozen=True,
             catalog_version=1,
             attach_id_required=False,
@@ -1123,16 +1133,32 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         transaction_id: TransactionId | None,
         schema_name: str,
         name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
     ) -> TableInfo | None:
-        """Get information about a table (case-insensitive lookup)."""
+        """Get information about a table (case-insensitive lookup).
+
+        When ``at_unit`` / ``at_value`` are provided, the default implementation
+        returns the same table info (no schema evolution). Override this method
+        to return version-specific schemas for time-travel queries.
+        """
+        # Validate at_unit and at_value are both provided or both absent
+        if bool(at_unit) != bool(at_value):
+            raise ValueError("at_unit and at_value must both be provided or both be None")
+
         self._build_registries()
         assert self._table_registry is not None
         assert self._schema_registry is not None
         table = self._table_registry.get((schema_name.lower(), name.lower()))
-        if table:
-            schema = self._schema_registry.get(schema_name.lower())
-            return table.to_table_info(schema.name if schema else schema_name)
-        return None
+        if table is None:
+            return None
+
+        # If AT clause present but table doesn't support time travel, error
+        if at_unit and not table.supports_time_travel:
+            raise ValueError(f"Table '{schema_name}.{name}' does not support time travel queries")
+
+        schema = self._schema_registry.get(schema_name.lower())
+        return table.to_table_info(schema.name if schema else schema_name)
 
     def view_get(
         self,
@@ -1188,12 +1214,20 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         For tables with explicit columns, override this method in your Worker
         to provide scan functions.
         """
+        # Validate at_unit and at_value are both provided or both absent
+        if bool(at_unit) != bool(at_value):
+            raise ValueError("at_unit and at_value must both be provided or both be None")
+
         self._build_registries()
         assert self._table_registry is not None
         assert self._schema_registry is not None
 
-        # Check if table exists and is function-backed
+        # Validate AT clause against table's supports_time_travel
         table = self._table_registry.get((schema_name.lower(), name.lower()))
+        if table is not None and at_unit and not table.supports_time_travel:
+            raise ValueError(f"Table '{schema_name}.{name}' does not support time travel queries")
+
+        # Check if table exists and is function-backed
         if table is not None and table.function is not None:
             # Auto-implement for function-backed tables
             func_meta = table.function.get_metadata()
