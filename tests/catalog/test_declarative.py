@@ -12,7 +12,7 @@ Tests cover:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import ClassVar
 
 import pyarrow as pa
 import pytest
@@ -33,6 +33,7 @@ from vgi.catalog import (
     SchemaObjectType,
     Table,
     TableInfo,
+    TransactionId,
     View,
     ViewInfo,
 )
@@ -959,11 +960,11 @@ class TestWorkerWithCatalog:
         interface = interface_cls()
         assert interface._effective_catalog_name == "myapp"  # type: ignore[attr-defined]
 
-    def test_worker_custom_table_scan_function_get(self) -> None:
-        """Worker.table_scan_function_get is copied to interface."""
+    def test_explicit_catalog_interface_table_scan_function_get(self) -> None:
+        """Custom table_scan_function_get on explicit CatalogInterface subclass."""
         explicit_table = Table(name="orders", columns=pa.schema([("id", pa.int64())]))
 
-        class MyWorker(Worker):
+        class MyCatalog(ReadOnlyCatalogInterface):
             catalog = Catalog(
                 name="myapp",
                 schemas=[Schema(name="main", tables=[explicit_table])],
@@ -972,8 +973,8 @@ class TestWorkerWithCatalog:
             def table_scan_function_get(
                 self,
                 *,
-                attach_id: Any,
-                transaction_id: Any,
+                attach_id: AttachId,
+                transaction_id: TransactionId | None,
                 schema_name: str,
                 name: str,
                 at_unit: str | None,
@@ -984,6 +985,9 @@ class TestWorkerWithCatalog:
                     positional_arguments=[pa.scalar("orders.parquet")],
                     named_arguments={},
                 )
+
+        class MyWorker(Worker):
+            catalog_interface = MyCatalog
 
         interface_cls = MyWorker._get_catalog_interface()
         assert interface_cls is not None

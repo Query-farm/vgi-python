@@ -30,6 +30,7 @@ from vgi.catalog import (
     Catalog,
     Macro,
     MacroType,
+    ReadOnlyCatalogInterface,
     ScanFunctionResult,
     Schema,
     SecretTypeSpec,
@@ -123,11 +124,344 @@ from vgi.examples.table_in_out import (
 )
 from vgi.worker import Worker
 
+_EXAMPLE_CATALOG = Catalog(
+    name="example",
+    default_schema="main",
+    schemas=[
+        Schema(
+            name="main",
+            comment="Example functions for testing VGI",
+            functions=[
+                # TableInOutGenerator - transform input batches
+                EchoFunction,
+                BufferInputFunction,
+                FilterBySettingFunction,
+                RepeatInputsFunction,
+                SumAllColumnsFunction,
+                SumAllColumnsSimpleDistributed,
+                ExceptionFinalizeFunction,
+                ExceptionProcessFunction,
+                # TableFunctionGenerator - generate output without input
+                ConstantColumnsFunction,
+                FilterEchoFunction,
+                DoubleSequenceFunction,
+                GeneratorExceptionFunction,
+                LoggingGeneratorFunction,
+                MakeSeriesCountFunction,
+                MakeSeriesCsvFunction,
+                MakeSeriesFloatFunction,
+                MakeSeriesRangeFunction,
+                MakeSeriesStepFunction,
+                MakePairsIntFunction,
+                MakePairsIntStrFunction,
+                MakePairsStrFunction,
+                RepeatValueIntFunction,
+                RepeatValueStrFunction,
+                NamedParamsEchoFunction,
+                NestedSequenceFunction,
+                PartitionedSequenceFunction,
+                ProjectedDataFunction,
+                RowIdSequenceFunction,
+                SecretDemoFunction,
+                ScopedSecretDemoFunction,
+                SequenceFunction,
+                SettingsAwareFunction,
+                StructSettingsFunction,
+                TenThousandFunction,
+                VersionedDataFunction,
+                # ScalarFunctionGenerator - transform to single-column output
+                AddValuesFunction,
+                BernoulliFunction,
+                BinaryPacketFunction,
+                ConcatValuesIntFunction,
+                ConcatValuesStrFunction,
+                ConditionalMessageFunction,
+                DoubleFunction,
+                FormatNumberDefaultFunction,
+                FormatNumberFullFunction,
+                FormatNumberPrecisionFunction,
+                GeoCentroidFixedFunction,
+                GeoCentroidListFunction,
+                GeoCentroidStructFunction,
+                GeoDistanceFixedFunction,
+                GeoDistanceListFunction,
+                GeoDistanceStructFunction,
+                HashSeedFunction,
+                MultiplyBySettingFunction,
+                MultiplyFunction,
+                NullHandlingFunction,
+                PairTypeIntIntFunction,
+                PairTypeIntStrFunction,
+                PairTypeStrStrFunction,
+                RandomBytesFunction,
+                RandomIntFunction,
+                ReturnSecretValueFunction,
+                SmartFormatPrefixFunction,
+                SmartFormatWidthFunction,
+                SumValuesFunction,
+                TypeInfoInt32Function,
+                TypeInfoInt64Function,
+                TypeInfoStringFunction,
+                TypeInfoUInt32Function,
+                TypeInfoUInt64Function,
+                AnyMixedIntFunction,
+                AnyMixedStrFunction,
+                UpperCaseFunction,
+                WhoAmIFunction,
+            ],
+            views=[
+                View(
+                    name="first_ten",
+                    definition="SELECT * FROM sequence(10)",
+                    comment="First 10 integers",
+                ),
+                View(
+                    name="even_numbers",
+                    definition="SELECT * FROM sequence(100) WHERE n % 2 = 0",
+                    comment="Even numbers from 0 to 98",
+                ),
+            ],
+            macros=[
+                Macro(
+                    name="vgi_multiply",
+                    macro_type=MacroType.SCALAR,
+                    parameters=["x", "y"],
+                    definition="x * y",
+                    comment="Multiply two values",
+                ),
+                Macro(
+                    name="vgi_clamp",
+                    macro_type=MacroType.SCALAR,
+                    parameters=["val", "lo", "hi"],
+                    parameter_default_values=pa.RecordBatch.from_pydict(
+                        {"lo": [pa.scalar(0).as_py()], "hi": [pa.scalar(100).as_py()]},
+                        schema=pa.schema([("lo", pa.int64()), ("hi", pa.int64())]),
+                    ),
+                    definition="GREATEST(lo, LEAST(hi, val))",
+                    comment="Clamp a value between lo and hi (defaults: 0..100)",
+                ),
+                Macro(
+                    name="vgi_range_table",
+                    macro_type=MacroType.TABLE,
+                    parameters=["n"],
+                    definition="SELECT * FROM range(n)",
+                    comment="Table macro returning range of values",
+                ),
+            ],
+        ),
+        Schema(
+            name="data",
+            comment="Example tables backed by functions",
+            tables=[
+                # Function-backed table: schema derived via bind()
+                Table(
+                    name="large_sequence",
+                    function=SequenceFunction,
+                    arguments=Arguments(positional=(pa.scalar(1_000_000),)),
+                    comment="A large sequence of integers from 0 to 1,000,000",
+                ),
+                # Time-travel table: version-specific schema
+                Table(
+                    name="versioned_data",
+                    columns=pa.schema(
+                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+                            pa.field("id", pa.int64()),
+                            pa.field("score", pa.float64()),
+                        ]
+                    ),
+                    supports_time_travel=True,
+                    comment="Versioned data table demonstrating time travel with schema evolution",
+                ),
+                # Explicit columns table: requires table_scan_function_get
+                Table(
+                    name="numbers",
+                    columns=pa.schema([("value", pa.int64())]),
+                    comment="First 100 integers (demonstrates explicit columns)",
+                ),
+                # Row ID position tests (int64 row_id)
+                Table(
+                    name="rowid_first",
+                    columns=pa.schema(
+                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+                            pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
+                            pa.field("name", pa.string()),
+                            pa.field("value", pa.string()),
+                        ]
+                    ),
+                    comment="Table with row_id at column index 0",
+                ),
+                Table(
+                    name="rowid_middle",
+                    columns=pa.schema(
+                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+                            pa.field("name", pa.string()),
+                            pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
+                            pa.field("value", pa.string()),
+                        ]
+                    ),
+                    comment="Table with row_id at column index 1",
+                ),
+                Table(
+                    name="rowid_last",
+                    columns=pa.schema(
+                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+                            pa.field("name", pa.string()),
+                            pa.field("value", pa.string()),
+                            pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
+                        ]
+                    ),
+                    comment="Table with row_id at column index 2",
+                ),
+                # Row ID type tests (row_id at index 0)
+                Table(
+                    name="rowid_string",
+                    columns=pa.schema(
+                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+                            pa.field("row_id", pa.string(), metadata={b"is_row_id": b""}),
+                            pa.field("value", pa.int64()),
+                        ]
+                    ),
+                    comment="Table with string row_id",
+                ),
+                Table(
+                    name="rowid_struct",
+                    columns=pa.schema(
+                        [
+                            pa.field(
+                                "row_id",
+                                pa.struct([("a", pa.int64()), ("b", pa.string())]),
+                                metadata={b"is_row_id": b""},
+                            ),
+                            pa.field("value", pa.string()),
+                        ]
+                    ),
+                    comment="Table with struct row_id",
+                ),
+            ],
+            views=[
+                View(
+                    name="small_numbers",
+                    definition="SELECT * FROM numbers WHERE value < 10",
+                    comment="Numbers less than 10",
+                ),
+            ],
+        ),
+    ],
+)
+
+
+class ExampleCatalog(ReadOnlyCatalogInterface):
+    """Catalog interface for the example worker.
+
+    Defines table_get and table_scan_function_get for tables with explicit
+    columns, including time-travel support for versioned_data.
+    """
+
+    catalog = _EXAMPLE_CATALOG
+
+    def table_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
+    ) -> TableInfo | None:
+        """Return version-specific schema for time-travel tables."""
+        if bool(at_unit) != bool(at_value):
+            raise ValueError("at_unit and at_value must both be provided or both be None")
+        if schema_name.lower() == "data" and name.lower() == "versioned_data" and at_unit:
+            version = resolve_version(at_unit, at_value)
+            cols = _VERSIONED_SCHEMAS[version]
+            return TableInfo(
+                name=name,
+                schema_name=schema_name,
+                columns=SerializedSchema(cols.serialize().to_pybytes()),
+                not_null_constraints=[],
+                unique_constraints=[],
+                check_constraints=[],
+                comment="Versioned data table demonstrating time travel with schema evolution",
+                tags={},
+            )
+        return super().table_get(
+            attach_id=attach_id,
+            transaction_id=transaction_id,
+            schema_name=schema_name,
+            name=name,
+            at_unit=at_unit,
+            at_value=at_value,
+        )
+
+    def table_scan_function_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        at_unit: str | None,
+        at_value: str | None,
+    ) -> ScanFunctionResult:
+        """Return scan function for tables with explicit columns."""
+        if bool(at_unit) != bool(at_value):
+            raise ValueError("at_unit and at_value must both be provided or both be None")
+
+        # Handle the "versioned_data" table with time travel
+        if schema_name.lower() == "data" and name.lower() == "versioned_data":
+            version = resolve_version(at_unit, at_value)
+            return ScanFunctionResult(
+                function_name="versioned_data_scan",
+                positional_arguments=[pa.scalar(version)],
+                named_arguments={},
+            )
+
+        # Reject AT clause on tables that don't support time travel
+        if at_unit:
+            raise ValueError(f"Table '{schema_name}.{name}' does not support time travel queries")
+
+        # Handle the "numbers" table with explicit columns
+        if schema_name.lower() == "data" and name.lower() == "numbers":
+            return ScanFunctionResult(
+                function_name="sequence",
+                positional_arguments=[pa.scalar(100)],
+                named_arguments={},
+            )
+
+        # Row ID test tables
+        rowid_tables: dict[str, dict[str, str]] = {
+            "rowid_first": {"layout": "first", "row_id_type": "int64"},
+            "rowid_middle": {"layout": "middle", "row_id_type": "int64"},
+            "rowid_last": {"layout": "last", "row_id_type": "int64"},
+            "rowid_string": {"layout": "first", "row_id_type": "string"},
+            "rowid_struct": {"layout": "first", "row_id_type": "struct"},
+        }
+        if schema_name.lower() == "data" and name.lower() in rowid_tables:
+            opts = rowid_tables[name.lower()]
+            return ScanFunctionResult(
+                function_name="rowid_sequence",
+                positional_arguments=[pa.scalar(20)],
+                named_arguments={
+                    "layout": pa.scalar(opts["layout"]),
+                    "row_id_type": pa.scalar(opts["row_id_type"]),
+                },
+            )
+
+        return super().table_scan_function_get(
+            attach_id=attach_id,
+            transaction_id=transaction_id,
+            schema_name=schema_name,
+            name=name,
+            at_unit=at_unit,
+            at_value=at_value,
+        )
+
 
 class ExampleWorker(Worker):
     """Example worker with built-in test functions.
 
-    This worker exposes all example functions via the catalog interface,
+    This worker exposes all example functions via the ExampleCatalog interface,
     allowing clients to discover available functions via the "example" catalog.
 
     Settings exposed via catalog_attach:
@@ -137,6 +471,9 @@ class ExampleWorker(Worker):
     - threshold: Filter threshold (used by FilterBySettingFunction)
     - config: Sequence configuration struct (used by StructSettingsFunction)
     """
+
+    catalog_interface = ExampleCatalog
+    catalog = _EXAMPLE_CATALOG
 
     class Settings:
         """Settings exposed via catalog_attach."""
@@ -165,357 +502,6 @@ class ExampleWorker(Worker):
             ),
         ),
     ]
-
-    catalog = Catalog(
-        name="example",
-        default_schema="main",
-        schemas=[
-            Schema(
-                name="main",
-                comment="Example functions for testing VGI",
-                functions=[
-                    # TableInOutGenerator - transform input batches
-                    EchoFunction,
-                    BufferInputFunction,
-                    FilterBySettingFunction,
-                    RepeatInputsFunction,
-                    SumAllColumnsFunction,
-                    SumAllColumnsSimpleDistributed,
-                    ExceptionFinalizeFunction,
-                    ExceptionProcessFunction,
-                    # TableFunctionGenerator - generate output without input
-                    ConstantColumnsFunction,
-                    FilterEchoFunction,
-                    DoubleSequenceFunction,
-                    GeneratorExceptionFunction,
-                    LoggingGeneratorFunction,
-                    MakeSeriesCountFunction,
-                    MakeSeriesCsvFunction,
-                    MakeSeriesFloatFunction,
-                    MakeSeriesRangeFunction,
-                    MakeSeriesStepFunction,
-                    MakePairsIntFunction,
-                    MakePairsIntStrFunction,
-                    MakePairsStrFunction,
-                    RepeatValueIntFunction,
-                    RepeatValueStrFunction,
-                    NamedParamsEchoFunction,
-                    NestedSequenceFunction,
-                    PartitionedSequenceFunction,
-                    ProjectedDataFunction,
-                    RowIdSequenceFunction,
-                    SecretDemoFunction,
-                    ScopedSecretDemoFunction,
-                    SequenceFunction,
-                    SettingsAwareFunction,
-                    StructSettingsFunction,
-                    TenThousandFunction,
-                    VersionedDataFunction,
-                    # ScalarFunctionGenerator - transform to single-column output
-                    AddValuesFunction,
-                    BernoulliFunction,
-                    BinaryPacketFunction,
-                    ConcatValuesIntFunction,
-                    ConcatValuesStrFunction,
-                    ConditionalMessageFunction,
-                    DoubleFunction,
-                    FormatNumberDefaultFunction,
-                    FormatNumberFullFunction,
-                    FormatNumberPrecisionFunction,
-                    GeoCentroidFixedFunction,
-                    GeoCentroidListFunction,
-                    GeoCentroidStructFunction,
-                    GeoDistanceFixedFunction,
-                    GeoDistanceListFunction,
-                    GeoDistanceStructFunction,
-                    HashSeedFunction,
-                    MultiplyBySettingFunction,
-                    MultiplyFunction,
-                    NullHandlingFunction,
-                    PairTypeIntIntFunction,
-                    PairTypeIntStrFunction,
-                    PairTypeStrStrFunction,
-                    RandomBytesFunction,
-                    RandomIntFunction,
-                    ReturnSecretValueFunction,
-                    SmartFormatPrefixFunction,
-                    SmartFormatWidthFunction,
-                    SumValuesFunction,
-                    TypeInfoInt32Function,
-                    TypeInfoInt64Function,
-                    TypeInfoStringFunction,
-                    TypeInfoUInt32Function,
-                    TypeInfoUInt64Function,
-                    AnyMixedIntFunction,
-                    AnyMixedStrFunction,
-                    UpperCaseFunction,
-                    WhoAmIFunction,
-                ],
-                views=[
-                    View(
-                        name="first_ten",
-                        definition="SELECT * FROM sequence(10)",
-                        comment="First 10 integers",
-                    ),
-                    View(
-                        name="even_numbers",
-                        definition="SELECT * FROM sequence(100) WHERE n % 2 = 0",
-                        comment="Even numbers from 0 to 98",
-                    ),
-                ],
-                macros=[
-                    Macro(
-                        name="vgi_multiply",
-                        macro_type=MacroType.SCALAR,
-                        parameters=["x", "y"],
-                        definition="x * y",
-                        comment="Multiply two values",
-                    ),
-                    Macro(
-                        name="vgi_clamp",
-                        macro_type=MacroType.SCALAR,
-                        parameters=["val", "lo", "hi"],
-                        parameter_default_values=pa.RecordBatch.from_pydict(
-                            {"lo": [pa.scalar(0).as_py()], "hi": [pa.scalar(100).as_py()]},
-                            schema=pa.schema([("lo", pa.int64()), ("hi", pa.int64())]),
-                        ),
-                        definition="GREATEST(lo, LEAST(hi, val))",
-                        comment="Clamp a value between lo and hi (defaults: 0..100)",
-                    ),
-                    Macro(
-                        name="vgi_range_table",
-                        macro_type=MacroType.TABLE,
-                        parameters=["n"],
-                        definition="SELECT * FROM range(n)",
-                        comment="Table macro returning range of values",
-                    ),
-                ],
-            ),
-            Schema(
-                name="data",
-                comment="Example tables backed by functions",
-                tables=[
-                    # Function-backed table: schema derived via bind()
-                    Table(
-                        name="large_sequence",
-                        function=SequenceFunction,
-                        arguments=Arguments(positional=(pa.scalar(1_000_000),)),
-                        comment="A large sequence of integers from 0 to 1,000,000",
-                    ),
-                    # Time-travel table: version-specific schema
-                    Table(
-                        name="versioned_data",
-                        columns=pa.schema(
-                            [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-                                pa.field("id", pa.int64()),
-                                pa.field("score", pa.float64()),
-                            ]
-                        ),
-                        supports_time_travel=True,
-                        comment="Versioned data table demonstrating time travel with schema evolution",
-                    ),
-                    # Explicit columns table: requires table_scan_function_get
-                    Table(
-                        name="numbers",
-                        columns=pa.schema([("value", pa.int64())]),
-                        comment="First 100 integers (demonstrates explicit columns)",
-                    ),
-                    # Row ID position tests (int64 row_id)
-                    Table(
-                        name="rowid_first",
-                        columns=pa.schema(
-                            [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-                                pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
-                                pa.field("name", pa.string()),
-                                pa.field("value", pa.string()),
-                            ]
-                        ),
-                        comment="Table with row_id at column index 0",
-                    ),
-                    Table(
-                        name="rowid_middle",
-                        columns=pa.schema(
-                            [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-                                pa.field("name", pa.string()),
-                                pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
-                                pa.field("value", pa.string()),
-                            ]
-                        ),
-                        comment="Table with row_id at column index 1",
-                    ),
-                    Table(
-                        name="rowid_last",
-                        columns=pa.schema(
-                            [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-                                pa.field("name", pa.string()),
-                                pa.field("value", pa.string()),
-                                pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
-                            ]
-                        ),
-                        comment="Table with row_id at column index 2",
-                    ),
-                    # Row ID type tests (row_id at index 0)
-                    Table(
-                        name="rowid_string",
-                        columns=pa.schema(
-                            [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-                                pa.field("row_id", pa.string(), metadata={b"is_row_id": b""}),
-                                pa.field("value", pa.int64()),
-                            ]
-                        ),
-                        comment="Table with string row_id",
-                    ),
-                    Table(
-                        name="rowid_struct",
-                        columns=pa.schema(
-                            [
-                                pa.field(
-                                    "row_id",
-                                    pa.struct([("a", pa.int64()), ("b", pa.string())]),
-                                    metadata={b"is_row_id": b""},
-                                ),
-                                pa.field("value", pa.string()),
-                            ]
-                        ),
-                        comment="Table with struct row_id",
-                    ),
-                ],
-                views=[
-                    View(
-                        name="small_numbers",
-                        definition="SELECT * FROM numbers WHERE value < 10",
-                        comment="Numbers less than 10",
-                    ),
-                ],
-            ),
-        ],
-    )
-
-    def table_get(
-        self,
-        *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
-        schema_name: str,
-        name: str,
-        at_unit: str | None = None,
-        at_value: str | None = None,
-    ) -> TableInfo | None:
-        """Return version-specific schema for time-travel tables."""
-        if bool(at_unit) != bool(at_value):
-            raise ValueError("at_unit and at_value must both be provided or both be None")
-        if schema_name.lower() == "data" and name.lower() == "versioned_data" and at_unit:
-            version = resolve_version(at_unit, at_value)
-            cols = _VERSIONED_SCHEMAS[version]
-            return TableInfo(
-                name=name,
-                schema_name=schema_name,
-                columns=SerializedSchema(cols.serialize().to_pybytes()),
-                not_null_constraints=[],
-                unique_constraints=[],
-                check_constraints=[],
-                comment="Versioned data table demonstrating time travel with schema evolution",
-                tags={},
-            )
-        # Delegate to ReadOnlyCatalogInterface for all other cases
-        from vgi.catalog.catalog_interface import ReadOnlyCatalogInterface
-
-        return ReadOnlyCatalogInterface.table_get(
-            self,  # type: ignore[arg-type]
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            schema_name=schema_name,
-            name=name,
-            at_unit=at_unit,
-            at_value=at_value,
-        )
-
-    def table_scan_function_get(
-        self,
-        *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
-        schema_name: str,
-        name: str,
-        at_unit: str | None,
-        at_value: str | None,
-    ) -> ScanFunctionResult:
-        """Return scan function for tables with explicit columns.
-
-        This method is called when DuckDB needs to scan a table. For tables
-        defined with explicit columns (not function-backed), you must implement
-        this to specify which function to call for scanning.
-
-        Args:
-            attach_id: The catalog attachment identifier.
-            transaction_id: Optional transaction identifier.
-            schema_name: The schema containing the table.
-            name: The table name.
-            at_unit: Time travel unit (e.g., "version", "timestamp").
-            at_value: Time travel value.
-
-        Returns:
-            ScanFunctionResult specifying the function to call for scanning.
-
-        """
-        if bool(at_unit) != bool(at_value):
-            raise ValueError("at_unit and at_value must both be provided or both be None")
-
-        # Handle the "versioned_data" table with time travel
-        if schema_name.lower() == "data" and name.lower() == "versioned_data":
-            version = resolve_version(at_unit, at_value)
-            return ScanFunctionResult(
-                function_name="versioned_data_scan",
-                positional_arguments=[pa.scalar(version)],
-                named_arguments={},
-            )
-
-        # Reject AT clause on tables that don't support time travel
-        if at_unit:
-            raise ValueError(f"Table '{schema_name}.{name}' does not support time travel queries")
-
-        # Handle the "numbers" table with explicit columns
-        if schema_name.lower() == "data" and name.lower() == "numbers":
-            # Scan using the sequence function with count=100
-            return ScanFunctionResult(
-                function_name="sequence",
-                positional_arguments=[pa.scalar(100)],  # Generate 100 numbers
-                named_arguments={},
-            )
-
-        # Row ID test tables — route to rowid_sequence with appropriate layout/type
-        rowid_tables: dict[str, dict[str, str]] = {
-            "rowid_first": {"layout": "first", "row_id_type": "int64"},
-            "rowid_middle": {"layout": "middle", "row_id_type": "int64"},
-            "rowid_last": {"layout": "last", "row_id_type": "int64"},
-            "rowid_string": {"layout": "first", "row_id_type": "string"},
-            "rowid_struct": {"layout": "first", "row_id_type": "struct"},
-        }
-        if schema_name.lower() == "data" and name.lower() in rowid_tables:
-            opts = rowid_tables[name.lower()]
-            return ScanFunctionResult(
-                function_name="rowid_sequence",
-                positional_arguments=[pa.scalar(20)],
-                named_arguments={
-                    "layout": pa.scalar(opts["layout"]),
-                    "row_id_type": pa.scalar(opts["row_id_type"]),
-                },
-            )
-
-        # For function-backed tables, delegate to the catalog interface
-        # which handles them automatically
-        catalog_interface = self._get_catalog_interface()
-        if catalog_interface is not None:
-            return catalog_interface().table_scan_function_get(
-                attach_id=attach_id,
-                transaction_id=transaction_id,
-                schema_name=schema_name,
-                name=name,
-                at_unit=at_unit,
-                at_value=at_value,
-            )
-
-        raise NotImplementedError(f"table_scan_function_get not implemented for {schema_name}.{name}")
 
 
 def main() -> None:

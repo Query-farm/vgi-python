@@ -238,63 +238,6 @@ class Worker:
         if missing:
             raise ValueError(f"Function '{request.function_name}' requires settings: {missing}")
 
-    def table_scan_function_get(
-        self,
-        *,
-        attach_id: Any,
-        transaction_id: Any,
-        schema_name: str,
-        name: str,
-        at_unit: str | None,
-        at_value: str | None,
-    ) -> Any:
-        """Override this method to provide custom scan functions for tables.
-
-        This method is called when a table defined with explicit columns
-        (not function-backed) needs to be scanned. Override in your Worker
-        subclass to return a ScanFunctionResult.
-
-        For function-backed tables (Table(function=...)), scanning is handled
-        automatically and this method is not called.
-
-        Args:
-            attach_id: The attachment identifier.
-            transaction_id: The transaction identifier, if any.
-            schema_name: The schema name.
-            name: The table name.
-            at_unit: Time travel unit (optional).
-            at_value: Time travel value (optional).
-
-        Returns:
-            ScanFunctionResult describing how to scan the table.
-
-        Raises:
-            NotImplementedError: Always (base implementation).
-
-        """
-        raise NotImplementedError(
-            f"table_scan_function_get not implemented for table "
-            f"'{schema_name}.{name}'. Override this method in your Worker "
-            f"subclass to provide scan functions for tables with explicit columns."
-        )
-
-    def table_get(
-        self,
-        *,
-        attach_id: Any,
-        transaction_id: Any,
-        schema_name: str,
-        name: str,
-        at_unit: str | None = None,
-        at_value: str | None = None,
-    ) -> Any:
-        """Override to return version-specific table schemas for time travel.
-
-        This is called by ``catalog_table_get`` when an AT clause is present.
-        The default delegates to the catalog interface's ``table_get``.
-        """
-        raise NotImplementedError
-
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Process Settings inner class when subclassing Worker."""
         super().__init_subclass__(**kwargs)
@@ -362,6 +305,12 @@ class Worker:
         """
         # Use explicit catalog_interface if set
         if cls.catalog_interface is not None:
+            # Inject settings and secret_types from the Worker's Settings class
+            # so catalog_attach() can serialize them.
+            if cls._setting_specs and hasattr(cls.catalog_interface, "settings"):
+                cls.catalog_interface.settings = list(cls._setting_specs)
+            if cls._secret_type_specs and hasattr(cls.catalog_interface, "secret_types"):
+                cls.catalog_interface.secret_types = list(cls._secret_type_specs)
             return cls.catalog_interface
 
         # Check for new Catalog object or legacy patterns
@@ -390,19 +339,6 @@ class Worker:
                 # Legacy pattern: use class attributes
                 attrs["catalog_name"] = cls.catalog_name
                 attrs["functions"] = list(cls.functions)
-
-            # Copy table_scan_function_get from Worker if overridden
-            # This allows Worker subclasses to define the scan method directly
-            if (
-                hasattr(cls, "table_scan_function_get")
-                and cls.table_scan_function_get is not Worker.table_scan_function_get
-            ):
-                attrs["table_scan_function_get"] = cls.table_scan_function_get
-
-            # Copy table_get from Worker if overridden
-            # This allows Worker subclasses to return version-specific schemas
-            if hasattr(cls, "table_get") and cls.table_get is not Worker.table_get:
-                attrs["table_get"] = cls.table_get
 
             cls._default_catalog_interface = cast(
                 type[CatalogInterface],
