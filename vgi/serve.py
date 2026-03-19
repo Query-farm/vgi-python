@@ -200,9 +200,11 @@ def create_app(
 
     from vgi_rpc.rpc import RpcServer
 
+    from vgi.otel import VgiTracer
     from vgi.protocol import VgiProtocol
 
     worker = worker_cls(quiet=True, log_level=log_level)
+    worker._vgi_tracer = VgiTracer.create(otel_config)
     server = RpcServer(VgiProtocol, worker, enable_describe=describe)
     wsgi_app = make_wsgi_app(
         server,
@@ -291,7 +293,8 @@ def main() -> None:
                 otel_config=otel_config,
             )
         else:
-            worker_cls(quiet=quiet, log_level=effective_level).run()
+            otel_config = _resolve_otel_config()
+            worker_cls(quiet=quiet, log_level=effective_level).run(otel_config=otel_config)
 
     app()
 

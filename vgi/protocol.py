@@ -50,6 +50,7 @@ from vgi.catalog.catalog_interface import (
 )
 from vgi.function_storage import BoundStorage
 from vgi.invocation import BindResponse, FunctionType, GlobalInitResponse
+from vgi.otel import VgiTracer, _batch_bytes, _timed_exchange, get_noop_tracer
 from vgi.scalar_function import ScalarFunctionGenerator
 from vgi.table_function import (
     ProcessParams,
@@ -397,6 +398,7 @@ class ScalarExchangeState(ExchangeState):
     _init_call: Annotated[InitRequest, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
     _init_response: Annotated[GlobalInitResponse, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
     _func_cls: Annotated[type[ScalarFunctionGenerator], Transient()] = field(default=None, repr=False)  # type: ignore[assignment]
+    _vgi_tracer: Annotated[VgiTracer, Transient()] = field(default_factory=get_noop_tracer, repr=False)
 
     def rehydrate(self, implementation: object) -> None:
         """Restore ``_func_cls`` from the worker's function registry."""
@@ -404,6 +406,7 @@ class ScalarExchangeState(ExchangeState):
 
         worker: Worker = implementation  # type: ignore[assignment]
         self._func_cls = worker._resolve_function(self._init_call.bind_call)  # type: ignore[assignment]
+        self._vgi_tracer = worker._vgi_tracer
 
     def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Process one input batch through the scalar function."""
@@ -420,17 +423,31 @@ class ScalarExchangeState(ExchangeState):
         if inject_row:
             batch = pa.record_batch({"__row": pa.array([True])})
 
-        output = cls.process(
-            batch=batch,
-            init_call=self._init_call,
-            init_response=self._init_response,
-            storage=BoundStorage(cls.storage, self._init_response.execution_id),
-            auth_context=ctx.auth,
+        timer = _timed_exchange(
+            self._vgi_tracer,
+            "vgi.execute.scalar",
+            self._init_call.bind_call.function_name,
+            self._init_call.bind_call.function_type.value,
+            self._init_response.execution_id,
         )
-        if inject_row:
-            cls._validate_row_count(output, batch)
-        else:
-            cls._validate_row_count(output, input.batch)
+        with timer:
+            output = cls.process(
+                batch=batch,
+                init_call=self._init_call,
+                init_response=self._init_response,
+                storage=BoundStorage(cls.storage, self._init_response.execution_id),
+                auth_context=ctx.auth,
+            )
+            if inject_row:
+                cls._validate_row_count(output, batch)
+            else:
+                cls._validate_row_count(output, input.batch)
+            timer.record(
+                input_rows=input.batch.num_rows,
+                output_rows=output.num_rows,
+                input_bytes=_batch_bytes(input.batch),
+                output_bytes=_batch_bytes(output),
+            )
         out.emit(output)
 
 
@@ -480,7 +497,7 @@ class _FilteringOutputCollector:
 
     __slots__ = ("_inner", "_func_cls", "_filters")
 
-    def __init__(self, inner: OutputCollector, func_cls: type[TableFunctionBase[Any]], filters: Any) -> None:
+    def __init__(self, inner: OutputCollector | Any, func_cls: type[TableFunctionBase[Any]], filters: Any) -> None:
         self._inner = inner
         self._func_cls = func_cls
         self._filters = filters
@@ -509,6 +526,25 @@ class _FilteringOutputCollector:
     @property
     def output_schema(self) -> pa.Schema:
         return self._inner.output_schema
+
+
+class _TrackingOutputCollector:
+    """Wrapper that tracks total rows and bytes emitted, delegating all else."""
+
+    __slots__ = ("_inner", "total_rows", "total_bytes")
+
+    def __init__(self, inner: OutputCollector) -> None:
+        self._inner = inner
+        self.total_rows = 0
+        self.total_bytes = 0
+
+    def emit(self, batch: pa.RecordBatch) -> None:
+        self.total_rows += batch.num_rows
+        self.total_bytes += _batch_bytes(batch)
+        self._inner.emit(batch)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
 
 
 @dataclass
@@ -540,6 +576,7 @@ class TableProducerState(ProducerState):
     _user_state: Annotated[Any, Transient()] = field(default=None, repr=False)
     _pushdown_filters: Annotated[Any, Transient()] = field(default=None, repr=False)  # PushdownFilters | None
     _auto_apply: Annotated[bool, Transient()] = field(default=False, repr=False)
+    _vgi_tracer: Annotated[VgiTracer, Transient()] = field(default_factory=get_noop_tracer, repr=False)
 
     def __post_init__(self) -> None:
         """Resolve pushdown filters if auto_apply_filters is enabled."""
@@ -562,6 +599,7 @@ class TableProducerState(ProducerState):
         func_cls = worker._resolve_function(self._init_call.bind_call)
         assert issubclass(func_cls, TableFunctionGenerator)
         self._func_cls = func_cls
+        self._vgi_tracer = worker._vgi_tracer
         proj_ids = _effective_projection_ids(func_cls, self._init_call.projection_ids)
         output_schema = project_schema(proj_ids, self._init_call.output_schema)
         self._params = ProcessParams(
@@ -593,13 +631,25 @@ class TableProducerState(ProducerState):
     def produce(self, out: OutputCollector, ctx: CallContext) -> None:
         """Produce the next output batch from the table function."""
         params = dataclasses.replace(self._params, auth_context=ctx.auth)
-        if self._auto_apply and self._pushdown_filters is not None:
-            # Wrap the OutputCollector to auto-apply filters to emitted batches
-            filtered_out = _FilteringOutputCollector(out, self._func_cls, self._pushdown_filters)
-            self._func_cls.process(params, self._user_state, filtered_out)  # type: ignore[arg-type]
-            filtered_out.propagate()
-        else:
-            self._func_cls.process(params, self._user_state, out)
+        timer = _timed_exchange(
+            self._vgi_tracer,
+            "vgi.execute.table",
+            self._init_call.bind_call.function_name,
+            self._init_call.bind_call.function_type.value,
+            self._init_response.execution_id,
+        )
+        with timer:
+            tracking_out = _TrackingOutputCollector(out)
+            if self._auto_apply and self._pushdown_filters is not None:
+                filtered_out = _FilteringOutputCollector(tracking_out, self._func_cls, self._pushdown_filters)
+                self._func_cls.process(params, self._user_state, filtered_out)  # type: ignore[arg-type]
+                filtered_out.propagate()
+            else:
+                self._func_cls.process(params, self._user_state, tracking_out)  # type: ignore[arg-type]
+            timer.record(
+                output_rows=tracking_out.total_rows,
+                output_bytes=tracking_out.total_bytes,
+            )
 
 
 @dataclass
@@ -629,6 +679,7 @@ class TableInOutExchangeState(ExchangeState):
     _user_state: Annotated[Any, Transient()] = field(default=None, repr=False)
     _pushdown_filters: Annotated[Any, Transient()] = field(default=None, repr=False)  # PushdownFilters | None
     _auto_apply: Annotated[bool, Transient()] = field(default=False, repr=False)
+    _vgi_tracer: Annotated[VgiTracer, Transient()] = field(default_factory=get_noop_tracer, repr=False)
 
     def __post_init__(self) -> None:
         """Resolve pushdown filters if auto_apply_filters is enabled."""
@@ -651,6 +702,7 @@ class TableInOutExchangeState(ExchangeState):
         func_cls = worker._resolve_function(self._init_call.bind_call)
         assert issubclass(func_cls, TableInOutGenerator)
         self._func_cls = func_cls
+        self._vgi_tracer = worker._vgi_tracer
         proj_ids = _effective_projection_ids(func_cls, self._init_call.projection_ids)
         output_schema = project_schema(proj_ids, self._init_call.output_schema)
         self._params = ProcessParams(
@@ -679,12 +731,27 @@ class TableInOutExchangeState(ExchangeState):
     def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Process one input batch through the table-in-out function."""
         params = dataclasses.replace(self._params, auth_context=ctx.auth)
-        if self._auto_apply and self._pushdown_filters is not None:
-            filtered_out = _FilteringOutputCollector(out, self._func_cls, self._pushdown_filters)
-            self._func_cls.process(params, self._user_state, input.batch, filtered_out)  # type: ignore[arg-type]
-            filtered_out.propagate()
-        else:
-            self._func_cls.process(params, self._user_state, input.batch, out)
+        timer = _timed_exchange(
+            self._vgi_tracer,
+            "vgi.execute.table_in_out",
+            self._init_call.bind_call.function_name,
+            self._init_call.bind_call.function_type.value,
+            self._init_response.execution_id,
+        )
+        with timer:
+            tracking_out = _TrackingOutputCollector(out)
+            if self._auto_apply and self._pushdown_filters is not None:
+                filtered_out = _FilteringOutputCollector(tracking_out, self._func_cls, self._pushdown_filters)
+                self._func_cls.process(params, self._user_state, input.batch, filtered_out)  # type: ignore[arg-type]
+                filtered_out.propagate()
+            else:
+                self._func_cls.process(params, self._user_state, input.batch, tracking_out)  # type: ignore[arg-type]
+            timer.record(
+                input_rows=input.batch.num_rows,
+                output_rows=tracking_out.total_rows,
+                input_bytes=_batch_bytes(input.batch),
+                output_bytes=tracking_out.total_bytes,
+            )
 
 
 @dataclass

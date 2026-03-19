@@ -93,6 +93,7 @@ from vgi.invocation import (
     GlobalInitResponse,
 )
 from vgi.logging_config import LogFormat, LogLevel
+from vgi.otel import VgiTracer, get_noop_tracer
 from vgi.protocol import (
     BindRequest,
     CatalogAttachRequest,
@@ -467,7 +468,10 @@ class Worker:
                     otel_config=otel_config,
                 )
             else:
-                cls(quiet=quiet, log_level=effective_level).run()
+                from vgi.serve import _resolve_otel_config
+
+                otel_config = _resolve_otel_config()
+                cls(quiet=quiet, log_level=effective_level).run(otel_config=otel_config)
 
         app()
 
@@ -1045,6 +1049,12 @@ class Worker:
 
         Implements VgiProtocol.bind().
         """
+        self._vgi_tracer.set_current_span_attributes(
+            {
+                "vgi.function.name": request.function_name,
+                "vgi.function.type": request.function_type.value,
+            }
+        )
         func_cls = self._resolve_function(request)
         self._validate_required_settings(func_cls, request)
 
@@ -1072,6 +1082,13 @@ class Worker:
         Implements VgiProtocol.init(). Creates the appropriate state object
         based on function type and creates the appropriate state object.
         """
+        self._vgi_tracer.set_current_span_attributes(
+            {
+                "vgi.function.name": request.bind_call.function_name,
+                "vgi.function.type": request.bind_call.function_type.value,
+                "vgi.init.is_secondary": request.is_secondary,
+            }
+        )
         func_cls = self._resolve_function(request.bind_call)
         instance = func_cls(logger=_logger)
 
@@ -1088,6 +1105,18 @@ class Worker:
             else:
                 init_response = instance.global_init(request)  # type: ignore[attr-defined]
 
+        self._vgi_tracer.set_current_span_attributes(
+            {
+                "vgi.init.execution_id": init_response.execution_id.hex(),
+            }
+        )
+        if request.phase is not None:
+            self._vgi_tracer.set_current_span_attributes(
+                {
+                    "vgi.init.phase": request.phase.value,
+                }
+            )
+
         # Build common ProcessParams for table/table-in-out functions
         proj_ids = _effective_projection_ids(func_cls, request.projection_ids)
         output_schema = project_schema(proj_ids, request.output_schema)
@@ -1102,6 +1131,7 @@ class Worker:
                 _func_cls=type(instance),
                 _init_call=request,
                 _init_response=init_response,
+                _vgi_tracer=self._vgi_tracer,
             )
             input_schema = request.bind_call.input_schema
 
@@ -1126,6 +1156,7 @@ class Worker:
                     _func_cls=type(instance),
                     _params=params,
                     _user_state=user_state,
+                    _vgi_tracer=self._vgi_tracer,
                 )
                 input_schema = request.bind_call.input_schema
             elif request.phase == TableInOutFunctionInitPhase.FINALIZE:
@@ -1157,6 +1188,7 @@ class Worker:
                 _func_cls=type(instance),
                 _params=params,
                 _user_state=user_state,
+                _vgi_tracer=self._vgi_tracer,
             )
             input_schema = None  # Producer — no input
 
@@ -1174,6 +1206,10 @@ class Worker:
     # VgiProtocol implementation - Catalog Discovery
     # ---------------------------------------------------------------------------
 
+    def _enrich_catalog_span(self, **attrs: Any) -> None:
+        """Add catalog-specific attributes to the current vgi_rpc span."""
+        self._vgi_tracer.set_current_span_attributes(attrs)
+
     def catalog_catalogs(self) -> CatalogsResponse:
         """List available catalog names."""
         cat = self._get_catalog()
@@ -1185,6 +1221,7 @@ class Worker:
 
     def catalog_attach(self, request: CatalogAttachRequest) -> CatalogAttachResult:
         """Attach to a catalog with options."""
+        self._enrich_catalog_span(vgi_catalog_name=request.name)
         cat = self._get_catalog()
         options = self._options_batch_to_dict(request.options)
         return cat.catalog_attach(name=request.name, options=options)
@@ -1196,12 +1233,14 @@ class Worker:
 
     def catalog_create(self, request: CatalogCreateRequest) -> None:
         """Create a new catalog."""
+        self._enrich_catalog_span(vgi_catalog_name=request.name)
         cat = self._get_catalog()
         options = self._options_batch_to_dict(request.options)
         cat.catalog_create(name=request.name, on_conflict=request.on_conflict, options=options)
 
     def catalog_drop(self, name: str) -> None:
         """Drop a catalog."""
+        self._enrich_catalog_span(vgi_catalog_name=name)
         cat = self._get_catalog()
         cat.catalog_drop(name=name)
 
@@ -1255,6 +1294,7 @@ class Worker:
 
     def catalog_schema_get(self, attach_id: bytes, name: str, transaction_id: bytes | None = None) -> SchemasResponse:
         """Get information about a schema. Returns 0 or 1 items."""
+        self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
         info = cat.schema_get(
             attach_id=AttachId(attach_id),
@@ -1272,6 +1312,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Create a new schema."""
+        self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
         cat.schema_create(
             attach_id=AttachId(attach_id),
@@ -1290,6 +1331,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Drop a schema."""
+        self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
         cat.schema_drop(
             attach_id=AttachId(attach_id),
@@ -1306,6 +1348,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> TablesResponse:
         """List tables in a schema."""
+        self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
         infos = cat.schema_contents(
             attach_id=AttachId(attach_id),
@@ -1322,6 +1365,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> ViewsResponse:
         """List views in a schema."""
+        self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
         infos = cat.schema_contents(
             attach_id=AttachId(attach_id),
@@ -1339,6 +1383,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> FunctionsResponse:
         """List functions in a schema (scalar or table)."""
+        self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
         infos = cat.schema_contents(  # type: ignore[call-overload]
             attach_id=AttachId(attach_id),
@@ -1360,6 +1405,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> TablesResponse:
         """Get information about a table. Returns 0 or 1 items."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         info = cat.table_get(
             attach_id=AttachId(attach_id),
@@ -1371,6 +1417,7 @@ class Worker:
 
     def catalog_table_create(self, request: TableCreateRequest) -> None:
         """Create a new table."""
+        self._enrich_catalog_span(vgi_schema_name=request.schema_name, vgi_table_name=request.name)
         cat = self._get_catalog()
         cat.table_create(
             attach_id=AttachId(request.attach_id),
@@ -1393,6 +1440,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Drop a table."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_drop(
             attach_id=AttachId(attach_id),
@@ -1412,6 +1460,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> bytes:
         """Get the scan function for a table. Returns ScanFunctionResult as IPC bytes."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_scan_function_get(
             attach_id=AttachId(attach_id),
@@ -1433,6 +1482,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a table."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_comment_set(
             attach_id=AttachId(attach_id),
@@ -1453,6 +1503,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Rename a table."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_rename(
             attach_id=AttachId(attach_id),
@@ -1474,6 +1525,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Add a new column to a table."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_add(
             attach_id=AttachId(attach_id),
@@ -1497,6 +1549,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Drop a column from a table."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_drop(
             attach_id=AttachId(attach_id),
@@ -1520,6 +1573,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Rename a column."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_rename(
             attach_id=AttachId(attach_id),
@@ -1542,6 +1596,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Set the default value expression for a column."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_default_set(
             attach_id=AttachId(attach_id),
@@ -1563,6 +1618,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Remove the default value from a column."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_default_drop(
             attach_id=AttachId(attach_id),
@@ -1584,6 +1640,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Change the type of a column."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_type_change(
             attach_id=AttachId(attach_id),
@@ -1605,6 +1662,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Remove NOT NULL constraint from a column."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_not_null_drop(
             attach_id=AttachId(attach_id),
@@ -1625,6 +1683,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Add NOT NULL constraint to a column."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_not_null_set(
             attach_id=AttachId(attach_id),
@@ -1647,6 +1706,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> ViewsResponse:
         """Get information about a view. Returns 0 or 1 items."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_view_name=name)
         cat = self._get_catalog()
         info = cat.view_get(
             attach_id=AttachId(attach_id),
@@ -1666,6 +1726,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Create a new view."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_view_name=name)
         cat = self._get_catalog()
         cat.view_create(
             attach_id=AttachId(attach_id),
@@ -1685,6 +1746,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Drop a view."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_view_name=name)
         cat = self._get_catalog()
         cat.view_drop(
             attach_id=AttachId(attach_id),
@@ -1704,6 +1766,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Rename a view."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_view_name=name)
         cat = self._get_catalog()
         cat.view_rename(
             attach_id=AttachId(attach_id),
@@ -1724,6 +1787,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a view."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_view_name=name)
         cat = self._get_catalog()
         cat.view_comment_set(
             attach_id=AttachId(attach_id),
@@ -1746,6 +1810,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> MacrosResponse:
         """Get information about a macro. Returns 0 or 1 items."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_macro_name=name)
         cat = self._get_catalog()
         info = cat.macro_get(
             attach_id=AttachId(attach_id),
@@ -1757,6 +1822,7 @@ class Worker:
 
     def catalog_macro_create(self, request: MacroCreateRequest) -> None:
         """Create a new macro."""
+        self._enrich_catalog_span(vgi_schema_name=request.schema_name, vgi_macro_name=request.name)
         cat = self._get_catalog()
         cat.macro_create(
             attach_id=AttachId(request.attach_id),
@@ -1779,6 +1845,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> None:
         """Drop a macro."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_macro_name=name)
         cat = self._get_catalog()
         cat.macro_drop(
             attach_id=AttachId(attach_id),
@@ -1796,6 +1863,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> MacrosResponse:
         """List macros in a schema (scalar or table)."""
+        self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
         infos = cat.schema_contents(  # type: ignore[call-overload]
             attach_id=AttachId(attach_id),
@@ -1819,10 +1887,17 @@ class Worker:
 
         """
         self._quiet = quiet or os.environ.get("VGI_QUIET") == "1"
+        self._vgi_tracer: VgiTracer = get_noop_tracer()
         logging.getLogger("vgi").setLevel(log_level)
 
-    def run(self) -> None:
-        """Run the worker, reading from stdin and writing to stdout."""
+    def run(self, otel_config: Any = None) -> None:
+        """Run the worker, reading from stdin and writing to stdout.
+
+        Args:
+            otel_config: Optional ``OtelConfig`` for OpenTelemetry instrumentation.
+                When provided, instruments the RPC server and creates a VGI tracer.
+
+        """
         # Warn if stdin is a terminal - user likely ran worker directly
         if sys.stdin.isatty() and not self._quiet:
             sys.stderr.write(
@@ -1843,6 +1918,11 @@ class Worker:
 
         try:
             server = RpcServer(VgiProtocol, self)
+            if otel_config is not None:
+                from vgi_rpc.otel import instrument_server
+
+                instrument_server(server, otel_config)
+                self._vgi_tracer = VgiTracer.create(otel_config)
             serve_stdio(server)
         except KeyboardInterrupt:
             _logger.debug("worker_interrupted")
