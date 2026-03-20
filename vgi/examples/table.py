@@ -49,7 +49,9 @@ from vgi.table_function import (
 
 __all__ = [
     "ConstantColumnsFunction",
+    "DepartmentsScanFunction",
     "DoubleSequenceFunction",
+    "EmployeesScanFunction",
     "FilterEchoFunction",
     "GeneratorExceptionFunction",
     "LoggingGeneratorFunction",
@@ -65,15 +67,17 @@ __all__ = [
     "NestedSequenceFunction",
     "PartitionedSequenceFunction",
     "ProjectedDataFunction",
+    "ProjectsScanFunction",
     "RepeatValueIntFunction",
     "RepeatValueStrFunction",
+    "RowIdSequenceFunction",
     "ScopedSecretDemoFunction",
     "SecretDemoFunction",
     "SequenceFunction",
     "SettingsAwareFunction",
-    "RowIdSequenceFunction",
     "StructSettingsFunction",
     "TenThousandFunction",
+    "VersionedConstraintsScanFunction",
     "VersionedDataFunction",
 ]
 
@@ -2383,4 +2387,232 @@ class VersionedDataFunction(TableFunctionGenerator[VersionedDataFunctionArgs, Ve
         state.done = True
         version = params.args.version
         data = _VERSIONED_DATA[version]
+        out.emit(pa.RecordBatch.from_pydict(data, schema=params.output_schema))
+
+
+# ============================================================================
+# Static data table functions for constraint testing
+# ============================================================================
+
+
+@dataclass(slots=True, frozen=True)
+class _EmptyArgs:
+    """No arguments."""
+
+
+@dataclass(kw_only=True)
+class _OneShotState(ArrowSerializableDataclass):
+    """State that emits data once."""
+
+    done: bool = False
+
+
+def _static_scan_function(
+    func_name: str,
+    func_description: str,
+    output_schema: pa.Schema,
+    data: dict[str, list[Any]],
+) -> type[TableFunctionGenerator[_EmptyArgs, _OneShotState]]:
+    """Create a table function that returns static data in one batch.
+
+    This factory eliminates boilerplate for simple scan functions that
+    return a fixed dataset. Each generated class is decorated with
+    ``@init_single_worker`` and has a unique ``Meta.name``.
+    """
+
+    @init_single_worker
+    class StaticScanFunction(TableFunctionGenerator[_EmptyArgs, _OneShotState]):
+        """Returns static data."""
+
+        class Meta:
+            """Function metadata."""
+
+            name = func_name
+            description = func_description
+
+        @classmethod
+        def on_bind(cls, params: BindParams[_EmptyArgs]) -> BindResponse:
+            """Return output schema."""
+            return BindResponse(output_schema=output_schema)
+
+        @classmethod
+        def initial_state(cls, params: ProcessParams[_EmptyArgs]) -> _OneShotState:
+            """Create initial state."""
+            return _OneShotState()
+
+        @classmethod
+        def process(
+            cls,
+            params: ProcessParams[_EmptyArgs],
+            state: _OneShotState,
+            out: OutputCollector,
+        ) -> None:
+            """Emit data."""
+            if state.done:
+                out.finish()
+                return
+            state.done = True
+            out.emit(pa.RecordBatch.from_pydict(data, schema=params.output_schema))
+
+    StaticScanFunction.__name__ = func_name.title().replace("_", "") + "Function"
+    StaticScanFunction.__qualname__ = StaticScanFunction.__name__
+
+    return StaticScanFunction  # type: ignore[return-value]
+
+
+DepartmentsScanFunction = _static_scan_function(
+    func_name="departments_scan",
+    func_description="Scan departments table",
+    output_schema=pa.schema(
+        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+            pa.field("id", pa.int64()),
+            pa.field("name", pa.string()),
+            pa.field("budget", pa.float64()),
+        ]
+    ),
+    data={
+        "id": [1, 2, 3],
+        "name": ["Engineering", "Sales", "HR"],
+        "budget": [500000.0, 300000.0, 200000.0],
+    },
+)
+
+EmployeesScanFunction = _static_scan_function(
+    func_name="employees_scan",
+    func_description="Scan employees table",
+    output_schema=pa.schema(
+        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+            pa.field("id", pa.int64()),
+            pa.field("name", pa.string()),
+            pa.field("email", pa.string()),
+            pa.field("department_id", pa.int64()),
+        ]
+    ),
+    data={
+        "id": [1, 2, 3, 4, 5],
+        "name": ["Alice", "Bob", "Carol", "Dave", "Eve"],
+        "email": ["alice@co.com", "bob@co.com", "carol@co.com", "dave@co.com", "eve@co.com"],
+        "department_id": [1, 1, 2, 2, 3],
+    },
+)
+
+ProjectsScanFunction = _static_scan_function(
+    func_name="projects_scan",
+    func_description="Scan projects table",
+    output_schema=pa.schema(
+        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+            pa.field("department_id", pa.int64()),
+            pa.field("project_code", pa.string()),
+            pa.field("title", pa.string()),
+        ]
+    ),
+    data={
+        "department_id": [1, 1, 2],
+        "project_code": ["P001", "P002", "P003"],
+        "title": ["Backend API", "Frontend UI", "Sales Portal"],
+    },
+)
+
+
+# ============================================================================
+# VersionedConstraintsScanFunction — time travel with evolving constraints
+# ============================================================================
+
+# Version 1: simple users table (id, name) — NOT NULL on id only
+# Version 2: adds email column, PK on id, UNIQUE on email
+# Version 3: adds department_id column, FK to departments
+
+_VERSIONED_CONSTRAINTS_SCHEMAS: dict[int, pa.Schema] = {
+    1: pa.schema([pa.field("id", pa.int64()), pa.field("name", pa.string())]),  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+    2: pa.schema(
+        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+            pa.field("id", pa.int64()),
+            pa.field("name", pa.string()),
+            pa.field("email", pa.string()),
+        ]
+    ),
+    3: pa.schema(
+        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+            pa.field("id", pa.int64()),
+            pa.field("name", pa.string()),
+            pa.field("email", pa.string()),
+            pa.field("department_id", pa.int64()),
+        ]
+    ),
+}
+
+_VERSIONED_CONSTRAINTS_DATA: dict[int, dict[str, list[Any]]] = {
+    1: {"id": [1, 2], "name": ["Alice", "Bob"]},
+    2: {"id": [1, 2, 3], "name": ["Alice", "Bob", "Carol"], "email": ["a@co", "b@co", "c@co"]},
+    3: {
+        "id": [1, 2, 3],
+        "name": ["Alice", "Bob", "Carol"],
+        "email": ["a@co", "b@co", "c@co"],
+        "department_id": [1, 2, 1],
+    },
+}
+
+_VERSIONED_CONSTRAINTS_CURRENT = 3
+
+
+def resolve_versioned_constraints_version(at_unit: str | None, at_value: str | None) -> int:
+    """Resolve AT clause for versioned_constraints table."""
+    if not at_unit:
+        return _VERSIONED_CONSTRAINTS_CURRENT
+
+    if at_unit.upper() == "VERSION":
+        version = int(at_value)  # type: ignore[arg-type]
+        if version not in _VERSIONED_CONSTRAINTS_SCHEMAS:
+            raise ValueError(f"Unknown version: {version}. Valid versions: {sorted(_VERSIONED_CONSTRAINTS_SCHEMAS)}")
+        return version
+
+    raise ValueError(f"Unsupported at_unit: {at_unit!r}")
+
+
+@dataclass(slots=True, frozen=True)
+class _VersionedConstraintsArgs:
+    """Arguments for VersionedConstraintsScanFunction."""
+
+    version: Annotated[int, Arg(0, doc="Data version", default=_VERSIONED_CONSTRAINTS_CURRENT)]
+
+
+@init_single_worker
+class VersionedConstraintsScanFunction(
+    TableFunctionGenerator[_VersionedConstraintsArgs, _OneShotState],
+):
+    """Returns version-specific data for constraint evolution testing."""
+
+    class Meta:
+        """Metadata for VersionedConstraintsScanFunction."""
+
+        name = "versioned_constraints_scan"
+        description = "Scan versioned constraints table"
+
+    @classmethod
+    def on_bind(cls, params: BindParams[_VersionedConstraintsArgs]) -> BindResponse:
+        """Return output schema."""
+        version = params.args.version
+        if version not in _VERSIONED_CONSTRAINTS_SCHEMAS:
+            raise ValueError(f"Unknown version: {version}")
+        return BindResponse(output_schema=_VERSIONED_CONSTRAINTS_SCHEMAS[version])
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_VersionedConstraintsArgs]) -> _OneShotState:
+        """Create initial state."""
+        return _OneShotState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_VersionedConstraintsArgs],
+        state: _OneShotState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit data."""
+        if state.done:
+            out.finish()
+            return
+        state.done = True
+        version = params.args.version
+        data = _VERSIONED_CONSTRAINTS_DATA[version]
         out.emit(pa.RecordBatch.from_pydict(data, schema=params.output_schema))

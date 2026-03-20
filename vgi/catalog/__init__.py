@@ -26,7 +26,7 @@ from vgi.catalog.catalog_interface import (
     TransactionId,
     ViewInfo,
 )
-from vgi.catalog.descriptors import Catalog, Macro, Schema, Table, View
+from vgi.catalog.descriptors import Catalog, ForeignKeyDef, Macro, Schema, Table, View
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import Setting, SettingSpec
 from vgi.catalog.storage import CatalogStorage, CatalogStorageSqlite
@@ -58,6 +58,7 @@ __all__ = [
     "ScanFunctionResult",
     # Declarative descriptors
     "Catalog",
+    "ForeignKeyDef",
     "Macro",
     "Schema",
     "Table",

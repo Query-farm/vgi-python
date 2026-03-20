@@ -156,6 +156,10 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     not_null_constraints: Annotated[list[int], ArrowType(pa.list_(pa.int32()))]
     unique_constraints: Annotated[list[list[int]], ArrowType(pa.list_(pa.list_(pa.int32())))]
     check_constraints: list[str]
+    primary_key_constraints: Annotated[list[list[int]], ArrowType(pa.list_(pa.list_(pa.int32())))] = field(
+        default_factory=list
+    )
+    foreign_key_constraints: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

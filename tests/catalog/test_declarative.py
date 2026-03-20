@@ -23,6 +23,7 @@ from vgi.catalog import (
     AttachId,
     Catalog,
     CatalogAttachResult,
+    ForeignKeyDef,
     Macro,
     MacroInfo,
     MacroType,
@@ -228,6 +229,234 @@ class TestTableValidation:
                 columns=pa.schema([("id", pa.int64())]),
                 unique=(("invalid",),),
             )
+
+
+class TestTablePrimaryKeyConstraints:
+    """Tests for Table primary_key constraint support."""
+
+    def test_table_with_single_column_pk(self) -> None:
+        """Table accepts a single-column primary key."""
+        table = Table(
+            name="users",
+            columns=pa.schema(
+                [("id", pa.int64()), ("name", pa.string())]  # type: ignore[arg-type]
+            ),
+            primary_key=(("id",),),
+        )
+        assert table.primary_key == (("id",),)
+
+    def test_table_with_composite_pk(self) -> None:
+        """Table accepts a composite (multi-column) primary key."""
+        table = Table(
+            name="projects",
+            columns=pa.schema(
+                [("dept_id", pa.int64()), ("code", pa.string())]  # type: ignore[arg-type]
+            ),
+            primary_key=(("dept_id", "code"),),
+        )
+        assert table.primary_key == (("dept_id", "code"),)
+
+    def test_table_rejects_invalid_pk_column(self) -> None:
+        """Table raises ValueError for PK column not in schema."""
+        with pytest.raises(ValueError, match="primary_key column 'invalid' not found"):
+            Table(
+                name="test",
+                columns=pa.schema([("id", pa.int64())]),
+                primary_key=(("invalid",),),
+            )
+
+    def test_table_rejects_multiple_primary_keys(self) -> None:
+        """Table raises ValueError when more than one PK constraint is defined."""
+        with pytest.raises(ValueError, match="at most one primary_key constraint allowed"):
+            Table(
+                name="test",
+                columns=pa.schema(
+                    [("id", pa.int64()), ("code", pa.string())]  # type: ignore[arg-type]
+                ),
+                primary_key=(("id",), ("code",)),
+            )
+
+    def test_resolve_primary_key_indices(self) -> None:
+        """_resolve_primary_key_indices converts column names to indices."""
+        table = Table(
+            name="projects",
+            columns=pa.schema(
+                [("dept_id", pa.int64()), ("code", pa.string()), ("title", pa.string())]  # type: ignore[arg-type]
+            ),
+            primary_key=(("dept_id", "code"),),
+        )
+        assert table._resolve_primary_key_indices() == [[0, 1]]
+
+
+class TestTableForeignKeyConstraints:
+    """Tests for Table foreign_key constraint support."""
+
+    def test_table_with_foreign_key(self) -> None:
+        """Table accepts a foreign key definition."""
+        fk = ForeignKeyDef(
+            columns=("dept_id",),
+            referenced_table="departments",
+            referenced_columns=("id",),
+        )
+        table = Table(
+            name="employees",
+            columns=pa.schema([("id", pa.int64()), ("dept_id", pa.int64())]),
+            foreign_key=(fk,),
+        )
+        assert len(table.foreign_key) == 1
+        assert table.foreign_key[0].referenced_table == "departments"
+
+    def test_table_with_multiple_foreign_keys(self) -> None:
+        """Table accepts multiple foreign key constraints."""
+        table = Table(
+            name="assignments",
+            columns=pa.schema([("emp_id", pa.int64()), ("proj_id", pa.int64())]),
+            foreign_key=(
+                ForeignKeyDef(columns=("emp_id",), referenced_table="employees", referenced_columns=("id",)),
+                ForeignKeyDef(columns=("proj_id",), referenced_table="projects", referenced_columns=("id",)),
+            ),
+        )
+        assert len(table.foreign_key) == 2
+
+    def test_table_rejects_invalid_fk_column(self) -> None:
+        """Table raises ValueError for FK column not in schema."""
+        with pytest.raises(ValueError, match="foreign_key column 'invalid' not found"):
+            Table(
+                name="test",
+                columns=pa.schema([("id", pa.int64())]),
+                foreign_key=(
+                    ForeignKeyDef(columns=("invalid",), referenced_table="other", referenced_columns=("id",)),
+                ),
+            )
+
+    def test_table_rejects_fk_column_count_mismatch(self) -> None:
+        """Table raises ValueError when FK and referenced column counts differ."""
+        with pytest.raises(ValueError, match="counts must match"):
+            Table(
+                name="test",
+                columns=pa.schema([("a", pa.int64()), ("b", pa.int64())]),
+                foreign_key=(ForeignKeyDef(columns=("a", "b"), referenced_table="other", referenced_columns=("id",)),),
+            )
+
+    def test_foreign_key_def_referenced_schema_default(self) -> None:
+        """ForeignKeyDef defaults referenced_schema to None."""
+        fk = ForeignKeyDef(columns=("a",), referenced_table="b", referenced_columns=("c",))
+        assert fk.referenced_schema is None
+
+    def test_foreign_key_def_referenced_schema_explicit(self) -> None:
+        """ForeignKeyDef accepts explicit referenced_schema."""
+        fk = ForeignKeyDef(
+            columns=("a",),
+            referenced_table="b",
+            referenced_columns=("c",),
+            referenced_schema="other_schema",
+        )
+        assert fk.referenced_schema == "other_schema"
+
+    def test_serialize_foreign_keys_uses_current_schema_by_default(self) -> None:
+        """_serialize_foreign_keys fills referenced_schema from current schema when None."""
+        table = Table(
+            name="test",
+            columns=pa.schema([("id", pa.int64()), ("ref_id", pa.int64())]),
+            foreign_key=(ForeignKeyDef(columns=("ref_id",), referenced_table="other", referenced_columns=("id",)),),
+        )
+        fk_bytes = table._serialize_foreign_keys("my_schema")
+        assert len(fk_bytes) == 1
+        from vgi_rpc.utils import deserialize_record_batch
+
+        batch, _ = deserialize_record_batch(fk_bytes[0])
+        assert batch.column("referenced_schema")[0].as_py() == "my_schema"
+
+    def test_serialize_foreign_keys_uses_explicit_schema(self) -> None:
+        """_serialize_foreign_keys uses ForeignKeyDef.referenced_schema when set."""
+        table = Table(
+            name="test",
+            columns=pa.schema([("id", pa.int64()), ("ref_id", pa.int64())]),
+            foreign_key=(
+                ForeignKeyDef(
+                    columns=("ref_id",),
+                    referenced_table="other",
+                    referenced_columns=("id",),
+                    referenced_schema="alt_schema",
+                ),
+            ),
+        )
+        fk_bytes = table._serialize_foreign_keys("my_schema")
+        from vgi_rpc.utils import deserialize_record_batch
+
+        batch, _ = deserialize_record_batch(fk_bytes[0])
+        assert batch.column("referenced_schema")[0].as_py() == "alt_schema"
+
+
+class TestTableToTableInfoConstraints:
+    """Tests for Table.to_table_info() with PK and FK constraints."""
+
+    def test_to_table_info_with_primary_key(self) -> None:
+        """to_table_info converts PK column names to indices."""
+        table = Table(
+            name="users",
+            columns=pa.schema(
+                [("id", pa.int64()), ("email", pa.string())]  # type: ignore[arg-type]
+            ),
+            primary_key=(("id",),),
+        )
+        info = table.to_table_info("main")
+        assert info.primary_key_constraints == [[0]]
+
+    def test_to_table_info_with_composite_pk(self) -> None:
+        """to_table_info converts composite PK column names to indices."""
+        table = Table(
+            name="projects",
+            columns=pa.schema(
+                [("dept_id", pa.int64()), ("code", pa.string()), ("title", pa.string())]  # type: ignore[arg-type]
+            ),
+            primary_key=(("dept_id", "code"),),
+        )
+        info = table.to_table_info("main")
+        assert info.primary_key_constraints == [[0, 1]]
+
+    def test_to_table_info_with_foreign_key(self) -> None:
+        """to_table_info serializes FK constraints as IPC bytes."""
+        table = Table(
+            name="employees",
+            columns=pa.schema([("id", pa.int64()), ("dept_id", pa.int64())]),
+            foreign_key=(
+                ForeignKeyDef(columns=("dept_id",), referenced_table="departments", referenced_columns=("id",)),
+            ),
+        )
+        info = table.to_table_info("data")
+        assert len(info.foreign_key_constraints) == 1
+        assert isinstance(info.foreign_key_constraints[0], bytes)
+
+    def test_to_table_info_no_pk_fk_defaults_empty(self) -> None:
+        """to_table_info returns empty PK/FK when not specified."""
+        table = Table(
+            name="simple",
+            columns=pa.schema([("id", pa.int64())]),
+        )
+        info = table.to_table_info("main")
+        assert info.primary_key_constraints == []
+        assert info.foreign_key_constraints == []
+
+    def test_to_table_info_all_constraints(self) -> None:
+        """to_table_info converts all constraint types."""
+        table = Table(
+            name="full",
+            columns=pa.schema(
+                [("id", pa.int64()), ("name", pa.string()), ("ref_id", pa.int64())]  # type: ignore[arg-type]
+            ),
+            not_null=("id", "name"),
+            unique=(("name",),),
+            check=("id > 0",),
+            primary_key=(("id",),),
+            foreign_key=(ForeignKeyDef(columns=("ref_id",), referenced_table="other", referenced_columns=("id",)),),
+        )
+        info = table.to_table_info("main")
+        assert info.not_null_constraints == [0, 1]
+        assert info.unique_constraints == [[1]]
+        assert info.check_constraints == ["id > 0"]
+        assert info.primary_key_constraints == [[0]]
+        assert len(info.foreign_key_constraints) == 1
 
 
 class TestTableToTableInfo:

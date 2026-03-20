@@ -28,6 +28,7 @@ from vgi.arguments import Arguments
 from vgi.catalog import (
     AttachId,
     Catalog,
+    ForeignKeyDef,
     Macro,
     MacroType,
     ReadOnlyCatalogInterface,
@@ -83,9 +84,12 @@ from vgi.examples.scalar import (
     WhoAmIFunction,
 )
 from vgi.examples.table import (
+    _VERSIONED_CONSTRAINTS_SCHEMAS,
     _VERSIONED_SCHEMAS,
     ConstantColumnsFunction,
+    DepartmentsScanFunction,
     DoubleSequenceFunction,
+    EmployeesScanFunction,
     FilterEchoFunction,
     GeneratorExceptionFunction,
     LoggingGeneratorFunction,
@@ -101,6 +105,7 @@ from vgi.examples.table import (
     NestedSequenceFunction,
     PartitionedSequenceFunction,
     ProjectedDataFunction,
+    ProjectsScanFunction,
     RepeatValueIntFunction,
     RepeatValueStrFunction,
     RowIdSequenceFunction,
@@ -110,8 +115,10 @@ from vgi.examples.table import (
     SettingsAwareFunction,
     StructSettingsFunction,
     TenThousandFunction,
+    VersionedConstraintsScanFunction,
     VersionedDataFunction,
     resolve_version,
+    resolve_versioned_constraints_version,
 )
 from vgi.examples.table_in_out import (
     BufferInputFunction,
@@ -170,6 +177,11 @@ _EXAMPLE_CATALOG = Catalog(
                 StructSettingsFunction,
                 TenThousandFunction,
                 VersionedDataFunction,
+                # Static data scan functions for constraint-backed tables
+                DepartmentsScanFunction,
+                EmployeesScanFunction,
+                ProjectsScanFunction,
+                VersionedConstraintsScanFunction,
                 # ScalarFunctionGenerator - transform to single-column output
                 AddValuesFunction,
                 BernoulliFunction,
@@ -338,6 +350,88 @@ _EXAMPLE_CATALOG = Catalog(
                     ),
                     comment="Table with struct row_id",
                 ),
+                # ----- Constraint example tables -----
+                Table(
+                    name="departments",
+                    columns=pa.schema(
+                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+                            pa.field("id", pa.int64()),
+                            pa.field("name", pa.string()),
+                            pa.field("budget", pa.float64()),
+                        ]
+                    ),
+                    primary_key=(("id",),),
+                    not_null=("id", "name"),
+                    unique=(("name",),),
+                    check=("budget >= 0",),
+                    comment="Department reference table",
+                ),
+                Table(
+                    name="employees",
+                    columns=pa.schema(
+                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+                            pa.field("id", pa.int64()),
+                            pa.field("name", pa.string()),
+                            pa.field("email", pa.string()),
+                            pa.field("department_id", pa.int64()),
+                        ]
+                    ),
+                    primary_key=(("id",),),
+                    not_null=("id", "name", "email"),
+                    unique=(("email",),),
+                    foreign_key=(
+                        ForeignKeyDef(
+                            columns=("department_id",),
+                            referenced_table="departments",
+                            referenced_columns=("id",),
+                        ),
+                    ),
+                    comment="Employee table with FK to departments",
+                ),
+                Table(
+                    name="projects",
+                    columns=pa.schema(
+                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+                            pa.field("department_id", pa.int64()),
+                            pa.field("project_code", pa.string()),
+                            pa.field("title", pa.string()),
+                        ]
+                    ),
+                    primary_key=(("department_id", "project_code"),),
+                    not_null=("department_id", "project_code", "title"),
+                    foreign_key=(
+                        ForeignKeyDef(
+                            columns=("department_id",),
+                            referenced_table="departments",
+                            referenced_columns=("id",),
+                        ),
+                    ),
+                    comment="Projects with composite PK and FK to departments",
+                ),
+                # Time-travel constraint evolution table
+                Table(
+                    name="versioned_constraints",
+                    columns=pa.schema(
+                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+                            pa.field("id", pa.int64()),
+                            pa.field("name", pa.string()),
+                            pa.field("email", pa.string()),
+                            pa.field("department_id", pa.int64()),
+                        ]
+                    ),
+                    supports_time_travel=True,
+                    not_null=("id", "name"),
+                    primary_key=(("id",),),
+                    unique=(("email",),),
+                    foreign_key=(
+                        ForeignKeyDef(
+                            columns=("department_id",),
+                            referenced_table="departments",
+                            referenced_columns=("id",),
+                        ),
+                    ),
+                    comment="Table with constraints that evolve across versions",
+                ),
             ],
             views=[
                 View(
@@ -385,6 +479,56 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 comment="Versioned data table demonstrating time travel with schema evolution",
                 tags={},
             )
+        if schema_name.lower() == "data" and name.lower() == "versioned_constraints" and at_unit:
+            version = resolve_versioned_constraints_version(at_unit, at_value)
+            cols = _VERSIONED_CONSTRAINTS_SCHEMAS[version]
+            # Constraints evolve with version:
+            # V1: NOT NULL on id only
+            # V2: NOT NULL on id+name, PK on id, UNIQUE on email
+            # V3: NOT NULL on id+name, PK on id, UNIQUE on email, FK department_id→departments.id
+            not_null: list[int] = []
+            pk: list[list[int]] = []
+            unique: list[list[int]] = []
+            fk: list[bytes] = []
+            col_names = [f.name for f in cols]
+            if version >= 1:
+                not_null.append(col_names.index("id"))
+            if version >= 2:
+                not_null.append(col_names.index("name"))
+                pk.append([col_names.index("id")])
+                unique.append([col_names.index("email")])
+            if version >= 3:
+                from vgi_rpc.utils import serialize_record_batch_bytes
+
+                fk_batch = pa.RecordBatch.from_pydict(
+                    {
+                        "fk_columns": [["department_id"]],
+                        "pk_columns": [["id"]],
+                        "referenced_table": ["departments"],
+                        "referenced_schema": [schema_name],
+                    },
+                    schema=pa.schema(
+                        [
+                            ("fk_columns", pa.list_(pa.utf8())),
+                            ("pk_columns", pa.list_(pa.utf8())),
+                            ("referenced_table", pa.utf8()),
+                            ("referenced_schema", pa.utf8()),
+                        ]
+                    ),
+                )
+                fk.append(serialize_record_batch_bytes(fk_batch))
+            return TableInfo(
+                name=name,
+                schema_name=schema_name,
+                columns=SerializedSchema(cols.serialize().to_pybytes()),
+                not_null_constraints=not_null,
+                unique_constraints=unique,
+                check_constraints=[],
+                primary_key_constraints=pk,
+                foreign_key_constraints=fk,
+                comment="Table with constraints that evolve across versions",
+                tags={},
+            )
         return super().table_get(
             attach_id=attach_id,
             transaction_id=transaction_id,
@@ -416,6 +560,15 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 named_arguments={},
             )
 
+        # Handle the versioned_constraints table with time travel
+        if schema_name.lower() == "data" and name.lower() == "versioned_constraints":
+            version = resolve_versioned_constraints_version(at_unit, at_value)
+            return ScanFunctionResult(
+                function_name="versioned_constraints_scan",
+                positional_arguments=[pa.scalar(version)],
+                named_arguments={},
+            )
+
         # Reject AT clause on tables that don't support time travel
         if at_unit:
             raise ValueError(f"Table '{schema_name}.{name}' does not support time travel queries")
@@ -425,6 +578,19 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             return ScanFunctionResult(
                 function_name="sequence",
                 positional_arguments=[pa.scalar(100)],
+                named_arguments={},
+            )
+
+        # Constraint example tables — simple static scan functions
+        _static_scan_tables: dict[str, str] = {
+            "departments": "departments_scan",
+            "employees": "employees_scan",
+            "projects": "projects_scan",
+        }
+        if schema_name.lower() == "data" and name.lower() in _static_scan_tables:
+            return ScanFunctionResult(
+                function_name=_static_scan_tables[name.lower()],
+                positional_arguments=[],
                 named_arguments={},
             )
 

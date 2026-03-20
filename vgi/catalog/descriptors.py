@@ -34,11 +34,31 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Catalog",
+    "ForeignKeyDef",
     "Macro",
     "Schema",
     "Table",
     "View",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class ForeignKeyDef:
+    """A foreign key constraint definition.
+
+    Attributes:
+        columns: Column names in THIS table that form the FK.
+        referenced_table: Name of the referenced table.
+        referenced_columns: Column names in the referenced table.
+        referenced_schema: Schema of the referenced table.
+            Defaults to None meaning same schema as this table.
+
+    """
+
+    columns: tuple[str, ...]
+    referenced_table: str
+    referenced_columns: tuple[str, ...]
+    referenced_schema: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -76,6 +96,8 @@ class Table:
     not_null: tuple[str, ...] = ()
     unique: tuple[tuple[str, ...], ...] = ()
     check: tuple[str, ...] = ()
+    primary_key: tuple[tuple[str, ...], ...] = ()
+    foreign_key: tuple[ForeignKeyDef, ...] = ()
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
 
@@ -107,6 +129,39 @@ class Table:
                         f"Table '{self.name}': unique column '{col}' not found "
                         f"in schema. Available columns: {sorted(column_names)}"
                     )
+
+        # Validate primary_key column names
+        for group in self.primary_key:
+            for col in group:
+                if col not in column_names:
+                    raise ValueError(
+                        f"Table '{self.name}': primary_key column '{col}' not found "
+                        f"in schema. Available columns: {sorted(column_names)}"
+                    )
+
+        # Validate foreign_key column names (only FK side, not referenced table)
+        for fk in self.foreign_key:
+            for col in fk.columns:
+                if col not in column_names:
+                    raise ValueError(
+                        f"Table '{self.name}': foreign_key column '{col}' not found "
+                        f"in schema. Available columns: {sorted(column_names)}"
+                    )
+
+        # Validate at most one primary key
+        if len(self.primary_key) > 1:
+            raise ValueError(
+                f"Table '{self.name}': at most one primary_key constraint allowed, got {len(self.primary_key)}"
+            )
+
+        # Validate foreign_key column count parity
+        for fk in self.foreign_key:
+            if len(fk.columns) != len(fk.referenced_columns):
+                raise ValueError(
+                    f"Table '{self.name}': foreign_key referencing '{fk.referenced_table}' "
+                    f"has {len(fk.columns)} FK columns but {len(fk.referenced_columns)} "
+                    f"referenced columns — counts must match"
+                )
 
     def _get_resolved_columns(self) -> pa.Schema:
         """Get the resolved columns schema (explicit or derived from function).
@@ -157,6 +212,36 @@ class Table:
         cols = self.resolved_columns
         return [[cols.get_field_index(col) for col in group] for group in self.unique]
 
+    def _resolve_primary_key_indices(self) -> list[list[int]]:
+        """Convert column names to indices for primary_key constraints."""
+        cols = self.resolved_columns
+        return [[cols.get_field_index(col) for col in group] for group in self.primary_key]
+
+    def _serialize_foreign_keys(self, schema_name: str) -> list[bytes]:
+        """Serialize foreign key constraints as IPC bytes."""
+        from vgi_rpc.utils import serialize_record_batch_bytes
+
+        result = []
+        for fk in self.foreign_key:
+            batch = pa.RecordBatch.from_pydict(
+                {
+                    "fk_columns": [list(fk.columns)],
+                    "pk_columns": [list(fk.referenced_columns)],
+                    "referenced_table": [fk.referenced_table],
+                    "referenced_schema": [fk.referenced_schema or schema_name],
+                },
+                schema=pa.schema(
+                    [
+                        ("fk_columns", pa.list_(pa.utf8())),
+                        ("pk_columns", pa.list_(pa.utf8())),
+                        ("referenced_table", pa.utf8()),
+                        ("referenced_schema", pa.utf8()),
+                    ]
+                ),
+            )
+            result.append(serialize_record_batch_bytes(batch))
+        return result
+
     def to_table_info(self, schema_name: str) -> TableInfo:
         """Convert to TableInfo for catalog response."""
         cols = self.resolved_columns
@@ -167,6 +252,8 @@ class Table:
             not_null_constraints=self._resolve_not_null_indices(),
             unique_constraints=self._resolve_unique_indices(),
             check_constraints=list(self.check),
+            primary_key_constraints=self._resolve_primary_key_indices(),
+            foreign_key_constraints=self._serialize_foreign_keys(schema_name),
             comment=self.comment,
             tags=dict(self.tags),
         )
