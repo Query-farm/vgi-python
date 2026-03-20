@@ -32,6 +32,7 @@ from vgi.catalog import (
     Schema,
     SchemaInfo,
     SchemaObjectType,
+    Sql,
     Table,
     TableInfo,
     TransactionId,
@@ -495,6 +496,168 @@ class TestTableToTableInfo:
         assert info.not_null_constraints == [0, 1]
         assert info.unique_constraints == [[0], [1]]
         assert info.check_constraints == ["id > 0"]
+
+
+# =============================================================================
+# Table Defaults Tests
+# =============================================================================
+
+
+class TestTableDefaults:
+    """Tests for Table defaults field validation and serialization."""
+
+    def test_defaults_valid_columns(self) -> None:
+        """Defaults with valid column names are accepted."""
+        table = Table(
+            name="t",
+            columns=pa.schema(
+                [("id", pa.int64()), ("name", pa.string())]  # type: ignore[arg-type]
+            ),
+            defaults={"name": "hello"},
+        )
+        assert table.defaults == {"name": "hello"}
+
+    def test_defaults_invalid_column_raises(self) -> None:
+        """Defaults referencing unknown column raises ValueError."""
+        with pytest.raises(ValueError, match="defaults column 'missing'"):
+            Table(
+                name="t",
+                columns=pa.schema([("id", pa.int64())]),
+                defaults={"missing": 0},
+            )
+
+    def test_defaults_empty_dict(self) -> None:
+        """Empty defaults dict produces no metadata changes."""
+        table = Table(
+            name="t",
+            columns=pa.schema([("id", pa.int64())]),
+            defaults={},
+        )
+        info = table.to_table_info("main")
+        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        assert schema.field("id").metadata is None
+
+    def test_defaults_python_str_quoted(self) -> None:
+        """Python str defaults are auto-quoted as SQL string literals."""
+        table = Table(
+            name="t",
+            columns=pa.schema(
+                [("id", pa.int64()), ("name", pa.string())]  # type: ignore[arg-type]
+            ),
+            defaults={"name": "unknown"},
+        )
+        info = table.to_table_info("main")
+        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        assert schema.field("name").metadata == {b"default": b"'unknown'"}
+
+    def test_defaults_python_str_escapes_quotes(self) -> None:
+        """Python str defaults with single quotes are properly escaped."""
+        table = Table(
+            name="t",
+            columns=pa.schema(
+                [("id", pa.int64()), ("name", pa.string())]  # type: ignore[arg-type]
+            ),
+            defaults={"name": "it's"},
+        )
+        info = table.to_table_info("main")
+        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        assert schema.field("name").metadata == {b"default": b"'it''s'"}
+
+    def test_defaults_python_int(self) -> None:
+        """Python int defaults become unquoted numeric literals."""
+        table = Table(
+            name="t",
+            columns=pa.schema([("qty", pa.int64())]),
+            defaults={"qty": 42},
+        )
+        info = table.to_table_info("main")
+        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        assert schema.field("qty").metadata == {b"default": b"42"}
+
+    def test_defaults_python_float(self) -> None:
+        """Python float defaults become unquoted numeric literals."""
+        table = Table(
+            name="t",
+            columns=pa.schema([("price", pa.float64())]),
+            defaults={"price": 9.99},
+        )
+        info = table.to_table_info("main")
+        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        assert schema.field("price").metadata == {b"default": b"9.99"}
+
+    def test_defaults_python_bool(self) -> None:
+        """Python bool defaults become true/false."""
+        table = Table(
+            name="t",
+            columns=pa.schema(
+                [("a", pa.bool_()), ("b", pa.bool_())]
+            ),
+            defaults={"a": True, "b": False},
+        )
+        info = table.to_table_info("main")
+        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        assert schema.field("a").metadata == {b"default": b"true"}
+        assert schema.field("b").metadata == {b"default": b"false"}
+
+    def test_defaults_python_none(self) -> None:
+        """Python None default becomes NULL."""
+        table = Table(
+            name="t",
+            columns=pa.schema([("val", pa.string())]),
+            defaults={"val": None},
+        )
+        info = table.to_table_info("main")
+        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        assert schema.field("val").metadata == {b"default": b"NULL"}
+
+    def test_defaults_sql_expression(self) -> None:
+        """Sql() defaults are passed through verbatim."""
+        table = Table(
+            name="t",
+            columns=pa.schema([("ts", pa.string())]),
+            defaults={"ts": Sql("current_timestamp")},
+        )
+        info = table.to_table_info("main")
+        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        assert schema.field("ts").metadata == {b"default": b"current_timestamp"}
+
+    def test_defaults_mixed_types(self) -> None:
+        """Multiple default types work together."""
+        table = Table(
+            name="t",
+            columns=pa.schema(
+                [  # type: ignore[arg-type]
+                    ("id", pa.int64()),
+                    ("qty", pa.int64()),
+                    ("name", pa.string()),
+                ]
+            ),
+            defaults={"qty": 0, "name": "unknown"},
+        )
+        info = table.to_table_info("main")
+        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        assert schema.field("qty").metadata == {b"default": b"0"}
+        assert schema.field("name").metadata == {b"default": b"'unknown'"}
+        assert schema.field("id").metadata is None
+
+    def test_defaults_preserve_existing_metadata(self) -> None:
+        """Defaults merge with existing field metadata (e.g., is_row_id)."""
+        table = Table(
+            name="t",
+            columns=pa.schema(
+                [  # type: ignore[arg-type]
+                    pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
+                    pa.field("value", pa.string()),
+                ]
+            ),
+            defaults={"row_id": 0},
+        )
+        info = table.to_table_info("main")
+        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        metadata = schema.field("row_id").metadata
+        assert metadata is not None
+        assert metadata[b"is_row_id"] == b""
+        assert metadata[b"default"] == b"0"
 
 
 # =============================================================================

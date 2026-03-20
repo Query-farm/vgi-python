@@ -2513,6 +2513,25 @@ ProjectsScanFunction = _static_scan_function(
     },
 )
 
+ProductsScanFunction = _static_scan_function(
+    func_name="products_scan",
+    func_description="Scan products table",
+    output_schema=pa.schema(
+        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+            pa.field("id", pa.int64()),
+            pa.field("name", pa.string()),
+            pa.field("quantity", pa.int64()),
+            pa.field("price", pa.float64()),
+        ]
+    ),
+    data={
+        "id": [1, 2, 3],
+        "name": ["Widget", "Gadget", "Doohickey"],
+        "quantity": [100, 50, 200],
+        "price": [9.99, 24.99, 4.99],
+    },
+)
+
 
 # ============================================================================
 # VersionedConstraintsScanFunction — time travel with evolving constraints

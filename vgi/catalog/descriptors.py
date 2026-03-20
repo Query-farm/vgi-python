@@ -32,14 +32,55 @@ if TYPE_CHECKING:
     from vgi.function import Function
     from vgi.table_function import TableFunctionGenerator
 
+
+class Sql(str):
+    """A raw SQL expression, passed through verbatim as a default value.
+
+    Use this when the default is a SQL expression rather than a Python literal::
+
+        defaults={"created_at": Sql("current_timestamp")}
+    """
+
+
+# A default value can be a Python literal (str, int, float, bool, None)
+# or Sql() for raw SQL expressions. Plain str values are treated as string
+# literals and automatically quoted.
+DefaultValue = str | int | float | bool | None
+
 __all__ = [
     "Catalog",
+    "DefaultValue",
     "ForeignKeyDef",
     "Macro",
     "Schema",
+    "Sql",
     "Table",
     "View",
 ]
+
+
+def _default_to_sql(value: DefaultValue) -> str:
+    """Convert a Python default value to a SQL expression string.
+
+    - ``Sql``: passed through verbatim (raw SQL)
+    - ``str``: quoted as a SQL string literal (``'hello'``)
+    - ``int`` / ``float``: unquoted numeric literal
+    - ``bool``: ``true`` / ``false``
+    - ``None``: ``NULL``
+    """
+    if isinstance(value, Sql):
+        return str(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if value is None:
+        return "NULL"
+    # str — quote as SQL string literal, escaping single quotes
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +124,9 @@ class Table:
         not_null: Tuple of column names with NOT NULL constraints.
         unique: Tuple of column name tuples for UNIQUE constraints.
         check: Tuple of SQL expressions for CHECK constraints.
+        defaults: Dict mapping column names to default values. Accepts
+            Python literals (str, int, float, bool, None) which are
+            auto-converted, or SqlExpression for raw SQL.
         comment: Optional table comment.
         tags: Optional metadata tags.
 
@@ -98,6 +142,7 @@ class Table:
     check: tuple[str, ...] = ()
     primary_key: tuple[tuple[str, ...], ...] = ()
     foreign_key: tuple[ForeignKeyDef, ...] = ()
+    defaults: dict[str, DefaultValue] = field(default_factory=dict)
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
 
@@ -161,6 +206,14 @@ class Table:
                     f"Table '{self.name}': foreign_key referencing '{fk.referenced_table}' "
                     f"has {len(fk.columns)} FK columns but {len(fk.referenced_columns)} "
                     f"referenced columns — counts must match"
+                )
+
+        # Validate defaults column names
+        for col in self.defaults:
+            if col not in column_names:
+                raise ValueError(
+                    f"Table '{self.name}': defaults column '{col}' not found "
+                    f"in schema. Available columns: {sorted(column_names)}"
                 )
 
     def _get_resolved_columns(self) -> pa.Schema:
@@ -242,9 +295,22 @@ class Table:
             result.append(serialize_record_batch_bytes(batch))
         return result
 
+    def _apply_defaults_to_schema(self, schema: pa.Schema) -> pa.Schema:
+        """Return schema with default value metadata applied to fields."""
+        if not self.defaults:
+            return schema
+        for col_name, value in self.defaults.items():
+            sql_expr = _default_to_sql(value)
+            idx = schema.get_field_index(col_name)
+            f = schema.field(idx)
+            existing = dict(f.metadata) if f.metadata else {}
+            existing[b"default"] = sql_expr.encode("utf-8")
+            schema = schema.set(idx, f.with_metadata(existing))
+        return schema
+
     def to_table_info(self, schema_name: str) -> TableInfo:
         """Convert to TableInfo for catalog response."""
-        cols = self.resolved_columns
+        cols = self._apply_defaults_to_schema(self.resolved_columns)
         return TableInfo(
             name=self.name,
             schema_name=schema_name,

@@ -104,6 +104,7 @@ from vgi.examples.table import (
     NamedParamsEchoFunction,
     NestedSequenceFunction,
     PartitionedSequenceFunction,
+    ProductsScanFunction,
     ProjectedDataFunction,
     ProjectsScanFunction,
     RepeatValueIntFunction,
@@ -180,6 +181,7 @@ _EXAMPLE_CATALOG = Catalog(
                 # Static data scan functions for constraint-backed tables
                 DepartmentsScanFunction,
                 EmployeesScanFunction,
+                ProductsScanFunction,
                 ProjectsScanFunction,
                 VersionedConstraintsScanFunction,
                 # ScalarFunctionGenerator - transform to single-column output
@@ -364,7 +366,27 @@ _EXAMPLE_CATALOG = Catalog(
                     not_null=("id", "name"),
                     unique=(("name",),),
                     check=("budget >= 0",),
+                    defaults={"budget": 0},
                     comment="Department reference table",
+                ),
+                Table(
+                    name="products",
+                    columns=pa.schema(
+                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+                            pa.field("id", pa.int64()),
+                            pa.field("name", pa.string()),
+                            pa.field("quantity", pa.int64()),
+                            pa.field("price", pa.float64()),
+                        ]
+                    ),
+                    not_null=("id",),
+                    primary_key=(("id",),),
+                    defaults={
+                        "quantity": 0,
+                        "name": "unknown",
+                        "price": 9.99,
+                    },
+                    comment="Product table with column defaults",
                 ),
                 Table(
                     name="employees",
@@ -585,6 +607,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         _static_scan_tables: dict[str, str] = {
             "departments": "departments_scan",
             "employees": "employees_scan",
+            "products": "products_scan",
             "projects": "projects_scan",
         }
         if schema_name.lower() == "data" and name.lower() in _static_scan_tables:
