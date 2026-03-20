@@ -54,6 +54,12 @@ __all__ = [
 ]
 
 
+def _validate_at_params(at_unit: str | None, at_value: str | None) -> None:
+    """Validate that at_unit and at_value are both provided or both absent."""
+    if bool(at_unit) != bool(at_value):
+        raise ValueError("at_unit and at_value must both be provided or both be None")
+
+
 @dataclass(frozen=True)
 class CatalogExample(ArrowSerializableDataclass):
     """An example usage of a function for catalog serialization.
@@ -1142,9 +1148,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         returns the same table info (no schema evolution). Override this method
         to return version-specific schemas for time-travel queries.
         """
-        # Validate at_unit and at_value are both provided or both absent
-        if bool(at_unit) != bool(at_value):
-            raise ValueError("at_unit and at_value must both be provided or both be None")
+        _validate_at_params(at_unit, at_value)
 
         self._build_registries()
         assert self._table_registry is not None
@@ -1214,9 +1218,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         For tables with explicit columns, override this method in your Worker
         to provide scan functions.
         """
-        # Validate at_unit and at_value are both provided or both absent
-        if bool(at_unit) != bool(at_value):
-            raise ValueError("at_unit and at_value must both be provided or both be None")
+        _validate_at_params(at_unit, at_value)
 
         self._build_registries()
         assert self._table_registry is not None

@@ -81,6 +81,7 @@ from vgi.catalog.catalog_interface import (
     SerializedSchema,
     SqlExpression,
     TransactionId,
+    _validate_at_params,
 )
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
@@ -254,6 +255,14 @@ class Worker:
         else:
             cls._secret_type_specs = []
 
+        # Inject settings/secret_types into explicit catalog_interface if set,
+        # so catalog_attach() can serialize them. Done once at class definition.
+        if cls.catalog_interface is not None:
+            if cls._setting_specs and hasattr(cls.catalog_interface, "settings"):
+                cls.catalog_interface.settings = list(cls._setting_specs)
+            if cls._secret_type_specs and hasattr(cls.catalog_interface, "secret_types"):
+                cls.catalog_interface.secret_types = list(cls._secret_type_specs)
+
     @classmethod
     def _build_registry(cls) -> dict[str, list[type[Function]]]:
         """Build function name -> list of classes mapping from functions list.
@@ -303,14 +312,8 @@ class Worker:
             CatalogInterface class to instantiate, or None if no catalog.
 
         """
-        # Use explicit catalog_interface if set
+        # Use explicit catalog_interface if set (settings injected in __init_subclass__)
         if cls.catalog_interface is not None:
-            # Inject settings and secret_types from the Worker's Settings class
-            # so catalog_attach() can serialize them.
-            if cls._setting_specs and hasattr(cls.catalog_interface, "settings"):
-                cls.catalog_interface.settings = list(cls._setting_specs)
-            if cls._secret_type_specs and hasattr(cls.catalog_interface, "secret_types"):
-                cls.catalog_interface.secret_types = list(cls._secret_type_specs)
             return cls.catalog_interface
 
         # Check for new Catalog object or legacy patterns
@@ -1365,8 +1368,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> TablesResponse:
         """Get information about a table. Returns 0 or 1 items."""
-        if bool(at_unit) != bool(at_value):
-            raise ValueError("at_unit and at_value must both be provided or both be None")
+        _validate_at_params(at_unit, at_value)
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         info = cat.table_get(
@@ -1424,8 +1426,7 @@ class Worker:
         transaction_id: bytes | None = None,
     ) -> bytes:
         """Get the scan function for a table. Returns ScanFunctionResult as IPC bytes."""
-        if bool(at_unit) != bool(at_value):
-            raise ValueError("at_unit and at_value must both be provided or both be None")
+        _validate_at_params(at_unit, at_value)
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_scan_function_get(

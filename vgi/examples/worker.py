@@ -41,6 +41,7 @@ from vgi.catalog import (
     TransactionId,
     View,
 )
+from vgi.catalog.catalog_interface import _validate_at_params
 from vgi.examples.scalar import (
     AddValuesFunction,
     AnyMixedIntFunction,
@@ -370,8 +371,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         at_value: str | None = None,
     ) -> TableInfo | None:
         """Return version-specific schema for time-travel tables."""
-        if bool(at_unit) != bool(at_value):
-            raise ValueError("at_unit and at_value must both be provided or both be None")
+        _validate_at_params(at_unit, at_value)
         if schema_name.lower() == "data" and name.lower() == "versioned_data" and at_unit:
             version = resolve_version(at_unit, at_value)
             cols = _VERSIONED_SCHEMAS[version]
@@ -405,8 +405,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         at_value: str | None,
     ) -> ScanFunctionResult:
         """Return scan function for tables with explicit columns."""
-        if bool(at_unit) != bool(at_value):
-            raise ValueError("at_unit and at_value must both be provided or both be None")
+        _validate_at_params(at_unit, at_value)
 
         # Handle the "versioned_data" table with time travel
         if schema_name.lower() == "data" and name.lower() == "versioned_data":
@@ -473,6 +472,8 @@ class ExampleWorker(Worker):
     """
 
     catalog_interface = ExampleCatalog
+    # catalog is set for introspection (worker page, tests) — runtime catalog
+    # operations go through catalog_interface.
     catalog = _EXAMPLE_CATALOG
 
     class Settings:
