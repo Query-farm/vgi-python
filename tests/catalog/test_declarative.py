@@ -589,9 +589,7 @@ class TestTableDefaults:
         """Python bool defaults become true/false."""
         table = Table(
             name="t",
-            columns=pa.schema(
-                [("a", pa.bool_()), ("b", pa.bool_())]
-            ),
+            columns=pa.schema([("a", pa.bool_()), ("b", pa.bool_())]),
             defaults={"a": True, "b": False},
         )
         info = table.to_table_info("main")
