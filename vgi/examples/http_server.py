@@ -6,6 +6,7 @@ Usage::
     vgi-example-http --port 9000
     vgi-example-http --host 0.0.0.0 --port 8080 --debug
     vgi-example-http --s3-bucket rusty-vgi-test
+    vgi-example-http --demo-storage
 
 Requires the ``http`` extra: ``pip install vgi[http]``
 For S3 offload support, also install: ``pip install vgi-rpc[s3]``
@@ -159,6 +160,11 @@ def main() -> None:
             "--externalize-compression",
             help="Compression for externalized batches: none or zstd",
         ),
+        demo_storage: bool = typer.Option(
+            False,
+            "--demo-storage",
+            help="Enable in-process blob storage for externalized payloads (no S3 required)",
+        ),
     ) -> None:
         try:
             from vgi_rpc import Compression, ExternalLocationConfig, RpcServer
@@ -189,10 +195,13 @@ def main() -> None:
 
         bucket = s3_bucket or os.environ.get("VGI_HTTP_S3_BUCKET")
         external_location = None
-        upload_url_provider = None
+        upload_url_provider: Any = None
+        max_request_bytes: int | None = None
         compression_choice = externalize_compression.lower()
         if compression_choice not in {"none", "zstd"}:
             raise typer.BadParameter("externalize-compression must be one of: none, zstd")
+        if bucket and demo_storage:
+            raise typer.BadParameter("--s3-bucket and --demo-storage are mutually exclusive")
         if bucket:
             storage = _SigV4S3Storage(
                 bucket=bucket,
@@ -213,6 +222,25 @@ def main() -> None:
                 f"bytes compression={compression_choice}\n"
             )
             sys.stderr.flush()
+        elif demo_storage:
+            from vgi.http.demo_storage import DemoBlobStorage, localhost_only_validator
+
+            demo_blob_storage = DemoBlobStorage()
+            compression = Compression() if compression_choice == "zstd" else None
+            external_location = ExternalLocationConfig(
+                storage=demo_blob_storage,
+                externalize_threshold_bytes=externalize_threshold_bytes,
+                compression=compression,
+                url_validator=localhost_only_validator,
+            )
+            upload_url_provider = demo_blob_storage
+            max_request_bytes = max_upload_bytes
+            sys.stderr.write(
+                "Demo blob storage enabled: "
+                f"threshold={externalize_threshold_bytes} bytes "
+                f"compression={compression_choice}\n"
+            )
+            sys.stderr.flush()
 
         import socket
 
@@ -222,6 +250,9 @@ def main() -> None:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.bind((host, 0))
                 port = int(s.getsockname()[1])
+
+        if demo_storage:
+            demo_blob_storage.set_base_url(f"http://{host}:{port}")
 
         from vgi.serve import _resolve_authenticate, _resolve_oauth_resource_metadata
 
@@ -236,9 +267,15 @@ def main() -> None:
             cors_origins=cors_origins,
             upload_url_provider=upload_url_provider,
             max_upload_bytes=max_upload_bytes if upload_url_provider is not None else None,
+            max_request_bytes=max_request_bytes,
             authenticate=authenticate,
             oauth_resource_metadata=oauth_metadata,
         )
+
+        if demo_storage:
+            from vgi.http.demo_storage import add_blob_routes
+
+            add_blob_routes(wsgi_app, demo_blob_storage, prefix=prefix)
 
         if describe:
             from vgi.http.worker_page import WorkerPageResource, build_worker_page
@@ -246,10 +283,17 @@ def main() -> None:
             worker_page_body = build_worker_page(ExampleWorker, prefix)
             wsgi_app.add_route(f"{prefix}/worker", WorkerPageResource(worker_page_body))
 
+        # Wrap with 413 middleware after all Falcon routes are registered.
+        serving_app: Any = wsgi_app
+        if demo_storage:
+            from vgi.http.demo_storage import MaxRequestBytesMiddleware
+
+            serving_app = MaxRequestBytesMiddleware(wsgi_app, max_upload_bytes)
+
         print(f"PORT:{port}", flush=True)
         sys.stderr.write(f"Serving ExampleWorker on http://{host}:{port}{prefix}\n")
         sys.stderr.flush()
-        waitress.serve(wsgi_app, host=host, port=port, _quiet=True)
+        waitress.serve(serving_app, host=host, port=port, _quiet=True)
 
     app()
 

@@ -65,6 +65,22 @@ The HTTP script (`test/run_http_integration.sh`) starts the HTTP server, waits f
 ready, runs the tests, and cleans up. Always use this script instead of manually managing
 the server. Server logs are at `/tmp/vgi-http-test-server.log`.
 
+**HTTP transport with demo blob storage** (forces all batches through external storage):
+```bash
+cd ~/Development/vgi
+VGI_DEMO_STORAGE=1 ./test/run_http_integration.sh "test/sql/integration/*"
+```
+
+This starts the server with `--demo-storage` and `--externalize-threshold-bytes 1`,
+forcing every batch through the in-process blob store. Control threshold and
+compression via `VGI_EXTERNALIZE_THRESHOLD_BYTES` and `VGI_EXTERNALIZE_COMPRESSION`
+env vars.
+
+**Note:** These tests require the C++ VGI extension to support resolving external
+location pointer batches. Until that support lands, all tests will fail with
+`Empty response` errors because the C++ client receives pointer batches instead
+of actual data.
+
 **Filter by test subset:**
 ```bash
 ./test/run_http_integration.sh "test/sql/integration/secret/*"
@@ -133,6 +149,31 @@ Use `-f` to supply SQL files to DuckDB, not stdin redirection. Do not redirect s
 - `table_in_out/buffer_input/scale.test_slow` — input buffering semantics differ over HTTP
 
 Two assertions are also skipped (via `skip on error_message matching 'HTTP'`).
+
+### Demo Blob Storage (External Batch Offloading)
+
+The example HTTP server supports in-process blob storage for demonstrating and testing
+external record batch offloading without S3 or any cloud infrastructure.
+
+**Running the example server with demo storage:**
+```bash
+vgi-example-http --demo-storage
+vgi-example-http --demo-storage --externalize-threshold-bytes 4096 --externalize-compression zstd
+```
+
+When `--demo-storage` is enabled:
+- Batches larger than `--externalize-threshold-bytes` are stored in-memory and replaced
+  with pointer batches containing `http://` URLs to `/__blobs__/{id}` endpoints
+- Upload URLs are supported via the `__upload_url__` endpoint for client-side uploads
+- `VGI-Max-Request-Bytes` is advertised and enforced (413 for oversized requests)
+- `--demo-storage` and `--s3-bucket` are mutually exclusive
+
+**Running demo storage pytest tests:**
+```bash
+uv run pytest tests/test_http_demo_storage.py -n auto -v
+```
+
+These tests require `vgi-rpc[external]` (aiohttp, tenacity) for external location resolution.
 
 ## Project Overview
 

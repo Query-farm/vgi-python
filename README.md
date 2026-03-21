@@ -422,6 +422,34 @@ Client                              Worker
 
 ---
 
+## External Batch Offloading (Demo Storage)
+
+When record batches are too large for HTTP request/response bodies, VGI supports
+externalizing them to blob storage. The server replaces oversized batches with
+pointer batches containing a URL, and the client transparently fetches the data.
+
+The example HTTP server includes a built-in demo blob store for testing this
+without S3 or any cloud infrastructure:
+
+```bash
+# Start with demo storage (4 KiB threshold for testing)
+vgi-example-http --demo-storage --externalize-threshold-bytes 4096
+
+# With zstd compression
+vgi-example-http --demo-storage --externalize-threshold-bytes 4096 --externalize-compression zstd
+```
+
+When `--demo-storage` is enabled:
+- Batches exceeding `--externalize-threshold-bytes` are stored in-memory and
+  served from `/__blobs__/{id}` endpoints on the same server
+- Clients can request upload URLs for large inputs via the `__upload_url__` endpoint
+- The server advertises `VGI-Max-Request-Bytes` and rejects oversized requests with 413
+
+For production use, implement the `ExternalStorage` protocol from `vgi_rpc` against
+your cloud storage (S3, GCS, etc.). The example server also supports S3 via `--s3-bucket`.
+
+---
+
 ## Documentation
 
 - [Function Lifecycle](docs/lifecycle.md) - Bind, init, process, finalize
