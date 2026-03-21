@@ -18,3 +18,10 @@ mypy-html-report/
 .coverage.*
 htmlcov/
 test-data/v.parquet
+
+# IDE / editor
+.vscode/
+.idea/
+
+# Playwright MCP
+.playwright-mcp/
