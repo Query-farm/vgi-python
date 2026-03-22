@@ -279,7 +279,12 @@ class Worker:
 
         registry: dict[str, list[type[Function]]] = {}
 
+        seen: set[type[Function]] = set()
+
         def add_function(func_cls: type[Function]) -> None:
+            if func_cls in seen:
+                return
+            seen.add(func_cls)
             meta = func_cls.get_metadata()
             if meta.name not in registry:
                 registry[meta.name] = []
@@ -294,6 +299,17 @@ class Worker:
             for schema in cls.catalog.schemas:
                 for func_cls in schema.functions:
                     add_function(func_cls)
+
+                # Auto-register functions referenced by table descriptors
+                for table in schema.tables:
+                    # Scan function (Table.function)
+                    if table.function is not None:
+                        add_function(table.function)
+                    # Write functions
+                    for attr in ("insert_function", "update_function", "delete_function"):
+                        write_func = getattr(table, attr, None)
+                        if write_func is not None:
+                            add_function(write_func)
 
         cls._registry = registry
         return registry
@@ -1436,6 +1452,60 @@ class Worker:
             name=name,
             at_unit=at_unit,
             at_value=at_value,
+        )
+        return result.serialize()
+
+    def catalog_table_insert_function_get(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> bytes:
+        """Get the insert function for a table. Returns WriteFunctionResult as IPC bytes."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        cat = self._get_catalog()
+        result = cat.table_insert_function_get(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+        )
+        return result.serialize()
+
+    def catalog_table_update_function_get(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> bytes:
+        """Get the update function for a table. Returns WriteFunctionResult as IPC bytes."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        cat = self._get_catalog()
+        result = cat.table_update_function_get(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+        )
+        return result.serialize()
+
+    def catalog_table_delete_function_get(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> bytes:
+        """Get the delete function for a table. Returns WriteFunctionResult as IPC bytes."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        cat = self._get_catalog()
+        result = cat.table_delete_function_get(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
         )
         return result.serialize()
 

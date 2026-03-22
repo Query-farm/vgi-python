@@ -31,6 +31,7 @@ from vgi.invocation import BindResponse, FunctionType
 if TYPE_CHECKING:
     from vgi.function import Function
     from vgi.table_function import TableFunctionGenerator
+    from vgi.table_in_out_function import TableInOutGenerator
 
 
 class Sql(str):
@@ -137,6 +138,9 @@ class Table:
     function: type[TableFunctionGenerator[Any, Any]] | None = None
     arguments: Arguments | None = None
     supports_time_travel: bool = False
+    insert_function: type[TableInOutGenerator[Any, Any]] | None = None
+    update_function: type[TableInOutGenerator[Any, Any]] | None = None
+    delete_function: type[TableInOutGenerator[Any, Any]] | None = None
     not_null: tuple[str, ...] = ()
     unique: tuple[tuple[str, ...], ...] = ()
     check: tuple[str, ...] = ()
@@ -215,6 +219,13 @@ class Table:
                     f"Table '{self.name}': defaults column '{col}' not found "
                     f"in schema. Available columns: {sorted(column_names)}"
                 )
+
+        # Validate write functions: UPDATE/DELETE require a scan function for row IDs
+        if (self.update_function is not None or self.delete_function is not None) and self.function is None:
+            raise ValueError(
+                f"Table '{self.name}': update_function and delete_function require "
+                f"a scan function (set 'function') to provide row IDs"
+            )
 
     def _get_resolved_columns(self) -> pa.Schema:
         """Get the resolved columns schema (explicit or derived from function).
@@ -320,6 +331,9 @@ class Table:
             check_constraints=list(self.check),
             primary_key_constraints=self._resolve_primary_key_indices(),
             foreign_key_constraints=self._serialize_foreign_keys(schema_name),
+            supports_insert=self.insert_function is not None,
+            supports_update=self.update_function is not None,
+            supports_delete=self.delete_function is not None,
             comment=self.comment,
             tags=dict(self.tags),
         )

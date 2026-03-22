@@ -37,6 +37,7 @@ from vgi.catalog import (
     SecretTypeSpec,
     SerializedSchema,
     Setting,
+    Sql,
     Table,
     TableInfo,
     TransactionId,
@@ -131,6 +132,14 @@ from vgi.examples.table_in_out import (
     SumAllColumnsFunction,
     SumAllColumnsSimpleDistributed,
 )
+from vgi.examples.writable_table import (
+    WritableProductsInsert,
+    WritableProductsScan,
+    WritableTableDelete,
+    WritableTableInsert,
+    WritableTableScan,
+    WritableTableUpdate,
+)
 from vgi.worker import Worker
 
 _EXAMPLE_CATALOG = Catalog(
@@ -223,6 +232,9 @@ _EXAMPLE_CATALOG = Catalog(
                 AnyMixedStrFunction,
                 UpperCaseFunction,
                 WhoAmIFunction,
+                # Writable table scan functions (registered here for projection_pushdown metadata)
+                WritableTableScan,
+                WritableProductsScan,
             ],
             views=[
                 View(
@@ -453,6 +465,30 @@ _EXAMPLE_CATALOG = Catalog(
                         ),
                     ),
                     comment="Table with constraints that evolve across versions",
+                ),
+                # ----- Writable table example -----
+                Table(
+                    name="writable_data",
+                    function=WritableTableScan,
+                    insert_function=WritableTableInsert,
+                    update_function=WritableTableUpdate,
+                    delete_function=WritableTableDelete,
+                    comment="In-memory writable table supporting INSERT/UPDATE/DELETE",
+                ),
+                Table(
+                    name="writable_products",
+                    function=WritableProductsScan,
+                    insert_function=WritableProductsInsert,
+                    primary_key=(("product_id",),),
+                    not_null=("product_id", "name"),
+                    check=("price >= 0",),
+                    defaults={
+                        "product_id": 0,
+                        "price": 0.0,
+                        "status": "draft",
+                        "created_at": Sql("'server-assigned'"),
+                    },
+                    comment="Writable products with defaults, constraints, and server-side modification",
                 ),
             ],
             views=[

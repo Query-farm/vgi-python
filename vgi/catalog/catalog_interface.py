@@ -51,6 +51,7 @@ __all__ = [
     "SecretLookupEntry",
     "MacroType",
     "SchemaObjectType",
+    "WriteFunctionResult",
 ]
 
 
@@ -160,6 +161,11 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
         default_factory=list
     )
     foreign_key_constraints: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
+
+    # Write support flags — indicate which DML operations the table supports.
+    supports_insert: bool = False
+    supports_update: bool = False
+    supports_delete: bool = False
 
 
 @dataclass(frozen=True)
@@ -382,6 +388,10 @@ class ScanFunctionResult:
             named_arguments=named_arguments,
             required_extensions=list(cast("list[str]", row.get("required_extensions") or [])),
         )
+
+
+# Write function discovery uses the same wire format as scan function discovery.
+WriteFunctionResult = ScanFunctionResult
 
 
 class CatalogInterface(ABC):
@@ -830,6 +840,53 @@ class CatalogInterface(ABC):
         """
         raise NotImplementedError("Table scan function get not implemented.")
 
+    def table_insert_function_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> ScanFunctionResult:
+        """Get the write function for INSERT operations on the table.
+
+        Returns a ScanFunctionResult identifying the TableInOutGenerator function
+        to call for inserting rows into this table.
+        """
+        raise NotImplementedError("Table insert not supported.")
+
+    def table_update_function_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> ScanFunctionResult:
+        """Get the write function for UPDATE operations on the table.
+
+        Returns a ScanFunctionResult identifying the TableInOutGenerator function
+        to call for updating rows in this table. Input batches will include a
+        rowid column plus the columns being updated.
+        """
+        raise NotImplementedError("Table update not supported.")
+
+    def table_delete_function_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> ScanFunctionResult:
+        """Get the write function for DELETE operations on the table.
+
+        Returns a ScanFunctionResult identifying the TableInOutGenerator function
+        to call for deleting rows from this table. Input batches will contain
+        a rowid column identifying the rows to delete.
+        """
+        raise NotImplementedError("Table delete not supported.")
+
     def view_create(
         self,
         *,
@@ -1258,6 +1315,82 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             f"Available tables: {available_str}. "
             f"Either use Table(function=...) for automatic scanning, "
             f"or override table_scan_function_get in your Worker."
+        )
+
+    def _write_function_get(
+        self,
+        *,
+        schema_name: str,
+        name: str,
+        operation: str,
+        attr_name: str,
+    ) -> ScanFunctionResult:
+        """Shared implementation for table_{insert,update,delete}_function_get."""
+        self._build_registries()
+        assert self._table_registry is not None
+
+        table = self._table_registry.get((schema_name.lower(), name.lower()))
+        if table is None:
+            raise NotImplementedError(f"Table '{schema_name}.{name}' not found in catalog.")
+
+        write_func = getattr(table, attr_name, None)
+        if write_func is None:
+            raise CatalogReadOnlyError(f"Table '{schema_name}.{name}' does not support {operation}.")
+
+        func_meta = write_func.get_metadata()
+        return ScanFunctionResult(
+            function_name=func_meta.name,
+            positional_arguments=[],
+            named_arguments={},
+            required_extensions=[],
+        )
+
+    def table_insert_function_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> ScanFunctionResult:
+        """Get insert function for a table."""
+        return self._write_function_get(
+            schema_name=schema_name,
+            name=name,
+            operation="INSERT",
+            attr_name="insert_function",
+        )
+
+    def table_update_function_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> ScanFunctionResult:
+        """Get update function for a table."""
+        return self._write_function_get(
+            schema_name=schema_name,
+            name=name,
+            operation="UPDATE",
+            attr_name="update_function",
+        )
+
+    def table_delete_function_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> ScanFunctionResult:
+        """Get delete function for a table."""
+        return self._write_function_get(
+            schema_name=schema_name,
+            name=name,
+            operation="DELETE",
+            attr_name="delete_function",
         )
 
     @overload

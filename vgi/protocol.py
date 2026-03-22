@@ -953,6 +953,36 @@ class VgiProtocol(Protocol):
         """Get the scan function for a table. Returns ScanFunctionResult as IPC bytes."""
         ...
 
+    def catalog_table_insert_function_get(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> bytes:
+        """Get the insert function for a table. Returns WriteFunctionResult as IPC bytes."""
+        ...
+
+    def catalog_table_update_function_get(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> bytes:
+        """Get the update function for a table. Returns WriteFunctionResult as IPC bytes."""
+        ...
+
+    def catalog_table_delete_function_get(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> bytes:
+        """Get the delete function for a table. Returns WriteFunctionResult as IPC bytes."""
+        ...
+
     def catalog_table_comment_set(
         self,
         attach_id: bytes,
