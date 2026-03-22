@@ -36,6 +36,7 @@ vgi-example-worker = "vgi.examples.worker:main"
 vgi-example-http = "vgi.examples.http_server:main"
 vgi-example-catalog-worker = "vgi.examples.catalog:main"
 vgi-ci-worker = "vgi.ci.worker:main"
+vgi-transactor = "vgi.transactor.server:main"
 
 [tool.hatch.metadata]
 allow-direct-references = true
