@@ -1,8 +1,9 @@
 """Example writable tables with INSERT, UPDATE, DELETE, and RETURNING support.
 
 Demonstrates how to implement write operations using TableInOutGenerator functions
-backed by a shared DuckDB database. The scan functions emit a ``row_id`` column marked
-with ``is_row_id`` metadata so that UPDATE and DELETE can identify target rows.
+that proxy Arrow batches through a **db-transactor** subprocess. The transactor
+owns the single DuckDB connection and provides transactional access to multiple
+VGI worker processes.
 
 Two tables are provided:
 
@@ -24,20 +25,19 @@ Usage in a Table descriptor::
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import duckdb
 import pyarrow as pa
+from vgi_rpc import AnnotatedBatch
 
 from vgi.invocation import BindResponse, GlobalInitResponse
 from vgi.table_function import TableFunctionGenerator
 from vgi.table_in_out_function import TableInOutGenerator
+from vgi.transactor.client import TransactorClient
 
 __all__ = [
-    "DuckDBStore",
-    "ProductsStore",
+    "TransactorProxy",
     "WritableProductsInsert",
     "WritableProductsScan",
     "WritableTableDelete",
@@ -51,11 +51,7 @@ _COUNT_SCHEMA = pa.schema([("count", pa.int64())])
 
 
 def _parse_write_options(bind_call: Any) -> dict[str, Any]:
-    """Parse the write_options RecordBatch from the bind call's named arguments.
-
-    Works with a BindRequest object. Returns a dict with keys: return_chunks (bool),
-    on_conflict (str), on_conflict_columns (list[str]). Missing keys get defaults.
-    """
+    """Parse the write_options RecordBatch from the bind call's named arguments."""
     defaults: dict[str, Any] = {
         "return_chunks": False,
         "on_conflict": "throw",
@@ -95,41 +91,78 @@ def _is_returning(params: Any) -> bool:
 
 
 # ============================================================================
-# DuckDBStore — shared base for DuckDB-backed stores
+# TransactorProxy — manages the db-transactor connection
 # ============================================================================
 
+_DEFAULT_DB_PATH = Path("~/.local/state/vgi/writable_store.duckdb")
 
-class DuckDBStore:
-    """Base class for DuckDB-backed stores with lazy initialization.
 
-    Connection is created lazily on first use and reused for the lifetime of the
-    store instance. Subclasses override ``_create_tables`` to define their schema.
+def _get_db_path() -> Path:
+    """Get the database path from env var or default."""
+    env_path = os.environ.get("VGI_WRITABLE_STORE")
+    return Path(env_path) if env_path else _DEFAULT_DB_PATH.expanduser()
 
-    The database path is determined by (in order):
-    1. The ``path`` constructor argument
-    2. The ``VGI_WRITABLE_STORE`` environment variable
-    3. ``~/.local/state/vgi/writable_store.duckdb``
+
+class TransactorProxy:
+    """Manages connections to the db-transactor subprocess.
+
+    Lazily spawns the transactor on first use. Provides methods to open
+    exchange streams (insert/delete/update) and producer streams (scan)
+    that proxy Arrow batches to the transactor's DuckDB connection.
     """
 
-    _DEFAULT_PATH = Path("~/.local/state/vgi/writable_store.duckdb")
+    def __init__(self, db_path: Path | None = None, ddl_statements: list[str] | None = None) -> None:
+        """Initialize the proxy."""
+        self._db_path = db_path or _get_db_path()
+        self._ddl = ddl_statements or []
+        self._client: TransactorClient | None = None
+        self._tables_created = False
 
-    def __init__(self, path: Path | None = None) -> None:
-        """Initialize the store. Database is created lazily on first access."""
-        env_path = os.environ.get("VGI_WRITABLE_STORE")
-        self._path = path or (Path(env_path) if env_path else self._DEFAULT_PATH.expanduser())
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn: duckdb.DuckDBPyConnection | None = None
+    def _get_proxy(self) -> Any:
+        """Get the transactor RPC proxy (auto-spawn if needed)."""
+        if self._client is None:
+            self._client = TransactorClient(str(self._db_path))
+        proxy = self._client.get_proxy()
+        if not self._tables_created:
+            for ddl in self._ddl:
+                proxy.execute_ddl(sql=ddl)
+            self._tables_created = True
+        return proxy
 
-    def _get_conn(self) -> duckdb.DuckDBPyConnection:
-        """Get or create the DuckDB connection."""
-        if self._conn is None:
-            self._conn = duckdb.connect(str(self._path))
-            self._create_tables(self._conn)
-        return self._conn
+    def close(self) -> None:
+        """Close the transactor connection."""
+        if self._client is not None:
+            self._client.close()
+            self._client = None
 
-    def _create_tables(self, conn: duckdb.DuckDBPyConnection) -> None:
-        """Override to create tables. Called once on first connection."""
-        raise NotImplementedError
+
+# Module-level proxy — DDL is sent to the transactor on first use.
+_WRITABLE_DATA_DDL = [
+    "CREATE SEQUENCE IF NOT EXISTS writable_data_seq START 1",
+    (
+        "CREATE TABLE IF NOT EXISTS writable_data ("
+        "  row_id BIGINT DEFAULT nextval('writable_data_seq') PRIMARY KEY,"
+        "  id BIGINT NOT NULL,"
+        "  name VARCHAR NOT NULL"
+        ")"
+    ),
+]
+
+_WRITABLE_PRODUCTS_DDL = [
+    "CREATE SEQUENCE IF NOT EXISTS writable_products_seq START 1",
+    (
+        "CREATE TABLE IF NOT EXISTS writable_products ("
+        "  row_id BIGINT DEFAULT nextval('writable_products_seq') PRIMARY KEY,"
+        "  product_id BIGINT NOT NULL UNIQUE,"
+        "  name VARCHAR NOT NULL,"
+        "  price DOUBLE NOT NULL DEFAULT 0.0 CHECK(price >= 0),"
+        "  status VARCHAR NOT NULL DEFAULT 'draft',"
+        "  created_at VARCHAR NOT NULL DEFAULT 'server-assigned'"
+        ")"
+    ),
+]
+
+transactor_proxy = TransactorProxy(ddl_statements=_WRITABLE_DATA_DDL + _WRITABLE_PRODUCTS_DDL)
 
 
 # ============================================================================
@@ -152,75 +185,8 @@ _SCAN_SCHEMA = pa.schema(
 )
 
 
-class MemoryStore(DuckDBStore):
-    """DuckDB-backed store for the writable_data table."""
-
-    def _create_tables(self, conn: duckdb.DuckDBPyConnection) -> None:
-        """Create the writable_data table."""
-        conn.execute(
-            "CREATE SEQUENCE IF NOT EXISTS writable_data_seq START 1;"
-            "CREATE TABLE IF NOT EXISTS writable_data ("
-            "  row_id BIGINT DEFAULT nextval('writable_data_seq') PRIMARY KEY,"
-            "  id BIGINT NOT NULL,"
-            "  name VARCHAR NOT NULL"
-            ")"
-        )
-
-    def insert(self, rows: list[dict[str, Any]]) -> list[int]:
-        """Insert rows and return their assigned row IDs."""
-        conn = self._get_conn()
-        ids: list[int] = []
-        for row in rows:
-            result = conn.execute(
-                "INSERT INTO writable_data (id, name) VALUES ($1, $2) RETURNING row_id",
-                [row["id"], row["name"]],
-            ).fetchone()
-            ids.append(result[0] if result else 0)
-        return ids
-
-    def update(self, row_id: int, values: dict[str, Any]) -> bool:
-        """Update a row by row_id. Returns True if the row was found."""
-        set_parts = []
-        params: list[Any] = []
-        for i, (col, val) in enumerate(values.items()):
-            set_parts.append(f"{col} = ${i + 1}")
-            params.append(val)
-        params.append(row_id)
-        conn = self._get_conn()
-        result = conn.execute(
-            f"UPDATE writable_data SET {', '.join(set_parts)} WHERE row_id = ${len(params)} RETURNING row_id",  # noqa: S608
-            params,
-        )
-        return result.fetchone() is not None
-
-    def delete(self, row_id: int) -> bool:
-        """Delete a row by row_id. Returns True if the row was found."""
-        conn = self._get_conn()
-        result = conn.execute("DELETE FROM writable_data WHERE row_id = $1 RETURNING row_id", [row_id])
-        return result.fetchone() is not None
-
-    def scan(self) -> list[tuple[int, dict[str, Any]]]:
-        """Return all (row_id, row_dict) pairs.
-
-        Note: loads all rows into memory. Production code should use cursors
-        and batch the output for large tables.
-        """
-        conn = self._get_conn()
-        rows = conn.execute("SELECT row_id, id, name FROM writable_data").fetchall()
-        return [(r[0], {"id": r[1], "name": r[2]}) for r in rows]
-
-    def reset(self) -> None:
-        """Clear all data."""
-        conn = self._get_conn()
-        conn.execute("DELETE FROM writable_data")
-
-
-# Module-level store — database is created lazily on first access.
-writable_store = MemoryStore()
-
-
 class WritableTableScan(TableFunctionGenerator[None, None]):
-    """Scan function for the writable table. Emits row_id + data columns."""
+    """Scan function — proxies to transactor scan stream."""
 
     class Meta:
         """Metadata for WritableTableScan."""
@@ -235,31 +201,21 @@ class WritableTableScan(TableFunctionGenerator[None, None]):
 
     @classmethod
     def on_init(cls, params):  # type: ignore[override]
-        """Limit to a single worker — DuckDB store is not partitioned."""
+        """Limit to a single worker."""
         return GlobalInitResponse(max_workers=1)
 
     @classmethod
     def process(cls, params, state, out):  # type: ignore[override]
-        """Emit rows from the store, respecting projection pushdown."""
-        rows = writable_store.scan()
-        if rows:
-            full_data: dict[str, list[Any]] = {
-                "row_id": [r[0] for r in rows],
-                "id": [r[1]["id"] for r in rows],
-                "name": [r[1]["name"] for r in rows],
-            }
-            projected = {col: full_data[col] for col in params.output_schema.names}
-            batch = pa.record_batch(projected, schema=params.output_schema)
-            out.emit(batch)
+        """Proxy scan through the transactor."""
+        proxy = transactor_proxy._get_proxy()
+        columns = list(params.output_schema.names)
+        for batch in proxy.scan(tx_id=b"\x00", schema_name="", table_name="writable_data", columns=columns):
+            out.emit(batch.batch)
         out.finish()
 
 
 class WritableTableInsert(TableInOutGenerator[None, None]):
-    """INSERT handler: receives rows with table columns, appends to store.
-
-    Supports RETURNING: when ``return_chunks=true`` is passed via write_options,
-    the function returns the inserted rows instead of counts.
-    """
+    """INSERT handler — proxies batches to transactor insert stream."""
 
     class Meta:
         """Metadata for WritableTableInsert."""
@@ -275,17 +231,16 @@ class WritableTableInsert(TableInOutGenerator[None, None]):
 
     @classmethod
     def process(cls, params, state, batch, out):  # type: ignore[override]
-        """Insert all rows from the batch into the store."""
-        rows = batch.to_pylist()
-        writable_store.insert(rows)
-        if params.output_schema != _COUNT_SCHEMA:
-            out.emit(batch)
-        else:
-            out.emit(pa.record_batch({"count": [len(rows)]}, schema=_COUNT_SCHEMA))
+        """Forward batch to transactor insert stream."""
+        returning = params.output_schema != _COUNT_SCHEMA
+        proxy = transactor_proxy._get_proxy()
+        with proxy.insert(tx_id=b"\x00", schema_name="", table_name="writable_data", returning=returning) as stream:
+            response = stream.exchange(AnnotatedBatch(batch=batch))
+            out.emit(response.batch)
 
 
 class WritableTableUpdate(TableInOutGenerator[None, None]):
-    """UPDATE handler: receives row_id + updated columns."""
+    """UPDATE handler — proxies batches to transactor update stream."""
 
     class Meta:
         """Metadata for WritableTableUpdate."""
@@ -299,18 +254,15 @@ class WritableTableUpdate(TableInOutGenerator[None, None]):
 
     @classmethod
     def process(cls, params, state, batch, out):  # type: ignore[override]
-        """Update rows identified by row_id with new column values."""
-        count = 0
-        for i in range(batch.num_rows):
-            row_id = batch.column("row_id")[i].as_py()
-            values = {col: batch.column(col)[i].as_py() for col in batch.schema.names if col != "row_id"}
-            if writable_store.update(row_id, values):
-                count += 1
-        out.emit(pa.record_batch({"count": [count]}, schema=_COUNT_SCHEMA))
+        """Forward batch to transactor update stream."""
+        proxy = transactor_proxy._get_proxy()
+        with proxy.update(tx_id=b"\x00", schema_name="", table_name="writable_data") as stream:
+            response = stream.exchange(AnnotatedBatch(batch=batch))
+            out.emit(response.batch)
 
 
 class WritableTableDelete(TableInOutGenerator[None, None]):
-    """DELETE handler: receives row_id column, removes matching rows."""
+    """DELETE handler — proxies batches to transactor delete stream."""
 
     class Meta:
         """Metadata for WritableTableDelete."""
@@ -324,13 +276,11 @@ class WritableTableDelete(TableInOutGenerator[None, None]):
 
     @classmethod
     def process(cls, params, state, batch, out):  # type: ignore[override]
-        """Delete rows identified by row_id from the store."""
-        count = 0
-        for i in range(batch.num_rows):
-            row_id = batch.column("row_id")[i].as_py()
-            if writable_store.delete(row_id):
-                count += 1
-        out.emit(pa.record_batch({"count": [count]}, schema=_COUNT_SCHEMA))
+        """Forward batch to transactor delete stream."""
+        proxy = transactor_proxy._get_proxy()
+        with proxy.delete(tx_id=b"\x00", schema_name="", table_name="writable_data") as stream:
+            response = stream.exchange(AnnotatedBatch(batch=batch))
+            out.emit(response.batch)
 
 
 # ============================================================================
@@ -359,98 +309,8 @@ _PRODUCTS_SCAN_SCHEMA = pa.schema(
 )
 
 
-class ProductsStore(DuckDBStore):
-    """DuckDB-backed products store with server-side ID and timestamp assignment."""
-
-    def _create_tables(self, conn: duckdb.DuckDBPyConnection) -> None:
-        """Create the writable_products table with constraints."""
-        conn.execute(
-            "CREATE SEQUENCE IF NOT EXISTS writable_products_seq START 1;"
-            "CREATE TABLE IF NOT EXISTS writable_products ("
-            "  row_id BIGINT DEFAULT nextval('writable_products_seq') PRIMARY KEY,"
-            "  product_id BIGINT NOT NULL UNIQUE,"
-            "  name VARCHAR NOT NULL,"
-            "  price DOUBLE NOT NULL DEFAULT 0.0 CHECK(price >= 0),"
-            "  status VARCHAR NOT NULL DEFAULT 'draft',"
-            "  created_at VARCHAR NOT NULL"
-            ")"
-        )
-
-    def insert(
-        self,
-        rows: list[dict[str, Any]],
-        on_conflict: str = "throw",
-        on_conflict_columns: list[str] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Insert rows with server-side modification. Returns the actual inserted rows.
-
-        Server-side behavior:
-        - ``created_at`` is always overwritten with the server UTC timestamp
-        - ``product_id`` of 0 is auto-assigned via a sequence
-        - ``on_conflict="nothing"`` uses targeted ``ON CONFLICT(...) DO NOTHING``
-        """
-        result_rows: list[dict[str, Any]] = []
-        now = datetime.now(tz=UTC).isoformat()
-        conn = self._get_conn()
-
-        # Build the INSERT SQL with optional ON CONFLICT clause
-        base_sql = (
-            "INSERT INTO writable_products (product_id, name, price, status, created_at) VALUES ($1, $2, $3, $4, $5)"
-        )
-        if on_conflict == "nothing":
-            target_cols = ", ".join(on_conflict_columns or ["product_id"])
-            base_sql += f" ON CONFLICT({target_cols}) DO NOTHING"
-
-        # Use COALESCE(NULLIF($1, 0), nextval(...)) to auto-assign product_id when 0.
-        # Use RETURNING to detect which rows were actually inserted
-        # (ON CONFLICT DO NOTHING silently skips — RETURNING returns nothing for them).
-        auto_id_sql = base_sql.replace(
-            "$1",
-            "COALESCE(NULLIF($1, 0), nextval('writable_products_seq'))",
-        )
-        returning_sql = auto_id_sql + " RETURNING product_id, name, price, status, created_at"
-
-        for row in rows:
-            created_at = now
-            product_id = row.get("product_id", 0)
-
-            inserted = conn.execute(
-                returning_sql,
-                [product_id, row["name"], row["price"], row["status"], created_at],
-            ).fetchone()
-
-            if inserted is None:
-                # Row was skipped due to ON CONFLICT DO NOTHING
-                continue
-
-            result_rows.append(
-                {
-                    "product_id": inserted[0],
-                    "name": inserted[1],
-                    "price": inserted[2],
-                    "status": inserted[3],
-                    "created_at": inserted[4],
-                }
-            )
-        return result_rows
-
-    def scan(self) -> list[tuple[int, dict[str, Any]]]:
-        """Return all (row_id, row_dict) pairs."""
-        conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT row_id, product_id, name, price, status, created_at FROM writable_products"
-        ).fetchall()
-        return [
-            (r[0], {"product_id": r[1], "name": r[2], "price": r[3], "status": r[4], "created_at": r[5]}) for r in rows
-        ]
-
-
-# Module-level store — database is created lazily on first access.
-products_store = ProductsStore()
-
-
 class WritableProductsScan(TableFunctionGenerator[None, None]):
-    """Scan function for writable_products table."""
+    """Scan function — proxies to transactor scan stream."""
 
     class Meta:
         """Metadata for WritableProductsScan."""
@@ -470,30 +330,20 @@ class WritableProductsScan(TableFunctionGenerator[None, None]):
 
     @classmethod
     def process(cls, params, state, out):  # type: ignore[override]
-        """Emit rows from the products store, respecting projection pushdown."""
-        rows = products_store.scan()
-        if rows:
-            full_data: dict[str, list[Any]] = {
-                "row_id": [r[0] for r in rows],
-                "product_id": [r[1]["product_id"] for r in rows],
-                "name": [r[1]["name"] for r in rows],
-                "price": [r[1]["price"] for r in rows],
-                "status": [r[1]["status"] for r in rows],
-                "created_at": [r[1]["created_at"] for r in rows],
-            }
-            projected = {col: full_data[col] for col in params.output_schema.names}
-            batch = pa.record_batch(projected, schema=params.output_schema)
-            out.emit(batch)
+        """Proxy scan through the transactor."""
+        proxy = transactor_proxy._get_proxy()
+        columns = list(params.output_schema.names)
+        for batch in proxy.scan(tx_id=b"\x00", schema_name="", table_name="writable_products", columns=columns):
+            out.emit(batch.batch)
         out.finish()
 
 
 class WritableProductsInsert(TableInOutGenerator[None, None]):
-    """INSERT handler for writable_products with server-side modification.
+    """INSERT handler for writable_products — proxies to transactor.
 
-    Server-side behavior:
-    - ``created_at`` is always overwritten with the server timestamp
-    - ``product_id`` of 0 is auto-assigned via a sequence
-    - RETURNING reflects the server-modified values
+    Server-side modification (auto product_id, timestamp) is handled by
+    DuckDB DEFAULT expressions in the transactor's schema. The RETURNING
+    response from the transactor includes the server-assigned values.
     """
 
     class Meta:
@@ -511,32 +361,9 @@ class WritableProductsInsert(TableInOutGenerator[None, None]):
 
     @classmethod
     def process(cls, params, state, batch, out):  # type: ignore[override]
-        """Insert products with server-side modification."""
-        opts = _get_write_options(params)
-        rows = batch.to_pylist()
-        actual_rows = products_store.insert(
-            rows,
-            on_conflict=opts["on_conflict"],
-            on_conflict_columns=opts["on_conflict_columns"],
-        )
-
-        if params.output_schema != _COUNT_SCHEMA:
-            # RETURNING: emit only the successfully inserted rows
-            if actual_rows:
-                out.emit(
-                    pa.record_batch(
-                        {
-                            "product_id": [r["product_id"] for r in actual_rows],
-                            "name": [r["name"] for r in actual_rows],
-                            "price": [r["price"] for r in actual_rows],
-                            "status": [r["status"] for r in actual_rows],
-                            "created_at": [r["created_at"] for r in actual_rows],
-                        },
-                        schema=_PRODUCTS_TABLE_SCHEMA,
-                    )
-                )
-            else:
-                empty = {col: [] for col in _PRODUCTS_TABLE_SCHEMA.names}
-                out.emit(pa.record_batch(empty, schema=_PRODUCTS_TABLE_SCHEMA))
-        else:
-            out.emit(pa.record_batch({"count": [len(actual_rows)]}, schema=_COUNT_SCHEMA))
+        """Forward batch to transactor insert stream."""
+        returning = params.output_schema != _COUNT_SCHEMA
+        proxy = transactor_proxy._get_proxy()
+        with proxy.insert(tx_id=b"\x00", schema_name="", table_name="writable_products", returning=returning) as stream:
+            response = stream.exchange(AnnotatedBatch(batch=batch))
+            out.emit(response.batch)

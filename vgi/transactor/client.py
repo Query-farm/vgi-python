@@ -47,6 +47,7 @@ class TransactorClient:
         self._socket_path = self._compute_socket_path(self._db_path)
         self._transport: UnixTransport | None = None
         self._connection: RpcConnection | None = None
+        self._proxy: Any = None  # The typed proxy returned by RpcConnection.__enter__
         self._process: subprocess.Popen | None = None  # type: ignore[type-arg]
 
     @staticmethod
@@ -60,11 +61,11 @@ class TransactorClient:
 
         Returns a proxy implementing TransactorProtocol methods.
         """
-        if self._connection is not None:
-            return self._connection.proxy
+        if self._proxy is not None:
+            return self._proxy
 
         self._ensure_server()
-        return self._connection.proxy  # type: ignore[union-attr]
+        return self._proxy
 
     def _ensure_server(self) -> None:
         """Connect to existing transactor or spawn a new one."""
@@ -97,7 +98,7 @@ class TransactorClient:
             sock.connect(self._socket_path)
             self._transport = UnixTransport(sock)
             self._connection = RpcConnection(TransactorProtocol, self._transport)
-            self._connection.__enter__()
+            self._proxy = self._connection.__enter__()
             logger.info("Connected to transactor: %s", self._socket_path)
             return True
         except (ConnectionRefusedError, FileNotFoundError, OSError):

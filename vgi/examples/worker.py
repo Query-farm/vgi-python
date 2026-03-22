@@ -483,7 +483,6 @@ _EXAMPLE_CATALOG = Catalog(
                     not_null=("product_id", "name"),
                     check=("price >= 0",),
                     defaults={
-                        "product_id": 0,
                         "price": 0.0,
                         "status": "draft",
                         "created_at": Sql("'server-assigned'"),
