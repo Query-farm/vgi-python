@@ -70,6 +70,7 @@ class TransactorProtocol(Protocol):
         tx_id: bytes,
         schema_name: str,
         table_name: str,
+        columns: list[str] | None = None,
     ) -> Stream:
         """Update rows in a table via lockstep exchange.
 

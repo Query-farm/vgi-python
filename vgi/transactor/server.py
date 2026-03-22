@@ -126,15 +126,21 @@ class TransactorImpl:
         state = _DeleteState(conn=self._conn, lock=self._lock, qualified_name=qualified)
         return Stream(output_schema=_COUNT_SCHEMA, state=state, input_schema=input_schema)
 
-    def update(self, tx_id: bytes, schema_name: str, table_name: str) -> Stream:
+    def update(self, tx_id: bytes, schema_name: str, table_name: str, columns: list[str] | None = None) -> Stream:
         """Create an update exchange stream."""
         qualified = f"{schema_name}.{table_name}" if schema_name else table_name
-
-        # Update receives row_id + updated columns — schema determined by first batch
-        # Use a permissive input schema; actual columns come from the batch
         table_schema = self._table_schema(qualified)
+
+        # Build input schema from the update columns + row_id
+        if columns:
+            fields = [table_schema.field(c) for c in columns if table_schema.get_field_index(c) >= 0]
+            fields.append(pa.field("row_id", pa.int64()))
+            input_schema = pa.schema(fields)
+        else:
+            input_schema = table_schema
+
         state = _UpdateState(conn=self._conn, lock=self._lock, qualified_name=qualified)
-        return Stream(output_schema=_COUNT_SCHEMA, state=state, input_schema=table_schema)
+        return Stream(output_schema=_COUNT_SCHEMA, state=state, input_schema=input_schema)
 
     # ========== Read (streaming producer) ==========
 
@@ -233,13 +239,12 @@ class _DeleteState(ExchangeState):
         batch = input.batch
         with self.lock:
             self.conn.register("__delete_batch__", batch)
-            self.conn.execute(
+            result = self.conn.execute(
                 f"DELETE FROM {self.qualified_name} "  # noqa: S608
-                f"WHERE row_id IN (SELECT row_id FROM __delete_batch__)"
+                f"WHERE row_id IN (SELECT row_id FROM __delete_batch__) RETURNING row_id"
             )
-            # DuckDB doesn't return rowcount from execute directly; count via changes
-            deleted = self.conn.execute("SELECT changes()").fetchone()
-            count = deleted[0] if deleted else 0
+            deleted_rows = result.fetchall()
+            count = len(deleted_rows)
             self.conn.unregister("__delete_batch__")
         out.emit(pa.record_batch({"count": [count]}, schema=_COUNT_SCHEMA))
 
@@ -261,12 +266,13 @@ class _UpdateState(ExchangeState):
 
         with self.lock:
             self.conn.register("__update_batch__", batch)
-            self.conn.execute(
+            result = self.conn.execute(
                 f"UPDATE {self.qualified_name} SET {set_clause} "  # noqa: S608
-                f"FROM __update_batch__ WHERE {self.qualified_name}.row_id = __update_batch__.row_id"
+                f"FROM __update_batch__ WHERE {self.qualified_name}.row_id = __update_batch__.row_id "
+                f"RETURNING {self.qualified_name}.row_id"
             )
-            updated = self.conn.execute("SELECT changes()").fetchone()
-            count = updated[0] if updated else 0
+            updated_rows = result.fetchall()
+            count = len(updated_rows)
             self.conn.unregister("__update_batch__")
         out.emit(pa.record_batch({"count": [count]}, schema=_COUNT_SCHEMA))
 

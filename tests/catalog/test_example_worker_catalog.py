@@ -82,7 +82,7 @@ class TestExampleWorkerCatalog:
         result = client.catalog_attach(name="example", options={})
 
         assert result.attach_id is not None
-        assert result.supports_transactions is False
+        assert result.supports_transactions is True
         assert result.catalog_version_frozen is True
 
     def test_schema_contents_returns_functions(self) -> None:

@@ -255,8 +255,9 @@ class WritableTableUpdate(TableInOutGenerator[None, None]):
     @classmethod
     def process(cls, params, state, batch, out):  # type: ignore[override]
         """Forward batch to transactor update stream."""
+        update_cols = [name for name in batch.schema.names if name != "row_id"]
         proxy = transactor_proxy._get_proxy()
-        with proxy.update(tx_id=b"\x00", schema_name="", table_name="writable_data") as stream:
+        with proxy.update(tx_id=b"\x00", schema_name="", table_name="writable_data", columns=update_cols) as stream:
             response = stream.exchange(AnnotatedBatch(batch=batch))
             out.emit(response.batch)
 
