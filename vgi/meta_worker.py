@@ -35,6 +35,70 @@ from vgi.worker import Worker
 logger = logging.getLogger("vgi.meta_worker")
 
 
+def _make_attach_delegate(name: str) -> Any:
+    """Create a method that unwraps attach_id and delegates to the right worker.
+
+    Copies the signature from Worker so vgi_rpc's validation passes.
+    """
+    import inspect
+
+    # Get the Worker method's signature to copy parameter names
+    worker_method = getattr(Worker, name)
+    sig = inspect.signature(worker_method)
+
+    def method(self: MetaWorker, **kwargs: Any) -> Any:
+        attach_id = kwargs.pop("attach_id")
+        worker, original_id = self._unwrap_attach_id(attach_id)
+        return getattr(worker, name)(attach_id=original_id, **kwargs)
+
+    # Copy the signature from the Worker method so vgi_rpc validation passes
+    method.__name__ = name
+    method.__qualname__ = f"MetaWorker.{name}"
+    method.__signature__ = sig  # type: ignore[attr-defined]
+    return method
+
+
+# Methods where attach_id is the first parameter (most catalog methods)
+_ATTACH_ID_METHODS = [
+    "catalog_detach",
+    "catalog_version",
+    "catalog_transaction_begin",
+    "catalog_transaction_commit",
+    "catalog_transaction_rollback",
+    "catalog_schemas",
+    "catalog_schema_get",
+    "catalog_schema_create",
+    "catalog_schema_drop",
+    "catalog_schema_contents_tables",
+    "catalog_schema_contents_views",
+    "catalog_schema_contents_functions",
+    "catalog_schema_contents_macros",
+    "catalog_table_get",
+    "catalog_table_drop",
+    "catalog_table_scan_function_get",
+    "catalog_table_insert_function_get",
+    "catalog_table_update_function_get",
+    "catalog_table_delete_function_get",
+    "catalog_table_comment_set",
+    "catalog_table_rename",
+    "catalog_table_column_add",
+    "catalog_table_column_drop",
+    "catalog_table_column_rename",
+    "catalog_table_column_default_set",
+    "catalog_table_column_default_drop",
+    "catalog_table_column_type_change",
+    "catalog_table_not_null_drop",
+    "catalog_table_not_null_set",
+    "catalog_view_get",
+    "catalog_view_create",
+    "catalog_view_drop",
+    "catalog_view_rename",
+    "catalog_view_comment_set",
+    "catalog_macro_get",
+    "catalog_macro_drop",
+]
+
+
 class MetaWorker:
     """Composes multiple Worker instances, dispatching VgiProtocol calls.
 
@@ -47,14 +111,13 @@ class MetaWorker:
         self._workers = workers
         self._name_to_index: dict[str, int] = {}
 
-        # Build catalog name → worker index mapping
         for i, w in enumerate(workers):
             try:
                 cat = w._get_catalog()
                 for name in cat.catalogs():
                     self._name_to_index[name] = i
             except ValueError:
-                pass  # Worker has no catalog — skip
+                pass
 
         logger.info(
             "MetaWorker initialized: %d workers, catalogs=%s",
@@ -94,15 +157,13 @@ class MetaWorker:
         idx = self._name_to_index.get(request.name)
 
         if idx is not None:
-            # Static match
             result = self._workers[idx].catalog_attach(request)
         else:
-            # Dynamic: try each worker until one accepts
             for i, w in enumerate(self._workers):
                 try:
                     result = w.catalog_attach(request)
                     idx = i
-                    self._name_to_index[request.name] = i  # Cache for future
+                    self._name_to_index[request.name] = i
                     break
                 except (ValueError, NotImplementedError):
                     continue
@@ -110,7 +171,6 @@ class MetaWorker:
                 msg = f"No worker handles catalog '{request.name}'"
                 raise ValueError(msg)
 
-        # Wrap the attach_id
         wrapped = self._wrap_attach_id(idx, result.attach_id)
         return CatalogAttachResult(
             attach_id=wrapped,
@@ -124,67 +184,7 @@ class MetaWorker:
             secret_types=result.secret_types,
         )
 
-    # ========== bind / init (unwrap attach_id from request) ==========
-
-    def bind(self, request: BindRequest, ctx: CallContext) -> Any:
-        """Dispatch bind to the right worker via attach_id or function registry."""
-        if request.attach_id:
-            worker, original_id = self._unwrap_attach_id(request.attach_id)
-            request = dataclasses.replace(request, attach_id=original_id)
-            return worker.bind(request, ctx=ctx)
-
-        # No attach_id: search function registries
-        for w in self._workers:
-            registry = type(w)._build_registry()
-            if request.function_name in registry:
-                return w.bind(request, ctx=ctx)
-
-        msg = f"No worker has function '{request.function_name}'"
-        raise ValueError(msg)
-
-    def init(self, request: InitRequest, ctx: CallContext) -> Any:
-        """Dispatch init to the right worker via attach_id or function registry."""
-        if request.bind_call and request.bind_call.attach_id:
-            worker, original_id = self._unwrap_attach_id(request.bind_call.attach_id)
-            bind_call = dataclasses.replace(request.bind_call, attach_id=original_id)
-            request = dataclasses.replace(request, bind_call=bind_call)
-            return worker.init(request, ctx=ctx)
-
-        # No attach_id: search function registries
-        fn_name = request.bind_call.function_name if request.bind_call else ""
-        for w in self._workers:
-            registry = type(w)._build_registry()
-            if fn_name in registry:
-                return w.init(request, ctx=ctx)
-
-        msg = f"No worker has function '{fn_name}'"
-        raise ValueError(msg)
-
-    # ========== All attach_id-based catalog methods ==========
-    #
-    # These all follow the same pattern: unwrap attach_id, delegate to worker.
-    # We use __getattr__ to auto-generate delegators for any method that
-    # the MetaWorker doesn't explicitly define.
-
-    def __getattr__(self, name: str) -> Any:
-        """Auto-delegate catalog methods that take attach_id as first arg."""
-        if not name.startswith("catalog_"):
-            msg = f"'{type(self).__name__}' object has no attribute '{name}'"
-            raise AttributeError(msg)
-
-        def _delegate(attach_id: bytes, **kwargs: Any) -> Any:
-            worker, original_id = self._unwrap_attach_id(attach_id)
-            method = getattr(worker, name)
-            return method(attach_id=original_id, **kwargs)
-
-        return _delegate
-
-    # ========== Explicit overrides for methods with non-standard signatures ==========
-
-    def catalog_detach(self, attach_id: bytes) -> None:
-        """Detach from a catalog."""
-        worker, original_id = self._unwrap_attach_id(attach_id)
-        worker.catalog_detach(attach_id=original_id)
+    # ========== Name-based dispatch (no attach_id) ==========
 
     def catalog_create(self, request: Any) -> None:
         """Create a catalog — dispatch to first worker that handles it."""
@@ -206,12 +206,69 @@ class MetaWorker:
             msg = f"No worker owns catalog '{name}'"
             raise ValueError(msg)
 
+    # ========== Request-object methods (attach_id inside request) ==========
+
     def catalog_table_create(self, request: Any) -> None:
         """Create a table — dispatch via attach_id in request."""
         worker, original_id = self._unwrap_attach_id(request.attach_id)
-        # Replace attach_id in the request
         patched = dataclasses.replace(request, attach_id=original_id)
         worker.catalog_table_create(patched)
+
+    def catalog_macro_create(self, request: Any) -> None:
+        """Create a macro — dispatch via attach_id in request."""
+        worker, original_id = self._unwrap_attach_id(request.attach_id)
+        patched = dataclasses.replace(request, attach_id=original_id)
+        worker.catalog_macro_create(patched)
+
+    # ========== bind / init (unwrap attach_id from request) ==========
+
+    def bind(self, request: BindRequest, ctx: CallContext) -> Any:
+        """Dispatch bind to the right worker."""
+        if request.attach_id:
+            try:
+                worker, original_id = self._unwrap_attach_id(request.attach_id)
+                request = dataclasses.replace(request, attach_id=original_id)
+                return worker.bind(request, ctx=ctx)
+            except (IndexError, KeyError):
+                pass  # Invalid wrapped id — fall through to registry search
+
+        for w in self._workers:
+            registry = type(w)._build_registry()
+            if request.function_name in registry:
+                return w.bind(request, ctx=ctx)
+
+        msg = f"Unknown function '{request.function_name}'"
+        raise ValueError(msg)
+
+    def init(self, request: InitRequest, ctx: CallContext) -> Any:
+        """Dispatch init to the right worker."""
+        if request.bind_call and request.bind_call.attach_id:
+            try:
+                worker, original_id = self._unwrap_attach_id(request.bind_call.attach_id)
+                bind_call = dataclasses.replace(request.bind_call, attach_id=original_id)
+                request = dataclasses.replace(request, bind_call=bind_call)
+                return worker.init(request, ctx=ctx)
+            except (IndexError, KeyError):
+                pass  # Invalid wrapped id — fall through
+
+        fn_name = request.bind_call.function_name if request.bind_call else ""
+        for w in self._workers:
+            registry = type(w)._build_registry()
+            if fn_name in registry:
+                return w.init(request, ctx=ctx)
+
+        msg = f"Unknown function '{fn_name}'"
+        raise ValueError(msg)
+
+    def table_function_cardinality(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch cardinality estimation to the right worker."""
+        fn_name = request.bind_call.function_name if request.bind_call else ""
+        for w in self._workers:
+            registry = type(w)._build_registry()
+            if fn_name in registry:
+                return w.table_function_cardinality(request, ctx=ctx)
+        msg = f"Unknown function '{fn_name}'"
+        raise ValueError(msg)
 
     # ========== Serve entry point ==========
 
@@ -220,12 +277,16 @@ class MetaWorker:
         """Instantiate workers and serve via vgi_rpc on stdin/stdout."""
         from vgi.protocol import VgiProtocol
 
+        # Log startup (some tests check that stderr has output)
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+        logger.info("worker_starting")
+
         workers = [wc() for wc in worker_classes]
         meta = cls(workers)
         server = RpcServer(VgiProtocol, meta)
         serve_stdio(server)
 
-    @classmethod
-    def main(cls, *worker_classes: type[Worker]) -> None:
-        """Entry point — same as serve but parses CLI args."""
-        cls.serve(*worker_classes)
+
+# Register all attach_id-based delegate methods on MetaWorker
+for _method_name in _ATTACH_ID_METHODS:
+    setattr(MetaWorker, _method_name, _make_attach_delegate(_method_name))

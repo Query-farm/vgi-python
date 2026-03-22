@@ -696,8 +696,11 @@ class ExampleWorker(Worker):
 
 
 def main() -> None:
-    """Run the example worker process."""
-    ExampleWorker.main()
+    """Run the example worker process with both example and writable catalogs."""
+    from vgi.examples.writable_worker import WritableWorker
+    from vgi.meta_worker import MetaWorker
+
+    MetaWorker.serve(ExampleWorker, WritableWorker)
 
 
 if __name__ == "__main__":
