@@ -262,11 +262,11 @@ class TestWriteFunctionAutoRegistration:
 
     def test_write_functions_in_registry(self) -> None:
         """Write functions from table descriptors appear in the worker's function registry."""
-        from vgi.examples.worker import ExampleWorker
+        from vgi.examples.writable_worker import WritableWorker
 
         # Reset cached registry so it rebuilds with our changes
-        ExampleWorker._registry = None
-        registry = ExampleWorker._build_registry()
+        WritableWorker._registry = None
+        registry = WritableWorker._build_registry()
         assert "writable_table_scan" in registry
         assert "writable_table_insert" in registry
         assert "writable_table_update" in registry
