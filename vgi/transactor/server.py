@@ -19,19 +19,14 @@ import threading
 
 import duckdb
 import pyarrow as pa
-from vgi_rpc import OutputCollector, RpcServer
-from vgi_rpc.rpc import CallContext, Stream, serve_unix
+from vgi_rpc import AnnotatedBatch, OutputCollector, RpcServer
+from vgi_rpc.rpc import CallContext, ExchangeState, ProducerState, Stream, serve_unix
 
-from vgi.transactor.protocol import (
-    _COUNT_SCHEMA,
-    DeleteExchangeState,
-    InsertExchangeState,
-    ScanProducerState,
-    TransactorProtocol,
-    UpdateExchangeState,
-)
+from vgi.transactor.protocol import TransactorProtocol
 
 logger = logging.getLogger("vgi.transactor")
+
+_COUNT_SCHEMA = pa.schema([("count", pa.int64())])
 
 
 class TransactorImpl:
@@ -50,12 +45,19 @@ class TransactorImpl:
         self._tx_condition = threading.Condition(self._lock)
         logger.info("Transactor started: %s", db_path)
 
+    # ========== Helpers ==========
+
+    def _table_schema(self, qualified_name: str) -> pa.Schema:
+        """Get the Arrow schema for a table (excluding row_id)."""
+        with self._lock:
+            result = self._conn.execute(f"SELECT * FROM {qualified_name} LIMIT 0")  # noqa: S608
+            return result.fetch_arrow_table().schema
+
     # ========== Transaction lifecycle ==========
 
     def begin(self, tx_id: bytes) -> None:
         """Begin a transaction."""
         with self._tx_condition:
-            # Wait if another transaction is active
             while self._active_tx is not None:
                 logger.debug("Waiting for active transaction to complete")
                 self._tx_condition.wait()
@@ -67,7 +69,8 @@ class TransactorImpl:
         """Commit the active transaction."""
         with self._tx_condition:
             if self._active_tx != tx_id:
-                raise ValueError(f"Cannot commit: transaction {tx_id.hex()} is not active")
+                msg = f"Cannot commit: transaction {tx_id.hex()} is not active"
+                raise ValueError(msg)
             self._conn.commit()
             self._active_tx = None
             self._tx_condition.notify_all()
@@ -77,7 +80,8 @@ class TransactorImpl:
         """Rollback the active transaction."""
         with self._tx_condition:
             if self._active_tx != tx_id:
-                raise ValueError(f"Cannot rollback: transaction {tx_id.hex()} is not active")
+                msg = f"Cannot rollback: transaction {tx_id.hex()} is not active"
+                raise ValueError(msg)
             self._conn.rollback()
             self._active_tx = None
             self._tx_condition.notify_all()
@@ -94,29 +98,37 @@ class TransactorImpl:
     ) -> Stream:
         """Create an insert exchange stream."""
         qualified = f"{schema_name}.{table_name}" if schema_name else table_name
+        table_schema = self._table_schema(qualified)
 
         state = _InsertState(
             conn=self._conn,
             lock=self._lock,
             qualified_name=qualified,
             returning=returning,
+            table_schema=table_schema,
         )
-        # Input schema will be determined by the first batch
-        return Stream(output_schema=_COUNT_SCHEMA, state=state)
+
+        output_schema = table_schema if returning else _COUNT_SCHEMA
+        return Stream(output_schema=output_schema, state=state, input_schema=table_schema)
 
     def delete(self, tx_id: bytes, schema_name: str, table_name: str) -> Stream:
         """Create a delete exchange stream."""
         qualified = f"{schema_name}.{table_name}" if schema_name else table_name
 
+        # Delete receives a batch with row_id column only
+        input_schema = pa.schema([("row_id", pa.int64())])
         state = _DeleteState(conn=self._conn, lock=self._lock, qualified_name=qualified)
-        return Stream(output_schema=_COUNT_SCHEMA, state=state)
+        return Stream(output_schema=_COUNT_SCHEMA, state=state, input_schema=input_schema)
 
     def update(self, tx_id: bytes, schema_name: str, table_name: str) -> Stream:
         """Create an update exchange stream."""
         qualified = f"{schema_name}.{table_name}" if schema_name else table_name
 
+        # Update receives row_id + updated columns — schema determined by first batch
+        # Use a permissive input schema; actual columns come from the batch
+        table_schema = self._table_schema(qualified)
         state = _UpdateState(conn=self._conn, lock=self._lock, qualified_name=qualified)
-        return Stream(output_schema=_COUNT_SCHEMA, state=state)
+        return Stream(output_schema=_COUNT_SCHEMA, state=state, input_schema=table_schema)
 
     # ========== Read (streaming producer) ==========
 
@@ -125,13 +137,12 @@ class TransactorImpl:
         qualified = f"{schema_name}.{table_name}" if schema_name else table_name
         col_list = ", ".join(columns) if columns else "*"
 
-        state = _ScanState(conn=self._conn, lock=self._lock, qualified_name=qualified, col_list=col_list)
-
-        # Determine output schema by querying with LIMIT 0
+        # Determine output schema
         with self._lock:
             result = self._conn.execute(f"SELECT {col_list} FROM {qualified} LIMIT 0")  # noqa: S608
             output_schema = result.fetch_arrow_table().schema
 
+        state = _ScanState(conn=self._conn, lock=self._lock, qualified_name=qualified, col_list=col_list)
         return Stream(output_schema=output_schema, state=state)
 
     # ========== DDL ==========
@@ -159,130 +170,117 @@ class TransactorImpl:
 # ============================================================================
 
 
-class _InsertState(InsertExchangeState):
-    """Insert exchange state that executes INSERT SQL per batch."""
+class _InsertState(ExchangeState):
+    """Insert exchange: receives row batches, inserts into table, returns count or RETURNING rows."""
 
-    def __init__(self, conn: duckdb.DuckDBPyConnection, lock: threading.Lock, qualified_name: str, returning: bool):
+    def __init__(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        lock: threading.Lock,
+        qualified_name: str,
+        returning: bool,
+        table_schema: pa.Schema,
+    ) -> None:
         """Initialize insert state."""
         self.conn = conn
         self.lock = lock
         self.qualified_name = qualified_name
         self.returning = returning
-        self._output_schema: pa.Schema | None = None
+        self.table_schema = table_schema
 
-    def exchange(self, input: pa.RecordBatch, out: OutputCollector, ctx: CallContext) -> None:
+    def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Insert the input batch and return count or RETURNING rows."""
-        columns = input.schema.names
-        placeholders = ", ".join(f"${i + 1}" for i in range(len(columns)))
+        batch = input.batch
+        columns = batch.schema.names
         col_names = ", ".join(columns)
 
-        if self.returning:
-            sql = f"INSERT INTO {self.qualified_name} ({col_names}) VALUES ({placeholders}) RETURNING *"  # noqa: S608
-        else:
-            sql = f"INSERT INTO {self.qualified_name} ({col_names}) VALUES ({placeholders})"  # noqa: S608
-
-        total_count = 0
-        returning_rows: list[tuple] = []
-
         with self.lock:
-            for i in range(input.num_rows):
-                params = [input.column(col)[i].as_py() for col in columns]
-                result = self.conn.execute(sql, params)
-                if self.returning:
-                    row = result.fetchone()
-                    if row:
-                        returning_rows.append(row)
-                        total_count += 1
-                else:
-                    total_count += 1
-
-        if self.returning and returning_rows:
-            # Build RETURNING batch from result rows
-            if self._output_schema is None:
-                # Determine schema from first RETURNING result
-                with self.lock:
-                    desc = (
-                        self.conn.execute(
-                            f"SELECT * FROM {self.qualified_name} LIMIT 0"  # noqa: S608
-                        )
-                        .fetch_arrow_table()
-                        .schema
-                    )
-                    self._output_schema = desc
-
-            arrays = {}
-            for col_idx, field in enumerate(self._output_schema):
-                arrays[field.name] = [row[col_idx] for row in returning_rows]
-            batch = pa.record_batch(arrays, schema=self._output_schema)
-            out.emit(batch)
-        else:
-            out.emit(pa.record_batch({"count": [total_count]}, schema=_COUNT_SCHEMA))
+            # Register the batch as a DuckDB relation and insert
+            self.conn.register("__insert_batch__", batch)
+            if self.returning:
+                result = self.conn.execute(
+                    f"INSERT INTO {self.qualified_name} ({col_names}) "  # noqa: S608
+                    f"SELECT * FROM __insert_batch__ RETURNING *"
+                )
+                returning_table = result.fetch_arrow_table()
+                self.conn.unregister("__insert_batch__")
+                out.emit(
+                    returning_table.to_batches()[0]
+                    if returning_table.num_rows > 0
+                    else pa.record_batch({col: [] for col in self.table_schema.names}, schema=self.table_schema)
+                )
+            else:
+                self.conn.execute(
+                    f"INSERT INTO {self.qualified_name} ({col_names}) "  # noqa: S608
+                    f"SELECT * FROM __insert_batch__"
+                )
+                count = batch.num_rows
+                self.conn.unregister("__insert_batch__")
+                out.emit(pa.record_batch({"count": [count]}, schema=_COUNT_SCHEMA))
 
 
-class _DeleteState(DeleteExchangeState):
-    """Delete exchange state that executes DELETE SQL per batch of row_ids."""
+class _DeleteState(ExchangeState):
+    """Delete exchange: receives row_id batches, deletes matching rows."""
 
-    def __init__(self, conn: duckdb.DuckDBPyConnection, lock: threading.Lock, qualified_name: str):
+    def __init__(self, conn: duckdb.DuckDBPyConnection, lock: threading.Lock, qualified_name: str) -> None:
         """Initialize delete state."""
         self.conn = conn
         self.lock = lock
         self.qualified_name = qualified_name
 
-    def exchange(self, input: pa.RecordBatch, out: OutputCollector, ctx: CallContext) -> None:
+    def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Delete rows by row_id."""
-        row_id_col = input.column("row_id")
-        count = 0
+        batch = input.batch
         with self.lock:
-            for i in range(input.num_rows):
-                row_id = row_id_col[i].as_py()
-                result = self.conn.execute(
-                    f"DELETE FROM {self.qualified_name} WHERE row_id = $1 RETURNING row_id",  # noqa: S608
-                    [row_id],
-                )
-                if result.fetchone() is not None:
-                    count += 1
+            self.conn.register("__delete_batch__", batch)
+            self.conn.execute(
+                f"DELETE FROM {self.qualified_name} "  # noqa: S608
+                f"WHERE row_id IN (SELECT row_id FROM __delete_batch__)"
+            )
+            # DuckDB doesn't return rowcount from execute directly; count via changes
+            deleted = self.conn.execute("SELECT changes()").fetchone()
+            count = deleted[0] if deleted else 0
+            self.conn.unregister("__delete_batch__")
         out.emit(pa.record_batch({"count": [count]}, schema=_COUNT_SCHEMA))
 
 
-class _UpdateState(UpdateExchangeState):
-    """Update exchange state that executes UPDATE SQL per batch."""
+class _UpdateState(ExchangeState):
+    """Update exchange: receives row_id + updated columns, updates matching rows."""
 
-    def __init__(self, conn: duckdb.DuckDBPyConnection, lock: threading.Lock, qualified_name: str):
+    def __init__(self, conn: duckdb.DuckDBPyConnection, lock: threading.Lock, qualified_name: str) -> None:
         """Initialize update state."""
         self.conn = conn
         self.lock = lock
         self.qualified_name = qualified_name
 
-    def exchange(self, input: pa.RecordBatch, out: OutputCollector, ctx: CallContext) -> None:
+    def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Update rows by row_id with new column values."""
-        columns = [name for name in input.schema.names if name != "row_id"]
-        count = 0
+        batch = input.batch
+        update_cols = [name for name in batch.schema.names if name != "row_id"]
+        set_clause = ", ".join(f"{col} = __update_batch__.{col}" for col in update_cols)
 
         with self.lock:
-            for i in range(input.num_rows):
-                row_id = input.column("row_id")[i].as_py()
-                set_parts = []
-                params: list = []
-                for j, col in enumerate(columns):
-                    set_parts.append(f"{col} = ${j + 1}")
-                    params.append(input.column(col)[i].as_py())
-                params.append(row_id)
-                set_clause = ", ".join(set_parts)
-
-                result = self.conn.execute(
-                    f"UPDATE {self.qualified_name} SET {set_clause} WHERE row_id = ${len(params)} RETURNING row_id",  # noqa: S608
-                    params,
-                )
-                if result.fetchone() is not None:
-                    count += 1
-
+            self.conn.register("__update_batch__", batch)
+            self.conn.execute(
+                f"UPDATE {self.qualified_name} SET {set_clause} "  # noqa: S608
+                f"FROM __update_batch__ WHERE {self.qualified_name}.row_id = __update_batch__.row_id"
+            )
+            updated = self.conn.execute("SELECT changes()").fetchone()
+            count = updated[0] if updated else 0
+            self.conn.unregister("__update_batch__")
         out.emit(pa.record_batch({"count": [count]}, schema=_COUNT_SCHEMA))
 
 
-class _ScanState(ScanProducerState):
-    """Scan producer state that queries all rows from a table."""
+class _ScanState(ProducerState):
+    """Scan producer: queries all rows from a table and emits them as batches."""
 
-    def __init__(self, conn: duckdb.DuckDBPyConnection, lock: threading.Lock, qualified_name: str, col_list: str):
+    def __init__(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        lock: threading.Lock,
+        qualified_name: str,
+        col_list: str,
+    ) -> None:
         """Initialize scan state."""
         self.conn = conn
         self.lock = lock
@@ -301,13 +299,9 @@ class _ScanState(ScanProducerState):
             result = self.conn.execute(f"SELECT {self.col_list} FROM {self.qualified_name}")  # noqa: S608
             table = result.fetch_arrow_table()
 
-        if table.num_rows > 0:
-            # Emit as a single batch
-            out.emit(table.to_batches()[0] if table.num_rows <= 2048 else table.to_batches()[0])
-            # For large tables, emit multiple batches
-            for batch in table.to_batches()[1:]:
+        for batch in table.to_batches():
+            if batch.num_rows > 0:
                 out.emit(batch)
-
         out.finish()
 
 
