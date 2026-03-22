@@ -60,7 +60,7 @@ class TestCLICatalogAttach:
         attach_result = json.loads(result.output)
         assert "attach_id" in attach_result
         assert len(attach_result["attach_id"]) > 0
-        assert attach_result["supports_transactions"] is True
+        assert attach_result["supports_transactions"] is False
         assert attach_result["catalog_version_frozen"] is True
         # ReadOnlyCatalogInterface returns attach_id_required=False
         assert attach_result["attach_id_required"] is False

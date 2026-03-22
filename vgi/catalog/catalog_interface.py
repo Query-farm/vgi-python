@@ -1164,7 +1164,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
 
         return CatalogAttachResult(
             attach_id=self._FIXED_ATTACH_ID,
-            supports_transactions=self.supports_transactions,
+            supports_transactions=False,
             supports_time_travel=has_time_travel,
             catalog_version_frozen=True,
             catalog_version=1,

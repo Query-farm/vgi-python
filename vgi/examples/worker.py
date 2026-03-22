@@ -508,37 +508,9 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
     Defines table_get and table_scan_function_get for tables with explicit
     columns, including time-travel support for versioned_data.
 
-    Supports transactions via the db-transactor subprocess — scan and write
-    workers share the same DuckDB transaction through the transactor.
     """
 
     catalog = _EXAMPLE_CATALOG
-    supports_transactions = True
-
-    def catalog_transaction_begin(self, *, attach_id: AttachId) -> TransactionId | None:
-        """Begin a transaction via the transactor."""
-        import uuid
-
-        from vgi.examples.writable_table import transactor_proxy
-
-        tx_id = TransactionId(uuid.uuid4().bytes)
-        proxy = transactor_proxy._get_proxy()
-        proxy.begin(tx_id=tx_id)
-        return tx_id
-
-    def catalog_transaction_commit(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
-        """Commit a transaction via the transactor."""
-        from vgi.examples.writable_table import transactor_proxy
-
-        proxy = transactor_proxy._get_proxy()
-        proxy.commit(tx_id=transaction_id)
-
-    def catalog_transaction_rollback(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
-        """Rollback a transaction via the transactor."""
-        from vgi.examples.writable_table import transactor_proxy
-
-        proxy = transactor_proxy._get_proxy()
-        proxy.rollback(tx_id=transaction_id)
 
     def table_get(
         self,
