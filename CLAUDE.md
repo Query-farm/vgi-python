@@ -87,6 +87,25 @@ of actual data.
 ./test/run_http_integration.sh "test/sql/integration/table/countdown*"
 ```
 
+**Profiling integration test timing:**
+
+The DuckDB unittest binary has per-query timing instrumentation in the
+sqllogictest runner (`duckdb/test/sqlite/sqllogic_command.cpp`). When enabled,
+each statement and query emits `[stmt ...]` or `[query ...]` lines to stderr
+with elapsed milliseconds. This helps identify slow queries and bottlenecks.
+
+```bash
+# Timing output goes to stderr, grep for the bracket-prefixed lines:
+cd ~/Development/vgi
+VGI_TEST_WORKER="uv run --project ~/Development/vgi-python vgi-example-worker" \
+    ./build/release/test/unittest "test/sql/integration/table/writable_table*" \
+    2>&1 | grep "^\[stmt\|^\[query" | sort -t']' -k2 -rn
+```
+
+Note: each VGI query has ~270ms connection setup overhead (worker spawn + bind +
+init). A test file with 100 statements takes ~27s just in overhead. This is
+normal for subprocess transport.
+
 **Combined coverage** (pytest + subprocess + HTTP integration):
 
 The integration tests exercise real protocol paths that unit tests don't cover:

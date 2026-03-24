@@ -96,6 +96,36 @@ class TestSchema:
             schema({"x": 123})  # type: ignore[dict-item]  # Intentionally invalid
         assert "Field 'x'" in str(exc_info.value)
 
+    def test_field_with_metadata(self) -> None:
+        """schema() accepts (DataType, metadata) tuples."""
+        s = schema(
+            row_id=(pa.int64(), {b"is_row_id": b""}),
+            name=pa.string(),
+        )
+        assert s.names == ["row_id", "name"]
+        assert s.field("row_id").type == pa.int64()
+        assert s.field("row_id").metadata == {b"is_row_id": b""}
+        assert s.field("name").metadata is None
+
+    def test_field_metadata_mixed_with_plain(self) -> None:
+        """schema() mixes metadata and plain fields."""
+        s = schema(
+            a=pa.int64(),
+            b=(pa.string(), {b"key": b"val"}),
+            c=pa.float64(),
+        )
+        assert len(s) == 3
+        assert s.field("a").metadata is None
+        assert s.field("b").metadata == {b"key": b"val"}
+        assert s.field("c").metadata is None
+
+    def test_field_metadata_invalid_type_in_tuple(self) -> None:
+        """schema() raises TypeError for invalid type in tuple."""
+        with pytest.raises(TypeError) as exc_info:
+            schema(x=("not_a_type", {}))  # type: ignore[arg-type]  # Intentionally invalid
+        assert "Field 'x'" in str(exc_info.value)
+        assert "first tuple element" in str(exc_info.value)
+
 
 class TestSchemaLike:
     """Tests for the schema_like() helper function."""

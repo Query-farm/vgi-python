@@ -13,52 +13,74 @@ schema_like(source, add, remove, rename, replace)
 
 """
 
+from __future__ import annotations
+
 from collections.abc import Mapping
 from typing import Any
 
 import pyarrow as pa
 
+# A field spec is either a bare DataType or a (DataType, metadata) tuple.
+FieldSpec = pa.DataType | tuple[pa.DataType, dict[bytes | str, bytes | str]]
+
 __all__ = [
+    "FieldSpec",
     "schema",
     "schema_like",
 ]
 
 
 def schema(
-    __fields: Mapping[str, pa.DataType] | None = None,
+    __fields: Mapping[str, FieldSpec] | None = None,
     /,
-    **kwargs: pa.DataType,
+    **kwargs: FieldSpec,
 ) -> pa.Schema:
     """Build an Arrow schema from field definitions.
 
     Creates a schema with fields in the order specified. Field names are
-    the keys and Arrow data types are the values.
+    the keys and values are either Arrow data types or ``(type, metadata)``
+    tuples for attaching field-level metadata.
 
     Args:
-        __fields: Optional mapping of field names to types (for programmatic use).
-        **kwargs: Field names mapped to Arrow data types.
+        __fields: Optional mapping of field names to specs (for programmatic use).
+        **kwargs: Field names mapped to Arrow data types or ``(type, metadata)`` tuples.
 
     Returns:
         Arrow schema with the specified fields.
 
     Raises:
-        TypeError: If a value is not a valid Arrow data type.
+        TypeError: If a value is not a valid Arrow data type or field spec.
+
+    Examples::
+
+        schema(id=pa.int64(), name=pa.string())
+        schema(row_id=(pa.int64(), {b"is_row_id": b""}), id=pa.int64())
 
     """
     # Combine __fields dict with kwargs
-    all_fields: dict[str, pa.DataType] = {}
+    all_fields: dict[str, FieldSpec] = {}
     if __fields is not None:
         all_fields.update(__fields)
     all_fields.update(kwargs)
 
     # Validate and build schema
     pa_fields: list[pa.Field[Any]] = []
-    for name, dtype in all_fields.items():
-        if not isinstance(dtype, pa.DataType):
+    for name, spec in all_fields.items():
+        if isinstance(spec, tuple):
+            dtype, metadata = spec
+            if not isinstance(dtype, pa.DataType):
+                raise TypeError(
+                    f"Field '{name}': expected pa.DataType as first tuple element, "
+                    f"got {type(dtype).__name__}. Use pa.int64(), pa.string(), etc."
+                )
+            pa_fields.append(pa.field(name, dtype, metadata=metadata))
+        elif isinstance(spec, pa.DataType):
+            pa_fields.append(pa.field(name, spec))
+        else:
             raise TypeError(
-                f"Field '{name}': expected pa.DataType, got {type(dtype).__name__}. Use pa.int64(), pa.string(), etc."
+                f"Field '{name}': expected pa.DataType or (pa.DataType, metadata) tuple, "
+                f"got {type(spec).__name__}. Use pa.int64(), pa.string(), etc."
             )
-        pa_fields.append(pa.field(name, dtype))
 
     return pa.schema(pa_fields)
 

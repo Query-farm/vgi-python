@@ -121,7 +121,8 @@ class TransactorClient:
         self._process = subprocess.Popen(  # noqa: S603
             cmd,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
 
     def close(self) -> None:

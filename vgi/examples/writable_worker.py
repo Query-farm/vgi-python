@@ -15,6 +15,7 @@ Tables:
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from vgi.catalog import (
@@ -27,8 +28,14 @@ from vgi.catalog import (
     TransactionId,
 )
 from vgi.examples.writable_table import (
+    WritableOrdersDelete,
+    WritableOrdersInsert,
+    WritableOrdersScan,
+    WritableOrdersUpdate,
+    WritableProductsDelete,
     WritableProductsInsert,
     WritableProductsScan,
+    WritableProductsUpdate,
     WritableTableDelete,
     WritableTableInsert,
     WritableTableScan,
@@ -36,6 +43,8 @@ from vgi.examples.writable_table import (
     transactor_proxy,
 )
 from vgi.worker import Worker
+
+logger = logging.getLogger("vgi.writable_worker")
 
 _WRITABLE_CATALOG = Catalog(
     name="writable",
@@ -48,6 +57,7 @@ _WRITABLE_CATALOG = Catalog(
                 # Scan functions registered here for projection_pushdown metadata
                 WritableTableScan,
                 WritableProductsScan,
+                WritableOrdersScan,
             ],
             tables=[
                 Table(
@@ -62,6 +72,8 @@ _WRITABLE_CATALOG = Catalog(
                     name="writable_products",
                     function=WritableProductsScan,
                     insert_function=WritableProductsInsert,
+                    update_function=WritableProductsUpdate,
+                    delete_function=WritableProductsDelete,
                     primary_key=(("product_id",),),
                     not_null=("product_id", "name"),
                     check=("price >= 0",),
@@ -71,6 +83,16 @@ _WRITABLE_CATALOG = Catalog(
                         "created_at": Sql("'server-assigned'"),
                     },
                     comment="Writable products with defaults, constraints, server-side modification",
+                ),
+                Table(
+                    name="writable_orders",
+                    function=WritableOrdersScan,
+                    insert_function=WritableOrdersInsert,
+                    update_function=WritableOrdersUpdate,
+                    delete_function=WritableOrdersDelete,
+                    not_null=("order_id", "product_id"),
+                    defaults={"quantity": 1},
+                    comment="Writable orders with FK to writable_products",
                 ),
             ],
         ),
@@ -92,12 +114,14 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def catalog_transaction_begin(self, *, attach_id: AttachId) -> TransactionId | None:
         """Begin a transaction via the transactor."""
         tx_id = TransactionId(uuid.uuid4().bytes)
+        logger.info("catalog_transaction_begin: tx_id=%s", tx_id.hex())
         proxy = transactor_proxy._get_proxy()
         proxy.begin(tx_id=tx_id)
         return tx_id
 
     def catalog_transaction_commit(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
         """Commit a transaction via the transactor."""
+        logger.info("catalog_transaction_commit: tx_id=%s", transaction_id.hex())
         proxy = transactor_proxy._get_proxy()
         proxy.commit(tx_id=transaction_id)
 
