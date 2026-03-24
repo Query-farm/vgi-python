@@ -158,7 +158,7 @@ def schema_like(
         # Get the (possibly replaced) type
         new_type = replace_map.get(field.name, field.type)
 
-        new_fields.append(pa.field(new_name, new_type))
+        new_fields.append(pa.field(new_name, new_type, metadata=field.metadata))
         final_names.add(new_name)
 
     # Step 4: Add new fields

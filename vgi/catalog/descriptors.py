@@ -128,6 +128,9 @@ class Table:
         defaults: Dict mapping column names to default values. Accepts
             Python literals (str, int, float, bool, None) which are
             auto-converted, or SqlExpression for raw SQL.
+        column_comments: Dict mapping column names to comment strings.
+            Comments are transported as Arrow field metadata and visible
+            via ``duckdb_columns()`` in DuckDB.
         comment: Optional table comment.
         tags: Optional metadata tags.
 
@@ -147,6 +150,7 @@ class Table:
     primary_key: tuple[tuple[str, ...], ...] = ()
     foreign_key: tuple[ForeignKeyDef, ...] = ()
     defaults: dict[str, DefaultValue] = field(default_factory=dict)
+    column_comments: dict[str, str] = field(default_factory=dict)
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
 
@@ -217,6 +221,14 @@ class Table:
             if col not in column_names:
                 raise ValueError(
                     f"Table '{self.name}': defaults column '{col}' not found "
+                    f"in schema. Available columns: {sorted(column_names)}"
+                )
+
+        # Validate column_comments column names
+        for col in self.column_comments:
+            if col not in column_names:
+                raise ValueError(
+                    f"Table '{self.name}': column_comments column '{col}' not found "
                     f"in schema. Available columns: {sorted(column_names)}"
                 )
 
@@ -319,9 +331,24 @@ class Table:
             schema = schema.set(idx, f.with_metadata(existing))
         return schema
 
+    def _apply_column_comments_to_schema(self, schema: pa.Schema) -> pa.Schema:
+        """Return schema with column comment metadata applied to fields."""
+        if not self.column_comments:
+            return schema
+        for col_name, comment in self.column_comments.items():
+            if not comment:
+                continue
+            idx = schema.get_field_index(col_name)
+            f = schema.field(idx)
+            existing = dict(f.metadata) if f.metadata else {}
+            existing[b"comment"] = comment.encode("utf-8")
+            schema = schema.set(idx, f.with_metadata(existing))
+        return schema
+
     def to_table_info(self, schema_name: str) -> TableInfo:
         """Convert to TableInfo for catalog response."""
         cols = self._apply_defaults_to_schema(self.resolved_columns)
+        cols = self._apply_column_comments_to_schema(cols)
         return TableInfo(
             name=self.name,
             schema_name=schema_name,

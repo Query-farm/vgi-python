@@ -386,6 +386,11 @@ _EXAMPLE_CATALOG = Catalog(
                         "name": "unknown",
                         "price": 9.99,
                     },
+                    column_comments={
+                        "id": "Unique product identifier",
+                        "name": "Product display name",
+                        "price": "Unit price in USD",
+                    },
                     comment="Product table with column defaults",
                 ),
                 Table(
