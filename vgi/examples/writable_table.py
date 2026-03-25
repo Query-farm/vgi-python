@@ -28,7 +28,7 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, ClassVar
+from typing import Annotated, Any, ClassVar
 
 import pyarrow as pa
 from vgi_rpc import AnnotatedBatch, ArrowSerializableDataclass, Transient
@@ -295,11 +295,15 @@ class WritableTableScan(_WritableScanBase):
 # ============================================================================
 
 
-class _WritableInsertBase(TableInOutGenerator[None, None]):
-    """Base class for INSERT handlers — subclasses set _table_name and _table_schema."""
+class _WritableWriteBase(TableInOutGenerator[None, None]):
+    """Base class for INSERT/UPDATE/DELETE handlers.
+
+    Subclasses set _table_name, _table_schema, and _operation ("insert"|"update"|"delete").
+    """
 
     _table_name: ClassVar[str]
     _table_schema: ClassVar[pa.Schema]
+    _operation: ClassVar[str]
 
     @classmethod
     def on_bind(cls, params: BindParams[None]) -> BindResponse:
@@ -309,63 +313,36 @@ class _WritableInsertBase(TableInOutGenerator[None, None]):
         return BindResponse(output_schema=_COUNT_SCHEMA)
 
     @classmethod
+    def _open_stream(cls, proxy: Any, tx_id: bytes, returning: bool, batch: pa.RecordBatch) -> Any:
+        """Open a write stream. Override for operations needing extra args (e.g., update columns)."""
+        return getattr(proxy, cls._operation)(tx_id=tx_id, table_name=cls._table_name, returning=returning)
+
+    @classmethod
     def process(cls, params: ProcessParams[None], state: None, batch: pa.RecordBatch, out: OutputCollector) -> None:
-        """Forward batch to transactor insert stream."""
+        """Forward batch to transactor write stream."""
         tx_id = _get_tx_id(params)
         returning = params.output_schema != _COUNT_SCHEMA
         proxy = transactor_proxy._get_proxy()
-        with proxy.insert(tx_id=tx_id, table_name=cls._table_name, returning=returning) as stream:
+        with cls._open_stream(proxy, tx_id, returning, batch) as stream:
             response = stream.exchange(AnnotatedBatch(batch=batch))
             out.emit(response.batch)
 
 
-class _WritableUpdateBase(TableInOutGenerator[None, None]):
-    """Base class for UPDATE handlers — subclasses set _table_name and _table_schema."""
+class _WritableInsertBase(_WritableWriteBase):
+    _operation = "insert"
 
-    _table_name: ClassVar[str]
-    _table_schema: ClassVar[pa.Schema]
 
-    @classmethod
-    def on_bind(cls, params: BindParams[None]) -> BindResponse:
-        """Bind: return table schema for RETURNING, count schema otherwise."""
-        if _is_returning(params):
-            return BindResponse(output_schema=cls._table_schema)
-        return BindResponse(output_schema=_COUNT_SCHEMA)
+class _WritableUpdateBase(_WritableWriteBase):
+    _operation = "update"
 
     @classmethod
-    def process(cls, params: ProcessParams[None], state: None, batch: pa.RecordBatch, out: OutputCollector) -> None:
-        """Forward batch to transactor update stream."""
-        tx_id = _get_tx_id(params)
-        returning = params.output_schema != _COUNT_SCHEMA
+    def _open_stream(cls, proxy: Any, tx_id: bytes, returning: bool, batch: pa.RecordBatch) -> Any:
         update_cols = [name for name in batch.schema.names if name != "rowid"]
-        proxy = transactor_proxy._get_proxy()
-        with proxy.update(tx_id=tx_id, table_name=cls._table_name, columns=update_cols, returning=returning) as stream:
-            response = stream.exchange(AnnotatedBatch(batch=batch))
-            out.emit(response.batch)
+        return proxy.update(tx_id=tx_id, table_name=cls._table_name, columns=update_cols, returning=returning)
 
 
-class _WritableDeleteBase(TableInOutGenerator[None, None]):
-    """Base class for DELETE handlers — subclasses set _table_name and _table_schema."""
-
-    _table_name: ClassVar[str]
-    _table_schema: ClassVar[pa.Schema]
-
-    @classmethod
-    def on_bind(cls, params: BindParams[None]) -> BindResponse:
-        """Bind: return table schema for RETURNING, count schema otherwise."""
-        if _is_returning(params):
-            return BindResponse(output_schema=cls._table_schema)
-        return BindResponse(output_schema=_COUNT_SCHEMA)
-
-    @classmethod
-    def process(cls, params: ProcessParams[None], state: None, batch: pa.RecordBatch, out: OutputCollector) -> None:
-        """Forward batch to transactor delete stream."""
-        tx_id = _get_tx_id(params)
-        returning = params.output_schema != _COUNT_SCHEMA
-        proxy = transactor_proxy._get_proxy()
-        with proxy.delete(tx_id=tx_id, table_name=cls._table_name, returning=returning) as stream:
-            response = stream.exchange(AnnotatedBatch(batch=batch))
-            out.emit(response.batch)
+class _WritableDeleteBase(_WritableWriteBase):
+    _operation = "delete"
 
 
 # ============================================================================

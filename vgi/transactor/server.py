@@ -300,28 +300,25 @@ class TransactorImpl:
 
     # ========== Metadata ==========
 
-    def list_schemas(self, tx_id: bytes) -> list[str]:
-        """List schema names within a transaction."""
+    def _query_list(self, tx_id: bytes, sql: str, params: list | None = None) -> list[str]:
+        """Execute a query within a transaction and return the first column as a list."""
         conn = self._get_tx_conn(tx_id)
         tx_lock = self._get_tx_lock(tx_id)
         with tx_lock:
-            result = conn.execute(
-                "SELECT schema_name FROM duckdb_schemas() "
-                "WHERE NOT internal"
-            )
+            result = conn.execute(sql, params or [])
             return [row[0] for row in result.fetchall()]
+
+    def list_schemas(self, tx_id: bytes) -> list[str]:
+        """List schema names within a transaction."""
+        return self._query_list(tx_id, "SELECT schema_name FROM duckdb_schemas() WHERE NOT internal")
 
     def list_user_tables(self, tx_id: bytes, schema_name: str = "main") -> list[str]:
         """List user tables in the given schema within a transaction."""
-        conn = self._get_tx_conn(tx_id)
-        tx_lock = self._get_tx_lock(tx_id)
-        with tx_lock:
-            result = conn.execute(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema=? AND table_type='BASE TABLE'",
-                [schema_name],
-            )
-            return [row[0] for row in result.fetchall()]
+        return self._query_list(
+            tx_id,
+            "SELECT table_name FROM information_schema.tables WHERE table_schema=? AND table_type='BASE TABLE'",
+            [schema_name],
+        )
 
     def table_schema(self, table_name: str, tx_id: bytes) -> bytes:
         """Get Arrow schema for a table as serialized IPC bytes within a transaction.
@@ -424,16 +421,11 @@ class TransactorImpl:
 
     def list_user_views(self, tx_id: bytes, schema_name: str = "main") -> list[str]:
         """List user-created view names in the given schema within a transaction."""
-        conn = self._get_tx_conn(tx_id)
-        tx_lock = self._get_tx_lock(tx_id)
-        with tx_lock:
-            sub = conn.subcursor()
-            result = sub.execute(
-                "SELECT view_name FROM duckdb_views() WHERE schema_name = ? AND NOT internal",
-                [schema_name],
-            ).fetchall()
-            sub.close()
-        return [row[0] for row in result]
+        return self._query_list(
+            tx_id,
+            "SELECT view_name FROM duckdb_views() WHERE schema_name = ? AND NOT internal",
+            [schema_name],
+        )
 
     def view_info(self, view_name: str, tx_id: bytes) -> str:
         """Return view info as JSON (definition, comment).

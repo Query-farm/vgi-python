@@ -83,6 +83,14 @@ def _qn(schema_name: str, name: str) -> str:
     return f'{_qi(schema_name)}.{_qi(name)}'
 
 
+def _comment_sql(target: str, comment: str | None) -> str:
+    """Build COMMENT ON <target> IS ... SQL."""
+    if comment is None:
+        return f"COMMENT ON {target} IS NULL;"
+    escaped = comment.replace("'", "''")
+    return f"COMMENT ON {target} IS '{escaped}';"
+
+
 # ============================================================================
 # Arrow type to DuckDB SQL type mapping
 # ============================================================================
@@ -311,6 +319,17 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         proxy = transactor_proxy._get_proxy()
         proxy.rollback(tx_id=transaction_id)
 
+    # ========== DDL helpers ==========
+
+    def _execute_ddl(self, transaction_id: TransactionId | None, sql: str,
+                     strip_catalog: str | None = None) -> None:
+        """Validate transaction, execute DDL, increment catalog version."""
+        if not transaction_id:
+            raise ValueError("transaction_id is required for DDL operations")
+        proxy = transactor_proxy._get_proxy()
+        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql, strip_catalog=strip_catalog)
+        self._catalog_version += 1
+
     # ========== DDL: Table operations ==========
 
     def table_create(
@@ -384,13 +403,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         all_parts = col_defs + constraints
         columns_sql = ",\n  ".join(all_parts)
         ddl = f"CREATE TABLE{if_not_exists} {_qn(schema_name, name)} (\n  {columns_sql}\n);"
-
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=ddl)
-
-        self._catalog_version += 1
+        self._execute_ddl(transaction_id, ddl)
         logger.info("table_create: %s (on_conflict=%s)", name, on_conflict.value)
 
     def table_drop(
@@ -403,16 +416,9 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Drop a table."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
         if_exists = " IF EXISTS" if ignore_not_found else ""
-        ddl = f"DROP TABLE{if_exists} {_qn(schema_name, name)};"
-
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=ddl)
-
-        self._catalog_version += 1
-        logger.info("table_drop: %s (ignore_not_found=%s)", name, ignore_not_found)
+        self._execute_ddl(transaction_id, f"DROP TABLE{if_exists} {_qn(schema_name, name)};")
+        logger.info("table_drop: %s", name)
 
     def table_rename(
         self,
@@ -425,13 +431,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Rename a table."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
-        sql = f"ALTER TABLE {_qn(schema_name, name)} RENAME TO {_qi(new_name)};"
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-
-        self._catalog_version += 1
+        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} RENAME TO {_qi(new_name)};")
         logger.info("table_rename: %s -> %s", name, new_name)
 
     def table_column_add(
@@ -446,17 +446,10 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         if_column_not_exists: bool,
     ) -> None:
         """Add a column to a table."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
         col_schema = pa.ipc.read_schema(pa.BufferReader(column_definition))
         field = col_schema.field(0)
         if_not_exists = " IF NOT EXISTS" if if_column_not_exists else ""
-        sql = f"ALTER TABLE {_qn(schema_name, name)} ADD COLUMN{if_not_exists} {_qi(field.name)} {_arrow_type_to_sql(field.type)};"
-
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-
-        self._catalog_version += 1
+        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} ADD COLUMN{if_not_exists} {_qi(field.name)} {_arrow_type_to_sql(field.type)};")
         logger.info("table_column_add: %s.%s", name, field.name)
 
     def table_column_drop(
@@ -472,16 +465,9 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         cascade: bool,
     ) -> None:
         """Drop a column from a table."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
         if_exists = " IF EXISTS" if if_column_exists else ""
         cascade_sql = " CASCADE" if cascade else ""
-        sql = f"ALTER TABLE {_qn(schema_name, name)} DROP COLUMN{if_exists} {_qi(column_name)}{cascade_sql};"
-
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-
-        self._catalog_version += 1
+        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} DROP COLUMN{if_exists} {_qi(column_name)}{cascade_sql};")
         logger.info("table_column_drop: %s.%s", name, column_name)
 
     def table_column_rename(
@@ -496,14 +482,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Rename a column in a table."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
-        sql = f"ALTER TABLE {_qn(schema_name, name)} RENAME COLUMN {_qi(column_name)} TO {_qi(new_column_name)};"
-
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-
-        self._catalog_version += 1
+        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} RENAME COLUMN {_qi(column_name)} TO {_qi(new_column_name)};")
         logger.info("table_column_rename: %s.%s -> %s", name, column_name, new_column_name)
 
     def table_comment_set(
@@ -517,18 +496,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Set or clear the comment on a table."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
-        if comment is None:
-            sql = f"COMMENT ON TABLE {_qn(schema_name, name)} IS NULL;"
-        else:
-            escaped = comment.replace("'", "''")
-            sql = f"COMMENT ON TABLE {_qn(schema_name, name)} IS '{escaped}';"
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-
-        self._catalog_version += 1
-        logger.info("table_comment_set: %s comment=%s", name, comment)
+        self._execute_ddl(transaction_id, _comment_sql(f"TABLE {_qn(schema_name, name)}", comment))
 
     def table_column_comment_set(
         self,
@@ -542,17 +510,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Set or clear the comment on a table column."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
-        if comment is None:
-            sql = f"COMMENT ON COLUMN {_qn(schema_name, name)}.{_qi(column_name)} IS NULL;"
-        else:
-            escaped = comment.replace("'", "''")
-            sql = f"COMMENT ON COLUMN {_qn(schema_name, name)}.{_qi(column_name)} IS '{escaped}';"
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-        self._catalog_version += 1
-        logger.info("table_column_comment_set: %s.%s comment=%s", name, column_name, comment)
+        self._execute_ddl(transaction_id, _comment_sql(f"COLUMN {_qn(schema_name, name)}.{_qi(column_name)}", comment))
 
     def table_column_type_change(
         self,
@@ -566,19 +524,13 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Change the type of a column in a table."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
         col_schema = pa.ipc.read_schema(pa.BufferReader(column_definition))
         field = col_schema.field(0)
         sql = f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(field.name)} TYPE {_arrow_type_to_sql(field.type)}"
         if expression:
             # expression comes from DuckDB's binder (serialized AST), not raw user input
             sql += f" USING {expression}"
-        sql += ";"
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-        self._catalog_version += 1
-        logger.info("table_column_type_change: %s.%s -> %s", name, field.name, field.type)
+        self._execute_ddl(transaction_id, sql + ";")
 
     def table_column_default_set(
         self,
@@ -592,13 +544,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Set the default expression for a column."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
-        sql = f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} SET DEFAULT {expression};"
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-        self._catalog_version += 1
-        logger.info("table_column_default_set: %s.%s = %s", name, column_name, expression)
+        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} SET DEFAULT {expression};")
 
     def table_column_default_drop(
         self,
@@ -611,13 +557,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Drop the default expression for a column."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
-        sql = f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} DROP DEFAULT;"
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-        self._catalog_version += 1
-        logger.info("table_column_default_drop: %s.%s", name, column_name)
+        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} DROP DEFAULT;")
 
     def table_not_null_set(
         self,
@@ -630,13 +570,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Set NOT NULL constraint on a column."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
-        sql = f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} SET NOT NULL;"
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-        self._catalog_version += 1
-        logger.info("table_not_null_set: %s.%s", name, column_name)
+        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} SET NOT NULL;")
 
     def table_not_null_drop(
         self,
@@ -649,13 +583,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Drop NOT NULL constraint from a column."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
-        sql = f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} DROP NOT NULL;"
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-        self._catalog_version += 1
-        logger.info("table_not_null_drop: %s.%s", name, column_name)
+        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} DROP NOT NULL;")
 
     # ========== Schema discovery (merge static + dynamic) ==========
 
@@ -726,27 +654,15 @@ class WritableCatalog(ReadOnlyCatalogInterface):
                       name: str, on_conflict: OnConflict = OnConflict.ERROR,
                       comment: str | None, tags: dict[str, str] | None) -> None:
         """Create a new schema in the transactor's DuckDB database."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
         if_not_exists = " IF NOT EXISTS" if on_conflict == OnConflict.IGNORE else ""
-        sql = f"CREATE SCHEMA{if_not_exists} {_qi(name)};"
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-        self._catalog_version += 1
-        logger.info("schema_create: %s (on_conflict=%s)", name, on_conflict.value)
+        self._execute_ddl(transaction_id, f"CREATE SCHEMA{if_not_exists} {_qi(name)};")
 
     def schema_drop(self, *, attach_id: AttachId, transaction_id: TransactionId | None,
                     name: str, ignore_not_found: bool, cascade: bool) -> None:
         """Drop a schema from the transactor's DuckDB database."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
         if_exists = " IF EXISTS" if ignore_not_found else ""
         cascade_sql = " CASCADE" if cascade else ""
-        sql = f"DROP SCHEMA{if_exists} {_qi(name)}{cascade_sql};"
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-        self._catalog_version += 1
-        logger.info("schema_drop: %s (ignore_not_found=%s, cascade=%s)", name, ignore_not_found, cascade)
+        self._execute_ddl(transaction_id, f"DROP SCHEMA{if_exists} {_qi(name)}{cascade_sql};")
 
     # ========== DDL: View operations ==========
 
@@ -761,20 +677,10 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         on_conflict: OnConflict,
     ) -> None:
         """Create a new view in the transactor's DuckDB database."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
-        if_replace = ""
-        if_not_exists = ""
-        if on_conflict == OnConflict.REPLACE:
-            if_replace = " OR REPLACE"
-        elif on_conflict == OnConflict.IGNORE:
-            if_not_exists = " IF NOT EXISTS"
+        if_replace = " OR REPLACE" if on_conflict == OnConflict.REPLACE else ""
+        if_not_exists = " IF NOT EXISTS" if on_conflict == OnConflict.IGNORE else ""
         sql = f"CREATE{if_replace} VIEW{if_not_exists} {_qn(schema_name, name)} AS {definition};"
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql,
-                              strip_catalog=self._effective_catalog_name)
-        self._catalog_version += 1
-        logger.info("view_create: %s (on_conflict=%s)", name, on_conflict.value)
+        self._execute_ddl(transaction_id, sql, strip_catalog=self._effective_catalog_name)
 
     def view_drop(
         self,
@@ -786,14 +692,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Drop a view."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
         if_exists = " IF EXISTS" if ignore_not_found else ""
-        sql = f"DROP VIEW{if_exists} {_qn(schema_name, name)};"
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-        self._catalog_version += 1
-        logger.info("view_drop: %s (ignore_not_found=%s)", name, ignore_not_found)
+        self._execute_ddl(transaction_id, f"DROP VIEW{if_exists} {_qn(schema_name, name)};")
 
     def view_rename(
         self,
@@ -806,13 +706,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Rename a view."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
-        sql = f"ALTER VIEW {_qn(schema_name, name)} RENAME TO {_qi(new_name)};"
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-        self._catalog_version += 1
-        logger.info("view_rename: %s -> %s", name, new_name)
+        self._execute_ddl(transaction_id, f"ALTER VIEW {_qn(schema_name, name)} RENAME TO {_qi(new_name)};")
 
     def view_comment_set(
         self,
@@ -825,17 +719,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Set or clear the comment on a view."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
-        if comment is None:
-            sql = f"COMMENT ON VIEW {_qn(schema_name, name)} IS NULL;"
-        else:
-            escaped = comment.replace("'", "''")
-            sql = f"COMMENT ON VIEW {_qn(schema_name, name)} IS '{escaped}';"
-        proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql)
-        self._catalog_version += 1
-        logger.info("view_comment_set: %s comment=%s", name, comment)
+        self._execute_ddl(transaction_id, _comment_sql(f"VIEW {_qn(schema_name, name)}", comment))
 
     # ========== Dynamic view discovery ==========
 
@@ -1047,6 +931,34 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
 
+    def _merge_dynamic_contents(
+        self, *, attach_id: AttachId, transaction_id: TransactionId | None,
+        schema_name: str, type: SchemaObjectType, info_type: type,
+        list_method: str, get_method: str,
+    ) -> list:
+        """Merge static catalog contents with dynamic entries from the transactor."""
+        static_results = list(super().schema_contents(
+            attach_id=attach_id, transaction_id=transaction_id, name=schema_name, type=type,
+        ))
+        static_names = {r.name.lower() for r in static_results if isinstance(r, info_type)}
+        try:
+            proxy = transactor_proxy._get_proxy()
+            dynamic_names = getattr(proxy, list_method)(tx_id=transaction_id, schema_name=schema_name) if transaction_id else []
+        except ValueError:
+            dynamic_names = []
+        except Exception:
+            logger.warning("schema_contents: error listing dynamic %s", type, exc_info=True)
+            dynamic_names = []
+        for item_name in dynamic_names:
+            if item_name.lower() not in static_names:
+                item = getattr(self, get_method)(
+                    attach_id=attach_id, transaction_id=transaction_id,
+                    schema_name=schema_name, name=item_name,
+                )
+                if item is not None:
+                    static_results.append(item)
+        return static_results
+
     def schema_contents(
         self,
         *,
@@ -1055,191 +967,55 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         name: str,
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo]:
-        """List schema contents, merging static + dynamic tables for TABLE type."""
-        # Normalize type parameter
+        """List schema contents, merging static + dynamic entries."""
         type_enum = type if isinstance(type, SchemaObjectType) else SchemaObjectType(type)
 
         if type_enum == SchemaObjectType.TABLE:
-            # Get static tables from parent
-            static_results = list(super().schema_contents(
-                attach_id=attach_id,
-                transaction_id=transaction_id,
-                name=name,
-                type=type,
-            ))
-            static_names = {r.name.lower() for r in static_results if isinstance(r, TableInfo)}
-
-            # Get dynamic tables from transactor
-            try:
-                proxy = transactor_proxy._get_proxy()
-                user_tables = proxy.list_user_tables(tx_id=transaction_id, schema_name=name) if transaction_id else []
-            except ValueError:
-                logger.debug("schema_contents: failed to list user tables from transactor")
-                user_tables = []
-            except Exception:
-                logger.warning("schema_contents: unexpected error listing user tables", exc_info=True)
-                user_tables = []
-
-            # Merge: add dynamic tables not already in static
-            for tbl_name in user_tables:
-                if tbl_name.lower() not in static_names:
-                    tbl_info = self.table_get(
-                        attach_id=attach_id,
-                        transaction_id=transaction_id,
-                        schema_name=name,
-                        name=tbl_name,
-                    )
-                    if tbl_info is not None:
-                        static_results.append(tbl_info)
-
-            return static_results
-
+            return self._merge_dynamic_contents(
+                attach_id=attach_id, transaction_id=transaction_id, schema_name=name,
+                type=type, info_type=TableInfo, list_method="list_user_tables", get_method="table_get",
+            )
         if type_enum == SchemaObjectType.VIEW:
-            # Get static views from parent
-            static_results = list(super().schema_contents(
-                attach_id=attach_id,
-                transaction_id=transaction_id,
-                name=name,
-                type=type,
-            ))
-            static_names = {r.name.lower() for r in static_results if isinstance(r, ViewInfo)}
-
-            # Get dynamic views from transactor
-            try:
-                proxy = transactor_proxy._get_proxy()
-                user_views = proxy.list_user_views(tx_id=transaction_id, schema_name=name) if transaction_id else []
-            except ValueError:
-                logger.debug("schema_contents: failed to list user views from transactor")
-                user_views = []
-            except Exception:
-                logger.warning("schema_contents: unexpected error listing user views", exc_info=True)
-                user_views = []
-
-            # Merge: add dynamic views not already in static
-            for vw_name in user_views:
-                if vw_name.lower() not in static_names:
-                    vw_info = self.view_get(
-                        attach_id=attach_id,
-                        transaction_id=transaction_id,
-                        schema_name=name,
-                        name=vw_name,
-                    )
-                    if vw_info is not None:
-                        static_results.append(vw_info)
-
-            return static_results
-
-        # Other types: delegate to parent
+            return self._merge_dynamic_contents(
+                attach_id=attach_id, transaction_id=transaction_id, schema_name=name,
+                type=type, info_type=ViewInfo, list_method="list_user_views", get_method="view_get",
+            )
         return super().schema_contents(
-            attach_id=attach_id,
-            transaction_id=transaction_id,
-            name=name,
-            type=type,
+            attach_id=attach_id, transaction_id=transaction_id, name=name, type=type,
         )
 
     # ========== Dynamic scan/write function dispatch ==========
 
-    def table_scan_function_get(
-        self,
-        *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
-        schema_name: str,
-        name: str,
-        at_unit: str | None,
-        at_value: str | None,
-    ) -> ScanFunctionResult:
-        """Get scan function — static tables use parent, dynamic use generic_writable_scan."""
-        # Try static catalog first
+    def _function_get(self, kind: str, *, attach_id: AttachId, transaction_id: TransactionId | None,
+                      schema_name: str, name: str, **kwargs: Any) -> ScanFunctionResult:
+        """Dispatch to static parent or generic dynamic function by kind."""
         if name.lower() in _STATIC_TABLE_NAMES:
-            return super().table_scan_function_get(
-                attach_id=attach_id,
-                transaction_id=transaction_id,
-                schema_name=schema_name,
-                name=name,
-                at_unit=at_unit,
-                at_value=at_value,
-            )
-
-        # Dynamic table — use generic scan with schema-qualified table_name as positional arg
+            parent = getattr(super(), f"table_{kind}_function_get")
+            return parent(attach_id=attach_id, transaction_id=transaction_id,
+                         schema_name=schema_name, name=name, **kwargs)
         qualified = f"{schema_name}.{name}" if schema_name else name
         return ScanFunctionResult(
-            function_name="generic_writable_scan",
+            function_name=f"generic_writable_{kind}",
             positional_arguments=[pa.scalar(qualified)],
             named_arguments={},
         )
 
-    def table_insert_function_get(
-        self,
-        *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
-        schema_name: str,
-        name: str,
-    ) -> ScanFunctionResult:
-        """Get insert function — static tables use parent, dynamic use generic."""
-        if name.lower() in _STATIC_TABLE_NAMES:
-            return super().table_insert_function_get(
-                attach_id=attach_id,
-                transaction_id=transaction_id,
-                schema_name=schema_name,
-                name=name,
-            )
+    def table_scan_function_get(self, *, attach_id, transaction_id, schema_name, name,
+                                at_unit, at_value) -> ScanFunctionResult:
+        return self._function_get("scan", attach_id=attach_id, transaction_id=transaction_id,
+                                  schema_name=schema_name, name=name, at_unit=at_unit, at_value=at_value)
 
-        qualified = f"{schema_name}.{name}" if schema_name else name
-        return ScanFunctionResult(
-            function_name="generic_writable_insert",
-            positional_arguments=[pa.scalar(qualified)],
-            named_arguments={},
-        )
+    def table_insert_function_get(self, *, attach_id, transaction_id, schema_name, name) -> ScanFunctionResult:
+        return self._function_get("insert", attach_id=attach_id, transaction_id=transaction_id,
+                                  schema_name=schema_name, name=name)
 
-    def table_update_function_get(
-        self,
-        *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
-        schema_name: str,
-        name: str,
-    ) -> ScanFunctionResult:
-        """Get update function — static tables use parent, dynamic use generic."""
-        if name.lower() in _STATIC_TABLE_NAMES:
-            return super().table_update_function_get(
-                attach_id=attach_id,
-                transaction_id=transaction_id,
-                schema_name=schema_name,
-                name=name,
-            )
+    def table_update_function_get(self, *, attach_id, transaction_id, schema_name, name) -> ScanFunctionResult:
+        return self._function_get("update", attach_id=attach_id, transaction_id=transaction_id,
+                                  schema_name=schema_name, name=name)
 
-        qualified = f"{schema_name}.{name}" if schema_name else name
-        return ScanFunctionResult(
-            function_name="generic_writable_update",
-            positional_arguments=[pa.scalar(qualified)],
-            named_arguments={},
-        )
-
-    def table_delete_function_get(
-        self,
-        *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
-        schema_name: str,
-        name: str,
-    ) -> ScanFunctionResult:
-        """Get delete function — static tables use parent, dynamic use generic."""
-        if name.lower() in _STATIC_TABLE_NAMES:
-            return super().table_delete_function_get(
-                attach_id=attach_id,
-                transaction_id=transaction_id,
-                schema_name=schema_name,
-                name=name,
-            )
-
-        qualified = f"{schema_name}.{name}" if schema_name else name
-        return ScanFunctionResult(
-            function_name="generic_writable_delete",
-            positional_arguments=[pa.scalar(qualified)],
-            named_arguments={},
-        )
+    def table_delete_function_get(self, *, attach_id, transaction_id, schema_name, name) -> ScanFunctionResult:
+        return self._function_get("delete", attach_id=attach_id, transaction_id=transaction_id,
+                                  schema_name=schema_name, name=name)
 
 
 class WritableWorker(Worker):

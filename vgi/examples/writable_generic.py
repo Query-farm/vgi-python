@@ -120,17 +120,14 @@ class GenericTableScan(TableFunctionGenerator[None, WritableScanState]):
 
 
 # ============================================================================
-# Generic insert — dynamic table name from first positional arg
+# Generic write base — shared INSERT/UPDATE/DELETE logic
 # ============================================================================
 
 
-class GenericTableInsert(TableInOutGenerator[None, None]):
-    """INSERT handler for any table — determines table name from first positional arg."""
+class _GenericWriteBase(TableInOutGenerator[None, None]):
+    """Base for generic write handlers. Subclasses set _operation."""
 
-    class Meta:
-        """Metadata for GenericTableInsert."""
-
-        name = "generic_writable_insert"
+    _operation: str  # "insert" | "update" | "delete"
 
     @classmethod
     def on_bind(cls, params: BindParams[None]) -> BindResponse:
@@ -138,89 +135,54 @@ class GenericTableInsert(TableInOutGenerator[None, None]):
         table_name = _get_table_name_from_bind(params)
         if _is_returning(params):
             table_schema = _get_table_schema_from_transactor(table_name, params.bind_call.transaction_id)
-            # Exclude row_id from RETURNING schema (it's auto-generated)
             user_fields = [f for f in table_schema if f.name not in ("rowid", "row_id")]
             return BindResponse(output_schema=pa.schema(user_fields))
         return BindResponse(output_schema=_COUNT_SCHEMA)
 
     @classmethod
+    def _open_stream(cls, proxy, tx_id, table_name, returning, batch):
+        """Open a write stream. Override for operations needing extra args."""
+        return getattr(proxy, cls._operation)(tx_id=tx_id, table_name=table_name, returning=returning)
+
+    @classmethod
     def process(cls, params: ProcessParams[None], state: None, batch: pa.RecordBatch, out: OutputCollector) -> None:
-        """Forward batch to transactor insert stream."""
+        """Forward batch to transactor write stream."""
         table_name = _get_table_name_from_process(params)
         tx_id = _get_tx_id(params)
         returning = params.output_schema != _COUNT_SCHEMA
         proxy = transactor_proxy._get_proxy()
-        with proxy.insert(tx_id=tx_id, table_name=table_name, returning=returning) as stream:
+        with cls._open_stream(proxy, tx_id, table_name, returning, batch) as stream:
             response = stream.exchange(AnnotatedBatch(batch=batch))
             out.emit(response.batch)
 
 
-# ============================================================================
-# Generic update — dynamic table name from first positional arg
-# ============================================================================
+class GenericTableInsert(_GenericWriteBase):
+    """INSERT handler for any table — determines table name from first positional arg."""
 
-
-class GenericTableUpdate(TableInOutGenerator[None, None]):
-    """UPDATE handler for any table — determines table name from first positional arg."""
+    _operation = "insert"
 
     class Meta:
-        """Metadata for GenericTableUpdate."""
+        name = "generic_writable_insert"
 
+
+class GenericTableUpdate(_GenericWriteBase):
+    """UPDATE handler for any table — determines table name from first positional arg."""
+
+    _operation = "update"
+
+    class Meta:
         name = "generic_writable_update"
 
     @classmethod
-    def on_bind(cls, params: BindParams[None]) -> BindResponse:
-        """Bind: query transactor for table schema to use for RETURNING."""
-        table_name = _get_table_name_from_bind(params)
-        if _is_returning(params):
-            table_schema = _get_table_schema_from_transactor(table_name, params.bind_call.transaction_id)
-            user_fields = [f for f in table_schema if f.name not in ("rowid", "row_id")]
-            return BindResponse(output_schema=pa.schema(user_fields))
-        return BindResponse(output_schema=_COUNT_SCHEMA)
-
-    @classmethod
-    def process(cls, params: ProcessParams[None], state: None, batch: pa.RecordBatch, out: OutputCollector) -> None:
-        """Forward batch to transactor update stream."""
-        table_name = _get_table_name_from_process(params)
-        tx_id = _get_tx_id(params)
-        returning = params.output_schema != _COUNT_SCHEMA
+    def _open_stream(cls, proxy, tx_id, table_name, returning, batch):
         update_cols = [name for name in batch.schema.names if name != "rowid"]
-        proxy = transactor_proxy._get_proxy()
-        with proxy.update(tx_id=tx_id, table_name=table_name, columns=update_cols, returning=returning) as stream:
-            response = stream.exchange(AnnotatedBatch(batch=batch))
-            out.emit(response.batch)
+        return proxy.update(tx_id=tx_id, table_name=table_name, columns=update_cols, returning=returning)
 
 
-# ============================================================================
-# Generic delete — dynamic table name from first positional arg
-# ============================================================================
-
-
-class GenericTableDelete(TableInOutGenerator[None, None]):
+class GenericTableDelete(_GenericWriteBase):
     """DELETE handler for any table — determines table name from first positional arg."""
 
+    _operation = "delete"
+
     class Meta:
-        """Metadata for GenericTableDelete."""
-
         name = "generic_writable_delete"
-
-    @classmethod
-    def on_bind(cls, params: BindParams[None]) -> BindResponse:
-        """Bind: query transactor for table schema to use for RETURNING."""
-        table_name = _get_table_name_from_bind(params)
-        if _is_returning(params):
-            table_schema = _get_table_schema_from_transactor(table_name, params.bind_call.transaction_id)
-            user_fields = [f for f in table_schema if f.name not in ("rowid", "row_id")]
-            return BindResponse(output_schema=pa.schema(user_fields))
-        return BindResponse(output_schema=_COUNT_SCHEMA)
-
-    @classmethod
-    def process(cls, params: ProcessParams[None], state: None, batch: pa.RecordBatch, out: OutputCollector) -> None:
-        """Forward batch to transactor delete stream."""
-        table_name = _get_table_name_from_process(params)
-        tx_id = _get_tx_id(params)
-        returning = params.output_schema != _COUNT_SCHEMA
-        proxy = transactor_proxy._get_proxy()
-        with proxy.delete(tx_id=tx_id, table_name=table_name, returning=returning) as stream:
-            response = stream.exchange(AnnotatedBatch(batch=batch))
-            out.emit(response.batch)
