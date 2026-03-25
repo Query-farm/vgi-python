@@ -1,22 +1,12 @@
 """Writable worker with transactional INSERT, UPDATE, DELETE, and DDL support.
 
-This worker exposes writable tables backed by a db-transactor subprocess.
-It supports transactions — scan and write workers share the same DuckDB
-transaction through the transactor.
-
-DDL operations (CREATE TABLE, DROP TABLE, ALTER TABLE, etc.) are forwarded to
-the transactor. Dynamically created tables are discovered via the transactor's
-metadata methods and served through generic writable functions.
+This worker exposes a fully dynamic writable catalog backed by a db-transactor
+subprocess. All tables are created via CREATE TABLE DDL — there are no static
+table definitions. Generic scan/insert/update/delete functions serve any table.
 
 Usage::
 
     vgi-writable-worker
-
-Tables:
-    writable_data — simple two-column table (id, name)
-    writable_products — table with defaults, constraints, server-side modification
-    writable_orders — table with foreign key to writable_products
-    (plus any dynamically created tables via CREATE TABLE)
 """
 
 from __future__ import annotations
@@ -39,8 +29,6 @@ from vgi.catalog import (
     SchemaInfo,
     SchemaObjectType,
     SerializedSchema,
-    Sql,
-    Table,
     TableInfo,
     TransactionId,
     FunctionInfo,
@@ -53,21 +41,7 @@ from vgi.examples.writable_generic import (
     GenericTableScan,
     GenericTableUpdate,
 )
-from vgi.examples.writable_table import (
-    WritableOrdersDelete,
-    WritableOrdersInsert,
-    WritableOrdersScan,
-    WritableOrdersUpdate,
-    WritableProductsDelete,
-    WritableProductsInsert,
-    WritableProductsScan,
-    WritableProductsUpdate,
-    WritableTableDelete,
-    WritableTableInsert,
-    WritableTableScan,
-    WritableTableUpdate,
-    transactor_proxy,
-)
+from vgi.examples.writable_table import transactor_proxy
 from vgi.worker import Worker
 
 logger = logging.getLogger("vgi.writable_worker")
@@ -184,7 +158,7 @@ def _deserialize_fk(fk_bytes: bytes) -> dict[str, Any]:
 
 
 # ============================================================================
-# Static catalog definition
+# Catalog definition — generic functions only, no static tables
 # ============================================================================
 
 
@@ -194,80 +168,25 @@ _WRITABLE_CATALOG = Catalog(
     schemas=[
         Schema(
             name="main",
-            comment="Writable tables backed by db-transactor",
             functions=[
-                # Scan functions registered here for projection_pushdown metadata
-                WritableTableScan,
-                WritableProductsScan,
-                WritableOrdersScan,
-                # Generic functions for DDL-created tables
                 GenericTableScan,
                 GenericTableInsert,
                 GenericTableUpdate,
                 GenericTableDelete,
             ],
-            tables=[
-                Table(
-                    name="writable_data",
-                    function=WritableTableScan,
-                    insert_function=WritableTableInsert,
-                    update_function=WritableTableUpdate,
-                    delete_function=WritableTableDelete,
-                    comment="Simple writable table (id, name)",
-                ),
-                Table(
-                    name="writable_products",
-                    function=WritableProductsScan,
-                    insert_function=WritableProductsInsert,
-                    update_function=WritableProductsUpdate,
-                    delete_function=WritableProductsDelete,
-                    primary_key=(("product_id",),),
-                    not_null=("product_id", "name"),
-                    check=("price >= 0",),
-                    defaults={
-                        "price": 0.0,
-                        "status": "draft",
-                        "created_at": Sql("'server-assigned'"),
-                    },
-                    comment="Writable products with defaults, constraints, server-side modification",
-                ),
-                Table(
-                    name="writable_orders",
-                    function=WritableOrdersScan,
-                    insert_function=WritableOrdersInsert,
-                    update_function=WritableOrdersUpdate,
-                    delete_function=WritableOrdersDelete,
-                    not_null=("order_id", "product_id"),
-                    defaults={"quantity": 1},
-                    comment="Writable orders with FK to writable_products",
-                ),
-            ],
+            tables=[],
         ),
     ],
 )
 
-# Set of static table names (lowercase) for quick lookup
-_STATIC_TABLE_NAMES: set[str] = set()
-for _schema in _WRITABLE_CATALOG.schemas:
-    for _table in _schema.tables:
-        _STATIC_TABLE_NAMES.add(_table.name.lower())
-
 
 # ============================================================================
-# WritableCatalog — catalog interface with DDL support
+# WritableCatalog — fully dynamic catalog interface
 # ============================================================================
 
 
 class WritableCatalog(ReadOnlyCatalogInterface):
-    """Catalog interface with transaction and DDL support for writable tables.
-
-    Transactions are managed by the db-transactor subprocess. The transactor
-    owns the single DuckDB connection and serializes all operations.
-
-    DDL operations (CREATE/DROP/ALTER TABLE) are forwarded to the transactor
-    and dynamically discovered tables are served through generic writable
-    functions.
-    """
+    """Fully dynamic catalog — all tables created via DDL, served by generic functions."""
 
     catalog = _WRITABLE_CATALOG
     supports_transactions = True
@@ -815,9 +734,10 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             import json
             from vgi_rpc.utils import serialize_record_batch_bytes
             constraints = json.loads(schema_meta[b"vgi.constraints"].decode("utf-8"))
-            # Build column name → index map (excluding rowid)
-            col_names = [f.name for f in table_schema if f.name != "rowid"]
-            col_index = {name: i for i, name in enumerate(col_names)}
+            # Build column name → index map in Arrow schema space (including rowid at index 0).
+            # Constraint indices must be in Arrow space so the C++ adjust_col lambda
+            # can correctly shift them to physical space (excluding rowid).
+            col_index = {f.name: i for i, f in enumerate(table_schema) if f.name != "rowid"}
             for c in constraints:
                 ctype = c["type"]
                 cols = c.get("columns") or []
@@ -975,13 +895,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
 
     # ========== Dynamic scan/write function dispatch ==========
 
-    def _function_get(self, kind: str, *, attach_id: AttachId, transaction_id: TransactionId | None,
-                      schema_name: str, name: str, **kwargs: Any) -> ScanFunctionResult:
-        """Dispatch to static parent or generic dynamic function by kind."""
-        if name.lower() in _STATIC_TABLE_NAMES:
-            parent = getattr(super(), f"table_{kind}_function_get")
-            return parent(attach_id=attach_id, transaction_id=transaction_id,
-                         schema_name=schema_name, name=name, **kwargs)
+    def _function_get(self, kind: str, *, schema_name: str, name: str, **kwargs: Any) -> ScanFunctionResult:
+        """Dispatch all tables to generic functions."""
         qualified = f"{schema_name}.{name}" if schema_name else name
         return ScanFunctionResult(
             function_name=f"generic_writable_{kind}",
@@ -991,20 +906,16 @@ class WritableCatalog(ReadOnlyCatalogInterface):
 
     def table_scan_function_get(self, *, attach_id, transaction_id, schema_name, name,
                                 at_unit, at_value) -> ScanFunctionResult:
-        return self._function_get("scan", attach_id=attach_id, transaction_id=transaction_id,
-                                  schema_name=schema_name, name=name, at_unit=at_unit, at_value=at_value)
+        return self._function_get("scan", schema_name=schema_name, name=name)
 
     def table_insert_function_get(self, *, attach_id, transaction_id, schema_name, name) -> ScanFunctionResult:
-        return self._function_get("insert", attach_id=attach_id, transaction_id=transaction_id,
-                                  schema_name=schema_name, name=name)
+        return self._function_get("insert", schema_name=schema_name, name=name)
 
     def table_update_function_get(self, *, attach_id, transaction_id, schema_name, name) -> ScanFunctionResult:
-        return self._function_get("update", attach_id=attach_id, transaction_id=transaction_id,
-                                  schema_name=schema_name, name=name)
+        return self._function_get("update", schema_name=schema_name, name=name)
 
     def table_delete_function_get(self, *, attach_id, transaction_id, schema_name, name) -> ScanFunctionResult:
-        return self._function_get("delete", attach_id=attach_id, transaction_id=transaction_id,
-                                  schema_name=schema_name, name=name)
+        return self._function_get("delete", schema_name=schema_name, name=name)
 
 
 class WritableWorker(Worker):
