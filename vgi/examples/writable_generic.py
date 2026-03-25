@@ -24,6 +24,7 @@ from vgi.table_in_out_function import TableInOutGenerator
 from vgi.examples.writable_table import (
     WritableScanState,
     _COUNT_SCHEMA,
+    _get_attach_id,
     _get_pushdown_filters,
     _get_tx_id,
     _is_returning,
@@ -56,10 +57,10 @@ def _get_table_name_from_process(params: ProcessParams[None]) -> str:
     return args.positional[0].as_py()
 
 
-def _get_table_schema_from_transactor(table_name: str, tx_id: bytes) -> pa.Schema:
+def _get_table_schema_from_transactor(table_name: str, attach_id: bytes, tx_id: bytes) -> pa.Schema:
     """Query the transactor for the table's Arrow schema (returned as IPC bytes)."""
     proxy = transactor_proxy._get_proxy()
-    schema_bytes = proxy.table_schema(table_name=table_name, tx_id=tx_id)
+    schema_bytes = proxy.table_schema(attach_id=attach_id, table_name=table_name, tx_id=tx_id)
     return pa.ipc.read_schema(pa.BufferReader(schema_bytes))
 
 
@@ -82,7 +83,7 @@ class GenericTableScan(TableFunctionGenerator[None, WritableScanState]):
     def on_bind(cls, params: BindParams[None]) -> BindResponse:
         """Bind: query transactor for table schema (already includes rowid)."""
         table_name = _get_table_name_from_bind(params)
-        table_schema = _get_table_schema_from_transactor(table_name, params.bind_call.transaction_id)
+        table_schema = _get_table_schema_from_transactor(table_name, params.bind_call.attach_id, params.bind_call.transaction_id)
         return BindResponse(output_schema=table_schema)
 
     @classmethod
@@ -94,11 +95,13 @@ class GenericTableScan(TableFunctionGenerator[None, WritableScanState]):
     def initial_state(cls, params: ProcessParams[None]) -> WritableScanState:
         """Open the transactor scan stream once before processing begins."""
         table_name = _get_table_name_from_process(params)
+        attach_id = _get_attach_id(params)
         tx_id = _get_tx_id(params)
         proxy = transactor_proxy._get_proxy()
         columns = list(params.output_schema.names)
         scan_iter = iter(
             proxy.scan(
+                attach_id=attach_id,
                 tx_id=tx_id,
                 schema_name="",
                 table_name=table_name,
@@ -134,24 +137,25 @@ class _GenericWriteBase(TableInOutGenerator[None, None]):
         """Bind: query transactor for table schema to use for RETURNING."""
         table_name = _get_table_name_from_bind(params)
         if _is_returning(params):
-            table_schema = _get_table_schema_from_transactor(table_name, params.bind_call.transaction_id)
+            table_schema = _get_table_schema_from_transactor(table_name, params.bind_call.attach_id, params.bind_call.transaction_id)
             user_fields = [f for f in table_schema if f.name not in ("rowid", "row_id")]
             return BindResponse(output_schema=pa.schema(user_fields))
         return BindResponse(output_schema=_COUNT_SCHEMA)
 
     @classmethod
-    def _open_stream(cls, proxy, tx_id, table_name, returning, batch):
+    def _open_stream(cls, proxy, attach_id, tx_id, table_name, returning, batch):
         """Open a write stream. Override for operations needing extra args."""
-        return getattr(proxy, cls._operation)(tx_id=tx_id, table_name=table_name, returning=returning)
+        return getattr(proxy, cls._operation)(attach_id=attach_id, tx_id=tx_id, table_name=table_name, returning=returning)
 
     @classmethod
     def process(cls, params: ProcessParams[None], state: None, batch: pa.RecordBatch, out: OutputCollector) -> None:
         """Forward batch to transactor write stream."""
         table_name = _get_table_name_from_process(params)
+        attach_id = _get_attach_id(params)
         tx_id = _get_tx_id(params)
         returning = params.output_schema != _COUNT_SCHEMA
         proxy = transactor_proxy._get_proxy()
-        with cls._open_stream(proxy, tx_id, table_name, returning, batch) as stream:
+        with cls._open_stream(proxy, attach_id, tx_id, table_name, returning, batch) as stream:
             response = stream.exchange(AnnotatedBatch(batch=batch))
             out.emit(response.batch)
 
@@ -174,9 +178,9 @@ class GenericTableUpdate(_GenericWriteBase):
         name = "generic_writable_update"
 
     @classmethod
-    def _open_stream(cls, proxy, tx_id, table_name, returning, batch):
+    def _open_stream(cls, proxy, attach_id, tx_id, table_name, returning, batch):
         update_cols = [name for name in batch.schema.names if name != "rowid"]
-        return proxy.update(tx_id=tx_id, table_name=table_name, columns=update_cols, returning=returning)
+        return proxy.update(attach_id=attach_id, tx_id=tx_id, table_name=table_name, columns=update_cols, returning=returning)
 
 
 class GenericTableDelete(_GenericWriteBase):

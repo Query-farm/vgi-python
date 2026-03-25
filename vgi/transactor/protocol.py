@@ -7,6 +7,9 @@ Uses ``vgi_rpc`` streaming patterns:
 - **Producer streams** (table function) for SELECT/SCAN
 - **Unary calls** for transaction lifecycle and DDL
 
+All methods that operate on a database take ``attach_id`` to identify
+which database to use. The transactor manages multiple databases, one
+per catalog attachment.
 """
 
 from __future__ import annotations
@@ -20,17 +23,28 @@ from vgi_rpc.rpc import ExchangeState, ProducerState, Stream
 class TransactorProtocol(Protocol):
     """RPC interface for the db-transactor subprocess."""
 
-    # ========== Transaction lifecycle (unary) ==========
+    # ========== Database lifecycle (unary) ==========
 
-    def begin(self, tx_id: bytes) -> None:
-        """Begin a transaction. Opens a DuckDB transaction internally."""
+    def register(self, attach_id: bytes, catalog_name: str = "",
+                 ddl_statements: list[str] | None = None) -> None:
+        """Register a new database for this attach_id and run initial DDL."""
         ...
 
-    def commit(self, tx_id: bytes) -> None:
+    def catalog_version(self, attach_id: bytes) -> int:
+        """Return the catalog version for the database (incremented on DDL)."""
+        ...
+
+    # ========== Transaction lifecycle (unary) ==========
+
+    def begin(self, attach_id: bytes) -> bytes:
+        """Begin a transaction. Returns the transactor-generated tx_id."""
+        ...
+
+    def commit(self, attach_id: bytes, tx_id: bytes) -> None:
         """Commit a transaction."""
         ...
 
-    def rollback(self, tx_id: bytes) -> None:
+    def rollback(self, attach_id: bytes, tx_id: bytes) -> None:
         """Rollback a transaction."""
         ...
 
@@ -38,103 +52,85 @@ class TransactorProtocol(Protocol):
 
     def insert(
         self,
+        attach_id: bytes,
         tx_id: bytes,
         table_name: str,
         schema_name: str = "",
         returning: bool = False,
     ) -> Stream[ExchangeState]:
-        """Insert rows into a table via lockstep exchange.
-
-        Client sends Arrow RecordBatches of rows to insert.
-        Server responds with count batches (or inserted rows if returning=True).
-        """
+        """Insert rows into a table via lockstep exchange."""
         ...
 
     def delete(
         self,
+        attach_id: bytes,
         tx_id: bytes,
         table_name: str,
         schema_name: str = "",
         returning: bool = False,
     ) -> Stream[ExchangeState]:
-        """Delete rows from a table via lockstep exchange.
-
-        Client sends Arrow RecordBatches with row_id column.
-        Server responds with count or RETURNING batches.
-        """
+        """Delete rows from a table via lockstep exchange."""
         ...
 
     def update(
         self,
+        attach_id: bytes,
         tx_id: bytes,
         table_name: str,
         schema_name: str = "",
         columns: list[str] | None = None,
         returning: bool = False,
     ) -> Stream[ExchangeState]:
-        """Update rows in a table via lockstep exchange.
-
-        Client sends Arrow RecordBatches with row_id + updated columns.
-        Server responds with count or RETURNING batches.
-        """
+        """Update rows in a table via lockstep exchange."""
         ...
 
     # ========== Read (streaming producer) ==========
 
     def scan(
         self,
+        attach_id: bytes,
         tx_id: bytes,
         table_name: str,
         columns: list[str],
         schema_name: str = "",
         pushdown_filters: bytes | None = None,
     ) -> Stream[ProducerState]:
-        """Scan rows from a table with optional predicate pushdown.
-
-        Server produces Arrow RecordBatches with the requested columns.
-        ``pushdown_filters`` is a serialized filter RecordBatch (same format
-        as VGI's ``InitRequest.pushdown_filters``), deserialized and converted
-        to a SQL WHERE clause by the transactor.
-        """
+        """Scan rows from a table with optional predicate pushdown."""
         ...
 
     # ========== DDL (unary) ==========
 
-    def execute_ddl(self, sql: str) -> None:
-        """Execute a DDL statement (CREATE TABLE, etc.)."""
+    def execute_ddl(self, attach_id: bytes, sql: str) -> None:
+        """Execute a DDL statement on the database (non-transactional)."""
         ...
 
-    def execute_ddl_tx(self, tx_id: bytes, sql: str, strip_catalog: str | None = None) -> None:
-        """Execute DDL within a transaction.
-
-        If ``strip_catalog`` is provided, external catalog references are
-        stripped from the SQL before execution (used for view definitions).
-        """
+    def execute_ddl_tx(self, attach_id: bytes, tx_id: bytes, sql: str, strip_catalog: str | None = None) -> None:
+        """Execute DDL within a transaction."""
         ...
 
     # ========== Metadata (unary) ==========
 
-    def list_schemas(self, tx_id: bytes) -> list[str]:
+    def list_schemas(self, attach_id: bytes, tx_id: bytes) -> list[str]:
         """List schema names within a transaction."""
         ...
 
-    def list_user_tables(self, tx_id: bytes, schema_name: str = "main") -> list[str]:
+    def list_user_tables(self, attach_id: bytes, tx_id: bytes, schema_name: str = "main") -> list[str]:
         """List user-created table names in the given schema within a transaction."""
         ...
 
-    def table_schema(self, table_name: str, tx_id: bytes) -> bytes:
-        """Get Arrow schema for a table as serialized IPC bytes, with rowid prepended and marked via is_row_id metadata."""
+    def table_schema(self, attach_id: bytes, table_name: str, tx_id: bytes) -> bytes:
+        """Get Arrow schema for a table as serialized IPC bytes."""
         ...
 
-    def table_comment(self, table_name: str, tx_id: bytes) -> str | None:
+    def table_comment(self, attach_id: bytes, table_name: str, tx_id: bytes) -> str | None:
         """Get the comment on a table, or None if no comment is set."""
         ...
 
-    def list_user_views(self, tx_id: bytes, schema_name: str = "main") -> list[str]:
+    def list_user_views(self, attach_id: bytes, tx_id: bytes, schema_name: str = "main") -> list[str]:
         """List user-created view names in the given schema within a transaction."""
         ...
 
-    def view_info(self, view_name: str, tx_id: bytes) -> str:
+    def view_info(self, attach_id: bytes, view_name: str, tx_id: bytes) -> str:
         """Get view info as JSON (definition, comment)."""
         ...
 

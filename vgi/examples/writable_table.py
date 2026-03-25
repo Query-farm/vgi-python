@@ -24,10 +24,8 @@ Usage in a Table descriptor::
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Annotated, Any, ClassVar
 
 import pyarrow as pa
@@ -114,11 +112,7 @@ def _is_returning(params: BindParams[None]) -> bool:
 
 
 def _get_tx_id(params: ProcessParams[None]) -> bytes:
-    """Get transaction_id from the bind request.
-
-    The C++ extension threads the transaction_id from VgiTransaction through the
-    BindRequest protocol. It arrives in params.init_call.bind_call.transaction_id.
-    """
+    """Get transaction_id from the bind request."""
     tx_id = params.init_call.bind_call.transaction_id
     if tx_id:
         return tx_id
@@ -126,47 +120,42 @@ def _get_tx_id(params: ProcessParams[None]) -> bytes:
     raise ValueError(msg)
 
 
+def _get_attach_id(params: ProcessParams[None]) -> bytes:
+    """Get attach_id from the bind request."""
+    attach_id = params.init_call.bind_call.attach_id
+    if attach_id:
+        return attach_id
+    msg = "attach_id is required but was not provided in the bind request"
+    raise ValueError(msg)
+
+
 # ============================================================================
 # TransactorProxy — manages the db-transactor connection
 # ============================================================================
 
-_DEFAULT_DB_PATH = Path("~/.local/state/vgi/writable_store.duckdb")
-
-
-def _get_db_path() -> Path:
-    """Get the database path from env var or default.
-
-    Set VGI_WRITABLE_STORE to a unique temp path per test run to ensure
-    each test suite starts with a fresh database.
-    """
-    env_path = os.environ.get("VGI_WRITABLE_STORE")
-    return Path(env_path) if env_path else _DEFAULT_DB_PATH.expanduser()
-
 
 class TransactorProxy:
-    """Manages connections to the db-transactor subprocess.
+    """Manages connections to the shared db-transactor subprocess.
 
-    Each worker process gets its own transactor with a unique database,
-    ensuring no state leaks between test runs or independent workers.
+    The transactor manages multiple databases internally (one per attach_id).
+    DDL statements are run during register() for each new catalog attachment.
     """
 
-    def __init__(self, db_path: Path | None = None, ddl_statements: list[str] | None = None) -> None:
+    def __init__(self, ddl_statements: list[str] | None = None) -> None:
         """Initialize the proxy."""
-        self._db_path = db_path or _get_db_path()
         self._ddl = ddl_statements or []
         self._client: TransactorClient | None = None
-        self._tables_created = False
 
     def _get_proxy(self) -> TransactorProtocol:
         """Get the transactor RPC proxy (auto-spawn if needed)."""
         if self._client is None:
-            self._client = TransactorClient(str(self._db_path))
-        proxy: TransactorProtocol = self._client.get_proxy()
-        if not self._tables_created:
-            for ddl in self._ddl:
-                proxy.execute_ddl(sql=ddl)
-            self._tables_created = True
-        return proxy
+            self._client = TransactorClient()
+        return self._client.get_proxy()
+
+    def register(self, attach_id: bytes, catalog_name: str = "") -> None:
+        """Register a new database for this attach_id and run initial DDL."""
+        proxy = self._get_proxy()
+        proxy.register(attach_id=attach_id, catalog_name=catalog_name, ddl_statements=self._ddl)
 
     def close(self) -> None:
         """Close the transactor connection."""
@@ -203,6 +192,13 @@ _WRITABLE_ORDERS_DDL = [
 ]
 
 transactor_proxy = TransactorProxy(ddl_statements=_WRITABLE_DATA_DDL + _WRITABLE_PRODUCTS_DDL + _WRITABLE_ORDERS_DDL)
+
+
+# Re-export for use by writable_worker and writable_generic
+__all__ = [
+    *__all__,
+    "_get_attach_id",
+]
 
 
 # ============================================================================
@@ -251,11 +247,13 @@ class _WritableScanBase(TableFunctionGenerator[None, WritableScanState]):
     @classmethod
     def initial_state(cls, params: ProcessParams[None]) -> WritableScanState:
         """Open the transactor scan stream once before processing begins."""
+        attach_id = _get_attach_id(params)
         tx_id = _get_tx_id(params)
         proxy = transactor_proxy._get_proxy()
         columns = list(params.output_schema.names)
         scan_iter = iter(
             proxy.scan(
+                attach_id=attach_id,
                 tx_id=tx_id,
                 schema_name="",
                 table_name=cls._table_name,
@@ -313,17 +311,18 @@ class _WritableWriteBase(TableInOutGenerator[None, None]):
         return BindResponse(output_schema=_COUNT_SCHEMA)
 
     @classmethod
-    def _open_stream(cls, proxy: Any, tx_id: bytes, returning: bool, batch: pa.RecordBatch) -> Any:
+    def _open_stream(cls, proxy: Any, attach_id: bytes, tx_id: bytes, returning: bool, batch: pa.RecordBatch) -> Any:
         """Open a write stream. Override for operations needing extra args (e.g., update columns)."""
-        return getattr(proxy, cls._operation)(tx_id=tx_id, table_name=cls._table_name, returning=returning)
+        return getattr(proxy, cls._operation)(attach_id=attach_id, tx_id=tx_id, table_name=cls._table_name, returning=returning)
 
     @classmethod
     def process(cls, params: ProcessParams[None], state: None, batch: pa.RecordBatch, out: OutputCollector) -> None:
         """Forward batch to transactor write stream."""
+        attach_id = _get_attach_id(params)
         tx_id = _get_tx_id(params)
         returning = params.output_schema != _COUNT_SCHEMA
         proxy = transactor_proxy._get_proxy()
-        with cls._open_stream(proxy, tx_id, returning, batch) as stream:
+        with cls._open_stream(proxy, attach_id, tx_id, returning, batch) as stream:
             response = stream.exchange(AnnotatedBatch(batch=batch))
             out.emit(response.batch)
 
@@ -336,9 +335,9 @@ class _WritableUpdateBase(_WritableWriteBase):
     _operation = "update"
 
     @classmethod
-    def _open_stream(cls, proxy: Any, tx_id: bytes, returning: bool, batch: pa.RecordBatch) -> Any:
+    def _open_stream(cls, proxy: Any, attach_id: bytes, tx_id: bytes, returning: bool, batch: pa.RecordBatch) -> Any:
         update_cols = [name for name in batch.schema.names if name != "rowid"]
-        return proxy.update(tx_id=tx_id, table_name=cls._table_name, columns=update_cols, returning=returning)
+        return proxy.update(attach_id=attach_id, tx_id=tx_id, table_name=cls._table_name, columns=update_cols, returning=returning)
 
 
 class _WritableDeleteBase(_WritableWriteBase):

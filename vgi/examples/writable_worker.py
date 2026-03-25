@@ -270,65 +270,53 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     """
 
     catalog = _WRITABLE_CATALOG
-    _FIXED_ATTACH_ID = AttachId(b"writable-catalog-")
     supports_transactions = True
     catalog_version_frozen = False
 
-    def __init__(self) -> None:
-        # Track catalog version — incremented on DDL operations
-        self._catalog_version: int = 1
-
     def catalog_attach(self, *, name: str, options: dict[str, Any]) -> CatalogAttachResult:
-        """Attach to the catalog with catalog_version_frozen=False."""
-        result = super().catalog_attach(name=name, options=options)
-        # Override frozen flag to signal dynamic catalog
+        """Attach: generate unique attach_id and register a fresh database in the transactor."""
+        attach_id = AttachId(uuid.uuid4().bytes)
+        transactor_proxy.register(attach_id=attach_id, catalog_name=name)
         return CatalogAttachResult(
-            attach_id=result.attach_id,
-            supports_transactions=result.supports_transactions,
-            supports_time_travel=result.supports_time_travel,
+            attach_id=attach_id,
+            supports_transactions=True,
+            supports_time_travel=False,
             catalog_version_frozen=False,
-            catalog_version=self._catalog_version,
-            attach_id_required=result.attach_id_required,
-            default_schema=result.default_schema,
-            settings=result.settings,
-            secret_types=result.secret_types,
+            catalog_version=1,
+            attach_id_required=True,
+            default_schema="main",
+            settings=[],
+            secret_types=[],
         )
 
     def catalog_version(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> int:
-        """Return current catalog version, incremented on DDL changes."""
-        return self._catalog_version
+        proxy = transactor_proxy._get_proxy()
+        return proxy.catalog_version(attach_id=attach_id)
 
     # ========== Transaction lifecycle ==========
 
     def catalog_transaction_begin(self, *, attach_id: AttachId) -> TransactionId | None:
-        """Begin a transaction via the transactor."""
-        tx_id = TransactionId(uuid.uuid4().bytes)
-        logger.info("catalog_transaction_begin: tx_id=%s", tx_id.hex())
+        """Begin a transaction — transactor generates the tx_id."""
         proxy = transactor_proxy._get_proxy()
-        proxy.begin(tx_id=tx_id)
-        return tx_id
+        tx_id = proxy.begin(attach_id=attach_id)
+        return TransactionId(tx_id)
 
     def catalog_transaction_commit(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
-        """Commit a transaction via the transactor."""
-        logger.info("catalog_transaction_commit: tx_id=%s", transaction_id.hex())
         proxy = transactor_proxy._get_proxy()
-        proxy.commit(tx_id=transaction_id)
+        proxy.commit(attach_id=attach_id, tx_id=transaction_id)
 
     def catalog_transaction_rollback(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
-        """Rollback a transaction via the transactor."""
         proxy = transactor_proxy._get_proxy()
-        proxy.rollback(tx_id=transaction_id)
+        proxy.rollback(attach_id=attach_id, tx_id=transaction_id)
 
     # ========== DDL helpers ==========
 
-    def _execute_ddl(self, transaction_id: TransactionId | None, sql: str,
-                     strip_catalog: str | None = None) -> None:
-        """Validate transaction, execute DDL, increment catalog version."""
+    def _execute_ddl(self, attach_id: AttachId, transaction_id: TransactionId | None, sql: str) -> None:
+        """Validate transaction and execute DDL. Version is tracked by the transactor."""
         if not transaction_id:
             raise ValueError("transaction_id is required for DDL operations")
         proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(tx_id=transaction_id, sql=sql, strip_catalog=strip_catalog)
-        self._catalog_version += 1
+        proxy.execute_ddl_tx(attach_id=attach_id, tx_id=transaction_id, sql=sql)
 
     # ========== DDL: Table operations ==========
 
@@ -403,7 +391,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         all_parts = col_defs + constraints
         columns_sql = ",\n  ".join(all_parts)
         ddl = f"CREATE TABLE{if_not_exists} {_qn(schema_name, name)} (\n  {columns_sql}\n);"
-        self._execute_ddl(transaction_id, ddl)
+        self._execute_ddl(attach_id, transaction_id, ddl)
         logger.info("table_create: %s (on_conflict=%s)", name, on_conflict.value)
 
     def table_drop(
@@ -417,7 +405,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     ) -> None:
         """Drop a table."""
         if_exists = " IF EXISTS" if ignore_not_found else ""
-        self._execute_ddl(transaction_id, f"DROP TABLE{if_exists} {_qn(schema_name, name)};")
+        self._execute_ddl(attach_id, transaction_id, f"DROP TABLE{if_exists} {_qn(schema_name, name)};")
         logger.info("table_drop: %s", name)
 
     def table_rename(
@@ -431,7 +419,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Rename a table."""
-        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} RENAME TO {_qi(new_name)};")
+        self._execute_ddl(attach_id, transaction_id, f"ALTER TABLE {_qn(schema_name, name)} RENAME TO {_qi(new_name)};")
         logger.info("table_rename: %s -> %s", name, new_name)
 
     def table_column_add(
@@ -449,7 +437,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         col_schema = pa.ipc.read_schema(pa.BufferReader(column_definition))
         field = col_schema.field(0)
         if_not_exists = " IF NOT EXISTS" if if_column_not_exists else ""
-        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} ADD COLUMN{if_not_exists} {_qi(field.name)} {_arrow_type_to_sql(field.type)};")
+        self._execute_ddl(attach_id, transaction_id, f"ALTER TABLE {_qn(schema_name, name)} ADD COLUMN{if_not_exists} {_qi(field.name)} {_arrow_type_to_sql(field.type)};")
         logger.info("table_column_add: %s.%s", name, field.name)
 
     def table_column_drop(
@@ -467,7 +455,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         """Drop a column from a table."""
         if_exists = " IF EXISTS" if if_column_exists else ""
         cascade_sql = " CASCADE" if cascade else ""
-        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} DROP COLUMN{if_exists} {_qi(column_name)}{cascade_sql};")
+        self._execute_ddl(attach_id, transaction_id, f"ALTER TABLE {_qn(schema_name, name)} DROP COLUMN{if_exists} {_qi(column_name)}{cascade_sql};")
         logger.info("table_column_drop: %s.%s", name, column_name)
 
     def table_column_rename(
@@ -482,7 +470,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Rename a column in a table."""
-        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} RENAME COLUMN {_qi(column_name)} TO {_qi(new_column_name)};")
+        self._execute_ddl(attach_id, transaction_id, f"ALTER TABLE {_qn(schema_name, name)} RENAME COLUMN {_qi(column_name)} TO {_qi(new_column_name)};")
         logger.info("table_column_rename: %s.%s -> %s", name, column_name, new_column_name)
 
     def table_comment_set(
@@ -496,7 +484,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Set or clear the comment on a table."""
-        self._execute_ddl(transaction_id, _comment_sql(f"TABLE {_qn(schema_name, name)}", comment))
+        self._execute_ddl(attach_id, transaction_id, _comment_sql(f"TABLE {_qn(schema_name, name)}", comment))
 
     def table_column_comment_set(
         self,
@@ -510,7 +498,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Set or clear the comment on a table column."""
-        self._execute_ddl(transaction_id, _comment_sql(f"COLUMN {_qn(schema_name, name)}.{_qi(column_name)}", comment))
+        self._execute_ddl(attach_id, transaction_id, _comment_sql(f"COLUMN {_qn(schema_name, name)}.{_qi(column_name)}", comment))
 
     def table_column_type_change(
         self,
@@ -530,7 +518,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         if expression:
             # expression comes from DuckDB's binder (serialized AST), not raw user input
             sql += f" USING {expression}"
-        self._execute_ddl(transaction_id, sql + ";")
+        self._execute_ddl(attach_id, transaction_id, sql + ";")
 
     def table_column_default_set(
         self,
@@ -544,7 +532,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Set the default expression for a column."""
-        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} SET DEFAULT {expression};")
+        self._execute_ddl(attach_id, transaction_id, f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} SET DEFAULT {expression};")
 
     def table_column_default_drop(
         self,
@@ -557,7 +545,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Drop the default expression for a column."""
-        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} DROP DEFAULT;")
+        self._execute_ddl(attach_id, transaction_id, f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} DROP DEFAULT;")
 
     def table_not_null_set(
         self,
@@ -570,7 +558,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Set NOT NULL constraint on a column."""
-        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} SET NOT NULL;")
+        self._execute_ddl(attach_id, transaction_id, f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} SET NOT NULL;")
 
     def table_not_null_drop(
         self,
@@ -583,7 +571,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Drop NOT NULL constraint from a column."""
-        self._execute_ddl(transaction_id, f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} DROP NOT NULL;")
+        self._execute_ddl(attach_id, transaction_id, f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} DROP NOT NULL;")
 
     # ========== Schema discovery (merge static + dynamic) ==========
 
@@ -602,7 +590,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
 
         try:
             proxy = transactor_proxy._get_proxy()
-            dynamic_names = proxy.list_schemas(tx_id=transaction_id)
+            dynamic_names = proxy.list_schemas(attach_id=attach_id, tx_id=transaction_id)
         except Exception:
             logger.debug("schemas: failed to list schemas from transactor")
             return static_schemas
@@ -635,7 +623,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
 
         try:
             proxy = transactor_proxy._get_proxy()
-            schema_names = proxy.list_schemas(tx_id=transaction_id)
+            schema_names = proxy.list_schemas(attach_id=attach_id, tx_id=transaction_id)
         except Exception:
             return None
 
@@ -655,14 +643,14 @@ class WritableCatalog(ReadOnlyCatalogInterface):
                       comment: str | None, tags: dict[str, str] | None) -> None:
         """Create a new schema in the transactor's DuckDB database."""
         if_not_exists = " IF NOT EXISTS" if on_conflict == OnConflict.IGNORE else ""
-        self._execute_ddl(transaction_id, f"CREATE SCHEMA{if_not_exists} {_qi(name)};")
+        self._execute_ddl(attach_id, transaction_id, f"CREATE SCHEMA{if_not_exists} {_qi(name)};")
 
     def schema_drop(self, *, attach_id: AttachId, transaction_id: TransactionId | None,
                     name: str, ignore_not_found: bool, cascade: bool) -> None:
         """Drop a schema from the transactor's DuckDB database."""
         if_exists = " IF EXISTS" if ignore_not_found else ""
         cascade_sql = " CASCADE" if cascade else ""
-        self._execute_ddl(transaction_id, f"DROP SCHEMA{if_exists} {_qi(name)}{cascade_sql};")
+        self._execute_ddl(attach_id, transaction_id, f"DROP SCHEMA{if_exists} {_qi(name)}{cascade_sql};")
 
     # ========== DDL: View operations ==========
 
@@ -680,7 +668,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         if_replace = " OR REPLACE" if on_conflict == OnConflict.REPLACE else ""
         if_not_exists = " IF NOT EXISTS" if on_conflict == OnConflict.IGNORE else ""
         sql = f"CREATE{if_replace} VIEW{if_not_exists} {_qn(schema_name, name)} AS {definition};"
-        self._execute_ddl(transaction_id, sql, strip_catalog=self._effective_catalog_name)
+        self._execute_ddl(attach_id, transaction_id, sql)
 
     def view_drop(
         self,
@@ -693,7 +681,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     ) -> None:
         """Drop a view."""
         if_exists = " IF EXISTS" if ignore_not_found else ""
-        self._execute_ddl(transaction_id, f"DROP VIEW{if_exists} {_qn(schema_name, name)};")
+        self._execute_ddl(attach_id, transaction_id, f"DROP VIEW{if_exists} {_qn(schema_name, name)};")
 
     def view_rename(
         self,
@@ -706,7 +694,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Rename a view."""
-        self._execute_ddl(transaction_id, f"ALTER VIEW {_qn(schema_name, name)} RENAME TO {_qi(new_name)};")
+        self._execute_ddl(attach_id, transaction_id, f"ALTER VIEW {_qn(schema_name, name)} RENAME TO {_qi(new_name)};")
 
     def view_comment_set(
         self,
@@ -719,7 +707,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Set or clear the comment on a view."""
-        self._execute_ddl(transaction_id, _comment_sql(f"VIEW {_qn(schema_name, name)}", comment))
+        self._execute_ddl(attach_id, transaction_id, _comment_sql(f"VIEW {_qn(schema_name, name)}", comment))
 
     # ========== Dynamic view discovery ==========
 
@@ -747,7 +735,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         try:
             proxy = transactor_proxy._get_proxy()
             import json
-            info_json = proxy.view_info(view_name=name, tx_id=transaction_id)
+            info_json = proxy.view_info(attach_id=attach_id, view_name=name, tx_id=transaction_id)
             info = json.loads(info_json)
         except ValueError:
             logger.debug("view_get: dynamic view '%s' not found in transactor", name)
@@ -798,6 +786,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             # Don't quote — the transactor handles its own quoting internally
             tx_table_name = f"{schema_name}.{name}" if schema_name else name
             schema_bytes = proxy.table_schema(
+                attach_id=attach_id,
                 table_name=tx_table_name,
                 tx_id=transaction_id,
             )
@@ -871,7 +860,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
 
         # Also fetch the table comment
         try:
-            table_comment = proxy.table_comment(table_name=name, tx_id=transaction_id)
+            table_comment = proxy.table_comment(attach_id=attach_id, table_name=name, tx_id=transaction_id)
         except Exception:
             table_comment = None
 
@@ -943,7 +932,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         static_names = {r.name.lower() for r in static_results if isinstance(r, info_type)}
         try:
             proxy = transactor_proxy._get_proxy()
-            dynamic_names = getattr(proxy, list_method)(tx_id=transaction_id, schema_name=schema_name) if transaction_id else []
+            dynamic_names = getattr(proxy, list_method)(attach_id=attach_id, tx_id=transaction_id, schema_name=schema_name) if transaction_id else []
         except ValueError:
             dynamic_names = []
         except Exception:

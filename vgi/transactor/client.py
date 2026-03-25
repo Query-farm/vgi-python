@@ -3,20 +3,23 @@
 Handles auto-spawning the transactor process if one isn't running,
 and provides a typed ``vgi_rpc`` proxy for RPC calls.
 
+The transactor manages multiple databases internally (one per attach_id),
+so a single transactor process serves all catalog attachments.
+
 Usage::
 
-    client = TransactorClient("/path/to/store.duckdb")
+    client = TransactorClient()
     proxy = client.get_proxy()
-    proxy.begin(tx_id)
+    proxy.register(attach_id)
+    tx_id = proxy.begin(attach_id)
     # ... use proxy.insert(), proxy.scan(), etc.
-    proxy.commit(tx_id)
+    proxy.commit(attach_id, tx_id)
     client.close()
 
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import subprocess
@@ -32,62 +35,50 @@ logger = logging.getLogger("vgi.transactor.client")
 
 _MAX_SPAWN_RETRIES = 50
 _SPAWN_RETRY_DELAY = 0.1  # seconds
+_DEFAULT_SOCKET_PATH = "/tmp/vgi-transactor.sock"  # noqa: S108
+_DEFAULT_DB_DIR = str(Path("~/.local/state/vgi/databases").expanduser())
 
 
 class TransactorClient:
     """Client that connects to (and optionally spawns) a db-transactor.
 
     The transactor process is auto-spawned on first use if not already
-    running. The socket path is deterministic based on the database path.
+    running. A single transactor serves all databases.
     """
 
-    def __init__(self, db_path: str | Path) -> None:
-        """Initialize client for the given database path."""
-        self._db_path = str(db_path)
-        self._socket_path = self._compute_socket_path(self._db_path)
+    def __init__(self) -> None:
+        """Initialize client."""
+        self._socket_path = os.environ.get("VGI_TRANSACTOR_SOCKET", _DEFAULT_SOCKET_PATH)
         self._transport: UnixTransport | None = None
         self._connection: RpcConnection | None = None
-        self._proxy: Any = None  # The typed proxy returned by RpcConnection.__enter__
+        self._proxy: Any = None
         self._process: subprocess.Popen | None = None  # type: ignore[type-arg]
 
-    @staticmethod
-    def _compute_socket_path(db_path: str) -> str:
-        """Compute a deterministic socket path from the database path."""
-        path_hash = hashlib.sha256(db_path.encode()).hexdigest()[:16]
-        return f"/tmp/vgi-transactor-{path_hash}.sock"  # noqa: S108
-
     def get_proxy(self) -> Any:
-        """Get the typed RPC proxy, spawning the transactor if needed.
-
-        Returns a proxy implementing TransactorProtocol methods.
-        """
+        """Get the typed RPC proxy, spawning the transactor if needed."""
         if self._proxy is not None:
             return self._proxy
-
         self._ensure_server()
         return self._proxy
 
     def _ensure_server(self) -> None:
         """Connect to existing transactor or spawn a new one."""
-        # Try connecting to existing socket first
         if self._try_connect():
             return
 
-        # No server running — spawn one
         self._spawn_server()
 
-        # Wait for it to become available
         for _ in range(_MAX_SPAWN_RETRIES):
             time.sleep(_SPAWN_RETRY_DELAY)
             if self._try_connect():
                 return
 
         raise RuntimeError(
-            f"Failed to connect to transactor after spawning (socket: {self._socket_path}, db: {self._db_path})"
+            f"Failed to connect to transactor after spawning (socket: {self._socket_path})"
         )
 
     def _try_connect(self) -> bool:
-        """Try to connect to an existing transactor socket. Returns True on success."""
+        """Try to connect to an existing transactor socket."""
         import socket
 
         if not os.path.exists(self._socket_path):
@@ -108,12 +99,15 @@ class TransactorClient:
         """Spawn a new transactor subprocess."""
         import sys
 
+        db_dir = os.environ.get("VGI_TRANSACTOR_DB_DIR", _DEFAULT_DB_DIR)
+        os.makedirs(db_dir, exist_ok=True)
+
         cmd = [
             sys.executable,
             "-m",
             "vgi.transactor.server",
-            "--db-path",
-            self._db_path,
+            "--db-dir",
+            db_dir,
             "--socket",
             self._socket_path,
         ]
@@ -126,7 +120,7 @@ class TransactorClient:
         )
 
     def close(self) -> None:
-        """Close the connection and optionally shut down the transactor."""
+        """Close the connection."""
         import contextlib
 
         if self._connection is not None:
