@@ -943,6 +943,7 @@ class VgiProtocol(Protocol):
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
+        cascade: bool = False,
         transaction_id: bytes | None = None,
     ) -> None:
         """Drop a table."""
@@ -1159,6 +1160,7 @@ class VgiProtocol(Protocol):
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
+        cascade: bool = False,
         transaction_id: bytes | None = None,
     ) -> None:
         """Drop a view."""

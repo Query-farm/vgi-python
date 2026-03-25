@@ -1423,6 +1423,7 @@ class Worker:
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
+        cascade: bool = False,
         transaction_id: bytes | None = None,
     ) -> None:
         """Drop a table."""
@@ -1434,6 +1435,7 @@ class Worker:
             schema_name=schema_name,
             name=name,
             ignore_not_found=ignore_not_found,
+            cascade=cascade,
         )
 
     def catalog_table_scan_function_get(
@@ -1807,6 +1809,7 @@ class Worker:
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
+        cascade: bool = False,
         transaction_id: bytes | None = None,
     ) -> None:
         """Drop a view."""
@@ -1818,6 +1821,7 @@ class Worker:
             schema_name=schema_name,
             name=name,
             ignore_not_found=ignore_not_found,
+            cascade=cascade,
         )
 
     def catalog_view_rename(

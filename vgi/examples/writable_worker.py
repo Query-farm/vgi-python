@@ -321,10 +321,12 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         schema_name: str,
         name: str,
         ignore_not_found: bool,
+        cascade: bool = False,
     ) -> None:
         """Drop a table."""
         if_exists = " IF EXISTS" if ignore_not_found else ""
-        self._execute_ddl(attach_id, transaction_id, f"DROP TABLE{if_exists} {_qn(schema_name, name)};")
+        cascade_sql = " CASCADE" if cascade else ""
+        self._execute_ddl(attach_id, transaction_id, f"DROP TABLE{if_exists} {_qn(schema_name, name)}{cascade_sql};")
         logger.info("table_drop: %s", name)
 
     def table_rename(
@@ -597,10 +599,12 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         schema_name: str,
         name: str,
         ignore_not_found: bool,
+        cascade: bool = False,
     ) -> None:
         """Drop a view."""
         if_exists = " IF EXISTS" if ignore_not_found else ""
-        self._execute_ddl(attach_id, transaction_id, f"DROP VIEW{if_exists} {_qn(schema_name, name)};")
+        cascade_sql = " CASCADE" if cascade else ""
+        self._execute_ddl(attach_id, transaction_id, f"DROP VIEW{if_exists} {_qn(schema_name, name)}{cascade_sql};")
 
     def view_rename(
         self,

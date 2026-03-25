@@ -680,6 +680,7 @@ class CatalogInterface(ABC):
         schema_name: str,
         name: str,
         ignore_not_found: bool,
+        cascade: bool = False,
     ) -> None:
         """Drop the table with the given name."""
         raise NotImplementedError("Table drop not implemented.")
@@ -927,6 +928,7 @@ class CatalogInterface(ABC):
         schema_name: str,
         name: str,
         ignore_not_found: bool,
+        cascade: bool = False,
     ) -> None:
         """Drop the view with the given name."""
         raise NotImplementedError("View drop not implemented.")

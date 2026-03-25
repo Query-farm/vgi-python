@@ -545,6 +545,7 @@ class CatalogClientMixin:
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
+        cascade: bool = False,
     ) -> None:
         """Drop a table.
 
@@ -554,6 +555,7 @@ class CatalogClientMixin:
             schema_name: The schema containing the table.
             name: The name of the table to drop.
             ignore_not_found: If True, don't error if table doesn't exist.
+            cascade: If True, also drop dependent objects.
 
         """
         with self._catalog_connect() as proxy:
@@ -562,6 +564,7 @@ class CatalogClientMixin:
                 schema_name=schema_name,
                 name=name,
                 ignore_not_found=ignore_not_found,
+                cascade=cascade,
                 transaction_id=transaction_id,
             )
 
@@ -1005,6 +1008,7 @@ class CatalogClientMixin:
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
+        cascade: bool = False,
     ) -> None:
         """Drop a view.
 
@@ -1014,6 +1018,7 @@ class CatalogClientMixin:
             schema_name: The schema containing the view.
             name: The name of the view to drop.
             ignore_not_found: If True, don't error if view doesn't exist.
+            cascade: If True, also drop dependent objects.
 
         """
         with self._catalog_connect() as proxy:
@@ -1022,6 +1027,7 @@ class CatalogClientMixin:
                 schema_name=schema_name,
                 name=name,
                 ignore_not_found=ignore_not_found,
+                cascade=cascade,
                 transaction_id=transaction_id,
             )
 

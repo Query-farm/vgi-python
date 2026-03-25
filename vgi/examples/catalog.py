@@ -475,6 +475,7 @@ class InMemoryCatalog(CatalogInterface):
         schema_name: str,
         name: str,
         ignore_not_found: bool,
+        cascade: bool = False,
     ) -> None:
         """Drop a table."""
         schema_data = self._get_schema(attach_id, schema_name)
@@ -596,6 +597,7 @@ class InMemoryCatalog(CatalogInterface):
         schema_name: str,
         name: str,
         ignore_not_found: bool,
+        cascade: bool = False,
     ) -> None:
         """Drop a view."""
         schema_data = self._get_schema(attach_id, schema_name)
