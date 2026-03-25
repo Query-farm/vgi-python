@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "click",
     "pyarrow",
+    "sqlglot",
     "typer>=0.9",
     "platformdirs",
     "numpy>=2.4.1",
@@ -115,6 +116,9 @@ exclude_lines = [
 
 [tool.coverage.html]
 directory = "htmlcov"
+
+[tool.uv.sources]
+duckdb = { path = "/Users/rusty/Development/duckdb-python/dist/duckdb-1.6.0.dev15-cp314-cp314-macosx_15_0_arm64.whl" }
 
 [dependency-groups]
 dev = ["lxml>=6.0.2", "pytest-timeout>=2.4.0", "ty>=0.0.8"]

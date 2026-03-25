@@ -80,6 +80,7 @@ _ATTACH_ID_METHODS = [
     "catalog_table_update_function_get",
     "catalog_table_delete_function_get",
     "catalog_table_comment_set",
+    "catalog_table_column_comment_set",
     "catalog_table_rename",
     "catalog_table_column_add",
     "catalog_table_column_drop",

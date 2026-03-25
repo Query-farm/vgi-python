@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+import pyarrow as pa
 from vgi_rpc.rpc import ExchangeState, ProducerState, Stream
 
 
@@ -101,6 +102,40 @@ class TransactorProtocol(Protocol):
 
     def execute_ddl(self, sql: str) -> None:
         """Execute a DDL statement (CREATE TABLE, etc.)."""
+        ...
+
+    def execute_ddl_tx(self, tx_id: bytes, sql: str, strip_catalog: str | None = None) -> None:
+        """Execute DDL within a transaction.
+
+        If ``strip_catalog`` is provided, external catalog references are
+        stripped from the SQL before execution (used for view definitions).
+        """
+        ...
+
+    # ========== Metadata (unary) ==========
+
+    def list_schemas(self, tx_id: bytes) -> list[str]:
+        """List schema names within a transaction."""
+        ...
+
+    def list_user_tables(self, tx_id: bytes, schema_name: str = "main") -> list[str]:
+        """List user-created table names in the given schema within a transaction."""
+        ...
+
+    def table_schema(self, table_name: str, tx_id: bytes) -> bytes:
+        """Get Arrow schema for a table as serialized IPC bytes, with rowid prepended and marked via is_row_id metadata."""
+        ...
+
+    def table_comment(self, table_name: str, tx_id: bytes) -> str | None:
+        """Get the comment on a table, or None if no comment is set."""
+        ...
+
+    def list_user_views(self, tx_id: bytes, schema_name: str = "main") -> list[str]:
+        """List user-created view names in the given schema within a transaction."""
+        ...
+
+    def view_info(self, view_name: str, tx_id: bytes) -> str:
+        """Get view info as JSON (definition, comment)."""
         ...
 
     # ========== Lifecycle (unary) ==========

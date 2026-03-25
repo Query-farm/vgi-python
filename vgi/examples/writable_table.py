@@ -134,7 +134,11 @@ _DEFAULT_DB_PATH = Path("~/.local/state/vgi/writable_store.duckdb")
 
 
 def _get_db_path() -> Path:
-    """Get the database path from env var or default."""
+    """Get the database path from env var or default.
+
+    Set VGI_WRITABLE_STORE to a unique temp path per test run to ensure
+    each test suite starts with a fresh database.
+    """
     env_path = os.environ.get("VGI_WRITABLE_STORE")
     return Path(env_path) if env_path else _DEFAULT_DB_PATH.expanduser()
 
@@ -142,9 +146,8 @@ def _get_db_path() -> Path:
 class TransactorProxy:
     """Manages connections to the db-transactor subprocess.
 
-    Lazily spawns the transactor on first use. Provides methods to open
-    exchange streams (insert/delete/update) and producer streams (scan)
-    that proxy Arrow batches to the transactor's DuckDB connection.
+    Each worker process gets its own transactor with a unique database,
+    ensuring no state leaks between test runs or independent workers.
     """
 
     def __init__(self, db_path: Path | None = None, ddl_statements: list[str] | None = None) -> None:

@@ -522,6 +522,7 @@ class CatalogInterface(ABC):
         attach_id: AttachId,
         transaction_id: TransactionId | None,
         name: str,
+        on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None,
         tags: dict[str, str],
     ) -> None:
@@ -660,6 +661,10 @@ class CatalogInterface(ABC):
         unique_constraints: list[list[int]],  # [] = no unique constraints
         # These are general check constraints specified as SQL expressions.
         check_constraints: list[str],  # [] = no check constraints
+        # Primary key constraints as column index groups
+        primary_key_constraints: list[list[int]] | None = None,
+        # Foreign key constraints as IPC-serialized bytes (same format as TableInfo)
+        foreign_key_constraints: list[bytes] | None = None,
     ) -> None:
         """Create a new table with the given name and schema.
 
@@ -691,6 +696,20 @@ class CatalogInterface(ABC):
     ) -> None:
         """Set the comment for the table with the given name."""
         raise NotImplementedError("Table comment set not implemented.")
+
+    def table_column_comment_set(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        column_name: str,
+        comment: str | None,
+        ignore_not_found: bool,
+    ) -> None:
+        """Set the comment for a column in the table."""
+        raise NotImplementedError("Table column comment set not implemented.")
 
     def table_rename(
         self,
@@ -1590,6 +1609,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     table_create = _read_only("create table")
     table_drop = _read_only("drop table")
     table_comment_set = _read_only("set table comment")
+    table_column_comment_set = _read_only("set column comment")
     table_rename = _read_only("rename table")
     table_column_add = _read_only("add column")
     table_column_drop = _read_only("drop column")

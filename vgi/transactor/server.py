@@ -253,6 +253,218 @@ class TransactorImpl:
             self._conn.execute(sql)
             logger.debug("DDL executed: %s", sql[:100])
 
+    def execute_ddl_tx(self, tx_id: bytes, sql: str, strip_catalog: str | None = None) -> None:
+        """Execute DDL within a transaction.
+
+        Args:
+            tx_id: Transaction identifier.
+            sql: DDL SQL to execute.
+            strip_catalog: If provided, strip this catalog name from qualified
+                references in the SQL before executing. Used for view definitions
+                where DuckDB's binder qualifies table names with the full catalog
+                path (e.g., ``writable.main.t1`` → ``t1``).
+        """
+        if strip_catalog:
+            sql = self.strip_catalog_refs(sql, strip_catalog)
+        conn = self._get_tx_conn(tx_id)
+        tx_lock = self._get_tx_lock(tx_id)
+        with tx_lock:
+            conn.execute(sql)
+        logger.debug("DDL (tx) executed: %s", sql[:100])
+
+    def strip_catalog_refs(self, sql: str, catalog_name: str) -> str:
+        """Strip external catalog references from SQL using AST transformation.
+
+        DuckDB's binder qualifies table references with the full catalog path
+        (e.g., ``writable.main.t1``). Since the transactor's DuckDB only has
+        local tables, we parse the SQL, walk table references, and strip the
+        catalog prefix from any that match the given catalog name.
+        """
+        import sqlglot
+        from sqlglot import exp
+
+        try:
+            parsed = sqlglot.parse_one(sql, dialect="duckdb")
+        except sqlglot.errors.ParseError:
+            logger.warning("strip_catalog_refs: failed to parse SQL, returning as-is: %s", sql[:100])
+            return sql
+
+        for table in parsed.find_all(exp.Table):
+            if table.catalog and table.catalog.lower() == catalog_name.lower():
+                table.set("catalog", None)
+                # Also strip schema if it's "main" (default)
+                if table.args.get("db") and table.args["db"].name.lower() == "main":
+                    table.set("db", None)
+
+        return parsed.sql(dialect="duckdb")
+
+    # ========== Metadata ==========
+
+    def list_schemas(self, tx_id: bytes) -> list[str]:
+        """List schema names within a transaction."""
+        conn = self._get_tx_conn(tx_id)
+        tx_lock = self._get_tx_lock(tx_id)
+        with tx_lock:
+            result = conn.execute(
+                "SELECT schema_name FROM duckdb_schemas() "
+                "WHERE NOT internal"
+            )
+            return [row[0] for row in result.fetchall()]
+
+    def list_user_tables(self, tx_id: bytes, schema_name: str = "main") -> list[str]:
+        """List user tables in the given schema within a transaction."""
+        conn = self._get_tx_conn(tx_id)
+        tx_lock = self._get_tx_lock(tx_id)
+        with tx_lock:
+            result = conn.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema=? AND table_type='BASE TABLE'",
+                [schema_name],
+            )
+            return [row[0] for row in result.fetchall()]
+
+    def table_schema(self, table_name: str, tx_id: bytes) -> bytes:
+        """Get Arrow schema for a table as serialized IPC bytes within a transaction.
+
+        Prepends the rowid pseudocolumn with is_row_id metadata, matching
+        how static writable tables report their schema.
+        """
+        conn = self._get_tx_conn(tx_id)
+        tx_lock = self._get_tx_lock(tx_id)
+        # Extract bare name for metadata queries (duckdb_tables, duckdb_columns use bare names)
+        bare_name = table_name.rsplit(".", 1)[-1] if "." in table_name else table_name
+        with tx_lock:
+            sub = conn.subcursor()
+            # Verify this is a table (not a view) — views don't have rowid and shouldn't
+            # be returned as writable tables
+            if "." in table_name:
+                schema_part = table_name.rsplit(".", 1)[0]
+                is_table = sub.execute(
+                    "SELECT COUNT(*) FROM duckdb_tables() WHERE schema_name = ? AND table_name = ?",
+                    [schema_part, bare_name],
+                ).fetchone()[0] > 0
+            else:
+                is_table = sub.execute(
+                    "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name = ?",
+                    [bare_name],
+                ).fetchone()[0] > 0
+            if not is_table:
+                sub.close()
+                raise ValueError(f"'{table_name}' is not a table")
+            schema = sub.execute(f"SELECT * FROM {table_name} LIMIT 0").to_arrow_table().schema  # noqa: S608
+
+            # Query column metadata (comments, defaults) via subcursor so we see
+            # uncommitted catalog changes from the same transaction
+            col_meta_result = sub.execute(
+                "SELECT column_name, comment, column_default FROM duckdb_columns() WHERE table_name = ?",
+                [bare_name],
+            ).fetchall()
+            sub.close()
+            meta_updates: dict[str, dict[bytes, bytes]] = {}
+            for row in col_meta_result:
+                col_name, comment, default = row[0], row[1], row[2]
+                updates: dict[bytes, bytes] = {}
+                if comment is not None:
+                    updates[b"comment"] = comment.encode("utf-8")
+                if default is not None:
+                    updates[b"default"] = default.encode("utf-8")
+                if updates:
+                    meta_updates[col_name] = updates
+            if meta_updates:
+                fields = list(schema)
+                for i, f in enumerate(fields):
+                    if f.name in meta_updates:
+                        metadata = dict(f.metadata) if f.metadata else {}
+                        metadata.update(meta_updates[f.name])
+                        fields[i] = f.with_metadata(metadata)
+                schema = pa.schema(fields)
+
+        # Query constraints and embed as schema-level metadata (JSON)
+        with tx_lock:
+            sub2 = conn.subcursor()
+            constraint_rows = sub2.execute(
+                "SELECT constraint_type, constraint_column_names, constraint_text, "
+                "referenced_table, referenced_column_names "
+                "FROM duckdb_constraints() WHERE table_name = ?",
+                [bare_name],
+            ).fetchall()
+            sub2.close()
+
+        import json
+        constraints_json = json.dumps([
+            {
+                "type": row[0],
+                "columns": row[1],
+                "text": row[2],
+                "referenced_table": row[3],
+                "referenced_columns": row[4],
+            }
+            for row in constraint_rows
+        ])
+        schema_meta = {b"vgi.constraints": constraints_json.encode("utf-8")}
+
+        # Prepend rowid pseudocolumn with is_row_id metadata
+        rowid_field = pa.field("rowid", pa.int64(), metadata={b"is_row_id": b""})
+        result_schema = pa.schema([rowid_field, *schema], metadata=schema_meta)
+        return result_schema.serialize().to_pybytes()
+
+    def table_comment(self, table_name: str, tx_id: bytes) -> str | None:
+        """Get the comment on a table within a transaction."""
+        conn = self._get_tx_conn(tx_id)
+        tx_lock = self._get_tx_lock(tx_id)
+        bare_name = table_name.rsplit(".", 1)[-1] if "." in table_name else table_name
+        with tx_lock:
+            result = conn.execute(
+                "SELECT comment FROM duckdb_tables() WHERE table_name = ?",
+                [bare_name],
+            ).fetchone()
+        if result and result[0]:
+            return result[0]
+        return None
+
+    def list_user_views(self, tx_id: bytes, schema_name: str = "main") -> list[str]:
+        """List user-created view names in the given schema within a transaction."""
+        conn = self._get_tx_conn(tx_id)
+        tx_lock = self._get_tx_lock(tx_id)
+        with tx_lock:
+            sub = conn.subcursor()
+            result = sub.execute(
+                "SELECT view_name FROM duckdb_views() WHERE schema_name = ? AND NOT internal",
+                [schema_name],
+            ).fetchall()
+            sub.close()
+        return [row[0] for row in result]
+
+    def view_info(self, view_name: str, tx_id: bytes) -> str:
+        """Return view info as JSON (definition, comment).
+
+        The ``sql`` column from ``duckdb_views()`` returns the full
+        ``CREATE VIEW ... AS SELECT ...`` statement. We strip the
+        ``CREATE VIEW <name> AS`` prefix so the definition is just the
+        SELECT statement, which is what the VGI catalog expects.
+        """
+        conn = self._get_tx_conn(tx_id)
+        tx_lock = self._get_tx_lock(tx_id)
+        with tx_lock:
+            sub = conn.subcursor()
+            result = sub.execute(
+                "SELECT sql, comment FROM duckdb_views() WHERE view_name = ?",
+                [view_name],
+            ).fetchone()
+            sub.close()
+        if result is None:
+            raise ValueError(f"View '{view_name}' not found")
+        import json
+        import re
+        definition = result[0] or ""
+        # Strip "CREATE VIEW <name> AS " prefix to get just the SELECT
+        match = re.match(r"CREATE\s+VIEW\s+\S+\s+AS\s+", definition, re.IGNORECASE)
+        if match:
+            definition = definition[match.end():]
+            # Strip trailing semicolon if present
+            definition = definition.rstrip().rstrip(";")
+        return json.dumps({"definition": definition, "comment": result[1]})
+
     # ========== Lifecycle ==========
 
     def ping(self) -> None:

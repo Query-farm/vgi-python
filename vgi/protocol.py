@@ -189,6 +189,12 @@ class TableCreateRequest(ArrowSerializableDataclass):
         default_factory=list
     )
     check_constraints: list[str] = field(default_factory=list)
+    primary_key_constraints: Annotated[list[list[int]], ArrowType(pa.list_(pa.list_(pa.int32())))] = field(
+        default_factory=list
+    )
+    foreign_key_constraints: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(
+        default_factory=list
+    )
     transaction_id: bytes | None = None
 
 
@@ -866,6 +872,7 @@ class VgiProtocol(Protocol):
         self,
         attach_id: bytes,
         name: str,
+        on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None = None,
         tags: dict[str, str] | None = None,
         transaction_id: bytes | None = None,
@@ -993,6 +1000,19 @@ class VgiProtocol(Protocol):
         transaction_id: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a table."""
+        ...
+
+    def catalog_table_column_comment_set(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        column_name: str,
+        comment: str | None = None,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Set or clear the comment on a table column."""
         ...
 
     def catalog_table_rename(

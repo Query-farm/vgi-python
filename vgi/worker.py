@@ -1284,6 +1284,7 @@ class Worker:
         self,
         attach_id: bytes,
         name: str,
+        on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None = None,
         tags: dict[str, str] | None = None,
         transaction_id: bytes | None = None,
@@ -1295,6 +1296,7 @@ class Worker:
             attach_id=AttachId(attach_id),
             transaction_id=TransactionId(transaction_id) if transaction_id else None,
             name=name,
+            on_conflict=on_conflict,
             comment=comment,
             tags=tags or {},
         )
@@ -1411,6 +1413,8 @@ class Worker:
             not_null_constraints=list(request.not_null_constraints),
             unique_constraints=[list(c) for c in request.unique_constraints],
             check_constraints=list(request.check_constraints),
+            primary_key_constraints=[list(c) for c in request.primary_key_constraints] if request.primary_key_constraints else None,
+            foreign_key_constraints=list(request.foreign_key_constraints) if request.foreign_key_constraints else None,
         )
 
     def catalog_table_drop(
@@ -1526,6 +1530,29 @@ class Worker:
             transaction_id=TransactionId(transaction_id) if transaction_id else None,
             schema_name=schema_name,
             name=name,
+            comment=comment,
+            ignore_not_found=ignore_not_found,
+        )
+
+    def catalog_table_column_comment_set(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        column_name: str,
+        comment: str | None = None,
+        ignore_not_found: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Set or clear the comment on a table column."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        cat = self._get_catalog()
+        cat.table_column_comment_set(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            column_name=column_name,
             comment=comment,
             ignore_not_found=ignore_not_found,
         )
