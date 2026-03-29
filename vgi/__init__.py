@@ -60,9 +60,16 @@ from vgi.scalar_function import (
 from vgi.schema_utils import schema, schema_like
 from vgi.table_filter_pushdown import (
     ColumnBounds,
+    ColumnRefNode,
+    ComparisonNode,
+    ConjunctionNode,
+    ConstantNode,
+    ExpressionFilter,
+    ExpressionNode,
     FilterDeserializationError,
     FilterError,
     FilterVersionError,
+    FunctionNode,
     PushdownFilters,
     deserialize_filters,
 )

@@ -10,17 +10,25 @@ import pytest
 from vgi.table_filter_pushdown import (
     AndFilter,
     ColumnBounds,
+    ColumnRefNode,
+    ComparisonNode,
     ComparisonOp,
+    ConjunctionNode,
     ConstantFilter,
+    ConstantNode,
+    ExpressionFilter,
+    ExpressionNodeType,
     Filter,
     FilterDeserializationError,
     FilterVersionError,
+    FunctionNode,
     InFilter,
     IsNotNullFilter,
     IsNullFilter,
     OrFilter,
     PushdownFilters,
     StructFilter,
+    _arrow_scalar_to_sql,
     _filter_to_sql,
     deserialize_filters,
 )
@@ -664,3 +672,282 @@ class TestDeserializationErrors:
         )
         with pytest.raises(FilterDeserializationError, match="Unknown filter type"):
             deserialize_filters(batch)
+
+
+# =============================================================================
+# Expression Filter Tests
+# =============================================================================
+
+
+class TestExpressionNodeToSql:
+    """Tests for ExpressionNode.to_sql() rendering."""
+
+    def test_column_ref(self) -> None:
+        """Column ref renders as quoted column name."""
+        node = ColumnRefNode(expr_type=ExpressionNodeType.COLUMN_REF, index=0)
+        assert node.to_sql("geom") == '"geom"'
+
+    def test_constant_int(self) -> None:
+        """Integer renders as number."""
+        node = ConstantNode(expr_type=ExpressionNodeType.CONSTANT, value=pa.scalar(42))
+        assert node.to_sql("x") == "42"
+
+    def test_constant_string(self) -> None:
+        """String renders as quoted literal."""
+        node = ConstantNode(expr_type=ExpressionNodeType.CONSTANT, value=pa.scalar("hello"))
+        assert node.to_sql("x") == "'hello'"
+
+    def test_constant_string_with_quote(self) -> None:
+        """Single quote in string is escaped."""
+        node = ConstantNode(expr_type=ExpressionNodeType.CONSTANT, value=pa.scalar("it's"))
+        assert node.to_sql("x") == "'it''s'"
+
+    def test_constant_float(self) -> None:
+        """Float renders as number."""
+        node = ConstantNode(expr_type=ExpressionNodeType.CONSTANT, value=pa.scalar(3.14))
+        assert node.to_sql("x") == "3.14"
+
+    def test_constant_bool(self) -> None:
+        """Boolean renders as TRUE/FALSE."""
+        node = ConstantNode(expr_type=ExpressionNodeType.CONSTANT, value=pa.scalar(True))
+        assert node.to_sql("x") == "TRUE"
+
+    def test_function_node(self) -> None:
+        """Function renders as name(args)."""
+        col = ColumnRefNode(expr_type=ExpressionNodeType.COLUMN_REF, index=0)
+        const = ConstantNode(expr_type=ExpressionNodeType.CONSTANT, value=pa.scalar(5))
+        func = FunctionNode(
+            expr_type=ExpressionNodeType.FUNCTION,
+            function_name="my_func",
+            children=(col, const),
+        )
+        assert func.to_sql("x") == 'my_func("x", 5)'
+
+    def test_operator_function_infix(self) -> None:
+        """Operator function renders as infix: (left op right)."""
+        col = ColumnRefNode(expr_type=ExpressionNodeType.COLUMN_REF, index=0)
+        const = ConstantNode(expr_type=ExpressionNodeType.CONSTANT, value=pa.scalar(5))
+        func = FunctionNode(
+            expr_type=ExpressionNodeType.FUNCTION,
+            function_name="&&",
+            children=(col, const),
+        )
+        assert func.to_sql("geom") == '("geom" && 5)'
+
+    def test_comparison_node(self) -> None:
+        """Comparison renders as (left op right)."""
+        col = ColumnRefNode(expr_type=ExpressionNodeType.COLUMN_REF, index=0)
+        const = ConstantNode(expr_type=ExpressionNodeType.CONSTANT, value=pa.scalar(10))
+        comp = ComparisonNode(
+            expr_type=ExpressionNodeType.COMPARISON,
+            op=ComparisonOp.GT,
+            left=col,
+            right=const,
+        )
+        assert comp.to_sql("n") == '("n" > 10)'
+
+    def test_conjunction_and(self) -> None:
+        """AND conjunction joins children with AND."""
+        c1 = ConstantNode(expr_type=ExpressionNodeType.CONSTANT, value=pa.scalar(True))
+        c2 = ConstantNode(expr_type=ExpressionNodeType.CONSTANT, value=pa.scalar(False))
+        conj = ConjunctionNode(
+            expr_type=ExpressionNodeType.CONJUNCTION,
+            conjunction_type="and",
+            children=(c1, c2),
+        )
+        assert conj.to_sql("x") == "(TRUE AND FALSE)"
+
+    def test_nested_function(self) -> None:
+        """Nested function: outer(inner(col, 100), const)."""
+        col = ColumnRefNode(expr_type=ExpressionNodeType.COLUMN_REF, index=0)
+        c100 = ConstantNode(expr_type=ExpressionNodeType.CONSTANT, value=pa.scalar(100))
+        inner = FunctionNode(
+            expr_type=ExpressionNodeType.FUNCTION,
+            function_name="st_buffer",
+            children=(col, c100),
+        )
+        c_geom = ConstantNode(expr_type=ExpressionNodeType.CONSTANT, value=pa.scalar("POINT(0 0)"))
+        outer = FunctionNode(
+            expr_type=ExpressionNodeType.FUNCTION,
+            function_name="st_intersects",
+            children=(inner, c_geom),
+        )
+        assert outer.to_sql("geom") == "st_intersects(st_buffer(\"geom\", 100), 'POINT(0 0)')"
+
+
+class TestExpressionFilterDeserialization:
+    """Tests for ExpressionFilter deserialization from Arrow IPC."""
+
+    def _make_expression_batch(self, expr_spec: object, value: int = 42) -> pa.RecordBatch:
+        """Build a filter batch with a single expression filter and one value column."""
+        spec = json.dumps([{
+            "column_name": "n",
+            "column_index": 0,
+            "type": "expression",
+            "expr": expr_spec,
+        }])
+        fields: list[pa.Field] = [  # type: ignore[type-arg]
+            pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"}),
+            pa.field("_val_0", pa.int64()),
+        ]
+        s = pa.schema(fields)
+        return pa.RecordBatch.from_pydict({"filter_spec": [spec], "_val_0": [value]}, schema=s)
+
+    def test_deserialize_simple_function(self) -> None:
+        """Deserialize a function(column_ref, constant) expression."""
+        expr_spec = {
+            "expr_type": "function",
+            "function_name": "my_func",
+            "children": [
+                {"expr_type": "column_ref", "index": 0},
+                {"expr_type": "constant", "value_ref": 0},
+            ],
+        }
+        batch = self._make_expression_batch(expr_spec)
+        pf = deserialize_filters(batch)
+
+        assert len(pf) == 1
+        f = pf.filters[0]
+        assert isinstance(f, ExpressionFilter)
+        assert f.column_name == "n"
+        assert isinstance(f.expr, FunctionNode)
+        assert f.expr.function_name == "my_func"
+        assert len(f.expr.children) == 2
+        assert isinstance(f.expr.children[0], ColumnRefNode)
+        assert isinstance(f.expr.children[1], ConstantNode)
+        assert f.expr.children[1].value.as_py() == 42
+
+    def test_deserialize_comparison(self) -> None:
+        """Deserialize a comparison(column_ref, constant) expression."""
+        expr_spec = {
+            "expr_type": "comparison",
+            "op": "gt",
+            "left": {"expr_type": "column_ref", "index": 0},
+            "right": {"expr_type": "constant", "value_ref": 0},
+        }
+        batch = self._make_expression_batch(expr_spec, value=10)
+        pf = deserialize_filters(batch)
+
+        f = pf.filters[0]
+        assert isinstance(f, ExpressionFilter)
+        assert isinstance(f.expr, ComparisonNode)
+        assert f.expr.op == ComparisonOp.GT
+
+    def test_deserialize_conjunction(self) -> None:
+        """Deserialize a conjunction of two constant nodes."""
+        expr_spec = {
+            "expr_type": "conjunction",
+            "conjunction_type": "or",
+            "children": [
+                {"expr_type": "constant", "value_ref": 0},
+                {"expr_type": "constant", "value_ref": 0},
+            ],
+        }
+        batch = self._make_expression_batch(expr_spec)
+        pf = deserialize_filters(batch)
+
+        f = pf.filters[0]
+        assert isinstance(f, ExpressionFilter)
+        assert isinstance(f.expr, ConjunctionNode)
+        assert f.expr.conjunction_type == "or"
+        assert len(f.expr.children) == 2
+
+
+class TestExpressionFilterEvaluate:
+    """Tests for ExpressionFilter.evaluate() using DuckDB."""
+
+    def test_evaluate_comparison(self) -> None:
+        """Evaluate a comparison expression against a batch."""
+        batch = _batch(("n", [1, 2, 3, 4, 5]))
+        # Build: n > 3
+        expr = ComparisonNode(
+            expr_type=ExpressionNodeType.COMPARISON,
+            op=ComparisonOp.GT,
+            left=ColumnRefNode(expr_type=ExpressionNodeType.COLUMN_REF, index=0),
+            right=ConstantNode(expr_type=ExpressionNodeType.CONSTANT, value=pa.scalar(3)),
+        )
+        ef = ExpressionFilter(column_name="n", column_index=0, expr=expr)
+        result = ef.evaluate(batch)
+        assert result.to_pylist() == [False, False, False, True, True]
+
+    def test_evaluate_function(self) -> None:
+        """Evaluate a function expression (list_contains) against a batch."""
+        batch = _batch(("vals", [[1, 2, 3], [4, 5, 6], [7, 8, 9]]))
+        # Build: list_contains(vals, 5)
+        expr = FunctionNode(
+            expr_type=ExpressionNodeType.FUNCTION,
+            function_name="list_contains",
+            children=(
+                ColumnRefNode(expr_type=ExpressionNodeType.COLUMN_REF, index=0),
+                ConstantNode(expr_type=ExpressionNodeType.CONSTANT, value=pa.scalar(5)),
+            ),
+        )
+        ef = ExpressionFilter(column_name="vals", column_index=0, expr=expr)
+        result = ef.evaluate(batch)
+        assert result.to_pylist() == [False, True, False]
+
+    def test_evaluate_with_nulls(self) -> None:
+        """NULL values in column produce NULL in boolean mask (treated as not passing)."""
+        batch = pa.RecordBatch.from_pydict(
+            {"n": [1, None, 3, None, 5]},
+            schema=pa.schema([("n", pa.int64())]),
+        )
+        # Build: n > 2
+        expr = ComparisonNode(
+            expr_type=ExpressionNodeType.COMPARISON,
+            op=ComparisonOp.GT,
+            left=ColumnRefNode(expr_type=ExpressionNodeType.COLUMN_REF, index=0),
+            right=ConstantNode(expr_type=ExpressionNodeType.CONSTANT, value=pa.scalar(2)),
+        )
+        ef = ExpressionFilter(column_name="n", column_index=0, expr=expr)
+        result = ef.evaluate(batch)
+        # NULL > 2 = NULL, which is treated as False by pc.filter
+        assert result.to_pylist() == [False, None, True, None, True]
+
+
+class TestArrowScalarToSql:
+    """Tests for _arrow_scalar_to_sql helper."""
+
+    def test_int(self) -> None:
+        """Integer scalar to SQL."""
+        assert _arrow_scalar_to_sql(pa.scalar(42)) == "42"
+
+    def test_float(self) -> None:
+        """Float scalar to SQL."""
+        assert _arrow_scalar_to_sql(pa.scalar(3.14)) == "3.14"
+
+    def test_string(self) -> None:
+        """String scalar to SQL."""
+        assert _arrow_scalar_to_sql(pa.scalar("hello")) == "'hello'"
+
+    def test_bool_true(self) -> None:
+        """True renders as TRUE."""
+        assert _arrow_scalar_to_sql(pa.scalar(True)) == "TRUE"
+
+    def test_bool_false(self) -> None:
+        """False renders as FALSE."""
+        assert _arrow_scalar_to_sql(pa.scalar(False)) == "FALSE"
+
+    def test_null(self) -> None:
+        """Null renders as NULL."""
+        assert _arrow_scalar_to_sql(pa.scalar(None, type=pa.int64())) == "NULL"
+
+    def test_binary_blob(self) -> None:
+        """Non-geometry binary renders as hex BLOB literal."""
+        result = _arrow_scalar_to_sql(pa.scalar(b"\x01\x02\x03"))
+        assert result == "'\\x010203'::BLOB"
+
+    def test_binary_blob_with_plain_field(self) -> None:
+        """Binary with plain field (no extension metadata) renders as BLOB."""
+        field = pa.field("data", pa.binary())
+        result = _arrow_scalar_to_sql(pa.scalar(b"\x01\x02\x03"), field)
+        assert result == "'\\x010203'::BLOB"
+
+    def test_binary_geometry(self) -> None:
+        """Binary with geoarrow.wkb extension renders as ST_GeomFromHEXWKB."""
+        field = pa.field("geom", pa.binary(), metadata={
+            b"ARROW:extension:name": b"geoarrow.wkb",
+            b"ARROW:extension:metadata": b"{}",
+        })
+        result = _arrow_scalar_to_sql(pa.scalar(b"\x01\x02\x03"), field)
+        assert result == "ST_GeomFromHEXWKB('010203')"

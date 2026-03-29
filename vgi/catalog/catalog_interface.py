@@ -305,6 +305,7 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     # Table function capabilities (None for scalar functions)
     projection_pushdown: bool | None = None
     filter_pushdown: bool | None = None
+    supported_expression_filters: list[str] = field(default_factory=list)
     order_preservation: OrderPreservation | None = None
     # Use ArrowType to specify int32 instead of default int64
     max_workers: Annotated[int | None, ArrowType(pa.int32())] = None
@@ -1728,6 +1729,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             # Table function capabilities (None for scalar)
             projection_pushdown=None if is_scalar else meta.projection_pushdown,
             filter_pushdown=None if is_scalar else meta.filter_pushdown,
+            supported_expression_filters=[] if is_scalar else meta.supported_expression_filters,
             order_preservation=None if is_scalar else meta.preserves_order,
             # Aggregate function fields
             order_dependent=meta.order_dependent,

@@ -22,6 +22,7 @@ import dataclasses
 import json
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -68,6 +69,7 @@ __all__ = [
     # Enums
     "FilterType",
     "ComparisonOp",
+    "ExpressionNodeType",
     # Filter classes
     "Filter",
     "ConstantFilter",
@@ -77,6 +79,14 @@ __all__ = [
     "AndFilter",
     "OrFilter",
     "StructFilter",
+    "ExpressionFilter",
+    # Expression node classes
+    "ExpressionNode",
+    "ColumnRefNode",
+    "ConstantNode",
+    "FunctionNode",
+    "ComparisonNode",
+    "ConjunctionNode",
     # Helpers
     "ColumnBounds",
     "PushdownFilters",
@@ -117,6 +127,17 @@ class FilterType(Enum):
     AND = "and"
     OR = "or"
     STRUCT = "struct"
+    EXPRESSION = "expression"
+
+
+class ExpressionNodeType(Enum):
+    """Expression node type identifiers matching the JSON protocol."""
+
+    COLUMN_REF = "column_ref"
+    CONSTANT = "constant"
+    FUNCTION = "function"
+    COMPARISON = "comparison"
+    CONJUNCTION = "conjunction"
 
 
 class ComparisonOp(Enum):
@@ -356,6 +377,209 @@ class StructFilter(Filter):
         """Return string representation for debugging."""
         nested = f"{self.column_name}.{self.child_name}"
         return f"StructFilter({nested}: {self.child_filter!r})"
+
+
+# =============================================================================
+# Expression Filter (recursive expression tree from DuckDB)
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class ExpressionNode:
+    """Base class for expression tree nodes.
+
+    Subclasses must set ``expr_type`` to match their class. This field
+    is used for serialization round-tripping (JSON ``expr_type`` key).
+    """
+
+    expr_type: ExpressionNodeType
+
+    def to_sql(self, column_name: str) -> str:
+        """Convert node to SQL string. Override in subclasses."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True, slots=True)
+class ColumnRefNode(ExpressionNode):
+    """Column reference node.
+
+    Note: In v1, all column refs in an expression filter refer to the same
+    column (the filter column). The index is stored for future multi-column
+    support but to_sql() always uses the filter's column_name.
+    """
+
+    index: int
+
+    def to_sql(self, column_name: str) -> str:
+        """Return quoted column name with double-quote escaping."""
+        escaped = column_name.replace('"', '""')
+        return f'"{escaped}"'
+
+
+@dataclass(frozen=True, slots=True)
+class ConstantNode(ExpressionNode):
+    """Constant value node."""
+
+    value: pa.Scalar[Any]
+    field: pa.Field[Any] | None = None  # Arrow field with extension metadata (if available)
+
+    def to_sql(self, column_name: str) -> str:
+        """Format Arrow scalar as SQL literal, using field metadata for extension types."""
+        return _arrow_scalar_to_sql(self.value, self.field)
+
+
+def _is_operator_name(name: str) -> bool:
+    """Check if a function name is an infix operator (all non-alphanumeric/underscore chars)."""
+    return len(name) > 0 and all(not (c.isalnum() or c == "_") for c in name)
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionNode(ExpressionNode):
+    """Function call node."""
+
+    function_name: str
+    children: tuple[ExpressionNode, ...]
+
+    def to_sql(self, column_name: str) -> str:
+        """Format as function_name(args...) or infix for operators like &&."""
+        if _is_operator_name(self.function_name) and len(self.children) == 2:
+            left = self.children[0].to_sql(column_name)
+            right = self.children[1].to_sql(column_name)
+            return f"({left} {self.function_name} {right})"
+        args = ", ".join(c.to_sql(column_name) for c in self.children)
+        return f"{self.function_name}({args})"
+
+
+@dataclass(frozen=True, slots=True)
+class ComparisonNode(ExpressionNode):
+    """Comparison node (left op right)."""
+
+    op: ComparisonOp
+    left: ExpressionNode
+    right: ExpressionNode
+
+    def to_sql(self, column_name: str) -> str:
+        """Format as (left op right)."""
+        return f"({self.left.to_sql(column_name)} {self.op.symbol} {self.right.to_sql(column_name)})"
+
+
+@dataclass(frozen=True, slots=True)
+class ConjunctionNode(ExpressionNode):
+    """AND/OR conjunction node."""
+
+    conjunction_type: str  # "and" or "or"
+    children: tuple[ExpressionNode, ...]
+
+    def to_sql(self, column_name: str) -> str:
+        """Format as (child1 AND/OR child2 AND/OR ...)."""
+        joiner = " AND " if self.conjunction_type == "and" else " OR "
+        parts = [c.to_sql(column_name) for c in self.children]
+        return f"({joiner.join(parts)})"
+
+
+# Arrow extension type name → SQL wrapper for binary values.
+# Maps ARROW:extension:name metadata to a function that converts hex to SQL.
+_ARROW_EXTENSION_SQL: dict[str, Callable[[str], str]] = {
+    "geoarrow.wkb": lambda hex_str: f"ST_GeomFromHEXWKB('{hex_str}')",
+}
+
+
+def _arrow_scalar_to_sql(scalar: pa.Scalar[Any], field: pa.Field[Any] | None = None) -> str:
+    """Convert an Arrow scalar to a SQL literal string.
+
+    Uses Arrow field metadata to handle extension types (e.g., geoarrow.wkb
+    for geometry). Falls back to generic representations for standard types.
+
+    Args:
+        scalar: Arrow scalar value.
+        field: Arrow field with extension metadata (optional). Used to detect
+               extension types like geoarrow.wkb for proper SQL rendering.
+
+    """
+    if scalar.is_valid is False:
+        return "NULL"
+
+    val = scalar.as_py()
+    typ = scalar.type
+
+    if pa.types.is_boolean(typ):
+        return "TRUE" if val else "FALSE"
+    elif pa.types.is_integer(typ) or pa.types.is_floating(typ):
+        return str(val)
+    elif pa.types.is_string(typ) or pa.types.is_large_string(typ):
+        escaped = str(val).replace("'", "''")
+        return f"'{escaped}'"
+    elif pa.types.is_binary(typ) or pa.types.is_large_binary(typ):
+        hex_str = val.hex()
+        # Check Arrow extension metadata for type-specific rendering
+        if field is not None and field.metadata is not None:
+            ext_name = field.metadata.get(b"ARROW:extension:name", b"").decode()
+            if ext_name in _ARROW_EXTENSION_SQL:
+                return _ARROW_EXTENSION_SQL[ext_name](hex_str)
+        return f"'\\x{hex_str}'::BLOB"
+    else:
+        # Fallback: use Python repr as string literal
+        escaped = str(val).replace("'", "''")
+        return f"'{escaped}'"
+
+
+_expression_eval_local = threading.local()
+
+
+def _get_expression_eval_connection() -> Any:
+    """Get or create a thread-local DuckDB connection for expression filter evaluation.
+
+    Each thread gets its own connection (DuckDB connections are not thread-safe).
+    Spatial extension is loaded if available (needed for geometry functions like &&).
+    """
+    conn = getattr(_expression_eval_local, "conn", None)
+    if conn is not None:
+        return conn
+
+    import duckdb
+
+    conn = duckdb.connect()
+    try:
+        conn.load_extension("spatial")
+    except Exception:
+        try:
+            conn.install_extension("spatial")
+            conn.load_extension("spatial")
+        except Exception:
+            pass  # spatial not available — non-spatial expressions still work
+    _expression_eval_local.conn = conn
+    return conn
+
+
+@dataclass(frozen=True, slots=True)
+class ExpressionFilter(Filter):
+    """Expression tree filter pushed from DuckDB.
+
+    Contains a recursive expression tree that the worker evaluates
+    using DuckDB. Typical use: spatial predicates like ``geom && box``.
+    """
+
+    expr: ExpressionNode
+
+    def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
+        """Evaluate expression tree against batch using DuckDB.
+
+        Uses a cached per-process DuckDB connection with spatial extension
+        pre-loaded (if available). DuckDB is imported lazily — workers that
+        don't use expression filters don't need it as a dependency.
+        """
+        conn = _get_expression_eval_connection()
+        tbl = conn.from_arrow(batch)  # noqa: F841 (used in SQL below)
+        sql_expr = self.expr.to_sql(self.column_name)
+        query_result = conn.sql(f"SELECT ({sql_expr})::BOOLEAN AS _r FROM tbl")
+        # Use to_arrow_table if available (duckdb >= 1.5.1), fall back to fetch_arrow_table
+        fetch = getattr(query_result, "to_arrow_table", None) or query_result.fetch_arrow_table
+        result = fetch()
+        return result.column("_r").combine_chunks()  # type: ignore[return-value]
+
+    def __repr__(self) -> str:
+        """Return string representation for debugging."""
+        return f"ExpressionFilter({self.column_name}: {self.expr.to_sql(self.column_name)})"
 
 
 # =============================================================================
@@ -798,6 +1022,12 @@ def _filter_to_sql(
             nested_col = f"{f.column_name}.{child_name}"
             return _filter_to_sql(child_filter, lambda _: quote(nested_col), placeholder, param_offset)
 
+        case ExpressionFilter(expr=expr):
+            # Expression filters use inline constants in to_sql() because
+            # they may contain geometry literals that can't be parameterized.
+            # Constants are embedded directly in the SQL string.
+            return expr.to_sql(f.column_name), []
+
         case _:
             raise ValueError(f"Unknown filter type: {type(f)}")
 
@@ -852,9 +1082,13 @@ def deserialize_filters(batch: pa.RecordBatch) -> PushdownFilters:
         )
         return value  # type: ignore[no-any-return]
 
+    def get_field(ref: int) -> pa.Field[Any]:
+        """Get the Arrow field for a value_ref (column ref+1 in the batch)."""
+        return batch.schema.field(ref + 1)
+
     # Parse filters
     try:
-        filters = tuple(_parse_filter(spec, get_value) for spec in filter_specs)
+        filters = tuple(_parse_filter(spec, get_value, get_field) for spec in filter_specs)
     except Exception as e:
         _log_debug("deserialize_parse_error", error=str(e))
         raise FilterDeserializationError(f"Failed to parse filters: {e}") from e
@@ -869,12 +1103,17 @@ def deserialize_filters(batch: pa.RecordBatch) -> PushdownFilters:
     return PushdownFilters(filters=filters, version=version)
 
 
-def _parse_filter(spec: dict[str, Any], get_value: Callable[[int], pa.Scalar[Any]]) -> Filter:
+def _parse_filter(
+    spec: dict[str, Any],
+    get_value: Callable[[int], pa.Scalar[Any]],
+    get_field: Callable[[int], pa.Field[Any]],
+) -> Filter:
     """Parse a single filter spec into a typed Filter object.
 
     Args:
         spec: Filter specification dict from JSON.
         get_value: Function to get Arrow scalar by value_ref index.
+        get_field: Function to get Arrow field by value_ref index (for extension metadata).
 
     Returns:
         Typed Filter object.
@@ -945,7 +1184,7 @@ def _parse_filter(spec: dict[str, Any], get_value: Callable[[int], pa.Scalar[Any
             column=column_name,
             num_children=len(spec["children"]),
         )
-        children = tuple(_parse_filter(c, get_value) for c in spec["children"])
+        children = tuple(_parse_filter(c, get_value, get_field) for c in spec["children"])
         _log_debug("parse_filter_and_complete", column=column_name)
         return AndFilter(
             column_name=column_name,
@@ -959,7 +1198,7 @@ def _parse_filter(spec: dict[str, Any], get_value: Callable[[int], pa.Scalar[Any
             column=column_name,
             num_children=len(spec["children"]),
         )
-        children = tuple(_parse_filter(c, get_value) for c in spec["children"])
+        children = tuple(_parse_filter(c, get_value, get_field) for c in spec["children"])
         _log_debug("parse_filter_or_complete", column=column_name)
         return OrFilter(
             column_name=column_name,
@@ -974,7 +1213,7 @@ def _parse_filter(spec: dict[str, Any], get_value: Callable[[int], pa.Scalar[Any
             column=column_name,
             child_name=child_name,
         )
-        child_filter = _parse_filter(spec["child_filter"], get_value)
+        child_filter = _parse_filter(spec["child_filter"], get_value, get_field)
         _log_debug("parse_filter_struct_complete", column=column_name)
         return StructFilter(
             column_name=column_name,
@@ -984,6 +1223,76 @@ def _parse_filter(spec: dict[str, Any], get_value: Callable[[int], pa.Scalar[Any
             child_filter=child_filter,
         )
 
+    elif filter_type == FilterType.EXPRESSION.value:
+        _log_debug("parse_filter_expression_start", column=column_name)
+        expr = _parse_expression_node(spec["expr"], get_value, get_field)
+        _log_debug("parse_filter_expression_complete", column=column_name)
+        return ExpressionFilter(
+            column_name=column_name,
+            column_index=column_index,
+            expr=expr,
+        )
+
     else:
         _log_debug("parse_filter_unknown", filter_type=filter_type)
         raise FilterDeserializationError(f"Unknown filter type: {filter_type}")
+
+
+def _parse_expression_node(
+    spec: dict[str, Any],
+    get_value: Callable[[int], pa.Scalar[Any]],
+    get_field: Callable[[int], pa.Field[Any]],
+) -> ExpressionNode:
+    """Parse a single expression node from a JSON spec.
+
+    Args:
+        spec: Expression node specification dict from JSON.
+        get_value: Function to get Arrow scalar by value_ref index.
+        get_field: Function to get Arrow field by value_ref index (for extension metadata).
+
+    Returns:
+        Typed ExpressionNode.
+
+    Raises:
+        FilterDeserializationError: If expression node type is unknown.
+
+    """
+    expr_type = spec["expr_type"]
+
+    if expr_type == ExpressionNodeType.COLUMN_REF.value:
+        return ColumnRefNode(expr_type=ExpressionNodeType.COLUMN_REF, index=spec["index"])
+
+    elif expr_type == ExpressionNodeType.CONSTANT.value:
+        ref = spec["value_ref"]
+        return ConstantNode(
+            expr_type=ExpressionNodeType.CONSTANT,
+            value=get_value(ref),
+            field=get_field(ref),
+        )
+
+    elif expr_type == ExpressionNodeType.FUNCTION.value:
+        children = tuple(_parse_expression_node(c, get_value, get_field) for c in spec["children"])
+        return FunctionNode(
+            expr_type=ExpressionNodeType.FUNCTION,
+            function_name=spec["function_name"],
+            children=children,
+        )
+
+    elif expr_type == ExpressionNodeType.COMPARISON.value:
+        return ComparisonNode(
+            expr_type=ExpressionNodeType.COMPARISON,
+            op=ComparisonOp(spec["op"]),
+            left=_parse_expression_node(spec["left"], get_value, get_field),
+            right=_parse_expression_node(spec["right"], get_value, get_field),
+        )
+
+    elif expr_type == ExpressionNodeType.CONJUNCTION.value:
+        children = tuple(_parse_expression_node(c, get_value, get_field) for c in spec["children"])
+        return ConjunctionNode(
+            expr_type=ExpressionNodeType.CONJUNCTION,
+            conjunction_type=spec["conjunction_type"],
+            children=children,
+        )
+
+    else:
+        raise FilterDeserializationError(f"Unknown expression node type: {expr_type}")

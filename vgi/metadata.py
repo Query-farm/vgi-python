@@ -319,6 +319,7 @@ class ResolvedMetadata:
     # Table function specific
     projection_pushdown: bool = False
     filter_pushdown: bool = False
+    supported_expression_filters: list[str] = field(default_factory=list)
     preserves_order: OrderPreservation = OrderPreservation.PRESERVES_ORDER
     max_workers: int | None = None
 
@@ -343,6 +344,7 @@ class ResolvedMetadata:
             "required_secrets": [e.to_dict() for e in self.required_secrets],
             "projection_pushdown": self.projection_pushdown,
             "filter_pushdown": self.filter_pushdown,
+            "supported_expression_filters": self.supported_expression_filters,
             "preserves_order": self.preserves_order.name,
             "max_workers": self.max_workers,
             "order_dependent": self.order_dependent.name,
@@ -367,6 +369,7 @@ class ResolvedMetadata:
             required_secrets=[SecretLookupEntry.from_dict(e) for e in d.get("required_secrets", [])],
             projection_pushdown=d.get("projection_pushdown", False),
             filter_pushdown=d.get("filter_pushdown", False),
+            supported_expression_filters=d.get("supported_expression_filters", []),
             preserves_order=OrderPreservation[d.get("preserves_order", "PRESERVES_ORDER")],
             max_workers=d.get("max_workers"),
             order_dependent=OrderDependence[d.get("order_dependent", "NOT_ORDER_DEPENDENT")],
@@ -747,6 +750,7 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         # Table function specific
         "projection_pushdown",
         "filter_pushdown",
+        "supported_expression_filters",
         "auto_apply_filters",  # Auto-apply pushdown filters to output batches
         "preserves_order",
         "max_workers",
@@ -910,6 +914,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         required_secrets=meta_required_secrets,
         projection_pushdown=attrs.get("projection_pushdown", False),
         filter_pushdown=attrs.get("filter_pushdown", False),
+        supported_expression_filters=attrs.get("supported_expression_filters", []),
         preserves_order=attrs.get("preserves_order", OrderPreservation.PRESERVES_ORDER),
         max_workers=attrs.get("max_workers"),
         order_dependent=attrs.get("order_dependent", OrderDependence.NOT_ORDER_DEPENDENT),
@@ -973,6 +978,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("required_secrets", pa.list_(_SECRET_REQUIREMENT_STRUCT)),
         pa.field("projection_pushdown", pa.bool_()),
         pa.field("filter_pushdown", pa.bool_()),
+        pa.field("supported_expression_filters", pa.list_(pa.string())),
         pa.field("preserves_order", pa.string()),
         pa.field("max_workers", pa.int32(), nullable=True),
         pa.field("order_dependent", pa.string()),
@@ -982,7 +988,7 @@ _METADATA_SCHEMA = pa.schema(
 
 # Fields that contain lists and need None -> [] conversion during deserialization
 _LIST_FIELDS: frozenset[str] = frozenset(
-    {"examples", "categories", "parameters", "required_settings", "required_secrets"}
+    {"examples", "categories", "parameters", "required_settings", "required_secrets", "supported_expression_filters"}
 )
 
 # Fields that contain maps and need None -> {} conversion during deserialization
