@@ -76,6 +76,7 @@ from vgi.catalog import CatalogInterface
 from vgi.catalog.catalog_interface import (
     AttachId,
     CatalogAttachResult,
+    IndexConstraintType,
     OnConflict,
     SchemaObjectType,
     SerializedSchema,
@@ -102,6 +103,8 @@ from vgi.protocol import (
     CatalogsResponse,
     CatalogVersionResponse,
     FunctionsResponse,
+    IndexCreateRequest,
+    IndexesResponse,
     InitRequest,
     MacroCreateRequest,
     MacrosResponse,
@@ -1267,7 +1270,7 @@ class Worker:
             attach_id=AttachId(attach_id),
             transaction_id=TransactionId(transaction_id) if transaction_id else None,
         )
-        return SchemasResponse.from_schema_infos(list(infos))
+        return SchemasResponse.from_infos(list(infos))
 
     def catalog_schema_get(self, attach_id: bytes, name: str, transaction_id: bytes | None = None) -> SchemasResponse:
         """Get information about a schema. Returns 0 or 1 items."""
@@ -1335,7 +1338,7 @@ class Worker:
             name=name,
             type=SchemaObjectType.TABLE,
         )
-        return TablesResponse.from_table_infos(list(infos))
+        return TablesResponse.from_infos(list(infos))
 
     def catalog_schema_contents_views(
         self,
@@ -1352,7 +1355,7 @@ class Worker:
             name=name,
             type=SchemaObjectType.VIEW,
         )
-        return ViewsResponse.from_view_infos(list(infos))
+        return ViewsResponse.from_infos(list(infos))
 
     def catalog_schema_contents_functions(
         self,
@@ -1370,7 +1373,7 @@ class Worker:
             name=name,
             type=type,
         )
-        return FunctionsResponse.from_function_infos(list(infos))
+        return FunctionsResponse.from_infos(list(infos))
 
     # ---------------------------------------------------------------------------
     # VgiProtocol implementation - Catalog Tables
@@ -1939,7 +1942,86 @@ class Worker:
             name=name,
             type=type,
         )
-        return MacrosResponse.from_macro_infos(list(infos))
+        return MacrosResponse.from_infos(list(infos))
+
+    # ---------------------------------------------------------------------------
+    # VgiProtocol implementation - Catalog Indexes
+    # ---------------------------------------------------------------------------
+
+    def catalog_index_get(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> IndexesResponse:
+        """Get information about an index. Returns 0 or 1 items."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_index_name=name)
+        cat = self._get_catalog()
+        info = cat.index_get(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+        )
+        return IndexesResponse.from_optional(info)
+
+    def catalog_index_create(self, request: IndexCreateRequest) -> None:
+        """Create a new index."""
+        self._enrich_catalog_span(
+            vgi_schema_name=request.schema_name, vgi_index_name=request.name
+        )
+        cat = self._get_catalog()
+        cat.index_create(
+            attach_id=AttachId(request.attach_id),
+            transaction_id=TransactionId(request.transaction_id) if request.transaction_id else None,
+            schema_name=request.schema_name,
+            name=request.name,
+            table_name=request.table_name,
+            index_type=request.index_type,
+            constraint_type=request.constraint_type,
+            expressions=list(request.expressions),
+            on_conflict=request.on_conflict,
+            options=dict(request.options) if request.options else None,
+        )
+
+    def catalog_index_drop(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        ignore_not_found: bool = False,
+        cascade: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Drop an index."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_index_name=name)
+        cat = self._get_catalog()
+        cat.index_drop(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+            ignore_not_found=ignore_not_found,
+            cascade=cascade,
+        )
+
+    def catalog_schema_contents_indexes(
+        self,
+        attach_id: bytes,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> IndexesResponse:
+        """List indexes in a schema."""
+        self._enrich_catalog_span(vgi_schema_name=name)
+        cat = self._get_catalog()
+        infos = cat.schema_contents(  # type: ignore[call-overload]
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            name=name,
+            type=SchemaObjectType.INDEX,
+        )
+        return IndexesResponse.from_infos(list(infos))
 
     # ---------------------------------------------------------------------------
     # Lifecycle

@@ -19,6 +19,8 @@ import pyarrow as pa
 from vgi.arguments import Arguments
 from vgi.catalog.catalog_interface import (
     AttachId,
+    IndexConstraintType,
+    IndexInfo,
     MacroInfo,
     MacroType,
     SchemaInfo,
@@ -52,6 +54,7 @@ __all__ = [
     "Catalog",
     "DefaultValue",
     "ForeignKeyDef",
+    "Index",
     "Macro",
     "Schema",
     "Sql",
@@ -452,9 +455,60 @@ class Macro:
         )
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Index:
+    """Declarative index definition.
+
+    Immutable.
+
+    Attributes:
+        name: Index name.
+        table_name: Name of the table this index is on.
+        expressions: SQL expression strings or column names defining the index.
+            For column-based indexes: ("col_a", "col_b")
+            For expression indexes: ("lower(col_a)", "col_b + 1")
+        index_type: The index type (e.g., "" for default).
+        constraint_type: NONE for regular, UNIQUE for unique indexes.
+        options: Key-value index options.
+        comment: Optional index comment.
+        tags: Optional metadata tags.
+
+    """
+
+    name: str
+    table_name: str
+    expressions: tuple[str, ...] = ()
+    index_type: str = ""
+    constraint_type: IndexConstraintType = IndexConstraintType.NONE
+    options: dict[str, str] = field(default_factory=dict)
+    comment: str | None = None
+    tags: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Validate index configuration."""
+        if not self.expressions:
+            raise ValueError(f"Index '{self.name}': must specify at least one expression")
+        if not self.table_name:
+            raise ValueError(f"Index '{self.name}': must specify a table_name")
+
+    def to_index_info(self, schema_name: str) -> IndexInfo:
+        """Convert to IndexInfo for catalog response."""
+        return IndexInfo(
+            name=self.name,
+            schema_name=schema_name,
+            table_name=self.table_name,
+            index_type=self.index_type,
+            constraint_type=self.constraint_type,
+            expressions=list(self.expressions),
+            options=dict(self.options),
+            comment=self.comment,
+            tags=dict(self.tags),
+        )
+
+
 @dataclass
 class Schema:
-    """Declarative schema definition grouping tables, views, functions, and macros.
+    """Declarative schema definition grouping tables, views, functions, macros, and indexes.
 
     Attributes:
         name: Schema name.
@@ -464,6 +518,7 @@ class Schema:
         views: Sequence of View definitions.
         functions: Sequence of Function classes (scalar, table, or aggregate).
         macros: Sequence of Macro definitions.
+        indexes: Sequence of Index definitions.
 
     """
 
@@ -474,6 +529,7 @@ class Schema:
     views: Sequence[View] = ()
     functions: Sequence[type[Function]] = ()
     macros: Sequence[Macro] = ()
+    indexes: Sequence[Index] = ()
 
     def to_schema_info(self, attach_id: AttachId) -> SchemaInfo:
         """Convert to SchemaInfo for catalog response."""

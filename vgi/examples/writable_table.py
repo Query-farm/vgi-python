@@ -13,7 +13,6 @@ from typing import Annotated
 
 import pyarrow as pa
 from vgi_rpc import AnnotatedBatch, ArrowSerializableDataclass, Transient
-from vgi_rpc.rpc import OutputCollector
 
 from vgi.protocol import BindRequest
 from vgi.schema_utils import schema

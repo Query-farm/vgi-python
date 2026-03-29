@@ -18,6 +18,7 @@ import os
 import sys
 import threading
 import uuid
+from typing import cast
 
 import duckdb
 import pyarrow as pa
@@ -45,8 +46,8 @@ class TransactorImpl:
         os.makedirs(db_dir, exist_ok=True)
         self._lock = threading.Lock()
         self._databases: dict[bytes, duckdb.DuckDBPyConnection] = {}
-        self._catalog_names: dict[bytes, str] = {}     # attach_id → catalog name (for view SQL stripping)
-        self._catalog_versions: dict[bytes, int] = {}   # attach_id → version (incremented on DDL)
+        self._catalog_names: dict[bytes, str] = {}  # attach_id → catalog name (for view SQL stripping)
+        self._catalog_versions: dict[bytes, int] = {}  # attach_id → version (incremented on DDL)
         # Transactions nested by attach_id: {attach_id: {tx_id: cursor}}
         self._transactions: dict[bytes, dict[bytes, duckdb.DuckDBPyConnection]] = {}
         self._tx_locks: dict[bytes, dict[bytes, threading.Lock]] = {}
@@ -89,14 +90,13 @@ class TransactorImpl:
             sub = conn.subcursor()
             sql = f"SELECT * FROM {qualified_name} LIMIT 0"  # noqa: S608
             result = sub.execute(sql)
-            schema = result.to_arrow_table().schema
+            schema: pa.Schema = result.to_arrow_table().schema
             sub.close()
             return schema
 
     # ========== Database lifecycle ==========
 
-    def register(self, attach_id: bytes, catalog_name: str = "",
-                 ddl_statements: list[str] | None = None) -> None:
+    def register(self, attach_id: bytes, catalog_name: str = "", ddl_statements: list[str] | None = None) -> None:
         """Create a new database for this attach_id and run initial DDL."""
         db_path = os.path.join(self._db_dir, f"{attach_id.hex()}.duckdb")
         conn = duckdb.connect(db_path)
@@ -171,8 +171,11 @@ class TransactorImpl:
 
         sub = conn.subcursor()
         state = _InsertState(
-            conn=sub, qualified_name=qualified, returning=returning,
-            table_schema=input_schema, tx_lock=tx_lock,
+            conn=sub,
+            qualified_name=qualified,
+            returning=returning,
+            table_schema=input_schema,
+            tx_lock=tx_lock,
         )
         return Stream(output_schema=output_schema, state=state, input_schema=input_schema)
 
@@ -250,8 +253,8 @@ class TransactorImpl:
         if pushdown_filters is not None:
             from vgi.table_filter_pushdown import deserialize_filters
 
-            reader = pa.ipc.open_stream(pushdown_filters)
-            pf_batch = reader.read_next_batch()
+            pf_reader = pa.ipc.open_stream(pushdown_filters)
+            pf_batch = pf_reader.read_next_batch()
             pf = deserialize_filters(pf_batch)
             if pf and pf.filters:
                 where_clause, bind_params = pf.to_sql()
@@ -321,7 +324,7 @@ class TransactorImpl:
 
     # ========== Metadata ==========
 
-    def _query_list(self, attach_id: bytes, tx_id: bytes, sql: str, params: list | None = None) -> list[str]:
+    def _query_list(self, attach_id: bytes, tx_id: bytes, sql: str, params: list[object] | None = None) -> list[str]:
         """Execute a query within a transaction and return the first column as a list."""
         conn = self._get_tx_conn(attach_id, tx_id)
         tx_lock = self._get_tx_lock(attach_id, tx_id)
@@ -336,7 +339,8 @@ class TransactorImpl:
     def list_user_tables(self, attach_id: bytes, tx_id: bytes, schema_name: str = "main") -> list[str]:
         """List user tables in the given schema within a transaction."""
         return self._query_list(
-            attach_id, tx_id,
+            attach_id,
+            tx_id,
             "SELECT table_name FROM information_schema.tables WHERE table_schema=? AND table_type='BASE TABLE'",
             [schema_name],
         )
@@ -350,15 +354,17 @@ class TransactorImpl:
             sub = conn.subcursor()
             if "." in table_name:
                 schema_part = table_name.rsplit(".", 1)[0]
-                is_table = sub.execute(
+                row = sub.execute(
                     "SELECT COUNT(*) FROM duckdb_tables() WHERE schema_name = ? AND table_name = ?",
                     [schema_part, bare_name],
-                ).fetchone()[0] > 0
+                ).fetchone()
+                is_table = row is not None and row[0] > 0
             else:
-                is_table = sub.execute(
+                row = sub.execute(
                     "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name = ?",
                     [bare_name],
-                ).fetchone()[0] > 0
+                ).fetchone()
+                is_table = row is not None and row[0] > 0
             if not is_table:
                 sub.close()
                 raise ValueError(f"'{table_name}' is not a table")
@@ -369,10 +375,10 @@ class TransactorImpl:
                 [bare_name],
             ).fetchall()
             sub.close()
-            meta_updates: dict[str, dict[bytes, bytes]] = {}
+            meta_updates: dict[str, dict[bytes | str, bytes | str]] = {}
             for row in col_meta_result:
                 col_name, comment, default = row[0], row[1], row[2]
-                updates: dict[bytes, bytes] = {}
+                updates: dict[bytes | str, bytes | str] = {}
                 if comment is not None:
                     updates[b"comment"] = comment.encode("utf-8")
                 if default is not None:
@@ -383,7 +389,9 @@ class TransactorImpl:
                 fields = list(schema)
                 for i, f in enumerate(fields):
                     if f.name in meta_updates:
-                        metadata = dict(f.metadata) if f.metadata else {}
+                        metadata: dict[bytes | str, bytes | str] = (
+                            dict(cast("dict[bytes | str, bytes | str]", f.metadata)) if f.metadata else {}
+                        )
                         metadata.update(meta_updates[f.name])
                         fields[i] = f.with_metadata(metadata)
                 schema = pa.schema(fields)
@@ -399,17 +407,20 @@ class TransactorImpl:
             sub2.close()
 
         import json
-        constraints_json = json.dumps([
-            {
-                "type": row[0],
-                "columns": row[1],
-                "text": row[2],
-                "referenced_table": row[3],
-                "referenced_columns": row[4],
-            }
-            for row in constraint_rows
-        ])
-        schema_meta = {b"vgi.constraints": constraints_json.encode("utf-8")}
+
+        constraints_json = json.dumps(
+            [
+                {
+                    "type": row[0],
+                    "columns": row[1],
+                    "text": row[2],
+                    "referenced_table": row[3],
+                    "referenced_columns": row[4],
+                }
+                for row in constraint_rows
+            ]
+        )
+        schema_meta: dict[bytes | str, bytes | str] = {b"vgi.constraints": constraints_json.encode("utf-8")}
 
         rowid_field = pa.field("rowid", pa.int64(), metadata={b"is_row_id": b""})
         result_schema = pa.schema([rowid_field, *schema], metadata=schema_meta)
@@ -426,13 +437,14 @@ class TransactorImpl:
                 [bare_name],
             ).fetchone()
         if result and result[0]:
-            return result[0]
+            return str(result[0])
         return None
 
     def list_user_views(self, attach_id: bytes, tx_id: bytes, schema_name: str = "main") -> list[str]:
         """List user-created view names in the given schema within a transaction."""
         return self._query_list(
-            attach_id, tx_id,
+            attach_id,
+            tx_id,
             "SELECT view_name FROM duckdb_views() WHERE schema_name = ? AND NOT internal",
             [schema_name],
         )
@@ -452,10 +464,11 @@ class TransactorImpl:
             raise ValueError(f"View '{view_name}' not found")
         import json
         import re
+
         definition = result[0] or ""
         match = re.match(r"CREATE\s+VIEW\s+\S+\s+AS\s+", definition, re.IGNORECASE)
         if match:
-            definition = definition[match.end():]
+            definition = definition[match.end() :]
             definition = definition.rstrip().rstrip(";")
         return json.dumps({"definition": definition, "comment": result[1]})
 
@@ -518,7 +531,14 @@ def _unique_batch_name(prefix: str) -> str:
 class _InsertState(ExchangeState):
     """Insert exchange: receives row batches, inserts into table, returns count or RETURNING rows."""
 
-    def __init__(self, conn, qualified_name, returning, table_schema, tx_lock):
+    def __init__(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        qualified_name: str,
+        returning: bool,
+        table_schema: pa.Schema,
+        tx_lock: threading.Lock,
+    ) -> None:
         self.conn = conn
         self.qualified_name = qualified_name
         self.returning = returning
@@ -540,10 +560,11 @@ class _InsertState(ExchangeState):
             self.conn.unregister(view_name)
         self._emit_result(result_batch, out)
 
-    def _emit_result(self, result_batch, out):
+    def _emit_result(self, result_batch: pa.RecordBatch, out: OutputCollector) -> None:
         if self.returning:
             out.emit(
-                result_batch if result_batch.num_rows > 0
+                result_batch
+                if result_batch.num_rows > 0
                 else pa.record_batch({c: [] for c in self.table_schema.names}, schema=self.table_schema)
             )
         else:
@@ -554,7 +575,14 @@ class _InsertState(ExchangeState):
 class _DeleteState(ExchangeState):
     """Delete exchange: receives rowid batches, deletes matching rows."""
 
-    def __init__(self, conn, qualified_name, returning, table_schema, tx_lock):
+    def __init__(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        qualified_name: str,
+        returning: bool,
+        table_schema: pa.Schema,
+        tx_lock: threading.Lock,
+    ) -> None:
         self.conn = conn
         self.qualified_name = qualified_name
         self.returning = returning
@@ -587,7 +615,8 @@ class _DeleteState(ExchangeState):
 
         if self.returning:
             out.emit(
-                result_batch if result_batch.num_rows > 0
+                result_batch
+                if result_batch.num_rows > 0
                 else pa.record_batch({c: [] for c in self.table_schema.names}, schema=self.table_schema)
             )
         else:
@@ -598,7 +627,14 @@ class _DeleteState(ExchangeState):
 class _UpdateState(ExchangeState):
     """Update exchange: receives rowid + updated columns, updates matching rows."""
 
-    def __init__(self, conn, qualified_name, returning, table_schema, tx_lock):
+    def __init__(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        qualified_name: str,
+        returning: bool,
+        table_schema: pa.Schema,
+        tx_lock: threading.Lock,
+    ) -> None:
         self.conn = conn
         self.qualified_name = qualified_name
         self.returning = returning
@@ -625,7 +661,8 @@ class _UpdateState(ExchangeState):
 
         if self.returning:
             out.emit(
-                result_batch if result_batch.num_rows > 0
+                result_batch
+                if result_batch.num_rows > 0
                 else pa.record_batch({c: [] for c in self.table_schema.names}, schema=self.table_schema)
             )
         else:

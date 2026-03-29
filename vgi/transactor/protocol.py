@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from typing import Protocol
 
-import pyarrow as pa
 from vgi_rpc.rpc import ExchangeState, ProducerState, Stream
 
 

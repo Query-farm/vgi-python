@@ -97,6 +97,9 @@ _ATTACH_ID_METHODS = [
     "catalog_view_comment_set",
     "catalog_macro_get",
     "catalog_macro_drop",
+    "catalog_index_get",
+    "catalog_index_drop",
+    "catalog_schema_contents_indexes",
 ]
 
 
@@ -220,6 +223,12 @@ class MetaWorker:
         worker, original_id = self._unwrap_attach_id(request.attach_id)
         patched = dataclasses.replace(request, attach_id=original_id)
         worker.catalog_macro_create(patched)
+
+    def catalog_index_create(self, request: Any) -> None:
+        """Create an index — dispatch via attach_id in request."""
+        worker, original_id = self._unwrap_attach_id(request.attach_id)
+        patched = dataclasses.replace(request, attach_id=original_id)
+        worker.catalog_index_create(patched)
 
     # ========== bind / init (unwrap attach_id from request) ==========
 

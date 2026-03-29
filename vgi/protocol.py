@@ -40,6 +40,8 @@ from vgi.arguments import Arguments
 from vgi.catalog.catalog_interface import (
     CatalogAttachResult,
     FunctionInfo,
+    IndexConstraintType,
+    IndexInfo,
     MacroInfo,
     MacroType,
     OnConflict,
@@ -70,6 +72,8 @@ __all__ = [
     "CatalogAttachRequest",
     "CatalogCreateRequest",
     "CatalogsResponse",
+    "IndexCreateRequest",
+    "IndexesResponse",
     "MacroCreateRequest",
     "MacrosResponse",
     "TableCreateRequest",
@@ -224,148 +228,57 @@ class TransactionBeginResponse(ArrowSerializableDataclass):
     transaction_id: bytes | None = None
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class SchemasResponse(ArrowSerializableDataclass):
-    """Response wrapping list of SchemaInfo.
+def _catalog_items_response(item_type: type) -> type:
+    """Generate a catalog items response class for the given ArrowSerializableDataclass type.
 
-    Also used for schema_get (0 or 1 items) and schemas (0+ items).
+    Each generated class wraps a list of IPC-serialized items with helpers:
+    - from_infos(items) / from_optional(item) — serialize into response
+    - to_infos() / to_optional() — deserialize from response
+
+    The item_type must have serialize_to_bytes() and deserialize_from_bytes() methods
+    (i.e., be an ArrowSerializableDataclass).
     """
+    type_name = item_type.__name__
 
-    items: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
+    @dataclass(frozen=True, slots=True, kw_only=True)
+    class _Response(ArrowSerializableDataclass):
+        items: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
 
-    @staticmethod
-    def from_schema_infos(infos: list[SchemaInfo]) -> SchemasResponse:
-        """Create from a list of SchemaInfo objects."""
-        return SchemasResponse(items=[info.serialize_to_bytes() for info in infos])
+        @staticmethod
+        def from_infos(infos: list) -> _Response:  # type: ignore[type-arg]
+            return _Response(items=[info.serialize_to_bytes() for info in infos])
 
-    @staticmethod
-    def from_optional(info: SchemaInfo | None) -> SchemasResponse:
-        """Create from an optional SchemaInfo (0 or 1 items)."""
-        if info is None:
-            return SchemasResponse(items=[])
-        return SchemasResponse(items=[info.serialize_to_bytes()])
+        @staticmethod
+        def from_optional(info: object | None) -> _Response:
+            if info is None:
+                return _Response(items=[])
+            return _Response(items=[info.serialize_to_bytes()])  # type: ignore[union-attr]
 
-    def to_schema_infos(self) -> list[SchemaInfo]:
-        """Deserialize items to SchemaInfo objects."""
-        return [SchemaInfo.deserialize_from_bytes(b) for b in self.items]
+        def to_infos(self) -> list:  # type: ignore[type-arg]
+            return [item_type.deserialize_from_bytes(b) for b in self.items]
 
-    def to_optional(self) -> SchemaInfo | None:
-        """Deserialize single optional item."""
-        if not self.items:
-            return None
-        return SchemaInfo.deserialize_from_bytes(self.items[0])
+        def to_optional(self) -> object | None:
+            if not self.items:
+                return None
+            return item_type.deserialize_from_bytes(self.items[0])
 
+    # Give the class a meaningful name for vgi_rpc introspection and repr
+    # "TableInfo" -> "TablesResponse", "IndexInfo" -> "IndexesResponse"
+    stem = type_name.removesuffix("Info")
+    plural = f"{stem}es" if stem.endswith(("x", "s", "sh", "ch")) else f"{stem}s"
+    class_name = f"{plural}Response"
+    _Response.__name__ = class_name
+    _Response.__qualname__ = class_name
+    _Response.__doc__ = f"Response wrapping list of {type_name}."
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class TablesResponse(ArrowSerializableDataclass):
-    """Response wrapping list of TableInfo.
-
-    Used for schema_contents_tables (0+ items) and table_get (0 or 1 items).
-    """
-
-    items: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
-
-    @staticmethod
-    def from_table_infos(infos: list[TableInfo]) -> TablesResponse:
-        """Create from a list of TableInfo objects."""
-        return TablesResponse(items=[info.serialize_to_bytes() for info in infos])
-
-    @staticmethod
-    def from_optional(info: TableInfo | None) -> TablesResponse:
-        """Create from an optional TableInfo (0 or 1 items)."""
-        if info is None:
-            return TablesResponse(items=[])
-        return TablesResponse(items=[info.serialize_to_bytes()])
-
-    def to_table_infos(self) -> list[TableInfo]:
-        """Deserialize items to TableInfo objects."""
-        return [TableInfo.deserialize_from_bytes(b) for b in self.items]
-
-    def to_optional(self) -> TableInfo | None:
-        """Deserialize single optional item."""
-        if not self.items:
-            return None
-        return TableInfo.deserialize_from_bytes(self.items[0])
+    return _Response
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class ViewsResponse(ArrowSerializableDataclass):
-    """Response wrapping list of ViewInfo.
-
-    Used for schema_contents_views (0+ items) and view_get (0 or 1 items).
-    """
-
-    items: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
-
-    @staticmethod
-    def from_view_infos(infos: list[ViewInfo]) -> ViewsResponse:
-        """Create from a list of ViewInfo objects."""
-        return ViewsResponse(items=[info.serialize_to_bytes() for info in infos])
-
-    @staticmethod
-    def from_optional(info: ViewInfo | None) -> ViewsResponse:
-        """Create from an optional ViewInfo (0 or 1 items)."""
-        if info is None:
-            return ViewsResponse(items=[])
-        return ViewsResponse(items=[info.serialize_to_bytes()])
-
-    def to_view_infos(self) -> list[ViewInfo]:
-        """Deserialize items to ViewInfo objects."""
-        return [ViewInfo.deserialize_from_bytes(b) for b in self.items]
-
-    def to_optional(self) -> ViewInfo | None:
-        """Deserialize single optional item."""
-        if not self.items:
-            return None
-        return ViewInfo.deserialize_from_bytes(self.items[0])
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class FunctionsResponse(ArrowSerializableDataclass):
-    """Response wrapping list of FunctionInfo for schema_contents_functions."""
-
-    items: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
-
-    @staticmethod
-    def from_function_infos(infos: list[FunctionInfo]) -> FunctionsResponse:
-        """Create from a list of FunctionInfo objects."""
-        return FunctionsResponse(items=[info.serialize_to_bytes() for info in infos])
-
-    def to_function_infos(self) -> list[FunctionInfo]:
-        """Deserialize items to FunctionInfo objects."""
-        return [FunctionInfo.deserialize_from_bytes(b) for b in self.items]
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class MacrosResponse(ArrowSerializableDataclass):
-    """Response wrapping list of MacroInfo.
-
-    Used for schema_contents_macros (0+ items) and macro_get (0 or 1 items).
-    """
-
-    items: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
-
-    @staticmethod
-    def from_macro_infos(infos: list[MacroInfo]) -> MacrosResponse:
-        """Create from a list of MacroInfo objects."""
-        return MacrosResponse(items=[info.serialize_to_bytes() for info in infos])
-
-    @staticmethod
-    def from_optional(info: MacroInfo | None) -> MacrosResponse:
-        """Create from an optional MacroInfo (0 or 1 items)."""
-        if info is None:
-            return MacrosResponse(items=[])
-        return MacrosResponse(items=[info.serialize_to_bytes()])
-
-    def to_macro_infos(self) -> list[MacroInfo]:
-        """Deserialize items to MacroInfo objects."""
-        return [MacroInfo.deserialize_from_bytes(b) for b in self.items]
-
-    def to_optional(self) -> MacroInfo | None:
-        """Deserialize single optional item."""
-        if not self.items:
-            return None
-        return MacroInfo.deserialize_from_bytes(self.items[0])
+SchemasResponse = _catalog_items_response(SchemaInfo)
+TablesResponse = _catalog_items_response(TableInfo)
+ViewsResponse = _catalog_items_response(ViewInfo)
+FunctionsResponse = _catalog_items_response(FunctionInfo)
+MacrosResponse = _catalog_items_response(MacroInfo)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -380,6 +293,25 @@ class MacroCreateRequest(ArrowSerializableDataclass):
     definition: str
     on_conflict: OnConflict
     parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
+    transaction_id: bytes | None = None
+
+
+IndexesResponse = _catalog_items_response(IndexInfo)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class IndexCreateRequest(ArrowSerializableDataclass):
+    """Request for catalog_index_create."""
+
+    attach_id: bytes
+    schema_name: str
+    name: str
+    table_name: str
+    index_type: str = ""
+    constraint_type: IndexConstraintType = IndexConstraintType.NONE
+    expressions: list[str] = field(default_factory=list)
+    on_conflict: OnConflict = OnConflict.ERROR
+    options: dict[str, str] = field(default_factory=dict)
     transaction_id: bytes | None = None
 
 
@@ -1225,4 +1157,41 @@ class VgiProtocol(Protocol):
         transaction_id: bytes | None = None,
     ) -> MacrosResponse:
         """List macros in a schema (scalar or table)."""
+        ...
+
+    # ========== Catalog - Indexes ==========
+
+    def catalog_index_get(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> IndexesResponse:
+        """Get information about an index. Returns 0 or 1 items."""
+        ...
+
+    def catalog_index_create(self, request: IndexCreateRequest) -> None:
+        """Create a new index."""
+        ...
+
+    def catalog_index_drop(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        ignore_not_found: bool = False,
+        cascade: bool = False,
+        transaction_id: bytes | None = None,
+    ) -> None:
+        """Drop an index."""
+        ...
+
+    def catalog_schema_contents_indexes(
+        self,
+        attach_id: bytes,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> IndexesResponse:
+        """List indexes in a schema."""
         ...

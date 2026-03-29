@@ -13,23 +13,24 @@ for dynamically discovered tables.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pyarrow as pa
 from vgi_rpc import AnnotatedBatch
 from vgi_rpc.rpc import OutputCollector
 
-from vgi.invocation import BindResponse, GlobalInitResponse
-from vgi.table_function import BindParams, InitParams, ProcessParams, TableFunctionGenerator
-from vgi.table_in_out_function import TableInOutGenerator
-
 from vgi.examples.writable_table import (
-    WritableScanState,
     _COUNT_SCHEMA,
+    WritableScanState,
     _get_attach_id,
     _get_pushdown_filters,
     _get_tx_id,
     _is_returning,
     transactor_proxy,
 )
+from vgi.invocation import BindResponse, GlobalInitResponse
+from vgi.table_function import BindParams, InitParams, ProcessParams, TableFunctionGenerator
+from vgi.table_in_out_function import TableInOutGenerator
 
 __all__ = [
     "GenericTableDelete",
@@ -45,7 +46,7 @@ def _get_table_name_from_bind(params: BindParams[None]) -> str:
     if not args.positional or args.positional[0] is None:
         msg = "table_name positional argument is required"
         raise ValueError(msg)
-    return args.positional[0].as_py()
+    return str(args.positional[0].as_py())
 
 
 def _get_table_name_from_process(params: ProcessParams[None]) -> str:
@@ -54,14 +55,14 @@ def _get_table_name_from_process(params: ProcessParams[None]) -> str:
     if not args.positional or args.positional[0] is None:
         msg = "table_name positional argument is required"
         raise ValueError(msg)
-    return args.positional[0].as_py()
+    return str(args.positional[0].as_py())
 
 
 def _get_table_schema_from_transactor(table_name: str, attach_id: bytes, tx_id: bytes) -> pa.Schema:
     """Query the transactor for the table's Arrow schema (returned as IPC bytes)."""
     proxy = transactor_proxy._get_proxy()
     schema_bytes = proxy.table_schema(attach_id=attach_id, table_name=table_name, tx_id=tx_id)
-    return pa.ipc.read_schema(pa.BufferReader(schema_bytes))
+    return pa.ipc.read_schema(pa.BufferReader(schema_bytes))  # type: ignore[arg-type]
 
 
 # ============================================================================
@@ -83,7 +84,12 @@ class GenericTableScan(TableFunctionGenerator[None, WritableScanState]):
     def on_bind(cls, params: BindParams[None]) -> BindResponse:
         """Bind: query transactor for table schema (already includes rowid)."""
         table_name = _get_table_name_from_bind(params)
-        table_schema = _get_table_schema_from_transactor(table_name, params.bind_call.attach_id, params.bind_call.transaction_id)
+        attach_id = params.bind_call.attach_id
+        tx_id = params.bind_call.transaction_id
+        assert attach_id is not None and tx_id is not None
+        table_schema = _get_table_schema_from_transactor(
+            table_name, attach_id, tx_id
+        )
         return BindResponse(output_schema=table_schema)
 
     @classmethod
@@ -137,15 +143,33 @@ class _GenericWriteBase(TableInOutGenerator[None, None]):
         """Bind: query transactor for table schema to use for RETURNING."""
         table_name = _get_table_name_from_bind(params)
         if _is_returning(params):
-            table_schema = _get_table_schema_from_transactor(table_name, params.bind_call.attach_id, params.bind_call.transaction_id)
+            attach_id = params.bind_call.attach_id
+            tx_id = params.bind_call.transaction_id
+            assert attach_id is not None and tx_id is not None
+            table_schema = _get_table_schema_from_transactor(
+                table_name, attach_id, tx_id
+            )
             user_fields = [f for f in table_schema if f.name not in ("rowid", "row_id")]
             return BindResponse(output_schema=pa.schema(user_fields))
         return BindResponse(output_schema=_COUNT_SCHEMA)
 
     @classmethod
-    def _open_stream(cls, proxy, attach_id, tx_id, table_name, returning, batch):
+    def _open_stream(
+        cls,
+        proxy: Any,
+        attach_id: bytes,
+        tx_id: bytes,
+        table_name: str,
+        returning: bool,
+        batch: pa.RecordBatch,
+    ) -> Any:
         """Open a write stream. Override for operations needing extra args."""
-        return getattr(proxy, cls._operation)(attach_id=attach_id, tx_id=tx_id, table_name=table_name, returning=returning)
+        return getattr(proxy, cls._operation)(
+            attach_id=attach_id,
+            tx_id=tx_id,
+            table_name=table_name,
+            returning=returning,
+        )
 
     @classmethod
     def process(cls, params: ProcessParams[None], state: None, batch: pa.RecordBatch, out: OutputCollector) -> None:
@@ -166,6 +190,8 @@ class GenericTableInsert(_GenericWriteBase):
     _operation = "insert"
 
     class Meta:
+        """Metadata for GenericTableInsert."""
+
         name = "generic_writable_insert"
 
 
@@ -175,12 +201,29 @@ class GenericTableUpdate(_GenericWriteBase):
     _operation = "update"
 
     class Meta:
+        """Metadata for GenericTableUpdate."""
+
         name = "generic_writable_update"
 
     @classmethod
-    def _open_stream(cls, proxy, attach_id, tx_id, table_name, returning, batch):
+    def _open_stream(
+        cls,
+        proxy: Any,
+        attach_id: bytes,
+        tx_id: bytes,
+        table_name: str,
+        returning: bool,
+        batch: pa.RecordBatch,
+    ) -> Any:
+        """Open an update stream with column list derived from the batch."""
         update_cols = [name for name in batch.schema.names if name != "rowid"]
-        return proxy.update(attach_id=attach_id, tx_id=tx_id, table_name=table_name, columns=update_cols, returning=returning)
+        return proxy.update(
+            attach_id=attach_id,
+            tx_id=tx_id,
+            table_name=table_name,
+            columns=update_cols,
+            returning=returning,
+        )
 
 
 class GenericTableDelete(_GenericWriteBase):
@@ -189,4 +232,6 @@ class GenericTableDelete(_GenericWriteBase):
     _operation = "delete"
 
     class Meta:
+        """Metadata for GenericTableDelete."""
+
         name = "generic_writable_delete"

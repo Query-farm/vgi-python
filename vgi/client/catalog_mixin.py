@@ -278,7 +278,7 @@ class CatalogClientMixin:
             return proxy.catalog_schemas(
                 attach_id=attach_id,
                 transaction_id=transaction_id,
-            ).to_schema_infos()
+            ).to_infos()
 
     def schema_get(
         self,
@@ -443,27 +443,27 @@ class CatalogClientMixin:
                     attach_id=attach_id,
                     name=name,
                     transaction_id=transaction_id,
-                ).to_table_infos()
+                ).to_infos()
             elif type == SchemaObjectType.VIEW:
                 return proxy.catalog_schema_contents_views(
                     attach_id=attach_id,
                     name=name,
                     transaction_id=transaction_id,
-                ).to_view_infos()
+                ).to_infos()
             elif type in (SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO):
                 return proxy.catalog_schema_contents_macros(
                     attach_id=attach_id,
                     name=name,
                     type=type,
                     transaction_id=transaction_id,
-                ).to_macro_infos()
+                ).to_infos()
             else:
                 return proxy.catalog_schema_contents_functions(
                     attach_id=attach_id,
                     name=name,
                     type=type,
                     transaction_id=transaction_id,
-                ).to_function_infos()
+                ).to_infos()
 
     # ========== Table Methods ==========
 

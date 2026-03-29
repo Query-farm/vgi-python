@@ -48,6 +48,8 @@ __all__ = [
     "OrderPreservation",
     # Catalog-specific
     "CatalogExample",
+    "IndexConstraintType",
+    "IndexInfo",
     "SecretLookupEntry",
     "MacroType",
     "SchemaObjectType",
@@ -211,6 +213,41 @@ class MacroType(Enum):
     TABLE = "table"
 
 
+class IndexConstraintType(Enum):
+    """The constraint type of an index.
+
+    NONE: Regular index (no constraint enforcement).
+    UNIQUE: Index enforces a UNIQUE constraint.
+    PRIMARY: Index enforces a PRIMARY KEY constraint.
+    """
+
+    NONE = "none"
+    UNIQUE = "unique"
+    PRIMARY = "primary"
+
+
+@dataclass(frozen=True)
+class IndexInfo(CatalogSchemaObject, ArrowSerializableDataclass):
+    """Information about an index in a schema.
+
+    Attributes:
+        table_name: The name of the table this index is on.
+        index_type: The index type string (e.g., "ART", or empty for default).
+        constraint_type: The constraint enforcement type (NONE, UNIQUE, PRIMARY).
+        expressions: SQL expression strings defining the indexed expressions.
+            For column-based indexes, these are column references (e.g., "col_a").
+            For expression indexes, these are arbitrary SQL (e.g., "lower(col_a)").
+        options: Key-value index options (WITH clause).
+
+    """
+
+    table_name: str
+    index_type: str = ""
+    constraint_type: IndexConstraintType = IndexConstraintType.NONE
+    expressions: list[str] = field(default_factory=list)
+    options: dict[str, str] = field(default_factory=dict)
+
+
 class SchemaObjectType(Enum):
     """The type of object that can exist within a schema.
 
@@ -223,6 +260,7 @@ class SchemaObjectType(Enum):
     TABLE_FUNCTION = "table_function"
     SCALAR_MACRO = "scalar_macro"
     TABLE_MACRO = "table_macro"
+    INDEX = "index"
 
 
 class OnConflict(Enum):
@@ -581,6 +619,16 @@ class CatalogInterface(ABC):
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
 
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: Literal[SchemaObjectType.INDEX],
+    ) -> Sequence[IndexInfo]: ...
+
     def schema_contents(
         self,
         *,
@@ -588,10 +636,10 @@ class CatalogInterface(ABC):
         transaction_id: TransactionId | None,
         name: str,
         type: SchemaObjectType,
-    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo]:
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
         """Get the contents of the schema with the given name.
 
-        Schemas can contain tables, views, functions, and macros.
+        Schemas can contain tables, views, functions, macros, and indexes.
 
         Args:
             attach_id: The attachment identifier.
@@ -604,6 +652,7 @@ class CatalogInterface(ABC):
                 - SchemaObjectType.TABLE_FUNCTION: Table functions
                 - SchemaObjectType.SCALAR_MACRO: Scalar macros
                 - SchemaObjectType.TABLE_MACRO: Table macros
+                - SchemaObjectType.INDEX: Indexes
 
         Returns:
             A list of TableInfo, ViewInfo, FunctionInfo, or MacroInfo objects
@@ -1017,6 +1066,53 @@ class CatalogInterface(ABC):
         """Drop the macro with the given name."""
         raise NotImplementedError("Macro drop not implemented.")
 
+    # ---- Indexes ----
+
+    def index_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> IndexInfo | None:
+        """Get information about the index with the given name.
+
+        Returns an IndexInfo object if the index exists, or None if it does not.
+        The default implementation returns None (no indexes).
+        """
+        return None
+
+    def index_create(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        table_name: str,
+        index_type: str,
+        constraint_type: IndexConstraintType,
+        expressions: list[str],
+        on_conflict: OnConflict,
+        options: dict[str, str] | None = None,
+    ) -> None:
+        """Create a new index on the specified table."""
+        raise NotImplementedError("Index create not implemented.")
+
+    def index_drop(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        ignore_not_found: bool,
+        cascade: bool = False,
+    ) -> None:
+        """Drop the index with the given name."""
+        raise NotImplementedError("Index drop not implemented.")
+
 
 def _read_only(operation: str) -> Any:
     """Create a CatalogInterface method that raises CatalogReadOnlyError."""
@@ -1084,6 +1180,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     _view_registry: "dict[tuple[str, str], View] | None" = None
     _function_registry: "dict[tuple[str, str], list[type]] | None" = None
     _macro_registry: "dict[tuple[str, str], Macro] | None" = None
+    _index_registry: "dict[tuple[str, str], Index] | None" = None
 
     def _build_registries(self) -> None:
         """Build lookup dicts from Catalog or legacy patterns.
@@ -1102,6 +1199,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         self._view_registry = {}
         self._function_registry = {}
         self._macro_registry = {}
+        self._index_registry = {}
 
         def _register_table(schema_key: str, table: "Table") -> None:
             key = (schema_key, table.name.lower())
@@ -1128,6 +1226,12 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                 raise ValueError(f"Duplicate macro '{macro.name}' in schema '{schema_key}'")
             self._macro_registry[key] = macro  # type: ignore[index]
 
+        def _register_index(schema_key: str, index: "Index") -> None:
+            key = (schema_key, index.name.lower())
+            if key in self._index_registry:  # type: ignore[operator]
+                raise ValueError(f"Duplicate index '{index.name}' in schema '{schema_key}'")
+            self._index_registry[key] = index  # type: ignore[index]
+
         if self.catalog is not None:
             # Build from Catalog object
             for schema in self.catalog.schemas:
@@ -1142,6 +1246,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                     _register_function(schema_key, func_cls)
                 for macro in schema.macros:
                     _register_macro(schema_key, macro)
+                for index in schema.indexes:
+                    _register_index(schema_key, index)
         else:
             # Backward compat: create "main" schema from legacy `functions` list
             main_schema = Schema(name="main", tables=(), views=(), functions=())
@@ -1280,6 +1386,24 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         if macro:
             schema = self._schema_registry.get(schema_name.lower())
             return macro.to_macro_info(schema.name if schema else schema_name)
+        return None
+
+    def index_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> IndexInfo | None:
+        """Get information about an index (case-insensitive lookup)."""
+        self._build_registries()
+        assert self._index_registry is not None
+        assert self._schema_registry is not None
+        index = self._index_registry.get((schema_name.lower(), name.lower()))
+        if index is not None:
+            schema = self._schema_registry.get(schema_name.lower())
+            return index.to_index_info(schema.name if schema else schema_name)
         return None
 
     def table_scan_function_get(
@@ -1454,6 +1578,16 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
 
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: Literal[SchemaObjectType.INDEX],
+    ) -> Sequence[IndexInfo]: ...
+
     def schema_contents(
         self,
         *,
@@ -1461,10 +1595,10 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         transaction_id: TransactionId | None,
         name: str,
         type: SchemaObjectType,
-    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo]:
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
         """List contents of a schema.
 
-        Returns tables, views, functions, or macros based on the type parameter.
+        Returns tables, views, functions, macros, or indexes based on the type parameter.
         Uses case-insensitive schema name lookup.
 
         Args:
@@ -1474,7 +1608,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             type: The type of objects to return. Must be a SchemaObjectType enum.
 
         Returns:
-            A list of TableInfo, ViewInfo, FunctionInfo, or MacroInfo objects.
+            A list of TableInfo, ViewInfo, FunctionInfo, MacroInfo, or IndexInfo objects.
 
         """
         self._build_registries()
@@ -1483,6 +1617,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         assert self._view_registry is not None
         assert self._function_registry is not None
         assert self._macro_registry is not None
+        assert self._index_registry is not None
 
         # Case-insensitive schema lookup
         name_lower = name.lower()
@@ -1495,7 +1630,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         # Normalize type parameter (may be string from wire protocol)
         type_enum = type if isinstance(type, SchemaObjectType) else SchemaObjectType(type)
 
-        results: list[TableInfo | ViewInfo | FunctionInfo | MacroInfo] = []
+        results: list[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo] = []
 
         if type_enum == SchemaObjectType.TABLE:
             for (sn, _), table in self._table_registry.items():
@@ -1505,6 +1640,10 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             for (sn, _), view in self._view_registry.items():
                 if sn == name_lower:
                     results.append(view.to_view_info(schema_name))
+        elif type_enum == SchemaObjectType.INDEX:
+            for (sn, _), index in self._index_registry.items():
+                if sn == name_lower:
+                    results.append(index.to_index_info(schema_name))
         elif type_enum in (SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO):
             target_macro_type = MacroType.SCALAR if type_enum == SchemaObjectType.SCALAR_MACRO else MacroType.TABLE
             for (sn, _), macro in self._macro_registry.items():
@@ -1627,3 +1766,5 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     view_comment_set = _read_only("set view comment")
     macro_create = _read_only("create macro")
     macro_drop = _read_only("drop macro")
+    index_create = _read_only("create index")
+    index_drop = _read_only("drop index")

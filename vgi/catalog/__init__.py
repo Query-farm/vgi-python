@@ -13,6 +13,8 @@ from vgi.catalog.catalog_interface import (
     CatalogSchemaObject,
     FunctionInfo,
     FunctionType,
+    IndexConstraintType,
+    IndexInfo,
     MacroInfo,
     MacroType,
     OnConflict,
@@ -26,7 +28,7 @@ from vgi.catalog.catalog_interface import (
     TransactionId,
     ViewInfo,
 )
-from vgi.catalog.descriptors import Catalog, ForeignKeyDef, Macro, Schema, Sql, Table, View
+from vgi.catalog.descriptors import Catalog, ForeignKeyDef, Index, Macro, Schema, Sql, Table, View
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import Setting, SettingSpec
 from vgi.catalog.storage import CatalogStorage, CatalogStorageSqlite
@@ -39,6 +41,7 @@ __all__ = [
     "SqlExpression",
     # Enums
     "FunctionType",
+    "IndexConstraintType",
     "MacroType",
     "OnConflict",
     "SchemaObjectType",
@@ -47,6 +50,7 @@ __all__ = [
     "CatalogExample",
     "CatalogObject",
     "CatalogSchemaObject",
+    "IndexInfo",
     "MacroInfo",
     "SchemaInfo",
     "SecretTypeSpec",
@@ -59,6 +63,7 @@ __all__ = [
     # Declarative descriptors
     "Catalog",
     "ForeignKeyDef",
+    "Index",
     "Macro",
     "Schema",
     "Sql",
