@@ -299,6 +299,10 @@ class ProcessParams[TArgs]:
     storage: BoundStorage
     auth_context: AuthContext = AuthContext.anonymous()
 
+    # Current pushdown filters (updated dynamically from tick metadata for Top-N queries).
+    # None if no filters have been received. Updated before each process() call.
+    current_pushdown_filters: Any = None  # PushdownFilters | None
+
 
 class TableFunctionBase[TArgs](vgi.function.Function):
     """Base class for table functions with cardinality and schema validation.

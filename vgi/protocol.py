@@ -566,9 +566,37 @@ class TableProducerState(ProducerState):
             if self._init_call.pushdown_filters is not None:
                 self._pushdown_filters = func_cls.pushdown_filters(self._init_call.pushdown_filters)
 
+    def process(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
+        """Process tick batch — check for dynamic filter updates, then produce."""
+        if input.custom_metadata is not None:
+            encoded = input.custom_metadata.get(b"vgi_pushdown_filters")
+            if encoded is not None:
+                self._update_filters_from_metadata(encoded)
+        self.produce(out, ctx)
+
+    def _update_filters_from_metadata(self, encoded_filters: bytes) -> None:
+        """Decode and apply dynamic filter update from tick metadata."""
+        import base64
+
+        from vgi.table_filter_pushdown import deserialize_filters
+
+        try:
+            filter_bytes = base64.b64decode(encoded_filters)
+            table = pa.ipc.open_stream(filter_bytes).read_all()
+            if table.num_rows > 0:
+                filter_batch = table.to_batches()[0]
+                new_filters = deserialize_filters(filter_batch)
+                self._pushdown_filters = new_filters
+        except Exception:
+            pass  # Filter update failure is not fatal
+
     def produce(self, out: OutputCollector, ctx: CallContext) -> None:
         """Produce the next output batch from the table function."""
-        params = dataclasses.replace(self._params, auth_context=ctx.auth)
+        params = dataclasses.replace(
+            self._params,
+            auth_context=ctx.auth,
+            current_pushdown_filters=self._pushdown_filters,
+        )
         timer = _timed_exchange(
             self._vgi_tracer,
             "vgi.execute.table",

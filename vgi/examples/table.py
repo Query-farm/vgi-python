@@ -51,6 +51,7 @@ __all__ = [
     "ConstantColumnsFunction",
     "DepartmentsScanFunction",
     "DoubleSequenceFunction",
+    "DynamicFilterEchoFunction",
     "EmployeesScanFunction",
     "FilterEchoFunction",
     "GeneratorExceptionFunction",
@@ -2767,6 +2768,112 @@ class SpatialFilterExampleFunction(TableFunctionGenerator[_SpatialFilterArgs, _S
         out.emit(
             pa.RecordBatch.from_pydict(
                 {"n": ns, "x": xs, "y": ys, "geom": geoms},
+                schema=params.output_schema,
+            )
+        )
+
+        state.current_index += size
+        state.remaining -= size
+
+
+# ============================================================================
+# dynamic_filter_echo — echoes the current tick filter per batch
+# ============================================================================
+
+
+@dataclass(slots=True, frozen=True)
+class _DynFilterEchoArgs:
+    """Arguments for DynamicFilterEchoFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=1)]
+    batch_size: Annotated[int, Arg("batch_size", default=100, doc="Rows per batch")]
+
+
+@dataclass(kw_only=True)
+class _DynFilterEchoState(ArrowSerializableDataclass):
+    """Mutable state for DynamicFilterEchoFunction."""
+
+    remaining: int
+    current_index: int = 0
+
+
+def _format_pushed_filters_safe(filters: object) -> str:
+    """Format PushdownFilters to readable string, returning '(none)' if empty/None."""
+    if filters is None:
+        return "(none)"
+    from vgi.table_filter_pushdown import PushdownFilters
+
+    if isinstance(filters, PushdownFilters) and filters:
+        return repr(filters)
+    return "(none)"
+
+
+_DYN_FILTER_ECHO_SCHEMA = pa.schema([
+    pa.field("n", pa.int64()),
+    pa.field("pushed_filters", pa.utf8()),
+])
+
+
+@init_single_worker
+@bind_fixed_schema
+@_cardinality_from_count
+class DynamicFilterEchoFunction(TableFunctionGenerator[_DynFilterEchoArgs, _DynFilterEchoState]):
+    """Generates descending integers and echoes the current tick filter per batch.
+
+    USE CASE
+    --------
+    Demonstrates dynamic filter pushdown. Rows are generated in **descending**
+    order (count-1, count-2, ..., 0) so that ``ORDER BY n ASC LIMIT K`` causes
+    the Top-N heap to tighten gradually. Each batch's ``pushed_filters`` column
+    shows the filter received from the most recent tick.
+
+    SCHEMA
+    ------
+    Output: {"n": int64, "pushed_filters": string}
+
+    """
+
+    class Meta:
+        """Metadata for DynamicFilterEchoFunction."""
+
+        name = "dynamic_filter_echo"
+        description = "Generates descending integers, echoes dynamic tick filter per batch"
+        categories = ["generator", "diagnostic"]
+        filter_pushdown = True
+        auto_apply_filters = True
+        projection_pushdown = True
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = _DYN_FILTER_ECHO_SCHEMA
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_DynFilterEchoArgs]) -> _DynFilterEchoState:
+        """Create initial state."""
+        return _DynFilterEchoState(remaining=params.args.count)
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_DynFilterEchoArgs],
+        state: _DynFilterEchoState,
+        out: OutputCollector,
+    ) -> None:
+        """Generate descending rows with current filter echoed."""
+        if state.remaining <= 0:
+            out.finish()
+            return
+
+        total = params.args.count
+        size = min(state.remaining, params.args.batch_size)
+        start = state.current_index
+
+        # Descending order: first batch has highest values
+        ns = [total - 1 - i for i in range(start, start + size)]
+        filter_str = _format_pushed_filters_safe(params.current_pushdown_filters)
+        filter_values = [filter_str] * size
+
+        out.emit(
+            pa.RecordBatch.from_pydict(
+                {"n": ns, "pushed_filters": filter_values},
                 schema=params.output_schema,
             )
         )
