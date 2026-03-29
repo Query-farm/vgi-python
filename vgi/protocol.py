@@ -588,7 +588,7 @@ class TableProducerState(ProducerState):
                 new_filters = deserialize_filters(filter_batch)
                 self._pushdown_filters = new_filters
         except Exception:
-            pass  # Filter update failure is not fatal
+            _log.warning("Failed to deserialize dynamic filter from tick metadata", exc_info=True)
 
     def produce(self, out: OutputCollector, ctx: CallContext) -> None:
         """Produce the next output batch from the table function."""
