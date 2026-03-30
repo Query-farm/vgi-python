@@ -50,7 +50,7 @@ class TransactorClient:
         """Initialize client."""
         self._socket_path = os.environ.get("VGI_TRANSACTOR_SOCKET", _DEFAULT_SOCKET_PATH)
         self._transport: UnixTransport | None = None
-        self._connection: RpcConnection | None = None
+        self._connection: RpcConnection[TransactorProtocol] | None = None
         self._proxy: Any = None
         self._process: subprocess.Popen | None = None  # type: ignore[type-arg]
 
@@ -73,9 +73,7 @@ class TransactorClient:
             if self._try_connect():
                 return
 
-        raise RuntimeError(
-            f"Failed to connect to transactor after spawning (socket: {self._socket_path})"
-        )
+        raise RuntimeError(f"Failed to connect to transactor after spawning (socket: {self._socket_path})")
 
     def _try_connect(self) -> bool:
         """Try to connect to an existing transactor socket."""
@@ -88,7 +86,7 @@ class TransactorClient:
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.connect(self._socket_path)
             self._transport = UnixTransport(sock)
-            self._connection = RpcConnection(TransactorProtocol, self._transport)
+            self._connection = RpcConnection(TransactorProtocol, self._transport)  # type: ignore[type-abstract]
             self._proxy = self._connection.__enter__()
             logger.info("Connected to transactor: %s", self._socket_path)
             return True

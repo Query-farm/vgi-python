@@ -23,7 +23,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Protocol, get_args, get_origin
+from typing import TYPE_CHECKING, Annotated, Any, Protocol, get_args, get_origin
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType, Transient
@@ -134,7 +134,8 @@ class InitRequest(ArrowSerializableDataclass):
 
     # Table function extras (None for scalar)
     projection_ids: list[int] | None = None
-    pushdown_filters: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
+    pushdown_filters: Annotated[pa.RecordBatch | None, ArrowType(pa.large_binary())] = None
+    join_keys: Annotated[pa.RecordBatch | None, ArrowType(pa.large_binary())] = None
 
     # Table-in-out extras
     phase: TableInOutFunctionInitPhase | None = None
@@ -196,9 +197,7 @@ class TableCreateRequest(ArrowSerializableDataclass):
     primary_key_constraints: Annotated[list[list[int]], ArrowType(pa.list_(pa.list_(pa.int32())))] = field(
         default_factory=list
     )
-    foreign_key_constraints: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(
-        default_factory=list
-    )
+    foreign_key_constraints: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
     transaction_id: bytes | None = None
 
 
@@ -252,15 +251,15 @@ def _catalog_items_response(item_type: type) -> type:
         def from_optional(info: object | None) -> _Response:
             if info is None:
                 return _Response(items=[])
-            return _Response(items=[info.serialize_to_bytes()])  # type: ignore[union-attr]
+            return _Response(items=[info.serialize_to_bytes()])  # type: ignore[attr-defined]
 
         def to_infos(self) -> list:  # type: ignore[type-arg]
-            return [item_type.deserialize_from_bytes(b) for b in self.items]
+            return [item_type.deserialize_from_bytes(b) for b in self.items]  # type: ignore[attr-defined]
 
         def to_optional(self) -> object | None:
             if not self.items:
                 return None
-            return item_type.deserialize_from_bytes(self.items[0])
+            return item_type.deserialize_from_bytes(self.items[0])  # type: ignore[attr-defined,no-any-return]
 
     # Give the class a meaningful name for vgi_rpc introspection and repr
     # "TableInfo" -> "TablesResponse", "IndexInfo" -> "IndexesResponse"
@@ -274,11 +273,43 @@ def _catalog_items_response(item_type: type) -> type:
     return _Response
 
 
-SchemasResponse = _catalog_items_response(SchemaInfo)
-TablesResponse = _catalog_items_response(TableInfo)
-ViewsResponse = _catalog_items_response(ViewInfo)
-FunctionsResponse = _catalog_items_response(FunctionInfo)
-MacrosResponse = _catalog_items_response(MacroInfo)
+if TYPE_CHECKING:
+    from typing import Self
+
+    # Provide mypy with explicit class shapes for the dynamically generated responses.
+    class _CatalogItemsResponseStub(ArrowSerializableDataclass):
+        items: list[bytes]
+
+        @classmethod
+        def from_infos(cls, infos: list[Any]) -> Self: ...
+
+        @classmethod
+        def from_optional(cls, info: object | None) -> Self: ...
+
+        def to_infos(self) -> list[Any]: ...
+
+        def to_optional(self) -> Any: ...
+
+    class SchemasResponse(_CatalogItemsResponseStub):
+        """Response wrapping list of SchemaInfo."""
+
+    class TablesResponse(_CatalogItemsResponseStub):
+        """Response wrapping list of TableInfo."""
+
+    class ViewsResponse(_CatalogItemsResponseStub):
+        """Response wrapping list of ViewInfo."""
+
+    class FunctionsResponse(_CatalogItemsResponseStub):
+        """Response wrapping list of FunctionInfo."""
+
+    class MacrosResponse(_CatalogItemsResponseStub):
+        """Response wrapping list of MacroInfo."""
+else:
+    SchemasResponse = _catalog_items_response(SchemaInfo)
+    TablesResponse = _catalog_items_response(TableInfo)
+    ViewsResponse = _catalog_items_response(ViewInfo)
+    FunctionsResponse = _catalog_items_response(FunctionInfo)
+    MacrosResponse = _catalog_items_response(MacroInfo)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -296,7 +327,12 @@ class MacroCreateRequest(ArrowSerializableDataclass):
     transaction_id: bytes | None = None
 
 
-IndexesResponse = _catalog_items_response(IndexInfo)
+if TYPE_CHECKING:
+
+    class IndexesResponse(_CatalogItemsResponseStub):  # noqa: E302
+        """Response wrapping list of IndexInfo."""
+else:
+    IndexesResponse = _catalog_items_response(IndexInfo)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -521,7 +557,10 @@ class TableProducerState(ProducerState):
         if self._func_cls is not None and self._func_cls._should_auto_apply_filters():
             self._auto_apply = True
             if self._params is not None and self._params.init_call.pushdown_filters is not None:
-                self._pushdown_filters = self._func_cls.pushdown_filters(self._params.init_call.pushdown_filters)
+                self._pushdown_filters = self._func_cls.pushdown_filters(
+                    self._params.init_call.pushdown_filters,
+                    join_keys=self._params.init_call.join_keys,
+                )
 
     def _to_row_dict(self) -> dict[str, object]:
         """Serialize _user_state into _user_state_bytes before standard serialization."""
@@ -564,7 +603,10 @@ class TableProducerState(ProducerState):
         if func_cls._should_auto_apply_filters():
             self._auto_apply = True
             if self._init_call.pushdown_filters is not None:
-                self._pushdown_filters = func_cls.pushdown_filters(self._init_call.pushdown_filters)
+                self._pushdown_filters = func_cls.pushdown_filters(
+                    self._init_call.pushdown_filters,
+                    join_keys=self._init_call.join_keys,
+                )
 
     def process(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Process tick batch — check for dynamic filter updates, then produce."""
@@ -652,7 +694,10 @@ class TableInOutExchangeState(ExchangeState):
         if self._func_cls is not None and self._func_cls._should_auto_apply_filters():
             self._auto_apply = True
             if self._params is not None and self._params.init_call.pushdown_filters is not None:
-                self._pushdown_filters = self._func_cls.pushdown_filters(self._params.init_call.pushdown_filters)
+                self._pushdown_filters = self._func_cls.pushdown_filters(
+                    self._params.init_call.pushdown_filters,
+                    join_keys=self._params.init_call.join_keys,
+                )
 
     def _to_row_dict(self) -> dict[str, object]:
         """Serialize _user_state into _user_state_bytes before standard serialization."""
@@ -692,7 +737,10 @@ class TableInOutExchangeState(ExchangeState):
         if func_cls._should_auto_apply_filters():
             self._auto_apply = True
             if self._init_call.pushdown_filters is not None:
-                self._pushdown_filters = func_cls.pushdown_filters(self._init_call.pushdown_filters)
+                self._pushdown_filters = func_cls.pushdown_filters(
+                    self._init_call.pushdown_filters,
+                    join_keys=self._init_call.join_keys,
+                )
 
     def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Process one input batch through the table-in-out function."""

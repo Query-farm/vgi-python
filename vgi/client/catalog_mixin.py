@@ -299,7 +299,7 @@ class CatalogClientMixin:
 
         """
         with self._catalog_connect() as proxy:
-            return proxy.catalog_schema_get(
+            return proxy.catalog_schema_get(  # type: ignore[no-any-return]
                 attach_id=attach_id,
                 name=name,
                 transaction_id=transaction_id,
@@ -488,7 +488,7 @@ class CatalogClientMixin:
 
         """
         with self._catalog_connect() as proxy:
-            return proxy.catalog_table_get(
+            return proxy.catalog_table_get(  # type: ignore[no-any-return]
                 attach_id=attach_id,
                 schema_name=schema_name,
                 name=name,
@@ -962,7 +962,7 @@ class CatalogClientMixin:
 
         """
         with self._catalog_connect() as proxy:
-            return proxy.catalog_view_get(
+            return proxy.catalog_view_get(  # type: ignore[no-any-return]
                 attach_id=attach_id,
                 schema_name=schema_name,
                 name=name,
@@ -1116,7 +1116,7 @@ class CatalogClientMixin:
 
         """
         with self._catalog_connect() as proxy:
-            return proxy.catalog_macro_get(
+            return proxy.catalog_macro_get(  # type: ignore[no-any-return]
                 attach_id=attach_id,
                 schema_name=schema_name,
                 name=name,

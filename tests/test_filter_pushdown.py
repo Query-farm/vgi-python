@@ -780,12 +780,16 @@ class TestExpressionFilterDeserialization:
 
     def _make_expression_batch(self, expr_spec: object, value: int = 42) -> pa.RecordBatch:
         """Build a filter batch with a single expression filter and one value column."""
-        spec = json.dumps([{
-            "column_name": "n",
-            "column_index": 0,
-            "type": "expression",
-            "expr": expr_spec,
-        }])
+        spec = json.dumps(
+            [
+                {
+                    "column_name": "n",
+                    "column_index": 0,
+                    "type": "expression",
+                    "expr": expr_spec,
+                }
+            ]
+        )
         fields: list[pa.Field] = [  # type: ignore[type-arg]
             pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"}),
             pa.field("_val_0", pa.int64()),
@@ -945,9 +949,291 @@ class TestArrowScalarToSql:
 
     def test_binary_geometry(self) -> None:
         """Binary with geoarrow.wkb extension renders as ST_GeomFromHEXWKB."""
-        field = pa.field("geom", pa.binary(), metadata={
-            b"ARROW:extension:name": b"geoarrow.wkb",
-            b"ARROW:extension:metadata": b"{}",
-        })
+        field = pa.field(
+            "geom",
+            pa.binary(),
+            metadata={
+                b"ARROW:extension:name": b"geoarrow.wkb",
+                b"ARROW:extension:metadata": b"{}",
+            },
+        )
         result = _arrow_scalar_to_sql(pa.scalar(b"\x01\x02\x03"), field)
         assert result == "ST_GeomFromHEXWKB('010203')"
+
+
+# =============================================================================
+# Join Keys Batch Tests
+# =============================================================================
+
+
+class TestJoinKeysBatch:
+    """Tests for the join_keys filter type and get_join_keys_batch()."""
+
+    @staticmethod
+    def _make_filter_batch_with_join_keys() -> pa.RecordBatch:
+        """Build a filter batch containing a join_keys filter spec (no value columns)."""
+        spec = json.dumps(
+            [
+                {
+                    "column_name": "id",
+                    "column_index": 0,
+                    "type": "join_keys",
+                    "keys_column": "id",
+                }
+            ]
+        )
+        fields = [
+            pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"}),
+        ]
+        return pa.RecordBatch.from_pydict({"filter_spec": [spec]}, schema=pa.schema(fields))
+
+    @staticmethod
+    def _make_join_keys_batch(values: list[int]) -> pa.RecordBatch:
+        """Build a flat join keys RecordBatch with an 'id' column."""
+        return pa.RecordBatch.from_pydict({"id": values})
+
+    def test_deserialize_join_keys(self) -> None:
+        """join_keys filter type deserializes into InFilter with correct values."""
+        filter_batch = self._make_filter_batch_with_join_keys()
+        keys_batch = self._make_join_keys_batch([10, 20, 30])
+
+        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+
+        assert len(pf) == 1
+        f = pf.filters[0]
+        assert isinstance(f, InFilter)
+        assert f.column_name == "id"
+        assert f.values.to_pylist() == [10, 20, 30]
+
+    def test_evaluate_join_keys(self) -> None:
+        """InFilter from join_keys correctly filters a data batch."""
+        filter_batch = self._make_filter_batch_with_join_keys()
+        keys_batch = self._make_join_keys_batch([1, 3, 5])
+
+        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+        data = pa.RecordBatch.from_pydict({"id": [0, 1, 2, 3, 4, 5, 6]})
+        result = pf.apply(data)
+
+        assert result.column("id").to_pylist() == [1, 3, 5]
+
+    def test_get_join_keys_batch(self) -> None:
+        """get_join_keys_batch() returns the original batch (zero-copy)."""
+        filter_batch = self._make_filter_batch_with_join_keys()
+        keys_batch = self._make_join_keys_batch([100, 200])
+
+        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+
+        returned = pf.get_join_keys_batch()
+        assert returned is keys_batch  # same object, zero-copy
+
+    def test_get_join_keys_batch_none(self) -> None:
+        """get_join_keys_batch() returns None when no join keys were provided."""
+        spec = json.dumps(
+            [
+                {
+                    "column_name": "id",
+                    "column_index": 0,
+                    "type": "constant",
+                    "op": "eq",
+                    "value_ref": 0,
+                }
+            ]
+        )
+        fields = [
+            pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"}),
+            pa.field("_val_0", pa.int64()),
+        ]
+        batch = pa.RecordBatch.from_pydict({"filter_spec": [spec], "_val_0": [42]}, schema=pa.schema(fields))
+        pf = deserialize_filters(batch)
+
+        assert pf.get_join_keys_batch() is None
+
+    def test_join_keys_missing_batch_skips_filter(self) -> None:
+        """join_keys filter with no keys batch is silently skipped."""
+        filter_batch = self._make_filter_batch_with_join_keys()
+
+        # No join_keys argument — the filter should be skipped
+        pf = deserialize_filters(filter_batch, join_keys=None)
+
+        assert len(pf) == 0  # filter was dropped
+
+    def test_join_keys_missing_column_skips_filter(self) -> None:
+        """join_keys filter referencing a non-existent column is skipped."""
+        filter_batch = self._make_filter_batch_with_join_keys()
+        # Keys batch has 'other_col' not 'id'
+        keys_batch = pa.RecordBatch.from_pydict({"other_col": [1, 2, 3]})
+
+        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+
+        assert len(pf) == 0  # filter was dropped
+
+    def test_join_keys_large_value_set(self) -> None:
+        """Large join keys batch (10K values) deserializes and evaluates correctly."""
+        filter_batch = self._make_filter_batch_with_join_keys()
+        keys = list(range(0, 100000, 10))  # 10K values: 0, 10, 20, ...
+        keys_batch = self._make_join_keys_batch(keys)
+
+        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+
+        assert len(pf) == 1
+        f = pf.filters[0]
+        assert isinstance(f, InFilter)
+        assert len(f.values) == 10000
+
+        # Evaluate against a small data batch
+        data = pa.RecordBatch.from_pydict({"id": [0, 5, 10, 15, 20]})
+        result = pf.apply(data)
+        assert result.column("id").to_pylist() == [0, 10, 20]
+
+    def test_join_keys_string_type(self) -> None:
+        """Join keys work with string columns."""
+        spec = json.dumps(
+            [
+                {
+                    "column_name": "name",
+                    "column_index": 0,
+                    "type": "join_keys",
+                    "keys_column": "name",
+                }
+            ]
+        )
+        fields = [
+            pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"}),
+        ]
+        filter_batch = pa.RecordBatch.from_pydict({"filter_spec": [spec]}, schema=pa.schema(fields))
+        keys_batch = pa.RecordBatch.from_pydict({"name": ["alice", "bob"]})
+
+        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+
+        assert len(pf) == 1
+        f = pf.filters[0]
+        assert isinstance(f, InFilter)
+        assert f.values.to_pylist() == ["alice", "bob"]
+
+    def test_join_keys_mixed_with_other_filters(self) -> None:
+        """join_keys filter alongside a constant filter both deserialize."""
+        spec = json.dumps(
+            [
+                {
+                    "column_name": "id",
+                    "column_index": 0,
+                    "type": "join_keys",
+                    "keys_column": "id",
+                },
+                {
+                    "column_name": "status",
+                    "column_index": 1,
+                    "type": "constant",
+                    "op": "eq",
+                    "value_ref": 0,
+                },
+            ]
+        )
+        fields = [
+            pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"}),
+            pa.field("_val_0", pa.utf8()),
+        ]
+        filter_batch = pa.RecordBatch.from_pydict(
+            {"filter_spec": [spec], "_val_0": ["active"]},
+            schema=pa.schema(fields),
+        )
+        keys_batch = pa.RecordBatch.from_pydict({"id": [1, 2, 3]})
+
+        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+
+        assert len(pf) == 2
+        assert isinstance(pf.filters[0], InFilter)
+        assert isinstance(pf.filters[1], ConstantFilter)
+
+    def test_join_keys_inside_and_filter(self) -> None:
+        """join_keys nested inside an AND filter — AND drops the None child safely."""
+        spec = json.dumps(
+            [
+                {
+                    "column_name": "id",
+                    "column_index": 0,
+                    "type": "and",
+                    "children": [
+                        {
+                            "column_name": "id",
+                            "column_index": 0,
+                            "type": "join_keys",
+                            "keys_column": "id",
+                        },
+                        {
+                            "column_name": "id",
+                            "column_index": 0,
+                            "type": "constant",
+                            "op": "ge",
+                            "value_ref": 0,
+                        },
+                    ],
+                }
+            ]
+        )
+        fields = [
+            pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"}),
+            pa.field("_val_0", pa.int64()),
+        ]
+        batch = pa.RecordBatch.from_pydict({"filter_spec": [spec], "_val_0": [0]}, schema=pa.schema(fields))
+        keys_batch = pa.RecordBatch.from_pydict({"id": [10, 20, 30]})
+
+        pf = deserialize_filters(batch, join_keys=keys_batch)
+        assert len(pf) == 1
+        f = pf.filters[0]
+        assert isinstance(f, AndFilter)
+        assert len(f.children) == 2
+        assert isinstance(f.children[0], InFilter)
+        assert isinstance(f.children[1], ConstantFilter)
+
+    def test_join_keys_inside_or_filter_drops_entire_or(self) -> None:
+        """join_keys inside OR with missing batch drops the entire OR (not just the child)."""
+        spec = json.dumps(
+            [
+                {
+                    "column_name": "id",
+                    "column_index": 0,
+                    "type": "or",
+                    "children": [
+                        {
+                            "column_name": "id",
+                            "column_index": 0,
+                            "type": "join_keys",
+                            "keys_column": "id",
+                        },
+                        {
+                            "column_name": "id",
+                            "column_index": 0,
+                            "type": "constant",
+                            "op": "eq",
+                            "value_ref": 0,
+                        },
+                    ],
+                }
+            ]
+        )
+        fields = [
+            pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"}),
+            pa.field("_val_0", pa.int64()),
+        ]
+        batch = pa.RecordBatch.from_pydict({"filter_spec": [spec], "_val_0": [42]}, schema=pa.schema(fields))
+
+        # No join_keys batch — the OR child resolves to None, so entire OR is dropped
+        pf = deserialize_filters(batch, join_keys=None)
+        assert len(pf) == 0
+
+    def test_join_keys_empty_batch(self) -> None:
+        """Empty join keys batch (0 rows) produces InFilter that filters everything out."""
+        filter_batch = self._make_filter_batch_with_join_keys()
+        keys_batch = pa.RecordBatch.from_pydict({"id": pa.array([], type=pa.int64())})
+
+        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+        assert len(pf) == 1
+        f = pf.filters[0]
+        assert isinstance(f, InFilter)
+        assert len(f.values) == 0
+
+        # Evaluating against data should filter everything out
+        data = pa.RecordBatch.from_pydict({"id": [1, 2, 3]})
+        result = pf.apply(data)
+        assert result.num_rows == 0

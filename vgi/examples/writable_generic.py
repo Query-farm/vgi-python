@@ -87,9 +87,7 @@ class GenericTableScan(TableFunctionGenerator[None, WritableScanState]):
         attach_id = params.bind_call.attach_id
         tx_id = params.bind_call.transaction_id
         assert attach_id is not None and tx_id is not None
-        table_schema = _get_table_schema_from_transactor(
-            table_name, attach_id, tx_id
-        )
+        table_schema = _get_table_schema_from_transactor(table_name, attach_id, tx_id)
         return BindResponse(output_schema=table_schema)
 
     @classmethod
@@ -146,9 +144,7 @@ class _GenericWriteBase(TableInOutGenerator[None, None]):
             attach_id = params.bind_call.attach_id
             tx_id = params.bind_call.transaction_id
             assert attach_id is not None and tx_id is not None
-            table_schema = _get_table_schema_from_transactor(
-                table_name, attach_id, tx_id
-            )
+            table_schema = _get_table_schema_from_transactor(table_name, attach_id, tx_id)
             user_fields = [f for f in table_schema if f.name not in ("rowid", "row_id")]
             return BindResponse(output_schema=pa.schema(user_fields))
         return BindResponse(output_schema=_COUNT_SCHEMA)

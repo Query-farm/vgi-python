@@ -19,6 +19,7 @@ from vgi.catalog import (
     CatalogAttachResult,
     CatalogInterface,
     FunctionInfo,
+    IndexInfo,
     MacroInfo,
     MacroType,
     OnConflict,
@@ -300,6 +301,7 @@ class InMemoryCatalog(CatalogInterface):
         attach_id: AttachId,
         transaction_id: TransactionId | None,
         name: str,
+        on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None,
         tags: dict[str, str],
     ) -> None:
@@ -381,6 +383,16 @@ class InMemoryCatalog(CatalogInterface):
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
 
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: Literal[SchemaObjectType.INDEX],
+    ) -> Sequence[IndexInfo]: ...
+
     def schema_contents(
         self,
         *,
@@ -388,7 +400,7 @@ class InMemoryCatalog(CatalogInterface):
         transaction_id: TransactionId | None,
         name: str,
         type: SchemaObjectType,
-    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo]:
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
         """Get the contents of a schema.
 
         Args:
@@ -403,7 +415,7 @@ class InMemoryCatalog(CatalogInterface):
 
         """
         schema_data = self._get_schema(attach_id, name)
-        result: list[TableInfo | ViewInfo | FunctionInfo | MacroInfo] = []
+        result: list[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo] = []
 
         # Normalize type parameter (may be string from wire protocol)
         type_enum = type if isinstance(type, SchemaObjectType) else SchemaObjectType(type)
@@ -442,6 +454,8 @@ class InMemoryCatalog(CatalogInterface):
         not_null_constraints: list[int],
         unique_constraints: list[list[int]],
         check_constraints: list[str],
+        primary_key_constraints: list[list[int]] | None = None,
+        foreign_key_constraints: list[bytes] | None = None,
     ) -> None:
         """Create a new table."""
         schema_data = self._get_schema(attach_id, schema_name)

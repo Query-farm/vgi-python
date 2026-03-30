@@ -24,8 +24,7 @@ class TransactorProtocol(Protocol):
 
     # ========== Database lifecycle (unary) ==========
 
-    def register(self, attach_id: bytes, catalog_name: str = "",
-                 ddl_statements: list[str] | None = None) -> None:
+    def register(self, attach_id: bytes, catalog_name: str = "", ddl_statements: list[str] | None = None) -> None:
         """Register a new database for this attach_id and run initial DDL."""
         ...
 

@@ -76,7 +76,6 @@ from vgi.catalog import CatalogInterface
 from vgi.catalog.catalog_interface import (
     AttachId,
     CatalogAttachResult,
-    IndexConstraintType,
     OnConflict,
     SchemaObjectType,
     SerializedSchema,
@@ -1416,8 +1415,12 @@ class Worker:
             not_null_constraints=list(request.not_null_constraints),
             unique_constraints=[list(c) for c in request.unique_constraints],
             check_constraints=list(request.check_constraints),
-            primary_key_constraints=[list(c) for c in request.primary_key_constraints] if request.primary_key_constraints else None,
-            foreign_key_constraints=list(request.foreign_key_constraints) if request.foreign_key_constraints else None,
+            primary_key_constraints=(
+                [list(c) for c in request.primary_key_constraints] if request.primary_key_constraints else None
+            ),
+            foreign_key_constraints=(
+                list(request.foreign_key_constraints) if request.foreign_key_constraints else None
+            ),
         )
 
     def catalog_table_drop(
@@ -1968,9 +1971,7 @@ class Worker:
 
     def catalog_index_create(self, request: IndexCreateRequest) -> None:
         """Create a new index."""
-        self._enrich_catalog_span(
-            vgi_schema_name=request.schema_name, vgi_index_name=request.name
-        )
+        self._enrich_catalog_span(vgi_schema_name=request.schema_name, vgi_index_name=request.name)
         cat = self._get_catalog()
         cat.index_create(
             attach_id=AttachId(request.attach_id),
@@ -2015,7 +2016,7 @@ class Worker:
         """List indexes in a schema."""
         self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
-        infos = cat.schema_contents(  # type: ignore[call-overload]
+        infos = cat.schema_contents(
             attach_id=AttachId(attach_id),
             transaction_id=TransactionId(transaction_id) if transaction_id else None,
             name=name,

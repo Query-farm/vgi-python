@@ -1469,23 +1469,41 @@ class ScopedSecretDemoFunction(TableFunctionGenerator[ScopedSecretDemoArgs, Scop
 
 
 def _format_pushed_filters(filters: PushdownFilters | None) -> str:
-    """Format pushed-down filters as a human-readable SQL-like string."""
+    """Format pushed-down filters as a human-readable SQL-like string.
+
+    Large IN lists (from join key pushdown) are truncated to avoid
+    generating multi-megabyte filter strings.
+    """
     if not filters:
         return "(none)"
-    sql, params = filters.to_sql(quote_identifier=lambda s: s)
-    if not sql:
-        return "(none)"
-    # Replace ?-placeholders positionally to avoid issues if param values contain "?"
-    parts: list[str] = []
-    param_iter = iter(params)
-    for chunk in sql.split("?"):
-        parts.append(chunk)
-        try:
-            p = next(param_iter)
-            parts.append(repr(p) if isinstance(p, str) else str(p))
-        except StopIteration:
-            pass
-    return "".join(parts)
+
+    from vgi.table_filter_pushdown import AndFilter, InFilter, OrFilter, _filter_to_sql
+
+    def _format_one(f: object) -> str:
+        """Format a single filter, truncating large InFilters."""
+        if isinstance(f, InFilter) and len(f.values) > 20:
+            return f"{f.column_name} IN ({len(f.values)} values)"
+        if isinstance(f, AndFilter):
+            child_parts = [_format_one(c) for c in f.children]
+            return "(" + " AND ".join(child_parts) + ")"
+        if isinstance(f, OrFilter):
+            child_parts = [_format_one(c) for c in f.children]
+            return "(" + " OR ".join(child_parts) + ")"
+        # Fall back to SQL rendering for other filter types
+        sql, params = _filter_to_sql(f, lambda s: s, "?", 0)  # type: ignore[arg-type]
+        parts: list[str] = []
+        param_iter = iter(params)
+        for chunk in sql.split("?"):
+            parts.append(chunk)
+            try:
+                p = next(param_iter)
+                parts.append(repr(p) if isinstance(p, str) else str(p))
+            except StopIteration:
+                pass
+        return "".join(parts)
+
+    formatted_parts = [_format_one(f) for f in filters]
+    return " AND ".join(formatted_parts) if formatted_parts else "(none)"
 
 
 @dataclass(slots=True, frozen=True)
@@ -1555,7 +1573,8 @@ class FilterEchoFunction(TableFunctionGenerator[FilterEchoFunctionArgs, FilterEc
     def initial_state(cls, params: ProcessParams[FilterEchoFunctionArgs]) -> FilterEchoState:
         """Create initial state with remaining count and cached filter string."""
         pf = params.init_call.pushdown_filters
-        filters = cls.pushdown_filters(pf) if pf is not None else None
+        jk = params.init_call.join_keys
+        filters = cls.pushdown_filters(pf, join_keys=jk) if pf is not None else None
         return FilterEchoState(
             remaining=params.args.count,
             filter_str=_format_pushed_filters(filters),
@@ -2460,7 +2479,7 @@ def _static_scan_function(
     StaticScanFunction.__name__ = func_name.title().replace("_", "") + "Function"
     StaticScanFunction.__qualname__ = StaticScanFunction.__name__
 
-    return StaticScanFunction  # type: ignore[return-value]
+    return StaticScanFunction
 
 
 DepartmentsScanFunction = _static_scan_function(
@@ -2660,12 +2679,14 @@ _GEOMETRY_FIELD = pa.field(
     },
 )
 
-_SPATIAL_FILTER_SCHEMA = pa.schema([
-    pa.field("n", pa.int64()),
-    pa.field("x", pa.float64()),
-    pa.field("y", pa.float64()),
-    _GEOMETRY_FIELD,
-])
+_SPATIAL_FILTER_SCHEMA = pa.schema(
+    [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+        pa.field("n", pa.int64()),
+        pa.field("x", pa.float64()),
+        pa.field("y", pa.float64()),
+        _GEOMETRY_FIELD,
+    ]
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -2729,8 +2750,7 @@ class SpatialFilterExampleFunction(TableFunctionGenerator[_SpatialFilterArgs, _S
                 description="Generate 100 points on a 10x10 grid",
             ),
             FunctionExample(
-                sql="SELECT COUNT(*) FROM spatial_filter_example(100) "
-                "WHERE geom && ST_MakeEnvelope(0, 0, 0.5, 0.5)",
+                sql="SELECT COUNT(*) FROM spatial_filter_example(100) WHERE geom && ST_MakeEnvelope(0, 0, 0.5, 0.5)",
                 description="Count points in the lower-left quadrant",
             ),
         ]
@@ -2763,7 +2783,7 @@ class SpatialFilterExampleFunction(TableFunctionGenerator[_SpatialFilterArgs, _S
         ns = list(range(start, start + size))
         xs = [(i % cols) / cols for i in ns]
         ys = [(i // cols) / cols for i in ns]
-        geoms = [_make_wkb_point(x, y) for x, y in zip(xs, ys)]
+        geoms = [_make_wkb_point(x, y) for x, y in zip(xs, ys, strict=True)]
 
         out.emit(
             pa.RecordBatch.from_pydict(
@@ -2808,10 +2828,12 @@ def _format_pushed_filters_safe(filters: object) -> str:
     return "(none)"
 
 
-_DYN_FILTER_ECHO_SCHEMA = pa.schema([
-    pa.field("n", pa.int64()),
-    pa.field("pushed_filters", pa.utf8()),
-])
+_DYN_FILTER_ECHO_SCHEMA = pa.schema(
+    [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+        pa.field("n", pa.int64()),
+        pa.field("pushed_filters", pa.utf8()),
+    ]
+)
 
 
 @init_single_worker
@@ -2886,12 +2908,14 @@ class DynamicFilterEchoFunction(TableFunctionGenerator[_DynFilterEchoArgs, _DynF
 # expression_filter_test — non-spatial expression filter testing
 # ============================================================================
 
-_EXPR_FILTER_TEST_SCHEMA = pa.schema([
-    pa.field("id", pa.int64()),
-    pa.field("name", pa.utf8()),
-    pa.field("tags", pa.list_(pa.utf8())),
-    pa.field("score", pa.float64()),
-])
+_EXPR_FILTER_TEST_SCHEMA = pa.schema(
+    [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+        pa.field("id", pa.int64()),
+        pa.field("name", pa.utf8()),
+        pa.field("tags", pa.list_(pa.utf8())),
+        pa.field("score", pa.float64()),
+    ]
+)
 
 
 @dataclass(slots=True, frozen=True)

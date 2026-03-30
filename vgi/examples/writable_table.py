@@ -124,7 +124,7 @@ class TransactorProxy:
         """Get the transactor RPC proxy (auto-spawn if needed)."""
         if self._client is None:
             self._client = TransactorClient()
-        return self._client.get_proxy()
+        return self._client.get_proxy()  # type: ignore[no-any-return]
 
     def register(self, attach_id: bytes, catalog_name: str = "") -> None:
         """Register a new database for this attach_id and run initial DDL."""

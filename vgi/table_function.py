@@ -544,7 +544,10 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         return TableCardinality(estimate=None, max=None)
 
     @staticmethod
-    def pushdown_filters(pushdown_filters: pa.RecordBatch) -> PushdownFilters | None:
+    def pushdown_filters(
+        pushdown_filters: pa.RecordBatch,
+        join_keys: pa.RecordBatch | None = None,
+    ) -> PushdownFilters | None:
         """Get deserialized pushdown filters, or None if not present.
 
         Use this property to access the filter AST for:
@@ -554,6 +557,12 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
         For automatic filtering, set auto_apply_filters=True in Meta.
 
+        Args:
+            pushdown_filters: Arrow RecordBatch containing serialized filters.
+            join_keys: Optional flat Arrow RecordBatch of join key values
+                (one row per key). Available via ``get_join_keys_batch()``
+                on the returned ``PushdownFilters`` for temp table registration.
+
         Returns:
             PushdownFilters container with parsed filter AST, or None.
 
@@ -562,7 +571,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             return None
         from vgi.table_filter_pushdown import deserialize_filters
 
-        return deserialize_filters(pushdown_filters)
+        return deserialize_filters(pushdown_filters, join_keys=join_keys)
 
     @classmethod
     def _should_auto_apply_filters(cls) -> bool:

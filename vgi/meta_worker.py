@@ -23,7 +23,7 @@ from typing import Any
 from vgi_rpc import RpcServer
 from vgi_rpc.rpc import CallContext, serve_stdio
 
-from vgi.catalog.catalog_interface import CatalogAttachResult
+from vgi.catalog.catalog_interface import AttachId, CatalogAttachResult
 from vgi.protocol import (
     BindRequest,
     CatalogAttachRequest,
@@ -177,7 +177,7 @@ class MetaWorker:
 
         wrapped = self._wrap_attach_id(idx, result.attach_id)
         return CatalogAttachResult(
-            attach_id=wrapped,
+            attach_id=AttachId(wrapped),
             supports_transactions=result.supports_transactions,
             supports_time_travel=result.supports_time_travel,
             catalog_version_frozen=result.catalog_version_frozen,

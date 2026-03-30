@@ -21,7 +21,7 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from vgi.catalog.descriptors import Catalog, Macro, Schema, Table, View
+    from vgi.catalog.descriptors import Catalog, Index, Macro, Schema, Table, View
     from vgi.catalog.secret_type import SecretTypeSpec
     from vgi.catalog.setting import SettingSpec
 

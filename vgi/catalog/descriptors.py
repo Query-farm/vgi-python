@@ -331,7 +331,7 @@ class Table:
             f = schema.field(idx)
             existing = dict(f.metadata) if f.metadata else {}
             existing[b"default"] = sql_expr.encode("utf-8")
-            schema = schema.set(idx, f.with_metadata(existing))
+            schema = schema.set(idx, f.with_metadata(existing))  # type: ignore[arg-type]
         return schema
 
     def _apply_column_comments_to_schema(self, schema: pa.Schema) -> pa.Schema:
@@ -345,7 +345,7 @@ class Table:
             f = schema.field(idx)
             existing = dict(f.metadata) if f.metadata else {}
             existing[b"comment"] = comment.encode("utf-8")
-            schema = schema.set(idx, f.with_metadata(existing))
+            schema = schema.set(idx, f.with_metadata(existing))  # type: ignore[arg-type]
         return schema
 
     def to_table_info(self, schema_name: str) -> TableInfo:

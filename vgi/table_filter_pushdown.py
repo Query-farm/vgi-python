@@ -124,6 +124,7 @@ class FilterType(Enum):
     IS_NULL = "is_null"
     IS_NOT_NULL = "is_not_null"
     IN = "in"
+    JOIN_KEYS = "join_keys"
     AND = "and"
     OR = "or"
     STRUCT = "struct"
@@ -575,7 +576,7 @@ class ExpressionFilter(Filter):
         # Use to_arrow_table if available (duckdb >= 1.5.1), fall back to fetch_arrow_table
         fetch = getattr(query_result, "to_arrow_table", None) or query_result.fetch_arrow_table
         result = fetch()
-        return result.column("_r").combine_chunks()  # type: ignore[return-value]
+        return result.column("_r").combine_chunks()  # type: ignore[no-any-return]
 
     def __repr__(self) -> str:
         """Return string representation for debugging."""
@@ -656,6 +657,29 @@ class PushdownFilters:
 
     filters: tuple[Filter, ...]
     version: str = _SUPPORTED_VERSION
+    join_keys_batch: pa.RecordBatch | None = None
+
+    def get_join_keys_batch(self) -> pa.RecordBatch | None:
+        """Return the raw join keys batch for temp table registration.
+
+        When DuckDB joins a local table against a VGI remote table, the
+        build-side's distinct key values are sent as a flat Arrow RecordBatch.
+        This method returns that batch so service authors can register it as a
+        DuckDB temp table for SQL-native joins::
+
+            keys = params.current_pushdown_filters.get_join_keys_batch()
+            if keys is not None:
+                conn.register("join_keys", keys)
+                result = conn.sql(
+                    "SELECT d.* FROM my_data d JOIN join_keys USING (id)"
+                )
+
+        Returns:
+            The join keys RecordBatch (zero-copy), or None if no join keys
+            were pushed.
+
+        """
+        return self.join_keys_batch
 
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
         """Evaluate all filters, returning boolean mask.
@@ -1037,11 +1061,18 @@ def _filter_to_sql(
 # =============================================================================
 
 
-def deserialize_filters(batch: pa.RecordBatch) -> PushdownFilters:
+def deserialize_filters(
+    batch: pa.RecordBatch,
+    join_keys: pa.RecordBatch | None = None,
+) -> PushdownFilters:
     """Deserialize Arrow IPC bytes to typed AST.
 
     Args:
         batch: Arrow RecordBatch containing the serialized filters.
+        join_keys: Optional flat Arrow RecordBatch of join key values
+            (one row per key). Referenced by ``join_keys`` filter type entries
+            in the filter spec. Also stored as ``join_keys_batch`` on the
+            returned ``PushdownFilters`` for direct temp table registration.
 
     Returns:
         PushdownFilters container with parsed filter AST.
@@ -1086,9 +1117,23 @@ def deserialize_filters(batch: pa.RecordBatch) -> PushdownFilters:
         """Get the Arrow field for a value_ref (column ref+1 in the batch)."""
         return batch.schema.field(ref + 1)
 
+    def get_join_keys_column(column_name: str) -> pa.Array[Any] | None:
+        """Resolve a column from the join keys batch by name."""
+        if join_keys is None:
+            return None
+        try:
+            return join_keys.column(column_name)
+        except KeyError:
+            return None
+
     # Parse filters
     try:
-        filters = tuple(_parse_filter(spec, get_value, get_field) for spec in filter_specs)
+        parsed: list[Filter] = []
+        for spec in filter_specs:
+            f = _parse_filter(spec, get_value, get_field, get_join_keys_column)
+            if f is not None:
+                parsed.append(f)
+        filters = tuple(parsed)
     except Exception as e:
         _log_debug("deserialize_parse_error", error=str(e))
         raise FilterDeserializationError(f"Failed to parse filters: {e}") from e
@@ -1100,23 +1145,26 @@ def deserialize_filters(batch: pa.RecordBatch) -> PushdownFilters:
         columns=[f.column_name for f in filters],
     )
 
-    return PushdownFilters(filters=filters, version=version)
+    return PushdownFilters(filters=filters, version=version, join_keys_batch=join_keys)
 
 
 def _parse_filter(
     spec: dict[str, Any],
     get_value: Callable[[int], pa.Scalar[Any]],
     get_field: Callable[[int], pa.Field[Any]],
-) -> Filter:
+    get_join_keys_column: Callable[[str], pa.Array[Any] | None] | None = None,
+) -> Filter | None:
     """Parse a single filter spec into a typed Filter object.
 
     Args:
         spec: Filter specification dict from JSON.
         get_value: Function to get Arrow scalar by value_ref index.
         get_field: Function to get Arrow field by value_ref index (for extension metadata).
+        get_join_keys_column: Function to resolve a column from the join keys batch by name.
+            Returns None if no join keys batch or column not found.
 
     Returns:
-        Typed Filter object.
+        Typed Filter object, or None if the filter references missing join keys.
 
     Raises:
         FilterDeserializationError: If filter type is unknown.
@@ -1178,13 +1226,40 @@ def _parse_filter(
             values=values_array,
         )
 
+    elif filter_type == FilterType.JOIN_KEYS.value:
+        keys_column_name = spec["keys_column"]
+        join_values: pa.Array[Any] | None = get_join_keys_column(keys_column_name) if get_join_keys_column else None
+        if join_values is None:
+            _log_debug(
+                "parse_filter_join_keys_missing",
+                column=column_name,
+                keys_column=keys_column_name,
+            )
+            return None  # graceful degradation — DuckDB filters client-side
+        _log_debug(
+            "parse_filter_join_keys",
+            column=column_name,
+            keys_column=keys_column_name,
+            num_values=len(join_values),
+            value_type=str(join_values.type),
+        )
+        return InFilter(
+            column_name=column_name,
+            column_index=column_index,
+            values=join_values,
+        )
+
     elif filter_type == FilterType.AND.value:
         _log_debug(
             "parse_filter_and_start",
             column=column_name,
             num_children=len(spec["children"]),
         )
-        children = tuple(_parse_filter(c, get_value, get_field) for c in spec["children"])
+        children = tuple(
+            f
+            for c in spec["children"]
+            if (f := _parse_filter(c, get_value, get_field, get_join_keys_column)) is not None
+        )
         _log_debug("parse_filter_and_complete", column=column_name)
         return AndFilter(
             column_name=column_name,
@@ -1198,7 +1273,16 @@ def _parse_filter(
             column=column_name,
             num_children=len(spec["children"]),
         )
-        children = tuple(_parse_filter(c, get_value, get_field) for c in spec["children"])
+        parsed_children: list[Filter] = []
+        for c in spec["children"]:
+            child = _parse_filter(c, get_value, get_field, get_join_keys_column)
+            if child is None:
+                # Dropping a child from OR would strengthen the filter (fewer rows pass),
+                # which is wrong for graceful degradation. Drop the entire OR instead.
+                _log_debug("parse_filter_or_child_missing", column=column_name)
+                return None
+            parsed_children.append(child)
+        children = tuple(parsed_children)
         _log_debug("parse_filter_or_complete", column=column_name)
         return OrFilter(
             column_name=column_name,
@@ -1213,7 +1297,9 @@ def _parse_filter(
             column=column_name,
             child_name=child_name,
         )
-        child_filter = _parse_filter(spec["child_filter"], get_value, get_field)
+        child_filter = _parse_filter(spec["child_filter"], get_value, get_field, get_join_keys_column)
+        if child_filter is None:
+            return None
         _log_debug("parse_filter_struct_complete", column=column_name)
         return StructFilter(
             column_name=column_name,
