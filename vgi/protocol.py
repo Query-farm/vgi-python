@@ -135,7 +135,7 @@ class InitRequest(ArrowSerializableDataclass):
     # Table function extras (None for scalar)
     projection_ids: list[int] | None = None
     pushdown_filters: Annotated[pa.RecordBatch | None, ArrowType(pa.large_binary())] = None
-    join_keys: Annotated[pa.RecordBatch | None, ArrowType(pa.large_binary())] = None
+    join_keys: Annotated[list[pa.RecordBatch] | None, ArrowType(pa.list_(pa.large_binary()))] = None
 
     # Table-in-out extras
     phase: TableInOutFunctionInitPhase | None = None

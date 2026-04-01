@@ -546,7 +546,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
     @staticmethod
     def pushdown_filters(
         pushdown_filters: pa.RecordBatch,
-        join_keys: pa.RecordBatch | None = None,
+        join_keys: list[pa.RecordBatch] | None = None,
     ) -> PushdownFilters | None:
         """Get deserialized pushdown filters, or None if not present.
 
@@ -559,9 +559,10 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
         Args:
             pushdown_filters: Arrow RecordBatch containing serialized filters.
-            join_keys: Optional flat Arrow RecordBatch of join key values
-                (one row per key). Available via ``get_join_keys_batch()``
-                on the returned ``PushdownFilters`` for temp table registration.
+            join_keys: Optional list of single-column Arrow RecordBatches,
+                one per IN filter column. Available via
+                ``get_join_keys_batch()`` / ``get_join_keys_batches()``
+                on the returned ``PushdownFilters``.
 
         Returns:
             PushdownFilters container with parsed filter AST, or None.

@@ -997,7 +997,7 @@ class TestJoinKeysBatch:
         filter_batch = self._make_filter_batch_with_join_keys()
         keys_batch = self._make_join_keys_batch([10, 20, 30])
 
-        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+        pf = deserialize_filters(filter_batch, join_keys=[keys_batch])
 
         assert len(pf) == 1
         f = pf.filters[0]
@@ -1010,21 +1010,23 @@ class TestJoinKeysBatch:
         filter_batch = self._make_filter_batch_with_join_keys()
         keys_batch = self._make_join_keys_batch([1, 3, 5])
 
-        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+        pf = deserialize_filters(filter_batch, join_keys=[keys_batch])
         data = pa.RecordBatch.from_pydict({"id": [0, 1, 2, 3, 4, 5, 6]})
         result = pf.apply(data)
 
         assert result.column("id").to_pylist() == [1, 3, 5]
 
     def test_get_join_keys_batch(self) -> None:
-        """get_join_keys_batch() returns the original batch (zero-copy)."""
+        """get_join_keys_batch() merges single-column batches into one."""
         filter_batch = self._make_filter_batch_with_join_keys()
         keys_batch = self._make_join_keys_batch([100, 200])
 
-        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+        pf = deserialize_filters(filter_batch, join_keys=[keys_batch])
 
         returned = pf.get_join_keys_batch()
-        assert returned is keys_batch  # same object, zero-copy
+        assert returned is not None
+        assert returned.num_columns == 1
+        assert returned.column("id").to_pylist() == [100, 200]
 
     def test_get_join_keys_batch_none(self) -> None:
         """get_join_keys_batch() returns None when no join keys were provided."""
@@ -1063,7 +1065,7 @@ class TestJoinKeysBatch:
         # Keys batch has 'other_col' not 'id'
         keys_batch = pa.RecordBatch.from_pydict({"other_col": [1, 2, 3]})
 
-        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+        pf = deserialize_filters(filter_batch, join_keys=[keys_batch])
 
         assert len(pf) == 0  # filter was dropped
 
@@ -1073,7 +1075,7 @@ class TestJoinKeysBatch:
         keys = list(range(0, 100000, 10))  # 10K values: 0, 10, 20, ...
         keys_batch = self._make_join_keys_batch(keys)
 
-        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+        pf = deserialize_filters(filter_batch, join_keys=[keys_batch])
 
         assert len(pf) == 1
         f = pf.filters[0]
@@ -1103,7 +1105,7 @@ class TestJoinKeysBatch:
         filter_batch = pa.RecordBatch.from_pydict({"filter_spec": [spec]}, schema=pa.schema(fields))
         keys_batch = pa.RecordBatch.from_pydict({"name": ["alice", "bob"]})
 
-        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+        pf = deserialize_filters(filter_batch, join_keys=[keys_batch])
 
         assert len(pf) == 1
         f = pf.filters[0]
@@ -1139,7 +1141,7 @@ class TestJoinKeysBatch:
         )
         keys_batch = pa.RecordBatch.from_pydict({"id": [1, 2, 3]})
 
-        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+        pf = deserialize_filters(filter_batch, join_keys=[keys_batch])
 
         assert len(pf) == 2
         assert isinstance(pf.filters[0], InFilter)
@@ -1178,7 +1180,7 @@ class TestJoinKeysBatch:
         batch = pa.RecordBatch.from_pydict({"filter_spec": [spec], "_val_0": [0]}, schema=pa.schema(fields))
         keys_batch = pa.RecordBatch.from_pydict({"id": [10, 20, 30]})
 
-        pf = deserialize_filters(batch, join_keys=keys_batch)
+        pf = deserialize_filters(batch, join_keys=[keys_batch])
         assert len(pf) == 1
         f = pf.filters[0]
         assert isinstance(f, AndFilter)
@@ -1227,7 +1229,7 @@ class TestJoinKeysBatch:
         filter_batch = self._make_filter_batch_with_join_keys()
         keys_batch = pa.RecordBatch.from_pydict({"id": pa.array([], type=pa.int64())})
 
-        pf = deserialize_filters(filter_batch, join_keys=keys_batch)
+        pf = deserialize_filters(filter_batch, join_keys=[keys_batch])
         assert len(pf) == 1
         f = pf.filters[0]
         assert isinstance(f, InFilter)
@@ -1237,3 +1239,77 @@ class TestJoinKeysBatch:
         data = pa.RecordBatch.from_pydict({"id": [1, 2, 3]})
         result = pf.apply(data)
         assert result.num_rows == 0
+
+    def test_multiple_join_keys_different_cardinalities(self) -> None:
+        """Multiple join_keys batches with different row counts deserialize correctly."""
+        spec = json.dumps(
+            [
+                {
+                    "column_name": "period",
+                    "column_index": 0,
+                    "type": "join_keys",
+                    "keys_column": "period",
+                },
+                {
+                    "column_name": "concept",
+                    "column_index": 1,
+                    "type": "join_keys",
+                    "keys_column": "concept",
+                },
+            ]
+        )
+        fields = [
+            pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"}),
+        ]
+        filter_batch = pa.RecordBatch.from_pydict({"filter_spec": [spec]}, schema=pa.schema(fields))
+        # 5 period values, 3 concept values — different cardinalities
+        keys_period = pa.RecordBatch.from_pydict({"period": ["Q1", "Q2", "Q3", "Q4", "FY"]})
+        keys_concept = pa.RecordBatch.from_pydict({"concept": ["Revenue", "NetIncome", "EPS"]})
+
+        pf = deserialize_filters(filter_batch, join_keys=[keys_period, keys_concept])
+
+        assert len(pf) == 2
+        assert isinstance(pf.filters[0], InFilter)
+        assert pf.filters[0].values.to_pylist() == ["Q1", "Q2", "Q3", "Q4", "FY"]
+        assert isinstance(pf.filters[1], InFilter)
+        assert pf.filters[1].values.to_pylist() == ["Revenue", "NetIncome", "EPS"]
+
+    def test_get_join_keys_batch_returns_none_for_different_cardinalities(self) -> None:
+        """get_join_keys_batch() returns None when batches have different row counts."""
+        spec = json.dumps(
+            [
+                {"column_name": "a", "column_index": 0, "type": "join_keys", "keys_column": "a"},
+                {"column_name": "b", "column_index": 1, "type": "join_keys", "keys_column": "b"},
+            ]
+        )
+        fields = [pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"})]
+        filter_batch = pa.RecordBatch.from_pydict({"filter_spec": [spec]}, schema=pa.schema(fields))
+        keys_a = pa.RecordBatch.from_pydict({"a": [1, 2, 3]})
+        keys_b = pa.RecordBatch.from_pydict({"b": [10, 20]})
+
+        pf = deserialize_filters(filter_batch, join_keys=[keys_a, keys_b])
+
+        assert pf.get_join_keys_batch() is None  # can't merge different cardinalities
+        assert pf.get_join_keys_batches() is not None
+        assert len(pf.get_join_keys_batches()) == 2  # type: ignore[arg-type]
+
+    def test_get_join_keys_batch_merges_same_cardinality(self) -> None:
+        """get_join_keys_batch() merges batches when all have the same row count."""
+        spec = json.dumps(
+            [
+                {"column_name": "a", "column_index": 0, "type": "join_keys", "keys_column": "a"},
+                {"column_name": "b", "column_index": 1, "type": "join_keys", "keys_column": "b"},
+            ]
+        )
+        fields = [pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"})]
+        filter_batch = pa.RecordBatch.from_pydict({"filter_spec": [spec]}, schema=pa.schema(fields))
+        keys_a = pa.RecordBatch.from_pydict({"a": [1, 2, 3]})
+        keys_b = pa.RecordBatch.from_pydict({"b": [10, 20, 30]})
+
+        pf = deserialize_filters(filter_batch, join_keys=[keys_a, keys_b])
+
+        merged = pf.get_join_keys_batch()
+        assert merged is not None
+        assert merged.num_columns == 2
+        assert merged.column("a").to_pylist() == [1, 2, 3]
+        assert merged.column("b").to_pylist() == [10, 20, 30]

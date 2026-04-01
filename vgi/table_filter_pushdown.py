@@ -657,15 +657,20 @@ class PushdownFilters:
 
     filters: tuple[Filter, ...]
     version: str = _SUPPORTED_VERSION
-    join_keys_batch: pa.RecordBatch | None = None
+    join_keys_batches: list[pa.RecordBatch] | None = None
 
     def get_join_keys_batch(self) -> pa.RecordBatch | None:
-        """Return the raw join keys batch for temp table registration.
+        """Return a merged join keys batch for temp table registration.
 
-        When DuckDB joins a local table against a VGI remote table, the
-        build-side's distinct key values are sent as a flat Arrow RecordBatch.
-        This method returns that batch so service authors can register it as a
-        DuckDB temp table for SQL-native joins::
+        When all join key batches have the same row count (the semi-join
+        case), returns a single RecordBatch with all columns merged.
+        When batches have different row counts (independent IN filters),
+        they cannot be merged, so this returns ``None``.
+
+        For individual column access, use :meth:`get_join_keys_batches`
+        or :meth:`get_column_in_values`.
+
+        Example::
 
             keys = params.current_pushdown_filters.get_join_keys_batch()
             if keys is not None:
@@ -675,11 +680,32 @@ class PushdownFilters:
                 )
 
         Returns:
-            The join keys RecordBatch (zero-copy), or None if no join keys
-            were pushed.
+            Merged RecordBatch when all batches have equal row counts,
+            or None.
 
         """
-        return self.join_keys_batch
+        if not self.join_keys_batches:
+            return None
+        row_counts = {b.num_rows for b in self.join_keys_batches}
+        if len(row_counts) != 1:
+            return None
+        # All same cardinality — merge into one multi-column batch
+        columns: list[pa.Array] = []
+        fields: list[pa.Field] = []
+        for b in self.join_keys_batches:
+            for i in range(b.num_columns):
+                columns.append(b.column(i))
+                fields.append(b.schema.field(i))
+        return pa.RecordBatch.from_arrays(columns, schema=pa.schema(fields))
+
+    def get_join_keys_batches(self) -> list[pa.RecordBatch] | None:
+        """Return all join key batches (one per IN filter column).
+
+        Each batch is a single-column RecordBatch. Different batches may have
+        different row counts. Returns ``None`` if no join keys were pushed.
+
+        """
+        return self.join_keys_batches if self.join_keys_batches else None
 
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
         """Evaluate all filters, returning boolean mask.
@@ -1063,16 +1089,15 @@ def _filter_to_sql(
 
 def deserialize_filters(
     batch: pa.RecordBatch,
-    join_keys: pa.RecordBatch | None = None,
+    join_keys: list[pa.RecordBatch] | None = None,
 ) -> PushdownFilters:
     """Deserialize Arrow IPC bytes to typed AST.
 
     Args:
         batch: Arrow RecordBatch containing the serialized filters.
-        join_keys: Optional flat Arrow RecordBatch of join key values
-            (one row per key). Referenced by ``join_keys`` filter type entries
-            in the filter spec. Also stored as ``join_keys_batch`` on the
-            returned ``PushdownFilters`` for direct temp table registration.
+        join_keys: Optional list of single-column Arrow RecordBatches, one per
+            IN filter column. Each batch may have a different row count.
+            Referenced by ``join_keys`` filter type entries in the filter spec.
 
     Returns:
         PushdownFilters container with parsed filter AST.
@@ -1118,13 +1143,15 @@ def deserialize_filters(
         return batch.schema.field(ref + 1)
 
     def get_join_keys_column(column_name: str) -> pa.Array[Any] | None:
-        """Resolve a column from the join keys batch by name."""
-        if join_keys is None:
+        """Resolve a column from the join keys batches by name."""
+        if not join_keys:
             return None
-        try:
-            return join_keys.column(column_name)
-        except KeyError:
-            return None
+        for keys_batch in join_keys:
+            try:
+                return keys_batch.column(column_name)
+            except KeyError:
+                continue
+        return None
 
     # Parse filters
     try:
@@ -1145,7 +1172,7 @@ def deserialize_filters(
         columns=[f.column_name for f in filters],
     )
 
-    return PushdownFilters(filters=filters, version=version, join_keys_batch=join_keys)
+    return PushdownFilters(filters=filters, version=version, join_keys_batches=join_keys)
 
 
 def _parse_filter(
