@@ -551,12 +551,16 @@ class Catalog:
         name: The catalog name (used in SQL as the database name).
         default_schema: Schema to use for unqualified table/view/function names.
         schemas: Sequence of Schema objects defining the catalog contents.
+        comment: Optional comment describing the catalog.
+        tags: Optional key-value tags associated with the catalog.
 
     """
 
     name: str
     default_schema: str = "main"
     schemas: Sequence[Schema] = ()
+    comment: str | None = None
+    tags: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate catalog configuration."""

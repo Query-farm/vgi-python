@@ -71,6 +71,8 @@ class CatalogData:
     name: str
     schemas: dict[str, SchemaData] = field(default_factory=dict)
     version: int = 1
+    comment: str | None = None
+    tags: dict[str, str] = field(default_factory=dict)
 
 
 class InMemoryCatalog(CatalogInterface):
@@ -156,6 +158,8 @@ class InMemoryCatalog(CatalogInterface):
             supports_time_travel=False,
             catalog_version_frozen=False,
             catalog_version=catalog.version,
+            comment=catalog.comment,
+            tags=dict(catalog.tags),
         )
 
     def catalog_detach(self, *, attach_id: AttachId) -> None:

@@ -141,6 +141,8 @@ from vgi.worker import Worker
 _EXAMPLE_CATALOG = Catalog(
     name="example",
     default_schema="main",
+    comment="Example VGI catalog for testing",
+    tags={"source": "vgi-example-worker", "version": "1"},
     schemas=[
         Schema(
             name="main",

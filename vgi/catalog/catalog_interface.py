@@ -117,6 +117,10 @@ class CatalogAttachResult(ArrowSerializableDataclass):
     # Secret types registered with DuckDB's SecretManager.
     # Each SecretTypeSpec is serialized as bytes for Arrow compatibility.
     secret_types: list[bytes] = field(default_factory=list)
+    # Optional comment describing this catalog/database.
+    comment: str | None = None
+    # Optional key-value tags associated with this catalog/database.
+    tags: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1300,6 +1304,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             default_schema=self._default_schema_name,
             settings=serialized_settings,
             secret_types=serialized_secret_types,
+            comment=self.catalog.comment if self.catalog is not None else None,
+            tags=dict(self.catalog.tags) if self.catalog is not None else {},
         )
 
     def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> list[SchemaInfo]:

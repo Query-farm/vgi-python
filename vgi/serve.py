@@ -151,6 +151,44 @@ def _load_module(module_ref: str) -> ModuleType:
         sys.exit(1)
 
 
+def _make_frontend_redirect(frontend_url: str, prefix: str) -> object:
+    """Create a Falcon resource that redirects to the external frontend."""
+    import html as _html
+
+    import falcon
+
+    # Build the redirect HTML — the service URL is injected at request time
+    # so it adapts to the actual host/port the server is running on.
+    _redirect_template = (
+        '<!DOCTYPE html><html><head>'
+        '<meta http-equiv="refresh" content="0;url={redirect_url}">'
+        '</head><body>'
+        'Redirecting to <a href="{redirect_url}">VGI Frontend</a>...'
+        '</body></html>'
+    )
+    _frontend_base = frontend_url.rstrip("/")
+    _prefix = prefix
+
+    class _FrontendRedirectResource:
+        def on_get(self, req: falcon.Request, resp: falcon.Response) -> None:
+            scheme = req.forwarded_scheme or req.scheme
+            host = req.forwarded_host or req.host
+            service_url = f"{scheme}://{host}{_prefix}"
+            redirect_url = f"{_frontend_base}?service={service_url}"
+            # Pass auth token in URL fragment so the frontend can use it
+            # for cross-origin API calls (cookie is bound to this origin).
+            token = req.cookies.get("_vgi_auth")
+            if token:
+                redirect_url += f"#token={token}"
+            resp.status = "302 Found"
+            resp.set_header("Location", redirect_url)
+            resp.set_header("Cache-Control", "no-cache")
+            resp.content_type = "text/html; charset=utf-8"
+            resp.text = _redirect_template.format(redirect_url=_html.escape(redirect_url))
+
+    return _FrontendRedirectResource()
+
+
 def create_app(
     worker_cls: type[Worker],
     *,
@@ -214,13 +252,29 @@ def create_app(
         authenticate=authenticate,
         oauth_resource_metadata=oauth_resource_metadata,
         otel_config=otel_config,
+        enable_landing_page=False,
     )
 
-    if describe:
+    # Frontend: either redirect to external CDN or serve pre-rendered worker page
+    frontend_url = os.environ.get("VGI_FRONTEND_URL")
+    if frontend_url:
+        # External frontend — redirect to CDN with ?service= param
+        _FrontendRedirectResource = _make_frontend_redirect(frontend_url, prefix)
+        wsgi_app.add_route(prefix or "/", _FrontendRedirectResource)
+    elif describe:
         from vgi.http.worker_page import WorkerPageResource, build_worker_page
 
         worker_page_body = build_worker_page(worker_cls, prefix)
-        wsgi_app.add_route(f"{prefix}/worker", WorkerPageResource(worker_page_body))
+        # Inject PKCE user-info JS if OAuth PKCE is active
+        if oauth_resource_metadata is not None and getattr(oauth_resource_metadata, "client_id", None) is not None:
+            try:
+                from vgi_rpc.http._oauth_pkce import build_user_info_html
+
+                user_info = build_user_info_html(prefix)
+                worker_page_body = worker_page_body.replace(b"</body>", user_info.encode() + b"\n</body>")
+            except ImportError:
+                pass
+        wsgi_app.add_route(prefix or "/", WorkerPageResource(worker_page_body))
 
     return wsgi_app
 

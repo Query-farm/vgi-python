@@ -176,17 +176,7 @@ class MetaWorker:
                 raise ValueError(msg)
 
         wrapped = self._wrap_attach_id(idx, result.attach_id)
-        return CatalogAttachResult(
-            attach_id=AttachId(wrapped),
-            supports_transactions=result.supports_transactions,
-            supports_time_travel=result.supports_time_travel,
-            catalog_version_frozen=result.catalog_version_frozen,
-            catalog_version=result.catalog_version,
-            attach_id_required=result.attach_id_required,
-            default_schema=result.default_schema,
-            settings=result.settings,
-            secret_types=result.secret_types,
-        )
+        return dataclasses.replace(result, attach_id=AttachId(wrapped))
 
     # ========== Name-based dispatch (no attach_id) ==========
 

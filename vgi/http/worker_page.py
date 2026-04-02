@@ -274,6 +274,34 @@ def build_worker_page(worker_cls: type[Worker], prefix: str) -> bytes:
     # Collect sections
     body_parts: list[str] = []
 
+    # Connection snippet
+    catalog = getattr(worker_cls, "catalog", None)
+    catalog_name = catalog.name if catalog is not None else worker_name.lower()
+    body_parts.append(
+        f'<div class="connect-box">'
+        f'<div class="connect-label">Connect with DuckDB'
+        f'<button class="copy-btn" id="copy-btn" title="Copy to clipboard">'
+        f'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">'
+        f'<rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/>'
+        f'<path d="M10.5 5.5V2.5a1 1 0 00-1-1h-7a1 1 0 00-1 1v7a1 1 0 001 1h3"/>'
+        f'</svg>'
+        f'</button>'
+        f'</div>'
+        f'<pre><code id="connect-sql">'
+        f"ATTACH '{_esc(catalog_name)}' AS {_esc(catalog_name)} (TYPE vgi, LOCATION '<span class=\"connect-url\">{{location}}</span>');"
+        f'</code></pre>'
+        f'<script>'
+        f'(function(){{var u=location.origin+"{_esc(prefix)}";'
+        f'var el=document.getElementById("connect-sql");'
+        f'if(el)el.innerHTML=el.innerHTML.replace("{{location}}",u);'
+        f'var btn=document.getElementById("copy-btn");'
+        f'if(btn)btn.onclick=function(){{var t=el.textContent;'
+        f'navigator.clipboard.writeText(t).then(function(){{btn.classList.add("copied");'
+        f'setTimeout(function(){{btn.classList.remove("copied")}},1500)}})}};}})();'
+        f'</script>'
+        f'</div>'
+    )
+
     # Settings
     if worker_cls._setting_specs:
         body_parts.append(_build_settings_section(list(worker_cls._setting_specs)))
@@ -420,6 +448,18 @@ _PAGE_TEMPLATE = (
   .mini-varargs {{ background: #f5eee0; color: #6b4423; }}
   .mini-table-input {{ background: #e0ecf5; color: #1a4a6b; }}
   .mini-func-backed {{ background: #f0ece0; color: #6b6b5a; }}
+  .connect-box {{ border: 1px solid #e0dcd0; border-radius: 8px; padding: 16px 20px;
+                   margin-bottom: 32px; background: #fff; }}
+  .connect-box pre {{ margin: 8px 0 0; }}
+  .connect-label {{ font-size: 0.8em; font-weight: 600; text-transform: uppercase;
+                     letter-spacing: 0.05em; color: #6b6b5a;
+                     display: flex; align-items: center; gap: 8px; }}
+  .copy-btn {{ background: none; border: 1px solid #e0dcd0; border-radius: 4px;
+               padding: 3px 5px; cursor: pointer; color: #6b6b5a;
+               transition: all 0.15s ease; display: inline-flex; align-items: center; }}
+  .copy-btn:hover {{ color: #2d5016; border-color: #4a7c23; }}
+  .copy-btn.copied {{ color: #4a7c23; border-color: #4a7c23; }}
+  .connect-url {{ color: #4a7c23; }}
   .docstring {{ color: #6b6b5a; margin-bottom: 12px; line-height: 1.5; }}
   .example-desc {{ color: #6b6b5a; font-size: 0.9em; margin-bottom: 4px; }}
   table {{ width: 100%; border-collapse: collapse; font-size: 0.9em; }}
