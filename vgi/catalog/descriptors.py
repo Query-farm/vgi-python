@@ -131,6 +131,10 @@ class Table:
         defaults: Dict mapping column names to default values. Accepts
             Python literals (str, int, float, bool, None) which are
             auto-converted, or SqlExpression for raw SQL.
+        generated_columns: Dict mapping column names to SQL expressions
+            for generated (virtual) columns. Generated columns are
+            computed on read by DuckDB and are mutually exclusive with
+            defaults.
         column_comments: Dict mapping column names to comment strings.
             Comments are transported as Arrow field metadata and visible
             via ``duckdb_columns()`` in DuckDB.
@@ -153,6 +157,7 @@ class Table:
     primary_key: tuple[tuple[str, ...], ...] = ()
     foreign_key: tuple[ForeignKeyDef, ...] = ()
     defaults: dict[str, DefaultValue] = field(default_factory=dict)
+    generated_columns: dict[str, str] = field(default_factory=dict)
     column_comments: dict[str, str] = field(default_factory=dict)
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
@@ -225,6 +230,19 @@ class Table:
                 raise ValueError(
                     f"Table '{self.name}': defaults column '{col}' not found "
                     f"in schema. Available columns: {sorted(column_names)}"
+                )
+
+        # Validate generated_columns column names and no overlap with defaults
+        for col in self.generated_columns:
+            if col not in column_names:
+                raise ValueError(
+                    f"Table '{self.name}': generated_columns column '{col}' not found "
+                    f"in schema. Available columns: {sorted(column_names)}"
+                )
+            if col in self.defaults:
+                raise ValueError(
+                    f"Table '{self.name}': column '{col}' cannot have both a "
+                    f"default value and a generated expression"
                 )
 
         # Validate column_comments column names
@@ -334,6 +352,18 @@ class Table:
             schema = schema.set(idx, f.with_metadata(existing))  # type: ignore[arg-type]
         return schema
 
+    def _apply_generated_columns_to_schema(self, schema: pa.Schema) -> pa.Schema:
+        """Return schema with generated expression metadata applied to fields."""
+        if not self.generated_columns:
+            return schema
+        for col_name, expression in self.generated_columns.items():
+            idx = schema.get_field_index(col_name)
+            f = schema.field(idx)
+            existing = dict(f.metadata) if f.metadata else {}
+            existing[b"generated_expression"] = expression.encode("utf-8")
+            schema = schema.set(idx, f.with_metadata(existing))  # type: ignore[arg-type]
+        return schema
+
     def _apply_column_comments_to_schema(self, schema: pa.Schema) -> pa.Schema:
         """Return schema with column comment metadata applied to fields."""
         if not self.column_comments:
@@ -351,6 +381,7 @@ class Table:
     def to_table_info(self, schema_name: str) -> TableInfo:
         """Convert to TableInfo for catalog response."""
         cols = self._apply_defaults_to_schema(self.resolved_columns)
+        cols = self._apply_generated_columns_to_schema(cols)
         cols = self._apply_column_comments_to_schema(cols)
         return TableInfo(
             name=self.name,

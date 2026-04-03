@@ -364,6 +364,22 @@ _EXAMPLE_CATALOG = Catalog(
                     ),
                     comment="Table with struct row_id",
                 ),
+                # ----- Generated column example table -----
+                Table(
+                    name="generated_sequence",
+                    columns=pa.schema(
+                        [  # type: ignore[arg-type]
+                            pa.field("n", pa.int64()),
+                            pa.field("doubled", pa.int64()),
+                            pa.field("label", pa.string()),
+                        ]
+                    ),
+                    generated_columns={
+                        "doubled": "n * 2",
+                        "label": "'item_' || CAST(n AS VARCHAR)",
+                    },
+                    comment="Table with generated columns backed by sequence(10)",
+                ),
                 # ----- Constraint example tables -----
                 Table(
                     name="departments",
@@ -627,6 +643,14 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         # Reject AT clause on tables that don't support time travel
         if at_unit:
             raise ValueError(f"Table '{schema_name}.{name}' does not support time travel queries")
+
+        # Handle the "generated_sequence" table (generated columns, backed by sequence)
+        if schema_name.lower() == "data" and name.lower() == "generated_sequence":
+            return ScanFunctionResult(
+                function_name="sequence",
+                positional_arguments=[pa.scalar(10)],
+                named_arguments={},
+            )
 
         # Handle the "numbers" table with explicit columns
         if schema_name.lower() == "data" and name.lower() == "numbers":
