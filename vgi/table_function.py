@@ -247,6 +247,20 @@ class TableInOutFunctionInitPhase(Enum):
     FINALIZE = auto()
 
 
+class OrderByDirection(Enum):
+    """ORDER BY direction pushed down from DuckDB's RowGroupPruner optimizer."""
+
+    ASC = auto()
+    DESC = auto()
+
+
+class OrderByNullOrder(Enum):
+    """NULL ordering pushed down from DuckDB's RowGroupPruner optimizer."""
+
+    NULLS_FIRST = auto()
+    NULLS_LAST = auto()
+
+
 @dataclass(slots=True, frozen=True, kw_only=True)
 class BindParams[TArgs]:
     """Parameters passed to on_bind()."""

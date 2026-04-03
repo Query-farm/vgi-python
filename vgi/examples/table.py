@@ -3003,3 +3003,125 @@ class ExpressionFilterTestFunction(TableFunctionGenerator[_ExprFilterTestArgs, _
 
         state.current_index += size
         state.remaining -= size
+
+
+# ============================================================================
+# order_echo — echoes ORDER BY + LIMIT pushdown hints from DuckDB optimizer
+# ============================================================================
+
+
+@dataclass(slots=True, frozen=True)
+class _OrderEchoArgs:
+    """Arguments for OrderEchoFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0, default=10)]
+    batch_size: Annotated[int, Arg("batch_size", default=2048, doc="Batch size for output", ge=1)]
+
+
+@dataclass(kw_only=True)
+class _OrderEchoState(ArrowSerializableDataclass):
+    """Mutable state for OrderEchoFunction."""
+
+    remaining: int
+    current_index: int = 0
+    order_column: Annotated[str, Transient()] = "(none)"
+    order_direction: Annotated[str, Transient()] = "(none)"
+    order_null_order: Annotated[str, Transient()] = "(none)"
+    order_limit: Annotated[int, Transient()] = -1
+
+
+_ORDER_ECHO_SCHEMA = schema({
+    "n": pa.int64(),
+    "s": pa.utf8(),
+    "order_column": pa.utf8(),
+    "order_direction": pa.utf8(),
+    "order_null_order": pa.utf8(),
+    "order_limit": pa.int64(),
+})
+
+
+@init_single_worker
+@bind_fixed_schema
+@_cardinality_from_count
+class OrderEchoFunction(TableFunctionGenerator[_OrderEchoArgs, _OrderEchoState]):
+    """Echoes ORDER BY + LIMIT pushdown hints in output columns.
+
+    USE CASE
+    --------
+    Verify that DuckDB's RowGroupPruner optimizer pushes ORDER BY + LIMIT
+    hints to VGI table functions via the ``set_scan_order`` callback.
+    The order_* columns show what hints were received. The function does
+    NOT apply the order/limit itself -- DuckDB's operators handle that.
+
+    SCHEMA
+    ------
+    Output: {"n": int64, "s": string, "order_column": string,
+             "order_direction": string, "order_null_order": string,
+             "order_limit": int64}
+
+    """
+
+    class Meta:
+        """Metadata for OrderEchoFunction."""
+
+        name = "order_echo"
+        description = "Echoes ORDER BY + LIMIT pushdown hints in output"
+        categories = ["generator", "diagnostic"]
+        filter_pushdown = True
+        auto_apply_filters = True
+        projection_pushdown = True
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM order_echo(100) ORDER BY n LIMIT 5",
+                description="See which ORDER BY hint was pushed down",
+            ),
+        ]
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = _ORDER_ECHO_SCHEMA
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_OrderEchoArgs]) -> _OrderEchoState:
+        """Create initial state with cached order hint values."""
+        init = params.init_call
+        return _OrderEchoState(
+            remaining=params.args.count,
+            order_column=init.order_by_column_name or "(none)",
+            order_direction=init.order_by_direction.name if init.order_by_direction else "(none)",
+            order_null_order=init.order_by_null_order.name if init.order_by_null_order else "(none)",
+            order_limit=init.order_by_limit if init.order_by_limit is not None else -1,
+        )
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_OrderEchoArgs],
+        state: _OrderEchoState,
+        out: OutputCollector,
+    ) -> None:
+        """Generate rows echoing order pushdown hints."""
+        if state.remaining <= 0:
+            out.finish()
+            return
+
+        size = min(state.remaining, params.args.batch_size)
+        start = state.current_index
+
+        n_values = list(range(start, start + size))
+        s_values = [f"row_{i}" for i in n_values]
+
+        out.emit(
+            pa.RecordBatch.from_pydict(
+                {
+                    "n": n_values,
+                    "s": s_values,
+                    "order_column": [state.order_column] * size,
+                    "order_direction": [state.order_direction] * size,
+                    "order_null_order": [state.order_null_order] * size,
+                    "order_limit": [state.order_limit] * size,
+                },
+                schema=params.output_schema,
+            )
+        )
+
+        state.current_index += size
+        state.remaining -= size

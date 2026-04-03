@@ -55,6 +55,8 @@ from vgi.invocation import BindResponse, FunctionType, GlobalInitResponse
 from vgi.otel import VgiTracer, _batch_bytes, _timed_exchange, get_noop_tracer
 from vgi.scalar_function import ScalarFunctionGenerator
 from vgi.table_function import (
+    OrderByDirection,
+    OrderByNullOrder,
     ProcessParams,
     SecretsAccessor,
     TableCardinality,
@@ -143,6 +145,12 @@ class InitRequest(ArrowSerializableDataclass):
     # Secondary init (None = global init, set = secondary)
     execution_id: bytes | None = None
     init_opaque_data: Annotated[ArrowSerializableDataclass | None, ArrowType(pa.binary())] = None
+
+    # Order pushdown hint from DuckDB's RowGroupPruner optimizer (all None when no hint)
+    order_by_column_name: str | None = None
+    order_by_direction: OrderByDirection | None = None
+    order_by_null_order: OrderByNullOrder | None = None
+    order_by_limit: int | None = None
 
     @property
     def is_secondary(self) -> bool:
