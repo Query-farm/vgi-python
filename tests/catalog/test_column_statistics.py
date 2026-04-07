@@ -358,6 +358,10 @@ class TestStatisticsFromDuckDB:
         assert stats["id"].min.as_py() == 1
         assert stats["id"].max.as_py() == 3  # type: ignore[union-attr]
         assert stats["name"].has_null is True
+        assert stats["name"].max_string_length == 6  # "Banana"
+        assert stats["name"].contains_unicode is False
+        assert stats["id"].max_string_length is None  # non-string column
+        assert stats["id"].contains_unicode is None  # non-string column
 
     def test_all_null_column(self) -> None:
         import duckdb
@@ -386,6 +390,7 @@ class TestStatisticsFromDuckDB:
         assert stats["x"].min is None
         assert stats["x"].has_null is False
         assert stats["x"].has_not_null is False
+        assert stats["y"].max_string_length is None  # empty table
 
     def test_geometry_2d(self) -> None:
         import duckdb
@@ -404,6 +409,23 @@ class TestStatisticsFromDuckDB:
         assert stats["geom"].max is not None
         assert isinstance(stats["geom"].min, pa.Scalar)
         assert stats["geom"].min.type == pa.binary()
+
+    def test_geometry_with_leading_null(self) -> None:
+        """Geometry detection works even when the first row is NULL."""
+        import duckdb
+
+        from vgi.catalog.duckdb_statistics import statistics_from_duckdb
+
+        conn = duckdb.connect()
+        conn.execute("LOAD spatial")
+        conn.execute("CREATE TABLE geo (geom GEOMETRY)")
+        conn.execute("INSERT INTO geo VALUES (NULL), (ST_Point(1.0, 2.0)), (ST_Point(3.0, 4.0))")
+
+        stats = statistics_from_duckdb(conn, "geo")
+        assert stats["geom"].min is not None
+        assert stats["geom"].max is not None
+        assert stats["geom"].min.type == pa.binary()  # type: ignore[union-attr]
+        assert stats["geom"].has_null is True
 
     def test_list_columns(self) -> None:
         """List columns use list_min/list_max for child element bounds."""
@@ -466,9 +488,7 @@ class TestStatisticsFromDuckDB:
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
         conn = duckdb.connect()
-        conn.execute(
-            "CREATE TABLE t (info STRUCT(age INT, name VARCHAR, score DOUBLE, active BOOLEAN))"
-        )
+        conn.execute("CREATE TABLE t (info STRUCT(age INT, name VARCHAR, score DOUBLE, active BOOLEAN))")
         conn.execute(
             "INSERT INTO t VALUES "
             "({'age': 25, 'name': 'Alice', 'score': 95.5, 'active': true}), "
@@ -498,10 +518,7 @@ class TestStatisticsFromDuckDB:
         conn = duckdb.connect()
         conn.execute("CREATE TABLE t (data STRUCT(x INT, label VARCHAR))")
         conn.execute(
-            "INSERT INTO t VALUES "
-            "({'x': 1, 'label': 'a'}), "
-            "({'x': NULL, 'label': 'b'}), "
-            "({'x': 3, 'label': NULL})"
+            "INSERT INTO t VALUES ({'x': 1, 'label': 'a'}), ({'x': NULL, 'label': 'b'}), ({'x': 3, 'label': NULL})"
         )
 
         stats = statistics_from_duckdb(conn, "t")
@@ -658,6 +675,8 @@ class TestStatisticsFromDuckDB:
         # Type should be the value type (string), not dictionary
         assert not pa.types.is_dictionary(stats["c"].min.type)  # type: ignore[union-attr]
         assert not pa.types.is_dictionary(stats["c"].max.type)  # type: ignore[union-attr]
+        # max_string_length should be computed for ENUM columns
+        assert stats["c"].max_string_length == 5  # "green" is longest
 
     def test_dictionary_encoded_serialization_roundtrip(self) -> None:
         """Dictionary-encoded stats serialize correctly through sparse union."""
@@ -708,7 +727,25 @@ class TestStatisticsFromDuckDB:
         assert name_stat.has_null is True
         assert name_stat.min.as_py() == "Alice"  # type: ignore[union-attr]
 
+        name_stat = next(s for s in stats if s.column_name == "name")
+        assert name_stat.contains_unicode is False
+        assert name_stat.max_string_length == 5  # "Alice"
+
         # Ready to wrap in TableColumnStatisticsResult for dynamic use
         result = TableColumnStatisticsResult(statistics=stats, cache_max_age_seconds=60)
         assert result.cache_max_age_seconds == 60
         assert len(result.statistics) == 3
+
+    def test_contains_unicode(self) -> None:
+        """contains_unicode detects non-ASCII characters in string columns."""
+        import duckdb
+
+        from vgi.catalog.duckdb_statistics import statistics_from_duckdb
+
+        conn = duckdb.connect()
+        conn.execute("CREATE TABLE t (ascii_col VARCHAR, unicode_col VARCHAR)")
+        conn.execute("INSERT INTO t VALUES ('hello', 'caf\u00e9'), ('world', '\u00fc\u00f6\u00e4')")
+
+        stats = statistics_from_duckdb(conn, "t")
+        assert stats["ascii_col"].contains_unicode is False
+        assert stats["unicode_col"].contains_unicode is True

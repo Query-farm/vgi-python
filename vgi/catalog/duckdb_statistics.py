@@ -46,7 +46,7 @@ _GEOMETRY_TYPE_NAMES = frozenset({"GEOMETRY", "POINT_2D", "LINESTRING_2D", "POLY
 def _is_geometry_column(conn: duckdb.DuckDBPyConnection, qualified: str, col: str) -> bool:
     """Check if a column is a geometry type by querying DuckDB's typeof()."""
     try:
-        row = conn.execute(f"SELECT typeof({col}) FROM {qualified} LIMIT 1").fetchone()
+        row = conn.execute(f"SELECT typeof({col}) FROM {qualified} WHERE {col} IS NOT NULL LIMIT 1").fetchone()
         return row is not None and row[0] in _GEOMETRY_TYPE_NAMES
     except Exception:
         return False
@@ -264,7 +264,8 @@ def statistics_from_duckdb(
         min_val: pa.Scalar | None = None  # type: ignore[type-arg]
         max_val: pa.Scalar | None = None  # type: ignore[type-arg]
 
-        if _is_geometry_column(conn, qualified, col):
+        is_geom = _is_geometry_column(conn, qualified, col)
+        if is_geom:
             min_val, max_val = _geometry_stats(conn, qualified, col)
         elif (
             pa.types.is_list(field.type)
@@ -288,12 +289,50 @@ def statistics_from_duckdb(
         if max_val is not None and pa.types.is_dictionary(max_val.type):
             max_val = pa.scalar(max_val.as_py(), type=max_val.type.value_type)
 
+        # Compute max_string_length for string/binary columns (including
+        # dictionary-encoded columns with string value types like ENUMs).
+        # Skip geometry columns — their Arrow type is binary but strlen/octet_length
+        # don't apply to the DuckDB GEOMETRY type.
+        max_string_length: int | None = None
+        is_dict = pa.types.is_dictionary(field.type)
+        effective_type = field.type.value_type if is_dict else field.type
+        if not is_geom and (
+            pa.types.is_string(effective_type)
+            or pa.types.is_large_string(effective_type)
+            or pa.types.is_binary(effective_type)
+            or pa.types.is_large_binary(effective_type)
+        ):
+            # strlen returns byte length for VARCHAR; octet_length for BLOB.
+            # ENUM columns need a cast to VARCHAR first.
+            if pa.types.is_binary(effective_type) or pa.types.is_large_binary(effective_type):
+                len_expr = f"octet_length({col})"
+            elif is_dict:
+                len_expr = f"strlen({col}::VARCHAR)"
+            else:
+                len_expr = f"strlen({col})"
+            len_row = conn.execute(f"SELECT max({len_expr}) AS max_len FROM {qualified}").fetchone()
+            if len_row is not None and len_row[0] is not None:
+                max_string_length = int(len_row[0])
+
+        # Compute contains_unicode for string columns: true if any value has
+        # characters outside ASCII (byte length > character length).
+        contains_unicode: bool | None = None
+        if pa.types.is_string(effective_type) or pa.types.is_large_string(effective_type):
+            if is_dict:
+                unicode_expr = f"strlen({col}::VARCHAR) != length({col}::VARCHAR)"
+            else:
+                unicode_expr = f"strlen({col}) != length({col})"
+            uni_row = conn.execute(f"SELECT bool_or({unicode_expr}) AS has_unicode FROM {qualified}").fetchone()
+            contains_unicode = bool(uni_row[0]) if uni_row is not None and uni_row[0] is not None else False
+
         result[field.name] = ColumnStatisticsInput(
             min=min_val,
             max=max_val,
             has_null=null_count > 0,
             has_not_null=non_null_count > 0,
             distinct_count=distinct_count,
+            max_string_length=max_string_length,
+            contains_unicode=contains_unicode,
         )
 
     return result

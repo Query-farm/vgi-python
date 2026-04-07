@@ -284,22 +284,23 @@ def build_worker_page(worker_cls: type[Worker], prefix: str) -> bytes:
         f'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">'
         f'<rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/>'
         f'<path d="M10.5 5.5V2.5a1 1 0 00-1-1h-7a1 1 0 00-1 1v7a1 1 0 001 1h3"/>'
-        f'</svg>'
-        f'</button>'
-        f'</div>'
+        f"</svg>"
+        f"</button>"
+        f"</div>"
         f'<pre><code id="connect-sql">'
-        f"ATTACH '{_esc(catalog_name)}' AS {_esc(catalog_name)} (TYPE vgi, LOCATION '<span class=\"connect-url\">{{location}}</span>');"
-        f'</code></pre>'
-        f'<script>'
+        f"ATTACH '{_esc(catalog_name)}' AS {_esc(catalog_name)}"
+        f" (TYPE vgi, LOCATION '<span class=\"connect-url\">{{location}}</span>');"
+        f"</code></pre>"
+        f"<script>"
         f'(function(){{var u=location.origin+"{_esc(prefix)}";'
         f'var el=document.getElementById("connect-sql");'
         f'if(el)el.innerHTML=el.innerHTML.replace("{{location}}",u);'
         f'var btn=document.getElementById("copy-btn");'
-        f'if(btn)btn.onclick=function(){{var t=el.textContent;'
+        f"if(btn)btn.onclick=function(){{var t=el.textContent;"
         f'navigator.clipboard.writeText(t).then(function(){{btn.classList.add("copied");'
         f'setTimeout(function(){{btn.classList.remove("copied")}},1500)}})}};}})();'
-        f'</script>'
-        f'</div>'
+        f"</script>"
+        f"</div>"
     )
 
     # Settings
