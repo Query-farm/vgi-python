@@ -155,16 +155,14 @@ def _make_frontend_redirect(frontend_url: str, prefix: str) -> object:
     """Create a Falcon resource that redirects to the external frontend."""
     import html as _html
 
-    import falcon
-
     # Build the redirect HTML — the service URL is injected at request time
     # so it adapts to the actual host/port the server is running on.
     _redirect_template = (
-        '<!DOCTYPE html><html><head>'
+        "<!DOCTYPE html><html><head>"
         '<meta http-equiv="refresh" content="0;url={redirect_url}">'
-        '</head><body>'
+        "</head><body>"
         'Redirecting to <a href="{redirect_url}">VGI Frontend</a>...'
-        '</body></html>'
+        "</body></html>"
     )
     _frontend_base = frontend_url.rstrip("/")
     _prefix = prefix

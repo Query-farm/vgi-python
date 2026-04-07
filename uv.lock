@@ -1057,7 +1057,7 @@ dev = [
 
 [[package]]
 name = "vgi-rpc"
-version = "0.6.5"
+version = "0.6.10"
 source = { directory = "../vgi-rpc" }
 dependencies = [
     { name = "docstring-parser" },
@@ -1139,6 +1139,7 @@ docs = [
     { name = "mkdocs-material", specifier = ">=9.5" },
     { name = "mkdocs-section-index", specifier = ">=0.3" },
     { name = "mkdocstrings", extras = ["python"], specifier = ">=0.27" },
+    { name = "pygments", specifier = ">=2.19,<2.20" },
 ]
 
 [[package]]
