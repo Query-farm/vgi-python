@@ -12,19 +12,21 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Union
 
 import pyarrow as pa
 
 from vgi.arguments import Arguments
 from vgi.catalog.catalog_interface import (
     AttachId,
+    ColumnStatistics,
     IndexConstraintType,
     IndexInfo,
     MacroInfo,
     MacroType,
     SchemaInfo,
     SerializedSchema,
+    TableColumnStatisticsResult,
     TableInfo,
     ViewInfo,
 )
@@ -50,8 +52,13 @@ class Sql(str):
 # literals and automatically quoted.
 DefaultValue = str | int | float | bool | None
 
+# A stat value is either a plain Python value (auto-converted using the column's
+# Arrow type) or an explicit PyArrow scalar (used as-is).
+StatValue = Union[None, bool, int, float, str, bytes, "pa.Scalar"]  # type: ignore[type-arg]
+
 __all__ = [
     "Catalog",
+    "ColumnStatisticsInput",
     "DefaultValue",
     "ForeignKeyDef",
     "Index",
@@ -61,6 +68,58 @@ __all__ = [
     "Table",
     "View",
 ]
+
+
+def _to_scalar(
+    value: StatValue,
+    arrow_type: pa.DataType,
+) -> pa.Scalar | None:  # type: ignore[type-arg]
+    """Convert a stat value to a PyArrow scalar, inferring type from the column schema."""
+    if value is None:
+        return None
+    if isinstance(value, pa.Scalar):
+        return value  # Already a scalar — use as-is
+    return pa.scalar(value, type=arrow_type)
+
+
+@dataclass(frozen=True, slots=True)
+class ColumnStatisticsInput:
+    """Column statistics specified on a Table descriptor.
+
+    Values for ``min`` and ``max`` can be plain Python literals (int, float, str, etc.)
+    which are auto-converted to PyArrow scalars using the column's Arrow type from
+    the table schema, or explicit ``pa.scalar(...)`` values used as-is.
+
+    Example::
+
+        # Plain Python values — types inferred from schema
+        ColumnStatisticsInput(min=1, max=100, has_null=False, distinct_count=100)
+
+        # Explicit PyArrow scalars
+        ColumnStatisticsInput(min=pa.scalar(1, pa.int32()), max=pa.scalar(100, pa.int32()))
+
+    """
+
+    min: StatValue = None
+    max: StatValue = None
+    has_null: bool = True
+    has_not_null: bool = True
+    distinct_count: int | None = None
+    contains_unicode: bool | None = None
+    max_string_length: int | None = None
+
+    def resolve(self, column_name: str, arrow_type: pa.DataType) -> ColumnStatistics:
+        """Convert to a :class:`ColumnStatistics` with properly typed PyArrow scalars."""
+        return ColumnStatistics(
+            column_name=column_name,
+            min=_to_scalar(self.min, arrow_type),
+            max=_to_scalar(self.max, arrow_type),
+            has_null=self.has_null,
+            has_not_null=self.has_not_null,
+            distinct_count=self.distinct_count,
+            contains_unicode=self.contains_unicode,
+            max_string_length=self.max_string_length,
+        )
 
 
 def _default_to_sql(value: DefaultValue) -> str:
@@ -159,6 +218,8 @@ class Table:
     defaults: dict[str, DefaultValue] = field(default_factory=dict)
     generated_columns: dict[str, str] = field(default_factory=dict)
     column_comments: dict[str, str] = field(default_factory=dict)
+    statistics: dict[str, ColumnStatisticsInput] = field(default_factory=dict)
+    statistics_cache_max_age_seconds: int | None = None
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
 
@@ -241,8 +302,7 @@ class Table:
                 )
             if col in self.defaults:
                 raise ValueError(
-                    f"Table '{self.name}': column '{col}' cannot have both a "
-                    f"default value and a generated expression"
+                    f"Table '{self.name}': column '{col}' cannot have both a default value and a generated expression"
                 )
 
         # Validate column_comments column names
@@ -250,6 +310,14 @@ class Table:
             if col not in column_names:
                 raise ValueError(
                     f"Table '{self.name}': column_comments column '{col}' not found "
+                    f"in schema. Available columns: {sorted(column_names)}"
+                )
+
+        # Validate statistics column names
+        for col in self.statistics:
+            if col not in column_names:
+                raise ValueError(
+                    f"Table '{self.name}': statistics column '{col}' not found "
                     f"in schema. Available columns: {sorted(column_names)}"
                 )
 
@@ -395,8 +463,28 @@ class Table:
             supports_insert=self.insert_function is not None,
             supports_update=self.update_function is not None,
             supports_delete=self.delete_function is not None,
+            supports_column_statistics=bool(self.statistics),
             comment=self.comment,
             tags=dict(self.tags),
+        )
+
+    def resolve_column_statistics(self) -> TableColumnStatisticsResult | None:
+        """Resolve the ``statistics`` dict into a :class:`TableColumnStatisticsResult`.
+
+        Returns ``None`` if no statistics are defined. Otherwise, converts
+        each entry to a :class:`ColumnStatistics` with properly typed PyArrow
+        scalars inferred from the table's column schema.
+        """
+        if not self.statistics:
+            return None
+        resolved_cols = self.resolved_columns
+        stats = []
+        for col_name, stat_input in self.statistics.items():
+            col_field = resolved_cols.field(col_name)
+            stats.append(stat_input.resolve(col_name, col_field.type))
+        return TableColumnStatisticsResult(
+            statistics=stats,
+            cache_max_age_seconds=self.statistics_cache_max_age_seconds,
         )
 
 

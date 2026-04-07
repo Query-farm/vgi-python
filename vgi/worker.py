@@ -82,6 +82,7 @@ from vgi.catalog.catalog_interface import (
     SqlExpression,
     TransactionId,
     _validate_at_params,
+    serialize_column_statistics,
 )
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
@@ -1466,6 +1467,26 @@ class Worker:
             at_value=at_value,
         )
         return result.serialize()
+
+    def catalog_table_column_statistics_get(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> bytes | None:
+        """Get column statistics for a table. Returns IPC bytes or None."""
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        cat = self._get_catalog()
+        result = cat.table_column_statistics_get(
+            attach_id=AttachId(attach_id),
+            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            schema_name=schema_name,
+            name=name,
+        )
+        if result is None:
+            return None
+        return serialize_column_statistics(result.statistics, result.cache_max_age_seconds)
 
     def catalog_table_insert_function_get(
         self,

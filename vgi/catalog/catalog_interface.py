@@ -48,11 +48,13 @@ __all__ = [
     "OrderPreservation",
     # Catalog-specific
     "CatalogExample",
+    "ColumnStatistics",
     "IndexConstraintType",
     "IndexInfo",
     "SecretLookupEntry",
     "MacroType",
     "SchemaObjectType",
+    "TableColumnStatisticsResult",
     "WriteFunctionResult",
 ]
 
@@ -121,6 +123,9 @@ class CatalogAttachResult(ArrowSerializableDataclass):
     comment: str | None = None
     # Optional key-value tags associated with this catalog/database.
     tags: dict[str, str] = field(default_factory=dict)
+    # Whether any tables in this catalog can provide column statistics.
+    # Global gate — if False, GetStatistics() returns nullptr for all tables.
+    supports_column_statistics: bool = False
 
 
 @dataclass(frozen=True)
@@ -172,6 +177,9 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     supports_insert: bool = False
     supports_update: bool = False
     supports_delete: bool = False
+
+    # Statistics capability flag — indicates this table can provide column statistics.
+    supports_column_statistics: bool = False
 
 
 @dataclass(frozen=True)
@@ -435,6 +443,201 @@ class ScanFunctionResult:
 
 # Write function discovery uses the same wire format as scan function discovery.
 WriteFunctionResult = ScanFunctionResult
+
+
+# ============================================================================
+# Column Statistics
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class ColumnStatistics:
+    """Statistics for a single column in a table.
+
+    Workers provide these to help DuckDB's optimizer make cost-based decisions
+    (filter elimination, join reordering, etc.).
+
+    Attributes:
+        column_name: Name of the column these statistics describe.
+        min: Minimum value as a typed PyArrow scalar (e.g., ``pa.scalar(0, pa.int64())``),
+            or ``None`` if unknown.
+        max: Maximum value as a typed PyArrow scalar, or ``None`` if unknown.
+            Must have the same Arrow type as ``min``.
+        has_null: Whether the column contains any null values.
+        has_not_null: Whether the column contains any non-null values.
+        distinct_count: Approximate count of distinct values, or ``None`` if unknown.
+        contains_unicode: String/binary columns only — whether values contain non-ASCII
+            characters. ``None`` for non-string columns.
+        max_string_length: String/binary columns only — maximum byte length of values.
+            ``None`` for non-string columns.
+
+    """
+
+    column_name: str
+    min: pa.Scalar | None = None  # type: ignore[type-arg]
+    max: pa.Scalar | None = None  # type: ignore[type-arg]
+    has_null: bool = True
+    has_not_null: bool = True
+    distinct_count: int | None = None
+    contains_unicode: bool | None = None
+    max_string_length: int | None = None
+
+
+@dataclass(frozen=True)
+class TableColumnStatisticsResult:
+    """Result from ``table_column_statistics_get`` with optional cache control.
+
+    Attributes:
+        statistics: Per-column statistics for the table.
+        cache_max_age_seconds: How long the client may cache these statistics
+            (in seconds). ``None`` means cache indefinitely (static data).
+            ``0`` means do not cache (live/volatile data).
+
+    """
+
+    statistics: list[ColumnStatistics]
+    cache_max_age_seconds: int | None = None
+
+
+def _infer_stat_type(stat: ColumnStatistics) -> pa.DataType:
+    """Infer the Arrow type for a ColumnStatistics entry from its min/max scalars."""
+    if stat.min is not None and stat.min.is_valid:
+        return stat.min.type  # type: ignore[no-any-return]
+    if stat.max is not None and stat.max.is_valid:
+        return stat.max.type  # type: ignore[no-any-return]
+    return pa.null()
+
+
+def serialize_column_statistics(
+    stats: list[ColumnStatistics],
+    cache_max_age_seconds: int | None = None,
+) -> bytes:
+    """Serialize column statistics into a single RecordBatch with sparse union min/max.
+
+    The ``min`` and ``max`` columns use an Arrow sparse union whose child types
+    are the distinct column types present in *stats*.  This keeps everything in
+    a single IPC stream regardless of how many column types the table has.
+
+    Args:
+        stats: Per-column statistics to serialize.
+        cache_max_age_seconds: Optional cache TTL embedded in schema metadata.
+
+    Returns:
+        IPC-serialized bytes of the statistics RecordBatch.
+
+    """
+    n = len(stats)
+    if n == 0:
+        # Return a minimal empty batch — must construct empty union arrays manually
+        # since pa.array([], type=sparse_union) is not supported
+        union_fields = [pa.field("0", pa.null())]
+        union_type = pa.sparse_union(union_fields)
+        empty_union = pa.UnionArray.from_sparse(
+            pa.array([], type=pa.int8()),
+            [pa.array([], type=pa.null())],
+            field_names=["0"],
+            type_codes=[0],  # type: ignore[arg-type]
+        )
+        schema = pa.schema(
+            [
+                pa.field("column_name", pa.utf8()),
+                pa.field("min", union_type),
+                pa.field("max", union_type),
+                pa.field("has_null", pa.bool_()),
+                pa.field("has_not_null", pa.bool_()),
+                pa.field("distinct_count", pa.int64()),
+                pa.field("contains_unicode", pa.bool_()),
+                pa.field("max_string_length", pa.uint64()),
+            ]
+        )
+        batch = pa.record_batch(
+            [
+                pa.array([], type=pa.utf8()),
+                empty_union,
+                empty_union,
+                pa.array([], type=pa.bool_()),
+                pa.array([], type=pa.bool_()),
+                pa.array([], type=pa.int64()),
+                pa.array([], type=pa.bool_()),
+                pa.array([], type=pa.uint64()),
+            ],
+            schema=schema,
+        )
+        return serialize_record_batch_bytes(batch)
+
+    # 1. Collect distinct Arrow types, assign type codes
+    type_map: dict[pa.DataType, int] = {}
+    row_type_codes: list[int] = []
+    for s in stats:
+        arrow_type = _infer_stat_type(s)
+        if arrow_type not in type_map:
+            type_map[arrow_type] = len(type_map)
+        row_type_codes.append(type_map[arrow_type])
+
+    # 2. Build sparse union child arrays (each child is length N)
+    union_fields: list[pa.Field] = []  # type: ignore[type-arg]
+    field_names: list[str] = []
+    type_codes: list[int] = []
+    min_children: list[pa.Array] = []  # type: ignore[type-arg]
+    max_children: list[pa.Array] = []  # type: ignore[type-arg]
+    for arrow_type, code in sorted(type_map.items(), key=lambda x: x[1]):
+        union_fields.append(pa.field(str(code), arrow_type))
+        field_names.append(str(code))
+        type_codes.append(code)
+        min_vals = [s.min if row_type_codes[i] == code else None for i, s in enumerate(stats)]
+        max_vals = [s.max if row_type_codes[i] == code else None for i, s in enumerate(stats)]
+        min_children.append(pa.array(min_vals, type=arrow_type))
+        max_children.append(pa.array(max_vals, type=arrow_type))
+
+    # 3. Build sparse union arrays
+    codes_arr = pa.array(row_type_codes, type=pa.int8())
+    min_union = pa.UnionArray.from_sparse(
+        codes_arr,
+        min_children,
+        field_names=field_names,
+        type_codes=type_codes,  # type: ignore[arg-type]
+    )
+    max_union = pa.UnionArray.from_sparse(
+        codes_arr,
+        max_children,
+        field_names=field_names,
+        type_codes=type_codes,  # type: ignore[arg-type]
+    )
+
+    # 4. Build schema and batch
+    union_type = pa.sparse_union(union_fields)
+    schema = pa.schema(
+        [
+            pa.field("column_name", pa.utf8()),
+            pa.field("min", union_type),
+            pa.field("max", union_type),
+            pa.field("has_null", pa.bool_()),
+            pa.field("has_not_null", pa.bool_()),
+            pa.field("distinct_count", pa.int64()),
+            pa.field("contains_unicode", pa.bool_()),
+            pa.field("max_string_length", pa.uint64()),
+        ],
+    )
+
+    batch = pa.record_batch(
+        [
+            pa.array([s.column_name for s in stats], type=pa.utf8()),
+            min_union,
+            max_union,
+            pa.array([s.has_null for s in stats], type=pa.bool_()),
+            pa.array([s.has_not_null for s in stats], type=pa.bool_()),
+            pa.array([s.distinct_count for s in stats], type=pa.int64()),
+            pa.array([s.contains_unicode for s in stats], type=pa.bool_()),
+            pa.array([s.max_string_length for s in stats], type=pa.uint64()),
+        ],
+        schema=schema,
+    )
+
+    # 5. Serialize with cache TTL as IPC batch custom_metadata (not schema metadata)
+    custom_metadata = None
+    if cache_max_age_seconds is not None:
+        custom_metadata = pa.KeyValueMetadata({b"cache_max_age_seconds": str(cache_max_age_seconds).encode()})
+    return serialize_record_batch_bytes(batch, custom_metadata=custom_metadata)
 
 
 class CatalogInterface(ABC):
@@ -914,6 +1117,25 @@ class CatalogInterface(ABC):
         """
         raise NotImplementedError("Table scan function get not implemented.")
 
+    def table_column_statistics_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> TableColumnStatisticsResult | None:
+        """Get column statistics for all columns in a table.
+
+        Returns a :class:`TableColumnStatisticsResult` containing per-column
+        statistics and an optional cache TTL, or ``None`` if statistics are not
+        available for this table.
+
+        The default implementation returns ``None`` (no statistics).
+        Workers that provide statistics should override this method.
+        """
+        return None
+
     def table_insert_function_get(
         self,
         *,
@@ -1289,10 +1511,11 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         serialized_settings = [s.serialize() for s in self.settings]
         serialized_secret_types = [st.serialize() for st in self.secret_types]
 
-        # Auto-derive supports_time_travel from tables
+        # Auto-derive supports_time_travel and supports_column_statistics from tables
         self._build_registries()
         assert self._table_registry is not None
         has_time_travel = any(t.supports_time_travel for t in self._table_registry.values())
+        has_column_statistics = any(bool(t.statistics) for t in self._table_registry.values())
 
         return CatalogAttachResult(
             attach_id=self._FIXED_ATTACH_ID,
@@ -1306,6 +1529,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             secret_types=serialized_secret_types,
             comment=self.catalog.comment if self.catalog is not None else None,
             tags=dict(self.catalog.tags) if self.catalog is not None else {},
+            supports_column_statistics=has_column_statistics,
         )
 
     def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> list[SchemaInfo]:
@@ -1412,6 +1636,27 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             schema = self._schema_registry.get(schema_name.lower())
             return index.to_index_info(schema.name if schema else schema_name)
         return None
+
+    def table_column_statistics_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+    ) -> TableColumnStatisticsResult | None:
+        """Get column statistics from the Table descriptor's ``statistics`` dict.
+
+        Automatically resolves plain Python values to typed PyArrow scalars
+        using the column's Arrow type from the table schema.
+        Override this method for dynamic or computed statistics.
+        """
+        self._build_registries()
+        assert self._table_registry is not None
+        table = self._table_registry.get((schema_name.lower(), name.lower()))
+        if table is None:
+            return None
+        return table.resolve_column_statistics()
 
     def table_scan_function_get(
         self,

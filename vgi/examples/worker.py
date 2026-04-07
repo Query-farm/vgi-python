@@ -45,6 +45,8 @@ from vgi.catalog import (
     View,
 )
 from vgi.catalog.catalog_interface import _validate_at_params
+from vgi.catalog.descriptors import ColumnStatisticsInput
+from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 from vgi.examples.scalar import (
     AddValuesFunction,
     AnyMixedIntFunction,
@@ -138,6 +140,53 @@ from vgi.examples.table_in_out import (
     SumAllColumnsSimpleDistributed,
 )
 from vgi.worker import Worker
+
+
+# ---------------------------------------------------------------------------
+# DuckDB-backed table: demonstrates statistics_from_duckdb() helper.
+# Creates an in-memory table and extracts real statistics from it.
+# ---------------------------------------------------------------------------
+def _build_numbers_stats() -> dict[str, ColumnStatisticsInput]:
+    """Extract statistics for the 'numbers' table (integers 0-99) from DuckDB.
+
+    Demonstrates the ``statistics_from_duckdb()`` helper by creating the same
+    data in a DuckDB in-memory table and pulling real statistics from it.
+    """
+    import duckdb
+
+    conn = duckdb.connect()
+    conn.execute("CREATE TABLE numbers AS SELECT unnest(range(100)) AS value")
+    stats = statistics_from_duckdb(conn, "numbers")
+    conn.close()
+    return stats
+
+
+_NUMBERS_STATS = _build_numbers_stats()
+
+
+def _build_geo_stats() -> tuple[pa.Schema, dict[str, ColumnStatisticsInput]]:
+    """Build a geometry table in DuckDB and extract spatial statistics.
+
+    Creates a 5x5 grid of points (0,0) to (4,4) with an integer ID.
+    Demonstrates geometry statistics via ``statistics_from_duckdb()``.
+    """
+    import duckdb
+
+    conn = duckdb.connect()
+    conn.execute("LOAD spatial")
+    conn.execute(
+        "CREATE TABLE geo_points AS "
+        "SELECT row_number() OVER () AS id, "
+        "ST_Point(x::DOUBLE, y::DOUBLE)::GEOMETRY AS geom "
+        "FROM range(5) t1(x), range(5) t2(y)"
+    )
+    schema = conn.execute("SELECT * FROM geo_points LIMIT 0").to_arrow_table().schema
+    stats = statistics_from_duckdb(conn, "geo_points")
+    conn.close()
+    return schema, stats
+
+
+_GEO_SCHEMA, _GEO_STATS = _build_geo_stats()
 
 _EXAMPLE_CATALOG = Catalog(
     name="example",
@@ -285,6 +334,10 @@ _EXAMPLE_CATALOG = Catalog(
                     name="large_sequence",
                     function=SequenceFunction,
                     arguments=Arguments(positional=(pa.scalar(1_000_000),)),
+                    statistics={
+                        "n": ColumnStatisticsInput(min=0, max=999_999, has_null=False, distinct_count=1_000_000),
+                    },
+                    statistics_cache_max_age_seconds=3600,
                     comment="A large sequence of integers from 0 to 1,000,000",
                 ),
                 # Time-travel table: version-specific schema
@@ -299,11 +352,32 @@ _EXAMPLE_CATALOG = Catalog(
                     supports_time_travel=True,
                     comment="Versioned data table demonstrating time travel with schema evolution",
                 ),
-                # Explicit columns table: requires table_scan_function_get
+                # Explicit columns table with statistics extracted from DuckDB
+                # via statistics_from_duckdb() — demonstrates the helper workflow
                 Table(
                     name="numbers",
                     columns=pa.schema([("value", pa.int64())]),
+                    statistics=_NUMBERS_STATS,
+                    statistics_cache_max_age_seconds=3600,
                     comment="First 100 integers (demonstrates explicit columns)",
+                ),
+                # Geometry table with spatial statistics from DuckDB
+                Table(
+                    name="geo_points",
+                    columns=_GEO_SCHEMA,
+                    statistics=_GEO_STATS,
+                    statistics_cache_max_age_seconds=3600,
+                    comment="5x5 grid of points with spatial statistics",
+                ),
+                # Table with TTL=0 (never cache) for cache expiry testing
+                Table(
+                    name="volatile_numbers",
+                    columns=pa.schema([("value", pa.int64())]),
+                    statistics={
+                        "value": ColumnStatisticsInput(min=0, max=99, has_null=False, distinct_count=100),
+                    },
+                    statistics_cache_max_age_seconds=0,
+                    comment="Numbers with volatile stats (TTL=0, always re-fetched)",
                 ),
                 # Row ID position tests (int64 row_id)
                 Table(
@@ -395,6 +469,19 @@ _EXAMPLE_CATALOG = Catalog(
                     unique=(("name",),),
                     check=("budget >= 0",),
                     defaults={"budget": 0},
+                    statistics={
+                        "id": ColumnStatisticsInput(min=1, max=10, has_null=False, distinct_count=10),
+                        "name": ColumnStatisticsInput(
+                            min="Accounting",
+                            max="Sales",
+                            has_null=False,
+                            distinct_count=10,
+                            contains_unicode=False,
+                            max_string_length=20,
+                        ),
+                        "budget": ColumnStatisticsInput(min=50000.0, max=500000.0, has_null=False, distinct_count=10),
+                    },
+                    statistics_cache_max_age_seconds=3600,
                     comment="Department reference table",
                 ),
                 Table(
@@ -419,6 +506,20 @@ _EXAMPLE_CATALOG = Catalog(
                         "name": "Product display name",
                         "price": "Unit price in USD",
                     },
+                    statistics={
+                        "id": ColumnStatisticsInput(min=1, max=100, has_null=False, distinct_count=100),
+                        "name": ColumnStatisticsInput(
+                            min="Anvil",
+                            max="Zebra Tape",
+                            has_null=False,
+                            distinct_count=100,
+                            contains_unicode=False,
+                            max_string_length=30,
+                        ),
+                        "quantity": ColumnStatisticsInput(min=0, max=10000, has_null=True, distinct_count=50),
+                        "price": ColumnStatisticsInput(min=0.99, max=999.99, has_null=False, distinct_count=80),
+                    },
+                    statistics_cache_max_age_seconds=3600,
                     comment="Product table with column defaults",
                 ),
                 Table(
@@ -609,6 +710,10 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             at_value=at_value,
         )
 
+    # Column statistics are defined inline on each Table descriptor using
+    # the `statistics` dict. ReadOnlyCatalogInterface auto-serves them —
+    # no override of table_column_statistics_get() needed here.
+
     def table_scan_function_get(
         self,
         *,
@@ -652,8 +757,8 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 named_arguments={},
             )
 
-        # Handle the "numbers" table with explicit columns
-        if schema_name.lower() == "data" and name.lower() == "numbers":
+        # Handle "numbers" and "volatile_numbers" — both use sequence(100)
+        if schema_name.lower() == "data" and name.lower() in ("numbers", "volatile_numbers"):
             return ScanFunctionResult(
                 function_name="sequence",
                 positional_arguments=[pa.scalar(100)],

@@ -977,6 +977,20 @@ class VgiProtocol(Protocol):
         """Get the scan function for a table. Returns ScanFunctionResult as IPC bytes."""
         ...
 
+    def catalog_table_column_statistics_get(
+        self,
+        attach_id: bytes,
+        schema_name: str,
+        name: str,
+        transaction_id: bytes | None = None,
+    ) -> bytes | None:
+        """Get column statistics for a table.
+
+        Returns IPC bytes of a RecordBatch with sparse-union min/max columns,
+        or None if statistics are not available.
+        """
+        ...
+
     def catalog_table_insert_function_get(
         self,
         attach_id: bytes,
