@@ -281,6 +281,13 @@ def statistics_from_duckdb(
             min_val = min_scalar if min_scalar.is_valid else None
             max_val = max_scalar if max_scalar.is_valid else None
 
+        # Unwrap dictionary-encoded scalars (e.g. from ENUM columns) to their
+        # value type so that statistics report actual values, not dictionary indices.
+        if min_val is not None and pa.types.is_dictionary(min_val.type):
+            min_val = pa.scalar(min_val.as_py(), type=min_val.type.value_type)
+        if max_val is not None and pa.types.is_dictionary(max_val.type):
+            max_val = pa.scalar(max_val.as_py(), type=max_val.type.value_type)
+
         result[field.name] = ColumnStatisticsInput(
             min=min_val,
             max=max_val,

@@ -1,4 +1,4 @@
-# ruff: noqa: S101
+# ruff: noqa: S101, D102
 """Tests for column statistics serialization, deserialization, and helpers."""
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from vgi.catalog.catalog_interface import (
     serialize_column_statistics,
 )
 from vgi.catalog.descriptors import ColumnStatisticsInput, Table
-
 
 # ============================================================================
 # serialize_column_statistics
@@ -88,8 +87,8 @@ class TestSerializeColumnStatistics:
         assert batch.num_rows == 3
         # Verify the sparse union has 3 child types
         min_type = batch.schema.field("min").type
-        assert pa.types.is_union(min_type)  # type: ignore[attr-defined]
-        assert min_type.num_fields == 3  # type: ignore[union-attr]
+        assert pa.types.is_union(min_type)
+        assert min_type.num_fields == 3
 
         # Verify values roundtrip
         names = [batch.column("column_name")[i].as_py() for i in range(3)]
@@ -194,8 +193,8 @@ class TestSerializeColumnStatistics:
         batch, _ = deserialize_record_batch(data)
 
         min_type = batch.schema.field("min").type
-        assert pa.types.is_union(min_type)  # type: ignore[attr-defined]
-        assert min_type.num_fields == 1  # type: ignore[union-attr]
+        assert pa.types.is_union(min_type)
+        assert min_type.num_fields == 1
 
 
 # ============================================================================
@@ -211,9 +210,9 @@ class TestColumnStatisticsInput:
         cs = si.resolve("id", pa.int64())
 
         assert cs.column_name == "id"
-        assert isinstance(cs.min, pa.Scalar)  # type: ignore[arg-type]
-        assert cs.min.type == pa.int64()  # type: ignore[union-attr]
-        assert cs.min.as_py() == 1  # type: ignore[union-attr]
+        assert isinstance(cs.min, pa.Scalar)
+        assert cs.min.type == pa.int64()
+        assert cs.min.as_py() == 1
         assert cs.max.as_py() == 100  # type: ignore[union-attr]
 
     def test_plain_string(self) -> None:
@@ -236,7 +235,7 @@ class TestColumnStatisticsInput:
         cs = si.resolve("id", pa.int64())
 
         assert cs.min is explicit_min
-        assert cs.min.type == pa.int32()  # type: ignore[union-attr]
+        assert cs.min.type == pa.int32()
 
     def test_none_values(self) -> None:
         si = ColumnStatisticsInput(min=None, max=None)
@@ -257,8 +256,8 @@ class TestTableDescriptorStatistics:
     def test_inline_statistics(self) -> None:
         table = Table(
             name="test_table",
-            columns=pa.schema(  # type: ignore[arg-type]
-                [pa.field("id", pa.int64()), pa.field("name", pa.string())]
+            columns=pa.schema(
+                [pa.field("id", pa.int64()), pa.field("name", pa.string())]  # type: ignore[arg-type]
             ),
             statistics={
                 "id": ColumnStatisticsInput(min=1, max=100, has_null=False, distinct_count=100),
@@ -308,8 +307,8 @@ class TestTableDescriptorStatistics:
     def test_full_roundtrip(self) -> None:
         table = Table(
             name="roundtrip",
-            columns=pa.schema(  # type: ignore[arg-type]
-                [pa.field("a", pa.int32()), pa.field("b", pa.float64())]
+            columns=pa.schema(
+                [pa.field("a", pa.int32()), pa.field("b", pa.float64())]  # type: ignore[arg-type]
             ),
             statistics={
                 "a": ColumnStatisticsInput(min=0, max=255, has_null=False, distinct_count=256),
@@ -355,8 +354,8 @@ class TestStatisticsFromDuckDB:
         assert set(stats.keys()) == {"id", "name", "price"}
         assert stats["id"].has_null is False
         assert stats["id"].has_not_null is True
-        assert isinstance(stats["id"].min, pa.Scalar)  # type: ignore[arg-type]
-        assert stats["id"].min.as_py() == 1  # type: ignore[union-attr]
+        assert isinstance(stats["id"].min, pa.Scalar)
+        assert stats["id"].min.as_py() == 1
         assert stats["id"].max.as_py() == 3  # type: ignore[union-attr]
         assert stats["name"].has_null is True
 
@@ -403,8 +402,8 @@ class TestStatisticsFromDuckDB:
         stats = statistics_from_duckdb(conn, "geo")
         assert stats["geom"].min is not None
         assert stats["geom"].max is not None
-        assert isinstance(stats["geom"].min, pa.Scalar)  # type: ignore[arg-type]
-        assert stats["geom"].min.type == pa.binary()  # type: ignore[union-attr]
+        assert isinstance(stats["geom"].min, pa.Scalar)
+        assert stats["geom"].min.type == pa.binary()
 
     def test_list_columns(self) -> None:
         """List columns use list_min/list_max for child element bounds."""
@@ -533,8 +532,8 @@ class TestStatisticsFromDuckDB:
         assert batch.num_rows == 2
         # Struct union child should preserve structure
         min_type = batch.schema.field("min").type
-        assert pa.types.is_union(min_type)  # type: ignore[attr-defined]
-        assert min_type.num_fields == 2  # struct + int64  # type: ignore[union-attr]
+        assert pa.types.is_union(min_type)
+        assert min_type.num_fields == 2  # struct + int64
 
         assert batch.column("column_name")[0].as_py() == "point"
         assert batch.column("min")[0].as_py() == {"x": 0.0, "y": 0.0}
@@ -568,10 +567,18 @@ class TestStatisticsFromDuckDB:
         stats = statistics_from_duckdb(conn, "t")
         cs_list = [
             ColumnStatistics(
-                column_name="id", min=stats["id"].min, max=stats["id"].max, has_null=False, has_not_null=True
+                column_name="id",
+                min=stats["id"].min,  # type: ignore[arg-type]
+                max=stats["id"].max,  # type: ignore[arg-type]
+                has_null=False,
+                has_not_null=True,
             ),
             ColumnStatistics(
-                column_name="tags", min=stats["tags"].min, max=stats["tags"].max, has_null=False, has_not_null=True
+                column_name="tags",
+                min=stats["tags"].min,  # type: ignore[arg-type]
+                max=stats["tags"].max,  # type: ignore[arg-type]
+                has_null=False,
+                has_not_null=True,
             ),
         ]
         data = serialize_column_statistics(cs_list)
@@ -579,7 +586,7 @@ class TestStatisticsFromDuckDB:
 
         assert batch.num_rows == 2
         min_type = batch.schema.field("min").type
-        assert pa.types.is_union(min_type)  # type: ignore[attr-defined]
+        assert pa.types.is_union(min_type)
         assert batch.column("column_name")[1].as_py() == "tags"
         assert batch.column("min")[1].as_py() == [("score", 8.0), ("weight", 1.5)]
 
@@ -631,6 +638,48 @@ class TestStatisticsFromDuckDB:
         assert result.statistics[0].min.as_py() == 0  # type: ignore[union-attr]
         assert result.statistics[0].max.as_py() == 9  # type: ignore[union-attr]
 
+    def test_dictionary_encoded_column(self) -> None:
+        """Dictionary-encoded (ENUM) columns report actual values, not dictionary indices."""
+        import duckdb
+
+        from vgi.catalog.duckdb_statistics import statistics_from_duckdb
+
+        conn = duckdb.connect()
+        conn.execute("CREATE TYPE color AS ENUM ('red', 'green', 'blue')")
+        conn.execute("CREATE TABLE t (c color)")
+        conn.execute("INSERT INTO t VALUES ('red'), ('green'), ('blue')")
+
+        stats = statistics_from_duckdb(conn, "t")
+
+        # Must be actual string values, not dictionary indices (0, 1, 2).
+        # ENUM ordering is by ordinal: red=0, green=1, blue=2
+        assert stats["c"].min.as_py() == "red"  # type: ignore[union-attr]
+        assert stats["c"].max.as_py() == "blue"  # type: ignore[union-attr]
+        # Type should be the value type (string), not dictionary
+        assert not pa.types.is_dictionary(stats["c"].min.type)  # type: ignore[union-attr]
+        assert not pa.types.is_dictionary(stats["c"].max.type)  # type: ignore[union-attr]
+
+    def test_dictionary_encoded_serialization_roundtrip(self) -> None:
+        """Dictionary-encoded stats serialize correctly through sparse union."""
+        import duckdb
+
+        from vgi.catalog.duckdb_statistics import column_statistics_from_duckdb
+
+        conn = duckdb.connect()
+        conn.execute("CREATE TYPE size AS ENUM ('small', 'medium', 'large')")
+        conn.execute("CREATE TABLE t (id INT, sz size)")
+        conn.execute("INSERT INTO t VALUES (1, 'small'), (2, 'large'), (3, 'medium')")
+
+        cs_list = column_statistics_from_duckdb(conn, "t")
+        data = serialize_column_statistics(cs_list)
+        batch, _ = deserialize_record_batch(data)
+
+        assert batch.num_rows == 2
+        sz_idx = [batch.column("column_name")[i].as_py() for i in range(2)].index("sz")
+        # ENUM ordering is by ordinal: small=0, medium=1, large=2
+        assert batch.column("min")[sz_idx].as_py() == "small"
+        assert batch.column("max")[sz_idx].as_py() == "large"
+
     def test_column_statistics_from_duckdb(self) -> None:
         """column_statistics_from_duckdb returns resolved ColumnStatistics list."""
         import duckdb
@@ -651,8 +700,8 @@ class TestStatisticsFromDuckDB:
 
         # Values are already resolved pa.Scalar with correct types
         id_stat = next(s for s in stats if s.column_name == "id")
-        assert isinstance(id_stat.min, pa.Scalar)  # type: ignore[arg-type]
-        assert id_stat.min.as_py() == 1  # type: ignore[union-attr]
+        assert isinstance(id_stat.min, pa.Scalar)
+        assert id_stat.min.as_py() == 1
         assert id_stat.max.as_py() == 3  # type: ignore[union-attr]
 
         name_stat = next(s for s in stats if s.column_name == "name")

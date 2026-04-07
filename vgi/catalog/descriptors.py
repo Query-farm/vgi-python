@@ -79,6 +79,10 @@ def _to_scalar(
         return None
     if isinstance(value, pa.Scalar):
         return value  # Already a scalar — use as-is
+    # Unwrap dictionary type — stats should use the value type so min/max
+    # serialize as the actual value, not the dictionary index.
+    if pa.types.is_dictionary(arrow_type):
+        arrow_type = arrow_type.value_type
     return pa.scalar(value, type=arrow_type)
 
 
