@@ -72,6 +72,7 @@ __all__ = [
     "RepeatValueIntFunction",
     "RepeatValueStrFunction",
     "RowIdSequenceFunction",
+    "SampleEchoFunction",
     "ScopedSecretDemoFunction",
     "SecretDemoFunction",
     "SequenceFunction",
@@ -80,6 +81,8 @@ __all__ = [
     "TenThousandFunction",
     "ExpressionFilterTestFunction",
     "SpatialFilterExampleFunction",
+    "ColorsScanFunction",
+    "ProductsScanFunction",
     "VersionedConstraintsScanFunction",
     "VersionedDataFunction",
 ]
@@ -2554,6 +2557,23 @@ ProductsScanFunction = _static_scan_function(
     },
 )
 
+ColorsScanFunction = _static_scan_function(
+    func_name="colors_scan",
+    func_description="Scan colors table (ENUM column)",
+    output_schema=pa.schema(
+        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+            pa.field("id", pa.int64()),
+            pa.field("color", pa.string()),
+            pa.field("hex_code", pa.string()),
+        ]
+    ),
+    data={
+        "id": [1, 2, 3],
+        "color": ["blue", "green", "red"],
+        "hex_code": ["#0000FF", "#00FF00", "#FF0000"],
+    },
+)
+
 
 # ============================================================================
 # VersionedConstraintsScanFunction — time travel with evolving constraints
@@ -3030,14 +3050,16 @@ class _OrderEchoState(ArrowSerializableDataclass):
     order_limit: Annotated[int, Transient()] = -1
 
 
-_ORDER_ECHO_SCHEMA = schema({
-    "n": pa.int64(),
-    "s": pa.utf8(),
-    "order_column": pa.utf8(),
-    "order_direction": pa.utf8(),
-    "order_null_order": pa.utf8(),
-    "order_limit": pa.int64(),
-})
+_ORDER_ECHO_SCHEMA = schema(
+    {
+        "n": pa.int64(),
+        "s": pa.utf8(),
+        "order_column": pa.utf8(),
+        "order_direction": pa.utf8(),
+        "order_null_order": pa.utf8(),
+        "order_limit": pa.int64(),
+    }
+)
 
 
 @init_single_worker
@@ -3118,6 +3140,120 @@ class OrderEchoFunction(TableFunctionGenerator[_OrderEchoArgs, _OrderEchoState])
                     "order_direction": [state.order_direction] * size,
                     "order_null_order": [state.order_null_order] * size,
                     "order_limit": [state.order_limit] * size,
+                },
+                schema=params.output_schema,
+            )
+        )
+
+        state.current_index += size
+        state.remaining -= size
+
+
+# ============================================================================
+# sample_echo — echoes TABLESAMPLE pushdown hints from DuckDB optimizer
+# ============================================================================
+
+
+@dataclass(slots=True, frozen=True)
+class _SampleEchoArgs:
+    """Arguments for SampleEchoFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0, default=10)]
+    batch_size: Annotated[int, Arg("batch_size", default=2048, doc="Batch size for output", ge=1)]
+
+
+@dataclass(kw_only=True)
+class _SampleEchoState(ArrowSerializableDataclass):
+    """Mutable state for SampleEchoFunction."""
+
+    remaining: int
+    current_index: int = 0
+    sample_percentage: Annotated[float, Transient()] = -1.0
+    sample_seed: Annotated[int, Transient()] = -1
+
+
+_SAMPLE_ECHO_SCHEMA = schema(
+    {
+        "n": pa.int64(),
+        "s": pa.utf8(),
+        "sample_percentage": pa.float64(),
+        "sample_seed": pa.int64(),
+    }
+)
+
+
+@init_single_worker
+@bind_fixed_schema
+@_cardinality_from_count
+class SampleEchoFunction(TableFunctionGenerator[_SampleEchoArgs, _SampleEchoState]):
+    """Echoes TABLESAMPLE pushdown hints in output columns.
+
+    USE CASE
+    --------
+    Verify that DuckDB's SamplingPushdown optimizer pushes TABLESAMPLE SYSTEM
+    hints to VGI table functions. The sample_* columns show what hints were
+    received. The function does NOT apply sampling itself -- it returns all
+    rows so tests can verify the echo values.
+
+    SCHEMA
+    ------
+    Output: {"n": int64, "s": string, "sample_percentage": float64,
+             "sample_seed": int64}
+
+    """
+
+    class Meta:
+        """Metadata for SampleEchoFunction."""
+
+        name = "sample_echo"
+        description = "Echoes TABLESAMPLE pushdown hints in output"
+        categories = ["generator", "diagnostic"]
+        projection_pushdown = True
+        sampling_pushdown = True
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM sample_echo(100) TABLESAMPLE SYSTEM(10%)",
+                description="See which TABLESAMPLE hint was pushed down",
+            ),
+        ]
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = _SAMPLE_ECHO_SCHEMA
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_SampleEchoArgs]) -> _SampleEchoState:
+        """Create initial state with cached sample hint values."""
+        init = params.init_call
+        return _SampleEchoState(
+            remaining=params.args.count,
+            sample_percentage=init.tablesample_percentage if init.tablesample_percentage is not None else -1.0,
+            sample_seed=init.tablesample_seed if init.tablesample_seed is not None else -1,
+        )
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_SampleEchoArgs],
+        state: _SampleEchoState,
+        out: OutputCollector,
+    ) -> None:
+        """Generate rows echoing sample pushdown hints."""
+        if state.remaining <= 0:
+            out.finish()
+            return
+
+        size = min(state.remaining, params.args.batch_size)
+        start = state.current_index
+
+        n_values = list(range(start, start + size))
+        s_values = [f"row_{i}" for i in n_values]
+
+        out.emit(
+            pa.RecordBatch.from_pydict(
+                {
+                    "n": n_values,
+                    "s": s_values,
+                    "sample_percentage": [state.sample_percentage] * size,
+                    "sample_seed": [state.sample_seed] * size,
                 },
                 schema=params.output_schema,
             )

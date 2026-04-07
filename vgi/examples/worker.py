@@ -90,6 +90,7 @@ from vgi.examples.scalar import (
 from vgi.examples.table import (
     _VERSIONED_CONSTRAINTS_SCHEMAS,
     _VERSIONED_SCHEMAS,
+    ColorsScanFunction,
     ConstantColumnsFunction,
     DepartmentsScanFunction,
     DoubleSequenceFunction,
@@ -112,6 +113,7 @@ from vgi.examples.table import (
     OrderEchoFunction,
     PartitionedSequenceFunction,
     ProductsScanFunction,
+    SampleEchoFunction,
     ProjectedDataFunction,
     ProjectsScanFunction,
     RepeatValueIntFunction,
@@ -188,6 +190,31 @@ def _build_geo_stats() -> tuple[pa.Schema, dict[str, ColumnStatisticsInput]]:
 
 _GEO_SCHEMA, _GEO_STATS = _build_geo_stats()
 
+
+def _build_enum_stats() -> dict[str, ColumnStatisticsInput]:
+    """Extract statistics for a table with ENUM (dictionary-encoded) columns.
+
+    Demonstrates that ``statistics_from_duckdb()`` correctly unwraps
+    dictionary-encoded min/max to actual string values rather than
+    returning dictionary indices.
+    """
+    import duckdb
+
+    conn = duckdb.connect()
+    conn.execute("CREATE TYPE color AS ENUM ('red', 'green', 'blue')")
+    conn.execute(
+        "CREATE TABLE colors AS "
+        "SELECT unnest(range(3)) + 1 AS id, "
+        "unnest(['red', 'green', 'blue'])::color AS color, "
+        "unnest(['#FF0000', '#00FF00', '#0000FF']) AS hex_code"
+    )
+    stats = statistics_from_duckdb(conn, "colors")
+    conn.close()
+    return stats
+
+
+_ENUM_STATS = _build_enum_stats()
+
 _EXAMPLE_CATALOG = Catalog(
     name="example",
     default_schema="main",
@@ -229,6 +256,7 @@ _EXAMPLE_CATALOG = Catalog(
                 OrderEchoFunction,
                 PartitionedSequenceFunction,
                 ProjectedDataFunction,
+                SampleEchoFunction,
                 RowIdSequenceFunction,
                 SecretDemoFunction,
                 ScopedSecretDemoFunction,
@@ -240,6 +268,7 @@ _EXAMPLE_CATALOG = Catalog(
                 TenThousandFunction,
                 VersionedDataFunction,
                 # Static data scan functions for constraint-backed tables
+                ColorsScanFunction,
                 DepartmentsScanFunction,
                 EmployeesScanFunction,
                 ProductsScanFunction,
@@ -378,6 +407,21 @@ _EXAMPLE_CATALOG = Catalog(
                     },
                     statistics_cache_max_age_seconds=0,
                     comment="Numbers with volatile stats (TTL=0, always re-fetched)",
+                ),
+                # ENUM (dictionary-encoded) column table — tests that statistics
+                # report actual string values, not dictionary indices.
+                Table(
+                    name="colors",
+                    columns=pa.schema(
+                        [  # type: ignore[arg-type]
+                            pa.field("id", pa.int64()),
+                            pa.field("color", pa.string()),
+                            pa.field("hex_code", pa.string()),
+                        ]
+                    ),
+                    statistics=_ENUM_STATS,
+                    statistics_cache_max_age_seconds=3600,
+                    comment="Colors table with ENUM-derived statistics",
                 ),
                 # Row ID position tests (int64 row_id)
                 Table(
@@ -767,6 +811,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
 
         # Constraint example tables — simple static scan functions
         _static_scan_tables: dict[str, str] = {
+            "colors": "colors_scan",
             "departments": "departments_scan",
             "employees": "employees_scan",
             "products": "products_scan",

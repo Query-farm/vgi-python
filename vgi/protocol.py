@@ -152,6 +152,10 @@ class InitRequest(ArrowSerializableDataclass):
     order_by_null_order: OrderByNullOrder | None = None
     order_by_limit: int | None = None
 
+    # TABLESAMPLE pushdown hint from DuckDB's SamplingPushdown optimizer (all None when no hint)
+    tablesample_percentage: float | None = None
+    tablesample_seed: int | None = None
+
     @property
     def is_secondary(self) -> bool:
         """True if this is a secondary init request."""
