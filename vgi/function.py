@@ -18,6 +18,7 @@ See Also:
 from __future__ import annotations
 
 import logging
+import os
 from abc import ABC
 from typing import (
     Annotated,
@@ -33,6 +34,35 @@ import pyarrow as pa
 from vgi.exceptions import SchemaValidationError
 from vgi.function_storage import FunctionStorage, FunctionStorageSqlite
 from vgi.metadata import MetadataMixin, ResolvedMetadata
+
+
+def _resolve_storage() -> FunctionStorage:
+    """Resolve the default FunctionStorage backend from environment."""
+    backend = os.environ.get("VGI_WORKER_SHARED_STORAGE", "sqlite").lower()
+    if backend == "sqlite":
+        return FunctionStorageSqlite()
+    if backend == "azure-sql":
+        from vgi.function_storage_azure_sql import FunctionStorageAzureSql
+
+        return FunctionStorageAzureSql.from_env()
+    raise ValueError(f"Unknown VGI_WORKER_SHARED_STORAGE backend: {backend!r}. Supported: 'sqlite', 'azure-sql'")
+
+
+class _DefaultStorageDescriptor:
+    """Resolve FunctionStorage lazily on first attribute access.
+
+    This avoids evaluating environment variables at import time. When a
+    subclass explicitly sets ``storage = SomeStorage(...)``, the plain
+    attribute shadows this descriptor — no interference.
+    """
+
+    _resolved: FunctionStorage | None = None
+
+    def __get__(self, obj: object | None, objtype: type | None = None) -> FunctionStorage:
+        if self._resolved is None:
+            self._resolved = _resolve_storage()
+        return self._resolved
+
 
 # Default max_workers when not explicitly specified (effectively unlimited)
 DEFAULT_MAX_WORKERS = 99999
@@ -70,7 +100,7 @@ class Function(ABC, MetadataMixin):
 
     """
 
-    storage: ClassVar[FunctionStorage] = FunctionStorageSqlite()
+    storage: ClassVar[FunctionStorage] = _DefaultStorageDescriptor()  # type: ignore[assignment]
 
     # Cache for resolved metadata
     _metadata_cache: ClassVar[ResolvedMetadata | None] = None

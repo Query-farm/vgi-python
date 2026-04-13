@@ -6,8 +6,10 @@ across worker processes in distributed VGI function execution.
 Protocol:
     FunctionStorage: Unified protocol for all VGI state storage needs.
 
-Implementation:
-    FunctionStorageSqlite: SQLite-backed storage implementation.
+Implementations:
+    FunctionStorageSqlite: SQLite-backed storage (local/subprocess transport).
+    FunctionStorageAzureSql: Azure SQL Database-backed storage (cloud deployments).
+        See ``vgi.function_storage_azure_sql`` for details.
 
 """
 
