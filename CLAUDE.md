@@ -245,12 +245,15 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-example-
 | `VGI_OTEL_CLAIM_ATTRIBUTES` | Comma-separated `claim_key=span_attr_name` pairs for claim extraction |
 | `VGI_OTEL_DISABLE_TRACING` | Disable tracing only (`1`/`true`/`yes`) |
 | `VGI_OTEL_DISABLE_METRICS` | Disable metrics only (`1`/`true`/`yes`) |
-| `VGI_WORKER_SHARED_STORAGE` | Storage backend: `sqlite` (default) or `azure-sql` (requires `[azure]` extra) |
+| `VGI_WORKER_SHARED_STORAGE` | Storage backend: `sqlite` (default), `azure-sql` (requires `[azure]` extra), or `cloudflare-do` |
 | `VGI_AZURE_SQL_SERVER` | Azure SQL server hostname (required when `azure-sql`) |
 | `VGI_AZURE_SQL_DATABASE` | Azure SQL database name (required when `azure-sql`) |
 | `VGI_AZURE_SQL_USER` | SQL auth username (omit for managed identity) |
 | `VGI_AZURE_SQL_PASSWORD` | SQL auth password (omit for managed identity) |
 | `VGI_AZURE_SQL_DEBUG_LOG` | File path for Azure SQL storage debug/timing logs |
+| `VGI_CF_DO_URL` | Cloudflare Worker URL (required when `cloudflare-do`) |
+| `VGI_CF_DO_TOKEN` | Bearer token for Cloudflare Worker auth (optional) |
+| `VGI_CF_DO_DEBUG_LOG` | File path for Cloudflare DO storage debug/timing logs |
 
 ### Worker Debug Mode
 
@@ -410,3 +413,4 @@ The table schema is automatically derived from the function's `output_schema`:
 - **Function lifecycle**: `docs/lifecycle.md`
 - **Generator API (advanced)**: `docs/generator-api.md`
 - **Catalog interface**: `docs/catalog-interface.md`
+- **Shared storage backends**: `docs/shared-storage.md`

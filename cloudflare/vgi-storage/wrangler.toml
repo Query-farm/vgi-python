@@ -1,0 +1,12 @@
+name = "vgi-storage"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[durable_objects]
+bindings = [
+  { name = "STORAGE", class_name = "VgiStorageDO" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["VgiStorageDO"]

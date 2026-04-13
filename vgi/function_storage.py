@@ -10,6 +10,8 @@ Implementations:
     FunctionStorageSqlite: SQLite-backed storage (local/subprocess transport).
     FunctionStorageAzureSql: Azure SQL Database-backed storage (cloud deployments).
         See ``vgi.function_storage_azure_sql`` for details.
+    FunctionStorageCfDo: Cloudflare Durable Object-backed storage (edge deployments).
+        See ``vgi.function_storage_cf_do`` for details.
 
 """
 

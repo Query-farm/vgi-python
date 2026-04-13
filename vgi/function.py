@@ -45,7 +45,13 @@ def _resolve_storage() -> FunctionStorage:
         from vgi.function_storage_azure_sql import FunctionStorageAzureSql
 
         return FunctionStorageAzureSql.from_env()
-    raise ValueError(f"Unknown VGI_WORKER_SHARED_STORAGE backend: {backend!r}. Supported: 'sqlite', 'azure-sql'")
+    if backend == "cloudflare-do":
+        from vgi.function_storage_cf_do import FunctionStorageCfDo
+
+        return FunctionStorageCfDo.from_env()
+    raise ValueError(
+        f"Unknown VGI_WORKER_SHARED_STORAGE backend: {backend!r}. Supported: 'sqlite', 'azure-sql', 'cloudflare-do'"
+    )
 
 
 class _DefaultStorageDescriptor:
