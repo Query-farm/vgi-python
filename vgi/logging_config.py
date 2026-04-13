@@ -37,6 +37,7 @@ _KNOWN_LOGGERS: list[tuple[str, str, str]] = [
     ("vgi.client.cli", "CLI front-end", "argument parsing"),
     ("vgi.filter_pushdown", "Filter pushdown debug", "filter deserialization / evaluation"),
     ("vgi_rpc", "vgi_rpc root logger", "all vgi_rpc messages"),
+    ("vgi_rpc.access", "RPC access log (enriched by VGI)", "per-request structured access log"),
     ("vgi_rpc.wire.request", "RPC wire request", "serialised request bytes"),
     ("vgi_rpc.wire.response", "RPC wire response", "serialised response bytes"),
     ("vgi_rpc.wire.transport", "Transport layer", "pipe / HTTP transport debug"),

@@ -259,8 +259,16 @@ def main() -> None:
         authenticate = _resolve_authenticate()
         oauth_metadata = _resolve_oauth_resource_metadata()
 
+        from vgi.worker import _get_vgi_version
+
         worker = ExampleWorker(quiet=True, log_level=effective_level)
-        server = RpcServer(VgiProtocol, worker, external_location=external_location, enable_describe=describe)
+        server = RpcServer(
+            VgiProtocol,
+            worker,
+            external_location=external_location,
+            enable_describe=describe,
+            server_version=_get_vgi_version(),
+        )
         wsgi_app = make_wsgi_app(
             server,
             prefix=prefix,

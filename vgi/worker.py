@@ -61,6 +61,7 @@ vgi.examples.worker : Example worker with built-in functions
 
 from __future__ import annotations
 
+import importlib.metadata
 import logging
 import os
 import sys
@@ -140,6 +141,19 @@ if TYPE_CHECKING:
     from vgi.catalog.descriptors import Catalog
 
 _logger = logging.getLogger("vgi.worker")
+
+_vgi_version_cache: str | None = None
+
+
+def _get_vgi_version() -> str:
+    """Return the installed vgi package version (cached)."""
+    global _vgi_version_cache  # noqa: PLW0603
+    if _vgi_version_cache is None:
+        try:
+            _vgi_version_cache = importlib.metadata.version("vgi")
+        except importlib.metadata.PackageNotFoundError:
+            _vgi_version_cache = "unknown"
+    return _vgi_version_cache
 
 
 def _format_arguments_for_error(args: Arguments) -> str:
@@ -1033,6 +1047,9 @@ class Worker:
             {
                 "vgi.function.name": request.function_name,
                 "vgi.function.type": request.function_type.value,
+                "vgi.principal": ctx.auth.principal,
+                "vgi.auth_domain": ctx.auth.domain,
+                "vgi.authenticated": ctx.auth.authenticated,
             }
         )
         func_cls = self._resolve_function(request)
@@ -1067,6 +1084,9 @@ class Worker:
                 "vgi.function.name": request.bind_call.function_name,
                 "vgi.function.type": request.bind_call.function_type.value,
                 "vgi.init.is_secondary": request.is_secondary,
+                "vgi.principal": ctx.auth.principal,
+                "vgi.auth_domain": ctx.auth.domain,
+                "vgi.authenticated": ctx.auth.authenticated,
             }
         )
         func_cls = self._resolve_function(request.bind_call)
@@ -2089,7 +2109,7 @@ class Worker:
         _logger.info("worker_starting")
 
         try:
-            server = RpcServer(VgiProtocol, self)
+            server = RpcServer(VgiProtocol, self, server_version=_get_vgi_version())
             if otel_config is not None:
                 from vgi_rpc.otel import instrument_server
 
