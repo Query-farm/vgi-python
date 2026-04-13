@@ -441,10 +441,19 @@ def _resolve_bearer_authenticate() -> Callable[..., Any] | None:
 
 
 def _resolve_jwt_authenticate() -> Callable[..., Any] | None:
-    """Build a jwt_authenticate callback from VGI_JWT_ISSUER + VGI_JWT_AUDIENCE."""
-    issuer = os.environ.get("VGI_JWT_ISSUER")
-    if not issuer:
+    """Build a jwt_authenticate callback from VGI_JWT_ISSUER + VGI_JWT_AUDIENCE.
+
+    ``VGI_JWT_ISSUER`` may be a single issuer URL or a comma-separated list
+    for multi-tenant setups (e.g. Microsoft Entra with multiple tenants).
+    """
+    issuer_raw = os.environ.get("VGI_JWT_ISSUER")
+    if not issuer_raw:
         return None
+
+    issuers = tuple(s.strip() for s in issuer_raw.split(",") if s.strip())
+    if not issuers:
+        sys.stderr.write("Error: VGI_JWT_ISSUER is set but contains no valid values\n")
+        sys.exit(1)
 
     audience_raw = os.environ.get("VGI_JWT_AUDIENCE")
     if not audience_raw:
@@ -466,6 +475,9 @@ def _resolve_jwt_authenticate() -> Callable[..., Any] | None:
         sys.exit(1)
 
     jwks_uri = os.environ.get("VGI_JWT_JWKS_URI")
+    # Pass a single string when only one issuer (backwards compatible),
+    # or a tuple when multiple issuers are configured.
+    issuer: str | tuple[str, ...] = issuers[0] if len(issuers) == 1 else issuers
     return jwt_authenticate(issuer=issuer, audience=audiences, jwks_uri=jwks_uri)
 
 
