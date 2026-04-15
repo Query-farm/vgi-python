@@ -471,7 +471,7 @@ def extract_parameters(cls: type, *, validate_table_input: bool = True) -> list[
     parameters: list[ParameterInfo] = []
     seen_names: set[str] = set()
 
-    # Check for new Param/ConstParam API (ScalarFunction subclasses)
+    # Check for new Param/ConstParam API (ScalarFunction and AggregateFunction subclasses)
     # These are stored in _compute_params and _const_params class attributes
     compute_params: dict[str, Arg[Any]] = getattr(cls, "_compute_params", {})
     const_params: dict[str, Arg[Any]] = getattr(cls, "_const_params", {})

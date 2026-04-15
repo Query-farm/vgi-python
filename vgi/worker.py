@@ -65,12 +65,14 @@ import importlib.metadata
 import logging
 import os
 import sys
+import uuid
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, cast, final
 
 import pyarrow as pa
 from vgi_rpc.rpc import CallContext, RpcServer, Stream, serve_stdio
 
+from vgi.aggregate_function import AggregateBindParams, AggregateFunction
 from vgi.argument_spec import ArgumentSpec, extract_argument_specs
 from vgi.arguments import Arguments
 from vgi.catalog import CatalogInterface
@@ -139,6 +141,18 @@ from vgi.table_in_out_function import (
 
 if TYPE_CHECKING:
     from vgi.catalog.descriptors import Catalog
+    from vgi.protocol import (
+        AggregateBindRequest,
+        AggregateBindResponse,
+        AggregateCombineRequest,
+        AggregateCombineResponse,
+        AggregateDestructorRequest,
+        AggregateDestructorResponse,
+        AggregateFinalizeRequest,
+        AggregateFinalizeResponse,
+        AggregateUpdateRequest,
+        AggregateUpdateResponse,
+    )
 
 _logger = logging.getLogger("vgi.worker")
 
@@ -995,6 +1009,38 @@ class Worker:
             candidates=candidates,
         )
 
+    def _resolve_function_by_name(
+        self,
+        function_name: str,
+        attach_id: bytes | None = None,
+        function_type: type[Function] | None = None,
+    ) -> type[Function]:
+        """Look up a function by name only (no argument disambiguation).
+
+        Args:
+            function_name: The name of the function to look up.
+            attach_id: Optional attach ID (reserved for future catalog use).
+            function_type: Optional base class to filter candidates by type.
+
+        """
+        registry = self._build_registry()
+        if function_name not in registry:
+            available = sorted(registry.keys())
+            raise ValueError(f"Unknown function: '{function_name}'. Available: {available}")
+        candidates = registry[function_name]
+        if function_type is not None:
+            candidates = [c for c in candidates if issubclass(c, function_type)]
+            if not candidates:
+                raise ValueError(
+                    f"No {function_type.__name__} named '{function_name}' found. "
+                    f"Candidates exist but are not {function_type.__name__}."
+                )
+        if len(candidates) == 1:
+            return candidates[0]
+        # For aggregates with overloads, return the first match
+        # (overload disambiguation happens at bind time on the C++ side)
+        return candidates[0]
+
     # ---------------------------------------------------------------------------
     # Catalog helpers
     # ---------------------------------------------------------------------------
@@ -1072,6 +1118,308 @@ class Worker:
                 f" functions, but '{func_cls.__name__}' is not a TableFunctionGenerator."
             )
         return func_cls.cardinality(func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth))
+
+    # ========== Aggregate Function Methods ==========
+
+    @staticmethod
+    def _load_aggregate_const_args(
+        func_cls: type[AggregateFunction],  # type: ignore[type-arg]
+        storage: BoundStorage,
+    ) -> Arguments | None:
+        """Load const arguments stored during aggregate_bind (group_id=-2)."""
+        from vgi.arguments import Arguments
+
+        result = storage.aggregate_get([-2])
+        if result[0] is not None:
+            return Arguments.deserialize_from_bytes(result[0][1])
+        return None
+
+    def aggregate_bind(
+        self,
+        request: AggregateBindRequest,
+        ctx: CallContext,
+    ) -> AggregateBindResponse:
+        """Bind an aggregate function, return output schema and execution_id."""
+        from vgi.protocol import AggregateBindResponse
+
+        func_cls = self._resolve_function_by_name(
+            request.function_name, request.attach_id, function_type=AggregateFunction
+        )
+        if not issubclass(func_cls, AggregateFunction):
+            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+
+        execution_id = uuid.uuid4().bytes
+        bind_params = AggregateBindParams(
+            args=request.arguments,
+            input_schema=request.input_schema,
+            settings=_batch_to_scalar_dict(request.settings),
+            secrets=SecretsAccessor(request.secrets),
+            auth_context=ctx.auth,
+        )
+        result = func_cls.on_bind(bind_params)
+
+        if bind_params.secrets.needs_resolution:
+            raise NotImplementedError(
+                f"Aggregate function '{request.function_name}' requires secret resolution, "
+                "which is not yet supported for aggregate functions."
+            )
+
+        # Store const arguments in FunctionStorage for later callbacks (group_id=-2).
+        if request.arguments and request.arguments.positional:
+            storage = BoundStorage(func_cls.storage, execution_id)
+            storage.aggregate_put([(-2, request.arguments.serialize_to_bytes())])
+
+        return AggregateBindResponse(
+            output_schema=result.output_schema,
+            execution_id=execution_id,
+        )
+
+    def aggregate_update(
+        self,
+        request: AggregateUpdateRequest,
+        ctx: CallContext,
+    ) -> AggregateUpdateResponse:
+        """Accumulate rows from a DataChunk into per-group state."""
+        from vgi.aggregate_function import GROUP_COLUMN_NAME
+        from vgi.protocol import AggregateUpdateResponse
+
+        func_cls = self._resolve_function_by_name(
+            request.function_name, request.attach_id, function_type=AggregateFunction
+        )
+        if not issubclass(func_cls, AggregateFunction):
+            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+
+        batch = pa.ipc.open_stream(request.input_batch).read_next_batch()
+        storage = BoundStorage(func_cls.storage, request.execution_id)
+
+        # Strip __vgi_group_id and extract group_ids
+        gid_col_idx = batch.schema.get_field_index(GROUP_COLUMN_NAME)
+        group_ids: pa.Int64Array = batch.column(gid_col_idx).cast(pa.int64())  # type: ignore[assignment]
+        clean_batch = batch.remove_column(gid_col_idx)
+
+        # Load existing states, create initial_state for new groups
+        unique_gids: list[int] = [v.as_py() for v in group_ids.unique()]
+        stored = storage.aggregate_get(unique_gids)
+
+        if func_cls.state_class is None:
+            raise ValueError(f"Aggregate function '{request.function_name}' has no state_class defined")
+        const_args = self._load_aggregate_const_args(func_cls, storage)
+        params = ProcessParams(
+            args=const_args,
+            init_call=None,
+            init_response=None,
+            output_schema=pa.schema([]),
+            settings={},
+            secrets={},
+            storage=storage,
+            auth_context=ctx.auth,
+        )
+        states: dict[int, Any] = {}
+        new_gids: set[int] = set()  # Track groups created in this batch
+        initial_bytes: dict[int, bytes] = {}  # Snapshot initial state for new groups
+        for i, gid in enumerate(unique_gids):
+            result = stored[i]
+            if result is not None:
+                states[gid] = func_cls.state_class.deserialize_from_bytes(result[1])
+            else:
+                state = func_cls.initial_state(params)
+                states[gid] = state
+                new_gids.add(gid)
+                initial_bytes[gid] = state.serialize_to_bytes()
+
+        # Call user's update() with column arrays and const scalars as kwargs
+        kwargs: dict[str, Any] = {"states": states, "group_ids": group_ids}
+        compute_params = getattr(func_cls, "_compute_params", {})
+        for name, arg in compute_params.items():
+            col_idx = getattr(arg, "_resolution_index", None)
+            if col_idx is not None and col_idx < clean_batch.num_columns:
+                if getattr(arg, "varargs", False):
+                    # Varargs: collect all columns from this index onward as a list
+                    kwargs[name] = [clean_batch.column(i) for i in range(col_idx, clean_batch.num_columns)]
+                else:
+                    kwargs[name] = clean_batch.column(col_idx)
+        # Extract const values from stored arguments
+        const_params = getattr(func_cls, "_const_params", {})
+        const_phases = getattr(func_cls, "_const_param_phases", {})
+        if const_args and const_args.positional and const_params:
+            for name, arg in const_params.items():
+                phase = const_phases.get(name, "all")
+                if phase not in ("all", "update"):
+                    continue  # Skip finalize-only params during update
+                arg_idx = getattr(arg, "_resolution_index", None)
+                if arg_idx is not None and arg_idx < len(const_args.positional):
+                    scalar = const_args.positional[arg_idx]
+                    kwargs[name] = scalar.as_py() if scalar is not None else None
+        # Inject params for functions that declare it
+        import inspect
+
+        update_sig = inspect.signature(func_cls.update)
+        if "params" in update_sig.parameters:
+            kwargs["params"] = params
+        func_cls.update(**kwargs)
+
+        # Save updated states. Skip new groups whose state wasn't modified —
+        # this ensures groups that received only NULL values (NullHandling.DEFAULT
+        # skips them) don't get stored, so finalize() sees None → returns NULL.
+        state_data: list[tuple[int, bytes]] = []
+        for gid in states:
+            serialized = states[gid].serialize_to_bytes()
+            if gid in new_gids and serialized == initial_bytes[gid]:
+                continue  # New group, not modified by update() — don't persist
+            state_data.append((gid, serialized))
+        if state_data:
+            storage.aggregate_put(state_data)
+
+        return AggregateUpdateResponse()
+
+    def aggregate_combine(
+        self,
+        request: AggregateCombineRequest,
+        ctx: CallContext,
+    ) -> AggregateCombineResponse:
+        """Merge source states into target states."""
+        from vgi.protocol import AggregateCombineResponse
+
+        func_cls = self._resolve_function_by_name(
+            request.function_name, request.attach_id, function_type=AggregateFunction
+        )
+        if not issubclass(func_cls, AggregateFunction):
+            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+        merge_batch = pa.ipc.open_stream(request.merge_batch).read_next_batch()
+        storage = BoundStorage(func_cls.storage, request.execution_id)
+
+        if merge_batch.num_rows == 0:
+            return AggregateCombineResponse()
+
+        source_ids: list[int] = merge_batch.column("source_group_id").to_pylist()  # type: ignore[assignment]
+        target_ids: list[int] = merge_batch.column("target_group_id").to_pylist()  # type: ignore[assignment]
+
+        all_gids: list[int] = list(set(source_ids) | set(target_ids))
+        stored = storage.aggregate_get(all_gids)
+
+        if func_cls.state_class is None:
+            raise ValueError(f"Aggregate function '{request.function_name}' has no state_class defined")
+        const_args = self._load_aggregate_const_args(func_cls, storage)
+        params = ProcessParams(
+            args=const_args,
+            init_call=None,
+            init_response=None,
+            output_schema=pa.schema([]),
+            settings={},
+            secrets={},
+            storage=storage,
+            auth_context=ctx.auth,
+        )
+        states: dict[int, Any] = {}
+        for i, gid in enumerate(all_gids):
+            result = stored[i]
+            if result is not None:
+                states[gid] = func_cls.state_class.deserialize_from_bytes(result[1])
+            # else: group was never updated — leave absent from states dict
+
+        # Apply merges. Skip pairs where both source and target were never
+        # updated (not in FunctionStorage). If only one side exists, use
+        # initial_state() for the missing side so combine() has two states.
+        for src_gid, tgt_gid in zip(source_ids, target_ids, strict=True):
+            src = states.get(src_gid)
+            tgt = states.get(tgt_gid)
+            if src is None and tgt is None:
+                continue  # Neither side was ever updated — nothing to merge
+            if src is None:
+                src = func_cls.initial_state(params)
+            if tgt is None:
+                tgt = func_cls.initial_state(params)
+            states[tgt_gid] = func_cls.combine(src, tgt, params)
+
+        # Save updated targets (only those present in states dict)
+        updated_targets = set(target_ids)
+        state_data = [(gid, states[gid].serialize_to_bytes()) for gid in updated_targets if gid in states]
+        if state_data:
+            storage.aggregate_put(state_data)
+
+        return AggregateCombineResponse()
+
+    def aggregate_finalize(
+        self,
+        request: AggregateFinalizeRequest,
+        ctx: CallContext,
+    ) -> AggregateFinalizeResponse:
+        """Produce results for a chunk of group_ids."""
+        from vgi.protocol import AggregateFinalizeResponse
+
+        func_cls = self._resolve_function_by_name(
+            request.function_name, request.attach_id, function_type=AggregateFunction
+        )
+        if not issubclass(func_cls, AggregateFunction):
+            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+        group_ids_batch = pa.ipc.open_stream(request.group_ids_batch).read_next_batch()
+        group_ids: pa.Int64Array = group_ids_batch.column("group_id").cast(pa.int64())  # type: ignore[assignment]
+        gid_list: list[int] = group_ids.to_pylist()  # type: ignore[assignment]
+
+        storage = BoundStorage(func_cls.storage, request.execution_id)
+        stored = storage.aggregate_get(gid_list)
+
+        if func_cls.state_class is None:
+            raise ValueError(f"Aggregate function '{request.function_name}' has no state_class defined")
+        const_args = self._load_aggregate_const_args(func_cls, storage)
+        params = ProcessParams(
+            args=const_args,
+            init_call=None,
+            init_response=None,
+            output_schema=request.output_schema,
+            settings={},
+            secrets={},
+            storage=storage,
+            auth_context=ctx.auth,
+        )
+        states: dict[int, Any] = {}
+        for i, gid in enumerate(gid_list):
+            result = stored[i]
+            if result is not None:
+                states[gid] = func_cls.state_class.deserialize_from_bytes(result[1])
+            else:
+                # Group was never updated — no entry in FunctionStorage.
+                # Pass None so finalize() can return NULL (SQL standard for
+                # SUM/AVG/MIN/MAX over zero rows). COUNT handles None → 0.
+                states[gid] = None
+
+        # Call user's finalize()
+        result_batch = func_cls.finalize(group_ids, states, params)
+
+        # Validate
+        if result_batch.num_rows != len(gid_list):
+            raise ValueError(
+                f"finalize() returned {result_batch.num_rows} rows but expected {len(gid_list)} (one per group_id)"
+            )
+
+        # Serialize result batch to IPC stream bytes
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, result_batch.schema) as writer:
+            writer.write_batch(result_batch)
+        return AggregateFinalizeResponse(result_batch=sink.getvalue().to_pybytes())
+
+    def aggregate_destructor(
+        self,
+        request: AggregateDestructorRequest,
+        ctx: CallContext,
+    ) -> AggregateDestructorResponse:
+        """Best-effort cleanup of aggregate states."""
+        from vgi.protocol import AggregateDestructorResponse
+
+        func_cls = self._resolve_function_by_name(
+            request.function_name, request.attach_id, function_type=AggregateFunction
+        )
+        if not issubclass(func_cls, AggregateFunction):
+            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+
+        # Called once when all states have been destroyed (C++ tracks with
+        # destroy_counter == group_id_counter). Clear all FunctionStorage state.
+        storage = BoundStorage(func_cls.storage, request.execution_id)
+        storage.aggregate_clear()
+
+        return AggregateDestructorResponse()
+
+    # ========== Function Invocation ==========
 
     def init(self, request: InitRequest, ctx: CallContext) -> Stream[ProcessState, GlobalInitResponse]:
         """Initialize a function execution and return a processing stream.

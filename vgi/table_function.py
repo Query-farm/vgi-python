@@ -51,6 +51,7 @@ __all__ = [
     "init_single_worker",
     "bind_fixed_schema",
     "_struct_scalar_to_dict",
+    "_extract_setting_secret_params",
 ]
 
 
@@ -299,8 +300,8 @@ class ProcessParams[TArgs]:
     """Parameters passed to process() and finalize()."""
 
     args: TArgs
-    init_call: InitRequest
-    init_response: BaseInitResponse
+    init_call: InitRequest | None  # None for aggregate functions
+    init_response: BaseInitResponse | None  # None for aggregate functions
 
     # This is the projected schema based on projection_ids,
     # which is what the function should produce.

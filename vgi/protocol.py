@@ -568,10 +568,11 @@ class TableProducerState(ProducerState):
         """Resolve pushdown filters if auto_apply_filters is enabled."""
         if self._func_cls is not None and self._func_cls._should_auto_apply_filters():
             self._auto_apply = True
-            if self._params is not None and self._params.init_call.pushdown_filters is not None:
+            init_call = self._params.init_call if self._params is not None else None
+            if init_call is not None and init_call.pushdown_filters is not None:
                 self._pushdown_filters = self._func_cls.pushdown_filters(
-                    self._params.init_call.pushdown_filters,
-                    join_keys=self._params.init_call.join_keys,
+                    init_call.pushdown_filters,
+                    join_keys=init_call.join_keys,
                 )
 
     def _to_row_dict(self) -> dict[str, object]:
@@ -705,10 +706,11 @@ class TableInOutExchangeState(ExchangeState):
         """Resolve pushdown filters if auto_apply_filters is enabled."""
         if self._func_cls is not None and self._func_cls._should_auto_apply_filters():
             self._auto_apply = True
-            if self._params is not None and self._params.init_call.pushdown_filters is not None:
+            init_call = self._params.init_call if self._params is not None else None
+            if init_call is not None and init_call.pushdown_filters is not None:
                 self._pushdown_filters = self._func_cls.pushdown_filters(
-                    self._params.init_call.pushdown_filters,
-                    join_keys=self._params.init_call.join_keys,
+                    init_call.pushdown_filters,
+                    join_keys=init_call.join_keys,
                 )
 
     def _to_row_dict(self) -> dict[str, object]:
@@ -808,6 +810,100 @@ ProcessState = ScalarExchangeState | TableProducerState | TableInOutExchangeStat
 
 
 # ---------------------------------------------------------------------------
+# Aggregate Function RPC Types (all unary request/response)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateBindRequest(ArrowSerializableDataclass):
+    """Request for aggregate_bind — resolve output schema."""
+
+    function_name: str
+    arguments: Annotated[Arguments, ArrowType(pa.binary())]
+    input_schema: Annotated[pa.Schema | None, ArrowType(pa.binary())] = None
+    settings: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
+    secrets: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
+    attach_id: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateBindResponse(ArrowSerializableDataclass):
+    """Response from aggregate_bind."""
+
+    output_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
+    execution_id: bytes
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateUpdateRequest(ArrowSerializableDataclass):
+    """Request for aggregate_update — accumulate rows into per-group state."""
+
+    function_name: str
+    execution_id: bytes
+    input_batch: bytes  # Full IPC stream bytes (schema + data + EOS)
+    attach_id: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateUpdateResponse(ArrowSerializableDataclass):
+    """Response from aggregate_update — empty ack."""
+
+    pass
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateCombineRequest(ArrowSerializableDataclass):
+    """Request for aggregate_combine — merge source states into targets."""
+
+    function_name: str
+    execution_id: bytes
+    merge_batch: bytes  # Full IPC stream bytes
+    attach_id: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateCombineResponse(ArrowSerializableDataclass):
+    """Response from aggregate_combine — empty ack."""
+
+    pass
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateFinalizeRequest(ArrowSerializableDataclass):
+    """Request for aggregate_finalize — produce results for group_ids."""
+
+    function_name: str
+    execution_id: bytes
+    group_ids_batch: bytes  # Full IPC stream bytes
+    output_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
+    attach_id: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateFinalizeResponse(ArrowSerializableDataclass):
+    """Response from aggregate_finalize — result batch as IPC stream bytes."""
+
+    result_batch: bytes  # Full IPC stream bytes
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateDestructorRequest(ArrowSerializableDataclass):
+    """Request for aggregate_destructor — best-effort state cleanup."""
+
+    function_name: str
+    execution_id: bytes
+    group_ids_batch: bytes  # Full IPC stream bytes
+    attach_id: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateDestructorResponse(ArrowSerializableDataclass):
+    """Response from aggregate_destructor — empty ack."""
+
+    pass
+
+
+# ---------------------------------------------------------------------------
 # VGI Protocol
 # ---------------------------------------------------------------------------
 
@@ -816,8 +912,9 @@ class VgiProtocol(Protocol):
     """VGI wire protocol definition for vgi_rpc.
 
     Methods:
-    - ``bind()`` / ``init()``: Function invocation protocol
-    - ``catalog_*``: ~35 typed catalog interface methods replacing opaque ``catalog_call``
+    - ``bind()`` / ``init()``: Function invocation protocol (scalar/table)
+    - ``aggregate_*``: Aggregate function RPC methods (all unary)
+    - ``catalog_*``: ~35 typed catalog interface methods
 
     ``vgi_rpc.RpcServer(VgiProtocol, worker)`` handles serialization,
     dispatching, error propagation, and stream lifecycle.
@@ -834,6 +931,28 @@ class VgiProtocol(Protocol):
 
     def table_function_cardinality(self, request: TableFunctionCardinalityRequest) -> TableCardinality:
         """Estimate the cardinality of a table function's output."""
+        ...
+
+    # ========== Aggregate Function Methods (all unary) ==========
+
+    def aggregate_bind(self, request: AggregateBindRequest) -> AggregateBindResponse:
+        """Bind an aggregate function, return output schema and execution_id."""
+        ...
+
+    def aggregate_update(self, request: AggregateUpdateRequest) -> AggregateUpdateResponse:
+        """Accumulate rows from a DataChunk into per-group state."""
+        ...
+
+    def aggregate_combine(self, request: AggregateCombineRequest) -> AggregateCombineResponse:
+        """Merge source states into target states."""
+        ...
+
+    def aggregate_finalize(self, request: AggregateFinalizeRequest) -> AggregateFinalizeResponse:
+        """Produce results for a chunk of group_ids."""
+        ...
+
+    def aggregate_destructor(self, request: AggregateDestructorRequest) -> AggregateDestructorResponse:
+        """Best-effort cleanup of aggregate states. Must not raise."""
         ...
 
     # ========== Catalog - Discovery ==========

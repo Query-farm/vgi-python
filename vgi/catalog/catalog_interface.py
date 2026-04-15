@@ -270,6 +270,7 @@ class SchemaObjectType(Enum):
     VIEW = "view"
     SCALAR_FUNCTION = "scalar_function"
     TABLE_FUNCTION = "table_function"
+    AGGREGATE_FUNCTION = "aggregate_function"
     SCALAR_MACRO = "scalar_macro"
     TABLE_MACRO = "table_macro"
     INDEX = "index"
@@ -815,7 +816,11 @@ class CatalogInterface(ABC):
         attach_id: AttachId,
         transaction_id: TransactionId | None,
         name: str,
-        type: Literal[SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION],
+        type: Literal[
+            SchemaObjectType.SCALAR_FUNCTION,
+            SchemaObjectType.TABLE_FUNCTION,
+            SchemaObjectType.AGGREGATE_FUNCTION,
+        ],
     ) -> Sequence[FunctionInfo]: ...
 
     @overload
@@ -1818,7 +1823,11 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         attach_id: AttachId,
         transaction_id: TransactionId | None,
         name: str,
-        type: Literal[SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION],
+        type: Literal[
+            SchemaObjectType.SCALAR_FUNCTION,
+            SchemaObjectType.TABLE_FUNCTION,
+            SchemaObjectType.AGGREGATE_FUNCTION,
+        ],
     ) -> Sequence[FunctionInfo]: ...
 
     @overload
@@ -1912,9 +1921,11 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                     # Filter by function type
                     if type_enum == SchemaObjectType.SCALAR_FUNCTION and func_info.function_type != FunctionType.SCALAR:
                         continue
-                    if type_enum == SchemaObjectType.TABLE_FUNCTION and func_info.function_type not in (
-                        FunctionType.TABLE,
-                        FunctionType.AGGREGATE,
+                    if type_enum == SchemaObjectType.TABLE_FUNCTION and func_info.function_type != FunctionType.TABLE:
+                        continue
+                    if (
+                        type_enum == SchemaObjectType.AGGREGATE_FUNCTION
+                        and func_info.function_type != FunctionType.AGGREGATE
                     ):
                         continue
                     results.append(func_info)
@@ -1949,12 +1960,13 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         # Get output schema from catalog introspection methods if available
         output_schema: pa.Schema = pa.schema([])
         has_catalog_schema = hasattr(func_cls, "catalog_output_schema")
-        if func_type == FunctionType.SCALAR and has_catalog_schema:
-            # ScalarFunction has catalog_output_schema() classmethod
+        if func_type in (FunctionType.SCALAR, FunctionType.AGGREGATE) and has_catalog_schema:
+            # ScalarFunction/AggregateFunction has catalog_output_schema() classmethod
             output_schema = func_cls.catalog_output_schema()  # type: ignore[attr-defined]
         output_bytes = SerializedSchema(output_schema.serialize().to_pybytes())
 
         is_scalar = func_type == FunctionType.SCALAR
+        is_aggregate = func_type == FunctionType.AGGREGATE
 
         return FunctionInfo(
             name=meta.name,
@@ -1964,9 +1976,9 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             output_schema=output_bytes,
             comment=None,  # Functions don't use comment; use description instead
             tags=meta.tags,
-            # Scalar function behavior fields (None for non-scalar)
+            # Scalar/aggregate function behavior fields
             stability=meta.stability if is_scalar else None,
-            null_handling=meta.null_handling if is_scalar else None,
+            null_handling=meta.null_handling if (is_scalar or is_aggregate) else None,
             # Documentation fields
             description=meta.description or "",  # Intrinsic from Meta.description
             examples=[

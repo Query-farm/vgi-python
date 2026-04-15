@@ -9,14 +9,17 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import pyarrow as pa
 from vgi_rpc import AnnotatedBatch, ArrowSerializableDataclass, Transient
 
-from vgi.protocol import BindRequest
 from vgi.schema_utils import schema
 from vgi.table_function import BindParams, ProcessParams
+
+if TYPE_CHECKING:
+    from vgi.protocol import BindRequest
+
 from vgi.transactor.client import TransactorClient
 from vgi.transactor.protocol import TransactorProtocol
 
@@ -68,6 +71,7 @@ def _is_returning(params: BindParams[None]) -> bool:
 
 def _get_tx_id(params: ProcessParams[None]) -> bytes:
     """Get transaction_id from the bind request."""
+    assert params.init_call is not None
     tx_id = params.init_call.bind_call.transaction_id
     if tx_id:
         return tx_id
@@ -77,6 +81,7 @@ def _get_tx_id(params: ProcessParams[None]) -> bytes:
 
 def _get_attach_id(params: ProcessParams[None]) -> bytes:
     """Get attach_id from the bind request."""
+    assert params.init_call is not None
     attach_id = params.init_call.bind_call.attach_id
     if attach_id:
         return attach_id
@@ -86,6 +91,7 @@ def _get_attach_id(params: ProcessParams[None]) -> bytes:
 
 def _get_pushdown_filters(params: ProcessParams[None]) -> bytes | None:
     """Get pushdown_filters as serialized IPC bytes from params (or None)."""
+    assert params.init_call is not None
     pf_batch = params.init_call.pushdown_filters
     if pf_batch is None:
         return None

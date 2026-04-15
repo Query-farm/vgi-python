@@ -62,6 +62,11 @@ class FunctionStorage(Protocol):
     Primary worker enqueues work items, workers atomically claim items
     from the queue for processing.
 
+    **Aggregate State** - Per-group-id state for aggregate functions.
+    Each group_id maps to a serialized state blob. Thread-local hash tables
+    in DuckDB guarantee no concurrent writes to the same group_id, so no
+    versioning or locking is needed.
+
     """
 
     def worker_put(self, execution_id: bytes, worker_id: int, state: bytes) -> None:
@@ -146,6 +151,51 @@ class FunctionStorage(Protocol):
         """
         ...
 
+    # --- Aggregate State (per-group-id storage for aggregate functions) ---
+
+    def aggregate_state_get(self, execution_id: bytes, group_ids: list[int]) -> list[tuple[int, bytes] | None]:
+        """Load aggregate states for specific group_ids.
+
+        Non-destructive read. Returns a list parallel to the input
+        ``group_ids``: each element is ``(group_id, state_bytes)`` for
+        groups that exist, or ``None`` for unknown group_ids.
+
+        Args:
+            execution_id: Unique identifier for the function invocation.
+            group_ids: List of group_ids to look up.
+
+        Returns:
+            List parallel to ``group_ids`` with found states or None.
+
+        """
+        ...
+
+    def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]]) -> None:
+        """Unconditionally write aggregate states for the given group_ids.
+
+        Uses INSERT OR REPLACE semantics — existing states are overwritten.
+        No version checking is performed; DuckDB's thread-local hash tables
+        guarantee that each group_id is only written by one thread during
+        the UPDATE phase.
+
+        Args:
+            execution_id: Unique identifier for the function invocation.
+            data: List of ``(group_id, state_bytes)`` pairs to store.
+
+        """
+        ...
+
+    def aggregate_state_clear(self, execution_id: bytes) -> None:
+        """Remove all aggregate states for an execution_id.
+
+        Called after all FINALIZE exchanges complete to clean up storage.
+
+        Args:
+            execution_id: Unique identifier for the function invocation.
+
+        """
+        ...
+
 
 class BoundStorage:
     def __init__(self, storage: FunctionStorage, execution_id: bytes):
@@ -183,6 +233,20 @@ class BoundStorage:
         """Clear all remaining work items and unregister the invocation."""
         return self._base.queue_clear(self._execution_id)
 
+    # --- Aggregate State ---
+
+    def aggregate_get(self, group_ids: list[int]) -> list[tuple[int, bytes] | None]:
+        """Load aggregate states for specific group_ids."""
+        return self._base.aggregate_state_get(self._execution_id, group_ids)
+
+    def aggregate_put(self, data: list[tuple[int, bytes]]) -> None:
+        """Unconditionally write aggregate states."""
+        self._base.aggregate_state_put(self._execution_id, data)
+
+    def aggregate_clear(self) -> None:
+        """Remove all aggregate states for this execution."""
+        self._base.aggregate_state_clear(self._execution_id)
+
     @staticmethod
     def serialize_record_batch(batch: pa.RecordBatch) -> bytes:
         """Serialize a RecordBatch to Arrow IPC stream bytes."""
@@ -201,11 +265,12 @@ class FunctionStorageSqlite:
     """SQLite-backed storage for VGI function state.
 
     This implementation uses SQLite with WAL mode to allow multiple worker
-    processes to share state. It manages three tables:
+    processes to share state. It manages these tables:
 
     - global_state_storage: Key-value store for init data
     - worker_state: Per-worker partial state keyed by (execution_id, worker_id)
     - work_queue: FIFO queue of work items per invocation
+    - aggregate_state: Per-group-id state for aggregate functions
 
     """
 
@@ -285,6 +350,16 @@ class FunctionStorageSqlite:
                 CREATE TABLE IF NOT EXISTS invocation_registry (
                     execution_id BLOB PRIMARY KEY,
                     created_at REAL DEFAULT (julianday('now'))
+                )
+            """)
+            # Aggregate state - per-group-id storage for aggregate functions
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS aggregate_state (
+                    execution_id BLOB NOT NULL,
+                    group_id INTEGER NOT NULL,
+                    state_data BLOB NOT NULL,
+                    created_at REAL DEFAULT (julianday('now')),
+                    PRIMARY KEY (execution_id, group_id)
                 )
             """)
             conn.commit()
@@ -414,6 +489,68 @@ class FunctionStorageSqlite:
         finally:
             conn.close()
 
+    # --- Aggregate State ---
+
+    def aggregate_state_get(self, execution_id: bytes, group_ids: list[int]) -> list[tuple[int, bytes] | None]:
+        """Load aggregate states for specific group_ids.
+
+        Batches queries in chunks of 500 to stay under SQLite's default
+        999-parameter limit.
+        """
+        if not group_ids:
+            return []
+        conn = self._connect()
+        try:
+            found: dict[int, bytes] = {}
+            chunk_size = 500
+            for i in range(0, len(group_ids), chunk_size):
+                chunk = group_ids[i : i + chunk_size]
+                placeholders = ",".join("?" * len(chunk))
+                cursor = conn.execute(
+                    f"SELECT group_id, state_data FROM aggregate_state "  # noqa: S608
+                    f"WHERE execution_id = ? AND group_id IN ({placeholders})",
+                    (execution_id, *chunk),
+                )
+                for row in cursor.fetchall():
+                    found[row[0]] = row[1]
+            return [(gid, found[gid]) if gid in found else None for gid in group_ids]
+        finally:
+            conn.close()
+
+    def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]]) -> None:
+        """Unconditionally write aggregate states."""
+        if not data:
+            return
+        # Opportunistically clean old entries (1% of calls)
+        if random.random() < 0.01:
+            self.cleanup_old_entries(max_age_days=1.0)
+
+        conn = self._connect()
+        try:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO aggregate_state
+                (execution_id, group_id, state_data, created_at)
+                VALUES (?, ?, ?, julianday('now'))
+                """,
+                [(execution_id, gid, state_bytes) for gid, state_bytes in data],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def aggregate_state_clear(self, execution_id: bytes) -> None:
+        """Remove all aggregate states for an execution_id."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "DELETE FROM aggregate_state WHERE execution_id = ?",
+                (execution_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     # --- Maintenance (not part of protocol) ---
 
     def cleanup_old_entries(self, max_age_days: float = 1.0) -> int:
@@ -456,7 +593,20 @@ class FunctionStorageSqlite:
                 """,
                 (max_age_days,),
             )
+            cursor5 = conn.execute(
+                """
+                DELETE FROM aggregate_state
+                WHERE julianday('now') - created_at > ?
+                """,
+                (max_age_days,),
+            )
             conn.commit()
-            return int(cursor1.rowcount) + int(cursor2.rowcount) + int(cursor3.rowcount) + int(cursor4.rowcount)
+            return (
+                int(cursor1.rowcount)
+                + int(cursor2.rowcount)
+                + int(cursor3.rowcount)
+                + int(cursor4.rowcount)
+                + int(cursor5.rowcount)
+            )
         finally:
             conn.close()

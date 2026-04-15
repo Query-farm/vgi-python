@@ -47,6 +47,16 @@ from vgi.catalog import (
 from vgi.catalog.catalog_interface import _validate_at_params
 from vgi.catalog.descriptors import ColumnStatisticsInput
 from vgi.catalog.duckdb_statistics import statistics_from_duckdb
+from vgi.examples.aggregate import (
+    AvgFunction,
+    CountFunction,
+    GenericSumFunction,
+    ListAggFunction,
+    PercentileFunction,
+    SumAllFunction,
+    SumFunction,
+    WeightedSumFunction,
+)
 from vgi.examples.scalar import (
     AddValuesFunction,
     AnyMixedIntFunction,
@@ -313,6 +323,15 @@ _EXAMPLE_CATALOG = Catalog(
                 AnyMixedStrFunction,
                 UpperCaseFunction,
                 WhoAmIFunction,
+                # AggregateFunction - aggregate input rows
+                AvgFunction,
+                CountFunction,
+                GenericSumFunction,
+                ListAggFunction,
+                PercentileFunction,
+                SumAllFunction,
+                SumFunction,
+                WeightedSumFunction,
             ],
             views=[
                 View(

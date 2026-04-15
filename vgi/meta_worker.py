@@ -271,6 +271,46 @@ class MetaWorker:
         msg = f"Unknown function '{fn_name}'"
         raise ValueError(msg)
 
+    # ========== Aggregate function dispatch ==========
+
+    def _dispatch_aggregate(self, request: Any, method_name: str, ctx: CallContext) -> Any:
+        """Dispatch an aggregate RPC to the right worker by function_name."""
+        fn_name = getattr(request, "function_name", "")
+        if hasattr(request, "attach_id") and request.attach_id:
+            try:
+                worker, original_id = self._unwrap_attach_id(request.attach_id)
+                import dataclasses
+
+                request = dataclasses.replace(request, attach_id=original_id)
+                return getattr(worker, method_name)(request, ctx=ctx)
+            except (IndexError, KeyError):
+                pass
+        for w in self._workers:
+            registry = type(w)._build_registry()
+            if fn_name in registry:
+                return getattr(w, method_name)(request, ctx=ctx)
+        raise ValueError(f"Unknown aggregate function '{fn_name}'")
+
+    def aggregate_bind(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch aggregate_bind to the right worker."""
+        return self._dispatch_aggregate(request, "aggregate_bind", ctx)
+
+    def aggregate_update(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch aggregate_update to the right worker."""
+        return self._dispatch_aggregate(request, "aggregate_update", ctx)
+
+    def aggregate_combine(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch aggregate_combine to the right worker."""
+        return self._dispatch_aggregate(request, "aggregate_combine", ctx)
+
+    def aggregate_finalize(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch aggregate_finalize to the right worker."""
+        return self._dispatch_aggregate(request, "aggregate_finalize", ctx)
+
+    def aggregate_destructor(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch aggregate_destructor to the right worker."""
+        return self._dispatch_aggregate(request, "aggregate_destructor", ctx)
+
     # ========== Serve entry point ==========
 
     @classmethod

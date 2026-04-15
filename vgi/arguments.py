@@ -1450,6 +1450,9 @@ class ConstParam:
     arrow_type: pa.DataType | type | None = None
     # Position in the argument list
     position: int | None = None
+    # Phase when this const param is needed (aggregate functions only).
+    # "all" = every callback, "update" = only update, "finalize" = only finalize.
+    phase: str = "all"
 
 
 @dataclass(frozen=True, slots=True)

@@ -374,7 +374,11 @@ class InMemoryCatalog(CatalogInterface):
         attach_id: AttachId,
         transaction_id: TransactionId | None,
         name: str,
-        type: Literal[SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION],
+        type: Literal[
+            SchemaObjectType.SCALAR_FUNCTION,
+            SchemaObjectType.TABLE_FUNCTION,
+            SchemaObjectType.AGGREGATE_FUNCTION,
+        ],
     ) -> Sequence[FunctionInfo]: ...
 
     @overload

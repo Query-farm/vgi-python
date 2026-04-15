@@ -239,6 +239,26 @@ class FunctionStorageCfDo:
         )
         return cleared
 
+    # --- Aggregate State ---
+
+    def aggregate_state_get(self, execution_id: bytes, group_ids: list[int]) -> list[tuple[int, bytes] | None]:
+        """Not yet supported on Cloudflare DO."""
+        raise NotImplementedError(
+            "Aggregate functions are not yet supported with the Cloudflare Durable Object storage backend."
+        )
+
+    def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]]) -> None:
+        """Not yet supported on Cloudflare DO."""
+        raise NotImplementedError(
+            "Aggregate functions are not yet supported with the Cloudflare Durable Object storage backend."
+        )
+
+    def aggregate_state_clear(self, execution_id: bytes) -> None:
+        """Not yet supported on Cloudflare DO."""
+        raise NotImplementedError(
+            "Aggregate functions are not yet supported with the Cloudflare Durable Object storage backend."
+        )
+
     # --- Factory ---
 
     @classmethod

@@ -422,6 +422,7 @@ class NestedSequenceFunction(TableFunctionGenerator[NestedSequenceFunctionArgume
             return
 
         size = min(state.remaining, params.args.batch_size)
+        assert params.init_call is not None
         projected_cols = cls._get_projected_column_names(params.init_call.projection_ids)
         indices = list(range(state.current_index, state.current_index + size))
         data: dict[str, Any] = {}
@@ -849,6 +850,7 @@ class ProjectedDataFunction(TableFunctionGenerator[ProjectedDataFunctionArgument
             out.finish()
             return
 
+        assert params.init_call is not None
         projected_indices = cls._get_projected_column_indices(params.init_call.projection_ids)
         batch_size = min(state.remaining, cls.BATCH_SIZE)
 
@@ -1575,6 +1577,7 @@ class FilterEchoFunction(TableFunctionGenerator[FilterEchoFunctionArgs, FilterEc
     @classmethod
     def initial_state(cls, params: ProcessParams[FilterEchoFunctionArgs]) -> FilterEchoState:
         """Create initial state with remaining count and cached filter string."""
+        assert params.init_call is not None
         pf = params.init_call.pushdown_filters
         jk = params.init_call.join_keys
         filters = cls.pushdown_filters(pf, join_keys=jk) if pf is not None else None
@@ -3104,6 +3107,7 @@ class OrderEchoFunction(TableFunctionGenerator[_OrderEchoArgs, _OrderEchoState])
     @classmethod
     def initial_state(cls, params: ProcessParams[_OrderEchoArgs]) -> _OrderEchoState:
         """Create initial state with cached order hint values."""
+        assert params.init_call is not None
         init = params.init_call
         return _OrderEchoState(
             remaining=params.args.count,
@@ -3222,6 +3226,7 @@ class SampleEchoFunction(TableFunctionGenerator[_SampleEchoArgs, _SampleEchoStat
     @classmethod
     def initial_state(cls, params: ProcessParams[_SampleEchoArgs]) -> _SampleEchoState:
         """Create initial state with cached sample hint values."""
+        assert params.init_call is not None
         init = params.init_call
         return _SampleEchoState(
             remaining=params.args.count,

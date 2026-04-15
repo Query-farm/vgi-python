@@ -8,6 +8,10 @@ and communicate with the database through stdin/stdout.
 
 from vgi_rpc.log import Level, Message
 
+from vgi.aggregate_function import (
+    AggregateBindParams,
+    AggregateFunction,
+)
 from vgi.argument_spec import (
     VGI_ARG_KEY,
     VGI_ARG_NAMED,
@@ -80,6 +84,8 @@ from vgi.table_in_out_function import (
 from vgi.worker import Worker
 
 __all__ = [
+    "AggregateBindParams",
+    "AggregateFunction",
     "AnyArrow",
     "AnyArrowValue",
     "Arg",

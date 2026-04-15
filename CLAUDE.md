@@ -409,6 +409,7 @@ The table schema is automatically derived from the function's `output_schema`:
 ## Additional Documentation
 
 - **Access log**: See `vgi-rpc` docs site
+- **Aggregate functions**: `docs/aggregate-functions.md`
 - **Function metadata**: `docs/metadata.md`
 - **Function lifecycle**: `docs/lifecycle.md`
 - **Generator API (advanced)**: `docs/generator-api.md`

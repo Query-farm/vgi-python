@@ -25,3 +25,10 @@ test-data/v.parquet
 
 # Playwright MCP
 .playwright-mcp/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example

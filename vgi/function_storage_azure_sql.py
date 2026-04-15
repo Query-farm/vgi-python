@@ -447,6 +447,20 @@ class FunctionStorageAzureSql:
 
         return self._execute_with_retry(_do)
 
+    # --- Aggregate State ---
+
+    def aggregate_state_get(self, execution_id: bytes, group_ids: list[int]) -> list[tuple[int, bytes] | None]:
+        """Not yet supported on Azure SQL."""
+        raise NotImplementedError("Aggregate functions are not yet supported with the Azure SQL storage backend.")
+
+    def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]]) -> None:
+        """Not yet supported on Azure SQL."""
+        raise NotImplementedError("Aggregate functions are not yet supported with the Azure SQL storage backend.")
+
+    def aggregate_state_clear(self, execution_id: bytes) -> None:
+        """Not yet supported on Azure SQL."""
+        raise NotImplementedError("Aggregate functions are not yet supported with the Azure SQL storage backend.")
+
     # --- Factory ---
 
     @classmethod
