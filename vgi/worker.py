@@ -1121,8 +1121,8 @@ class Worker:
 
     # ========== Aggregate Function Methods ==========
 
-    @staticmethod
     def _load_aggregate_const_args(
+        self,
         func_cls: type[AggregateFunction],  # type: ignore[type-arg]
         storage: BoundStorage,
     ) -> Arguments | None:
@@ -1199,7 +1199,6 @@ class Worker:
 
         # Load existing states, create initial_state for new groups
         unique_gids: list[int] = [v.as_py() for v in group_ids.unique()]
-        stored = storage.aggregate_get(unique_gids)
 
         if func_cls.state_class is None:
             raise ValueError(f"Aggregate function '{request.function_name}' has no state_class defined")
@@ -1217,6 +1216,7 @@ class Worker:
         states: dict[int, Any] = {}
         new_gids: set[int] = set()  # Track groups created in this batch
         initial_bytes: dict[int, bytes] = {}  # Snapshot initial state for new groups
+        stored = storage.aggregate_get(unique_gids)
         for i, gid in enumerate(unique_gids):
             result = stored[i]
             if result is not None:
@@ -1295,7 +1295,6 @@ class Worker:
         target_ids: list[int] = merge_batch.column("target_group_id").to_pylist()  # type: ignore[assignment]
 
         all_gids: list[int] = list(set(source_ids) | set(target_ids))
-        stored = storage.aggregate_get(all_gids)
 
         if func_cls.state_class is None:
             raise ValueError(f"Aggregate function '{request.function_name}' has no state_class defined")
@@ -1311,6 +1310,7 @@ class Worker:
             auth_context=ctx.auth,
         )
         states: dict[int, Any] = {}
+        stored = storage.aggregate_get(all_gids)
         for i, gid in enumerate(all_gids):
             result = stored[i]
             if result is not None:
@@ -1318,7 +1318,7 @@ class Worker:
             # else: group was never updated — leave absent from states dict
 
         # Apply merges. Skip pairs where both source and target were never
-        # updated (not in FunctionStorage). If only one side exists, use
+        # updated (not in storage). If only one side exists, use
         # initial_state() for the missing side so combine() has two states.
         for src_gid, tgt_gid in zip(source_ids, target_ids, strict=True):
             src = states.get(src_gid)
@@ -1331,7 +1331,7 @@ class Worker:
                 tgt = func_cls.initial_state(params)
             states[tgt_gid] = func_cls.combine(src, tgt, params)
 
-        # Save updated targets (only those present in states dict)
+        # Save updated targets back to storage.
         updated_targets = set(target_ids)
         state_data = [(gid, states[gid].serialize_to_bytes()) for gid in updated_targets if gid in states]
         if state_data:
@@ -1357,7 +1357,6 @@ class Worker:
         gid_list: list[int] = group_ids.to_pylist()  # type: ignore[assignment]
 
         storage = BoundStorage(func_cls.storage, request.execution_id)
-        stored = storage.aggregate_get(gid_list)
 
         if func_cls.state_class is None:
             raise ValueError(f"Aggregate function '{request.function_name}' has no state_class defined")
@@ -1373,6 +1372,7 @@ class Worker:
             auth_context=ctx.auth,
         )
         states: dict[int, Any] = {}
+        stored = storage.aggregate_get(gid_list)
         for i, gid in enumerate(gid_list):
             result = stored[i]
             if result is not None:

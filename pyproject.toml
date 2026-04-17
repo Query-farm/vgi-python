@@ -13,6 +13,11 @@ dependencies = [
     "numpy>=2.4.1",
     "vgi-rpc @ file:///Users/rusty/Development/vgi-rpc",
     "duckdb>=1.5.0",
+    "scikit-learn>=1.8.0",
+    "yfinance>=1.2.2",
+    "matplotlib>=3.10.8",
+    "scipy>=1.17.1",
+    "jupyter>=1.1.1",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +27,9 @@ otel = ["vgi-rpc[otel]"]
 azure = [
     "pymssql>=2.3.0",
     "azure-identity>=1.16.0",
+]
+llm = [
+    "anthropic>=0.40.0",
 ]
 dev = [
     "mypy",

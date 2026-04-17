@@ -50,6 +50,8 @@ from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 from vgi.examples.aggregate import (
     AvgFunction,
     CountFunction,
+    DynamicAggregateFunction,
+    DynamicMLAggregateFunction,
     GenericSumFunction,
     ListAggFunction,
     PercentileFunction,
@@ -57,6 +59,14 @@ from vgi.examples.aggregate import (
     SumFunction,
     WeightedSumFunction,
 )
+
+try:
+    from vgi.examples.distill import DistillFunction
+    from vgi.examples.summarize import SummarizeFunction
+
+    _HAS_LLM = True
+except ImportError:
+    _HAS_LLM = False
 from vgi.examples.scalar import (
     AddValuesFunction,
     AnyMixedIntFunction,
@@ -326,12 +336,15 @@ _EXAMPLE_CATALOG = Catalog(
                 # AggregateFunction - aggregate input rows
                 AvgFunction,
                 CountFunction,
+                DynamicAggregateFunction,
+                DynamicMLAggregateFunction,
                 GenericSumFunction,
                 ListAggFunction,
                 PercentileFunction,
                 SumAllFunction,
                 SumFunction,
                 WeightedSumFunction,
+                *([] if not _HAS_LLM else [DistillFunction, SummarizeFunction]),
             ],
             views=[
                 View(

@@ -12,8 +12,8 @@ Demonstrates the AggregateFunction API with several aggregate types:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Annotated
+from dataclasses import dataclass, field
+from typing import Annotated, Any
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
@@ -27,6 +27,8 @@ from vgi.table_function import ProcessParams
 __all__ = [
     "AvgFunction",
     "CountFunction",
+    "DynamicAggregateFunction",
+    "DynamicMLAggregateFunction",
     "GenericSumFunction",
     "ListAggFunction",
     "PercentileFunction",
@@ -64,6 +66,27 @@ class WeightedSumState(ArrowSerializableDataclass):
 @dataclass(kw_only=True)
 class ListAggState(ArrowSerializableDataclass):
     values: Annotated[str, ArrowType(pa.string())] = ""
+
+
+@dataclass(kw_only=True)
+class DynamicState(ArrowSerializableDataclass):
+    state_bytes: Annotated[bytes, ArrowType(pa.binary())] = b""
+    code: Annotated[str, ArrowType(pa.string())] = ""
+    params: Annotated[dict[str, float], ArrowType(pa.map_(pa.string(), pa.float64()))] = field(default_factory=dict)
+
+
+def _serialize_table(table: pa.Table) -> bytes:
+    """Serialize a Table to Arrow IPC stream bytes."""
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, table.schema) as writer:
+        for batch in table.to_batches():
+            writer.write_batch(batch)
+    return sink.getvalue().to_pybytes()
+
+
+def _deserialize_table(data: bytes) -> pa.Table:
+    """Deserialize Arrow IPC stream bytes to a Table."""
+    return pa.ipc.open_stream(data).read_all()
 
 
 # ---------------------------------------------------------------------------
@@ -520,4 +543,251 @@ class SumAllFunction(AggregateFunction[SumAllState]):
         params: ProcessParams[None],
     ) -> Annotated[pa.RecordBatch, Returns(pa.float64())]:
         results = [s.total if (s := states[gid.as_py()]) is not None else None for gid in group_ids]
+        return pa.record_batch({"result": pa.array(results, type=pa.float64())})
+
+
+# ---------------------------------------------------------------------------
+# DynamicAggregateFunction — aggregate behavior defined by Python code string
+# ---------------------------------------------------------------------------
+
+import numpy as np  # noqa: E402
+
+_DYNAMIC_EXEC_NAMESPACE: dict[str, Any] = {
+    "dataclass": dataclass,
+    "field": field,
+    "Annotated": Annotated,
+    "pa": pa,
+    "np": np,
+    "ArrowSerializableDataclass": ArrowSerializableDataclass,
+    "ArrowType": ArrowType,
+}
+
+_dynamic_class_cache: dict[str, Any] = {}
+
+
+def _get_aggregate_class(code: str) -> Any:
+    """Exec the code string, validate, cache, and return the Aggregate class."""
+    if code not in _dynamic_class_cache:
+        namespace: dict[str, Any] = dict(_DYNAMIC_EXEC_NAMESPACE)
+        # Compile with dont_inherit=True so `from __future__ import annotations`
+        # in this module doesn't make the exec'd annotations into strings.
+        compiled = compile(code, "<dynamic_aggregate>", "exec", dont_inherit=True)
+        exec(compiled, namespace)  # noqa: S102
+        if "Aggregate" not in namespace:
+            raise ValueError("Dynamic aggregate code must define a class named 'Aggregate'")
+        agg_cls = namespace["Aggregate"]
+        for method in ("finalize",):
+            if not hasattr(agg_cls, method):
+                raise ValueError(f"Aggregate class must define a '{method}' method")
+        _dynamic_class_cache[code] = agg_cls
+    return _dynamic_class_cache[code]
+
+
+def _pack_dynamic_state(
+    dynamic_state: ArrowSerializableDataclass,
+    code: str = "",
+    params: dict[str, float] | None = None,
+) -> DynamicState:
+    return DynamicState(
+        state_bytes=dynamic_state.serialize_to_bytes(),
+        code=code,
+        params=params or {},
+    )
+
+
+def _unpack_dynamic_state(
+    wrapper: DynamicState, state_cls: type[ArrowSerializableDataclass]
+) -> ArrowSerializableDataclass:
+    return state_cls.deserialize_from_bytes(wrapper.state_bytes)
+
+
+class _DynamicAggregateBase(AggregateFunction[DynamicState]):
+    """Shared logic for dynamic aggregate functions.
+
+    The dynamic code's ``update(state, *arrays)`` receives Arrow arrays
+    directly — no per-row Python scalar conversion. State stores accumulated
+    data as Arrow IPC bytes for zero-copy round-trips.
+
+    For the ML variant, ``finalize(state, params)`` receives the params dict.
+    """
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[None]) -> DynamicState:
+        return DynamicState()
+
+    @classmethod
+    def _do_update(
+        cls,
+        states: dict[int, DynamicState],
+        group_ids: pa.Int64Array,
+        code_col: pa.StringArray,
+        columns: list[pa.Array],
+        params_col: pa.Array | None = None,
+    ) -> None:
+        code: str = code_col[0].as_py()
+        raw_params = params_col[0].as_py() if params_col is not None else None
+        if isinstance(raw_params, list):
+            params: dict[str, float] = {str(k): float(v) for k, v in raw_params}
+        elif isinstance(raw_params, dict):
+            params = {str(k): float(v) for k, v in raw_params.items()}
+        else:
+            params = {}
+        _get_aggregate_class(code)  # validate + cache the code early
+
+        # Build a table from the incoming columns (drop nulls)
+        col_names = [f"c{i}" for i in range(len(columns))]
+        incoming = pa.table({col_names[i]: columns[i] for i in range(len(columns))})
+        # Filter null rows
+        mask = None
+        for col in incoming.columns:
+            valid = col.is_valid()
+            mask = valid if mask is None else pa.compute.and_(mask, valid)
+        if mask is not None:
+            incoming = incoming.filter(mask)
+
+        # Group by group_id and dispatch. For window aggregates there's
+        # typically one group, so this is just one iteration.
+        unique_gids = group_ids.unique()
+        for gid_scalar in unique_gids:
+            gid: int = gid_scalar.as_py()
+            wrapper = states[gid]
+            # Get row indices for this group
+            gid_mask = pa.compute.equal(group_ids, gid_scalar)
+            group_table = incoming.filter(gid_mask)
+            if group_table.num_rows == 0:
+                continue
+
+            # Accumulate: concat with existing state data.
+            if wrapper.state_bytes:
+                combined = pa.concat_tables([_deserialize_table(wrapper.state_bytes), group_table])
+            else:
+                combined = group_table
+
+            states[gid] = DynamicState(
+                state_bytes=_serialize_table(combined),
+                code=code,
+                params=params,
+            )
+
+    @classmethod
+    def combine(cls, source: DynamicState, target: DynamicState, params: ProcessParams[None]) -> DynamicState:
+        code = target.code or source.code
+        if not code:
+            return target
+        p = target.params or source.params
+        src_table = _deserialize_table(source.state_bytes) if source.state_bytes else None
+        tgt_table = _deserialize_table(target.state_bytes) if target.state_bytes else None
+        if src_table is not None and tgt_table is not None:
+            combined = pa.concat_tables([tgt_table, src_table])
+        else:
+            combined = tgt_table or src_table
+        return DynamicState(
+            state_bytes=_serialize_table(combined) if combined is not None else b"",
+            code=code,
+            params=p,
+        )
+
+
+class DynamicAggregateFunction(_DynamicAggregateBase):
+    """Dynamic aggregate — behavior defined by a Python code string.
+
+    ``vgi_dynamic_agg(code, col1, col2, ...)``
+
+    The code and columns are regular parameters (not constants), so the code
+    can come from a table lookup, subquery, or variable.
+
+    The exec namespace pre-provides: ``dataclass``, ``Annotated``, ``pa``,
+    ``ArrowSerializableDataclass``, ``ArrowType``.
+    """
+
+    class Meta:
+        name = "vgi_dynamic_agg"
+        description = "Dynamic aggregate defined by Python code string"
+        null_handling = NullHandling.DEFAULT
+        order_dependent = OrderDependence.NOT_ORDER_DEPENDENT
+        distinct_dependent = DistinctDependence.NOT_DISTINCT_DEPENDENT
+
+    @classmethod
+    def update(
+        cls,
+        states: dict[int, DynamicState],
+        group_ids: pa.Int64Array,
+        code: Annotated[pa.StringArray, Param(doc="Python code defining Aggregate class")],
+        columns: Annotated[pa.Array, Param(doc="Input columns", varargs=True)],  # type: ignore[type-arg]
+    ) -> None:
+        cls._do_update(states, group_ids, code, columns)
+
+    @classmethod
+    def finalize(
+        cls,
+        group_ids: pa.Int64Array,
+        states: dict[int, DynamicState],
+        params: ProcessParams[None],
+    ) -> Annotated[pa.RecordBatch, Returns(pa.float64())]:
+        results: list[float | None] = []
+        for gid in group_ids:
+            wrapper = states[gid.as_py()]
+            if wrapper is not None and wrapper.code and wrapper.state_bytes:
+                table = _deserialize_table(wrapper.state_bytes)
+                agg_cls = _get_aggregate_class(wrapper.code)
+                result = agg_cls.finalize(table)
+                results.append(float(result) if result is not None else None)
+            else:
+                results.append(None)
+        return pa.record_batch({"result": pa.array(results, type=pa.float64())})
+
+
+class DynamicMLAggregateFunction(_DynamicAggregateBase):
+    """Dynamic ML aggregate with params dict.
+
+    ``vgi_dynamic_ml_agg(code, params, col1, col2, ...)``
+
+    Like ``vgi_dynamic_agg`` but with a ``MAP(VARCHAR, DOUBLE)`` params
+    column forwarded to ``Aggregate.finalize(state, params)`` so the
+    dynamic code can access arbitrary parameters (seed, lookback, alpha, etc.).
+
+    SQL::
+
+        SELECT vgi_dynamic_ml_agg(
+            code,
+            MAP {'seed': 42, 'lb': 5, 'alpha': 1.0},
+            col1, col2
+        ) ...
+    """
+
+    class Meta:
+        name = "vgi_dynamic_ml_agg"
+        description = "Dynamic ML aggregate with params dict"
+        null_handling = NullHandling.DEFAULT
+        order_dependent = OrderDependence.NOT_ORDER_DEPENDENT
+        distinct_dependent = DistinctDependence.NOT_DISTINCT_DEPENDENT
+
+    @classmethod
+    def update(
+        cls,
+        states: dict[int, DynamicState],
+        group_ids: pa.Int64Array,
+        code: Annotated[pa.StringArray, Param(doc="Python code defining Aggregate class")],
+        params_col: Annotated[pa.Array, Param(doc="MAP(VARCHAR, DOUBLE) parameters")],  # type: ignore[type-arg]
+        columns: Annotated[pa.Array, Param(doc="Input columns", varargs=True)],  # type: ignore[type-arg]
+    ) -> None:
+        cls._do_update(states, group_ids, code, columns, params_col=params_col)
+
+    @classmethod
+    def finalize(
+        cls,
+        group_ids: pa.Int64Array,
+        states: dict[int, DynamicState],
+        params: ProcessParams[None],
+    ) -> Annotated[pa.RecordBatch, Returns(pa.float64())]:
+        results: list[float | None] = []
+        for gid in group_ids:
+            wrapper = states[gid.as_py()]
+            if wrapper is not None and wrapper.code and wrapper.state_bytes:
+                table = _deserialize_table(wrapper.state_bytes)
+                agg_cls = _get_aggregate_class(wrapper.code)
+                result = agg_cls.finalize(table, wrapper.params)
+                results.append(float(result) if result is not None else None)
+            else:
+                results.append(None)
         return pa.record_batch({"result": pa.array(results, type=pa.float64())})
