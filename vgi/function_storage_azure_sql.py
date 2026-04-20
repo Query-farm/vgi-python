@@ -461,6 +461,30 @@ class FunctionStorageAzureSql:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError("Aggregate functions are not yet supported with the Azure SQL storage backend.")
 
+    def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes) -> None:
+        """Not yet supported on Azure SQL."""
+        raise NotImplementedError(
+            "Aggregate window functions are not yet supported with the Azure SQL storage backend."
+        )
+
+    def aggregate_window_partition_get(self, execution_id: bytes, partition_id: int) -> bytes | None:
+        """Not yet supported on Azure SQL."""
+        raise NotImplementedError(
+            "Aggregate window functions are not yet supported with the Azure SQL storage backend."
+        )
+
+    def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int) -> None:
+        """Not yet supported on Azure SQL."""
+        raise NotImplementedError(
+            "Aggregate window functions are not yet supported with the Azure SQL storage backend."
+        )
+
+    def aggregate_window_partition_clear(self, execution_id: bytes) -> None:
+        """Not yet supported on Azure SQL."""
+        raise NotImplementedError(
+            "Aggregate window functions are not yet supported with the Azure SQL storage backend."
+        )
+
     # --- Factory ---
 
     @classmethod

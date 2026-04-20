@@ -327,6 +327,8 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     # Aggregate function fields (future)
     order_dependent: OrderDependence = OrderDependence.NOT_ORDER_DEPENDENT
     distinct_dependent: DistinctDependence = DistinctDependence.NOT_DISTINCT_DEPENDENT
+    # True if the aggregate implements the window() callback
+    supports_window: bool = False
 
     # Settings required by the function
     required_settings: list[str] = field(default_factory=list)
@@ -1999,6 +2001,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             # Aggregate function fields
             order_dependent=meta.order_dependent,
             distinct_dependent=meta.distinct_dependent,
+            supports_window=meta.supports_window,
             # Settings
             required_settings=meta.required_settings,
             # Secrets

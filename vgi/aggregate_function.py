@@ -37,6 +37,7 @@ __all__ = [
     "AggregateBindParams",
     "AggregateFunction",
     "GROUP_COLUMN_NAME",
+    "WindowPartition",
 ]
 
 
@@ -49,6 +50,34 @@ class AggregateBindParams:
     settings: dict[str, Any]
     secrets: SecretsAccessor
     auth_context: AuthContext = AuthContext.anonymous()
+
+
+@dataclass(slots=True, frozen=True)
+class WindowPartition:
+    """Full partition data passed to a windowed aggregate callback.
+
+    Constructed by the worker from the ``aggregate_window_init`` RPC payload
+    and re-hydrated on every ``aggregate_window`` call via storage.
+
+    Attributes:
+        inputs: The partition's input RecordBatch (all input columns, all rows).
+        row_count: Total number of rows in the partition.
+        filter_mask: Boolean mask from an optional ``FILTER (WHERE ...)`` clause.
+            Length equals ``row_count``.
+        frame_stats: ``((begin_delta, end_delta), (begin_delta, end_delta))`` —
+            DuckDB's per-partition frame statistics for planning.
+        all_valid: Per-input-column validity flag (True if no nulls in column).
+    """
+
+    inputs: pa.RecordBatch
+    row_count: int
+    filter_mask: pa.BooleanArray
+    frame_stats: tuple[tuple[int, int], tuple[int, int]]
+    all_valid: list[bool]
+
+    def filter(self, start: int, end: int) -> pa.RecordBatch:
+        """Slice the partition inputs for rows ``[start, end)``."""
+        return self.inputs.slice(start, end - start)
 
 
 GROUP_COLUMN_NAME: Final[str] = "__vgi_group_id"
@@ -341,3 +370,61 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
         if group_id not in states:
             states[group_id] = cls.initial_state(params)
         return states[group_id]
+
+    # ------------------------------------------------------------------
+    # Optional windowed-aggregate callbacks
+    # ------------------------------------------------------------------
+    # Enable by setting ``Meta.supports_window = True`` and overriding
+    # ``window()`` (and optionally ``window_init()``).
+    #
+    # The C++ extension ships the full partition once per ``OVER`` partition
+    # via ``aggregate_window_init``; the worker serialises it to
+    # ``FunctionStorage`` keyed by ``(execution_id, partition_id)``. Each
+    # subsequent ``aggregate_window`` RPC carries just ``(rid, subframes)``
+    # and re-hydrates the partition from storage before calling ``window()``.
+    # See ``plan`` for the per-call flushing rationale (DuckDB's window
+    # callback has no per-Evaluate finalize hook).
+
+    @classmethod
+    def window_init(
+        cls,
+        partition: WindowPartition,
+        params: ProcessParams[Any],
+    ) -> Any:
+        """Derive optional per-partition state from the raw partition.
+
+        Called once per partition before any ``window()`` call. Return any
+        ``ArrowSerializableDataclass`` (so it can round-trip through storage),
+        or ``None`` if no derived state is required. The return value is
+        passed back to ``window()`` as ``window_state``.
+
+        Default implementation returns ``None``.
+        """
+        return None
+
+    @classmethod
+    def window(
+        cls,
+        rid: int,
+        subframes: list[tuple[int, int]],
+        partition: WindowPartition,
+        window_state: Any,
+        params: ProcessParams[Any],
+    ) -> Any:
+        """Compute the aggregate value for one output row.
+
+        Args:
+            rid: Partition-local row index being filled.
+            subframes: Frame ranges ``[(begin, end), ...]`` — 1 for the default
+                frame, 3 when ``EXCLUDE`` produces multiple subframes.
+            partition: The cached partition data.
+            window_state: Value returned by ``window_init()`` (may be ``None``).
+            params: Shared ``ProcessParams``.
+
+        Returns:
+            A Python scalar or Arrow-compatible value; the worker wraps it
+            into an IPC batch matching the function's output schema.
+        """
+        raise NotImplementedError(
+            f"{cls.__name__}: Meta.supports_window=True requires overriding window()"
+        )

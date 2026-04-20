@@ -66,7 +66,10 @@ import logging
 import os
 import sys
 import uuid
+from collections import OrderedDict
 from collections.abc import Sequence
+from dataclasses import dataclass
+from threading import Lock
 from typing import TYPE_CHECKING, Any, cast, final
 
 import pyarrow as pa
@@ -152,6 +155,14 @@ if TYPE_CHECKING:
         AggregateFinalizeResponse,
         AggregateUpdateRequest,
         AggregateUpdateResponse,
+        AggregateWindowBatchRequest,
+        AggregateWindowBatchResponse,
+        AggregateWindowDestructorRequest,
+        AggregateWindowDestructorResponse,
+        AggregateWindowInitRequest,
+        AggregateWindowInitResponse,
+        AggregateWindowRequest,
+        AggregateWindowResponse,
     )
 
 _logger = logging.getLogger("vgi.worker")
@@ -220,6 +231,226 @@ def _format_arguments_for_error(args: Arguments) -> str:
         parts.append("named_args={}")
 
     return ", ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Window partition in-process cache
+# ---------------------------------------------------------------------------
+# The storage layer (SQLite / Azure SQL / Cloudflare DO) is authoritative and
+# makes the window path correct across multi-process deployments. But a
+# single `aggregate_window` call does a BLOB read + Arrow IPC deserialize,
+# and we make that call once per output row. For a 1000-row partition that's
+# ~200ms of pure storage+deserialize overhead on top of the actual aggregate
+# work — enough to make the window path slower than DuckDB's segment-tree
+# fallback for many aggregates.
+#
+# Layer an in-memory cache on top of storage: populated on ``window_init``,
+# read first on ``window``, invalidated on ``window_destructor`` and on the
+# top-level ``aggregate_destructor`` safety sweep. Storage remains the
+# authoritative source — if the cache misses (different worker process, LRU
+# eviction, or a crashed-and-restarted worker) we fall through to storage.
+
+# Cap the cache so a missed destructor in a long-running worker can't grow
+# memory without bound. Eviction is correctness-safe because storage is
+# authoritative.
+_WINDOW_PARTITION_CACHE_MAX = 256
+
+
+@dataclass(slots=True)
+class _CachedWindowPartition:
+    """Fully-decoded partition ready to hand to the user's ``window()``."""
+
+    partition: Any  # vgi.aggregate_function.WindowPartition (avoid import cycle)
+    output_schema: pa.Schema
+    window_state: Any  # _WindowStatePlaceholder | None
+
+
+class _WindowPartitionCache:
+    """Process-local, thread-safe LRU of decoded window partitions.
+
+    Keyed by ``(execution_id, partition_id)``. Kept small on purpose — a
+    missed destructor bounds at ``_WINDOW_PARTITION_CACHE_MAX`` entries.
+    """
+
+    def __init__(self, max_size: int = _WINDOW_PARTITION_CACHE_MAX) -> None:
+        self._entries: OrderedDict[tuple[bytes, int], _CachedWindowPartition] = OrderedDict()
+        self._lock = Lock()
+        self._max_size = max_size
+
+    def get(self, execution_id: bytes, partition_id: int) -> _CachedWindowPartition | None:
+        key = (execution_id, partition_id)
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None:
+                self._entries.move_to_end(key)
+            return entry
+
+    def put(self, execution_id: bytes, partition_id: int, entry: _CachedWindowPartition) -> None:
+        key = (execution_id, partition_id)
+        with self._lock:
+            self._entries[key] = entry
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._max_size:
+                self._entries.popitem(last=False)
+
+    def delete(self, execution_id: bytes, partition_id: int) -> None:
+        key = (execution_id, partition_id)
+        with self._lock:
+            self._entries.pop(key, None)
+
+    def clear_execution(self, execution_id: bytes) -> None:
+        with self._lock:
+            to_drop = [k for k in self._entries if k[0] == execution_id]
+            for k in to_drop:
+                del self._entries[k]
+
+
+_window_partition_cache = _WindowPartitionCache()
+
+
+def _unpack_bool_mask(data: bytes, length: int) -> pa.BooleanArray:
+    """Decode a packed-bit filter mask into a BooleanArray of the given length."""
+    if not data:
+        return pa.array([True] * length, type=pa.bool_())
+    buf = pa.py_buffer(data)
+    return pa.Array.from_buffers(pa.bool_(), length, [None, buf])
+
+
+def _unpack_frame_stats(data: bytes) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Decode 4× little-endian int64 into FrameStats tuple-of-tuples."""
+    if not data or len(data) < 32:
+        return ((0, 0), (0, 0))
+    import struct
+
+    b0, e0, b1, e1 = struct.unpack("<qqqq", data[:32])
+    return ((b0, e0), (b1, e1))
+
+
+def _unpack_all_valid(data: bytes, column_count: int) -> list[bool]:
+    """Decode 1-byte-per-column validity bools."""
+    if not data:
+        return [True] * column_count
+    return [bool(b) for b in data[:column_count]]
+
+
+def _serialize_schema_bytes(schema: pa.Schema) -> bytes:
+    """Serialize an Arrow Schema to IPC bytes (stream format, schema only)."""
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, schema):
+        pass
+    return sink.getvalue().to_pybytes()
+
+
+# Arrow schema for the serialized window-partition cache payload stored in
+# FunctionStorage. One row per partition, all fields binary/int64.
+_WINDOW_PARTITION_CACHE_SCHEMA = pa.schema([
+    pa.field("partition_batch", pa.binary(), nullable=False),
+    pa.field("output_schema", pa.binary(), nullable=False),
+    pa.field("filter_mask", pa.binary(), nullable=False),
+    pa.field("frame_stats", pa.binary(), nullable=False),
+    pa.field("all_valid", pa.binary(), nullable=False),
+    pa.field("row_count", pa.int64(), nullable=False),
+    pa.field("window_state", pa.binary(), nullable=True),
+    pa.field("window_state_class_name", pa.string(), nullable=False),
+])
+
+
+def _encode_window_partition_cache(
+    *,
+    partition_batch_bytes: bytes,
+    output_schema_bytes: bytes,
+    filter_mask_bytes: bytes,
+    frame_stats_bytes: bytes,
+    all_valid_bytes: bytes,
+    row_count: int,
+    window_state_bytes: bytes | None,
+    window_state_class_name: str,
+) -> bytes:
+    batch = pa.record_batch(
+        {
+            "partition_batch": [partition_batch_bytes],
+            "output_schema": [output_schema_bytes],
+            "filter_mask": [filter_mask_bytes],
+            "frame_stats": [frame_stats_bytes],
+            "all_valid": [all_valid_bytes],
+            "row_count": [row_count],
+            "window_state": [window_state_bytes],
+            "window_state_class_name": [window_state_class_name],
+        },
+        schema=_WINDOW_PARTITION_CACHE_SCHEMA,
+    )
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, batch.schema) as writer:
+        writer.write_batch(batch)
+    return sink.getvalue().to_pybytes()
+
+
+def _decode_window_partition_cache(data: bytes) -> dict[str, Any]:
+    batch = pa.ipc.open_stream(data).read_next_batch()
+    if batch.num_rows != 1:
+        raise ValueError(f"Expected 1 cache row, got {batch.num_rows}")
+    row = batch.to_pylist()[0]
+    return row
+
+
+class _WindowStatePlaceholder:
+    """Lazy window-state holder passed to user's ``window()``.
+
+    Carries the raw bytes and class name from ``window_init``'s return value.
+    The user's ``window()`` implementation typically calls ``.deserialize(cls)``
+    to rebuild a real dataclass instance, or inspects ``.raw_bytes`` directly.
+    """
+
+    __slots__ = ("raw_bytes", "class_name")
+
+    def __init__(self, raw_bytes: bytes, class_name: str) -> None:
+        self.raw_bytes = raw_bytes
+        self.class_name = class_name
+
+    def deserialize(self, cls: type[Any]) -> Any:
+        """Deserialize the stored bytes via ``cls.deserialize_from_bytes``."""
+        return cls.deserialize_from_bytes(self.raw_bytes)
+
+
+def _build_scalar_result_batch(result_value: Any, output_schema: pa.Schema) -> pa.RecordBatch:
+    """Build a one-row RecordBatch containing the scalar window result.
+
+    If ``result_value`` is already a RecordBatch/Array with the right shape,
+    convert it; otherwise wrap the scalar in a one-element array of the
+    output column's type.
+    """
+    if isinstance(result_value, pa.RecordBatch):
+        if result_value.num_rows != 1:
+            raise ValueError(
+                f"window() must return a scalar or a 1-row RecordBatch, got {result_value.num_rows} rows"
+            )
+        return result_value
+
+    if len(output_schema) != 1:
+        raise ValueError(
+            f"Window aggregate output_schema must have 1 field, got {len(output_schema)}"
+        )
+    output_type = output_schema.field(0).type
+    col_name = output_schema.field(0).name
+    if isinstance(result_value, pa.Array):
+        if len(result_value) != 1:
+            raise ValueError(f"window() array result must have length 1, got {len(result_value)}")
+        arr = result_value
+    else:
+        arr = pa.array([result_value], type=output_type)
+    return pa.record_batch({col_name: arr}, schema=output_schema)
+
+
+def _build_batch_result(results: list[Any], output_schema: pa.Schema) -> pa.RecordBatch:
+    """Build a count-row RecordBatch containing the batched window results."""
+    if len(output_schema) != 1:
+        raise ValueError(
+            f"Window aggregate output_schema must have 1 field, got {len(output_schema)}"
+        )
+    output_type = output_schema.field(0).type
+    col_name = output_schema.field(0).name
+    arr = pa.array(results, type=output_type)
+    return pa.record_batch({col_name: arr}, schema=output_schema)
 
 
 class Worker:
@@ -1416,8 +1647,284 @@ class Worker:
         # destroy_counter == group_id_counter). Clear all FunctionStorage state.
         storage = BoundStorage(func_cls.storage, request.execution_id)
         storage.aggregate_clear()
+        # Safety sweep for windowed aggregates — in case a window_destructor
+        # RPC was dropped mid-query.
+        storage.aggregate_window_partition_clear()
+        _window_partition_cache.clear_execution(request.execution_id)
 
         return AggregateDestructorResponse()
+
+    # ========== Windowed Aggregate Methods ==========
+
+    def aggregate_window_init(
+        self,
+        request: AggregateWindowInitRequest,
+        ctx: CallContext,
+    ) -> AggregateWindowInitResponse:
+        """Cache a partition on the worker for windowed aggregation."""
+        from vgi.aggregate_function import WindowPartition
+        from vgi.protocol import AggregateWindowInitResponse
+
+        func_cls = self._resolve_function_by_name(
+            request.function_name, request.attach_id, function_type=AggregateFunction
+        )
+        if not issubclass(func_cls, AggregateFunction):
+            raise TypeError(
+                f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})"
+            )
+
+        storage = BoundStorage(func_cls.storage, request.execution_id)
+        const_args = self._load_aggregate_const_args(func_cls, storage)
+        params = ProcessParams(
+            args=const_args,
+            init_call=None,
+            init_response=None,
+            output_schema=request.output_schema,
+            settings={},
+            secrets={},
+            storage=storage,
+            auth_context=ctx.auth,
+        )
+
+        partition_batch = pa.ipc.open_stream(request.partition_batch).read_next_batch()
+        filter_mask = _unpack_bool_mask(request.filter_mask, request.row_count)
+        frame_stats = _unpack_frame_stats(request.frame_stats)
+        all_valid = _unpack_all_valid(request.all_valid, partition_batch.num_columns)
+
+        partition = WindowPartition(
+            inputs=partition_batch,
+            row_count=request.row_count,
+            filter_mask=filter_mask,
+            frame_stats=frame_stats,
+            all_valid=all_valid,
+        )
+
+        window_state = func_cls.window_init(partition, params)
+        window_state_bytes: bytes | None = None
+        if window_state is not None:
+            if not hasattr(window_state, "serialize_to_bytes"):
+                raise TypeError(
+                    f"{func_cls.__name__}.window_init() must return an ArrowSerializableDataclass "
+                    f"or None, got {type(window_state).__name__}"
+                )
+            window_state_bytes = window_state.serialize_to_bytes()
+
+        payload = _encode_window_partition_cache(
+            partition_batch_bytes=request.partition_batch,
+            output_schema_bytes=_serialize_schema_bytes(request.output_schema),
+            filter_mask_bytes=request.filter_mask,
+            frame_stats_bytes=request.frame_stats,
+            all_valid_bytes=request.all_valid,
+            row_count=request.row_count,
+            window_state_bytes=window_state_bytes,
+            window_state_class_name=type(window_state).__name__ if window_state is not None else "",
+        )
+        storage.aggregate_window_partition_put(request.partition_id, payload)
+
+        # Populate the in-process cache with the already-decoded partition
+        # so aggregate_window() can skip the storage read + deserialize.
+        cache_window_state: Any = None
+        if window_state is not None and window_state_bytes is not None:
+            cache_window_state = _WindowStatePlaceholder(
+                raw_bytes=window_state_bytes,
+                class_name=type(window_state).__name__,
+            )
+        _window_partition_cache.put(
+            request.execution_id,
+            request.partition_id,
+            _CachedWindowPartition(
+                partition=partition,
+                output_schema=request.output_schema,
+                window_state=cache_window_state,
+            ),
+        )
+
+        return AggregateWindowInitResponse()
+
+    def aggregate_window(
+        self,
+        request: AggregateWindowRequest,
+        ctx: CallContext,
+    ) -> AggregateWindowResponse:
+        """Compute one output row for a windowed aggregate."""
+        from vgi.protocol import AggregateWindowResponse
+
+        func_cls = self._resolve_function_by_name(
+            request.function_name, request.attach_id, function_type=AggregateFunction
+        )
+        if not issubclass(func_cls, AggregateFunction):
+            raise TypeError(
+                f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})"
+            )
+
+        storage = BoundStorage(func_cls.storage, request.execution_id)
+        cached = self._load_cached_window_partition(
+            func_cls, request.execution_id, request.partition_id, storage, request.function_name
+        )
+        partition = cached.partition
+        output_schema = cached.output_schema
+        window_state = cached.window_state
+
+        const_args = self._load_aggregate_const_args(func_cls, storage)
+        params = ProcessParams(
+            args=const_args,
+            init_call=None,
+            init_response=None,
+            output_schema=output_schema,
+            settings={},
+            secrets={},
+            storage=storage,
+            auth_context=ctx.auth,
+        )
+
+        subframes = list(zip(request.frame_starts, request.frame_ends, strict=True))
+        result_value = func_cls.window(request.rid, subframes, partition, window_state, params)
+
+        # Build a one-row result batch matching output_schema
+        result_batch = _build_scalar_result_batch(result_value, output_schema)
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, result_batch.schema) as writer:
+            writer.write_batch(result_batch)
+        return AggregateWindowResponse(result_batch=sink.getvalue().to_pybytes())
+
+    def _load_cached_window_partition(
+        self,
+        func_cls: type,
+        execution_id: bytes,
+        partition_id: int,
+        storage: BoundStorage,
+        function_name: str,
+    ) -> _CachedWindowPartition:
+        """Fetch the decoded partition from the in-process cache.
+
+        Falls back to storage on a cache miss (multi-process HTTP, LRU
+        eviction, or worker restart). Raises IOError if the partition is
+        unknown — window_init never ran, or the destructor already fired.
+        """
+        from vgi.aggregate_function import WindowPartition
+
+        cached = _window_partition_cache.get(execution_id, partition_id)
+        if cached is not None:
+            return cached
+
+        payload = storage.aggregate_window_partition_get(partition_id)
+        if payload is None:
+            raise IOError(
+                f"aggregate_window called for unknown partition_id={partition_id} "
+                f"(function {function_name}); window_init never ran or destructor already fired"
+            )
+        decoded = _decode_window_partition_cache(payload)
+        partition_batch = pa.ipc.open_stream(decoded["partition_batch"]).read_next_batch()
+        output_schema = pa.ipc.open_stream(decoded["output_schema"]).schema
+        filter_mask = _unpack_bool_mask(decoded["filter_mask"], decoded["row_count"])
+        frame_stats = _unpack_frame_stats(decoded["frame_stats"])
+        all_valid = _unpack_all_valid(decoded["all_valid"], partition_batch.num_columns)
+
+        partition = WindowPartition(
+            inputs=partition_batch,
+            row_count=decoded["row_count"],
+            filter_mask=filter_mask,
+            frame_stats=frame_stats,
+            all_valid=all_valid,
+        )
+        window_state: Any = None
+        if decoded["window_state"] is not None:
+            window_state = _WindowStatePlaceholder(
+                raw_bytes=decoded["window_state"],
+                class_name=decoded["window_state_class_name"],
+            )
+        cached = _CachedWindowPartition(
+            partition=partition,
+            output_schema=output_schema,
+            window_state=window_state,
+        )
+        _window_partition_cache.put(execution_id, partition_id, cached)
+        return cached
+
+    def aggregate_window_batch(
+        self,
+        request: AggregateWindowBatchRequest,
+        ctx: CallContext,
+    ) -> AggregateWindowBatchResponse:
+        """Compute ``count`` window output rows in a single batched RPC."""
+        from vgi.protocol import AggregateWindowBatchResponse
+
+        func_cls = self._resolve_function_by_name(
+            request.function_name, request.attach_id, function_type=AggregateFunction
+        )
+        if not issubclass(func_cls, AggregateFunction):
+            raise TypeError(
+                f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})"
+            )
+
+        storage = BoundStorage(func_cls.storage, request.execution_id)
+        cached = self._load_cached_window_partition(
+            func_cls, request.execution_id, request.partition_id, storage, request.function_name
+        )
+        partition = cached.partition
+        output_schema = cached.output_schema
+        window_state = cached.window_state
+
+        const_args = self._load_aggregate_const_args(func_cls, storage)
+        params = ProcessParams(
+            args=const_args,
+            init_call=None,
+            init_response=None,
+            output_schema=output_schema,
+            settings={},
+            secrets={},
+            storage=storage,
+            auth_context=ctx.auth,
+        )
+
+        # Unflatten subframes: frame_starts/frame_ends are concatenated across
+        # all rows, frames_per_row[i] gives the slice length for row i.
+        starts = request.frame_starts
+        ends = request.frame_ends
+        frames_per_row = request.frames_per_row
+        if request.count != len(frames_per_row):
+            raise ValueError(
+                f"aggregate_window_batch: count={request.count} but frames_per_row has "
+                f"{len(frames_per_row)} entries"
+            )
+
+        offset = 0
+        results: list[Any] = []
+        for i in range(request.count):
+            n = frames_per_row[i]
+            subframes = [(starts[offset + k], ends[offset + k]) for k in range(n)]
+            offset += n
+            rid = request.row_idx + i
+            results.append(
+                func_cls.window(rid, subframes, partition, window_state, params)
+            )
+
+        result_batch = _build_batch_result(results, output_schema)
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, result_batch.schema) as writer:
+            writer.write_batch(result_batch)
+        return AggregateWindowBatchResponse(result_batch=sink.getvalue().to_pybytes())
+
+    def aggregate_window_destructor(
+        self,
+        request: AggregateWindowDestructorRequest,
+        ctx: CallContext,
+    ) -> AggregateWindowDestructorResponse:
+        """Evict a cached partition from storage."""
+        from vgi.protocol import AggregateWindowDestructorResponse
+
+        func_cls = self._resolve_function_by_name(
+            request.function_name, request.attach_id, function_type=AggregateFunction
+        )
+        if not issubclass(func_cls, AggregateFunction):
+            raise TypeError(
+                f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})"
+            )
+
+        storage = BoundStorage(func_cls.storage, request.execution_id)
+        storage.aggregate_window_partition_delete(request.partition_id)
+        _window_partition_cache.delete(request.execution_id, request.partition_id)
+        return AggregateWindowDestructorResponse()
 
     # ========== Function Invocation ==========
 

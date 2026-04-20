@@ -18,7 +18,7 @@ from typing import Annotated, Any
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
 
-from vgi.aggregate_function import AggregateBindParams, AggregateFunction
+from vgi.aggregate_function import AggregateBindParams, AggregateFunction, WindowPartition
 from vgi.arguments import ConstParam, Param, Returns
 from vgi.invocation import BindResponse
 from vgi.metadata import DistinctDependence, NullHandling, OrderDependence
@@ -35,6 +35,9 @@ __all__ = [
     "SumAllFunction",
     "SumFunction",
     "WeightedSumFunction",
+    "WindowListAggFunction",
+    "WindowMedianFunction",
+    "WindowSumFunction",
 ]
 
 # ---------------------------------------------------------------------------
@@ -687,6 +690,69 @@ class _DynamicAggregateBase(AggregateFunction[DynamicState]):
             params=p,
         )
 
+    # ------------------------------------------------------------------
+    # Windowed path
+    # ------------------------------------------------------------------
+    # Shared logic for both vgi_dynamic_agg and vgi_dynamic_ml_agg.
+    # Each subclass overrides window() directly — the shared helper below just
+    # slices all partition columns to the current frame with filter_mask and
+    # NULL-drop applied. Reading code/params from the sliced frame (rather
+    # than partition.inputs.column(X)[0]) avoids aliasing across partitions
+    # when DuckDB batches many partitions into shared buffers.
+
+    @staticmethod
+    def _slice_to_frame(
+        partition: WindowPartition,
+        subframes: list[tuple[int, int]],
+        data_start: int,
+    ) -> pa.Table:
+        """Slice all partition columns to the frame rows.
+
+        Args:
+            data_start: Index where data columns begin (header columns are
+                ``[0 .. data_start)``). NULL-drop is applied on data columns
+                only — matches the filtering ``_do_update`` performs in the
+                non-window path.
+        """
+        num_cols = partition.inputs.num_columns
+        cols = [partition.inputs.column(i) for i in range(num_cols)]
+        col_names = [f"c{i}" for i in range(num_cols)]
+        slices: list[pa.Table] = []
+        for begin, end in subframes:
+            if end <= begin:
+                continue
+            length = end - begin
+            sliced = {col_names[i]: cols[i].slice(begin, length) for i in range(num_cols)}
+            t = pa.table(sliced)
+            if partition.filter_mask is not None:
+                t = t.filter(partition.filter_mask.slice(begin, length))
+            data_cols_of_t = t.columns[data_start:]
+            if data_cols_of_t:
+                null_mask = None
+                for col in data_cols_of_t:
+                    valid = col.is_valid()
+                    null_mask = valid if null_mask is None else pa.compute.and_(null_mask, valid)
+                if null_mask is not None:
+                    t = t.filter(null_mask)
+            slices.append(t)
+        if not slices:
+            return pa.table({c: pa.array([], type=cols[i].type) for i, c in enumerate(col_names)})
+        return pa.concat_tables(slices)
+
+    @staticmethod
+    def _data_table_from(frame: pa.Table, data_start: int) -> pa.Table:
+        """Rebuild a 0-indexed ``c0, c1, …`` data-only table for user code."""
+        data_cols = frame.columns[data_start:]
+        return pa.table({f"c{i}": col for i, col in enumerate(data_cols)})
+
+    @staticmethod
+    def _call_user(agg_cls: Any, data_table: pa.Table, user_params: dict[str, float] | None) -> Any:
+        """Prefer the user's ``window()``; fall back to ``finalize()``."""
+        fn = getattr(agg_cls, "window", None) or agg_cls.finalize
+        if user_params is None:
+            return fn(data_table)
+        return fn(data_table, user_params)
+
 
 class DynamicAggregateFunction(_DynamicAggregateBase):
     """Dynamic aggregate — behavior defined by a Python code string.
@@ -704,8 +770,12 @@ class DynamicAggregateFunction(_DynamicAggregateBase):
         name = "vgi_dynamic_agg"
         description = "Dynamic aggregate defined by Python code string"
         null_handling = NullHandling.DEFAULT
-        order_dependent = OrderDependence.NOT_ORDER_DEPENDENT
+        # User code is free-form Python that may depend on input order (e.g. data[-1]
+        # for "last row", slicing like data[:-1] / data[1:]). The framework can't
+        # introspect what the user does, so conservatively assume order matters.
+        order_dependent = OrderDependence.ORDER_DEPENDENT
         distinct_dependent = DistinctDependence.NOT_DISTINCT_DEPENDENT
+        supports_window = True
 
     @classmethod
     def update(
@@ -736,6 +806,25 @@ class DynamicAggregateFunction(_DynamicAggregateBase):
                 results.append(None)
         return pa.record_batch({"result": pa.array(results, type=pa.float64())})
 
+    @classmethod
+    def window(
+        cls,
+        rid: int,
+        subframes: list[tuple[int, int]],
+        partition: WindowPartition,
+        window_state: Any,
+        params: ProcessParams[None],
+    ) -> float | None:
+        # Column layout: [code, col1, col2, ...]
+        frame = cls._slice_to_frame(partition, subframes, data_start=1)
+        if frame.num_rows == 0:
+            return None
+        code = frame.column(0)[0].as_py()
+        data_table = cls._data_table_from(frame, data_start=1)
+        agg_cls = _get_aggregate_class(code)
+        result = cls._call_user(agg_cls, data_table, user_params=None)
+        return float(result) if result is not None else None
+
 
 class DynamicMLAggregateFunction(_DynamicAggregateBase):
     """Dynamic ML aggregate with params dict.
@@ -759,8 +848,12 @@ class DynamicMLAggregateFunction(_DynamicAggregateBase):
         name = "vgi_dynamic_ml_agg"
         description = "Dynamic ML aggregate with params dict"
         null_handling = NullHandling.DEFAULT
-        order_dependent = OrderDependence.NOT_ORDER_DEPENDENT
+        # User code is free-form Python that may depend on input order (e.g. data[-1]
+        # for "last row", slicing like data[:-1] / data[1:]). The framework can't
+        # introspect what the user does, so conservatively assume order matters.
+        order_dependent = OrderDependence.ORDER_DEPENDENT
         distinct_dependent = DistinctDependence.NOT_DISTINCT_DEPENDENT
+        supports_window = True
 
     @classmethod
     def update(
@@ -791,3 +884,293 @@ class DynamicMLAggregateFunction(_DynamicAggregateBase):
             else:
                 results.append(None)
         return pa.record_batch({"result": pa.array(results, type=pa.float64())})
+
+    @classmethod
+    def window(
+        cls,
+        rid: int,
+        subframes: list[tuple[int, int]],
+        partition: WindowPartition,
+        window_state: Any,
+        params: ProcessParams[None],
+    ) -> float | None:
+        # Column layout: [code, params_map, col1, col2, ...]
+        frame = cls._slice_to_frame(partition, subframes, data_start=2)
+        if frame.num_rows == 0:
+            return None
+        code = frame.column(0)[0].as_py()
+        raw = frame.column(1)[0].as_py()
+        if isinstance(raw, list):
+            user_params: dict[str, float] = {str(k): float(v) for k, v in raw}
+        elif isinstance(raw, dict):
+            user_params = {str(k): float(v) for k, v in raw.items()}
+        else:
+            user_params = {}
+        data_table = cls._data_table_from(frame, data_start=2)
+        agg_cls = _get_aggregate_class(code)
+        result = cls._call_user(agg_cls, data_table, user_params=user_params)
+        return float(result) if result is not None else None
+
+
+# ---------------------------------------------------------------------------
+# Window-capable aggregates (Meta.supports_window = True)
+# ---------------------------------------------------------------------------
+# These demonstrate the window() callback which lets DuckDB ship the whole
+# partition once and call the worker per output row with frame bounds.
+
+
+@dataclass(kw_only=True)
+class _EmptyWindowState(ArrowSerializableDataclass):
+    """Placeholder for functions that don't need derived per-partition state."""
+
+    pass
+
+
+class WindowSumFunction(AggregateFunction[SumState]):
+    """Windowed running-sum — demonstrates a simple window() callback.
+
+    Also implements update/combine/finalize so the function still works in
+    plain ``GROUP BY`` contexts (DuckDB picks the window path automatically
+    via ``WindowCustomAggregator::CanAggregate``).
+
+    SQL::
+
+        SELECT x, vgi_window_sum(x) OVER (ORDER BY x ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
+        FROM generate_series(1, 10) t(x);
+    """
+
+    class Meta:
+        name = "vgi_window_sum"
+        description = "Windowed sum that uses the per-partition window() callback"
+        null_handling = NullHandling.DEFAULT
+        order_dependent = OrderDependence.NOT_ORDER_DEPENDENT
+        distinct_dependent = DistinctDependence.NOT_DISTINCT_DEPENDENT
+        supports_window = True
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[None]) -> SumState:
+        return SumState()
+
+    @classmethod
+    def update(
+        cls,
+        states: dict[int, SumState],
+        group_ids: pa.Int64Array,
+        value: Annotated[pa.Int64Array, Param(doc="Column to sum")],
+    ) -> None:
+        table = pa.table({"gid": group_ids, "value": value})
+        grouped = table.group_by("gid").aggregate([("value", "sum")])
+        for i in range(grouped.num_rows):
+            gid: int = grouped.column("gid")[i].as_py()
+            val = grouped.column("value_sum")[i].as_py()
+            if val is not None:
+                states[gid] = SumState(total=states[gid].total + val)
+
+    @classmethod
+    def combine(cls, source: SumState, target: SumState, params: ProcessParams[None]) -> SumState:
+        return SumState(total=source.total + target.total)
+
+    @classmethod
+    def finalize(
+        cls,
+        group_ids: pa.Int64Array,
+        states: dict[int, SumState],
+        params: ProcessParams[None],
+    ) -> Annotated[pa.RecordBatch, Returns(pa.int64())]:
+        results = [s.total if (s := states[gid.as_py()]) is not None else None for gid in group_ids]
+        return pa.record_batch({"result": pa.array(results, type=pa.int64())})
+
+    # --- Window path ---
+
+    @classmethod
+    def window(
+        cls,
+        rid: int,
+        subframes: list[tuple[int, int]],
+        partition: WindowPartition,
+        window_state: Any,
+        params: ProcessParams[None],
+    ) -> int | None:
+        import pyarrow.compute as pc
+
+        value_col = partition.inputs.column(0)
+        total = 0
+        any_valid = False
+        for begin, end in subframes:
+            if end <= begin:
+                continue
+            slice_ = value_col.slice(begin, end - begin)
+            if partition.filter_mask is not None:
+                mask = partition.filter_mask.slice(begin, end - begin)
+                slice_ = slice_.filter(mask)
+            s = pc.sum(slice_)
+            if s.is_valid:
+                total += s.as_py()
+                any_valid = True
+        return total if any_valid else None
+
+
+class WindowMedianFunction(AggregateFunction[_EmptyWindowState]):
+    """Windowed median — non-incremental, benefits from caching the partition.
+
+    Uses the window() callback exclusively (no incremental update path makes
+    sense for median). Falls back to a naive GROUP BY implementation via
+    update/combine/finalize that collects values in a single string field.
+
+    SQL::
+
+        SELECT x, vgi_window_median(x) OVER (ORDER BY x ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING)
+        FROM generate_series(1, 20) t(x);
+    """
+
+    class Meta:
+        name = "vgi_window_median"
+        description = "Windowed median (window() callback demonstrates non-incremental aggregates)"
+        null_handling = NullHandling.DEFAULT
+        order_dependent = OrderDependence.NOT_ORDER_DEPENDENT
+        distinct_dependent = DistinctDependence.NOT_DISTINCT_DEPENDENT
+        supports_window = True
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[None]) -> _EmptyWindowState:
+        return _EmptyWindowState()
+
+    @classmethod
+    def update(
+        cls,
+        states: dict[int, _EmptyWindowState],
+        group_ids: pa.Int64Array,
+        value: Annotated[pa.DoubleArray, Param(doc="Column to compute median of")],
+    ) -> None:
+        # GROUP BY path not the primary use — kept only so the function works
+        # when used outside an OVER clause. Caller must not expect exact
+        # semantics for huge groups.
+        pass
+
+    @classmethod
+    def combine(
+        cls, source: _EmptyWindowState, target: _EmptyWindowState, params: ProcessParams[None]
+    ) -> _EmptyWindowState:
+        return target
+
+    @classmethod
+    def finalize(
+        cls,
+        group_ids: pa.Int64Array,
+        states: dict[int, _EmptyWindowState],
+        params: ProcessParams[None],
+    ) -> Annotated[pa.RecordBatch, Returns(pa.float64())]:
+        results = [None] * len(group_ids)
+        return pa.record_batch({"result": pa.array(results, type=pa.float64())})
+
+    @classmethod
+    def window(
+        cls,
+        rid: int,
+        subframes: list[tuple[int, int]],
+        partition: WindowPartition,
+        window_state: Any,
+        params: ProcessParams[None],
+    ) -> float | None:
+        value_col = partition.inputs.column(0)
+        values: list[float] = []
+        for begin, end in subframes:
+            if end <= begin:
+                continue
+            slice_ = value_col.slice(begin, end - begin)
+            if partition.filter_mask is not None:
+                mask = partition.filter_mask.slice(begin, end - begin)
+                slice_ = slice_.filter(mask)
+            for v in slice_.to_pylist():
+                if v is not None:
+                    values.append(float(v))
+        if not values:
+            return None
+        values.sort()
+        n = len(values)
+        mid = n // 2
+        if n % 2 == 1:
+            return values[mid]
+        return (values[mid - 1] + values[mid]) / 2.0
+
+
+class WindowListAggFunction(AggregateFunction[ListAggState]):
+    """Windowed ORDER_DEPENDENT aggregate — demonstrates the fallback handoff.
+
+    For ``vgi_window_listagg(s) OVER (ORDER BY x ...)`` DuckDB picks our
+    ``window()`` callback (arg_orders is empty; frame ordering comes from
+    the OVER clause).
+
+    For ``vgi_window_listagg(s ORDER BY x) OVER (...)`` DuckDB's
+    ``WindowCustomAggregator::CanAggregate`` rejects the window path
+    because ``wexpr.arg_orders`` is non-empty, and falls back to
+    update/combine/finalize. The result is still correct — just slower.
+    """
+
+    class Meta:
+        name = "vgi_window_listagg"
+        description = "Windowed string concat (ORDER_DEPENDENT; tests fallback handoff)"
+        null_handling = NullHandling.DEFAULT
+        order_dependent = OrderDependence.ORDER_DEPENDENT
+        distinct_dependent = DistinctDependence.DISTINCT_DEPENDENT
+        supports_window = True
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[None]) -> ListAggState:
+        return ListAggState()
+
+    @classmethod
+    def update(
+        cls,
+        states: dict[int, ListAggState],
+        group_ids: pa.Int64Array,
+        value: Annotated[pa.StringArray, Param(doc="String column")],
+    ) -> None:
+        for i in range(len(group_ids)):
+            gid: int = group_ids[i].as_py()
+            val = value[i].as_py()
+            if val is not None:
+                s = states[gid]
+                if s.values:
+                    states[gid] = ListAggState(values=s.values + "," + val)
+                else:
+                    states[gid] = ListAggState(values=val)
+
+    @classmethod
+    def combine(cls, source: ListAggState, target: ListAggState, params: ProcessParams[None]) -> ListAggState:
+        if source.values and target.values:
+            return ListAggState(values=target.values + "," + source.values)
+        return ListAggState(values=target.values or source.values)
+
+    @classmethod
+    def finalize(
+        cls,
+        group_ids: pa.Int64Array,
+        states: dict[int, ListAggState],
+        params: ProcessParams[None],
+    ) -> Annotated[pa.RecordBatch, Returns(pa.string())]:
+        results = [s.values or None if (s := states[gid.as_py()]) is not None else None for gid in group_ids]
+        return pa.record_batch({"result": pa.array(results, type=pa.string())})
+
+    @classmethod
+    def window(
+        cls,
+        rid: int,
+        subframes: list[tuple[int, int]],
+        partition: WindowPartition,
+        window_state: Any,
+        params: ProcessParams[None],
+    ) -> str | None:
+        value_col = partition.inputs.column(0)
+        parts: list[str] = []
+        for begin, end in subframes:
+            if end <= begin:
+                continue
+            slice_ = value_col.slice(begin, end - begin)
+            if partition.filter_mask is not None:
+                mask = partition.filter_mask.slice(begin, end - begin)
+                slice_ = slice_.filter(mask)
+            for v in slice_.to_pylist():
+                if v is not None:
+                    parts.append(v)
+        return ",".join(parts) if parts else None

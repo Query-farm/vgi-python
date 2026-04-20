@@ -904,6 +904,106 @@ class AggregateDestructorResponse(ArrowSerializableDataclass):
 
 
 # ---------------------------------------------------------------------------
+# Aggregate Window Function RPC Types
+# ---------------------------------------------------------------------------
+# Optional windowed-aggregate protocol: ``aggregate_window_init`` ships the
+# partition once, ``aggregate_window`` evaluates one output row at a time
+# (per-call flushing — DuckDB's window callback API has no per-Evaluate hook),
+# ``aggregate_window_destructor`` evicts the partition from storage.
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateWindowInitRequest(ArrowSerializableDataclass):
+    """Request for aggregate_window_init — ship a partition to the worker."""
+
+    function_name: str
+    execution_id: bytes
+    partition_id: int
+    row_count: int
+    partition_batch: bytes  # Full IPC stream bytes (partition's input columns)
+    output_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
+    filter_mask: bytes  # Packed-bit bool array, length == row_count
+    frame_stats: bytes  # 4× int64: ((begin_delta,end_delta),(begin_delta,end_delta))
+    all_valid: bytes  # 1 byte per input column
+    attach_id: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateWindowInitResponse(ArrowSerializableDataclass):
+    """Response from aggregate_window_init — empty ack."""
+
+    pass
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateWindowRequest(ArrowSerializableDataclass):
+    """Request for aggregate_window — compute the aggregate for one output row.
+
+    ``frame_starts`` and ``frame_ends`` are parallel arrays of length 1–3
+    (one entry per subframe; 3 only for EXCLUDE TIES / EXCLUDE GROUP).
+    """
+
+    function_name: str
+    execution_id: bytes
+    partition_id: int
+    rid: int
+    frame_starts: list[int]
+    frame_ends: list[int]
+    attach_id: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateWindowResponse(ArrowSerializableDataclass):
+    """Response from aggregate_window — one row RecordBatch with the scalar result."""
+
+    result_batch: bytes  # Full IPC stream bytes (one row, output schema)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateWindowDestructorRequest(ArrowSerializableDataclass):
+    """Request for aggregate_window_destructor — evict a partition from storage."""
+
+    function_name: str
+    execution_id: bytes
+    partition_id: int
+    attach_id: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateWindowDestructorResponse(ArrowSerializableDataclass):
+    """Response from aggregate_window_destructor — empty ack."""
+
+    pass
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateWindowBatchRequest(ArrowSerializableDataclass):
+    """Request for aggregate_window_batch — compute ``count`` output rows in one RPC.
+
+    ``frames_per_row[i]`` gives the subframe cardinality for output row ``i``
+    (1 normally, 2–3 for EXCLUDE TIES / EXCLUDE GROUP). ``frame_starts`` and
+    ``frame_ends`` are flat arrays of length ``sum(frames_per_row)``.
+    """
+
+    function_name: str
+    execution_id: bytes
+    partition_id: int
+    row_idx: int
+    count: int
+    frames_per_row: list[int]
+    frame_starts: list[int]
+    frame_ends: list[int]
+    attach_id: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateWindowBatchResponse(ArrowSerializableDataclass):
+    """Response from aggregate_window_batch — count-row RecordBatch."""
+
+    result_batch: bytes  # Full IPC stream bytes (count rows, output schema)
+
+
+# ---------------------------------------------------------------------------
 # VGI Protocol
 # ---------------------------------------------------------------------------
 
@@ -953,6 +1053,28 @@ class VgiProtocol(Protocol):
 
     def aggregate_destructor(self, request: AggregateDestructorRequest) -> AggregateDestructorResponse:
         """Best-effort cleanup of aggregate states. Must not raise."""
+        ...
+
+    # ========== Aggregate Window Function Methods (optional, all unary) ==========
+
+    def aggregate_window_init(self, request: AggregateWindowInitRequest) -> AggregateWindowInitResponse:
+        """Ship a partition to the worker for windowed aggregation."""
+        ...
+
+    def aggregate_window(self, request: AggregateWindowRequest) -> AggregateWindowResponse:
+        """Compute an aggregate value for one output row of the window."""
+        ...
+
+    def aggregate_window_destructor(
+        self, request: AggregateWindowDestructorRequest
+    ) -> AggregateWindowDestructorResponse:
+        """Evict a cached partition from storage."""
+        ...
+
+    def aggregate_window_batch(
+        self, request: AggregateWindowBatchRequest
+    ) -> AggregateWindowBatchResponse:
+        """Compute ``count`` window output rows in one batched RPC."""
         ...
 
     # ========== Catalog - Discovery ==========

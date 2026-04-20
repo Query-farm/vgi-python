@@ -259,6 +259,30 @@ class FunctionStorageCfDo:
             "Aggregate functions are not yet supported with the Cloudflare Durable Object storage backend."
         )
 
+    def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes) -> None:
+        """Not yet supported on Cloudflare DO."""
+        raise NotImplementedError(
+            "Aggregate window functions are not yet supported with the Cloudflare Durable Object storage backend."
+        )
+
+    def aggregate_window_partition_get(self, execution_id: bytes, partition_id: int) -> bytes | None:
+        """Not yet supported on Cloudflare DO."""
+        raise NotImplementedError(
+            "Aggregate window functions are not yet supported with the Cloudflare Durable Object storage backend."
+        )
+
+    def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int) -> None:
+        """Not yet supported on Cloudflare DO."""
+        raise NotImplementedError(
+            "Aggregate window functions are not yet supported with the Cloudflare Durable Object storage backend."
+        )
+
+    def aggregate_window_partition_clear(self, execution_id: bytes) -> None:
+        """Not yet supported on Cloudflare DO."""
+        raise NotImplementedError(
+            "Aggregate window functions are not yet supported with the Cloudflare Durable Object storage backend."
+        )
+
     # --- Factory ---
 
     @classmethod

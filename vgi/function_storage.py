@@ -196,6 +196,33 @@ class FunctionStorage(Protocol):
         """
         ...
 
+    # --- Aggregate Window Partition (per-partition cached input for windowed aggregates) ---
+
+    def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes) -> None:
+        """Write a cached partition payload for a windowed aggregate.
+
+        The payload is typically an Arrow IPC stream carrying the full
+        partition input plus any derived window_state. Keyed by
+        ``(execution_id, partition_id)`` with INSERT OR REPLACE semantics.
+        """
+        ...
+
+    def aggregate_window_partition_get(self, execution_id: bytes, partition_id: int) -> bytes | None:
+        """Load the cached partition payload for a windowed aggregate."""
+        ...
+
+    def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int) -> None:
+        """Delete one cached partition. No-op if not present."""
+        ...
+
+    def aggregate_window_partition_clear(self, execution_id: bytes) -> None:
+        """Remove all cached partitions for an execution_id.
+
+        Safety-sweep called from ``aggregate_destructor`` to catch any
+        partitions whose destructor RPCs were dropped mid-query.
+        """
+        ...
+
 
 class BoundStorage:
     def __init__(self, storage: FunctionStorage, execution_id: bytes):
@@ -246,6 +273,24 @@ class BoundStorage:
     def aggregate_clear(self) -> None:
         """Remove all aggregate states for this execution."""
         self._base.aggregate_state_clear(self._execution_id)
+
+    # --- Aggregate Window Partition ---
+
+    def aggregate_window_partition_put(self, partition_id: int, data: bytes) -> None:
+        """Write a cached partition payload for a windowed aggregate."""
+        self._base.aggregate_window_partition_put(self._execution_id, partition_id, data)
+
+    def aggregate_window_partition_get(self, partition_id: int) -> bytes | None:
+        """Load the cached partition payload."""
+        return self._base.aggregate_window_partition_get(self._execution_id, partition_id)
+
+    def aggregate_window_partition_delete(self, partition_id: int) -> None:
+        """Delete one cached partition."""
+        self._base.aggregate_window_partition_delete(self._execution_id, partition_id)
+
+    def aggregate_window_partition_clear(self) -> None:
+        """Remove all cached partitions for this execution."""
+        self._base.aggregate_window_partition_clear(self._execution_id)
 
     @staticmethod
     def serialize_record_batch(batch: pa.RecordBatch) -> bytes:
@@ -360,6 +405,16 @@ class FunctionStorageSqlite:
                     state_data BLOB NOT NULL,
                     created_at REAL DEFAULT (julianday('now')),
                     PRIMARY KEY (execution_id, group_id)
+                )
+            """)
+            # Aggregate window partitions - per-partition cached input for windowed aggregates
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS aggregate_window_partitions (
+                    execution_id BLOB NOT NULL,
+                    partition_id INTEGER NOT NULL,
+                    payload BLOB NOT NULL,
+                    created_at REAL DEFAULT (julianday('now')),
+                    PRIMARY KEY (execution_id, partition_id)
                 )
             """)
             conn.commit()
@@ -551,6 +606,65 @@ class FunctionStorageSqlite:
         finally:
             conn.close()
 
+    # --- Aggregate Window Partition ---
+
+    def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes) -> None:
+        """Store a cached windowed-aggregate partition payload."""
+        if random.random() < 0.01:
+            self.cleanup_old_entries(max_age_days=1.0)
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO aggregate_window_partitions
+                (execution_id, partition_id, payload, created_at)
+                VALUES (?, ?, ?, julianday('now'))
+                """,
+                (execution_id, partition_id, data),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def aggregate_window_partition_get(self, execution_id: bytes, partition_id: int) -> bytes | None:
+        """Load a cached windowed-aggregate partition payload."""
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "SELECT payload FROM aggregate_window_partitions "
+                "WHERE execution_id = ? AND partition_id = ?",
+                (execution_id, partition_id),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int) -> None:
+        """Delete a single cached windowed-aggregate partition."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "DELETE FROM aggregate_window_partitions "
+                "WHERE execution_id = ? AND partition_id = ?",
+                (execution_id, partition_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def aggregate_window_partition_clear(self, execution_id: bytes) -> None:
+        """Remove all cached windowed-aggregate partitions for an execution_id."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "DELETE FROM aggregate_window_partitions WHERE execution_id = ?",
+                (execution_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     # --- Maintenance (not part of protocol) ---
 
     def cleanup_old_entries(self, max_age_days: float = 1.0) -> int:
@@ -600,6 +714,13 @@ class FunctionStorageSqlite:
                 """,
                 (max_age_days,),
             )
+            cursor6 = conn.execute(
+                """
+                DELETE FROM aggregate_window_partitions
+                WHERE julianday('now') - created_at > ?
+                """,
+                (max_age_days,),
+            )
             conn.commit()
             return (
                 int(cursor1.rowcount)
@@ -607,6 +728,7 @@ class FunctionStorageSqlite:
                 + int(cursor3.rowcount)
                 + int(cursor4.rowcount)
                 + int(cursor5.rowcount)
+                + int(cursor6.rowcount)
             )
         finally:
             conn.close()

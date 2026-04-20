@@ -58,6 +58,9 @@ from vgi.examples.aggregate import (
     SumAllFunction,
     SumFunction,
     WeightedSumFunction,
+    WindowListAggFunction,
+    WindowMedianFunction,
+    WindowSumFunction,
 )
 
 try:
@@ -344,6 +347,9 @@ _EXAMPLE_CATALOG = Catalog(
                 SumAllFunction,
                 SumFunction,
                 WeightedSumFunction,
+                WindowListAggFunction,
+                WindowMedianFunction,
+                WindowSumFunction,
                 *([] if not _HAS_LLM else [DistillFunction, SummarizeFunction]),
             ],
             views=[

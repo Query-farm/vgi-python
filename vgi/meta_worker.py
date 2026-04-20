@@ -311,6 +311,22 @@ class MetaWorker:
         """Dispatch aggregate_destructor to the right worker."""
         return self._dispatch_aggregate(request, "aggregate_destructor", ctx)
 
+    def aggregate_window_init(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch aggregate_window_init to the right worker."""
+        return self._dispatch_aggregate(request, "aggregate_window_init", ctx)
+
+    def aggregate_window(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch aggregate_window to the right worker."""
+        return self._dispatch_aggregate(request, "aggregate_window", ctx)
+
+    def aggregate_window_destructor(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch aggregate_window_destructor to the right worker."""
+        return self._dispatch_aggregate(request, "aggregate_window_destructor", ctx)
+
+    def aggregate_window_batch(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch aggregate_window_batch to the right worker."""
+        return self._dispatch_aggregate(request, "aggregate_window_batch", ctx)
+
     # ========== Serve entry point ==========
 
     @classmethod

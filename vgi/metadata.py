@@ -327,6 +327,7 @@ class ResolvedMetadata:
     # Aggregate function specific
     order_dependent: OrderDependence = OrderDependence.NOT_ORDER_DEPENDENT
     distinct_dependent: DistinctDependence = DistinctDependence.NOT_DISTINCT_DEPENDENT
+    supports_window: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -351,6 +352,7 @@ class ResolvedMetadata:
             "max_workers": self.max_workers,
             "order_dependent": self.order_dependent.name,
             "distinct_dependent": self.distinct_dependent.name,
+            "supports_window": self.supports_window,
         }
 
     @staticmethod
@@ -377,6 +379,7 @@ class ResolvedMetadata:
             max_workers=d.get("max_workers"),
             order_dependent=OrderDependence[d.get("order_dependent", "NOT_ORDER_DEPENDENT")],
             distinct_dependent=DistinctDependence[d.get("distinct_dependent", "NOT_DISTINCT_DEPENDENT")],
+            supports_window=d.get("supports_window", False),
         )
 
 
@@ -761,6 +764,7 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         # Aggregate function specific
         "order_dependent",
         "distinct_dependent",
+        "supports_window",
         # Scalar function specific
         "output_type",  # pa.DataType | type[AnyArrow] for scalar functions
     }
@@ -924,6 +928,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         max_workers=attrs.get("max_workers"),
         order_dependent=attrs.get("order_dependent", OrderDependence.NOT_ORDER_DEPENDENT),
         distinct_dependent=attrs.get("distinct_dependent", DistinctDependence.NOT_DISTINCT_DEPENDENT),
+        supports_window=bool(attrs.get("supports_window", False)),
     )
 
 
@@ -989,6 +994,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("max_workers", pa.int32(), nullable=True),
         pa.field("order_dependent", pa.string()),
         pa.field("distinct_dependent", pa.string()),
+        pa.field("supports_window", pa.bool_()),
     ]
 )
 
