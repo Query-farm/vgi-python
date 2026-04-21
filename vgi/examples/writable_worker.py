@@ -193,8 +193,17 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     supports_transactions = True
     catalog_version_frozen = False
 
-    def catalog_attach(self, *, name: str, options: dict[str, Any]) -> CatalogAttachResult:
+    def catalog_attach(
+        self,
+        *,
+        name: str,
+        options: dict[str, Any],
+        data_version_spec: str = "",
+        implementation_version: str = "",
+        ctx: Any = None,
+    ) -> CatalogAttachResult:
         """Attach: generate unique attach_id and register a fresh database in the transactor."""
+        del data_version_spec, implementation_version, ctx
         if name != _WRITABLE_CATALOG.name:
             raise ValueError(f"Unknown catalog: {name!r}. Available: {_WRITABLE_CATALOG.name}")
         attach_id = AttachId(uuid.uuid4().bytes)
@@ -211,8 +220,15 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             secret_types=[],
         )
 
-    def catalog_version(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> int:
+    def catalog_version(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        ctx: Any = None,
+    ) -> int:
         """Return the current catalog version from the transactor."""
+        del ctx
         proxy = transactor_proxy._get_proxy()
         return proxy.catalog_version(attach_id=attach_id)
 

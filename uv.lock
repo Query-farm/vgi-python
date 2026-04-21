@@ -3127,7 +3127,7 @@ dev = [
 
 [[package]]
 name = "vgi-rpc"
-version = "0.8.0"
+version = "0.9.0"
 source = { directory = "../vgi-rpc" }
 dependencies = [
     { name = "docstring-parser" },

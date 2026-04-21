@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 from vgi.catalog import (
     AttachId,
     CatalogAttachResult,
+    CatalogInfo,
     CatalogInterface,
     FunctionInfo,
     IndexInfo,
@@ -137,12 +138,25 @@ class InMemoryCatalog(CatalogInterface):
 
     # Required abstract methods
 
-    def catalogs(self) -> list[str]:
-        """Get a list of catalog names."""
-        return list(self._catalogs.keys())
+    def catalogs(self) -> list[CatalogInfo]:
+        """Get a list of catalog discovery records."""
+        return [CatalogInfo(name=name) for name in self._catalogs]
 
-    def catalog_attach(self, *, name: str, options: dict[str, Any]) -> CatalogAttachResult:
-        """Attach to a catalog with the given name."""
+    def catalog_attach(
+        self,
+        *,
+        name: str,
+        options: dict[str, Any],
+        data_version_spec: str = "",
+        implementation_version: str = "",
+        ctx: Any = None,
+    ) -> CatalogAttachResult:
+        """Attach to a catalog with the given name.
+
+        This example has no version opinion: requested versions are ignored and
+        resolved_* fields echo back empty strings.
+        """
+        del data_version_spec, implementation_version, ctx
         if name not in self._catalogs:
             msg = f"Catalog {name!r} not found"
             raise ValueError(msg)
@@ -244,8 +258,15 @@ class InMemoryCatalog(CatalogInterface):
 
     # Optional methods with implementations
 
-    def catalog_version(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> int:
+    def catalog_version(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        ctx: Any = None,
+    ) -> int:
         """Get the current catalog version."""
+        del ctx
         catalog = self._get_catalog(attach_id)
         return catalog.version
 

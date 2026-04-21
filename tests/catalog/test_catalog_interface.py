@@ -11,6 +11,7 @@ from vgi.catalog import (
     AttachId,
     CatalogAttachResult,
     CatalogExample,
+    CatalogInfo,
     CatalogInterface,
     FunctionInfo,
     FunctionType,
@@ -65,12 +66,21 @@ def readonly_catalog() -> "MinimalReadOnlyCatalog":
 class MinimalCatalog(CatalogInterface):
     """Minimal implementation for testing abstract method requirements."""
 
-    def catalogs(self) -> list[str]:
+    def catalogs(self) -> list[CatalogInfo]:
         """Return list of catalogs."""
-        return ["test"]
+        return [CatalogInfo(name="test")]
 
-    def catalog_attach(self, *, name: str, options: dict[str, Any]) -> CatalogAttachResult:
+    def catalog_attach(
+        self,
+        *,
+        name: str,
+        options: dict[str, Any],
+        data_version_spec: str = "",
+        implementation_version: str = "",
+        ctx: Any = None,
+    ) -> CatalogAttachResult:
         """Attach to catalog."""
+        del data_version_spec, implementation_version, ctx
         return CatalogAttachResult(
             attach_id=AttachId(b"test"),
             supports_transactions=False,
@@ -143,7 +153,7 @@ class TestCatalogInterfaceAbstract:
     def test_minimal_implementation_works(self) -> None:
         """A minimal implementation can be instantiated."""
         catalog = MinimalCatalog()
-        assert list(catalog.catalogs()) == ["test"]
+        assert [c.name for c in catalog.catalogs()] == ["test"]
 
 
 class TestCatalogInterfaceDefaults:
@@ -316,12 +326,21 @@ class TestCatalogInterfaceNotImplemented:
 class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
     """Minimal read-only implementation for testing."""
 
-    def catalogs(self) -> list[str]:
+    def catalogs(self) -> list[CatalogInfo]:
         """Return list of catalogs."""
-        return ["readonly"]
+        return [CatalogInfo(name="readonly")]
 
-    def catalog_attach(self, *, name: str, options: dict[str, Any]) -> CatalogAttachResult:
+    def catalog_attach(
+        self,
+        *,
+        name: str,
+        options: dict[str, Any],
+        data_version_spec: str = "",
+        implementation_version: str = "",
+        ctx: Any = None,
+    ) -> CatalogAttachResult:
         """Attach to catalog."""
+        del data_version_spec, implementation_version, ctx
         return CatalogAttachResult(
             attach_id=AttachId(b"readonly"),
             supports_transactions=False,

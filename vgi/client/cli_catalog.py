@@ -52,7 +52,16 @@ def catalog_list(worker: str) -> None:
     """List available catalogs."""
     client = Client(worker)
     catalogs = client.catalogs()
-    output_json(catalogs)
+    output_json(
+        [
+            {
+                "name": c.name,
+                "implementation_version": c.implementation_version,
+                "data_version_spec": c.data_version_spec,
+            }
+            for c in catalogs
+        ]
+    )
 
 
 @catalog.command("attach")

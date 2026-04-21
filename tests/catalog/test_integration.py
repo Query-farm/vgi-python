@@ -39,7 +39,7 @@ class TestCatalogBasic:
         """Default 'memory' catalog exists."""
         client = Client(CATALOG_WORKER)
         catalogs = client.catalogs()
-        assert "memory" in catalogs
+        assert "memory" in [c.name for c in catalogs]
 
     def test_attach_to_default_catalog(self) -> None:
         """Can attach to the default memory catalog."""

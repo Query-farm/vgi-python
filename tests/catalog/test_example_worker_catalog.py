@@ -74,7 +74,7 @@ class TestExampleWorkerCatalog:
         """ExampleWorker.catalogs() returns 'example' catalog."""
         client = Client(EXAMPLE_WORKER)
         catalogs = client.catalogs()
-        assert "example" in catalogs
+        assert "example" in [c.name for c in catalogs]
 
     def test_catalog_attach_works(self) -> None:
         """Can attach to the 'example' catalog."""

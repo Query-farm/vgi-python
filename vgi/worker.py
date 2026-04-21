@@ -2066,20 +2066,31 @@ class Worker:
         self._vgi_tracer.set_current_span_attributes(attrs)
 
     def catalog_catalogs(self) -> CatalogsResponse:
-        """List available catalog names."""
+        """List available catalog discovery records."""
         cat = self._get_catalog()
-        return CatalogsResponse(items=cat.catalogs())
+        return CatalogsResponse.from_infos(list(cat.catalogs()))
 
     # ---------------------------------------------------------------------------
     # VgiProtocol implementation - Catalog Lifecycle
     # ---------------------------------------------------------------------------
 
-    def catalog_attach(self, request: CatalogAttachRequest) -> CatalogAttachResult:
+    def catalog_attach(
+        self,
+        request: CatalogAttachRequest,
+        *,
+        ctx: "CallContext | None" = None,
+    ) -> CatalogAttachResult:
         """Attach to a catalog with options."""
         self._enrich_catalog_span(vgi_catalog_name=request.name)
         cat = self._get_catalog()
         options = self._options_batch_to_dict(request.options)
-        return cat.catalog_attach(name=request.name, options=options)
+        return cat.catalog_attach(
+            name=request.name,
+            options=options,
+            data_version_spec=request.data_version_spec,
+            implementation_version=request.implementation_version,
+            ctx=ctx,
+        )
 
     def catalog_detach(self, attach_id: bytes) -> None:
         """Detach from a catalog."""
@@ -2099,12 +2110,19 @@ class Worker:
         cat = self._get_catalog()
         cat.catalog_drop(name=name)
 
-    def catalog_version(self, attach_id: bytes, transaction_id: bytes | None = None) -> CatalogVersionResponse:
+    def catalog_version(
+        self,
+        attach_id: bytes,
+        transaction_id: bytes | None = None,
+        *,
+        ctx: "CallContext | None" = None,
+    ) -> CatalogVersionResponse:
         """Get the current catalog version."""
         cat = self._get_catalog()
         version = cat.catalog_version(
             attach_id=AttachId(attach_id),
             transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            ctx=ctx,
         )
         return CatalogVersionResponse(version=version)
 

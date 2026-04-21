@@ -119,8 +119,8 @@ class MetaWorker:
         for i, w in enumerate(workers):
             try:
                 cat = w._get_catalog()
-                for name in cat.catalogs():
-                    self._name_to_index[name] = i
+                for info in cat.catalogs():
+                    self._name_to_index[info.name] = i
             except ValueError:
                 pass
 
@@ -145,28 +145,33 @@ class MetaWorker:
     # ========== Catalog listing ==========
 
     def catalog_catalogs(self) -> CatalogsResponse:
-        """Return union of all catalog names across all workers."""
-        names: list[str] = []
+        """Return union of all catalog discovery records across all workers."""
+        infos = []
         for w in self._workers:
             try:
                 cat = w._get_catalog()
-                names.extend(cat.catalogs())
+                infos.extend(cat.catalogs())
             except ValueError:
                 pass
-        return CatalogsResponse(items=names)
+        return CatalogsResponse.from_infos(infos)
 
     # ========== Catalog attach (dispatch by name, wrap result) ==========
 
-    def catalog_attach(self, request: CatalogAttachRequest) -> CatalogAttachResult:
+    def catalog_attach(
+        self,
+        request: CatalogAttachRequest,
+        *,
+        ctx: CallContext | None = None,
+    ) -> CatalogAttachResult:
         """Attach to a catalog — dispatch by name with dynamic fallback."""
         idx = self._name_to_index.get(request.name)
 
         if idx is not None:
-            result = self._workers[idx].catalog_attach(request)
+            result = self._workers[idx].catalog_attach(request, ctx=ctx)
         else:
             for i, w in enumerate(self._workers):
                 try:
-                    result = w.catalog_attach(request)
+                    result = w.catalog_attach(request, ctx=ctx)
                     idx = i
                     self._name_to_index[request.name] = i
                     break

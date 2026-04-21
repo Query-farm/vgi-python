@@ -8,6 +8,7 @@ from vgi.catalog.catalog_interface import (
     AttachId,
     CatalogAttachResult,
     CatalogExample,
+    CatalogInfo,
     CatalogInterface,
     CatalogObject,
     CatalogSchemaObject,
@@ -48,6 +49,7 @@ __all__ = [
     # Data classes
     "CatalogAttachResult",
     "CatalogExample",
+    "CatalogInfo",
     "CatalogObject",
     "CatalogSchemaObject",
     "IndexInfo",

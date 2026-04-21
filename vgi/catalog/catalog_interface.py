@@ -21,6 +21,8 @@ from typing import (
 )
 
 if TYPE_CHECKING:
+    from vgi_rpc.rpc import CallContext
+
     from vgi.catalog.descriptors import Catalog, Index, Macro, Schema, Table, View
     from vgi.catalog.secret_type import SecretTypeSpec
     from vgi.catalog.setting import SettingSpec
@@ -48,6 +50,7 @@ __all__ = [
     "OrderPreservation",
     # Catalog-specific
     "CatalogExample",
+    "CatalogInfo",
     "ColumnStatistics",
     "IndexConstraintType",
     "IndexInfo",
@@ -90,6 +93,24 @@ SqlExpression = NewType("SqlExpression", str)
 
 
 @dataclass(frozen=True)
+class CatalogInfo(ArrowSerializableDataclass):
+    """Discovery record for a catalog exposed by a worker.
+
+    Returned by catalog_catalogs() so clients can inspect per-catalog version
+    metadata before attaching.
+    """
+
+    # Catalog name — pass to catalog_attach() to open it.
+    name: str
+    # Worker software version (singular per worker). Empty = worker declares no
+    # implementation version.
+    implementation_version: str = ""
+    # Semver range the catalog serves (e.g. ">=1.0.0,<2.0.0"). Empty = worker
+    # declares no data-version opinion.
+    data_version_spec: str = ""
+
+
+@dataclass(frozen=True)
 class CatalogAttachResult(ArrowSerializableDataclass):
     """Result from attaching to a catalog."""
 
@@ -126,6 +147,12 @@ class CatalogAttachResult(ArrowSerializableDataclass):
     # Whether any tables in this catalog can provide column statistics.
     # Global gate — if False, GetStatistics() returns nullptr for all tables.
     supports_column_statistics: bool = False
+    # Concrete data version the worker resolved for this attach. Empty = worker
+    # has no opinion or the request omitted data_version_spec.
+    resolved_data_version: str = ""
+    # Concrete implementation version the worker resolved for this attach.
+    # Empty = worker has no opinion or the request omitted implementation_version.
+    resolved_implementation_version: str = ""
 
 
 @dataclass(frozen=True)
@@ -674,8 +701,12 @@ class CatalogInterface(ABC):
         return set()
 
     @abstractmethod
-    def catalogs(self) -> list[str]:
-        """Get a list of catalog names provided by the VGI worker.
+    def catalogs(self) -> list[CatalogInfo]:
+        """Get a list of catalog discovery records provided by the VGI worker.
+
+        Each record carries the catalog name and — if the worker has opinions —
+        its implementation_version and data_version_spec, so clients can
+        prevalidate ATTACH requests.
 
         This is a discovery only method.
         """
@@ -725,11 +756,31 @@ class CatalogInterface(ABC):
         raise NotImplementedError("Catalog transactions not implemented.")
 
     @abstractmethod
-    def catalog_attach(self, *, name: str, options: dict[str, Any]) -> CatalogAttachResult:
+    def catalog_attach(
+        self,
+        *,
+        name: str,
+        options: dict[str, Any],
+        data_version_spec: str = "",
+        implementation_version: str = "",
+        ctx: "CallContext | None" = None,
+    ) -> CatalogAttachResult:
         """Attach to a catalog with the given name and options.
 
-        Returns a CatalogAttachResult containing the attach ID and other information
-        about the attachment.
+        ``data_version_spec`` and ``implementation_version`` carry the
+        semver constraints the client requested at ATTACH time. Pass-through
+        strings — subclasses interpret and validate them. Empty string means
+        the client did not constrain that dimension. Implementations that
+        cannot satisfy a requested version MUST raise an exception with a
+        human-readable message; the error surfaces on the client as the
+        ATTACH failure.
+
+        ``ctx`` is injected by the RPC dispatcher when available. Over HTTP it
+        enables setting a per-session routing cookie via ``ctx.set_cookie()``;
+        over subprocess it may be ``None`` or have empty cookie support.
+
+        Returns a CatalogAttachResult containing the attach ID, other catalog
+        metadata, and the resolved concrete versions chosen by the worker.
         """
 
     def catalog_detach(self, *, attach_id: AttachId) -> None:
@@ -740,7 +791,13 @@ class CatalogInterface(ABC):
         """
         return  # Default no-op
 
-    def catalog_version(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> int:
+    def catalog_version(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        ctx: "CallContext | None" = None,
+    ) -> int:
         """Get the current catalog version for the given attach_id and transaction_id.
 
         Returns an integer representing the current catalog version.
@@ -748,8 +805,13 @@ class CatalogInterface(ABC):
         Changes to schemas, tables, and objects increment this version. It is used to
         expire cached catalog/schema/object information inside a VGI client or process.
 
+        ``ctx`` is injected by the RPC dispatcher when available. Subclasses that use
+        HTTP-session cookies can consult ``ctx.cookies`` to verify routing
+        stickiness.
+
         The default implementation returns 0.
         """
+        del ctx
         return 0
 
     def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> list[SchemaInfo]:
@@ -1505,12 +1567,25 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             return self.catalog.default_schema
         return "main"
 
-    def catalogs(self) -> list[str]:
-        """Return the list of available catalogs."""
-        return [self._effective_catalog_name]
+    def catalogs(self) -> list[CatalogInfo]:
+        """Return the list of available catalogs.
 
-    def catalog_attach(self, *, name: str, options: dict[str, Any]) -> CatalogAttachResult:
-        """Attach to the catalog."""
+        Default discovery record carries just the catalog name — subclasses
+        that want to advertise version metadata should override.
+        """
+        return [CatalogInfo(name=self._effective_catalog_name)]
+
+    def catalog_attach(
+        self,
+        *,
+        name: str,
+        options: dict[str, Any],
+        data_version_spec: str = "",
+        implementation_version: str = "",
+        ctx: "CallContext | None" = None,
+    ) -> CatalogAttachResult:
+        """Attach to the catalog. Version constraints are ignored by default."""
+        del data_version_spec, implementation_version, ctx
         effective_name = self._effective_catalog_name
         if name != effective_name:
             raise ValueError(f"Unknown catalog: {name!r}. Available: {effective_name}")

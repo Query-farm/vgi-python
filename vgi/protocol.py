@@ -39,6 +39,7 @@ from vgi_rpc.rpc import (
 from vgi.arguments import Arguments
 from vgi.catalog.catalog_interface import (
     CatalogAttachResult,
+    CatalogInfo,
     FunctionInfo,
     IndexConstraintType,
     IndexInfo,
@@ -177,10 +178,18 @@ class TableFunctionCardinalityRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CatalogAttachRequest(ArrowSerializableDataclass):
-    """Request for catalog_attach. Uses RecordBatch for mixed-type options."""
+    """Request for catalog_attach. Uses RecordBatch for mixed-type options.
+
+    ``data_version_spec`` and ``implementation_version`` carry semver
+    strings the user supplied at ATTACH time (concrete or range). Empty
+    string = unconstrained. The worker is responsible for interpreting
+    and validating them.
+    """
 
     name: str
     options: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
+    data_version_spec: str = ""
+    implementation_version: str = ""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -218,11 +227,9 @@ class TableCreateRequest(ArrowSerializableDataclass):
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class CatalogsResponse(ArrowSerializableDataclass):
-    """Response wrapping list[str] for catalog_catalogs()."""
-
-    items: list[str]
+# ``CatalogsResponse`` is generated below via ``_catalog_items_response`` once
+# that factory is defined — it wraps a list of CatalogInfo records serialized
+# as bytes, matching the pattern used for other list[Info] responses.
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -302,6 +309,9 @@ if TYPE_CHECKING:
 
         def to_optional(self) -> Any: ...
 
+    class CatalogsResponse(_CatalogItemsResponseStub):
+        """Response wrapping list of CatalogInfo."""
+
     class SchemasResponse(_CatalogItemsResponseStub):
         """Response wrapping list of SchemaInfo."""
 
@@ -317,6 +327,7 @@ if TYPE_CHECKING:
     class MacrosResponse(_CatalogItemsResponseStub):
         """Response wrapping list of MacroInfo."""
 else:
+    CatalogsResponse = _catalog_items_response(CatalogInfo)
     SchemasResponse = _catalog_items_response(SchemaInfo)
     TablesResponse = _catalog_items_response(TableInfo)
     ViewsResponse = _catalog_items_response(ViewInfo)

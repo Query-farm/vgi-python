@@ -18,11 +18,11 @@ class TestClientCatalogStatelessOperations:
     """Test catalog operations that work independently."""
 
     def test_catalogs_returns_list(self) -> None:
-        """Client.catalogs() returns list of catalog names."""
+        """Client.catalogs() returns list of catalog discovery records."""
         client = Client(CATALOG_WORKER)
         catalogs = client.catalogs()
         assert isinstance(catalogs, list)
-        assert "memory" in catalogs
+        assert "memory" in [c.name for c in catalogs]
 
     def test_catalog_attach_returns_result(self) -> None:
         """Client.catalog_attach() returns CatalogAttachResult."""
@@ -38,13 +38,13 @@ class TestClientCatalogStatelessOperations:
         client = Client(CATALOG_WORKER)
         # Don't call start() - catalog methods use WorkerPool independently
         catalogs = client.catalogs()
-        assert "memory" in catalogs
+        assert "memory" in [c.name for c in catalogs]
 
     def test_catalogs_works_inside_context_manager(self) -> None:
         """Catalog methods work inside context manager."""
         with Client(CATALOG_WORKER) as client:
             catalogs = client.catalogs()
-            assert "memory" in catalogs
+            assert "memory" in [c.name for c in catalogs]
 
     def test_multiple_catalogs_calls(self) -> None:
         """Multiple catalogs() calls work on same Client instance."""
@@ -53,8 +53,8 @@ class TestClientCatalogStatelessOperations:
         catalogs1 = client.catalogs()
         catalogs2 = client.catalogs()
 
-        assert "memory" in catalogs1
-        assert "memory" in catalogs2
+        assert "memory" in [c.name for c in catalogs1]
+        assert "memory" in [c.name for c in catalogs2]
 
     def test_catalog_attach_includes_capabilities(self) -> None:
         """CatalogAttachResult includes capability flags."""
@@ -71,10 +71,12 @@ class TestClientCatalogProtocolIntegrity:
     """Test that the catalog protocol is working correctly."""
 
     def test_catalogs_returns_correct_format(self) -> None:
-        """catalogs() returns a list of strings."""
+        """catalogs() returns a list of CatalogInfo records."""
         client = Client(CATALOG_WORKER)
         catalogs = client.catalogs()
 
         assert isinstance(catalogs, list)
-        for name in catalogs:
-            assert isinstance(name, str)
+        for info in catalogs:
+            assert isinstance(info.name, str)
+            assert isinstance(info.implementation_version, str)
+            assert isinstance(info.data_version_spec, str)

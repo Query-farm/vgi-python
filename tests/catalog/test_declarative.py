@@ -1032,8 +1032,8 @@ class TestReadOnlyCatalogWithCatalog:
 
     def test_catalogs_returns_catalog_name(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """catalogs() returns the catalog name from Catalog object."""
-        names = catalog_interface.catalogs()
-        assert names == ["testapp"]
+        infos = catalog_interface.catalogs()
+        assert [i.name for i in infos] == ["testapp"]
 
     def test_catalog_attach(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """catalog_attach returns result with correct defaults."""

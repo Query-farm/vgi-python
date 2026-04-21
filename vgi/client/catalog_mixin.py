@@ -47,6 +47,7 @@ from vgi_rpc.utils import deserialize_record_batch
 from vgi.catalog import (
     AttachId,
     CatalogAttachResult,
+    CatalogInfo,
     FunctionInfo,
     MacroInfo,
     MacroType,
@@ -124,27 +125,40 @@ class CatalogClientMixin:
 
     # ========== Discovery Methods ==========
 
-    def catalogs(self) -> list[str]:
-        """Get list of catalog names from the worker.
+    def catalogs(self) -> list[CatalogInfo]:
+        """Get list of catalog discovery records from the worker.
 
         Returns:
-            List of catalog names available in the worker.
+            List of CatalogInfo records carrying per-catalog name,
+            implementation_version, and data_version_spec.
 
         """
         with self._catalog_connect() as proxy:
-            return proxy.catalog_catalogs().items
+            return proxy.catalog_catalogs().to_infos()
 
     # ========== Catalog Lifecycle Methods ==========
 
-    def catalog_attach(self, *, name: str, options: dict[str, Any] | None = None) -> CatalogAttachResult:
+    def catalog_attach(
+        self,
+        *,
+        name: str,
+        options: dict[str, Any] | None = None,
+        data_version_spec: str = "",
+        implementation_version: str = "",
+    ) -> CatalogAttachResult:
         """Attach to a catalog.
 
         Args:
             name: The catalog name to attach to.
             options: Optional dictionary of catalog-specific options.
+            data_version_spec: Semver constraint for the catalog's data version
+                (empty = unconstrained — worker picks).
+            implementation_version: Semver constraint for the worker's
+                implementation version (empty = unconstrained).
 
         Returns:
-            CatalogAttachResult with attach_id and catalog capabilities.
+            CatalogAttachResult with attach_id, catalog capabilities, and
+            the resolved concrete versions the worker picked.
 
         """
         with self._catalog_connect() as proxy:
@@ -152,6 +166,8 @@ class CatalogClientMixin:
                 request=CatalogAttachRequest(
                     name=name,
                     options=self._options_to_batch(options),
+                    data_version_spec=data_version_spec,
+                    implementation_version=implementation_version,
                 )
             )
 
