@@ -58,10 +58,17 @@ if TYPE_CHECKING:
 
 
 CATALOG_NAME = "versioned_tables"
-IMPLEMENTATION_VERSION = "1.0.0"
 DATA_VERSION_SPEC = ">=1.0.0,<4.0.0"
 SUPPORTED_VERSIONS: tuple[str, ...] = ("1.0.0", "1.1.0", "2.0.0", "3.0.0")
 DEFAULT_VERSION = "3.0.0"
+
+# Implementation versions use a distinctly different numbering (10.x / 11.x)
+# from data versions (1.x / 2.x / 3.x) so test assertions can't confuse the
+# two dimensions. The advertised implementation_version in vgi_catalogs() is
+# the default (newest) — clients that want an older impl pass a spec.
+SUPPORTED_IMPLEMENTATION_VERSIONS: tuple[str, ...] = ("10.0.0", "10.1.0", "11.0.0")
+DEFAULT_IMPLEMENTATION_VERSION = "11.0.0"
+
 STICKY_COOKIE_NAME = "vgi_sticky"
 
 
@@ -243,7 +250,7 @@ VERSION_TABLES: dict[str, dict[str, _VersionedTable]] = {
 
 
 # ============================================================================
-# Version spec resolver (npm-ish)
+# Version spec resolver (npm-ish) — generic over (supported, default, label)
 # ============================================================================
 
 _EXACT_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
@@ -261,67 +268,73 @@ def _parse(version: str) -> tuple[int, int, int]:
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
 
 
-_SUPPORTED_TUPLES: list[tuple[tuple[int, int, int], str]] = sorted(
-    [(_parse(v), v) for v in SUPPORTED_VERSIONS]
-)
+def _resolve_against(spec: str, supported: tuple[str, ...], default: str, *, label: str) -> str:
+    """Resolve an npm-style spec to a concrete supported version.
 
-
-def _resolve_spec(spec: str) -> str:
-    """Resolve a user spec to a concrete supported version.
-
-    Raises ``ValueError`` with a human-readable message when nothing matches.
-    The extension surfaces that message as the ATTACH failure.
+    Accepts exact ``X.Y.Z``, bare ``X`` (latest in major), bare ``X.Y``
+    (pinned to ``X.Y.0``), caret ``^X.Y.Z`` (newest in major with
+    ``(y,z) >= (Y,Z)``), and tilde ``~X.Y.Z`` (newest in major.minor with
+    ``z >= Z``). Raises ``ValueError`` with ``label`` in the message when
+    nothing matches; the extension surfaces that as the ATTACH failure.
     """
     if not spec:
-        return DEFAULT_VERSION
+        return default
+
+    sorted_supported: list[tuple[tuple[int, int, int], str]] = sorted(
+        (_parse(v), v) for v in supported
+    )
 
     # Exact X.Y.Z
     if _EXACT_RE.match(spec):
-        if spec in SUPPORTED_VERSIONS:
+        if spec in supported:
             return spec
-        raise ValueError(
-            f"Unsupported data_version_spec {spec!r}; this worker serves {list(SUPPORTED_VERSIONS)}",
-        )
+        raise ValueError(f"Unsupported {label} {spec!r}; this worker serves {list(supported)}")
 
     # Bare major `X`: latest X.y.z
     m = _MAJOR_RE.match(spec)
     if m:
         major = int(m.group(1))
-        candidates = [v for t, v in _SUPPORTED_TUPLES if t[0] == major]
+        candidates = [v for t, v in sorted_supported if t[0] == major]
         if not candidates:
-            raise ValueError(f"Unsupported data_version_spec {spec!r}; no major {major} version available")
-        return candidates[-1]  # _SUPPORTED_TUPLES is sorted ascending
+            raise ValueError(f"Unsupported {label} {spec!r}; no major {major} version available")
+        return candidates[-1]
 
-    # Bare major.minor `X.Y`: pinned to X.Y.0 (per user intent)
+    # Bare major.minor `X.Y`: pinned to X.Y.0
     m = _MAJOR_MINOR_RE.match(spec)
     if m:
         pinned = f"{m.group(1)}.{m.group(2)}.0"
-        if pinned in SUPPORTED_VERSIONS:
+        if pinned in supported:
             return pinned
-        raise ValueError(
-            f"Unsupported data_version_spec {spec!r}; {pinned!r} not in {list(SUPPORTED_VERSIONS)}",
-        )
+        raise ValueError(f"Unsupported {label} {spec!r}; {pinned!r} not in {list(supported)}")
 
-    # Caret `^X.Y.Z`: newest X.y.z with (y,z) >= (Y,Z)
+    # Caret `^X.Y.Z`
     m = _CARET_RE.match(spec)
     if m:
         base = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
-        candidates = [v for t, v in _SUPPORTED_TUPLES if t[0] == base[0] and t >= base]
+        candidates = [v for t, v in sorted_supported if t[0] == base[0] and t >= base]
         if not candidates:
-            raise ValueError(f"Unsupported data_version_spec {spec!r}; no match in major {base[0]}")
+            raise ValueError(f"Unsupported {label} {spec!r}; no match in major {base[0]}")
         return candidates[-1]
 
-    # Tilde `~X.Y.Z`: newest X.Y.z with z >= Z
+    # Tilde `~X.Y.Z`
     m = _TILDE_RE.match(spec)
     if m:
         base = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
-        candidates = [v for t, v in _SUPPORTED_TUPLES if t[0] == base[0] and t[1] == base[1] and t >= base]
+        candidates = [v for t, v in sorted_supported if t[0] == base[0] and t[1] == base[1] and t >= base]
         if not candidates:
-            raise ValueError(f"Unsupported data_version_spec {spec!r}; no match in {base[0]}.{base[1]}.x")
+            raise ValueError(f"Unsupported {label} {spec!r}; no match in {base[0]}.{base[1]}.x")
         return candidates[-1]
 
-    raise ValueError(
-        f"Unsupported data_version_spec {spec!r}; accepted forms: X.Y.Z, X, X.Y, ^X.Y.Z, ~X.Y.Z",
+    raise ValueError(f"Unsupported {label} {spec!r}; accepted forms: X.Y.Z, X, X.Y, ^X.Y.Z, ~X.Y.Z")
+
+
+def _resolve_data_version(spec: str) -> str:
+    return _resolve_against(spec, SUPPORTED_VERSIONS, DEFAULT_VERSION, label="data_version_spec")
+
+
+def _resolve_impl_version(spec: str) -> str:
+    return _resolve_against(
+        spec, SUPPORTED_IMPLEMENTATION_VERSIONS, DEFAULT_IMPLEMENTATION_VERSION, label="implementation_version"
     )
 
 
@@ -353,11 +366,16 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
     # ------------------------------------------------------------------ catalogs
 
     def catalogs(self) -> list[CatalogInfo]:
-        """Advertise catalog name and version metadata for discovery."""
+        """Advertise catalog name and version metadata for discovery.
+
+        ``implementation_version`` advertises the default (newest) impl. Clients
+        that want an older impl pass a spec (``^10.0.0``, ``~10.0.0``, etc.)
+        via the ATTACH ``implementation_version`` option.
+        """
         return [
             CatalogInfo(
                 name=CATALOG_NAME,
-                implementation_version=IMPLEMENTATION_VERSION,
+                implementation_version=DEFAULT_IMPLEMENTATION_VERSION,
                 data_version_spec=DATA_VERSION_SPEC,
             ),
         ]
@@ -376,13 +394,8 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
         if name != CATALOG_NAME:
             raise ValueError(f"Unknown catalog: {name!r}. Available: {CATALOG_NAME}")
 
-        if implementation_version and implementation_version != IMPLEMENTATION_VERSION:
-            raise ValueError(
-                f"Unsupported implementation_version {implementation_version!r}; "
-                f"this worker serves {IMPLEMENTATION_VERSION!r}",
-            )
-
-        resolved = _resolve_spec(data_version_spec)
+        resolved_impl = _resolve_impl_version(implementation_version)
+        resolved = _resolve_data_version(data_version_spec)
 
         attach_id = AttachId(resolved.encode("utf-8") + self._ATTACH_ID_SEP + uuid.uuid4().bytes)
 
@@ -402,7 +415,7 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
             attach_id_required=True,
             default_schema="main",
             resolved_data_version=resolved,
-            resolved_implementation_version=IMPLEMENTATION_VERSION,
+            resolved_implementation_version=resolved_impl,
         )
 
     # ------------------------------------------------------------------ helpers
