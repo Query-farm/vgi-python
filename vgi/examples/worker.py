@@ -446,6 +446,14 @@ _EXAMPLE_CATALOG = Catalog(
                     statistics_cache_max_age_seconds=0,
                     comment="Numbers with volatile stats (TTL=0, always re-fetched)",
                 ),
+                # Table with NO declared statistics — stats must come from the underlying
+                # scan function (SequenceFunction.statistics) via table_function_statistics RPC.
+                # Column name matches the function output ("n") so no rename is needed.
+                Table(
+                    name="funny_numbers",
+                    columns=pa.schema([("n", pa.int64())]),
+                    comment="123456 integers; stats served by the sequence function, not the table",
+                ),
                 # ENUM (dictionary-encoded) column table — tests that statistics
                 # report actual string values, not dictionary indices.
                 Table(
@@ -844,6 +852,15 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             return ScanFunctionResult(
                 function_name="sequence",
                 positional_arguments=[pa.scalar(100)],
+                named_arguments={},
+            )
+
+        # funny_numbers — 123456 rows from sequence; statistics deliberately NOT set on
+        # the table so SequenceFunction.statistics() provides them via table_function_statistics.
+        if schema_name.lower() == "data" and name.lower() == "funny_numbers":
+            return ScanFunctionResult(
+                function_name="sequence",
+                positional_arguments=[pa.scalar(123456)],
                 named_arguments={},
             )
 

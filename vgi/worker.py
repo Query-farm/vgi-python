@@ -119,6 +119,7 @@ from vgi.protocol import (
     SchemasResponse,
     TableCreateRequest,
     TableFunctionCardinalityRequest,
+    TableFunctionStatisticsRequest,
     TableInOutExchangeState,
     TableInOutFinalizeState,
     TableProducerState,
@@ -1349,6 +1350,23 @@ class Worker:
                 f" functions, but '{func_cls.__name__}' is not a TableFunctionGenerator."
             )
         return func_cls.cardinality(func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth))
+
+    def table_function_statistics(
+        self, request: TableFunctionStatisticsRequest, ctx: CallContext
+    ) -> bytes | None:
+        """Return per-column statistics for a table function's output.
+
+        Implements VgiProtocol.table_function_statistics(). Returns IPC bytes
+        of the serialized ColumnStatistics batch (same wire shape as
+        catalog_table_column_statistics_get), or None when stats are unknown.
+        """
+        func_cls = self._resolve_function(request.bind_call)
+        if not issubclass(func_cls, TableFunctionGenerator):
+            return None
+        stats = func_cls.statistics(func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth))
+        if not stats:
+            return None
+        return serialize_column_statistics(stats, cache_max_age_seconds=None)
 
     # ========== Aggregate Function Methods ==========
 

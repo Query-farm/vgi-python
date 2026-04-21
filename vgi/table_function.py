@@ -36,6 +36,7 @@ from vgi.invocation import (
 )
 
 if TYPE_CHECKING:
+    from vgi.catalog.catalog_interface import ColumnStatistics
     from vgi.protocol import BindRequest, InitRequest
     from vgi.table_filter_pushdown import PushdownFilters
 
@@ -557,6 +558,28 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
         """
         return TableCardinality(estimate=None, max=None)
+
+    @classmethod
+    def statistics(cls, params: BindParams[TArgs]) -> list[ColumnStatistics] | None:
+        """Return per-output-column statistics for this invocation.
+
+        Override to provide min/max/distinct/null stats so DuckDB's optimizer can
+        do filter elimination (e.g. prune a scan entirely when the filter is out
+        of range), improve join ordering, and fold always-true/always-false
+        predicates at plan time.
+
+        ``params`` is the same ``BindParams[TArgs]`` used by ``cardinality`` and
+        ``initial_state``, so stats can be derived directly from user-supplied
+        arguments.
+
+        Returns:
+            A list of ColumnStatistics (one entry per column for which stats
+            are known — columns not listed get unknown stats), or None when no
+            stats are available (same effect as today: optimizer receives no
+            column stats).
+
+        """
+        return None
 
     @staticmethod
     def pushdown_filters(

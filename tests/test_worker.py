@@ -6,11 +6,17 @@ from typing import Annotated
 import pyarrow as pa
 import pytest
 from vgi_rpc.rpc import AuthContext, CallContext, OutputCollector
+from vgi_rpc.utils import deserialize_record_batch
 
 from vgi import Arg, TableInOutFunction, TableInput
 from vgi.arguments import Arguments, ConstParam, Param, Returns
+from vgi.catalog.catalog_interface import ColumnStatistics
 from vgi.invocation import FunctionType
-from vgi.protocol import BindRequest, TableFunctionCardinalityRequest
+from vgi.protocol import (
+    BindRequest,
+    TableFunctionCardinalityRequest,
+    TableFunctionStatisticsRequest,
+)
 from vgi.scalar_function import ScalarFunction
 from vgi.table_function import (
     BindParams,
@@ -594,6 +600,128 @@ class TestTableFunctionCardinality:
         )
         result = worker.table_function_cardinality(request, _anon_ctx())
         assert result.estimate == 30
+
+
+@init_single_worker
+@bind_fixed_schema
+class _FixedStatsFunc(TableFunctionGenerator[_CountArgs]):
+    """Table function that returns fixed per-column stats derived from count."""
+
+    class Meta:
+        name = "fixed_stats"
+
+    FIXED_SCHEMA = pa.schema([pa.field("n", pa.int64())])
+
+    @classmethod
+    def statistics(cls, params: BindParams[_CountArgs]) -> list[ColumnStatistics] | None:
+        if params.args.count <= 0:
+            return []
+        return [
+            ColumnStatistics(
+                column_name="n",
+                min=pa.scalar(0, pa.int64()),
+                max=pa.scalar(params.args.count - 1, pa.int64()),
+                has_null=False,
+                has_not_null=True,
+                distinct_count=params.args.count,
+            )
+        ]
+
+    @classmethod
+    def process(cls, params: ProcessParams[_CountArgs], state: None, out: OutputCollector) -> None:
+        out.finish()
+
+
+@init_single_worker
+@bind_fixed_schema
+class _NoStatsFunc(TableFunctionGenerator[_CountArgs]):
+    """Table function that uses the default (no stats) behavior."""
+
+    class Meta:
+        name = "no_stats"
+
+    FIXED_SCHEMA = pa.schema([pa.field("n", pa.int64())])
+
+    @classmethod
+    def process(cls, params: ProcessParams[_CountArgs], state: None, out: OutputCollector) -> None:
+        out.finish()
+
+
+class TestTableFunctionStatistics:
+    """Tests for Worker.table_function_statistics()."""
+
+    def test_returns_stats_from_bind_args(self) -> None:
+        """Stats are derived from user-supplied bind args and serialized to IPC bytes."""
+
+        class MyWorker(Worker):
+            functions = [_FixedStatsFunc]
+
+        worker = MyWorker()
+        request = TableFunctionStatisticsRequest(
+            bind_call=_make_bind_request("fixed_stats", 100),
+        )
+        result = worker.table_function_statistics(request, _anon_ctx())
+
+        assert isinstance(result, bytes)
+        batch, _ = deserialize_record_batch(result)
+        assert batch.num_rows == 1
+        assert batch.column("column_name")[0].as_py() == "n"
+        assert batch.column("min")[0].as_py() == 0
+        assert batch.column("max")[0].as_py() == 99
+        assert batch.column("has_null")[0].as_py() is False
+        assert batch.column("has_not_null")[0].as_py() is True
+        assert batch.column("distinct_count")[0].as_py() == 100
+
+    def test_default_returns_none(self) -> None:
+        """Functions that don't override statistics() return None."""
+
+        class MyWorker(Worker):
+            functions = [_NoStatsFunc]
+
+        worker = MyWorker()
+        request = TableFunctionStatisticsRequest(
+            bind_call=_make_bind_request("no_stats", 10),
+        )
+        assert worker.table_function_statistics(request, _anon_ctx()) is None
+
+    def test_empty_stats_list_returns_none(self) -> None:
+        """An explicit empty list is treated as 'no stats' → None over the wire."""
+
+        class MyWorker(Worker):
+            functions = [_FixedStatsFunc]
+
+        worker = MyWorker()
+        # count=0 triggers the `return []` branch in _FixedStatsFunc.statistics
+        request = TableFunctionStatisticsRequest(
+            bind_call=_make_bind_request("fixed_stats", 0),
+        )
+        assert worker.table_function_statistics(request, _anon_ctx()) is None
+
+    def test_non_table_function_returns_none(self) -> None:
+        """Scalar / non-TableFunctionGenerator functions return None (no error)."""
+
+        class MyWorker(Worker):
+            functions = [_ScalarOnlyFunc]
+
+        worker = MyWorker()
+        request = TableFunctionStatisticsRequest(
+            bind_call=_make_bind_request("scalar_only"),
+        )
+        assert worker.table_function_statistics(request, _anon_ctx()) is None
+
+    def test_passes_bind_opaque_data(self) -> None:
+        """bind_opaque_data is accepted on the request (mirrors cardinality)."""
+
+        class MyWorker(Worker):
+            functions = [_FixedStatsFunc]
+
+        worker = MyWorker()
+        request = TableFunctionStatisticsRequest(
+            bind_call=_make_bind_request("fixed_stats", 5),
+            bind_opaque_data=None,
+        )
+        result = worker.table_function_statistics(request, _anon_ctx())
+        assert isinstance(result, bytes)
 
 
 class TestScalarOverloading:

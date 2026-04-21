@@ -276,6 +276,16 @@ class MetaWorker:
         msg = f"Unknown function '{fn_name}'"
         raise ValueError(msg)
 
+    def table_function_statistics(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch per-column statistics lookup to the right worker."""
+        fn_name = request.bind_call.function_name if request.bind_call else ""
+        for w in self._workers:
+            registry = type(w)._build_registry()
+            if fn_name in registry:
+                return w.table_function_statistics(request, ctx=ctx)
+        msg = f"Unknown function '{fn_name}'"
+        raise ValueError(msg)
+
     # ========== Aggregate function dispatch ==========
 
     def _dispatch_aggregate(self, request: Any, method_name: str, ctx: CallContext) -> Any:

@@ -33,6 +33,7 @@ from vgi_rpc.log import Level
 from vgi_rpc.rpc import OutputCollector
 
 from vgi.arguments import Arg, Secret, Setting
+from vgi.catalog.catalog_interface import ColumnStatistics
 from vgi.invocation import BindResponse, GlobalInitResponse
 from vgi.metadata import FunctionExample
 from vgi.schema_utils import schema
@@ -128,11 +129,36 @@ class _BaseSequenceFunction(TableFunctionGenerator[Any, CountdownState]):
     """
 
     NUMPY_DTYPE: ClassVar[type[np.generic]]
+    STATS_ARROW_TYPE: ClassVar[pa.DataType] = pa.int64()
+    STATS_COLUMN_NAME: ClassVar[str] = "n"
 
     @classmethod
     def initial_state(cls, params: ProcessParams[Any]) -> CountdownState:
         """Create initial state with remaining count."""
         return CountdownState(remaining=params.args.count)
+
+    @classmethod
+    def statistics(cls, params: BindParams[Any]) -> list[ColumnStatistics] | None:
+        """Exact per-column stats derived from the user's bind args.
+
+        For sequence(count, increment=k): the output column spans
+        [0, (count - 1) * increment] with no nulls and count distinct values.
+        """
+        count = getattr(params.args, "count", None)
+        increment = getattr(params.args, "increment", 1)
+        if not isinstance(count, int) or count <= 0:
+            return []
+        max_value = (count - 1) * increment
+        return [
+            ColumnStatistics(
+                column_name=cls.STATS_COLUMN_NAME,
+                min=pa.scalar(0, cls.STATS_ARROW_TYPE),
+                max=pa.scalar(max_value, cls.STATS_ARROW_TYPE),
+                has_null=False,
+                has_not_null=True,
+                distinct_count=count,
+            )
+        ]
 
     @classmethod
     def process(cls, params: ProcessParams[Any], state: CountdownState, out: OutputCollector) -> None:
@@ -510,6 +536,7 @@ class DoubleSequenceFunction(_BaseSequenceFunction):
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.float64())])
     NUMPY_DTYPE: ClassVar[type[np.generic]] = np.float64
+    STATS_ARROW_TYPE: ClassVar[pa.DataType] = pa.float64()
 
 
 @dataclass(slots=True, frozen=True)

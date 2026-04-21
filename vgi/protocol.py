@@ -171,6 +171,19 @@ class TableFunctionCardinalityRequest(ArrowSerializableDataclass):
     bind_opaque_data: Annotated[ArrowSerializableDataclass | None, ArrowType(pa.binary())] = None
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TableFunctionStatisticsRequest(ArrowSerializableDataclass):
+    """Consolidated request for table function per-column statistics.
+
+    Mirrors TableFunctionCardinalityRequest: the worker receives a full
+    copy of the original BindRequest (including parsed Arguments), so it
+    can derive per-column stats from the user-supplied args.
+    """
+
+    bind_call: BindRequest
+    bind_opaque_data: Annotated[ArrowSerializableDataclass | None, ArrowType(pa.binary())] = None
+
+
 # ---------------------------------------------------------------------------
 # Catalog request types (for methods with complex parameters)
 # ---------------------------------------------------------------------------
@@ -1042,6 +1055,15 @@ class VgiProtocol(Protocol):
 
     def table_function_cardinality(self, request: TableFunctionCardinalityRequest) -> TableCardinality:
         """Estimate the cardinality of a table function's output."""
+        ...
+
+    def table_function_statistics(self, request: TableFunctionStatisticsRequest) -> bytes | None:
+        """Return per-column statistics for a table function's output.
+
+        Returns IPC bytes of a RecordBatch with sparse-union min/max columns
+        (same shape as catalog_table_column_statistics_get), or None if no
+        statistics are available.
+        """
         ...
 
     # ========== Aggregate Function Methods (all unary) ==========
