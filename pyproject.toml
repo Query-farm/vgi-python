@@ -53,6 +53,7 @@ vgi-example-versioned-tables-worker = "vgi.examples.versioned_tables:main"
 vgi-ci-worker = "vgi.ci.worker:main"
 vgi-writable-worker = "vgi.examples.writable_worker:main"
 vgi-transactor = "vgi.transactor.server:main"
+vgi-gen-cpp-schemas = "vgi.codegen.cpp_schemas:main"
 
 [tool.hatch.metadata]
 allow-direct-references = true
