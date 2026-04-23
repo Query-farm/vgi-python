@@ -54,6 +54,7 @@ vgi-ci-worker = "vgi.ci.worker:main"
 vgi-writable-worker = "vgi.examples.writable_worker:main"
 vgi-transactor = "vgi.transactor.server:main"
 vgi-gen-cpp-schemas = "vgi.codegen.cpp_schemas:main"
+vgi-gen-ts-schemas = "vgi.codegen.ts_schemas:main"
 
 [tool.hatch.metadata]
 allow-direct-references = true
