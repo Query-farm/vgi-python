@@ -24,7 +24,9 @@ Usage (Catalog API):
     from vgi.client import Client
 
     client = Client("./my_worker")
-    result = client.catalog_attach(name="my_catalog", options={})
+    result = client.catalog_attach(
+        name="my_catalog", options={}, data_version_spec=None, implementation_version=None
+    )
 
 Usage (CLI):
     vgi-client --input data.parquet --function echo

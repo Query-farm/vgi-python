@@ -102,12 +102,12 @@ class CatalogInfo(ArrowSerializableDataclass):
 
     # Catalog name — pass to catalog_attach() to open it.
     name: str
-    # Worker software version (singular per worker). Empty = worker declares no
-    # implementation version.
-    implementation_version: str = ""
-    # Semver range the catalog serves (e.g. ">=1.0.0,<2.0.0"). Empty = worker
+    # Worker software version (singular per worker). ``None`` = worker declares
+    # no implementation version.
+    implementation_version: str | None
+    # Semver range the catalog serves (e.g. ">=1.0.0,<2.0.0"). ``None`` = worker
     # declares no data-version opinion.
-    data_version_spec: str = ""
+    data_version_spec: str | None
 
 
 @dataclass(frozen=True)
@@ -147,12 +147,13 @@ class CatalogAttachResult(ArrowSerializableDataclass):
     # Whether any tables in this catalog can provide column statistics.
     # Global gate — if False, GetStatistics() returns nullptr for all tables.
     supports_column_statistics: bool = False
-    # Concrete data version the worker resolved for this attach. Empty = worker
-    # has no opinion or the request omitted data_version_spec.
-    resolved_data_version: str = ""
+    # Concrete data version the worker resolved for this attach. ``None`` =
+    # worker has no opinion or the request omitted data_version_spec.
+    resolved_data_version: str | None = field(kw_only=True)
     # Concrete implementation version the worker resolved for this attach.
-    # Empty = worker has no opinion or the request omitted implementation_version.
-    resolved_implementation_version: str = ""
+    # ``None`` = worker has no opinion or the request omitted
+    # implementation_version.
+    resolved_implementation_version: str | None = field(kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -761,15 +762,15 @@ class CatalogInterface(ABC):
         *,
         name: str,
         options: dict[str, Any],
-        data_version_spec: str = "",
-        implementation_version: str = "",
+        data_version_spec: str | None,
+        implementation_version: str | None,
         ctx: "CallContext | None" = None,
     ) -> CatalogAttachResult:
         """Attach to a catalog with the given name and options.
 
         ``data_version_spec`` and ``implementation_version`` carry the
         semver constraints the client requested at ATTACH time. Pass-through
-        strings — subclasses interpret and validate them. Empty string means
+        strings — subclasses interpret and validate them. ``None`` means
         the client did not constrain that dimension. Implementations that
         cannot satisfy a requested version MUST raise an exception with a
         human-readable message; the error surfaces on the client as the
@@ -1573,15 +1574,15 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         Default discovery record carries just the catalog name — subclasses
         that want to advertise version metadata should override.
         """
-        return [CatalogInfo(name=self._effective_catalog_name)]
+        return [CatalogInfo(name=self._effective_catalog_name, implementation_version=None, data_version_spec=None)]
 
     def catalog_attach(
         self,
         *,
         name: str,
         options: dict[str, Any],
-        data_version_spec: str = "",
-        implementation_version: str = "",
+        data_version_spec: str | None,
+        implementation_version: str | None,
         ctx: "CallContext | None" = None,
     ) -> CatalogAttachResult:
         """Attach to the catalog. Version constraints are ignored by default."""
@@ -1613,6 +1614,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             comment=self.catalog.comment if self.catalog is not None else None,
             tags=dict(self.catalog.tags) if self.catalog is not None else {},
             supports_column_statistics=has_column_statistics,
+            resolved_data_version=None,
+            resolved_implementation_version=None,
         )
 
     def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> list[SchemaInfo]:

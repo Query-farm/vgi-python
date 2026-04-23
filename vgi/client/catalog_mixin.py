@@ -14,7 +14,9 @@ Usage:
     catalogs = client.catalogs()
 
     # Attach to a catalog and work with schemas
-    result = client.catalog_attach(name="my_catalog")
+    result = client.catalog_attach(
+        name="my_catalog", data_version_spec=None, implementation_version=None
+    )
     schemas = client.schemas(attach_id=result.attach_id)
 
     # Use transactions for atomic operations
@@ -143,8 +145,8 @@ class CatalogClientMixin:
         *,
         name: str,
         options: dict[str, Any] | None = None,
-        data_version_spec: str = "",
-        implementation_version: str = "",
+        data_version_spec: str | None,
+        implementation_version: str | None,
     ) -> CatalogAttachResult:
         """Attach to a catalog.
 
@@ -152,9 +154,9 @@ class CatalogClientMixin:
             name: The catalog name to attach to.
             options: Optional dictionary of catalog-specific options.
             data_version_spec: Semver constraint for the catalog's data version
-                (empty = unconstrained — worker picks).
+                (``None`` = unconstrained — worker picks).
             implementation_version: Semver constraint for the worker's
-                implementation version (empty = unconstrained).
+                implementation version (``None`` = unconstrained).
 
         Returns:
             CatalogAttachResult with attach_id, catalog capabilities, and

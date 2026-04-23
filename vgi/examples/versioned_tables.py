@@ -53,8 +53,9 @@ from vgi.worker import Worker
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from vgi.catalog.catalog_interface import FunctionInfo, IndexInfo, MacroInfo, ViewInfo
     from vgi_rpc.rpc import CallContext
+
+    from vgi.catalog.catalog_interface import FunctionInfo, IndexInfo, MacroInfo, ViewInfo
 
 
 CATALOG_NAME = "versioned_tables"
@@ -268,7 +269,7 @@ def _parse(version: str) -> tuple[int, int, int]:
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
 
 
-def _resolve_against(spec: str, supported: tuple[str, ...], default: str, *, label: str) -> str:
+def _resolve_against(spec: str | None, supported: tuple[str, ...], default: str, *, label: str) -> str:
     """Resolve an npm-style spec to a concrete supported version.
 
     Accepts exact ``X.Y.Z``, bare ``X`` (latest in major), bare ``X.Y``
@@ -280,9 +281,7 @@ def _resolve_against(spec: str, supported: tuple[str, ...], default: str, *, lab
     if not spec:
         return default
 
-    sorted_supported: list[tuple[tuple[int, int, int], str]] = sorted(
-        (_parse(v), v) for v in supported
-    )
+    sorted_supported: list[tuple[tuple[int, int, int], str]] = sorted((_parse(v), v) for v in supported)
 
     # Exact X.Y.Z
     if _EXACT_RE.match(spec):
@@ -328,11 +327,11 @@ def _resolve_against(spec: str, supported: tuple[str, ...], default: str, *, lab
     raise ValueError(f"Unsupported {label} {spec!r}; accepted forms: X.Y.Z, X, X.Y, ^X.Y.Z, ~X.Y.Z")
 
 
-def _resolve_data_version(spec: str) -> str:
+def _resolve_data_version(spec: str | None) -> str:
     return _resolve_against(spec, SUPPORTED_VERSIONS, DEFAULT_VERSION, label="data_version_spec")
 
 
-def _resolve_impl_version(spec: str) -> str:
+def _resolve_impl_version(spec: str | None) -> str:
     return _resolve_against(
         spec, SUPPORTED_IMPLEMENTATION_VERSIONS, DEFAULT_IMPLEMENTATION_VERSION, label="implementation_version"
     )
@@ -385,9 +384,9 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
         *,
         name: str,
         options: dict[str, Any],
-        data_version_spec: str = "",
-        implementation_version: str = "",
-        ctx: "CallContext | None" = None,
+        data_version_spec: str | None,
+        implementation_version: str | None,
+        ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
         """Validate versions, record the resolved data version, return attach result."""
         del options
@@ -468,7 +467,7 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
         transaction_id: TransactionId | None,
         name: str,
         type: SchemaObjectType,
-    ) -> "Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]":
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
         """List objects in the schema — tables filtered by attach's resolved version."""
         del transaction_id
         if name.lower() != "main":
@@ -537,7 +536,7 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
         *,
         attach_id: AttachId,
         transaction_id: TransactionId | None,
-        ctx: "CallContext | None" = None,
+        ctx: CallContext | None = None,
     ) -> int:
         """Assert cookie stickiness on HTTP and return a constant version."""
         del transaction_id

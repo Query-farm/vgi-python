@@ -194,7 +194,7 @@ class TestCatalogAttachTimeTravel:
         """Catalog with a time-travel table reports supports_time_travel=True."""
         worker = ExampleWorker()
         cat = worker._get_catalog()
-        result = cat.catalog_attach(name="example", options={})
+        result = cat.catalog_attach(name="example", options={}, data_version_spec=None, implementation_version=None)
         assert result.supports_time_travel is True
 
     def test_catalog_without_time_travel_table(self) -> None:
@@ -215,7 +215,7 @@ class TestCatalogAttachTimeTravel:
             )
 
         cat = NoCatalog()
-        result = cat.catalog_attach(name="test", options={})
+        result = cat.catalog_attach(name="test", options={}, data_version_spec=None, implementation_version=None)
         assert result.supports_time_travel is False
 
 

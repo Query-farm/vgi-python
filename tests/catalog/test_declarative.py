@@ -1037,7 +1037,9 @@ class TestReadOnlyCatalogWithCatalog:
 
     def test_catalog_attach(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """catalog_attach returns result with correct defaults."""
-        result = catalog_interface.catalog_attach(name="testapp", options={})
+        result = catalog_interface.catalog_attach(
+            name="testapp", options={}, data_version_spec=None, implementation_version=None
+        )
         assert isinstance(result, CatalogAttachResult)
         assert result.default_schema == "main"
 
@@ -1493,5 +1495,7 @@ class TestMultiSchemaCatalog:
 
     def test_default_schema_in_attach_result(self, multi_schema_interface: ReadOnlyCatalogInterface) -> None:
         """Attach result has correct default_schema."""
-        result = multi_schema_interface.catalog_attach(name="warehouse", options={})
+        result = multi_schema_interface.catalog_attach(
+            name="warehouse", options={}, data_version_spec=None, implementation_version=None
+        )
         assert result.default_schema == "analytics"

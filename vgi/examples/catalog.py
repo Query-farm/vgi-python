@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal, overload
 
 if TYPE_CHECKING:
     import pyarrow as pa
+    from vgi_rpc.rpc import CallContext
 
 from vgi.catalog import (
     AttachId,
@@ -140,16 +141,16 @@ class InMemoryCatalog(CatalogInterface):
 
     def catalogs(self) -> list[CatalogInfo]:
         """Get a list of catalog discovery records."""
-        return [CatalogInfo(name=name) for name in self._catalogs]
+        return [CatalogInfo(name=name, implementation_version=None, data_version_spec=None) for name in self._catalogs]
 
     def catalog_attach(
         self,
         *,
         name: str,
         options: dict[str, Any],
-        data_version_spec: str = "",
-        implementation_version: str = "",
-        ctx: Any = None,
+        data_version_spec: str | None,
+        implementation_version: str | None,
+        ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
         """Attach to a catalog with the given name.
 
@@ -174,6 +175,8 @@ class InMemoryCatalog(CatalogInterface):
             catalog_version=catalog.version,
             comment=catalog.comment,
             tags=dict(catalog.tags),
+            resolved_data_version=None,
+            resolved_implementation_version=None,
         )
 
     def catalog_detach(self, *, attach_id: AttachId) -> None:

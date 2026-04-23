@@ -27,7 +27,7 @@ class TestClientCatalogStatelessOperations:
     def test_catalog_attach_returns_result(self) -> None:
         """Client.catalog_attach() returns CatalogAttachResult."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         assert result.attach_id is not None
         assert len(result.attach_id) == 16  # UUID bytes
@@ -59,7 +59,7 @@ class TestClientCatalogStatelessOperations:
     def test_catalog_attach_includes_capabilities(self) -> None:
         """CatalogAttachResult includes capability flags."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         # Check that capability flags are present (even if False)
         assert isinstance(result.supports_transactions, bool)
@@ -78,5 +78,5 @@ class TestClientCatalogProtocolIntegrity:
         assert isinstance(catalogs, list)
         for info in catalogs:
             assert isinstance(info.name, str)
-            assert isinstance(info.implementation_version, str)
-            assert isinstance(info.data_version_spec, str)
+            assert info.implementation_version is None or isinstance(info.implementation_version, str)
+            assert info.data_version_spec is None or isinstance(info.data_version_spec, str)

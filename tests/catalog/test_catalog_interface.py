@@ -68,15 +68,15 @@ class MinimalCatalog(CatalogInterface):
 
     def catalogs(self) -> list[CatalogInfo]:
         """Return list of catalogs."""
-        return [CatalogInfo(name="test")]
+        return [CatalogInfo(name="test", implementation_version=None, data_version_spec=None)]
 
     def catalog_attach(
         self,
         *,
         name: str,
         options: dict[str, Any],
-        data_version_spec: str = "",
-        implementation_version: str = "",
+        data_version_spec: str | None,
+        implementation_version: str | None,
         ctx: Any = None,
     ) -> CatalogAttachResult:
         """Attach to catalog."""
@@ -87,6 +87,8 @@ class MinimalCatalog(CatalogInterface):
             supports_time_travel=False,
             catalog_version_frozen=False,
             catalog_version=1,
+            resolved_data_version=None,
+            resolved_implementation_version=None,
         )
 
     def schema_get(
@@ -328,15 +330,15 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
 
     def catalogs(self) -> list[CatalogInfo]:
         """Return list of catalogs."""
-        return [CatalogInfo(name="readonly")]
+        return [CatalogInfo(name="readonly", implementation_version=None, data_version_spec=None)]
 
     def catalog_attach(
         self,
         *,
         name: str,
         options: dict[str, Any],
-        data_version_spec: str = "",
-        implementation_version: str = "",
+        data_version_spec: str | None,
+        implementation_version: str | None,
         ctx: Any = None,
     ) -> CatalogAttachResult:
         """Attach to catalog."""
@@ -347,6 +349,8 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
             supports_time_travel=False,
             catalog_version_frozen=True,
             catalog_version=1,
+            resolved_data_version=None,
+            resolved_implementation_version=None,
         )
 
     def schema_get(
@@ -876,7 +880,9 @@ class TestSchemaContentsTypeFilter:
 
     def test_fetch_all_function_types(self, catalog_with_functions: ReadOnlyCatalogInterface) -> None:
         """Can fetch both scalar and table functions with separate calls."""
-        attach_result = catalog_with_functions.catalog_attach(name="test", options={})
+        attach_result = catalog_with_functions.catalog_attach(
+            name="test", options={}, data_version_spec=None, implementation_version=None
+        )
 
         # Get scalar functions
         scalar_contents = list(
@@ -908,7 +914,9 @@ class TestSchemaContentsTypeFilter:
 
     def test_filter_scalar_function(self, catalog_with_functions: ReadOnlyCatalogInterface) -> None:
         """schema_contents with SCALAR_FUNCTION filter returns only scalar functions."""
-        attach_result = catalog_with_functions.catalog_attach(name="test", options={})
+        attach_result = catalog_with_functions.catalog_attach(
+            name="test", options={}, data_version_spec=None, implementation_version=None
+        )
         contents = list(
             catalog_with_functions.schema_contents(
                 attach_id=attach_result.attach_id,
@@ -925,7 +933,9 @@ class TestSchemaContentsTypeFilter:
 
     def test_filter_table_function(self, catalog_with_functions: ReadOnlyCatalogInterface) -> None:
         """schema_contents with TABLE_FUNCTION filter returns only table functions."""
-        attach_result = catalog_with_functions.catalog_attach(name="test", options={})
+        attach_result = catalog_with_functions.catalog_attach(
+            name="test", options={}, data_version_spec=None, implementation_version=None
+        )
         contents = list(
             catalog_with_functions.schema_contents(
                 attach_id=attach_result.attach_id,
@@ -942,7 +952,9 @@ class TestSchemaContentsTypeFilter:
 
     def test_filter_table_returns_empty(self, catalog_with_functions: ReadOnlyCatalogInterface) -> None:
         """schema_contents with TABLE filter returns empty (no tables in catalog)."""
-        attach_result = catalog_with_functions.catalog_attach(name="test", options={})
+        attach_result = catalog_with_functions.catalog_attach(
+            name="test", options={}, data_version_spec=None, implementation_version=None
+        )
         contents = list(
             catalog_with_functions.schema_contents(
                 attach_id=attach_result.attach_id,
@@ -955,7 +967,9 @@ class TestSchemaContentsTypeFilter:
 
     def test_filter_view_returns_empty(self, catalog_with_functions: ReadOnlyCatalogInterface) -> None:
         """schema_contents with VIEW filter returns empty (no views in catalog)."""
-        attach_result = catalog_with_functions.catalog_attach(name="test", options={})
+        attach_result = catalog_with_functions.catalog_attach(
+            name="test", options={}, data_version_spec=None, implementation_version=None
+        )
         contents = list(
             catalog_with_functions.schema_contents(
                 attach_id=attach_result.attach_id,
@@ -968,7 +982,9 @@ class TestSchemaContentsTypeFilter:
 
     def test_wrong_schema_returns_empty(self, catalog_with_functions: ReadOnlyCatalogInterface) -> None:
         """schema_contents with non-existent schema returns empty."""
-        attach_result = catalog_with_functions.catalog_attach(name="test", options={})
+        attach_result = catalog_with_functions.catalog_attach(
+            name="test", options={}, data_version_spec=None, implementation_version=None
+        )
         contents = list(
             catalog_with_functions.schema_contents(
                 attach_id=attach_result.attach_id,

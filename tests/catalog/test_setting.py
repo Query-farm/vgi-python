@@ -247,7 +247,9 @@ class TestCatalogAttachSettingsRoundTrip:
         assert catalog_interface_cls is not None
         catalog_interface = catalog_interface_cls()
 
-        result = catalog_interface.catalog_attach(name="example", options={})
+        result = catalog_interface.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
 
         # Deserialize settings from the result
         assert result.settings is not None

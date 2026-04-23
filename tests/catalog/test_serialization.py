@@ -32,6 +32,8 @@ class TestCatalogAttachResultSerialization:
             supports_time_travel=False,
             catalog_version_frozen=False,
             catalog_version=42,
+            resolved_data_version=None,
+            resolved_implementation_version=None,
         )
         serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
@@ -51,6 +53,8 @@ class TestCatalogAttachResultSerialization:
             supports_time_travel=False,
             catalog_version_frozen=True,
             catalog_version=0,
+            resolved_data_version=None,
+            resolved_implementation_version=None,
         )
         serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
@@ -66,6 +70,8 @@ class TestCatalogAttachResultSerialization:
             supports_time_travel=True,
             catalog_version_frozen=True,
             catalog_version=999,
+            resolved_data_version=None,
+            resolved_implementation_version=None,
         )
         serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
@@ -88,6 +94,8 @@ class TestCatalogAttachResultSerialization:
             catalog_version_frozen=False,
             catalog_version=1,
             settings=[option_bytes_1, option_bytes_2],
+            resolved_data_version=None,
+            resolved_implementation_version=None,
         )
         serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)
@@ -106,6 +114,8 @@ class TestCatalogAttachResultSerialization:
             catalog_version_frozen=False,
             catalog_version=1,
             settings=[],
+            resolved_data_version=None,
+            resolved_implementation_version=None,
         )
         serialized = original.serialize_to_bytes()
         batch, _ = deserialize_record_batch(serialized)

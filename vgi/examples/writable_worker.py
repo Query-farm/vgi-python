@@ -14,9 +14,12 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Sequence
-from typing import Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import pyarrow as pa
+
+if TYPE_CHECKING:
+    from vgi_rpc.rpc import CallContext
 
 from vgi.catalog import (
     AttachId,
@@ -198,9 +201,9 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         name: str,
         options: dict[str, Any],
-        data_version_spec: str = "",
-        implementation_version: str = "",
-        ctx: Any = None,
+        data_version_spec: str | None,
+        implementation_version: str | None,
+        ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
         """Attach: generate unique attach_id and register a fresh database in the transactor."""
         del data_version_spec, implementation_version, ctx
@@ -218,6 +221,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             default_schema="main",
             settings=[],
             secret_types=[],
+            resolved_data_version=None,
+            resolved_implementation_version=None,
         )
 
     def catalog_version(
@@ -225,7 +230,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_id: AttachId,
         transaction_id: TransactionId | None,
-        ctx: Any = None,
+        ctx: CallContext | None = None,
     ) -> int:
         """Return the current catalog version from the transactor."""
         del ctx

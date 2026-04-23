@@ -67,6 +67,7 @@ class WindowPartition:
         frame_stats: ``((begin_delta, end_delta), (begin_delta, end_delta))`` —
             DuckDB's per-partition frame statistics for planning.
         all_valid: Per-input-column validity flag (True if no nulls in column).
+
     """
 
     inputs: pa.RecordBatch
@@ -424,7 +425,6 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
         Returns:
             A Python scalar or Arrow-compatible value; the worker wraps it
             into an IPC batch matching the function's output schema.
+
         """
-        raise NotImplementedError(
-            f"{cls.__name__}: Meta.supports_window=True requires overriding window()"
-        )
+        raise NotImplementedError(f"{cls.__name__}: Meta.supports_window=True requires overriding window()")

@@ -431,7 +431,7 @@ def get_attach_id_from_options(
     # Auto-attach via --catalog
     assert catalog is not None
     options = attach_options or {}
-    result = client.catalog_attach(name=catalog, options=options)
+    result = client.catalog_attach(name=catalog, options=options, data_version_spec=None, implementation_version=None)
 
     # Return the attach_id and whether this is a stateful catalog
     # (is_stateful=True means caller should warn about using --catalog

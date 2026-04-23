@@ -713,6 +713,7 @@ class _DynamicAggregateBase(AggregateFunction[DynamicState]):
                 ``[0 .. data_start)``). NULL-drop is applied on data columns
                 only — matches the filtering ``_do_update`` performs in the
                 non-window path.
+
         """
         num_cols = partition.inputs.num_columns
         cols = [partition.inputs.column(i) for i in range(num_cols)]

@@ -344,16 +344,18 @@ def _serialize_schema_bytes(schema: pa.Schema) -> bytes:
 
 # Arrow schema for the serialized window-partition cache payload stored in
 # FunctionStorage. One row per partition, all fields binary/int64.
-_WINDOW_PARTITION_CACHE_SCHEMA = pa.schema([
-    pa.field("partition_batch", pa.binary(), nullable=False),
-    pa.field("output_schema", pa.binary(), nullable=False),
-    pa.field("filter_mask", pa.binary(), nullable=False),
-    pa.field("frame_stats", pa.binary(), nullable=False),
-    pa.field("all_valid", pa.binary(), nullable=False),
-    pa.field("row_count", pa.int64(), nullable=False),
-    pa.field("window_state", pa.binary(), nullable=True),
-    pa.field("window_state_class_name", pa.string(), nullable=False),
-])
+_WINDOW_PARTITION_CACHE_SCHEMA = pa.schema(
+    [
+        pa.field("partition_batch", pa.binary(), nullable=False),
+        pa.field("output_schema", pa.binary(), nullable=False),
+        pa.field("filter_mask", pa.binary(), nullable=False),
+        pa.field("frame_stats", pa.binary(), nullable=False),
+        pa.field("all_valid", pa.binary(), nullable=False),
+        pa.field("row_count", pa.int64(), nullable=False),
+        pa.field("window_state", pa.binary(), nullable=True),
+        pa.field("window_state_class_name", pa.string(), nullable=False),
+    ]
+)
 
 
 def _encode_window_partition_cache(
@@ -422,15 +424,11 @@ def _build_scalar_result_batch(result_value: Any, output_schema: pa.Schema) -> p
     """
     if isinstance(result_value, pa.RecordBatch):
         if result_value.num_rows != 1:
-            raise ValueError(
-                f"window() must return a scalar or a 1-row RecordBatch, got {result_value.num_rows} rows"
-            )
+            raise ValueError(f"window() must return a scalar or a 1-row RecordBatch, got {result_value.num_rows} rows")
         return result_value
 
     if len(output_schema) != 1:
-        raise ValueError(
-            f"Window aggregate output_schema must have 1 field, got {len(output_schema)}"
-        )
+        raise ValueError(f"Window aggregate output_schema must have 1 field, got {len(output_schema)}")
     output_type = output_schema.field(0).type
     col_name = output_schema.field(0).name
     if isinstance(result_value, pa.Array):
@@ -445,9 +443,7 @@ def _build_scalar_result_batch(result_value: Any, output_schema: pa.Schema) -> p
 def _build_batch_result(results: list[Any], output_schema: pa.Schema) -> pa.RecordBatch:
     """Build a count-row RecordBatch containing the batched window results."""
     if len(output_schema) != 1:
-        raise ValueError(
-            f"Window aggregate output_schema must have 1 field, got {len(output_schema)}"
-        )
+        raise ValueError(f"Window aggregate output_schema must have 1 field, got {len(output_schema)}")
     output_type = output_schema.field(0).type
     col_name = output_schema.field(0).name
     arr = pa.array(results, type=output_type)
@@ -1351,9 +1347,7 @@ class Worker:
             )
         return func_cls.cardinality(func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth))
 
-    def table_function_statistics(
-        self, request: TableFunctionStatisticsRequest, ctx: CallContext
-    ) -> bytes | None:
+    def table_function_statistics(self, request: TableFunctionStatisticsRequest, ctx: CallContext) -> bytes | None:
         """Return per-column statistics for a table function's output.
 
         Implements VgiProtocol.table_function_statistics(). Returns IPC bytes
@@ -1687,9 +1681,7 @@ class Worker:
             request.function_name, request.attach_id, function_type=AggregateFunction
         )
         if not issubclass(func_cls, AggregateFunction):
-            raise TypeError(
-                f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})"
-            )
+            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
         storage = BoundStorage(func_cls.storage, request.execution_id)
         const_args = self._load_aggregate_const_args(func_cls, storage)
@@ -1771,9 +1763,7 @@ class Worker:
             request.function_name, request.attach_id, function_type=AggregateFunction
         )
         if not issubclass(func_cls, AggregateFunction):
-            raise TypeError(
-                f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})"
-            )
+            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
         storage = BoundStorage(func_cls.storage, request.execution_id)
         cached = self._load_cached_window_partition(
@@ -1827,7 +1817,7 @@ class Worker:
 
         payload = storage.aggregate_window_partition_get(partition_id)
         if payload is None:
-            raise IOError(
+            raise OSError(
                 f"aggregate_window called for unknown partition_id={partition_id} "
                 f"(function {function_name}); window_init never ran or destructor already fired"
             )
@@ -1871,9 +1861,7 @@ class Worker:
             request.function_name, request.attach_id, function_type=AggregateFunction
         )
         if not issubclass(func_cls, AggregateFunction):
-            raise TypeError(
-                f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})"
-            )
+            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
         storage = BoundStorage(func_cls.storage, request.execution_id)
         cached = self._load_cached_window_partition(
@@ -1902,8 +1890,7 @@ class Worker:
         frames_per_row = request.frames_per_row
         if request.count != len(frames_per_row):
             raise ValueError(
-                f"aggregate_window_batch: count={request.count} but frames_per_row has "
-                f"{len(frames_per_row)} entries"
+                f"aggregate_window_batch: count={request.count} but frames_per_row has {len(frames_per_row)} entries"
             )
 
         offset = 0
@@ -1913,9 +1900,7 @@ class Worker:
             subframes = [(starts[offset + k], ends[offset + k]) for k in range(n)]
             offset += n
             rid = request.row_idx + i
-            results.append(
-                func_cls.window(rid, subframes, partition, window_state, params)
-            )
+            results.append(func_cls.window(rid, subframes, partition, window_state, params))
 
         result_batch = _build_batch_result(results, output_schema)
         sink = pa.BufferOutputStream()
@@ -1935,9 +1920,7 @@ class Worker:
             request.function_name, request.attach_id, function_type=AggregateFunction
         )
         if not issubclass(func_cls, AggregateFunction):
-            raise TypeError(
-                f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})"
-            )
+            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
         storage = BoundStorage(func_cls.storage, request.execution_id)
         storage.aggregate_window_partition_delete(request.partition_id)
@@ -2096,7 +2079,7 @@ class Worker:
         self,
         request: CatalogAttachRequest,
         *,
-        ctx: "CallContext | None" = None,
+        ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
         """Attach to a catalog with options."""
         self._enrich_catalog_span(vgi_catalog_name=request.name)
@@ -2133,7 +2116,7 @@ class Worker:
         attach_id: bytes,
         transaction_id: bytes | None = None,
         *,
-        ctx: "CallContext | None" = None,
+        ctx: CallContext | None = None,
     ) -> CatalogVersionResponse:
         """Get the current catalog version."""
         cat = self._get_catalog()

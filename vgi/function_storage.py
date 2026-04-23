@@ -631,8 +631,7 @@ class FunctionStorageSqlite:
         conn = self._connect()
         try:
             cursor = conn.execute(
-                "SELECT payload FROM aggregate_window_partitions "
-                "WHERE execution_id = ? AND partition_id = ?",
+                "SELECT payload FROM aggregate_window_partitions WHERE execution_id = ? AND partition_id = ?",
                 (execution_id, partition_id),
             )
             row = cursor.fetchone()
@@ -645,8 +644,7 @@ class FunctionStorageSqlite:
         conn = self._connect()
         try:
             conn.execute(
-                "DELETE FROM aggregate_window_partitions "
-                "WHERE execution_id = ? AND partition_id = ?",
+                "DELETE FROM aggregate_window_partitions WHERE execution_id = ? AND partition_id = ?",
                 (execution_id, partition_id),
             )
             conn.commit()

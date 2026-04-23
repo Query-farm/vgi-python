@@ -79,7 +79,7 @@ class TestExampleWorkerCatalog:
     def test_catalog_attach_works(self) -> None:
         """Can attach to the 'example' catalog."""
         client = Client(EXAMPLE_WORKER)
-        result = client.catalog_attach(name="example", options={})
+        result = client.catalog_attach(name="example", options={}, data_version_spec=None, implementation_version=None)
 
         assert result.attach_id is not None
         assert result.supports_transactions is False
@@ -90,7 +90,9 @@ class TestExampleWorkerCatalog:
         client = Client(EXAMPLE_WORKER)
 
         # Attach to catalog
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
         attach_id = attach_result.attach_id
 
         # Get table functions
@@ -108,7 +110,9 @@ class TestExampleWorkerCatalog:
         client = Client(EXAMPLE_WORKER)
 
         # Attach and get both table and scalar functions
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
 
         # Get table functions
         table_funcs = list(
@@ -149,7 +153,9 @@ class TestExampleWorkerCatalog:
         """FunctionInfo has correct function types."""
         client = Client(EXAMPLE_WORKER)
 
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
         functions = _get_all_functions(client, attach_result.attach_id)
 
         # Create lookup by name
@@ -168,7 +174,9 @@ class TestExampleWorkerCatalog:
         """FunctionInfo has serialized argument schema."""
         client = Client(EXAMPLE_WORKER)
 
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
         functions = _get_all_functions(client, attach_result.attach_id)
 
         # Create lookup by name
@@ -190,7 +198,9 @@ class TestExampleWorkerCatalog:
         """FunctionInfo has description from docstring or Meta."""
         client = Client(EXAMPLE_WORKER)
 
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
         functions = list(
             client.schema_contents(
                 attach_id=attach_result.attach_id,
@@ -211,7 +221,9 @@ class TestExampleWorkerCatalog:
         """FunctionInfo has schema_name set to 'main'."""
         client = Client(EXAMPLE_WORKER)
 
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
         functions = _get_all_functions(client, attach_result.attach_id)
 
         # All functions should be in 'main' schema
@@ -222,7 +234,9 @@ class TestExampleWorkerCatalog:
         """Scalar functions with static output types have output_schema populated."""
         client = Client(EXAMPLE_WORKER)
 
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
         functions = list(
             client.schema_contents(
                 attach_id=attach_result.attach_id,
@@ -247,7 +261,9 @@ class TestExampleWorkerCatalog:
         """Scalar functions with AnyArrow output type have 'any' output_schema."""
         client = Client(EXAMPLE_WORKER)
 
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
         functions = list(
             client.schema_contents(
                 attach_id=attach_result.attach_id,
@@ -273,7 +289,9 @@ class TestExampleWorkerCatalog:
         """Table functions have empty output_schema (can't determine without input)."""
         client = Client(EXAMPLE_WORKER)
 
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
         functions = list(
             client.schema_contents(
                 attach_id=attach_result.attach_id,
@@ -299,7 +317,9 @@ class TestExampleWorkerViews:
     def test_schema_contents_returns_views_in_main(self) -> None:
         """Main schema has 2 views (first_ten, even_numbers)."""
         client = Client(EXAMPLE_WORKER)
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
 
         views = list(
             client.schema_contents(
@@ -317,7 +337,9 @@ class TestExampleWorkerViews:
     def test_schema_contents_returns_views_in_data(self) -> None:
         """Data schema has 1 view (small_numbers)."""
         client = Client(EXAMPLE_WORKER)
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
 
         views = list(
             client.schema_contents(
@@ -333,7 +355,9 @@ class TestExampleWorkerViews:
     def test_view_get_returns_correct_info(self) -> None:
         """view_get returns correct definition, comment, and tags."""
         client = Client(EXAMPLE_WORKER)
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
 
         view = client.view_get(
             attach_id=attach_result.attach_id,
@@ -354,7 +378,9 @@ class TestExampleWorkerMacros:
     def test_schema_contents_returns_macros_in_main(self) -> None:
         """Main schema has 3 macros."""
         client = Client(EXAMPLE_WORKER)
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
 
         scalar_macros = list(
             client.schema_contents(
@@ -378,7 +404,9 @@ class TestExampleWorkerMacros:
     def test_macro_get_returns_correct_info(self) -> None:
         """macro_get returns a MacroInfo with correct fields."""
         client = Client(EXAMPLE_WORKER)
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
 
         info = client.macro_get(
             attach_id=attach_result.attach_id,
@@ -396,7 +424,9 @@ class TestExampleWorkerMacros:
     def test_macro_info_has_correct_types(self) -> None:
         """Macro type correctly distinguishes scalar vs table."""
         client = Client(EXAMPLE_WORKER)
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
 
         multiply = client.macro_get(
             attach_id=attach_result.attach_id,
@@ -418,7 +448,9 @@ class TestExampleWorkerMacros:
     def test_macro_info_has_parameters(self) -> None:
         """Parameter list survives round-trip."""
         client = Client(EXAMPLE_WORKER)
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
 
         info = client.macro_get(
             attach_id=attach_result.attach_id,
@@ -432,7 +464,9 @@ class TestExampleWorkerMacros:
     def test_macro_info_has_parameter_default_values(self) -> None:
         """RecordBatch parameter defaults survive round-trip with types."""
         client = Client(EXAMPLE_WORKER)
-        attach_result = client.catalog_attach(name="example", options={})
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
 
         info = client.macro_get(
             attach_id=attach_result.attach_id,

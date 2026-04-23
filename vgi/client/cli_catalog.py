@@ -76,7 +76,12 @@ def catalog_attach(name: str, worker: str, options: str) -> None:
     """
     opts = parse_json_option(options, "--options")
     client = Client(worker)
-    result = client.catalog_attach(name=name, options=opts)
+    result = client.catalog_attach(
+        name=name,
+        options=opts,
+        data_version_spec=None,
+        implementation_version=None,
+    )
     output_json(catalog_attach_result_to_dict(result))
 
 

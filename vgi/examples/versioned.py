@@ -73,8 +73,8 @@ class VersionedCatalog(ReadOnlyCatalogInterface):
         *,
         name: str,
         options: dict[str, Any],
-        data_version_spec: str = "",
-        implementation_version: str = "",
+        data_version_spec: str | None,
+        implementation_version: str | None,
         ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
         """Validate requested versions and pin an HTTP session."""
@@ -82,20 +82,20 @@ class VersionedCatalog(ReadOnlyCatalogInterface):
         if name != _VERSIONED_CATALOG.name:
             raise ValueError(f"Unknown catalog: {name!r}. Available: {_VERSIONED_CATALOG.name}")
 
-        if implementation_version and implementation_version != IMPLEMENTATION_VERSION:
+        if implementation_version is not None and implementation_version != IMPLEMENTATION_VERSION:
             raise ValueError(
                 f"Unsupported implementation_version {implementation_version!r}; "
                 f"this worker serves {IMPLEMENTATION_VERSION!r}",
             )
 
-        if data_version_spec and data_version_spec not in SUPPORTED_DATA_VERSIONS:
+        if data_version_spec is not None and data_version_spec not in SUPPORTED_DATA_VERSIONS:
             # Exact-match only — production workers would parse the range; this
             # example keeps the matcher trivial so failures are unambiguous.
             raise ValueError(
                 f"Unsupported data_version_spec {data_version_spec!r}; "
                 f"this worker serves one of {sorted(SUPPORTED_DATA_VERSIONS)}",
             )
-        resolved_data_version = data_version_spec or DEFAULT_DATA_VERSION
+        resolved_data_version = data_version_spec if data_version_spec is not None else DEFAULT_DATA_VERSION
 
         # Pin the session for HTTP routing. On subprocess transport set_cookie
         # raises RuntimeError — ignore it silently so the same worker works
@@ -133,8 +133,7 @@ class VersionedCatalog(ReadOnlyCatalogInterface):
             # Over HTTP, missing the sticky cookie means the client's cookie jar
             # is broken. Bail loudly so the test catches the regression.
             raise ValueError(
-                f"expected cookie {STICKY_COOKIE_NAME!r} on follow-up request; "
-                f"got {sorted(ctx.cookies)}",
+                f"expected cookie {STICKY_COOKIE_NAME!r} on follow-up request; got {sorted(ctx.cookies)}",
             )
         return 1
 

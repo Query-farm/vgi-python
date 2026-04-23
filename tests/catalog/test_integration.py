@@ -44,7 +44,7 @@ class TestCatalogBasic:
     def test_attach_to_default_catalog(self) -> None:
         """Can attach to the default memory catalog."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         assert result.attach_id is not None
         assert len(result.attach_id) == 16  # UUID bytes
@@ -56,12 +56,14 @@ class TestCatalogBasic:
         """Attaching to nonexistent catalog raises CatalogClientError."""
         client = Client(CATALOG_WORKER)
         with pytest.raises(CatalogClientError, match="not found"):
-            client.catalog_attach(name="nonexistent", options={})
+            client.catalog_attach(
+                name="nonexistent", options={}, data_version_spec=None, implementation_version=None
+            )
 
     def test_detach(self) -> None:
         """Can detach from an attached catalog."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
         # Should not raise
         client.catalog_detach(attach_id=result.attach_id)
 
@@ -72,7 +74,7 @@ class TestCatalogSchemas:
     def test_default_main_schema_exists(self) -> None:
         """Default 'main' schema exists after attach."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
         schemas = client.schemas(attach_id=result.attach_id)
 
         assert len(schemas) == 1
@@ -81,7 +83,7 @@ class TestCatalogSchemas:
     def test_schema_get_main(self) -> None:
         """Can get the main schema."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
         info = client.schema_get(attach_id=result.attach_id, name="main")
 
         assert info is not None
@@ -90,7 +92,7 @@ class TestCatalogSchemas:
     def test_schema_get_nonexistent(self) -> None:
         """Getting nonexistent schema returns None."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
         info = client.schema_get(attach_id=result.attach_id, name="nonexistent")
 
         assert info is None
@@ -98,7 +100,7 @@ class TestCatalogSchemas:
     def test_schema_create(self) -> None:
         """Can create a new schema and read it back."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         client.schema_create(
             attach_id=result.attach_id,
@@ -119,7 +121,7 @@ class TestCatalogSchemas:
     def test_schema_create_duplicate_raises(self) -> None:
         """Creating duplicate schema raises CatalogClientError."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         with pytest.raises(CatalogClientError, match="already exists"):
             client.schema_create(
@@ -130,7 +132,7 @@ class TestCatalogSchemas:
     def test_schema_drop(self) -> None:
         """Can create and drop a schema."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         client.schema_create(
             attach_id=result.attach_id,
@@ -148,7 +150,7 @@ class TestCatalogSchemas:
     def test_schema_drop_ignore_not_found(self) -> None:
         """Dropping nonexistent schema with ignore_not_found=True succeeds."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         # Should not raise
         client.schema_drop(
@@ -164,7 +166,7 @@ class TestCatalogTables:
     def test_table_create_and_get(self) -> None:
         """Can create and retrieve a table with constraints."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         columns_schema = schema(id=pa.int64(), name=pa.string())
         columns = SerializedSchema(columns_schema.serialize().to_pybytes())
@@ -196,7 +198,7 @@ class TestCatalogTables:
     def test_table_get_nonexistent(self) -> None:
         """Getting nonexistent table returns None."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         table = client.table_get(
             attach_id=result.attach_id,
@@ -208,7 +210,7 @@ class TestCatalogTables:
     def test_table_drop(self) -> None:
         """Can create and drop a table."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         columns = SerializedSchema(schema().serialize().to_pybytes())
         client.table_create(
@@ -234,7 +236,7 @@ class TestCatalogTables:
     def test_table_rename(self) -> None:
         """Can rename a table."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         columns = SerializedSchema(schema().serialize().to_pybytes())
         client.table_create(
@@ -269,7 +271,7 @@ class TestCatalogTables:
     def test_table_comment_set(self) -> None:
         """Can set a table comment."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         columns = SerializedSchema(schema().serialize().to_pybytes())
         client.table_create(
@@ -301,7 +303,7 @@ class TestCatalogViews:
     def test_view_create_and_get(self) -> None:
         """Can create and retrieve a view."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         client.view_create(
             attach_id=result.attach_id,
@@ -324,7 +326,7 @@ class TestCatalogViews:
     def test_view_drop(self) -> None:
         """Can create and drop a view."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         client.view_create(
             attach_id=result.attach_id,
@@ -349,7 +351,7 @@ class TestCatalogViews:
     def test_view_rename(self) -> None:
         """Can rename a view."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         client.view_create(
             attach_id=result.attach_id,
@@ -386,7 +388,7 @@ class TestCatalogVersioning:
     def test_version_increments_on_schema_create(self) -> None:
         """Version increments when schema is created."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         version1 = client.catalog_version(attach_id=result.attach_id)
 
@@ -402,7 +404,7 @@ class TestCatalogVersioning:
     def test_version_increments_on_table_create(self) -> None:
         """Version increments when table is created."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         version1 = client.catalog_version(attach_id=result.attach_id)
 
@@ -425,7 +427,7 @@ class TestCatalogSchemaContents:
     def test_schema_contents_lists_tables_and_views(self) -> None:
         """schema_contents returns tables and views when queried by type."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         columns = SerializedSchema(schema().serialize().to_pybytes())
         client.table_create(
@@ -468,7 +470,7 @@ class TestCatalogOnConflict:
     def test_table_create_error_on_duplicate(self) -> None:
         """OnConflict.ERROR raises on duplicate table."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         columns = SerializedSchema(schema().serialize().to_pybytes())
         client.table_create(
@@ -491,7 +493,7 @@ class TestCatalogOnConflict:
     def test_table_create_ignore_on_duplicate(self) -> None:
         """OnConflict.IGNORE does nothing on duplicate table."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         columns = SerializedSchema(schema().serialize().to_pybytes())
         client.table_create(
@@ -514,7 +516,7 @@ class TestCatalogOnConflict:
     def test_table_create_replace_on_duplicate(self) -> None:
         """OnConflict.REPLACE replaces duplicate table."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         columns1 = SerializedSchema(schema(a=pa.int32()).serialize().to_pybytes())
         columns2 = SerializedSchema(schema(b=pa.string()).serialize().to_pybytes())
@@ -550,7 +552,7 @@ class TestCatalogMacros:
     def test_macro_create_and_get(self) -> None:
         """Can create and retrieve a macro."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         client.macro_create(
             attach_id=result.attach_id,
@@ -577,7 +579,7 @@ class TestCatalogMacros:
     def test_macro_drop(self) -> None:
         """Can create and drop a macro."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         client.macro_create(
             attach_id=result.attach_id,
@@ -604,7 +606,7 @@ class TestCatalogMacros:
     def test_macro_drop_nonexistent_raises(self) -> None:
         """Dropping nonexistent macro raises CatalogClientError."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         with pytest.raises(CatalogClientError, match="not found"):
             client.macro_drop(
@@ -616,7 +618,7 @@ class TestCatalogMacros:
     def test_macro_drop_nonexistent_ignore(self) -> None:
         """Dropping nonexistent macro with ignore_not_found=True succeeds."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         # Should not raise
         client.macro_drop(
@@ -629,7 +631,7 @@ class TestCatalogMacros:
     def test_schema_contents_filters_by_type(self) -> None:
         """schema_contents correctly filters scalar vs table macros."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         client.macro_create(
             attach_id=result.attach_id,
@@ -667,7 +669,7 @@ class TestCatalogMacros:
     def test_parameter_default_values_preserved(self) -> None:
         """RecordBatch defaults survive create/get round-trip."""
         client = Client(CATALOG_WORKER)
-        result = client.catalog_attach(name="memory", options={})
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         defaults = pa.RecordBatch.from_pydict(
             {"lo": pa.array([0], type=pa.int64()), "hi": pa.array([100], type=pa.int64())}

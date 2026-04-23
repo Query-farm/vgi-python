@@ -194,15 +194,15 @@ class CatalogAttachRequest(ArrowSerializableDataclass):
     """Request for catalog_attach. Uses RecordBatch for mixed-type options.
 
     ``data_version_spec`` and ``implementation_version`` carry semver
-    strings the user supplied at ATTACH time (concrete or range). Empty
-    string = unconstrained. The worker is responsible for interpreting
-    and validating them.
+    strings the user supplied at ATTACH time (concrete or range). ``None``
+    = unconstrained. The worker is responsible for interpreting and
+    validating them.
     """
 
     name: str
     options: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
-    data_version_spec: str = ""
-    implementation_version: str = ""
+    data_version_spec: str | None
+    implementation_version: str | None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1104,9 +1104,7 @@ class VgiProtocol(Protocol):
         """Evict a cached partition from storage."""
         ...
 
-    def aggregate_window_batch(
-        self, request: AggregateWindowBatchRequest
-    ) -> AggregateWindowBatchResponse:
+    def aggregate_window_batch(self, request: AggregateWindowBatchRequest) -> AggregateWindowBatchResponse:
         """Compute ``count`` window output rows in one batched RPC."""
         ...
 
