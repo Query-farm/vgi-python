@@ -314,15 +314,13 @@ def _collect_schemas() -> list[EmittedSchema]:
             )
         )
 
-    # 3) Per-method request schemas (the outer wire batch). Unlike responses,
-    # these are exactly what vgi-rpc expects on stdin — `info.params_schema`.
-    # For methods taking a single dataclass request, this is `{request: binary}`;
-    # for methods with direct positional params, it's the merged per-param schema.
-    # Either way: what the C++ side constructs and writes to the wire.
+    # 3) Per-method request schemas (the outer wire batch). Emitted for every
+    # Protocol method — unary AND stream — because the request shape is the
+    # same wire contract regardless of response kind. `info.params_schema`
+    # already merges per-param types for methods with direct positional
+    # params vs. a single dataclass request.
     for method_name in sorted(methods.keys()):
         info = methods[method_name]
-        if info.method_type != MethodType.UNARY:
-            continue
         name = _sanitize_cpp_name(method_name) + "Params"
         if name in seen_names:
             continue
