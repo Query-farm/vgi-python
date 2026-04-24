@@ -233,6 +233,116 @@ class TestMaxWorkersIntegration:
         assert meta.max_workers is None
 
 
+class TestHasFinalizeDetection:
+    """Tests for the has_finalize auto-detection heuristic."""
+
+    def test_no_override(self) -> None:
+        """A subclass that defines neither finish nor finalize has_finalize=False."""
+        from vgi.table_in_out_function import TableInOutFunction as TIOF
+
+        class Plain(TIOF):  # type: ignore[type-arg]
+            class Meta:
+                name = "plain_fn"
+
+            data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
+
+        assert resolve_metadata(Plain).has_finalize is False
+
+    def test_finish_override_detected(self) -> None:
+        """Overriding finish() on TableInOutFunction sets has_finalize=True."""
+        from typing import Any
+
+        from vgi.table_in_out_function import TableInOutFunction as TIOF
+
+        class WithFinish(TIOF):  # type: ignore[type-arg]
+            class Meta:
+                name = "with_finish_fn"
+
+            data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
+
+            @classmethod
+            def finish(cls, params: Any, states: Any) -> list[Any]:
+                return []
+
+        assert resolve_metadata(WithFinish).has_finalize is True
+
+    def test_generator_finalize_override_detected(self) -> None:
+        """Overriding finalize() on TableInOutGenerator is detected."""
+        from typing import Any
+
+        from vgi.table_in_out_function import TableInOutGenerator
+
+        class GenWithFinalize(TableInOutGenerator):  # type: ignore[type-arg]
+            class Meta:
+                name = "gen_with_finalize_fn"
+
+            data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
+
+            @classmethod
+            def finalize(cls, params: Any) -> list[Any]:
+                return []
+
+        assert resolve_metadata(GenWithFinalize).has_finalize is True
+
+    def test_unrelated_mixin_with_finish_ignored(self) -> None:
+        """A mixin contributing a finish attribute must not false-positive.
+
+        The mixin is not a TableInOut ancestor.
+        """
+        from vgi.table_in_out_function import TableInOutFunction as TIOF
+
+        class UnrelatedMixin:
+            def finish(self) -> None:  # unrelated method — not a TableInOut override
+                pass
+
+        class WithMixin(UnrelatedMixin, TIOF):  # type: ignore[type-arg,misc]
+            class Meta:
+                name = "with_mixin_fn"
+
+            data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
+
+        assert resolve_metadata(WithMixin).has_finalize is False
+
+    def test_non_callable_attr_ignored(self) -> None:
+        """A class-level attribute named finish that isn't callable doesn't count."""
+        from vgi.table_in_out_function import TableInOutFunction as TIOF
+
+        class WithBogusAttr(TIOF):  # type: ignore[type-arg]
+            class Meta:
+                name = "bogus_attr_fn"
+
+            data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
+
+            finish = "not a method"  # type: ignore[assignment]
+
+        assert resolve_metadata(WithBogusAttr).has_finalize is False
+
+    def test_non_tableinout_class(self) -> None:
+        """Non-TableInOut function types always report has_finalize=False."""
+        from typing import Annotated, Any
+
+        from vgi.arguments import Param, Returns
+        from vgi.scalar_function import ScalarFunction
+
+        class ScalarWithFinalize(ScalarFunction):
+            class Meta:
+                name = "scalar_with_finalize_fn"
+
+            @classmethod
+            def finalize(cls, params: Any) -> list[Any]:
+                # irrelevant for scalar, detection must ignore
+                return []
+
+            @classmethod
+            def compute(
+                cls,
+                x: Annotated[pa.Int64Array, Param(doc="")],
+            ) -> Annotated[pa.Int64Array, Returns(pa.int64())]:
+                return x
+
+        assert resolve_metadata(ScalarWithFinalize).has_finalize is False
+
+
 class TestArrowSerialization:
     """Tests for Arrow serialization of metadata."""
 

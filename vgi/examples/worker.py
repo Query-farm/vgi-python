@@ -62,6 +62,7 @@ from vgi.examples.aggregate import (
     WindowMedianFunction,
     WindowSumFunction,
 )
+from vgi.examples.nest_tensor import NestTensorFunction, UnnestTensorFunction, UnnestTensorRowsFunction
 
 try:
     from vgi.examples.distill import DistillFunction
@@ -255,6 +256,7 @@ _EXAMPLE_CATALOG = Catalog(
                 RepeatInputsFunction,
                 SumAllColumnsFunction,
                 SumAllColumnsSimpleDistributed,
+                UnnestTensorRowsFunction,
                 ExceptionFinalizeFunction,
                 ExceptionProcessFunction,
                 # TableFunctionGenerator - generate output without input
@@ -334,6 +336,7 @@ _EXAMPLE_CATALOG = Catalog(
                 TypeInfoUInt64Function,
                 AnyMixedIntFunction,
                 AnyMixedStrFunction,
+                UnnestTensorFunction,
                 UpperCaseFunction,
                 WhoAmIFunction,
                 # AggregateFunction - aggregate input rows
@@ -343,6 +346,7 @@ _EXAMPLE_CATALOG = Catalog(
                 DynamicMLAggregateFunction,
                 GenericSumFunction,
                 ListAggFunction,
+                NestTensorFunction,
                 PercentileFunction,
                 SumAllFunction,
                 SumFunction,

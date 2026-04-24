@@ -358,6 +358,12 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     # True if the aggregate implements the window() callback
     supports_window: bool = False
 
+    # True if a table-in-out function declares a finalize/finish stage.
+    # The C++ extension uses this to conditionally register
+    # ``in_out_function_final``; DuckDB rejects LATERAL with correlated input
+    # on functions that register a finalize callback.
+    has_finalize: bool = False
+
     # Settings required by the function
     required_settings: list[str] = field(default_factory=list)
 
@@ -2080,6 +2086,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             order_dependent=meta.order_dependent,
             distinct_dependent=meta.distinct_dependent,
             supports_window=meta.supports_window,
+            has_finalize=meta.has_finalize,
             # Settings
             required_settings=meta.required_settings,
             # Secrets

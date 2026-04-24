@@ -329,6 +329,12 @@ class ResolvedMetadata:
     distinct_dependent: DistinctDependence = DistinctDependence.NOT_DISTINCT_DEPENDENT
     supports_window: bool = False
 
+    # Table-in-out specific: True if the function has a meaningful finalize phase
+    # (override of finalize()/finish()). Used by the C++ extension to decide
+    # whether to register in_out_function_final, which DuckDB disallows alongside
+    # LATERAL-projected input.
+    has_finalize: bool = False
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -353,6 +359,7 @@ class ResolvedMetadata:
             "order_dependent": self.order_dependent.name,
             "distinct_dependent": self.distinct_dependent.name,
             "supports_window": self.supports_window,
+            "has_finalize": self.has_finalize,
         }
 
     @staticmethod
@@ -380,6 +387,7 @@ class ResolvedMetadata:
             order_dependent=OrderDependence[d.get("order_dependent", "NOT_ORDER_DEPENDENT")],
             distinct_dependent=DistinctDependence[d.get("distinct_dependent", "NOT_DISTINCT_DEPENDENT")],
             supports_window=d.get("supports_window", False),
+            has_finalize=d.get("has_finalize", False),
         )
 
 
@@ -929,7 +937,61 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         order_dependent=attrs.get("order_dependent", OrderDependence.NOT_ORDER_DEPENDENT),
         distinct_dependent=attrs.get("distinct_dependent", DistinctDependence.NOT_DISTINCT_DEPENDENT),
         supports_window=bool(attrs.get("supports_window", False)),
+        has_finalize=_detect_has_finalize(cls, function_type),
     )
+
+
+def _detect_has_finalize(cls: type, function_type: CatalogFunctionType) -> bool:
+    """Detect whether a table-in-out function subclass overrides finalize/finish.
+
+    Semantics: return True iff a user subclass (one that is itself a
+    ``TableInOutGenerator`` subclass) strictly above the VGI bases in the MRO
+    defines a callable ``finish`` or ``finalize`` attribute.
+
+    Robust against:
+
+    - **Mixin ordering** — we skip MRO entries that aren't ``TableInOut``
+      subclasses (e.g. ``class Foo(Mixin, TableInOutFunction)`` — ``Mixin``
+      is skipped even if it accidentally defines ``finish``).
+    - **Non-callable attributes** — a class variable or property named
+      ``finish`` doesn't count; we require ``callable`` after unwrapping
+      ``classmethod``/``staticmethod`` descriptors.
+    - **Framework dispatch** — stops the walk at ``TableInOutGenerator`` and
+      ``TableInOutFunction`` themselves, so the base-class ``finalize``
+      dispatch stub doesn't trigger a false positive on every
+      ``TableInOutFunction`` subclass.
+    """
+    if function_type is not CatalogFunctionType.TABLE:
+        return False
+
+    # Lazy imports to avoid a circular dependency.
+    try:
+        from vgi.table_in_out_function import TableInOutFunction, TableInOutGenerator
+    except ImportError:  # pragma: no cover
+        return False
+
+    if not issubclass(cls, TableInOutGenerator):
+        return False
+
+    bases = {TableInOutGenerator, TableInOutFunction}
+    for klass in cls.__mro__:
+        if klass in bases:
+            return False
+        # Only count overrides defined on an actual TableInOut subclass, so
+        # an unrelated mixin with an identically-named attribute can't
+        # trigger a false positive.
+        if not issubclass(klass, TableInOutGenerator):
+            continue
+        for attr_name in ("finish", "finalize"):
+            raw = klass.__dict__.get(attr_name)
+            if raw is None:
+                continue
+            # Unwrap descriptors that wrap a function.
+            if isinstance(raw, (classmethod, staticmethod)):
+                raw = raw.__func__
+            if callable(raw):
+                return True
+    return False
 
 
 # =============================================================================
@@ -995,6 +1057,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("order_dependent", pa.string()),
         pa.field("distinct_dependent", pa.string()),
         pa.field("supports_window", pa.bool_()),
+        pa.field("has_finalize", pa.bool_()),
     ]
 )
 
