@@ -171,6 +171,31 @@ _logger = logging.getLogger("vgi.worker")
 _vgi_version_cache: str | None = None
 
 
+def _write_port_file(path: str, port: int) -> None:
+    """Write `port` to `path` atomically (tmp + rename).
+
+    Callers (typically test harnesses) watch for the target path to appear,
+    so a partially-written file would race the reader. Using rename means
+    the file either doesn't exist or has the full port number.
+    """
+    import os
+    import tempfile
+
+    parent = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".port.", dir=parent)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(f"{port}\n")
+        os.replace(tmp, path)
+    except BaseException:
+        # Best-effort cleanup of the tmp on any failure before the rename.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _get_vgi_version() -> str:
     """Return the installed vgi package version (cached)."""
     global _vgi_version_cache  # noqa: PLW0603
@@ -672,6 +697,15 @@ class Worker:
             describe: bool = typer.Option(  # noqa: B008
                 True, "--describe/--no-describe", help="Enable description pages (worker + RPC API)"
             ),
+            port_file: str | None = typer.Option(
+                None,
+                "--port-file",
+                help=(
+                    "Write the bound port number (one line, no prefix) to this file before starting "
+                    "to serve. For test harnesses / process managers that need the port side-channel "
+                    "without parsing stdout."
+                ),
+            ),
         ) -> None:
             env_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
             effective_debug = debug or env_debug
@@ -702,6 +736,7 @@ class Worker:
                     authenticate=authenticate,
                     oauth_resource_metadata=oauth_metadata,
                     otel_config=otel_config,
+                    port_file=port_file,
                 )
             else:
                 from vgi.serve import _resolve_otel_config
@@ -792,6 +827,7 @@ class Worker:
         authenticate: Any = None,
         oauth_resource_metadata: Any = None,
         otel_config: Any = None,
+        port_file: str | None = None,
     ) -> None:
         """Start the worker as an HTTP server (shared by ``main`` and ``main_http``)."""
         import socket
@@ -825,6 +861,12 @@ class Worker:
             oauth_resource_metadata=oauth_resource_metadata,
             otel_config=otel_config,
         )
+
+        # Side-channel port publication for test harnesses: write the port
+        # atomically (tmp + rename) so readers can watch for the file
+        # appearing without racing a partial write.
+        if port_file is not None:
+            _write_port_file(port_file, port)
 
         # Machine-readable port for process managers and test harnesses
         print(f"PORT:{port}", flush=True)

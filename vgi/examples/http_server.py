@@ -165,6 +165,15 @@ def main() -> None:
             "--demo-storage",
             help="Enable in-process blob storage for externalized payloads (no S3 required)",
         ),
+        port_file: str | None = typer.Option(
+            None,
+            "--port-file",
+            help=(
+                "Write the bound port number (one line, no prefix) to this file before starting "
+                "to serve. For test harnesses / process managers that need the port side-channel "
+                "without parsing stdout."
+            ),
+        ),
     ) -> None:
         try:
             from vgi_rpc import Compression, ExternalLocationConfig, RpcServer
@@ -297,6 +306,14 @@ def main() -> None:
             from vgi.http.demo_storage import MaxRequestBytesMiddleware
 
             serving_app = MaxRequestBytesMiddleware(wsgi_app, max_upload_bytes)
+
+        if port_file is not None:
+            # Atomic side-channel publication so test harnesses can watch
+            # for the file without racing a partial write. Same helper the
+            # main Worker class uses via `--port-file`.
+            from vgi.worker import _write_port_file
+
+            _write_port_file(port_file, port)
 
         print(f"PORT:{port}", flush=True)
         sys.stderr.write(f"Serving ExampleWorker on http://{host}:{port}{prefix}\n")
