@@ -345,6 +345,54 @@ column: Annotated[pa.Int64Array, Param(arrow_type=pa.int32(), doc="...")]
 
 For common use cases, VGI provides specialized base classes that handle boilerplate:
 
+## Stream cancellation (`on_cancel`)
+
+A streaming function (`TableFunctionGenerator` or
+`TableInOutGenerator`) may override `on_cancel(cls, params, state)` to
+release resources when the C++ extension tears down a scan early —
+e.g., DuckDB `LIMIT` clauses, user `break`, Ctrl-C, or exception
+unwind. The override receives the same `ProcessParams` that `process()`
+sees, plus the current user state (possibly deserialized from an HTTP
+state-token on a different worker than the one that originally built
+it). Typical bodies close a DB cursor, cancel an upstream HTTP
+request, or release a GPU buffer.
+
+```python
+class SlowCancellableFunction(TableFunctionGenerator[Args, State]):
+    @classmethod
+    def on_cancel(cls, params: ProcessParams[Args], state: State) -> None:
+        if state.cursor is not None:
+            state.cursor.close()
+```
+
+**Best-effort hook — do not rely on it for correctness.** Several
+classes of cancellation skip `on_cancel`:
+
+- Worker process kill (OOM, SIGKILL, crash), network partition, and
+  some error-on-error unwinds do not run the hook at all.
+- Mid-batch Ctrl-C: under VGI's lockstep RPC, a `ReadDataBatch` blocks
+  until the worker produces. The extension only enqueues the cancel
+  after the current batch returns, so a long `process()` (e.g. an LLM
+  streaming call) finishes before `on_cancel` sees the signal. Expect
+  up to "one batch of latency" after Ctrl-C.
+- **HTTP with `max_workers > 1`:** the cancel POST routes to any
+  worker in the pool, not necessarily the one that originally handled
+  the stream. `on_cancel` runs on the receiving worker after
+  deserializing the state, so it cannot reach process-local resources
+  (file handles, in-memory buffers) that live on the original worker.
+  Users who need guaranteed release should either set `max_workers=1`,
+  use subprocess transport, or keep resources in shared infrastructure
+  (Redis, DB pool) whose handle is derivable from the serialized state.
+
+Commit correctness-critical cleanup elsewhere (transactions, explicit
+`with`-statement finalization, idempotent end-of-stream processing).
+
+**Globally disabling:** `SET vgi_cancel_enabled=false;` skips the
+cancel dispatcher entirely on both subprocess and HTTP. When disabled,
+the dispatcher thread doesn't even start if the setting was false for
+the life of the process. `on_cancel` is never invoked; workers learn a
+stream is gone only via normal stream-close / HTTP state-token TTL.
+
 ## Using DuckDB Settings
 
 Functions can declare required settings via `Meta.required_settings` and

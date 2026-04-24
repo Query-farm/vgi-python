@@ -696,6 +696,16 @@ class TableProducerState(ProducerState):
                 output_bytes=tracking_out.total_bytes,
             )
 
+    def on_cancel(self, ctx: CallContext) -> None:
+        """Forward cancel signal to the user function's classmethod."""
+        if self._func_cls is None or self._params is None:
+            return
+        params = dataclasses.replace(self._params, auth_context=ctx.auth)
+        try:
+            self._func_cls.on_cancel(params, self._user_state)  # type: ignore[arg-type]
+        except Exception:
+            _log.debug("on_cancel hook raised", exc_info=True)
+
 
 @dataclass
 class TableInOutExchangeState(ExchangeState):
@@ -804,6 +814,16 @@ class TableInOutExchangeState(ExchangeState):
                 input_bytes=_batch_bytes(input.batch),
                 output_bytes=tracking_out.total_bytes,
             )
+
+    def on_cancel(self, ctx: CallContext) -> None:
+        """Forward cancel signal to the user function's classmethod."""
+        if self._func_cls is None or self._params is None:
+            return
+        params = dataclasses.replace(self._params, auth_context=ctx.auth)
+        try:
+            self._func_cls.on_cancel(params, self._user_state)  # type: ignore[arg-type]
+        except Exception:
+            _log.debug("on_cancel hook raised", exc_info=True)
 
 
 @dataclass

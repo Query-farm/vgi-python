@@ -62,6 +62,7 @@ from vgi.examples.aggregate import (
     WindowMedianFunction,
     WindowSumFunction,
 )
+from vgi.examples.cancellable import SlowCancellableFunction, SlowCancellableInOutFunction
 from vgi.examples.nest_tensor import NestTensorFunction, UnnestTensorFunction, UnnestTensorRowsFunction
 
 try:
@@ -254,6 +255,7 @@ _EXAMPLE_CATALOG = Catalog(
                 BufferInputFunction,
                 FilterBySettingFunction,
                 RepeatInputsFunction,
+                SlowCancellableInOutFunction,
                 SumAllColumnsFunction,
                 SumAllColumnsSimpleDistributed,
                 UnnestTensorRowsFunction,
@@ -261,6 +263,7 @@ _EXAMPLE_CATALOG = Catalog(
                 ExceptionProcessFunction,
                 # TableFunctionGenerator - generate output without input
                 ConstantColumnsFunction,
+                SlowCancellableFunction,
                 FilterEchoFunction,
                 DoubleSequenceFunction,
                 DynamicFilterEchoFunction,

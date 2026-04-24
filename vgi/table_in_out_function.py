@@ -24,6 +24,7 @@ from vgi.invocation import (
     GlobalInitResponse,
 )
 from vgi.table_function import (
+    _ON_CANCEL_CAVEATS,
     BindParams,
     InitParams,
     ProcessParams,
@@ -255,6 +256,28 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
 
         """
         return []
+
+    @classmethod
+    def on_cancel(cls, params: ProcessParams[TArgs], state: TState | None) -> None:  # noqa: D102
+        pass
+
+    on_cancel.__func__.__doc__ = (  # type: ignore[attr-defined]
+        f"""Release resources when the stream is cancelled before natural end.
+
+        The VGI C++ extension fires this hook when a DuckDB query tears
+        down a VGI table-in-out scan early (LIMIT clause upstream, user
+        break, Ctrl-C, exception unwind). Override to release expensive
+        per-stream resources the function was holding in ``state``
+        (database cursors, LLM streaming sessions, file handles, GPU
+        buffers).
+
+{_ON_CANCEL_CAVEATS}
+
+        Args:
+            params: Process parameters (same as ``process()`` received).
+            state: The current user state; ``None`` when state is unused.
+        """
+    )
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)

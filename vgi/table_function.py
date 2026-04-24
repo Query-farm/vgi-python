@@ -40,6 +40,20 @@ if TYPE_CHECKING:
     from vgi.protocol import BindRequest, InitRequest
     from vgi.table_filter_pushdown import PushdownFilters
 
+_ON_CANCEL_CAVEATS = """\
+        **Best-effort only.** This hook does not fire in every
+        cancellation path — process kills, network partitions, and
+        some error-on-error unwinds skip it. Never rely on
+        ``on_cancel`` for correctness-critical cleanup; treat it as a
+        resource-release optimization.
+
+        Under HTTP pooling with ``max_workers > 1``, ``on_cancel`` may
+        fire on a different worker process than the one that produced
+        batches for this stream. Process-local resources held in a
+        specific worker's memory cannot be reliably released from
+        another worker's ``on_cancel``; prefer shared infrastructure
+        whose handle is re-derivable from the serialized state."""
+
 __all__ = [
     "TableCardinality",
     "BindParams",
@@ -796,6 +810,32 @@ class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
             out: OutputCollector for emitting batches, logging, and signaling finish.
 
         """
+
+    @classmethod
+    def on_cancel(cls, params: ProcessParams[TArgs], state: TState) -> None:  # noqa: D102
+        pass
+
+    on_cancel.__func__.__doc__ = (  # type: ignore[attr-defined]
+        f"""Release resources when the stream is cancelled before natural end.
+
+        The VGI C++ extension fires this hook when a DuckDB query tears
+        down a VGI scan early (LIMIT clause, user break, Ctrl-C,
+        exception unwind). Override to release expensive per-stream
+        resources the function was holding in ``state`` (database
+        cursors, LLM streaming sessions, file handles, GPU buffers).
+
+{_ON_CANCEL_CAVEATS}
+
+        The stream has already been torn down by the time this fires;
+        no further batches may be emitted.
+
+        Args:
+            params: Process parameters (same as ``process()`` received).
+            state: The current user state, possibly deserialized from a
+                state-token on a different worker than the one that
+                originally built it.
+        """
+    )
 
 
 def init_single_worker[T: TableFunctionGenerator[Any, Any]](cls: type[T]) -> type[T]:
