@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -3031,7 +3031,7 @@ wheels = [
 
 [[package]]
 name = "vgi"
-version = "0.2.0"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -3110,7 +3110,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.17.1" },
     { name = "sqlglot" },
     { name = "typer", specifier = ">=0.9" },
-    { name = "vgi-rpc", directory = "../vgi-rpc" },
+    { name = "vgi-rpc", directory = "/Users/rusty/Development/vgi-rpc" },
     { name = "vgi-rpc", extras = ["http"], marker = "extra == 'http'" },
     { name = "vgi-rpc", extras = ["oauth"], marker = "extra == 'oauth'" },
     { name = "vgi-rpc", extras = ["otel"], marker = "extra == 'otel'" },
@@ -3128,7 +3128,7 @@ dev = [
 [[package]]
 name = "vgi-rpc"
 version = "0.9.0"
-source = { directory = "../vgi-rpc" }
+source = { directory = "/Users/rusty/Development/vgi-rpc" }
 dependencies = [
     { name = "docstring-parser" },
     { name = "pyarrow" },
@@ -3209,7 +3209,7 @@ docs = [
     { name = "mkdocs-material", specifier = ">=9.5" },
     { name = "mkdocs-section-index", specifier = ">=0.3" },
     { name = "mkdocstrings", extras = ["python"], specifier = ">=0.27" },
-    { name = "pygments", specifier = ">=2.19,<2.20" },
+    { name = "pygments", specifier = ">=2.20" },
 ]
 
 [[package]]
