@@ -47,8 +47,15 @@ class TestBindExceptionHandling:
             # Should contain the exception type
             assert "ValueError" in error_message
 
-    def test_bind_exception_contains_worker_exception_prefix(self) -> None:
-        """Bind-time exceptions should have 'Worker Exception' prefix."""
+    def test_bind_exception_leads_with_user_message(self) -> None:
+        """The first line of a ClientError is the user's exception, not VGI framing.
+
+        We used to prefix with ``Worker Exception:``; the prefix was noise that
+        pushed the actionable exception down a line. The contract now is:
+        ``str(e)`` starts with ``{error_type}: {error_message}`` (the same
+        thing ``RpcError.__init__`` sets), and optional sections (remote
+        traceback, worker stderr) follow after a blank line.
+        """
         with Client("vgi-example-worker") as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
@@ -59,7 +66,13 @@ class TestBindExceptionHandling:
                 )
 
             error_message = str(exc_info.value)
-            assert "Worker Exception" in error_message
+            first_line = error_message.split("\n", 1)[0]
+            # First line is "ValueError: <message>" (or similar user error)
+            # — NOT framed with "Worker Exception:" or any VGI wrapper.
+            assert not first_line.startswith("Worker Exception")
+            assert ":" in first_line  # standard "Type: message" shape
+            # Remote traceback, when present, is a later section.
+            assert "Traceback" in error_message
 
     def test_unknown_function_raises_client_error(self) -> None:
         """Calling unknown function should raise ClientError with helpful message."""
@@ -77,8 +90,6 @@ class TestBindExceptionHandling:
             assert "nonexistent_function" in error_message
             # Should indicate it's unknown
             assert "Unknown function" in error_message
-            # Should be a worker exception
-            assert "Worker Exception" in error_message
 
     def test_argument_mismatch_raises_error(self) -> None:
         """Wrong number of arguments should raise error during bind."""
@@ -93,8 +104,6 @@ class TestBindExceptionHandling:
                 )
 
             error_message = str(exc_info.value)
-            # Must be a worker exception with argument-related error
-            assert "Worker Exception" in error_message
             # Should mention missing/required argument or matching failure
             error_lower = error_message.lower()
             assert any(term in error_lower for term in ["argument", "required", "missing", "match"]), (

@@ -56,6 +56,49 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
     """
 
     @classmethod
+    def has_finalize_override(cls) -> bool:
+        """Whether this class's ``finalize``/``finish`` represents real work.
+
+        Returns True iff either:
+
+        - The class's ``Meta`` declares ``has_finalize`` as ``True`` or ``False``
+          (explicit override — the declared value wins, even if it disagrees
+          with the auto-detection).
+        - Auto-detection finds a user subclass (one that is itself a
+          ``TableInOutGenerator`` subclass) strictly above the VGI bases in
+          the MRO defining a callable ``finish`` or ``finalize`` attribute.
+
+        The framework uses this to decide whether to advertise a finalize
+        callback to DuckDB; DuckDB rejects LATERAL with correlated input on
+        table functions that register ``in_out_function_final``.
+        """
+        # Explicit Meta override.
+        meta = getattr(cls, "Meta", None)
+        explicit = getattr(meta, "has_finalize", None) if meta is not None else None
+        if explicit is not None:
+            return bool(explicit)
+
+        # Auto-detect.
+        bases = {TableInOutGenerator, TableInOutFunction}
+        for klass in cls.__mro__:
+            if klass in bases:
+                return False
+            # Only count overrides defined on an actual TableInOut subclass, so
+            # an unrelated mixin with an identically-named attribute can't
+            # trigger a false positive.
+            if not (isinstance(klass, type) and issubclass(klass, TableInOutGenerator)):
+                continue
+            for attr_name in ("finish", "finalize"):
+                raw = klass.__dict__.get(attr_name)
+                if raw is None:
+                    continue
+                if isinstance(raw, (classmethod, staticmethod)):
+                    raw = raw.__func__
+                if callable(raw):
+                    return True
+        return False
+
+    @classmethod
     def on_bind(
         cls,
         params: BindParams[TArgs],

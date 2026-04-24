@@ -76,15 +76,29 @@ _worker_logger = logging.getLogger("vgi.client.worker")
 
 
 class ClientError(Exception):
-    """Error raised by Client operations."""
+    """Error raised by Client operations.
+
+    The first line of ``str(ClientError)`` is the remote exception as the
+    worker raised it (``{error_type}: {error_message}``), so that whatever
+    a user typed into their `raise ValueError(...)` shows up at the top of
+    their traceback instead of being buried under VGI framing. Remote
+    traceback and worker-stderr excerpts, when present, follow after an
+    empty line.
+    """
 
     @classmethod
     def from_rpc_error(cls, e: RpcError) -> ClientError:
-        """Create a ClientError from an RpcError, including remote traceback."""
-        msg = f"Worker Exception: {e}"
-        if hasattr(e, "remote_traceback") and e.remote_traceback:
-            msg = f"{msg}\n\nRemote traceback:\n{e.remote_traceback}"
-        return cls(msg)
+        """Create a ClientError from an RpcError, including remote traceback.
+
+        Lead with the user's exception (``error_type: error_message``) so
+        the most actionable line is first. The ``Remote traceback`` section
+        trails and is only included when the worker produced one.
+        """
+        # str(e) is already "error_type: error_message" from RpcError.__init__.
+        parts: list[str] = [str(e)]
+        if getattr(e, "remote_traceback", ""):
+            parts.append(f"Remote traceback:\n{e.remote_traceback}")
+        return cls("\n\n".join(parts))
 
 
 # Module-level worker pool shared across all Client instances.
@@ -326,8 +340,10 @@ class Client(CatalogClientMixin):
         """Enrich a ClientError with captured worker stderr, if available.
 
         When passthrough_stderr is enabled, stderr already went to the terminal
-        so we return the error unchanged. Otherwise, we append the last 50 lines
-        of captured stderr to the error message.
+        so we return the error unchanged. Otherwise we append the last 50 lines
+        of captured stderr *after* the existing message — so the user's actual
+        exception (first line of ``str(error)``) stays at the top of the
+        rendered traceback and operational log noise trails.
         """
         if self.passthrough_stderr:
             return error
@@ -336,7 +352,7 @@ class Client(CatalogClientMixin):
             return error
         lines = stderr.strip().splitlines()
         excerpt = "\n".join(lines[-50:]) if len(lines) > 50 else "\n".join(lines)
-        new_error = ClientError(f"{error}\n\nWorker stderr:\n{excerpt}")
+        new_error = ClientError(f"{error}\n\nWorker stderr (last {len(excerpt.splitlines())} lines):\n{excerpt}")
         new_error.__cause__ = error.__cause__
         return new_error
 

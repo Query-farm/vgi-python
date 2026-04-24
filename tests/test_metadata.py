@@ -317,6 +317,38 @@ class TestHasFinalizeDetection:
 
         assert resolve_metadata(WithBogusAttr).has_finalize is False
 
+    def test_meta_override_forces_false(self) -> None:
+        """Meta.has_finalize = False wins over a real finish() override."""
+        from typing import Any
+
+        from vgi.table_in_out_function import TableInOutFunction as TIOF
+
+        class ForcedOff(TIOF):  # type: ignore[type-arg]
+            class Meta:
+                name = "forced_off"
+                has_finalize = False  # user claims this is a no-op
+
+            data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
+
+            @classmethod
+            def finish(cls, params: Any, states: Any) -> list[Any]:
+                return []
+
+        assert resolve_metadata(ForcedOff).has_finalize is False
+
+    def test_meta_override_forces_true(self) -> None:
+        """Meta.has_finalize = True forces the bit even with no finish override."""
+        from vgi.table_in_out_function import TableInOutFunction as TIOF
+
+        class ForcedOn(TIOF):  # type: ignore[type-arg]
+            class Meta:
+                name = "forced_on"
+                has_finalize = True
+
+            data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
+
+        assert resolve_metadata(ForcedOn).has_finalize is True
+
     def test_non_tableinout_class(self) -> None:
         """Non-TableInOut function types always report has_finalize=False."""
         from typing import Annotated, Any

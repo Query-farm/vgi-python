@@ -36,7 +36,11 @@ class TestBindExceptionHandling:
                 )
 
             assert "nonexistent_function_xyz" in str(exc_info.value)
-            assert "Worker Exception" in str(exc_info.value)
+            # Error is remote — first line is "error_type: error_message"
+            # (we dropped the old "Worker Exception:" prefix). A colon in the
+            # first line is enough to assert the standard shape without
+            # tying the test to a specific exception class.
+            assert ":" in str(exc_info.value).split("\n", 1)[0]
 
     def test_missing_required_setting_raises_client_error(self) -> None:
         """Test that missing required settings raise ClientError."""
@@ -73,7 +77,11 @@ class TestProcessingExceptionHandling:
                 )
 
             # Should get a type-related error
-            assert "Worker Exception" in str(exc_info.value)
+            # Error is remote — first line is "error_type: error_message"
+            # (we dropped the old "Worker Exception:" prefix). A colon in the
+            # first line is enough to assert the standard shape without
+            # tying the test to a specific exception class.
+            assert ":" in str(exc_info.value).split("\n", 1)[0]
 
 
 # =============================================================================
@@ -136,7 +144,7 @@ class TestMultiWorkerExceptionHandling:
 
             # Should get a proper error message
             error_message = str(exc_info.value)
-            assert "Worker Exception" in error_message
+            assert ":" in error_message.split("\n", 1)[0]
             assert "vgi_verbose_mode" in error_message
 
 
@@ -163,7 +171,11 @@ class TestTableInOutExceptionHandling:
                 )
 
             # Should get an error about the missing column
-            assert "Worker Exception" in str(exc_info.value)
+            # Error is remote — first line is "error_type: error_message"
+            # (we dropped the old "Worker Exception:" prefix). A colon in the
+            # first line is enough to assert the standard shape without
+            # tying the test to a specific exception class.
+            assert ":" in str(exc_info.value).split("\n", 1)[0]
 
 
 # =============================================================================
@@ -194,7 +206,11 @@ class TestScalarExceptionHandling:
                 )
 
             # Should get an error about the missing column
-            assert "Worker Exception" in str(exc_info.value)
+            # Error is remote — first line is "error_type: error_message"
+            # (we dropped the old "Worker Exception:" prefix). A colon in the
+            # first line is enough to assert the standard shape without
+            # tying the test to a specific exception class.
+            assert ":" in str(exc_info.value).split("\n", 1)[0]
 
 
 # =============================================================================
@@ -205,8 +221,8 @@ class TestScalarExceptionHandling:
 class TestErrorMessageContent:
     """Tests for verifying error message content and format."""
 
-    def test_worker_exception_prefix(self) -> None:
-        """Test that errors have 'Worker Exception' prefix."""
+    def test_error_first_line_has_type_and_message(self) -> None:
+        """First line of str(ClientError) is ``error_type: error_message``."""
         with Client("vgi-example-worker") as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
@@ -216,7 +232,11 @@ class TestErrorMessageContent:
                     )
                 )
 
-            assert "Worker Exception" in str(exc_info.value)
+            # Error is remote — first line is "error_type: error_message"
+            # (we dropped the old "Worker Exception:" prefix). A colon in the
+            # first line is enough to assert the standard shape without
+            # tying the test to a specific exception class.
+            assert ":" in str(exc_info.value).split("\n", 1)[0]
 
     def test_exception_type_in_message(self) -> None:
         """Test that exception type is included in error message."""

@@ -769,6 +769,10 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         "auto_apply_filters",  # Auto-apply pushdown filters to output batches
         "preserves_order",
         "max_workers",
+        # Table-in-out specific: explicit override for the has_finalize auto-detection.
+        # Set to True or False to force the emitted ``in_out_function_final``
+        # registration bit; leave unset (None) to auto-detect from finish/finalize.
+        "has_finalize",
         # Aggregate function specific
         "order_dependent",
         "distinct_dependent",
@@ -942,56 +946,23 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
 
 
 def _detect_has_finalize(cls: type, function_type: CatalogFunctionType) -> bool:
-    """Detect whether a table-in-out function subclass overrides finalize/finish.
+    """Route to the TableInOut base class's ``has_finalize_override`` hook.
 
-    Semantics: return True iff a user subclass (one that is itself a
-    ``TableInOutGenerator`` subclass) strictly above the VGI bases in the MRO
-    defines a callable ``finish`` or ``finalize`` attribute.
-
-    Robust against:
-
-    - **Mixin ordering** — we skip MRO entries that aren't ``TableInOut``
-      subclasses (e.g. ``class Foo(Mixin, TableInOutFunction)`` — ``Mixin``
-      is skipped even if it accidentally defines ``finish``).
-    - **Non-callable attributes** — a class variable or property named
-      ``finish`` doesn't count; we require ``callable`` after unwrapping
-      ``classmethod``/``staticmethod`` descriptors.
-    - **Framework dispatch** — stops the walk at ``TableInOutGenerator`` and
-      ``TableInOutFunction`` themselves, so the base-class ``finalize``
-      dispatch stub doesn't trigger a false positive on every
-      ``TableInOutFunction`` subclass.
+    For non-TableInOut function types always returns ``False``. The actual
+    detection logic lives on the base class so users can subclass and
+    override the heuristic, and so the Meta-level ``has_finalize`` flag is
+    handled in one place.
     """
     if function_type is not CatalogFunctionType.TABLE:
         return False
-
-    # Lazy imports to avoid a circular dependency.
+    # Lazy import to avoid a circular dependency.
     try:
-        from vgi.table_in_out_function import TableInOutFunction, TableInOutGenerator
+        from vgi.table_in_out_function import TableInOutGenerator
     except ImportError:  # pragma: no cover
         return False
-
     if not issubclass(cls, TableInOutGenerator):
         return False
-
-    bases = {TableInOutGenerator, TableInOutFunction}
-    for klass in cls.__mro__:
-        if klass in bases:
-            return False
-        # Only count overrides defined on an actual TableInOut subclass, so
-        # an unrelated mixin with an identically-named attribute can't
-        # trigger a false positive.
-        if not issubclass(klass, TableInOutGenerator):
-            continue
-        for attr_name in ("finish", "finalize"):
-            raw = klass.__dict__.get(attr_name)
-            if raw is None:
-                continue
-            # Unwrap descriptors that wrap a function.
-            if isinstance(raw, (classmethod, staticmethod)):
-                raw = raw.__func__
-            if callable(raw):
-                return True
-    return False
+    return cls.has_finalize_override()
 
 
 # =============================================================================
