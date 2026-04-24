@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
     from vgi.catalog.descriptors import Catalog, Index, Macro, Schema, Table, View
     from vgi.catalog.secret_type import SecretTypeSpec
+    from vgi.catalog.attach_option import AttachOptionSpec
     from vgi.catalog.setting import SettingSpec
 
 import pyarrow as pa
@@ -108,6 +109,10 @@ class CatalogInfo(ArrowSerializableDataclass):
     # Semver range the catalog serves (e.g. ">=1.0.0,<2.0.0"). ``None`` = worker
     # declares no data-version opinion.
     data_version_spec: str | None
+    # Attach-time options the catalog accepts (distinct from session settings).
+    # Each AttachOptionSpec is serialized as bytes for Arrow compatibility.
+    # Enables pre-attach discovery via the catalogs() RPC.
+    attach_option_specs: list[bytes] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -1470,6 +1475,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     functions: list[type] = []
     settings: list["SettingSpec"] = []
     secret_types: list["SecretTypeSpec"] = []
+    attach_option_specs: list["AttachOptionSpec"] = []
 
     # NEW: Optional Catalog object for declarative definition
     catalog: "Catalog | None" = None
@@ -1580,7 +1586,14 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         Default discovery record carries just the catalog name — subclasses
         that want to advertise version metadata should override.
         """
-        return [CatalogInfo(name=self._effective_catalog_name, implementation_version=None, data_version_spec=None)]
+        return [
+            CatalogInfo(
+                name=self._effective_catalog_name,
+                implementation_version=None,
+                data_version_spec=None,
+                attach_option_specs=[spec.serialize() for spec in self.attach_option_specs],
+            )
+        ]
 
     def catalog_attach(
         self,

@@ -91,6 +91,7 @@ from vgi.catalog.catalog_interface import (
     serialize_column_statistics,
 )
 from vgi.catalog.secret_type import SecretTypeSpec
+from vgi.catalog.attach_option import AttachOptionSpec, extract_attach_option_specs
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
 from vgi.function import (
     Function,
@@ -506,6 +507,7 @@ class Worker:
     _default_catalog_interface: type[CatalogInterface] | None = None
     _setting_specs: list[SettingSpec] = []  # Extracted from Settings inner class
     _secret_type_specs: list[SecretTypeSpec] = []  # Secret types to register
+    _attach_option_specs: list[AttachOptionSpec] = []  # Extracted from AttachOptions inner class
 
     @final
     @staticmethod
@@ -533,19 +535,28 @@ class Worker:
         else:
             cls._setting_specs = []
 
+        # Process AttachOptions inner class if present
+        if hasattr(cls, "AttachOptions") and isinstance(cls.AttachOptions, type):
+            cls._attach_option_specs = extract_attach_option_specs(cls.AttachOptions)
+        else:
+            cls._attach_option_specs = []
+
         # Process secret_types class attribute if present
         if hasattr(cls, "secret_types") and isinstance(cls.secret_types, list):
             cls._secret_type_specs = list(cls.secret_types)
         else:
             cls._secret_type_specs = []
 
-        # Inject settings/secret_types into explicit catalog_interface if set,
-        # so catalog_attach() can serialize them. Done once at class definition.
+        # Inject settings/secret_types/attach_option_specs into explicit
+        # catalog_interface if set, so catalogs()/catalog_attach() can
+        # serialize them. Done once at class definition.
         if cls.catalog_interface is not None:
             if cls._setting_specs and hasattr(cls.catalog_interface, "settings"):
                 cls.catalog_interface.settings = list(cls._setting_specs)
             if cls._secret_type_specs and hasattr(cls.catalog_interface, "secret_types"):
                 cls.catalog_interface.secret_types = list(cls._secret_type_specs)
+            if cls._attach_option_specs and hasattr(cls.catalog_interface, "attach_option_specs"):
+                cls.catalog_interface.attach_option_specs = list(cls._attach_option_specs)
 
     @classmethod
     def _build_registry(cls) -> dict[str, list[type[Function]]]:
@@ -631,6 +642,7 @@ class Worker:
             attrs: dict[str, Any] = {
                 "settings": list(cls._setting_specs),
                 "secret_types": list(cls._secret_type_specs),
+                "attach_option_specs": list(cls._attach_option_specs),
             }
 
             if has_catalog:
