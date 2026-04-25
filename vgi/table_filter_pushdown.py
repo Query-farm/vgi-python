@@ -690,8 +690,8 @@ class PushdownFilters:
         if len(row_counts) != 1:
             return None
         # All same cardinality — merge into one multi-column batch
-        columns: list[pa.Array] = []
-        fields: list[pa.Field] = []
+        columns: list[pa.Array[Any]] = []
+        fields: list[pa.Field[Any]] = []
         for b in self.join_keys_batches:
             for i in range(b.num_columns):
                 columns.append(b.column(i))

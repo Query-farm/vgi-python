@@ -23,6 +23,8 @@ from typing import (
 import pyarrow as pa
 from vgi_rpc.utils import deserialize_record_batch, serialize_record_batch_bytes
 
+from vgi.schema_utils import schema
+
 if TYPE_CHECKING:
     from typing import Self
 
@@ -61,7 +63,7 @@ class AttachOptionSpec:
 
     def serialize(self) -> bytes:
         """Serialize to Arrow IPC bytes."""
-        type_schema = pa.schema([pa.field("value", self.type)])
+        type_schema = schema(value=self.type)
         type_bytes = type_schema.serialize().to_pybytes()
 
         default_bytes: bytes | None = None

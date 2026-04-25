@@ -23,9 +23,9 @@ from typing import (
 if TYPE_CHECKING:
     from vgi_rpc.rpc import CallContext
 
+    from vgi.catalog.attach_option import AttachOptionSpec
     from vgi.catalog.descriptors import Catalog, Index, Macro, Schema, Table, View
     from vgi.catalog.secret_type import SecretTypeSpec
-    from vgi.catalog.attach_option import AttachOptionSpec
     from vgi.catalog.setting import SettingSpec
 
 import pyarrow as pa
@@ -573,7 +573,7 @@ def serialize_column_statistics(
     if n == 0:
         # Return a minimal empty batch — must construct empty union arrays manually
         # since pa.array([], type=sparse_union) is not supported
-        union_fields = [pa.field("0", pa.null())]
+        union_fields: list[pa.Field[Any]] = [pa.field("0", pa.null())]
         union_type = pa.sparse_union(union_fields)
         empty_union = pa.UnionArray.from_sparse(
             pa.array([], type=pa.int8()),
@@ -618,11 +618,11 @@ def serialize_column_statistics(
         row_type_codes.append(type_map[arrow_type])
 
     # 2. Build sparse union child arrays (each child is length N)
-    union_fields: list[pa.Field] = []  # type: ignore[type-arg]
+    union_fields = []
     field_names: list[str] = []
     type_codes: list[int] = []
-    min_children: list[pa.Array] = []  # type: ignore[type-arg]
-    max_children: list[pa.Array] = []  # type: ignore[type-arg]
+    min_children: list[pa.Array[Any]] = []
+    max_children: list[pa.Array[Any]] = []
     for arrow_type, code in sorted(type_map.items(), key=lambda x: x[1]):
         union_fields.append(pa.field(str(code), arrow_type))
         field_names.append(str(code))

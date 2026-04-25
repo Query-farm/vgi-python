@@ -79,6 +79,7 @@ from vgi.aggregate_function import AggregateBindParams, AggregateFunction
 from vgi.argument_spec import ArgumentSpec, extract_argument_specs
 from vgi.arguments import Arguments
 from vgi.catalog import CatalogInterface
+from vgi.catalog.attach_option import AttachOptionSpec, extract_attach_option_specs
 from vgi.catalog.catalog_interface import (
     AttachId,
     CatalogAttachResult,
@@ -91,7 +92,6 @@ from vgi.catalog.catalog_interface import (
     serialize_column_statistics,
 )
 from vgi.catalog.secret_type import SecretTypeSpec
-from vgi.catalog.attach_option import AttachOptionSpec, extract_attach_option_specs
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
 from vgi.function import (
     Function,
@@ -340,7 +340,7 @@ def _unpack_bool_mask(data: bytes, length: int) -> pa.BooleanArray:
     if not data:
         return pa.array([True] * length, type=pa.bool_())
     buf = pa.py_buffer(data)
-    return pa.Array.from_buffers(pa.bool_(), length, [None, buf])
+    return cast(pa.BooleanArray, pa.Array.from_buffers(pa.bool_(), length, [None, buf]))  # type: ignore[list-item]
 
 
 def _unpack_frame_stats(data: bytes) -> tuple[tuple[int, int], tuple[int, int]]:
@@ -370,18 +370,17 @@ def _serialize_schema_bytes(schema: pa.Schema) -> bytes:
 
 # Arrow schema for the serialized window-partition cache payload stored in
 # FunctionStorage. One row per partition, all fields binary/int64.
-_WINDOW_PARTITION_CACHE_SCHEMA = pa.schema(
-    [
-        pa.field("partition_batch", pa.binary(), nullable=False),
-        pa.field("output_schema", pa.binary(), nullable=False),
-        pa.field("filter_mask", pa.binary(), nullable=False),
-        pa.field("frame_stats", pa.binary(), nullable=False),
-        pa.field("all_valid", pa.binary(), nullable=False),
-        pa.field("row_count", pa.int64(), nullable=False),
-        pa.field("window_state", pa.binary(), nullable=True),
-        pa.field("window_state_class_name", pa.string(), nullable=False),
-    ]
-)
+_WINDOW_PARTITION_CACHE_FIELDS: list[pa.Field[Any]] = [
+    pa.field("partition_batch", pa.binary(), nullable=False),
+    pa.field("output_schema", pa.binary(), nullable=False),
+    pa.field("filter_mask", pa.binary(), nullable=False),
+    pa.field("frame_stats", pa.binary(), nullable=False),
+    pa.field("all_valid", pa.binary(), nullable=False),
+    pa.field("row_count", pa.int64(), nullable=False),
+    pa.field("window_state", pa.binary(), nullable=True),
+    pa.field("window_state_class_name", pa.string(), nullable=False),
+]
+_WINDOW_PARTITION_CACHE_SCHEMA = pa.schema(_WINDOW_PARTITION_CACHE_FIELDS)
 
 
 def _encode_window_partition_cache(

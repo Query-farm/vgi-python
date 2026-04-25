@@ -32,6 +32,7 @@ from vgi.arguments import Arg, Param, Returns, TableInput
 from vgi.invocation import BindResponse
 from vgi.metadata import DistinctDependence, NullHandling, OrderDependence
 from vgi.scalar_function import BindParameters, BindResult, ScalarFunction
+from vgi.schema_utils import schema
 from vgi.table_function import BindParams, ProcessParams
 from vgi.table_in_out_function import TableInOutGenerator
 
@@ -188,7 +189,7 @@ class NestTensorFunction(AggregateFunction[NestTensorState]):
             _validate_coord_type(f.name, f.type)
 
         out = _output_struct_type(value_type, axes_type)
-        return BindResponse(output_schema=pa.schema([("result", out)]))
+        return BindResponse(output_schema=schema(result=out))
 
     # -------------------------------------------------------------- lifecycle
 
@@ -561,7 +562,7 @@ class UnnestTensorRowsFunction(TableInOutGenerator[UnnestTensorRowsArgs]):
         out_axes_type = pa.struct(
             [pa.field(axes_type.field(i).name, axes_type.field(i).type.value_type) for i in range(len(axes_type))]
         )
-        output_schema = pa.schema([pa.field("value", inner), pa.field("axes", out_axes_type)])
+        output_schema = schema(value=inner, axes=out_axes_type)
         return BindResponse(output_schema=output_schema)
 
     @classmethod

@@ -49,7 +49,7 @@ import types as pytypes
 import typing
 from typing import TYPE_CHECKING
 
-from vgi_rpc.rpc._types import rpc_methods  # type: ignore[attr-defined]
+from vgi_rpc.rpc._types import rpc_methods
 
 from vgi.codegen._common import INFO_TYPES, GeneratorError, vgi_python_sha
 from vgi.protocol import VgiProtocol

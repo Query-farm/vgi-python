@@ -47,6 +47,7 @@ from vgi.catalog import (
     TransactionId,
 )
 from vgi.invocation import BindResponse
+from vgi.schema_utils import schema
 from vgi.table_function import BindParams, ProcessParams, TableFunctionGenerator, init_single_worker
 from vgi.worker import Worker
 
@@ -77,7 +78,7 @@ STICKY_COOKIE_NAME = "vgi_sticky"
 # Static table data
 # ============================================================================
 
-_ANIMALS_ROWS = {
+_ANIMALS_ROWS: dict[str, list[Any]] = {
     "name": ["chicken", "cow", "horse", "pig", "sheep"],
     "legs": [2, 4, 4, 4, 4],
     "sound": ["cluck", "moo", "neigh", "oink", "baa"],
@@ -87,36 +88,19 @@ _ANIMALS_ROWS = {
 # stability.
 _ANIMALS_COLORS = ["red", "brown", "black", "pink", "white"]
 
-_PLANTS_ROWS = {
+_PLANTS_ROWS: dict[str, list[Any]] = {
     "name": ["oak", "pine", "rose", "tomato", "wheat"],
     "kind": ["tree", "tree", "flower", "vegetable", "grass"],
     "height_m": [20.0, 25.0, 0.6, 1.5, 1.0],
 }
 
-_ANIMALS_SCHEMA_V1 = pa.schema(
-    [
-        pa.field("name", pa.string()),
-        pa.field("legs", pa.int64()),
-        pa.field("sound", pa.string()),
-    ]
+_ANIMALS_SCHEMA_V1 = schema(name=pa.string(), legs=pa.int64(), sound=pa.string())
+
+_ANIMALS_SCHEMA_V1_1 = schema(
+    name=pa.string(), legs=pa.int64(), sound=pa.string(), color=pa.string()
 )
 
-_ANIMALS_SCHEMA_V1_1 = pa.schema(
-    [
-        pa.field("name", pa.string()),
-        pa.field("legs", pa.int64()),
-        pa.field("sound", pa.string()),
-        pa.field("color", pa.string()),
-    ]
-)
-
-_PLANTS_SCHEMA = pa.schema(
-    [
-        pa.field("name", pa.string()),
-        pa.field("kind", pa.string()),
-        pa.field("height_m", pa.float64()),
-    ]
-)
+_PLANTS_SCHEMA = schema(name=pa.string(), kind=pa.string(), height_m=pa.float64())
 
 
 # ============================================================================
@@ -460,7 +444,7 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
             return None
         return SchemaInfo(attach_id=attach_id, name="main", comment=None, tags={})
 
-    def schema_contents(
+    def schema_contents(  # type: ignore[override]
         self,
         *,
         attach_id: AttachId,

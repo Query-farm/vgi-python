@@ -39,6 +39,7 @@ from vgi.catalog.catalog_interface import (
 )
 from vgi.catalog.descriptors import Catalog, Schema
 from vgi.invocation import BindResponse
+from vgi.schema_utils import schema
 from vgi.table_function import BindParams, ProcessParams, TableFunctionGenerator, init_single_worker
 from vgi.worker import Worker
 
@@ -88,7 +89,7 @@ class AttachOptions:
     opt_timestamp_tz: Annotated[
         datetime.datetime,
         AttachOption(desc="Timestamp with UTC tz", arrow_type=pa.timestamp("us", tz="UTC")),
-    ] = datetime.datetime(2026, 4, 24, 12, 34, 56, tzinfo=datetime.timezone.utc)
+    ] = datetime.datetime(2026, 4, 24, 12, 34, 56, tzinfo=datetime.UTC)
 
     # Precision
     opt_decimal: Annotated[
@@ -100,7 +101,7 @@ class AttachOptions:
         list[int], AttachOption(desc="List of int64", arrow_type=pa.list_(pa.int64()))
     ] = [1, 2, 3]
     opt_struct: Annotated[
-        dict,
+        dict[str, object],
         AttachOption(
             desc="Struct",
             arrow_type=pa.struct([pa.field("a", pa.int64()), pa.field("b", pa.string())]),
@@ -112,7 +113,7 @@ class AttachOptions:
 # and to backfill defaults in catalog_attach.
 _ATTACH_OPTION_SPECS: list[AttachOptionSpec] = extract_attach_option_specs(AttachOptions)
 
-_ECHO_SCHEMA: pa.Schema = pa.schema([pa.field(spec.name, spec.type) for spec in _ATTACH_OPTION_SPECS])
+_ECHO_SCHEMA: pa.Schema = schema({spec.name: spec.type for spec in _ATTACH_OPTION_SPECS})
 
 
 # ---------------------------------------------------------------------------

@@ -702,7 +702,7 @@ class TableProducerState(ProducerState):
             return
         params = dataclasses.replace(self._params, auth_context=ctx.auth)
         try:
-            self._func_cls.on_cancel(params, self._user_state)  # type: ignore[arg-type]
+            self._func_cls.on_cancel(params, self._user_state)
         except Exception:
             _log.debug("on_cancel hook raised", exc_info=True)
 
@@ -821,7 +821,7 @@ class TableInOutExchangeState(ExchangeState):
             return
         params = dataclasses.replace(self._params, auth_context=ctx.auth)
         try:
-            self._func_cls.on_cancel(params, self._user_state)  # type: ignore[arg-type]
+            self._func_cls.on_cancel(params, self._user_state)
         except Exception:
             _log.debug("on_cancel hook raised", exc_info=True)
 

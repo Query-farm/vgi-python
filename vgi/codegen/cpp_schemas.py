@@ -160,7 +160,7 @@ _ = cast  # keep cast import used for older test compatibility
 GENERATOR_VERSION = "1"
 
 
-def emit(out: "TextIO") -> None:
+def emit(out: TextIO) -> None:
     schemas = collect_schemas()
     sha = vgi_python_sha()
 

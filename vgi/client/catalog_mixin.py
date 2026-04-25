@@ -84,30 +84,58 @@ class CatalogClientError(Exception):
 class CatalogClientMixin:
     """Mixin that adds catalog operations to a VGI Client.
 
-    This mixin provides the core infrastructure for catalog operations.
-    Worker subprocesses are pooled and reused across calls via a shared
-    WorkerPool.
+    Catalog methods spawn ephemeral connections under the hood — for
+    subprocess transport a pooled subprocess worker; for HTTP transport a
+    short-lived ``http_connect`` session reusing the ``Client``'s shared
+    ``httpx.Client`` (bearer token, headers). Browsing catalogs over HTTP
+    is the canonical non-DuckDB use case this mixin supports.
 
-    Expected attributes from Client:
-        server_path: str - Worker command (shell command)
-
+    Expected attributes from ``Client``:
+        server_path: str — worker shell command (subprocess transport).
+        _transport: Literal["subprocess", "http"].
+        _base_url: str | None — HTTP base URL.
+        _get_or_create_httpx_client(): shared HTTP client factory.
     """
 
     # Type hints for attributes expected from Client
     server_path: str
+    _transport: Literal["subprocess", "http"]
+    _base_url: str | None
+    _external_location: Any | None
+
+    def _get_or_create_httpx_client(self) -> Any:  # implemented by Client
+        raise NotImplementedError
 
     @contextmanager
     def _catalog_connect(self) -> Iterator[VgiProtocol]:
-        """Get a typed proxy to the worker via the connection pool.
+        """Yield a typed ``VgiProtocol`` proxy honoring the client's transport.
 
-        Yields a VgiProtocol proxy. Worker errors are caught and
-        re-raised as CatalogClientError.
+        Subprocess: borrows from a module-level ``WorkerPool`` keyed by
+        command, so repeated catalog calls reuse a warm worker.
 
+        HTTP: opens a short-lived ``http_connect`` session per call. The
+        underlying ``httpx.Client`` is shared across calls via
+        ``Client._get_or_create_httpx_client`` so auth headers and
+        connection pooling are consistent.
+
+        Worker errors are caught and re-raised as ``CatalogClientError``.
         """
-        cmd = shlex.split(self.server_path)
         try:
-            with _catalog_pool.connect(VgiProtocol, cmd) as proxy:  # type: ignore[type-abstract]
-                yield proxy
+            if getattr(self, "_transport", "subprocess") == "http":
+                from vgi_rpc.http import http_connect
+
+                httpx_client = self._get_or_create_httpx_client()
+                with http_connect(
+                    VgiProtocol,  # type: ignore[type-abstract]
+                    base_url=self._base_url,
+                    client=httpx_client,
+                    external_location=getattr(self, "_external_location", None),
+                ) as proxy:
+                    yield proxy
+            else:
+                cmd = shlex.split(self.server_path)
+                with _catalog_pool.connect(VgiProtocol, cmd) as proxy:  # type: ignore[type-abstract]
+                    yield proxy
         except RpcError as e:
             raise CatalogClientError(str(e)) from e
         except CatalogClientError:

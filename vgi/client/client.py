@@ -1,34 +1,64 @@
-"""VGI client for communicating with VGI workers.
+"""VGI reference client — canonical implementation for other-language ports.
 
-This module provides the Client class for programmatic interaction with VGI workers.
-The client manages subprocess lifecycle and RPC communication via vgi_rpc.
+``vgi-python`` is the authoritative VGI implementation. Real users invoke
+VGI from DuckDB via the C++ extension; this module exists for two other
+audiences:
 
-PARALLEL PROCESSING
+1. **Non-DuckDB callers.** A TypeScript port that wants to browse catalog
+   contents, invoke a scalar, or feed an HTTP worker from outside DuckDB.
+   The HTTP transport below is the canonical path for those callers.
+2. **Porters.** TS/Go/Rust teams reading this file to understand what
+   their client must do. Every HTTP-relevant code path aims to be
+   plain enough to translate.
+
+Protocol sequence (HTTP)::
+
+    capabilities   → GET /capabilities              — upload-URL caps
+    connect        → http_connect(base_url, auth)   — typed proxy
+    catalogs       → proxy.catalog_catalogs()       — discover
+    attach         → proxy.catalog_attach(req)      — open a catalog
+    bind           → proxy.bind(BindRequest)        — resolve schema
+    init           → proxy.init(InitRequest)        — open a stream
+    exchange loop  → stream.exchange(AnnotatedBatch)
+                     • oversize input  → request_upload_urls + PUT + pointer batch
+                     • pointer output  → auto-resolve via external_location config
+    detach         → proxy.catalog_detach(attach_id)
+
+The subprocess transport (``_spawn_subprocess_connection``, ``WorkerPool``,
+``shell=True``) is a Python-only convenience for running tests against a
+local worker. Other-language ports do not need to mirror it — implement
+the HTTP flow and skip the subprocess branch.
+
+Parallel processing
 -------------------
-When a function returns max_workers > 1, the client automatically spawns
-additional workers and distributes batches across them. Output order may
-not match input order in parallel mode.
+When a bind returns ``max_workers > 1`` the client spawns additional
+worker connections and distributes input batches round-robin. Output
+order is non-deterministic in parallel mode. This is optimization; a
+minimal port can ignore it and always use one connection.
 
-KEY CLASSES
+Key classes
 -----------
-    Client          - Main class for invoking functions on workers
-    ClientError     - Exception raised on communication errors
-    WorkerConnection - Internal: holds state for a worker subprocess
+    Client             — main entry point; ``Client.from_http(...)`` for HTTP
+    ClientError        — raised on communication errors
+    WorkerConnection   — internal; one per transport-level connection
 
-Methods
--------
-client.start() : Start the worker subprocess
-client.stop() : Stop the worker subprocess
-client.table_in_out_function() : Invoke a table-in-out function and stream results
-client.table_function() : Invoke a table function and stream results
-client.scalar_function() : Invoke a scalar function and stream results
-client.get_worker_stderr() : Get captured stderr from worker
+Key methods
+-----------
+    client.catalogs()             — discover catalogs
+    client.catalog_attach(...)    — open a catalog
+    client.schemas(...)           — list schemas
+    client.schema_contents(...)   — list tables/views/functions/macros
+    client.scalar_function(...)   — invoke a scalar
+    client.table_function(...)    — invoke a table function
+    client.table_in_out_function(...) — invoke a table-in-out function
+    client.server_capabilities()  — HTTP only; upload-URL caps
 
 See Also
 --------
-vgi.worker.Worker : Base class for workers that Client spawns
-vgi.protocol.BindRequest : Request type for bind operations
-vgi.arguments.Arguments : Container for function arguments
+    vgi.protocol.VgiProtocol      — the RPC interface this client exercises
+    vgi.protocol.BindRequest      — request types
+    vgi.arguments.Arguments       — positional/named argument container
+    vgi_rpc.http.http_connect     — transport primitive this client wraps
 
 """
 
@@ -44,7 +74,7 @@ from collections.abc import Callable, Generator, Iterator
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from queue import Queue
-from typing import IO, Any, cast
+from typing import IO, Any, Literal, cast
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, WorkerPool
@@ -106,30 +136,59 @@ class ClientError(Exception):
 # repeated spawn/teardown overhead (especially valuable in tests).
 _default_pool = WorkerPool(max_idle=8, idle_timeout=30.0)
 
+# True once the HTTP transport is wired end-to-end. Used by the
+# parametrized ``client_transport`` fixture in tests/conftest.py to decide
+# whether to skip the HTTP leg of the matrix.
+_HTTP_TRANSPORT_READY = True
+
 
 @dataclass
 class WorkerConnection:
-    """Holds state for a single worker subprocess connection."""
+    """Holds state for a single worker connection (subprocess or HTTP).
+
+    Exactly one of {proc+connection, _pool_ctx, _http_ctx} is active per
+    connection — transport-specific teardown inspects these fields.
+    """
 
     proxy: VgiProtocol
     worker_index: int = 0
     stream: StreamSession | None = None
-    # Direct subprocess management (non-pooled)
+    # Subprocess transport, direct (non-pooled).
     proc: subprocess.Popen[bytes] | None = None
     connection: RpcConnection[VgiProtocol] | None = None
-    # Pool management
+    # Subprocess transport, pooled.
     _pool_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
+    # HTTP transport: context manager from vgi_rpc.http.http_connect.
+    _http_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
 
 
 class Client(CatalogClientMixin):
-    """Client for communicating with VGI workers.
+    """Canonical VGI client — HTTP is the path other-language ports mirror.
 
-    Manages the subprocess lifecycle and RPC communication with a VGI
-    worker process. Use as a context manager to ensure proper cleanup.
+    Two transports:
 
-    Also provides catalog operations via CatalogClientMixin - these methods
-    spawn ephemeral workers and don't require start()/stop().
+    * **HTTP** (``Client.from_http(base_url, bearer_token=...)``). The
+      canonical non-DuckDB path. Uses ``vgi_rpc.http.http_connect`` under
+      the hood; transparently resolves pointer batches returned by workers
+      that externalize large outputs (demo storage, S3). Transparently
+      externalizes large input batches when the server advertises upload-URL
+      support.
+    * **Subprocess** (``Client(server_path)``). Python-only convenience for
+      local workers. Uses shell subprocesses + a ``WorkerPool`` for reuse.
+      Ports don't need to mirror this.
 
+    Catalog operations (``catalogs()``, ``schema_contents()``, etc.) are
+    provided by ``CatalogClientMixin`` and don't require ``start()``. They
+    open a short-lived connection per call (HTTP) or borrow a pooled
+    subprocess worker.
+
+    Function invocation (``scalar_function``, ``table_function``,
+    ``table_in_out_function``) requires ``start()`` — typically via the
+    context-manager protocol::
+
+        with Client.from_http("http://host:port", bearer_token="...") as c:
+            for batch in c.table_function(function_name="sequence", ...):
+                ...
     """
 
     # Timeout for thread join operations (seconds)
@@ -253,39 +312,100 @@ class Client(CatalogClientMixin):
 
     def __init__(
         self,
-        server_path: str,
+        server_path: str | None = None,
         passthrough_stderr: bool = False,
         worker_limit: int | None = None,
         attach_id: bytes | None = None,
         pool: WorkerPool | None = _default_pool,
+        *,
+        transport: Literal["subprocess", "http"] = "subprocess",
+        base_url: str | None = None,
+        bearer_token: str | None = None,
+        httpx_client: Any | None = None,
+        external_location: Any | None = None,
     ):
         """Initialize the VGI client.
 
-        Creates a client configured to communicate with a VGI worker. The worker
-        subprocess is not started until start() is called or the client is used
+        Creates a client configured to communicate with a VGI worker. The
+        worker is not contacted until start() is called or the client is used
         as a context manager.
 
+        Transport selection: pass ``server_path`` (default) to spawn a local
+        subprocess worker; pass ``transport="http"`` + ``base_url=...`` (or
+        use the ``Client.from_http(...)`` factory) to talk to a remote HTTP
+        worker. Subprocess is Python-specific; HTTP is the canonical path
+        other-language clients mirror.
+
         Args:
-            server_path: Shell command or path to the VGI worker executable.
-                Executed via shell=True, so can include arguments (e.g.,
-                "python worker.py --debug" or "./my_worker").
-            passthrough_stderr: If True, worker stderr is passed through to
-                the parent process's stderr in real-time. If False (default),
-                stderr is captured in a buffer and available via
-                get_worker_stderr() after processing completes.
-            worker_limit: Maximum number of parallel worker processes. If set,
-                overrides the function's max_workers when that value exceeds
-                this limit. Also capped by os.cpu_count(). If None, uses the
-                function's max_workers (still capped by CPU count).
+            server_path: Subprocess-only. Shell command or path to the VGI
+                worker executable. Executed via shell=True.
+            passthrough_stderr: Subprocess-only. If True, worker stderr is
+                passed through to the parent process's stderr in real-time.
+            worker_limit: Maximum number of parallel worker processes.
             attach_id: Optional unique identifier for the DuckDB database
                 attachment. When VGI is used from an attached database, this
                 allows tracing calls back to that specific attachment.
-            pool: Optional WorkerPool for subprocess reuse. Defaults to a
-                shared module-level pool. Pass None to disable pooling and
-                use direct subprocess management.
+            pool: Subprocess-only. Optional WorkerPool for subprocess reuse.
+                Pass None to disable pooling and use direct subprocess
+                management.
+            transport: Which transport to use. ``"subprocess"`` (default)
+                spawns a local subprocess per worker; ``"http"`` connects to
+                a running worker via ``vgi_rpc.http.http_connect``.
+            base_url: HTTP-only. Base URL of the running worker, e.g.
+                ``"http://127.0.0.1:8765"``.
+            bearer_token: HTTP-only. When set, every request carries an
+                ``Authorization: Bearer <token>`` header. Static token
+                support only — no JWT / OAuth flows.
+            httpx_client: HTTP-only escape hatch. When provided, overrides
+                ``bearer_token`` and is used verbatim; supply this when you
+                need mTLS or a custom auth scheme. Not the canonical path.
+            external_location: HTTP-only. ``ExternalLocationConfig`` that
+                controls how the client fetches pointer batches (workers
+                that externalize large outputs via demo storage / S3 return
+                empty batches carrying ``vgi_rpc.location`` metadata).
+                Defaults to a vanilla ``ExternalLocationConfig()`` for HTTP
+                transport so pointer batches are resolved automatically.
+                Subprocess transport ignores this — subprocess workers
+                don't return pointer batches.
+
+        Raises:
+            ValueError: If the transport / server_path / base_url
+                combination is inconsistent.
 
         """
-        self.server_path = server_path
+        if transport == "subprocess":
+            if server_path is None:
+                raise ValueError("subprocess transport requires server_path")
+            if base_url is not None:
+                raise ValueError("base_url is only meaningful for transport='http'")
+        elif transport == "http":
+            if base_url is None:
+                raise ValueError("transport='http' requires base_url")
+            if server_path is not None:
+                raise ValueError("server_path is only meaningful for transport='subprocess'")
+        else:
+            raise ValueError(f"unknown transport {transport!r}")
+
+        self.server_path = server_path or ""
+        self._transport = transport
+        self._base_url = base_url
+        self._bearer_token = bearer_token
+        self._httpx_client = httpx_client
+        # True when ``_get_or_create_httpx_client`` constructed the client and
+        # is therefore responsible for closing it on ``stop()``. False when
+        # the caller passed ``httpx_client=`` — ownership stays with them.
+        self._httpx_client_owned = False
+        # Auto-enable pointer-batch resolution for HTTP unless the caller
+        # asked for something different. See ``external_location`` docs above.
+        if transport == "http" and external_location is None:
+            from vgi_rpc.external import ExternalLocationConfig
+
+            external_location = ExternalLocationConfig()
+        self._external_location = external_location
+        # HTTP server capabilities cache. Populated lazily by
+        # ``_get_http_capabilities`` — a single round-trip per Client that
+        # drives upload-URL externalization decisions.
+        self._http_capabilities: Any | None = None
         _worker_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
         self.passthrough_stderr = passthrough_stderr or _worker_debug
         self._worker_limit = worker_limit
@@ -297,6 +417,34 @@ class Client(CatalogClientMixin):
         self._stderr_buffer: list[bytes] = []
         self._stderr_lock = threading.Lock()
         self._stderr_threads: list[threading.Thread] = []
+
+    @classmethod
+    def from_http(
+        cls,
+        base_url: str,
+        *,
+        bearer_token: str | None = None,
+        httpx_client: Any | None = None,
+        external_location: Any | None = None,
+        worker_limit: int | None = None,
+        attach_id: bytes | None = None,
+    ) -> Client:
+        """Create a ``Client`` bound to a remote HTTP VGI worker.
+
+        Canonical entry point for non-DuckDB callers (e.g. a TypeScript port
+        browsing catalog contents). Subprocess-specific kwargs are not
+        accepted; pool/stderr semantics do not apply.
+        """
+        return cls(
+            transport="http",
+            base_url=base_url,
+            bearer_token=bearer_token,
+            httpx_client=httpx_client,
+            external_location=external_location,
+            worker_limit=worker_limit,
+            attach_id=attach_id,
+            pool=None,
+        )
 
     def _drain_stderr(self, stderr: IO[bytes]) -> None:
         """Background thread that continuously reads stderr.
@@ -357,21 +505,77 @@ class Client(CatalogClientMixin):
         return new_error
 
     def _spawn_worker(self, worker_index: int) -> WorkerConnection:
-        """Spawn or borrow a worker subprocess and create an RPC connection.
+        """Create a ``WorkerConnection`` for the configured transport.
 
-        When a pool is configured, borrows an idle worker (or spawns a new one)
-        from the pool. Otherwise creates a subprocess directly.
+        Dispatches to ``_spawn_subprocess_connection`` (Python-specific) or
+        ``_spawn_http_connection`` (the canonical path other-language ports
+        mirror). Keeping the two bodies separate makes the HTTP path easy
+        to read in isolation.
+        """
+        if self._transport == "http":
+            return self._spawn_http_connection(worker_index)
+        return self._spawn_subprocess_connection(worker_index)
 
-        Args:
-            worker_index: Index identifying this worker (0 for primary, 1+ for
-                additional workers). Used for logging and tracking.
+    def _spawn_http_connection(self, worker_index: int) -> WorkerConnection:
+        """Connect to a remote HTTP worker via ``vgi_rpc.http.http_connect``.
 
-        Returns:
-            WorkerConnection containing the RPC proxy ready for method calls.
+        This is the canonical path non-DuckDB clients implement; subprocess
+        is a Python convenience. Multiple ``worker_index`` values map to
+        independent RPC proxies against the same shared ``httpx.Client``
+        (and therefore the same base URL + auth config).
+        """
+        from vgi_rpc.http import http_connect
 
-        Raises:
-            ClientError: If stdout or stderr pipes fail to be created.
+        httpx_client = self._get_or_create_httpx_client()
+        ctx: AbstractContextManager[VgiProtocol] = http_connect(
+            VgiProtocol,  # type: ignore[type-abstract]
+            base_url=self._base_url,
+            client=httpx_client,
+            on_log=self._on_worker_log,
+            external_location=self._external_location,
+        )
+        proxy = ctx.__enter__()
+        _logger.debug("http_connection_opened worker_index=%s base_url=%s", worker_index, self._base_url)
+        return WorkerConnection(
+            proxy=proxy,
+            worker_index=worker_index,
+            _http_ctx=ctx,
+        )
 
+    def _get_or_create_httpx_client(self) -> Any:
+        """Return the shared httpx.Client for this Client's HTTP transport.
+
+        Lazily constructs one bound to ``self._base_url`` (so RPC requests
+        resolve against the remote worker) with an ``Authorization: Bearer
+        <token>`` header when ``bearer_token`` was supplied. When the
+        caller passes ``httpx_client=`` directly, they're responsible for
+        configuring ``base_url`` and auth on it — we use it verbatim.
+        """
+        if self._httpx_client is not None:
+            return self._httpx_client
+
+        import httpx
+
+        headers: dict[str, str] = {}
+        if self._bearer_token is not None:
+            headers["Authorization"] = f"Bearer {self._bearer_token}"
+        self._httpx_client = httpx.Client(
+            base_url=self._base_url or "",
+            follow_redirects=True,
+            headers=headers,
+        )
+        self._httpx_client_owned = True
+        return self._httpx_client
+
+    def _spawn_subprocess_connection(self, worker_index: int) -> WorkerConnection:
+        """Spawn or borrow a subprocess worker and wrap it in an RPC proxy.
+
+        When a pool is configured, borrows an idle worker (or spawns a new
+        one) from the pool. Otherwise creates a subprocess directly.
+
+        Python-specific: subprocess management relies on ``shell=True``
+        semantics and the ``WorkerPool`` abstraction that other languages
+        don't need to mirror.
         """
         if self._pool is not None:
             _logger.debug("borrowing_worker worker_index=%s", worker_index)
@@ -446,6 +650,13 @@ class Client(CatalogClientMixin):
         if worker.stream is not None:
             worker.stream.close()
             worker.stream = None
+
+        if worker._http_ctx is not None:
+            # HTTP transport — close the RPC proxy. The underlying httpx
+            # client is shared across workers and closed in Client.stop().
+            worker._http_ctx.__exit__(None, None, None)
+            _logger.debug("http_connection_closed worker_index=%s", worker.worker_index)
+            return 0
 
         if worker._pool_ctx is not None:
             # Return to pool — pool handles subprocess lifecycle
@@ -524,8 +735,13 @@ class Client(CatalogClientMixin):
         self._stderr_buffer = []
         _logger.debug("starting_server server_path=%s", self.server_path)
         self._primary = self._spawn_worker(0)
-        pid = self._primary.proc.pid if self._primary.proc is not None else "pooled"
-        _logger.debug("server_started pid=%s", pid)
+        if self._primary.proc is not None:
+            id_repr: Any = self._primary.proc.pid
+        elif self._primary._http_ctx is not None:
+            id_repr = f"http({self._base_url})"
+        else:
+            id_repr = "pooled"
+        _logger.debug("server_started id=%s", id_repr)
 
     def stop(self) -> int:
         """Stop all worker subprocesses and clean up resources.
@@ -566,7 +782,31 @@ class Client(CatalogClientMixin):
                 _logger.warning("stderr_thread_did_not_terminate")
         self._stderr_threads = []
 
+        # Close the shared httpx.Client if we created it ourselves.
+        if self._httpx_client_owned and self._httpx_client is not None:
+            try:
+                self._httpx_client.close()
+            finally:
+                self._httpx_client = None
+                self._httpx_client_owned = False
+
         return returncode
+
+    def server_capabilities(self) -> Any:
+        """Return the HTTP server's advertised capabilities.
+
+        Only valid for HTTP-mode clients. The returned
+        ``HttpServerCapabilities`` carries ``max_request_bytes``,
+        ``upload_url_support``, and ``max_upload_bytes`` — the fields the
+        client consults before deciding to externalize large input batches
+        via upload URLs (see Phase 4 of the whimsical-mccarthy plan).
+        """
+        if self._transport != "http":
+            raise ClientError("server_capabilities() is only available for HTTP transport")
+        from vgi_rpc.http import http_capabilities
+
+        httpx_client = self._get_or_create_httpx_client()
+        return http_capabilities(base_url=self._base_url, client=httpx_client)
 
     def __enter__(self) -> Client:
         """Enter the context manager by starting the worker subprocess."""
@@ -684,6 +924,77 @@ class Client(CatalogClientMixin):
         except RpcError as e:
             raise ClientError.from_rpc_error(e) from e
 
+    def _initialize_stream_common(
+        self,
+        *,
+        function_name: str,
+        arguments: Arguments,
+        function_type: FunctionType,
+        input_schema: pa.Schema | None,
+        settings: dict[str, Any] | None,
+        secrets: dict[str, Any] | None,
+        transaction_id: bytes | None,
+        projection_ids: list[int] | None,
+        pushdown_filters_batch: pa.RecordBatch | None,
+        phase: TableInOutFunctionInitPhase | None,
+        bind_result_callback: Callable[[BindResponse], None] | None,
+    ) -> tuple[BindRequest, BindResponse, GlobalInitResponse]:
+        """Run the canonical bind → init → fan-out-workers sequence.
+
+        All three function entry points (``scalar_function``,
+        ``table_function``, ``table_in_out_function``) share this shape:
+
+        1. Build a ``BindRequest`` from the user's call.
+        2. ``bind`` against the primary worker proxy.
+        3. ``init`` against the primary — stores ``StreamSession`` on the
+           primary worker connection.
+        4. Read the ``GlobalInitResponse`` header (carries ``max_workers``
+           + ``execution_id`` for secondary workers).
+        5. Spawn any additional workers and drive their ``init`` with the
+           primary's execution identity.
+
+        Centralizing this keeps HTTP/subprocess differences and protocol
+        changes (e.g. future scoped-secret re-bind, init hints) in one
+        place.
+        """
+        assert self._primary is not None, "primary worker not started"
+
+        bind_request = self._make_bind_request(
+            function_name=function_name,
+            arguments=arguments,
+            function_type=function_type,
+            input_schema=input_schema,
+            settings=settings,
+            secrets=secrets,
+            transaction_id=transaction_id,
+        )
+        bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
+
+        stream = self._do_init(
+            self._primary.proxy,
+            bind_request,
+            bind_response,
+            projection_ids=projection_ids,
+            pushdown_filters_batch=pushdown_filters_batch,
+            phase=phase,
+        )
+        self._primary.stream = stream
+
+        init_response = stream.typed_header(GlobalInitResponse)
+        max_workers = self._determine_max_workers(init_response.max_workers)
+
+        self._spawn_additional_workers(
+            max_workers,
+            bind_request,
+            bind_response,
+            init_response,
+            projection_ids=projection_ids,
+            pushdown_filters_batch=pushdown_filters_batch,
+            phase=phase,
+        )
+
+        return bind_request, bind_response, init_response
+
     def _spawn_additional_workers(
         self,
         max_workers: int,
@@ -773,6 +1084,87 @@ class Client(CatalogClientMixin):
     # Batch processing helpers
     # -----------------------------------------------------------------------
 
+    # -----------------------------------------------------------------------
+    # HTTP upload-URL externalization (Phase 4)
+    #
+    # Non-DuckDB clients send IPC bytes inline on each exchange() call.
+    # Servers can advertise a maximum request size via VGI-Max-Request-Bytes
+    # (surfaced as HttpServerCapabilities.max_request_bytes). When an input
+    # batch would exceed it AND the server supports upload URLs, we:
+    #   1. request_upload_urls(count=1) → {upload_url, download_url}
+    #   2. PUT the IPC bytes to upload_url
+    #   3. replace the batch with an empty one + vgi_rpc.location metadata
+    #      pointing at download_url
+    # The worker resolves the pointer batch on its end (mirror of the
+    # client's own external-location resolution on outputs).
+    # -----------------------------------------------------------------------
+
+    def _get_http_capabilities(self) -> Any:
+        """Return cached ``HttpServerCapabilities`` (HTTP transport only)."""
+        if self._http_capabilities is not None:
+            return self._http_capabilities
+        from vgi_rpc.http import http_capabilities
+
+        httpx_client = self._get_or_create_httpx_client()
+        self._http_capabilities = http_capabilities(base_url=self._base_url, client=httpx_client)
+        return self._http_capabilities
+
+    @staticmethod
+    def _serialize_batch_ipc(batch: pa.RecordBatch) -> bytes:
+        """Return Arrow IPC stream bytes for a single ``RecordBatch``."""
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, batch.schema) as writer:
+            writer.write_batch(batch)
+        return sink.getvalue().to_pybytes()
+
+    def _maybe_externalize_input_batch(self, batch: pa.RecordBatch) -> AnnotatedBatch:
+        """If the batch would exceed ``max_request_bytes``, externalize via upload URL.
+
+        No-op for subprocess transport or when the server doesn't advertise
+        upload-URL support. Returns an ``AnnotatedBatch`` either wrapping
+        the original batch (no externalization needed) or a pointer batch
+        carrying ``vgi_rpc.location`` metadata.
+        """
+        if self._transport != "http":
+            return AnnotatedBatch(batch=batch)
+
+        caps = self._get_http_capabilities()
+        if not getattr(caps, "upload_url_support", False):
+            return AnnotatedBatch(batch=batch)
+        threshold = getattr(caps, "max_request_bytes", None)
+        if threshold is None or threshold <= 0:
+            return AnnotatedBatch(batch=batch)
+
+        ipc_bytes = self._serialize_batch_ipc(batch)
+        if len(ipc_bytes) <= threshold:
+            return AnnotatedBatch(batch=batch)
+
+        from vgi_rpc.http import request_upload_urls
+        from vgi_rpc.metadata import LOCATION_KEY
+
+        httpx_client = self._get_or_create_httpx_client()
+        urls = request_upload_urls(base_url=self._base_url, count=1, client=httpx_client)
+        if not urls:
+            # Server claimed support but vended no URLs — surface the raw
+            # request rather than silently sending too-large bytes.
+            return AnnotatedBatch(batch=batch)
+        upload = urls[0]
+
+        put_resp = httpx_client.put(upload.upload_url, content=ipc_bytes, timeout=30.0)
+        put_resp.raise_for_status()
+
+        pointer = pa.RecordBatch.from_pydict(
+            {field.name: [] for field in batch.schema},
+            schema=batch.schema,
+        )
+        cm = pa.KeyValueMetadata({LOCATION_KEY: upload.download_url.encode()})
+        _logger.debug(
+            "externalized_input_batch size_bytes=%s download_url=%s",
+            len(ipc_bytes),
+            upload.download_url,
+        )
+        return AnnotatedBatch(batch=pointer, custom_metadata=cm)
+
     def _process_batch_on_worker(
         self,
         worker: WorkerConnection,
@@ -812,7 +1204,8 @@ class Client(CatalogClientMixin):
             )
 
             try:
-                output = worker.stream.exchange(AnnotatedBatch(batch=input_batch))
+                annotated = self._maybe_externalize_input_batch(input_batch)
+                output = worker.stream.exchange(annotated)
             except RpcError as e:
                 raise ClientError.from_rpc_error(e) from e
 
@@ -1049,41 +1442,18 @@ class Client(CatalogClientMixin):
                 input_schema = first_batch.schema
                 pushdown_filters_batch = self._deserialize_pushdown_filters(pushdown_filters)
 
-                # Bind
-                bind_request = self._make_bind_request(
+                bind_request, bind_response, init_response = self._initialize_stream_common(
                     function_name=function_name,
                     arguments=arguments,
                     function_type=FunctionType.TABLE,
                     input_schema=input_schema,
                     settings=settings,
+                    secrets=None,
                     transaction_id=transaction_id,
-                )
-                bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
-
-                # Init (INPUT phase)
-                stream = self._do_init(
-                    self._primary.proxy,
-                    bind_request,
-                    bind_response,
                     projection_ids=projection_ids,
                     pushdown_filters_batch=pushdown_filters_batch,
                     phase=TableInOutFunctionInitPhase.INPUT,
-                )
-                self._primary.stream = stream
-
-                # Get init response header for max_workers
-                init_response = stream.typed_header(GlobalInitResponse)
-                max_workers = self._determine_max_workers(init_response.max_workers)
-
-                # Spawn additional workers if needed
-                self._spawn_additional_workers(
-                    max_workers,
-                    bind_request,
-                    bind_response,
-                    init_response,
-                    projection_ids=projection_ids,
-                    pushdown_filters_batch=pushdown_filters_batch,
-                    phase=TableInOutFunctionInitPhase.INPUT,
+                    bind_result_callback=bind_result_callback,
                 )
 
                 # Process input batches across all workers
@@ -1230,38 +1600,18 @@ class Client(CatalogClientMixin):
         try:
             pushdown_filters_batch = self._deserialize_pushdown_filters(pushdown_filters)
 
-            # Bind
-            bind_request = self._make_bind_request(
+            self._initialize_stream_common(
                 function_name=function_name,
                 arguments=arguments,
                 function_type=FunctionType.TABLE,
+                input_schema=None,
                 settings=settings,
+                secrets=None,
                 transaction_id=transaction_id,
-            )
-            bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
-
-            # Init
-            stream = self._do_init(
-                self._primary.proxy,
-                bind_request,
-                bind_response,
                 projection_ids=projection_ids,
                 pushdown_filters_batch=pushdown_filters_batch,
-            )
-            self._primary.stream = stream
-
-            # Get init response header for max_workers
-            init_response = stream.typed_header(GlobalInitResponse)
-            max_workers = self._determine_max_workers(init_response.max_workers)
-
-            # Spawn additional workers
-            self._spawn_additional_workers(
-                max_workers,
-                bind_request,
-                bind_response,
-                init_response,
-                projection_ids=projection_ids,
-                pushdown_filters_batch=pushdown_filters_batch,
+                phase=None,
+                bind_result_callback=bind_result_callback,
             )
 
             # Read output from all workers in parallel
@@ -1423,8 +1773,7 @@ class Client(CatalogClientMixin):
 
                 input_schema = first_batch.schema
 
-                # Bind
-                bind_request = self._make_bind_request(
+                self._initialize_stream_common(
                     function_name=function_name,
                     arguments=arguments,
                     function_type=FunctionType.SCALAR,
@@ -1432,27 +1781,10 @@ class Client(CatalogClientMixin):
                     settings=settings,
                     secrets=secrets,
                     transaction_id=transaction_id,
-                )
-                bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
-
-                # Init
-                stream = self._do_init(
-                    self._primary.proxy,
-                    bind_request,
-                    bind_response,
-                )
-                self._primary.stream = stream
-
-                # Get init response header for max_workers
-                init_response = stream.typed_header(GlobalInitResponse)
-                max_workers = self._determine_max_workers(init_response.max_workers)
-
-                # Spawn additional workers
-                self._spawn_additional_workers(
-                    max_workers,
-                    bind_request,
-                    bind_response,
-                    init_response,
+                    projection_ids=None,
+                    pushdown_filters_batch=None,
+                    phase=None,
+                    bind_result_callback=bind_result_callback,
                 )
 
                 # Process batches across all workers

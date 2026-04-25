@@ -64,14 +64,6 @@ from vgi.examples.aggregate import (
 )
 from vgi.examples.cancellable import SlowCancellableFunction, SlowCancellableInOutFunction
 from vgi.examples.nest_tensor import NestTensorFunction, UnnestTensorFunction, UnnestTensorRowsFunction
-
-try:
-    from vgi.examples.distill import DistillFunction
-    from vgi.examples.summarize import SummarizeFunction
-
-    _HAS_LLM = True
-except ImportError:
-    _HAS_LLM = False
 from vgi.examples.scalar import (
     AddValuesFunction,
     AnyMixedIntFunction,
@@ -166,6 +158,7 @@ from vgi.examples.table_in_out import (
     SumAllColumnsFunction,
     SumAllColumnsSimpleDistributed,
 )
+from vgi.schema_utils import schema
 from vgi.worker import Worker
 
 
@@ -357,7 +350,6 @@ _EXAMPLE_CATALOG = Catalog(
                 WindowListAggFunction,
                 WindowMedianFunction,
                 WindowSumFunction,
-                *([] if not _HAS_LLM else [DistillFunction, SummarizeFunction]),
             ],
             views=[
                 View(
@@ -385,7 +377,7 @@ _EXAMPLE_CATALOG = Catalog(
                     parameters=["val", "lo", "hi"],
                     parameter_default_values=pa.RecordBatch.from_pydict(
                         {"lo": [pa.scalar(0).as_py()], "hi": [pa.scalar(100).as_py()]},
-                        schema=pa.schema([("lo", pa.int64()), ("hi", pa.int64())]),
+                        schema=schema(lo=pa.int64(), hi=pa.int64()),
                     ),
                     definition="GREATEST(lo, LEAST(hi, val))",
                     comment="Clamp a value between lo and hi (defaults: 0..100)",
@@ -417,12 +409,7 @@ _EXAMPLE_CATALOG = Catalog(
                 # Time-travel table: version-specific schema
                 Table(
                     name="versioned_data",
-                    columns=pa.schema(
-                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-                            pa.field("id", pa.int64()),
-                            pa.field("score", pa.float64()),
-                        ]
-                    ),
+                    columns=schema(id=pa.int64(), score=pa.float64()),
                     supports_time_travel=True,
                     comment="Versioned data table demonstrating time travel with schema evolution",
                 ),
@@ -430,7 +417,7 @@ _EXAMPLE_CATALOG = Catalog(
                 # via statistics_from_duckdb() — demonstrates the helper workflow
                 Table(
                     name="numbers",
-                    columns=pa.schema([("value", pa.int64())]),
+                    columns=schema(value=pa.int64()),
                     statistics=_NUMBERS_STATS,
                     statistics_cache_max_age_seconds=3600,
                     comment="First 100 integers (demonstrates explicit columns)",
@@ -446,7 +433,7 @@ _EXAMPLE_CATALOG = Catalog(
                 # Table with TTL=0 (never cache) for cache expiry testing
                 Table(
                     name="volatile_numbers",
-                    columns=pa.schema([("value", pa.int64())]),
+                    columns=schema(value=pa.int64()),
                     statistics={
                         "value": ColumnStatisticsInput(min=0, max=99, has_null=False, distinct_count=100),
                     },
@@ -458,20 +445,14 @@ _EXAMPLE_CATALOG = Catalog(
                 # Column name matches the function output ("n") so no rename is needed.
                 Table(
                     name="funny_numbers",
-                    columns=pa.schema([("n", pa.int64())]),
+                    columns=schema(n=pa.int64()),
                     comment="123456 integers; stats served by the sequence function, not the table",
                 ),
                 # ENUM (dictionary-encoded) column table — tests that statistics
                 # report actual string values, not dictionary indices.
                 Table(
                     name="colors",
-                    columns=pa.schema(
-                        [  # type: ignore[arg-type]
-                            pa.field("id", pa.int64()),
-                            pa.field("color", pa.string()),
-                            pa.field("hex_code", pa.string()),
-                        ]
-                    ),
+                    columns=schema(id=pa.int64(), color=pa.string(), hex_code=pa.string()),
                     statistics=_ENUM_STATS,
                     statistics_cache_max_age_seconds=3600,
                     comment="Colors table with ENUM-derived statistics",
@@ -479,72 +460,55 @@ _EXAMPLE_CATALOG = Catalog(
                 # Row ID position tests (int64 row_id)
                 Table(
                     name="rowid_first",
-                    columns=pa.schema(
-                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-                            pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
-                            pa.field("name", pa.string()),
-                            pa.field("value", pa.string()),
-                        ]
+                    columns=schema(
+                        row_id=(pa.int64(), {b"is_row_id": b""}),
+                        name=pa.string(),
+                        value=pa.string(),
                     ),
                     comment="Table with row_id at column index 0",
                 ),
                 Table(
                     name="rowid_middle",
-                    columns=pa.schema(
-                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-                            pa.field("name", pa.string()),
-                            pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
-                            pa.field("value", pa.string()),
-                        ]
+                    columns=schema(
+                        name=pa.string(),
+                        row_id=(pa.int64(), {b"is_row_id": b""}),
+                        value=pa.string(),
                     ),
                     comment="Table with row_id at column index 1",
                 ),
                 Table(
                     name="rowid_last",
-                    columns=pa.schema(
-                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-                            pa.field("name", pa.string()),
-                            pa.field("value", pa.string()),
-                            pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
-                        ]
+                    columns=schema(
+                        name=pa.string(),
+                        value=pa.string(),
+                        row_id=(pa.int64(), {b"is_row_id": b""}),
                     ),
                     comment="Table with row_id at column index 2",
                 ),
                 # Row ID type tests (row_id at index 0)
                 Table(
                     name="rowid_string",
-                    columns=pa.schema(
-                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-                            pa.field("row_id", pa.string(), metadata={b"is_row_id": b""}),
-                            pa.field("value", pa.int64()),
-                        ]
+                    columns=schema(
+                        row_id=(pa.string(), {b"is_row_id": b""}),
+                        value=pa.int64(),
                     ),
                     comment="Table with string row_id",
                 ),
                 Table(
                     name="rowid_struct",
-                    columns=pa.schema(
-                        [
-                            pa.field(
-                                "row_id",
-                                pa.struct([("a", pa.int64()), ("b", pa.string())]),
-                                metadata={b"is_row_id": b""},
-                            ),
-                            pa.field("value", pa.string()),
-                        ]
+                    columns=schema(
+                        row_id=(
+                            pa.struct([("a", pa.int64()), ("b", pa.string())]),
+                            {b"is_row_id": b""},
+                        ),
+                        value=pa.string(),
                     ),
                     comment="Table with struct row_id",
                 ),
                 # ----- Generated column example table -----
                 Table(
                     name="generated_sequence",
-                    columns=pa.schema(
-                        [  # type: ignore[arg-type]
-                            pa.field("n", pa.int64()),
-                            pa.field("doubled", pa.int64()),
-                            pa.field("label", pa.string()),
-                        ]
-                    ),
+                    columns=schema(n=pa.int64(), doubled=pa.int64(), label=pa.string()),
                     generated_columns={
                         "doubled": "n * 2",
                         "label": "'item_' || CAST(n AS VARCHAR)",
@@ -554,13 +518,7 @@ _EXAMPLE_CATALOG = Catalog(
                 # ----- Constraint example tables -----
                 Table(
                     name="departments",
-                    columns=pa.schema(
-                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-                            pa.field("id", pa.int64()),
-                            pa.field("name", pa.string()),
-                            pa.field("budget", pa.float64()),
-                        ]
-                    ),
+                    columns=schema(id=pa.int64(), name=pa.string(), budget=pa.float64()),
                     primary_key=(("id",),),
                     not_null=("id", "name"),
                     unique=(("name",),),
@@ -583,13 +541,11 @@ _EXAMPLE_CATALOG = Catalog(
                 ),
                 Table(
                     name="products",
-                    columns=pa.schema(
-                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-                            pa.field("id", pa.int64()),
-                            pa.field("name", pa.string()),
-                            pa.field("quantity", pa.int64()),
-                            pa.field("price", pa.float64()),
-                        ]
+                    columns=schema(
+                        id=pa.int64(),
+                        name=pa.string(),
+                        quantity=pa.int64(),
+                        price=pa.float64(),
                     ),
                     not_null=("id",),
                     primary_key=(("id",),),
@@ -621,13 +577,11 @@ _EXAMPLE_CATALOG = Catalog(
                 ),
                 Table(
                     name="employees",
-                    columns=pa.schema(
-                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-                            pa.field("id", pa.int64()),
-                            pa.field("name", pa.string()),
-                            pa.field("email", pa.string()),
-                            pa.field("department_id", pa.int64()),
-                        ]
+                    columns=schema(
+                        id=pa.int64(),
+                        name=pa.string(),
+                        email=pa.string(),
+                        department_id=pa.int64(),
                     ),
                     primary_key=(("id",),),
                     not_null=("id", "name", "email"),
@@ -643,12 +597,10 @@ _EXAMPLE_CATALOG = Catalog(
                 ),
                 Table(
                     name="projects",
-                    columns=pa.schema(
-                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-                            pa.field("department_id", pa.int64()),
-                            pa.field("project_code", pa.string()),
-                            pa.field("title", pa.string()),
-                        ]
+                    columns=schema(
+                        department_id=pa.int64(),
+                        project_code=pa.string(),
+                        title=pa.string(),
                     ),
                     primary_key=(("department_id", "project_code"),),
                     not_null=("department_id", "project_code", "title"),
@@ -664,13 +616,11 @@ _EXAMPLE_CATALOG = Catalog(
                 # Time-travel constraint evolution table
                 Table(
                     name="versioned_constraints",
-                    columns=pa.schema(
-                        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-                            pa.field("id", pa.int64()),
-                            pa.field("name", pa.string()),
-                            pa.field("email", pa.string()),
-                            pa.field("department_id", pa.int64()),
-                        ]
+                    columns=schema(
+                        id=pa.int64(),
+                        name=pa.string(),
+                        email=pa.string(),
+                        department_id=pa.int64(),
                     ),
                     supports_time_travel=True,
                     not_null=("id", "name"),

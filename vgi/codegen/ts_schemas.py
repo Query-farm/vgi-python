@@ -197,7 +197,7 @@ def _emit_const(es: EmittedSchema) -> str:
 GENERATOR_VERSION = "1"
 
 
-def emit(out: "TextIO") -> None:
+def emit(out: TextIO) -> None:
     schemas = collect_schemas()
     sha = vgi_python_sha()
 

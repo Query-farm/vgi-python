@@ -28,9 +28,6 @@ azure = [
     "pymssql>=2.3.0",
     "azure-identity>=1.16.0",
 ]
-llm = [
-    "anthropic>=0.40.0",
-]
 dev = [
     "mypy",
     "pyarrow-stubs",

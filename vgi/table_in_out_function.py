@@ -80,7 +80,7 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
             return bool(explicit)
 
         # Auto-detect.
-        bases = {TableInOutGenerator, TableInOutFunction}
+        bases: set[type] = {TableInOutGenerator, TableInOutFunction}
         for klass in cls.__mro__:
             if klass in bases:
                 return False

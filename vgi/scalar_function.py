@@ -579,7 +579,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
             return BindResponse.secret_scope_request(secrets_accessor.pending_lookups)
 
         return BindResponse(
-            output_schema=pa.schema([pa.field("result", result.output_type)]),
+            output_schema=schema(result=result.output_type),
             opaque_data=result.opaque_data,
         )
 

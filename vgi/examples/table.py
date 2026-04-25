@@ -238,7 +238,7 @@ class SequenceFunction(_BaseSequenceFunction):
         ]
 
     # Full schema before projection
-    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.int64())])
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema(n=pa.int64())
     NUMPY_DTYPE: ClassVar[type[np.generic]] = np.int64
 
 
@@ -534,7 +534,7 @@ class DoubleSequenceFunction(_BaseSequenceFunction):
             ),
         ]
 
-    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.float64())])
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema(n=pa.float64())
     NUMPY_DTYPE: ClassVar[type[np.generic]] = np.float64
     STATS_ARROW_TYPE: ClassVar[pa.DataType] = pa.float64()
 
@@ -576,7 +576,7 @@ class GeneratorExceptionFunction(TableFunctionGenerator[GeneratorExceptionFuncti
         categories = ["testing"]
         tags = {"category": "testing", "type": "error-handling"}
 
-    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.int64())])
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema(n=pa.int64())
 
     @classmethod
     def initial_state(cls, params: ProcessParams[GeneratorExceptionFunctionArguments]) -> GeneratorExceptionState:
@@ -634,7 +634,7 @@ class LoggingGeneratorFunction(TableFunctionGenerator[LoggingGeneratorFunctionAr
         description = "Emits log messages during generation"
         categories = ["testing"]
 
-    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.int64())])
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema(n=pa.int64())
 
     @classmethod
     def initial_state(cls, params: ProcessParams[LoggingGeneratorFunctionArguments]) -> LoggingGeneratorState:
@@ -739,7 +739,7 @@ class PartitionedSequenceFunction(
     # Batch size for output within each chunk
     BATCH_SIZE: ClassVar[int] = 1000
 
-    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.int64())])
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema(n=pa.int64())
 
     @classmethod
     def on_init(
@@ -1193,7 +1193,7 @@ class TenThousandFunction(TableFunctionGenerator[TenThousandFunctionArguments, T
 
     BATCH_SIZE: ClassVar[int] = 1000
 
-    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field("n", pa.int64())])
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema(n=pa.int64())
 
     @classmethod
     def cardinality(cls, params: BindParams[TenThousandFunctionArguments]) -> TableCardinality:
@@ -1647,7 +1647,7 @@ class FilterEchoFunction(TableFunctionGenerator[FilterEchoFunctionArgs, FilterEc
 # make_series — overloaded table function (3 overloads by positional arg count)
 # ============================================================================
 
-MAKE_SERIES_SCHEMA = pa.schema([("value", pa.int64())])
+MAKE_SERIES_SCHEMA = schema(value=pa.int64())
 
 
 @dataclass(kw_only=True)
@@ -1846,7 +1846,7 @@ class MakeSeriesCsvFunction(TableFunctionGenerator[MakeSeriesCsvArgs, MakeSeries
 # make_series — float overload (same 1-arg count as int and string overloads)
 # ============================================================================
 
-MAKE_SERIES_FLOAT_SCHEMA = pa.schema([("value", pa.float64())])
+MAKE_SERIES_FLOAT_SCHEMA = schema(value=pa.float64())
 
 
 @dataclass(kw_only=True)
@@ -1907,8 +1907,8 @@ class MakeSeriesFloatFunction(TableFunctionGenerator[MakeSeriesFloatArgs, MakeSe
 # make_pairs — overloaded table function (3 overloads by argument type)
 # ============================================================================
 
-MAKE_PAIRS_INT_SCHEMA = pa.schema([("a", pa.int64()), ("b", pa.int64())])
-MAKE_PAIRS_STR_SCHEMA = pa.schema([("a", pa.string()), ("b", pa.string())])
+MAKE_PAIRS_INT_SCHEMA = schema(a=pa.int64(), b=pa.int64())
+MAKE_PAIRS_STR_SCHEMA = schema(a=pa.string(), b=pa.string())
 
 
 @dataclass(kw_only=True)
@@ -2159,8 +2159,8 @@ class RepeatValueIntFunction(TableFunctionGenerator[RepeatValueIntArgs, RepeatVa
             return
         state.done = True
         data = {f"v{i}": col for i, col in enumerate(state.rows)}
-        schema = pa.schema([pa.field(f"v{i}", pa.int64()) for i in range(len(state.rows))])
-        out.emit(pa.RecordBatch.from_pydict(data, schema=schema))
+        out_schema = schema({f"v{i}": pa.int64() for i in range(len(state.rows))})
+        out.emit(pa.RecordBatch.from_pydict(data, schema=out_schema))
 
 
 @init_single_worker
@@ -2203,8 +2203,8 @@ class RepeatValueStrFunction(TableFunctionGenerator[RepeatValueStrArgs, RepeatVa
             return
         state.done = True
         data = {f"v{i}": col for i, col in enumerate(state.rows)}
-        schema = pa.schema([pa.field(f"v{i}", pa.string()) for i in range(len(state.rows))])
-        out.emit(pa.RecordBatch.from_pydict(data, schema=schema))
+        out_schema = schema({f"v{i}": pa.string() for i in range(len(state.rows))})
+        out.emit(pa.RecordBatch.from_pydict(data, schema=out_schema))
 
 
 # ============================================================================
@@ -2318,21 +2318,9 @@ class RowIdSequenceFunction(TableFunctionGenerator[RowIdSequenceFunctionArgs, Co
 
 # Version definitions: schema and data per version
 _VERSIONED_SCHEMAS: dict[int, pa.Schema] = {
-    1: pa.schema([pa.field("id", pa.int64())]),
-    2: pa.schema(
-        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-            pa.field("id", pa.int64()),
-            pa.field("name", pa.string()),
-            pa.field("score", pa.float64()),
-            pa.field("active", pa.bool_()),
-        ]
-    ),
-    3: pa.schema(
-        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-            pa.field("id", pa.int64()),
-            pa.field("score", pa.float64()),
-        ]
-    ),
+    1: schema(id=pa.int64()),
+    2: schema(id=pa.int64(), name=pa.string(), score=pa.float64(), active=pa.bool_()),
+    3: schema(id=pa.int64(), score=pa.float64()),
 }
 
 _VERSIONED_DATA: dict[int, dict[str, list[Any]]] = {
@@ -2614,22 +2602,9 @@ ColorsScanFunction = _static_scan_function(
 # Version 3: adds department_id column, FK to departments
 
 _VERSIONED_CONSTRAINTS_SCHEMAS: dict[int, pa.Schema] = {
-    1: pa.schema([pa.field("id", pa.int64()), pa.field("name", pa.string())]),  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-    2: pa.schema(
-        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-            pa.field("id", pa.int64()),
-            pa.field("name", pa.string()),
-            pa.field("email", pa.string()),
-        ]
-    ),
-    3: pa.schema(
-        [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
-            pa.field("id", pa.int64()),
-            pa.field("name", pa.string()),
-            pa.field("email", pa.string()),
-            pa.field("department_id", pa.int64()),
-        ]
-    ),
+    1: schema(id=pa.int64(), name=pa.string()),
+    2: schema(id=pa.int64(), name=pa.string(), email=pa.string()),
+    3: schema(id=pa.int64(), name=pa.string(), email=pa.string(), department_id=pa.int64()),
 }
 
 _VERSIONED_CONSTRAINTS_DATA: dict[int, dict[str, list[Any]]] = {

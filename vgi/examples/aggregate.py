@@ -22,6 +22,7 @@ from vgi.aggregate_function import AggregateBindParams, AggregateFunction, Windo
 from vgi.arguments import ConstParam, Param, Returns
 from vgi.invocation import BindResponse
 from vgi.metadata import DistinctDependence, NullHandling, OrderDependence
+from vgi.schema_utils import schema
 from vgi.table_function import ProcessParams
 
 __all__ = [
@@ -451,8 +452,8 @@ class GenericSumFunction(AggregateFunction[GenericSumState]):
         """Resolve output type from input type."""
         if params.input_schema:
             input_type = params.input_schema.field(0).type
-            return BindResponse(output_schema=pa.schema([("result", input_type)]))
-        return BindResponse(output_schema=pa.schema([("result", pa.float64())]))
+            return BindResponse(output_schema=schema(result=input_type))
+        return BindResponse(output_schema=schema(result=pa.float64()))
 
     @classmethod
     def initial_state(cls, params: ProcessParams[None]) -> GenericSumState:
@@ -463,7 +464,7 @@ class GenericSumFunction(AggregateFunction[GenericSumState]):
         cls,
         states: dict[int, GenericSumState],
         group_ids: pa.Int64Array,
-        value: Annotated[pa.Array, Param(doc="Numeric value to sum")],
+        value: Annotated[pa.Array[Any], Param(doc="Numeric value to sum")],
     ) -> None:
         table = pa.table({"gid": group_ids, "value": value.cast(pa.float64())})
         grouped = table.group_by("gid").aggregate([("value", "sum")])
@@ -523,7 +524,7 @@ class SumAllFunction(AggregateFunction[SumAllState]):
         cls,
         states: dict[int, SumAllState],
         group_ids: pa.Int64Array,
-        columns: Annotated[pa.Array, Param(doc="Numeric columns to sum", varargs=True)],
+        columns: Annotated[pa.Array[Any], Param(doc="Numeric columns to sum", varargs=True)],
     ) -> None:
         for i in range(len(group_ids)):
             gid: int = group_ids[i].as_py()
@@ -624,8 +625,8 @@ class _DynamicAggregateBase(AggregateFunction[DynamicState]):
         states: dict[int, DynamicState],
         group_ids: pa.Int64Array,
         code_col: pa.StringArray,
-        columns: list[pa.Array],
-        params_col: pa.Array | None = None,
+        columns: list[pa.Array[Any]],
+        params_col: pa.Array[Any] | None = None,
     ) -> None:
         code: str = code_col[0].as_py()
         raw_params = params_col[0].as_py() if params_col is not None else None
@@ -641,7 +642,7 @@ class _DynamicAggregateBase(AggregateFunction[DynamicState]):
         col_names = [f"c{i}" for i in range(len(columns))]
         incoming = pa.table({col_names[i]: columns[i] for i in range(len(columns))})
         # Filter null rows
-        mask = None
+        mask: pa.ChunkedArray[pa.BooleanScalar] | pa.BooleanArray | None = None
         for col in incoming.columns:
             valid = col.is_valid()
             mask = valid if mask is None else pa.compute.and_(mask, valid)
@@ -680,6 +681,7 @@ class _DynamicAggregateBase(AggregateFunction[DynamicState]):
         p = target.params or source.params
         src_table = _deserialize_table(source.state_bytes) if source.state_bytes else None
         tgt_table = _deserialize_table(target.state_bytes) if target.state_bytes else None
+        combined: pa.Table | None
         if src_table is not None and tgt_table is not None:
             combined = pa.concat_tables([tgt_table, src_table])
         else:
@@ -729,7 +731,7 @@ class _DynamicAggregateBase(AggregateFunction[DynamicState]):
                 t = t.filter(partition.filter_mask.slice(begin, length))
             data_cols_of_t = t.columns[data_start:]
             if data_cols_of_t:
-                null_mask = None
+                null_mask: pa.ChunkedArray[pa.BooleanScalar] | pa.BooleanArray | None = None
                 for col in data_cols_of_t:
                     valid = col.is_valid()
                     null_mask = valid if null_mask is None else pa.compute.and_(null_mask, valid)
@@ -784,7 +786,7 @@ class DynamicAggregateFunction(_DynamicAggregateBase):
         states: dict[int, DynamicState],
         group_ids: pa.Int64Array,
         code: Annotated[pa.StringArray, Param(doc="Python code defining Aggregate class")],
-        columns: Annotated[pa.Array, Param(doc="Input columns", varargs=True)],  # type: ignore[type-arg]
+        columns: Annotated[list[pa.Array[Any]], Param(doc="Input columns", varargs=True)],
     ) -> None:
         cls._do_update(states, group_ids, code, columns)
 
@@ -862,8 +864,8 @@ class DynamicMLAggregateFunction(_DynamicAggregateBase):
         states: dict[int, DynamicState],
         group_ids: pa.Int64Array,
         code: Annotated[pa.StringArray, Param(doc="Python code defining Aggregate class")],
-        params_col: Annotated[pa.Array, Param(doc="MAP(VARCHAR, DOUBLE) parameters")],  # type: ignore[type-arg]
-        columns: Annotated[pa.Array, Param(doc="Input columns", varargs=True)],  # type: ignore[type-arg]
+        params_col: Annotated[pa.Array[Any], Param(doc="MAP(VARCHAR, DOUBLE) parameters")],
+        columns: Annotated[list[pa.Array[Any]], Param(doc="Input columns", varargs=True)],
     ) -> None:
         cls._do_update(states, group_ids, code, columns, params_col=params_col)
 

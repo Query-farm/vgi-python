@@ -28,6 +28,7 @@ from vgi.arguments import Arguments
 from vgi.invocation import (
     BindResponse,
 )
+from vgi.schema_utils import schema
 from vgi.table_function import (
     ProcessParams,
     SecretsAccessor,
@@ -267,7 +268,7 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
         """
         # Default: use Returns annotation if available
         if cls._returns_output_type is not None:
-            return BindResponse(output_schema=pa.schema([("result", cls._returns_output_type)]))
+            return BindResponse(output_schema=schema(result=cls._returns_output_type))
         raise NotImplementedError(
             f"{cls.__name__} must either implement on_bind() or annotate finalize() with Returns(arrow_type=...)"
         )
@@ -277,7 +278,7 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
     def catalog_output_schema(cls) -> pa.Schema:
         """Return output schema for catalog introspection."""
         if cls._returns_output_type is not None:
-            return pa.schema([pa.field("result", cls._returns_output_type)])
+            return schema(result=cls._returns_output_type)
         # Dynamic type (Returns() with no arrow_type) — mark as "any" for C++
         field = pa.field("result", pa.null(), metadata={b"vgi:any": b"true"})
         return pa.schema([field])

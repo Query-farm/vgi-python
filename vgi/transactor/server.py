@@ -25,11 +25,13 @@ import pyarrow as pa
 from vgi_rpc import AnnotatedBatch, OutputCollector, RpcServer
 from vgi_rpc.rpc import CallContext, ExchangeState, ProducerState, Stream, StreamState, serve_unix
 
+from vgi.schema_utils import schema
+from vgi.transactor._duckdb_compat import subcursor
 from vgi.transactor.protocol import TransactorProtocol
 
 logger = logging.getLogger("vgi.transactor")
 
-_COUNT_SCHEMA = pa.schema([("count", pa.int64())])
+_COUNT_SCHEMA = schema(count=pa.int64())
 
 
 class TransactorImpl:
@@ -87,7 +89,7 @@ class TransactorImpl:
         conn = self._get_tx_conn(attach_id, tx_id)
         tx_lock = self._get_tx_lock(attach_id, tx_id)
         with tx_lock:
-            sub = conn.subcursor()
+            sub = subcursor(conn)
             sql = f"SELECT * FROM {qualified_name} LIMIT 0"  # noqa: S608
             result = sub.execute(sql)
             schema: pa.Schema = result.to_arrow_table().schema
@@ -169,7 +171,7 @@ class TransactorImpl:
         input_schema = pa.schema(input_fields)
         output_schema = input_schema if returning else _COUNT_SCHEMA
 
-        sub = conn.subcursor()
+        sub = subcursor(conn)
         state = _InsertState(
             conn=sub,
             qualified_name=qualified,
@@ -188,12 +190,12 @@ class TransactorImpl:
         qualified = f"{schema_name}.{table_name}" if schema_name else table_name
         table_schema = self._table_schema(qualified, attach_id, tx_id)
 
-        input_schema = pa.schema([("rowid", pa.int64())])
+        input_schema = schema(rowid=pa.int64())
         ret_fields = [f for f in table_schema if f.name != "rowid"]
         ret_schema = pa.schema(ret_fields)
         output_schema = ret_schema if returning else _COUNT_SCHEMA
 
-        sub = conn.subcursor()
+        sub = subcursor(conn)
         state = _DeleteState(
             conn=sub, qualified_name=qualified, returning=returning, table_schema=ret_schema, tx_lock=tx_lock
         )
@@ -225,7 +227,7 @@ class TransactorImpl:
         ret_schema = pa.schema(ret_fields)
         output_schema = ret_schema if returning else _COUNT_SCHEMA
 
-        sub = conn.subcursor()
+        sub = subcursor(conn)
         state = _UpdateState(
             conn=sub, qualified_name=qualified, returning=returning, table_schema=ret_schema, tx_lock=tx_lock
         )
@@ -261,12 +263,12 @@ class TransactorImpl:
                 sql += f" WHERE {where_clause}"
 
         with tx_lock:
-            schema_sub = conn.subcursor()
+            schema_sub = subcursor(conn)
             schema_sql = f"SELECT {col_list} FROM {qualified} LIMIT 0"  # noqa: S608
             output_schema = schema_sub.execute(schema_sql).to_arrow_table().schema
             schema_sub.close()
 
-            scan_cursor = conn.subcursor()
+            scan_cursor = subcursor(conn)
             result = scan_cursor.execute(sql, bind_params) if bind_params else scan_cursor.execute(sql)
             reader = result.to_arrow_reader(batch_size=50_000)
 
@@ -351,7 +353,7 @@ class TransactorImpl:
         tx_lock = self._get_tx_lock(attach_id, tx_id)
         bare_name = table_name.rsplit(".", 1)[-1] if "." in table_name else table_name
         with tx_lock:
-            sub = conn.subcursor()
+            sub = subcursor(conn)
             if "." in table_name:
                 schema_part = table_name.rsplit(".", 1)[0]
                 row = sub.execute(
@@ -397,7 +399,7 @@ class TransactorImpl:
                 schema = pa.schema(fields)
 
         with tx_lock:
-            sub2 = conn.subcursor()
+            sub2 = subcursor(conn)
             constraint_rows = sub2.execute(
                 "SELECT constraint_type, constraint_column_names, constraint_text, "
                 "referenced_table, referenced_column_names "
@@ -454,7 +456,7 @@ class TransactorImpl:
         conn = self._get_tx_conn(attach_id, tx_id)
         tx_lock = self._get_tx_lock(attach_id, tx_id)
         with tx_lock:
-            sub = conn.subcursor()
+            sub = subcursor(conn)
             result = sub.execute(
                 "SELECT sql, comment FROM duckdb_views() WHERE view_name = ?",
                 [view_name],

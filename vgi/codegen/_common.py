@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow as pa
+from vgi_rpc.rpc._types import MethodType, rpc_methods  # type: ignore[attr-defined]
 
 from vgi.catalog.catalog_interface import (
     CatalogInfo,
@@ -32,7 +33,6 @@ from vgi.catalog.catalog_interface import (
     ViewInfo,
 )
 from vgi.protocol import VgiProtocol
-from vgi_rpc.rpc._types import MethodType, rpc_methods  # type: ignore[attr-defined]
 
 # Info-object dataclasses that appear as inner items inside `{items: List<Binary>}`
 # responses. The wire layer erases them to `binary`, so the method signature

@@ -75,6 +75,91 @@ def example_worker() -> str:
 
 
 @pytest.fixture
+def http_worker() -> Any:
+    """Start ``vgi-example-http`` on a free port, yield its base URL, tear it down.
+
+    Usage::
+
+        def test_something(http_worker):
+            base_url = http_worker()                       # defaults
+            base_url = http_worker(extra_args=[...])       # pass flags
+
+    Implemented as a factory so individual tests can request different server
+    flags (e.g. ``--demo-storage``) without proliferating fixtures.
+    """
+    from contextlib import ExitStack
+
+    from tests._http_fixtures import start_http_worker
+
+    pytest.importorskip("vgi_rpc.http")
+
+    stack = ExitStack()
+
+    def _start(*, extra_args: list[str] | None = None, env: dict[str, str] | None = None) -> str:
+        return start_http_worker(stack, extra_args=tuple(extra_args or ()), env=env)
+
+    try:
+        yield _start
+    finally:
+        stack.close()
+
+
+# Keys used to identify transport modes in conformance tests. Keeping the
+# literal values here (rather than inside the fixture) makes it easy for
+# individual tests to opt out with ``@pytest.mark.parametrize("client_transport",
+# ["subprocess-pooled"], indirect=True)``.
+_CLIENT_TRANSPORT_MODES = ["subprocess-pooled", "subprocess-direct", "http"]
+
+
+@pytest.fixture(params=_CLIENT_TRANSPORT_MODES)
+def client_transport(request: pytest.FixtureRequest, example_worker: str) -> Any:
+    """Parametrized factory that builds a configured ``Client`` for each transport.
+
+    Yields a callable ``make_client()`` -> ``Client``. Callers must enter the
+    returned client as a context manager.
+
+    Modes:
+        subprocess-pooled: Pool-backed subprocess (the default path).
+        subprocess-direct: ``pool=None`` — direct Popen management.
+        http: ``Client.from_http(base_url)`` backed by a per-test
+            ``vgi-example-http`` subprocess. Skips if the HTTP transport
+            isn't wired yet.
+    """
+    from vgi.client.client import _HTTP_TRANSPORT_READY, Client, _default_pool
+
+    mode = request.param
+
+    http_base_url: str | None = None
+    http_stack: Any | None = None
+
+    def _make() -> Client:
+        nonlocal http_base_url, http_stack
+        if mode == "subprocess-pooled":
+            return Client(example_worker, pool=_default_pool)
+        if mode == "subprocess-direct":
+            return Client(example_worker, pool=None)
+        if mode == "http":
+            if not _HTTP_TRANSPORT_READY:
+                pytest.skip("Client HTTP transport arrives in Phase 2 of whimsical-mccarthy plan")
+            pytest.importorskip("vgi_rpc.http")
+            from contextlib import ExitStack
+
+            from tests._http_fixtures import start_http_worker
+
+            if http_base_url is None:
+                http_stack = ExitStack()
+                http_base_url = start_http_worker(http_stack)
+            return Client.from_http(http_base_url)
+        raise AssertionError(f"unknown transport mode {mode!r}")
+
+    try:
+        yield _make
+    finally:
+        if http_stack is not None:
+            http_stack.close()
+
+
+@pytest.fixture
 def simple_batches() -> list[pa.RecordBatch]:
     """Create simple test batches with integer and string columns."""
     s = schema(id=pa.int64(), value=pa.int64(), name=pa.string())
