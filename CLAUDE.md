@@ -37,6 +37,19 @@ uv run ruff check --fix . && uv run ruff format .
 
 When making changes, we don't need to worry about backward compatibility, make the changes and change the import references.
 
+## Conformance Tests
+
+Python conformance tests live in `tests/conformance/` and mirror the C++ integration tree
+(`~/Development/vgi/test/sql/integration/`). They drive the Python `Client` against the
+example worker across every feature area exercised by the C++ suite — drift guard so a
+new C++ capability cannot land without a Python counterpart.
+
+These run automatically as part of `uv run pytest -n auto` (picked up via
+`testpaths = ["tests"]`). The `test_directory_parity.py` test enforces that every
+subdirectory under `vgi/test/sql/integration/` has a matching `test_<area>.py` here;
+exemptions go in `_EXEMPTIONS` with a reason. The check skips when the C++ repo isn't
+present (acceptable for Python-only CI workers).
+
 ## Integration Testing
 
 Integration tests live in the `vgi` C++ repo (sibling directory) at `test/sql/integration/`.

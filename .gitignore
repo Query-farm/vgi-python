@@ -32,3 +32,6 @@ test-data/v.parquet
 !.dev.vars.example
 .env*
 !.env.example
+
+# Cloudflare Worker scaffolding
+cloudflare/vgi-storage/node_modules/

@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "vgi-python",
+  "compatibility_date": "2026-04-13",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "htmlcov"
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ]
+}
