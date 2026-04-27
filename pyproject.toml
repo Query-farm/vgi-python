@@ -90,7 +90,7 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # These files have type: ignore comments for ty that mypy doesn't need
-module = ["vgi._test_fixtures.scalar", "vgi.table_function"]
+module = ["vgi._test_fixtures.scalar.null_handling", "vgi.table_function"]
 warn_unused_ignores = false
 
 [tool.ty.environment]
