@@ -109,6 +109,8 @@ class BindParameters:
         settings: DuckDB settings as a single-row RecordBatch, or None.
         secrets: SecretsAccessor for accessing resolved and dynamic secrets.
         auth_context: Authentication context for the current request.
+        attach_id: Catalog attach ID, if the function was invoked through an ATTACHed catalog.
+        transaction_id: Catalog transaction ID, if invoked inside a catalog transaction.
 
     """
 
@@ -117,6 +119,8 @@ class BindParameters:
     settings: pa.RecordBatch | None
     secrets: SecretsAccessor
     auth_context: AuthContext = AuthContext.anonymous()
+    attach_id: bytes | None = None
+    transaction_id: bytes | None = None
 
 
 def _resolve_explicit_arrow_type(arrow_type: pa.DataType | type) -> pa.DataType:
@@ -571,7 +575,15 @@ class ScalarFunctionGenerator(vgi.function.Function):
 
         auth = ctx.auth if ctx is not None else AuthContext.anonymous()
         secrets_accessor = SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided)
-        bind_params = BindParameters(input.arguments, input.input_schema, input.settings, secrets_accessor, auth)
+        bind_params = BindParameters(
+            input.arguments,
+            input.input_schema,
+            input.settings,
+            secrets_accessor,
+            auth,
+            input.attach_id,
+            input.transaction_id,
+        )
         result = cls.on_bind(bind_params)
 
         # Check if on_bind() registered pending secret lookups
