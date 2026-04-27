@@ -12,11 +12,13 @@ from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import OutputCollector
 
 from vgi._test_fixtures.table._common import (
+    CountBatchArgs,
     CountdownState,
     _BaseSequenceFunction,
     _cardinality_from_count,
 )
 from vgi.arguments import Arg
+from vgi.catalog.catalog_interface import ColumnStatistics
 from vgi.invocation import BindResponse, GlobalInitResponse
 from vgi.metadata import FunctionExample
 from vgi.schema_utils import schema
@@ -31,12 +33,10 @@ from vgi.table_function import (
 )
 
 
-@dataclass(slots=True, frozen=True)
-class SequenceFunctionArgs:
+@dataclass(frozen=True)
+class SequenceFunctionArgs(CountBatchArgs):
     """Arguments for SequenceFunction."""
 
-    count: Annotated[int, Arg(0, doc="Number of integers to generate", ge=0)]
-    batch_size: Annotated[int, Arg("batch_size", default=1000, doc="Batch size for output", ge=1)]
     increment: Annotated[int, Arg("increment", default=1, doc="Step between values", ge=1)]
 
 
@@ -103,7 +103,12 @@ class SequenceFunction(_BaseSequenceFunction):
 
 @dataclass(slots=True, frozen=True)
 class NamedParamsEchoFunctionArgs:
-    """Arguments for NamedParamsEchoFunction."""
+    """Arguments for NamedParamsEchoFunction.
+
+    Note: keeps its own ``count`` (no ``batch_size``) because the function
+    uses a fixed ``BATCH_SIZE_FALLBACK``. Subclassing CountBatchArgs would
+    expose a user knob this fixture intentionally hides.
+    """
 
     count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
     greeting: Annotated[str, Arg("greeting", default="hello", doc="Greeting text echoed in output")]
@@ -115,7 +120,7 @@ class NamedParamsEchoFunctionArgs:
 @init_single_worker
 @bind_fixed_schema
 @_cardinality_from_count
-class NamedParamsEchoFunction(TableFunctionGenerator[NamedParamsEchoFunctionArgs, CountdownState]):
+class NamedParamsEchoFunction(_BaseSequenceFunction):
     """Echoes named parameter values directly in output columns.
 
     USE CASE
@@ -169,28 +174,22 @@ class NamedParamsEchoFunction(TableFunctionGenerator[NamedParamsEchoFunctionArgs
         }
     )
 
-    BATCH_SIZE: ClassVar[int] = 1000
+    @classmethod
+    def statistics(cls, params: BindParams[NamedParamsEchoFunctionArgs]) -> list[ColumnStatistics] | None:
+        """Echo function doesn't compute single-column stats — opt out of base impl."""
+        return None
 
     @classmethod
-    def initial_state(cls, params: ProcessParams[NamedParamsEchoFunctionArgs]) -> CountdownState:
-        """Create initial state with remaining count."""
-        return CountdownState(remaining=params.args.count)
-
-    @classmethod
-    def process(
+    def _emit_chunk(
         cls,
         params: ProcessParams[NamedParamsEchoFunctionArgs],
         state: CountdownState,
         out: OutputCollector,
+        start: int,
+        size: int,
     ) -> None:
-        """Generate rows echoing named parameter values."""
-        if state.remaining <= 0:
-            out.finish()
-            return
-
-        size = min(state.remaining, cls.BATCH_SIZE)
-        ids = list(range(state.current_index, state.current_index + size))
-
+        """Emit a batch of rows echoing the named parameter values."""
+        ids = list(range(start, start + size))
         data: dict[str, list[int] | list[str] | list[float] | list[bool]] = {
             "id": ids,
             "greeting": [params.args.greeting] * size,
@@ -198,26 +197,20 @@ class NamedParamsEchoFunction(TableFunctionGenerator[NamedParamsEchoFunctionArgs
             "float_value": [i * params.args.scale for i in ids],
             "enabled": [params.args.enabled] * size,
         }
-
         out.emit(pa.RecordBatch.from_pydict(data, schema=params.output_schema))
 
-        state.current_index += size
-        state.remaining -= size
 
-
-@dataclass(slots=True, frozen=True)
-class NestedSequenceFunctionArguments:
+@dataclass(frozen=True)
+class NestedSequenceFunctionArguments(CountBatchArgs):
     """Arguments for NestedSequenceFunction."""
 
-    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
-    batch_size: Annotated[int, Arg("batch_size", default=1000, doc="Batch size for output", ge=1)]
     history_size: Annotated[int, Arg("history_size", default=20, doc="Max items in history list", ge=1)]
 
 
 @init_single_worker
 @bind_fixed_schema
 @_cardinality_from_count
-class NestedSequenceFunction(TableFunctionGenerator[NestedSequenceFunctionArguments, CountdownState]):
+class NestedSequenceFunction(_BaseSequenceFunction):
     """Generates a sequence with nested struct and list columns.
 
     USE CASE
@@ -270,6 +263,8 @@ class NestedSequenceFunction(TableFunctionGenerator[NestedSequenceFunctionArgume
             ),
         ]
 
+    FunctionArguments = NestedSequenceFunctionArguments
+
     # Full schema before projection
     FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
@@ -283,6 +278,11 @@ class NestedSequenceFunction(TableFunctionGenerator[NestedSequenceFunctionArgume
     )
 
     @classmethod
+    def statistics(cls, params: BindParams[NestedSequenceFunctionArguments]) -> list[ColumnStatistics] | None:
+        """Nested sequence has multiple columns of varying types — opt out of base impl."""
+        return None
+
+    @classmethod
     def _get_projected_column_names(cls, projection_ids: list[int] | None) -> set[str]:
         """Get the set of column names to generate."""
         if projection_ids is not None:
@@ -290,26 +290,18 @@ class NestedSequenceFunction(TableFunctionGenerator[NestedSequenceFunctionArgume
         return {f.name for f in cls.FIXED_SCHEMA}
 
     @classmethod
-    def initial_state(cls, params: ProcessParams[NestedSequenceFunctionArguments]) -> CountdownState:
-        """Create initial state with remaining count."""
-        return CountdownState(remaining=params.args.count)
-
-    @classmethod
-    def process(
+    def _emit_chunk(
         cls,
         params: ProcessParams[NestedSequenceFunctionArguments],
         state: CountdownState,
         out: OutputCollector,
+        start: int,
+        size: int,
     ) -> None:
-        """Generate the next batch of the nested sequence."""
-        if state.remaining <= 0:
-            out.finish()
-            return
-
-        size = min(state.remaining, params.args.batch_size)
+        """Emit a batch of nested-sequence rows, honouring projection pushdown."""
         assert params.init_call is not None
         projected_cols = cls._get_projected_column_names(params.init_call.projection_ids)
-        indices = list(range(state.current_index, state.current_index + size))
+        indices = list(range(start, start + size))
         data: dict[str, Any] = {}
 
         if "n" in projected_cols:
@@ -321,22 +313,17 @@ class NestedSequenceFunction(TableFunctionGenerator[NestedSequenceFunctionArgume
         if "history" in projected_cols:
             history_list = []
             for i in indices:
-                start = max(0, i - params.args.history_size + 1)
-                history_list.append(list(range(start, i + 1)))
+                window_start = max(0, i - params.args.history_size + 1)
+                history_list.append(list(range(window_start, i + 1)))
             data["history"] = history_list
 
         out.emit(pa.RecordBatch.from_pydict(data, schema=params.output_schema))
 
-        state.current_index += size
-        state.remaining -= size
 
-
-@dataclass(slots=True, frozen=True)
-class DoubleSequenceFunctionArguments:
+@dataclass(frozen=True)
+class DoubleSequenceFunctionArguments(CountBatchArgs):
     """Arguments for DoubleSequenceFunction."""
 
-    count: Annotated[int, Arg(0, doc="Number of values to generate", ge=0)]
-    batch_size: Annotated[int, Arg("batch_size", default=1000, doc="Batch size for output", ge=1)]
     increment: Annotated[float, Arg("increment", default=1.0, doc="Step between values", gt=0.0)]
 
 
@@ -614,13 +601,15 @@ class RowIdSequenceFunctionArgs:
 
 
 @init_single_worker
-class RowIdSequenceFunction(TableFunctionGenerator[RowIdSequenceFunctionArgs, CountdownState]):
+class RowIdSequenceFunction(_BaseSequenceFunction):
     """Generates a sequence with a row_id column for testing row_id support.
 
     The layout argument controls where the row_id column appears in the schema,
     and row_id_type controls the type of the row_id column.
 
     """
+
+    FunctionArguments = RowIdSequenceFunctionArgs
 
     class Meta:
         """Metadata for RowIdSequenceFunction."""
@@ -629,7 +618,10 @@ class RowIdSequenceFunction(TableFunctionGenerator[RowIdSequenceFunctionArgs, Co
         description = "Sequence with row_id column"
         projection_pushdown = True
 
-    BATCH_SIZE: ClassVar[int] = 1000
+    @classmethod
+    def statistics(cls, params: BindParams[RowIdSequenceFunctionArgs]) -> list[ColumnStatistics] | None:
+        """Skip the base ``int64`` arange stats — schema is dynamic per-args here."""
+        return None
 
     @classmethod
     def on_bind(cls, params: BindParams[RowIdSequenceFunctionArgs]) -> BindResponse:
@@ -664,26 +656,15 @@ class RowIdSequenceFunction(TableFunctionGenerator[RowIdSequenceFunctionArgs, Co
         return BindResponse(output_schema=pa.schema(fields))
 
     @classmethod
-    def initial_state(cls, params: ProcessParams[RowIdSequenceFunctionArgs]) -> CountdownState:
-        """Create initial state with remaining count."""
-        return CountdownState(remaining=params.args.count)
-
-    @classmethod
-    def process(
+    def _emit_chunk(
         cls,
         params: ProcessParams[RowIdSequenceFunctionArgs],
         state: CountdownState,
         out: OutputCollector,
+        start: int,
+        size: int,
     ) -> None:
-        """Generate batch with row_id and data columns."""
-        if state.remaining <= 0:
-            out.finish()
-            return
-
-        size = min(state.remaining, cls.BATCH_SIZE)
-        start = state.current_index
-
-        # Build columns matching the output schema field order
+        """Emit a batch of row_id + data columns matching the dynamic output schema."""
         columns: dict[str, Any] = {}
         for f in params.output_schema:
             if f.name == "row_id":
@@ -699,6 +680,3 @@ class RowIdSequenceFunction(TableFunctionGenerator[RowIdSequenceFunctionArgs, Co
                 columns["value"] = [f"val_{i}" for i in range(start, start + size)]
 
         out.emit(pa.RecordBatch.from_pydict(columns, schema=params.output_schema))
-
-        state.current_index += size
-        state.remaining -= size
