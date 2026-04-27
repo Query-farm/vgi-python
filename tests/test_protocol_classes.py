@@ -151,18 +151,34 @@ class TestArguments:
         assert schema.field("positional_1").type == pa.string()
         assert schema.field("named_flag").type == pa.bool_()
 
-    def test_null_positional_without_default_raises(self) -> None:
-        """Null positional argument without default should raise ValueError."""
-        # Create a null scalar explicitly
+    def test_explicit_null_positional_returns_none(self) -> None:
+        """Explicit SQL NULL is a real value distinct from "argument absent"."""
         args = Arguments(positional=(pa.scalar(None, type=pa.int64()),))
-        with pytest.raises(ValueError, match="Argument 0: value is null"):
-            args.get(0)
+        assert args.get(0) is None
 
-    def test_null_named_without_default_raises(self) -> None:
-        """Null named argument without default should raise ValueError."""
+    def test_explicit_null_named_returns_none(self) -> None:
+        """Explicit SQL NULL named argument returns None, not the default."""
         args = Arguments(named={"key": pa.scalar(None, type=pa.string())})
-        with pytest.raises(ValueError, match="Argument 'key': value is null"):
-            args.get("key")
+        assert args.get("key") is None
+
+    def test_explicit_null_does_not_consult_default(self) -> None:
+        """Default is only used when the argument is absent, not for SQL NULL."""
+        args = Arguments(
+            positional=(pa.scalar(None, type=pa.int64()),),
+            named={"key": pa.scalar(None, type=pa.string())},
+        )
+        assert args.get(0, default=99) is None
+        assert args.get("key", default="fallback") is None
+
+    def test_absent_positional_uses_default(self) -> None:
+        """An out-of-range positional uses default."""
+        args = Arguments(positional=())
+        assert args.get(0, default=99) == 99
+
+    def test_absent_named_uses_default(self) -> None:
+        """A named arg the caller never wrote uses default."""
+        args = Arguments(named={})
+        assert args.get("key", default="fallback") == "fallback"
 
     def test_type_validation_positional_mismatch(self) -> None:
         """Type mismatch for positional argument should raise TypeError."""
@@ -430,8 +446,11 @@ class TestArg:
         obj = MyClass()
         assert obj.value == "default"
 
-    def test_null_scalar_with_default(self) -> None:
-        """Arg should use default when scalar is null."""
+    def test_absent_positional_slot_uses_default(self) -> None:
+        """A None slot indicates an absent argument, so default is used.
+
+        Distinct from an explicit SQL NULL, which is a real value.
+        """
 
         class MyClass:
             invocation = _MockInvocation(Arguments(positional=(None,)))
@@ -439,6 +458,19 @@ class TestArg:
 
         obj = MyClass()
         assert obj.value == 99
+
+    def test_explicit_null_through_arg_returns_none(self) -> None:
+        """Arg returns None for an explicit SQL NULL.
+
+        Default is only consulted when the argument was not supplied.
+        """
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar(None, type=pa.int64()),)))
+            value = Arg[int](0, default=99)
+
+        obj = MyClass()
+        assert obj.value is None
 
     def test_different_instances_independent(self) -> None:
         """Different instances should have independent cached values."""

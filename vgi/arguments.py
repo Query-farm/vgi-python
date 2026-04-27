@@ -369,32 +369,43 @@ class Arguments:
     ) -> Any:
         """Get argument as Python value.
 
+        SQL NULL is a real value, distinct from "argument not provided".
+        ``default`` is consulted only when the caller omitted the argument
+        entirely; an explicit SQL NULL returns ``None``.
+
         Args:
             key: Positional index (int) or argument name (str).
             type: Expected Arrow type. Raises TypeError if mismatch.
-            default: Value to return if argument is missing or null.
-                If not provided, raises an exception for missing/null args.
+            default: Value to return if argument is omitted (not provided
+                by the caller). If not provided, raises an exception for
+                missing args. ``default`` is *not* consulted for explicit
+                SQL NULL — that case returns ``None``.
 
         Returns:
-            The argument value as a Python object.
+            The argument value as a Python object. ``None`` if the caller
+            passed an explicit SQL NULL.
 
         Raises:
-            IndexError: Positional argument not found (no default provided).
-            KeyError: Named argument not found (no default provided).
-            ValueError: Argument is null (no default provided).
+            IndexError: Positional argument not provided (no default).
+            KeyError: Named argument not provided (no default).
             TypeError: Argument type doesn't match `type` parameter.
 
         """
-        # Get the scalar based on key type
+        # Get the scalar based on key type. Note: an absent argument means
+        # the caller did not write it at all; the C++ extension only ships
+        # fields the user supplied, so absence shows up as out-of-range
+        # (positional) or missing key (named). A scalar that is present
+        # but invalid is an *explicit* SQL NULL passed by the caller.
         if isinstance(key, int):
             # Positional argument
-            if key < 0 or key >= len(self.positional):
+            if key < 0 or key >= len(self.positional) or self.positional[key] is None:
                 if default is not _MISSING:
                     return default
                 raise IndexError(
                     f"Argument {key}: index out of range (have {len(self.positional)} positional arguments)"
                 )
             scalar = self.positional[key]
+            assert scalar is not None  # narrowed above
         else:
             # Named argument
             if self.named is None or key not in self.named:
@@ -402,15 +413,6 @@ class Arguments:
                     return default
                 raise KeyError(f"Argument '{key}': not found")
             scalar = self.named[key]
-
-        # Handle null values
-        if scalar is None or not scalar.is_valid:
-            if default is not _MISSING:
-                return default
-            if isinstance(key, int):
-                raise ValueError(f"Argument {key}: value is null")
-            else:
-                raise ValueError(f"Argument '{key}': value is null")
 
         # Type validation (if requested)
         if type is not None and scalar.type != type:
@@ -1026,8 +1028,11 @@ class Arg[ArgT]:
         else:
             value = arguments.get(lookup_pos, default=self.default)
 
-        # Apply validation
-        self._validate(value)
+        # Skip validation for None — either an explicit SQL NULL the caller
+        # passed, or default=None for a nullable Arg. Numeric/choice/pattern
+        # constraints don't apply to None and would otherwise TypeError.
+        if value is not None:
+            self._validate(value)
 
         # Wrap AnyArrow values with metadata for schema lookups
         if self._returns_any_arrow_value:
