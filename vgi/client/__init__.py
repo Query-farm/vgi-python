@@ -34,9 +34,13 @@ Usage (CLI):
 
 """
 
+from typing import TYPE_CHECKING, Any
+
 from vgi.client.catalog_mixin import CatalogClientMixin
-from vgi.client.cli import OutputWriter, main
 from vgi.client.client import Client, ClientError
+
+if TYPE_CHECKING:
+    from vgi.client.cli import OutputWriter, main
 
 __all__ = [
     "CatalogClientMixin",
@@ -45,3 +49,15 @@ __all__ = [
     "OutputWriter",
     "main",
 ]
+
+
+# Lazy-load the CLI surface. ``vgi.client.cli`` transitively imports
+# ``pyarrow.parquet`` / ``pyarrow._s3fs`` / ``pyarrow._gcsfs`` etc., which add
+# ~2 seconds to the cold import path. Programmatic users of ``Client`` don't
+# need any of that; only the ``vgi-client`` CLI entry point does.
+def __getattr__(name: str) -> Any:
+    if name in {"OutputWriter", "main"}:
+        from vgi.client import cli
+
+        return getattr(cli, name)
+    raise AttributeError(f"module 'vgi.client' has no attribute {name!r}")

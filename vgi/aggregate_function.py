@@ -179,8 +179,17 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
             return
 
         hints: dict[str, Any] = {}
-        with contextlib.suppress(Exception):
+        try:
             hints = get_type_hints(update_method, include_extras=True)
+        except Exception as exc:
+            import warnings
+
+            warnings.warn(
+                f"{cls.__name__}.update() type hints could not be resolved: {exc!r}. "
+                "Param/ConstParam annotations will be ignored, leaving the function "
+                "registered with no input columns.",
+                stacklevel=2,
+            )
 
         compute_params: dict[str, Arg[Any]] = {}
         const_params: dict[str, Arg[Any]] = {}

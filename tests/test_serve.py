@@ -448,7 +448,7 @@ class TestCLI:
             # Hit the worker description page
             import urllib.request
 
-            url = f"http://127.0.0.1:{port}/worker"
+            url = f"http://127.0.0.1:{port}/"
             with urllib.request.urlopen(url, timeout=5) as resp:
                 body = resp.read()
                 assert resp.status == 200

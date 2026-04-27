@@ -74,9 +74,9 @@ def example_worker() -> str:
     return "vgi-example-worker"
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def http_worker() -> Any:
-    """Start ``vgi-example-http`` on a free port, yield its base URL, tear it down.
+    """Start ``vgi-example-http`` lazily, sharing one server per (extra_args, env) combo.
 
     Usage::
 
@@ -84,8 +84,10 @@ def http_worker() -> Any:
             base_url = http_worker()                       # defaults
             base_url = http_worker(extra_args=[...])       # pass flags
 
-    Implemented as a factory so individual tests can request different server
-    flags (e.g. ``--demo-storage``) without proliferating fixtures.
+    Workers are session-scoped and cached by configuration key, so tests that
+    need the same flags reuse a single subprocess. Each unique combination
+    spawns its own server (one-time per session). The whole pool is torn
+    down at session end.
     """
     from contextlib import ExitStack
 
@@ -94,9 +96,16 @@ def http_worker() -> Any:
     pytest.importorskip("vgi_rpc.http")
 
     stack = ExitStack()
+    cache: dict[tuple[tuple[str, ...], tuple[tuple[str, str], ...]], str] = {}
 
     def _start(*, extra_args: list[str] | None = None, env: dict[str, str] | None = None) -> str:
-        return start_http_worker(stack, extra_args=tuple(extra_args or ()), env=env)
+        key = (
+            tuple(extra_args or ()),
+            tuple(sorted((env or {}).items())),
+        )
+        if key not in cache:
+            cache[key] = start_http_worker(stack, extra_args=key[0], env=dict(key[1]) or None)
+        return cache[key]
 
     try:
         yield _start
@@ -111,8 +120,38 @@ def http_worker() -> Any:
 _CLIENT_TRANSPORT_MODES = ["subprocess-pooled", "subprocess-direct", "http"]
 
 
+@pytest.fixture(scope="session")
+def _shared_http_base_url() -> Any:
+    """Session-scoped lazy starter for the default-config HTTP worker.
+
+    Used by the http branch of ``client_transport`` so every parametrized
+    http-mode test reuses one subprocess instead of spawning fresh ones.
+    """
+    from contextlib import ExitStack
+
+    from tests._http_fixtures import start_http_worker
+
+    pytest.importorskip("vgi_rpc.http")
+    stack = ExitStack()
+    cached: dict[str, str] = {}
+
+    def _start() -> str:
+        if "url" not in cached:
+            cached["url"] = start_http_worker(stack)
+        return cached["url"]
+
+    try:
+        yield _start
+    finally:
+        stack.close()
+
+
 @pytest.fixture(params=_CLIENT_TRANSPORT_MODES)
-def client_transport(request: pytest.FixtureRequest, example_worker: str) -> Any:
+def client_transport(
+    request: pytest.FixtureRequest,
+    example_worker: str,
+    _shared_http_base_url: Any,
+) -> Any:
     """Parametrized factory that builds a configured ``Client`` for each transport.
 
     Yields a callable ``make_client()`` -> ``Client``. Callers must enter the
@@ -129,11 +168,7 @@ def client_transport(request: pytest.FixtureRequest, example_worker: str) -> Any
 
     mode = request.param
 
-    http_base_url: str | None = None
-    http_stack: Any | None = None
-
     def _make() -> Client:
-        nonlocal http_base_url, http_stack
         if mode == "subprocess-pooled":
             return Client(example_worker, pool=_default_pool)
         if mode == "subprocess-direct":
@@ -142,21 +177,10 @@ def client_transport(request: pytest.FixtureRequest, example_worker: str) -> Any
             if not _HTTP_TRANSPORT_READY:
                 pytest.skip("Client HTTP transport arrives in Phase 2 of whimsical-mccarthy plan")
             pytest.importorskip("vgi_rpc.http")
-            from contextlib import ExitStack
-
-            from tests._http_fixtures import start_http_worker
-
-            if http_base_url is None:
-                http_stack = ExitStack()
-                http_base_url = start_http_worker(http_stack)
-            return Client.from_http(http_base_url)
+            return Client.from_http(_shared_http_base_url())
         raise AssertionError(f"unknown transport mode {mode!r}")
 
-    try:
-        yield _make
-    finally:
-        if http_stack is not None:
-            http_stack.close()
+    yield _make
 
 
 @pytest.fixture

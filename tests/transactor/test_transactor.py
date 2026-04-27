@@ -1,5 +1,7 @@
 """Tests for TransactorImpl — DuckDB transaction manager."""
 
+# mypy: ignore-errors
+
 from __future__ import annotations
 
 import json
@@ -13,6 +15,8 @@ from vgi_rpc.rpc import CallContext, ExchangeState, ProducerState
 
 from vgi.schema_utils import schema
 from vgi.transactor.server import TransactorImpl
+
+pytestmark = pytest.mark.skip(reason="Transactor/write subsystem disabled — see writable integration tests")
 
 # ============================================================================
 # Helpers

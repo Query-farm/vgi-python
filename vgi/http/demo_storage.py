@@ -112,9 +112,37 @@ class BlobResource:
             resp.set_header("Content-Encoding", content_encoding)
             resp.set_header("X-VGI-Content-Encoding", content_encoding)
 
+    def on_head(self, req: Any, resp: Any, blob_id: str) -> None:  # noqa: D102
+        # Mirror on_get headers (Content-Length/-Type/-Encoding) without a body.
+        # Required so external_fetch._head_probe can discover Content-Encoding;
+        # otherwise a 405 forces a plain GET path that skips zstd decompression.
+        import falcon
+
+        entry = self._storage.get(blob_id)
+        if entry is None:
+            raise falcon.HTTPNotFound(description=f"Blob {blob_id!r} not found")
+        data, content_encoding = entry
+        resp.content_length = len(data)
+        resp.content_type = "application/octet-stream"
+        resp.set_header("Accept-Ranges", "none")
+        if content_encoding:
+            resp.set_header("Content-Encoding", content_encoding)
+            resp.set_header("X-VGI-Content-Encoding", content_encoding)
+
     def on_put(self, req: Any, resp: Any, blob_id: str) -> None:  # noqa: D102
-        data = req.bounded_stream.read()
-        content_encoding = req.get_header("Content-Encoding")
+        # vgi_rpc's _CompressionMiddleware drains ``req.bounded_stream`` when
+        # the request carries ``Content-Encoding: zstd`` and stashes the
+        # decompressed payload on ``req.context.decompressed_stream``. Prefer
+        # that stream when present so we capture the raw IPC bytes; the
+        # producer's SHA-256 in custom_metadata is computed pre-compression so
+        # downstream verification still succeeds when we serve uncompressed.
+        decompressed_stream = getattr(req.context, "decompressed_stream", None)
+        if decompressed_stream is not None:
+            data = decompressed_stream.read()
+            content_encoding: str | None = None
+        else:
+            data = req.bounded_stream.read()
+            content_encoding = req.get_header("Content-Encoding")
         self._storage.put(blob_id, data, content_encoding)
         resp.status = "201 Created"
 

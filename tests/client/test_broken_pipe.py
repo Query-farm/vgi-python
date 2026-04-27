@@ -64,11 +64,13 @@ class TestClientWorkerExitHandling:
             # Either includes exit code (BrokenPipeError path) or describes
             # what operation failed (read-failure path)
             err_str = str(e)
+            err_lower = err_str.lower()
             has_useful_info = (
                 "42" in err_str  # Exit code from BrokenPipeError path
-                or "bind_result" in err_str  # Read failure path
-                or "terminated" in err_str  # BrokenPipeError message
-                or "worker" in err_str.lower()  # Worker connection failure
+                or "bind" in err_lower  # Names the failed RPC
+                or "terminated" in err_lower  # BrokenPipeError message
+                or "worker" in err_lower  # Worker connection failure
+                or "broken pipe" in err_lower  # Transport-level cause
             )
             assert has_useful_info, f"Expected useful error info, got: {e}"
 

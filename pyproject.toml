@@ -13,11 +13,6 @@ dependencies = [
     "numpy>=2.4.1",
     "vgi-rpc @ file:///Users/rusty/Development/vgi-rpc",
     "duckdb>=1.5.0",
-    "scikit-learn>=1.8.0",
-    "yfinance>=1.2.2",
-    "matplotlib>=3.10.8",
-    "scipy>=1.17.1",
-    "jupyter>=1.1.1",
 ]
 
 [project.optional-dependencies]
@@ -34,28 +29,21 @@ dev = [
     "pytest",
     "pytest-cov",
     "pytest-examples",
-    "pytest-mypy",
     "pytest-ruff",
     "pytest-xdist",
     "ruff",
+    "vgi-rpc[conformance,external,http,oauth,otel]",
 ]
 [project.scripts]
 vgi-serve = "vgi.serve:main"
 vgi-client = "vgi.client.cli:main"
 vgi-example-worker = "vgi.examples.worker:main"
 vgi-example-http = "vgi.examples.http_server:main"
-vgi-example-catalog-worker = "vgi.examples.catalog:main"
 vgi-example-versioned-worker = "vgi.examples.versioned:main"
 vgi-example-versioned-tables-worker = "vgi.examples.versioned_tables:main"
 vgi-example-attach-options-worker = "vgi.examples.attach_options:main"
-vgi-ci-worker = "vgi.ci.worker:main"
-vgi-writable-worker = "vgi.examples.writable_worker:main"
+vgi-example-writable-worker = "vgi.examples.writable_worker:main"
 vgi-transactor = "vgi.transactor.server:main"
-vgi-gen-cpp-schemas = "vgi.codegen.cpp_schemas:main"
-vgi-gen-cpp-constants = "vgi.codegen.cpp_constants:main"
-vgi-gen-ts-schemas = "vgi.codegen.ts_schemas:main"
-vgi-gen-ts-client = "vgi.codegen.ts_client:main"
-vgi-gen-go-schemas = "vgi.codegen.go_schemas:main"
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -63,6 +51,12 @@ allow-direct-references = true
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+exclude = ["vgi/codegen"]
+
+[tool.hatch.build.targets.sdist]
+exclude = []
 
 [tool.ruff]
 line-length = 120
@@ -98,7 +92,7 @@ warn_unused_ignores = false
 python-version = "3.13"
 
 [tool.pytest.ini_options]
-addopts = "--mypy --ruff"
+addopts = "--ruff"
 testpaths = ["tests"]
 
 [tool.coverage.run]

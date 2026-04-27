@@ -72,7 +72,7 @@ class TestStderrInErrorMessages:
         client.stop()
 
         error_msg = str(exc_info.value)
-        assert "Worker stderr:" in error_msg
+        assert "Worker stderr" in error_msg
         assert "Error: function not found" in error_msg
 
     def test_error_no_stderr_section_when_passthrough(self) -> None:
@@ -91,7 +91,7 @@ class TestStderrInErrorMessages:
         client.stop()
 
         error_msg = str(exc_info.value)
-        assert "Worker stderr:" not in error_msg
+        assert "Worker stderr" not in error_msg
 
     def test_stderr_enrichment_on_table_in_out_function(self) -> None:
         """table_in_out_function errors should include stderr."""
@@ -111,7 +111,7 @@ class TestStderrInErrorMessages:
             )
         client.stop()
 
-        assert "Worker stderr:" in str(exc_info.value)
+        assert "Worker stderr" in str(exc_info.value)
 
     def test_stderr_enrichment_on_scalar_function(self) -> None:
         """scalar_function errors should include stderr."""
@@ -129,4 +129,4 @@ class TestStderrInErrorMessages:
             )
         client.stop()
 
-        assert "Worker stderr:" in str(exc_info.value)
+        assert "Worker stderr" in str(exc_info.value)

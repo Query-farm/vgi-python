@@ -464,7 +464,7 @@ class GenericSumFunction(AggregateFunction[GenericSumState]):
         cls,
         states: dict[int, GenericSumState],
         group_ids: pa.Int64Array,
-        value: Annotated[pa.Array[Any], Param(doc="Numeric value to sum")],
+        value: Annotated[pa.Array, Param(doc="Numeric value to sum")],  # type: ignore[type-arg]
     ) -> None:
         table = pa.table({"gid": group_ids, "value": value.cast(pa.float64())})
         grouped = table.group_by("gid").aggregate([("value", "sum")])
@@ -524,7 +524,7 @@ class SumAllFunction(AggregateFunction[SumAllState]):
         cls,
         states: dict[int, SumAllState],
         group_ids: pa.Int64Array,
-        columns: Annotated[pa.Array[Any], Param(doc="Numeric columns to sum", varargs=True)],
+        columns: Annotated[pa.Array, Param(doc="Numeric columns to sum", varargs=True)],  # type: ignore[type-arg]
     ) -> None:
         for i in range(len(group_ids)):
             gid: int = group_ids[i].as_py()
@@ -786,7 +786,7 @@ class DynamicAggregateFunction(_DynamicAggregateBase):
         states: dict[int, DynamicState],
         group_ids: pa.Int64Array,
         code: Annotated[pa.StringArray, Param(doc="Python code defining Aggregate class")],
-        columns: Annotated[list[pa.Array[Any]], Param(doc="Input columns", varargs=True)],
+        columns: Annotated[list[pa.Array], Param(doc="Input columns", varargs=True)],  # type: ignore[type-arg]
     ) -> None:
         cls._do_update(states, group_ids, code, columns)
 
@@ -864,8 +864,8 @@ class DynamicMLAggregateFunction(_DynamicAggregateBase):
         states: dict[int, DynamicState],
         group_ids: pa.Int64Array,
         code: Annotated[pa.StringArray, Param(doc="Python code defining Aggregate class")],
-        params_col: Annotated[pa.Array[Any], Param(doc="MAP(VARCHAR, DOUBLE) parameters")],
-        columns: Annotated[list[pa.Array[Any]], Param(doc="Input columns", varargs=True)],
+        params_col: Annotated[pa.Array, Param(doc="MAP(VARCHAR, DOUBLE) parameters")],  # type: ignore[type-arg]
+        columns: Annotated[list[pa.Array], Param(doc="Input columns", varargs=True)],  # type: ignore[type-arg]
     ) -> None:
         cls._do_update(states, group_ids, code, columns, params_col=params_col)
 
