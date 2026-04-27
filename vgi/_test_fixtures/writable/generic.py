@@ -19,7 +19,7 @@ import pyarrow as pa
 from vgi_rpc import AnnotatedBatch
 from vgi_rpc.rpc import OutputCollector
 
-from vgi.examples.writable_table import (
+from vgi._test_fixtures.writable.table import (
     _COUNT_SCHEMA,
     WritableScanState,
     _get_attach_id,

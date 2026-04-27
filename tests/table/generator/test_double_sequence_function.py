@@ -12,9 +12,9 @@ from vgi.client import Client
 class TestDoubleSequenceFunction:
     """Tests for DoubleSequenceFunction via Client subprocess."""
 
-    def test_double_sequence_basic(self, example_worker: str) -> None:
+    def test_double_sequence_basic(self, fixture_worker: str) -> None:
         """Count=5 produces [0.0, 1.0, 2.0, 3.0, 4.0]."""
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             outputs = list(
                 client.table_function(
                     function_name="double_sequence",
@@ -28,9 +28,9 @@ class TestDoubleSequenceFunction:
             all_values.extend(batch.column("n").to_pylist())
         assert all_values == [0.0, 1.0, 2.0, 3.0, 4.0]
 
-    def test_double_sequence_with_increment(self, example_worker: str) -> None:
+    def test_double_sequence_with_increment(self, fixture_worker: str) -> None:
         """Count=3 with increment=0.5 produces [0.0, 0.5, 1.0]."""
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             outputs = list(
                 client.table_function(
                     function_name="double_sequence",

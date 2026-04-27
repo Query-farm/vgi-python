@@ -17,37 +17,24 @@ Settings:
 - config: Sequence configuration struct for struct_settings (struct, default: None)
 
 Usage:
-    vgi-example-worker
+    vgi-fixture-worker
 """
+
+# Friendly error if the test-fixtures extra is missing. Several fixture
+# modules below depend on numpy, so we surface a clear install message
+# instead of a raw ImportError.
+try:
+    import numpy  # noqa: F401
+except ImportError:
+    import sys as _sys
+
+    _sys.exit("vgi-fixture-worker requires the test-fixtures extra. Install with: pip install 'vgi[test-fixtures]'")
 
 from typing import Annotated
 
 import pyarrow as pa
 
-from vgi.arguments import Arguments
-from vgi.catalog import (
-    AttachId,
-    Catalog,
-    ForeignKeyDef,
-    Index,
-    IndexConstraintType,
-    Macro,
-    MacroType,
-    ReadOnlyCatalogInterface,
-    ScanFunctionResult,
-    Schema,
-    SecretTypeSpec,
-    SerializedSchema,
-    Setting,
-    Table,
-    TableInfo,
-    TransactionId,
-    View,
-)
-from vgi.catalog.catalog_interface import _validate_at_params
-from vgi.catalog.descriptors import ColumnStatisticsInput
-from vgi.catalog.duckdb_statistics import statistics_from_duckdb
-from vgi.examples.aggregate import (
+from vgi._test_fixtures.aggregate import (
     AvgFunction,
     CountFunction,
     DynamicAggregateFunction,
@@ -62,9 +49,9 @@ from vgi.examples.aggregate import (
     WindowMedianFunction,
     WindowSumFunction,
 )
-from vgi.examples.cancellable import SlowCancellableFunction, SlowCancellableInOutFunction
-from vgi.examples.nest_tensor import NestTensorFunction, UnnestTensorFunction, UnnestTensorRowsFunction
-from vgi.examples.scalar import (
+from vgi._test_fixtures.cancellable import SlowCancellableFunction, SlowCancellableInOutFunction
+from vgi._test_fixtures.nest_tensor import NestTensorFunction, UnnestTensorFunction, UnnestTensorRowsFunction
+from vgi._test_fixtures.scalar import (
     AddValuesFunction,
     AnyMixedIntFunction,
     AnyMixedStrFunction,
@@ -104,7 +91,7 @@ from vgi.examples.scalar import (
     UpperCaseFunction,
     WhoAmIFunction,
 )
-from vgi.examples.table import (
+from vgi._test_fixtures.table import (
     _VERSIONED_CONSTRAINTS_SCHEMAS,
     _VERSIONED_SCHEMAS,
     ColorsScanFunction,
@@ -148,7 +135,7 @@ from vgi.examples.table import (
     resolve_version,
     resolve_versioned_constraints_version,
 )
-from vgi.examples.table_in_out import (
+from vgi._test_fixtures.table_in_out import (
     BufferInputFunction,
     EchoFunction,
     ExceptionFinalizeFunction,
@@ -158,6 +145,29 @@ from vgi.examples.table_in_out import (
     SumAllColumnsFunction,
     SumAllColumnsSimpleDistributed,
 )
+from vgi.arguments import Arguments
+from vgi.catalog import (
+    AttachId,
+    Catalog,
+    ForeignKeyDef,
+    Index,
+    IndexConstraintType,
+    Macro,
+    MacroType,
+    ReadOnlyCatalogInterface,
+    ScanFunctionResult,
+    Schema,
+    SecretTypeSpec,
+    SerializedSchema,
+    Setting,
+    Table,
+    TableInfo,
+    TransactionId,
+    View,
+)
+from vgi.catalog.catalog_interface import _validate_at_params
+from vgi.catalog.descriptors import ColumnStatisticsInput
+from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 from vgi.schema_utils import schema
 from vgi.worker import Worker
 
@@ -237,7 +247,7 @@ _EXAMPLE_CATALOG = Catalog(
     name="example",
     default_schema="main",
     comment="Example VGI catalog for testing",
-    tags={"source": "vgi-example-worker", "version": "1"},
+    tags={"source": "vgi-fixture-worker", "version": "1"},
     schemas=[
         Schema(
             name="main",
@@ -914,11 +924,23 @@ class ExampleWorker(Worker):
 
 
 def main() -> None:
-    """Run the example worker process with both example and writable catalogs."""
-    from vgi.examples.writable_worker import WritableWorker
+    """Run the fixture worker process.
+
+    Always serves the base ExampleWorker catalog (depends on the
+    ``vgi[test-fixtures]`` extra). Adds the writable catalog when the
+    ``vgi[test-fixtures-writable]`` extra is also installed.
+    """
     from vgi.meta_worker import MetaWorker
 
-    MetaWorker.serve(ExampleWorker, WritableWorker)
+    workers: list[type] = [ExampleWorker]
+    try:
+        from vgi._test_fixtures.writable.worker import WritableWorker
+    except ImportError:
+        pass
+    else:
+        workers.append(WritableWorker)
+
+    MetaWorker.serve(*workers)
 
 
 if __name__ == "__main__":

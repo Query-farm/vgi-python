@@ -15,7 +15,7 @@ Demonstrates the ATTACH-time versioning protocol end-to-end:
   jar plumbs Set-Cookie → Cookie round trips. For subprocess transport
   ``ctx.cookies`` is empty and the check is skipped.
 
-Registered as the ``vgi-example-versioned-worker`` entry point.
+Registered as the ``vgi-fixture-versioned-worker`` entry point.
 """
 
 from __future__ import annotations

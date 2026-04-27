@@ -241,7 +241,7 @@ class TestCatalogAttachSettingsRoundTrip:
 
     def test_worker_settings_in_catalog_attach(self) -> None:
         """All ExampleWorker settings should be present in catalog_attach result."""
-        from vgi.examples.worker import ExampleWorker
+        from vgi._test_fixtures.worker import ExampleWorker
 
         catalog_interface_cls = ExampleWorker._get_catalog_interface()
         assert catalog_interface_cls is not None

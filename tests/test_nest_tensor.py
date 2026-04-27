@@ -8,15 +8,15 @@ from typing import Any
 import pyarrow as pa
 import pytest
 
-from vgi.aggregate_function import AggregateBindParams
-from vgi.arguments import Arguments
-from vgi.examples.nest_tensor import (
+from vgi._test_fixtures.nest_tensor import (
     NestTensorError,
     NestTensorFunction,
     NestTensorState,
     UnnestTensorFunction,
     _output_struct_type,
 )
+from vgi.aggregate_function import AggregateBindParams
+from vgi.arguments import Arguments
 from vgi.function_storage import BoundStorage, FunctionStorageSqlite
 from vgi.scalar_function import BindParameters
 from vgi.table_function import ProcessParams, SecretsAccessor

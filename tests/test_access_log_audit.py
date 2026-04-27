@@ -70,7 +70,7 @@ def _start_http_server(
     cmd = [
         sys.executable,
         "-m",
-        "vgi.examples.http_server",
+        "vgi._test_fixtures.http_server",
         "--host",
         "127.0.0.1",
         "--port",
@@ -213,7 +213,7 @@ class TestAccessLogConformance:
             # Print details for debugging
             for v in violations:
                 entry = access_logs[v.entry_index] if v.entry_index < len(access_logs) else {}
-                print(f"  VIOLATION: entry {v.entry_index} method={v.method} — {v.rule} — missing '{v.field}'")
+                print(f"  VIOLATION: entry {v.entry_index} method={v.method} path={v.path} — {v.message}")
                 print(f"    keys: {sorted(entry.keys())}")
 
         assert violations == [], f"{len(violations)} conformance violations in {len(access_logs)} entries"
@@ -259,5 +259,5 @@ class TestConformanceFromIntegrationLog:
         violations = validate_access_logs(access_logs)
         assert violations == [], (
             f"{len(violations)} conformance violations in {len(access_logs)} entries.\n"
-            + "\n".join(f"  {v.method}: missing '{v.field}' — {v.rule}" for v in violations[:20])
+            + "\n".join(f"  {v.method} {v.path}: {v.message}" for v in violations[:20])
         )

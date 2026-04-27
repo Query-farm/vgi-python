@@ -33,14 +33,14 @@ def _free_port() -> int:
 
 @contextmanager
 def _run_example_http_server(*, port: int, bucket: str, threshold_bytes: int) -> Iterator[None]:
-    """Run vgi.examples.http_server in a subprocess for the duration of a test."""
+    """Run vgi._test_fixtures.http_server in a subprocess for the duration of a test."""
     env = os.environ.copy()
     env[S3_BUCKET_ENV] = bucket
 
     cmd = [
         sys.executable,
         "-m",
-        "vgi.examples.http_server",
+        "vgi._test_fixtures.http_server",
         "--host",
         "127.0.0.1",
         "--port",
@@ -111,7 +111,7 @@ def test_http_input_upload_url_then_external_location_scalar_exchange(compressio
     pytest.importorskip("vgi_rpc.s3")
 
     if compression == "zstd":
-        import aiohttp.http_parser as http_parser  # type: ignore[import-not-found]
+        import aiohttp.http_parser as http_parser
 
         if not bool(getattr(http_parser, "HAS_ZSTD", False)):
             pytest.skip("zstd input test requires aiohttp zstd decode support (backports.zstd)")

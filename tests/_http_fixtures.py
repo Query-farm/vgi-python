@@ -1,4 +1,4 @@
-"""Shared helpers for spawning ``vgi-example-http`` as a subprocess.
+"""Shared helpers for spawning ``vgi-fixture-http`` as a subprocess.
 
 Lifted from ``tests/test_http_demo_storage.py`` so that conformance tests and
 other HTTP-dependent tests can reuse a single lifecycle.
@@ -29,7 +29,7 @@ def run_example_http_server(
     extra_args: Sequence[str] = (),
     env: dict[str, str] | None = None,
 ) -> Iterator[None]:
-    """Run ``vgi-example-http`` in a subprocess on ``port``.
+    """Run ``vgi-fixture-http`` in a subprocess on ``port``.
 
     ``extra_args`` are appended verbatim — e.g. ``("--demo-storage",
     "--externalize-threshold-bytes", "4096")``.
@@ -37,7 +37,7 @@ def run_example_http_server(
     cmd = [
         sys.executable,
         "-m",
-        "vgi.examples.http_server",
+        "vgi._test_fixtures.http_server",
         "--host",
         "127.0.0.1",
         "--port",
@@ -75,7 +75,7 @@ def start_http_worker(
     extra_args: Sequence[str] = (),
     env: dict[str, str] | None = None,
 ) -> str:
-    """Allocate a port, start ``vgi-example-http`` under ``stack``, return base URL."""
+    """Allocate a port, start ``vgi-fixture-http`` under ``stack``, return base URL."""
     port = free_port()
     base_url = f"http://127.0.0.1:{port}"
     stack.enter_context(run_example_http_server(port=port, extra_args=tuple(extra_args), env=env))

@@ -1461,7 +1461,7 @@ class TestGeoFunctions:
     )
     def test_distance_resolves(self, func_name: str, func_cls_name: str, col_type: str) -> None:
         """GeoDistance functions resolve with their respective point column types."""
-        import vgi.examples.scalar as geo
+        import vgi._test_fixtures.scalar as geo
 
         func_cls = getattr(geo, func_cls_name)
         point_type = {
@@ -1488,7 +1488,7 @@ class TestGeoFunctions:
     )
     def test_centroid_resolves(self, func_name: str, func_cls_name: str, col_type: str, num_points: int) -> None:
         """GeoCentroid functions resolve with varargs point columns."""
-        import vgi.examples.scalar as geo
+        import vgi._test_fixtures.scalar as geo
 
         func_cls = getattr(geo, func_cls_name)
         point_type = {

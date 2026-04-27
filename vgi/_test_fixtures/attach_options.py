@@ -11,7 +11,7 @@ This worker exists to exercise the attach-time options pipeline end-to-end:
 
 Run directly as a worker::
 
-    vgi-example-attach-options-worker
+    vgi-fixture-attach-options-worker
 
 Or serve over HTTP via ``vgi-serve``.
 """
@@ -80,26 +80,24 @@ class AttachOptions:
 
     # Temporal
     opt_date: Annotated[datetime.date, AttachOption(desc="Date", arrow_type=pa.date32())] = datetime.date(2026, 4, 24)
-    opt_time: Annotated[
-        datetime.time, AttachOption(desc="Time of day", arrow_type=pa.time64("us"))
-    ] = datetime.time(12, 34, 56)
-    opt_timestamp: Annotated[
-        datetime.datetime, AttachOption(desc="Naive timestamp", arrow_type=pa.timestamp("us"))
-    ] = datetime.datetime(2026, 4, 24, 12, 34, 56)
+    opt_time: Annotated[datetime.time, AttachOption(desc="Time of day", arrow_type=pa.time64("us"))] = datetime.time(
+        12, 34, 56
+    )
+    opt_timestamp: Annotated[datetime.datetime, AttachOption(desc="Naive timestamp", arrow_type=pa.timestamp("us"))] = (
+        datetime.datetime(2026, 4, 24, 12, 34, 56)
+    )
     opt_timestamp_tz: Annotated[
         datetime.datetime,
         AttachOption(desc="Timestamp with UTC tz", arrow_type=pa.timestamp("us", tz="UTC")),
     ] = datetime.datetime(2026, 4, 24, 12, 34, 56, tzinfo=datetime.UTC)
 
     # Precision
-    opt_decimal: Annotated[
-        Decimal, AttachOption(desc="Decimal(18,4)", arrow_type=pa.decimal128(18, 4))
-    ] = Decimal("123.4500")
+    opt_decimal: Annotated[Decimal, AttachOption(desc="Decimal(18,4)", arrow_type=pa.decimal128(18, 4))] = Decimal(
+        "123.4500"
+    )
 
     # Nested
-    opt_list: Annotated[
-        list[int], AttachOption(desc="List of int64", arrow_type=pa.list_(pa.int64()))
-    ] = [1, 2, 3]
+    opt_list: Annotated[list[int], AttachOption(desc="List of int64", arrow_type=pa.list_(pa.int64()))] = [1, 2, 3]
     opt_struct: Annotated[
         dict[str, object],
         AttachOption(

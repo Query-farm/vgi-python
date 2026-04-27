@@ -12,9 +12,9 @@ from vgi.client import Client
 class TestNestedSequenceFunction:
     """Tests for NestedSequenceFunction via Client subprocess."""
 
-    def test_nested_sequence_basic(self, example_worker: str) -> None:
+    def test_nested_sequence_basic(self, fixture_worker: str) -> None:
         """Count=5 produces 5 rows with n, metadata struct, and history list."""
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             outputs = list(
                 client.table_function(
                     function_name="nested_sequence",
@@ -38,9 +38,9 @@ class TestNestedSequenceFunction:
         assert pa.types.is_struct(output_schema.field("metadata").type)
         assert pa.types.is_list(output_schema.field("history").type)
 
-    def test_nested_sequence_struct_content(self, example_worker: str) -> None:
+    def test_nested_sequence_struct_content(self, fixture_worker: str) -> None:
         """Verify metadata.index and metadata.label values."""
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             outputs = list(
                 client.table_function(
                     function_name="nested_sequence",

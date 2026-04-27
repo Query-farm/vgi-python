@@ -157,7 +157,7 @@ class TestSecretConversionHelpers:
 class TestScalarFunctionSettingTypes:
     """Verify ScalarFunction delivers pa.Scalar for settings, dict[str, pa.Scalar] for secrets."""
 
-    def test_setting_delivers_pa_scalar(self, example_worker: str) -> None:
+    def test_setting_delivers_pa_scalar(self, fixture_worker: str) -> None:
         """MultiplyBySettingFunction receives pa.Scalar for setting."""
         from vgi import schema
         from vgi.client import Client
@@ -165,7 +165,7 @@ class TestScalarFunctionSettingTypes:
         s = schema(value=pa.int64())
         batch = pa.RecordBatch.from_pydict({"value": [1, 2, 3]}, schema=s)
 
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="multiply_by_setting",
@@ -177,7 +177,7 @@ class TestScalarFunctionSettingTypes:
         assert len(outputs) == 1
         assert outputs[0].to_pydict() == {"result": [5, 10, 15]}
 
-    def test_secret_delivers_dict_of_scalars(self, example_worker: str) -> None:
+    def test_secret_delivers_dict_of_scalars(self, fixture_worker: str) -> None:
         """ReturnSecretValueFunction receives dict[str, pa.Scalar] for secret."""
         from vgi import schema
         from vgi.client import Client
@@ -187,7 +187,7 @@ class TestScalarFunctionSettingTypes:
 
         secret_value = {"type": "test", "provider": "config", "secret_string": "s3cr3t"}
 
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="return_secret_value",
@@ -214,7 +214,7 @@ class TestTableFunctionSettingAnnotations:
         from vgi.arguments import Arguments
         from vgi.client import Client
 
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             outputs = list(
                 client.table_function(
                     function_name="settings_aware",
@@ -244,7 +244,7 @@ class TestAutoPopulateMetadata:
     def test_scalar_function_auto_populates_required_settings(self) -> None:
         """ScalarFunction with Setting() annotation auto-populates required_settings."""
         resolve_metadata.cache_clear()
-        from vgi.examples.scalar import MultiplyBySettingFunction
+        from vgi._test_fixtures.scalar import MultiplyBySettingFunction
 
         meta = MultiplyBySettingFunction.get_metadata()
         assert "multiplier" in meta.required_settings
@@ -252,7 +252,7 @@ class TestAutoPopulateMetadata:
     def test_scalar_function_auto_populates_required_secrets(self) -> None:
         """ScalarFunction with Secret() annotation auto-populates required_secrets."""
         resolve_metadata.cache_clear()
-        from vgi.examples.scalar import ReturnSecretValueFunction
+        from vgi._test_fixtures.scalar import ReturnSecretValueFunction
 
         meta = ReturnSecretValueFunction.get_metadata()
         secret_types = [entry.secret_type for entry in meta.required_secrets]
@@ -261,7 +261,7 @@ class TestAutoPopulateMetadata:
     def test_table_function_auto_populates_required_settings(self) -> None:
         """TableFunctionGenerator with Setting() on on_bind() auto-populates required_settings."""
         resolve_metadata.cache_clear()
-        from vgi.examples.table import SettingsAwareFunction
+        from vgi._test_fixtures.table import SettingsAwareFunction
 
         meta = SettingsAwareFunction.get_metadata()
         assert "vgi_verbose_mode" in meta.required_settings
@@ -333,7 +333,7 @@ class TestSecretsTypeInParams:
         from vgi.arguments import Arguments
         from vgi.client import Client
 
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             outputs = list(
                 client.table_function(
                     function_name="settings_aware",

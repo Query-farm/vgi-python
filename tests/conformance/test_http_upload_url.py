@@ -11,6 +11,8 @@ mirrors this structure gets transparent externalization on its side too.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pyarrow as pa
 import pytest
 
@@ -20,8 +22,8 @@ pytest.importorskip("vgi_rpc.http")
 
 
 @pytest.fixture(scope="module")
-def small_request_limit_base_url() -> str:
-    """Spawn ``vgi-example-http --demo-storage`` with a tiny ``max_request_bytes``.
+def small_request_limit_base_url() -> Iterator[str]:
+    """Spawn ``vgi-fixture-http --demo-storage`` with a tiny ``max_request_bytes``.
 
     Setting the externalize threshold low also forces output batches
     through the blob store; the combination exercises upload URLs (input)

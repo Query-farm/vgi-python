@@ -10,14 +10,14 @@ class TestExceptionProcessFunction:
     """Tests for exception_process function (raises during process)."""
 
     def test_exception_process_raises_client_error(
-        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
+        self, fixture_worker: str, numeric_batches: list[pa.RecordBatch]
     ) -> None:
         """Should raise ClientError when exception occurs during process()."""
         # Need at least 2 batches to trigger the exception
         # (raises on batch_count % 2 == 0, i.e. the 2nd batch)
         # Must use worker_limit=1 so both batches go to the same worker
         with (
-            Client(example_worker, worker_limit=1) as client,
+            Client(fixture_worker, worker_limit=1) as client,
             pytest.raises(ClientError) as exc_info,
         ):
             list(
@@ -32,12 +32,12 @@ class TestExceptionProcessFunction:
         assert "ValueError" in str(exc_info.value)
 
     def test_exception_process_includes_traceback(
-        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
+        self, fixture_worker: str, numeric_batches: list[pa.RecordBatch]
     ) -> None:
         """Exception should include traceback in the error message."""
         # Must use worker_limit=1 so both batches go to the same worker
         with (
-            Client(example_worker, worker_limit=1) as client,
+            Client(fixture_worker, worker_limit=1) as client,
             pytest.raises(ClientError) as exc_info,
         ):
             list(
@@ -56,11 +56,11 @@ class TestExceptionFinalizeFunction:
     """Tests for exception_finalize function (raises during finalize)."""
 
     def test_exception_finalize_raises_client_error(
-        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
+        self, fixture_worker: str, numeric_batches: list[pa.RecordBatch]
     ) -> None:
         """Should raise ClientError when exception occurs during finalize()."""
         with (
-            Client(example_worker) as client,
+            Client(fixture_worker) as client,
             pytest.raises(ClientError) as exc_info,
         ):
             list(
@@ -75,11 +75,11 @@ class TestExceptionFinalizeFunction:
         assert "ValueError" in str(exc_info.value)
 
     def test_exception_finalize_includes_traceback(
-        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
+        self, fixture_worker: str, numeric_batches: list[pa.RecordBatch]
     ) -> None:
         """Exception should include traceback in the error message."""
         with (
-            Client(example_worker) as client,
+            Client(fixture_worker) as client,
             pytest.raises(ClientError) as exc_info,
         ):
             list(
@@ -94,7 +94,7 @@ class TestExceptionFinalizeFunction:
         assert "Traceback" in error_message
 
     def test_exception_finalize_after_successful_processing(
-        self, example_worker: str, numeric_batches: list[pa.RecordBatch]
+        self, fixture_worker: str, numeric_batches: list[pa.RecordBatch]
     ) -> None:
         """Process phase should complete successfully before finalize fails."""
         # The function inherits from SumAllColumnsFunction, so process() should work
@@ -102,7 +102,7 @@ class TestExceptionFinalizeFunction:
         # since the generator fails before returning, but the exception message
         # confirms it's during finalize.
         with (
-            Client(example_worker) as client,
+            Client(fixture_worker) as client,
             pytest.raises(ClientError) as exc_info,
         ):
             list(

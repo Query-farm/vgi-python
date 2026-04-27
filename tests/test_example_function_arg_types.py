@@ -12,9 +12,9 @@ from typing import Any, get_type_hints
 import pyarrow as pa
 import pytest
 
+from vgi._test_fixtures.worker import ExampleWorker
 from vgi.argument_spec import extract_argument_specs
 from vgi.arguments import PYTHON_TO_ARROW, Arg, TableInput
-from vgi.examples.worker import ExampleWorker
 
 
 def get_arg_descriptors(func_cls: type) -> dict[str, Arg[Any]]:

@@ -5,17 +5,17 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from vgi.catalog.catalog_interface import (
-    AttachId,
-)
-from vgi.catalog.descriptors import Catalog, Schema, Table
-from vgi.examples.table import (
+from vgi._test_fixtures.table import (
     _CURRENT_VERSION,
     _VERSIONED_DATA,
     _VERSIONED_SCHEMAS,
     resolve_version,
 )
-from vgi.examples.worker import ExampleWorker
+from vgi._test_fixtures.worker import ExampleWorker
+from vgi.catalog.catalog_interface import (
+    AttachId,
+)
+from vgi.catalog.descriptors import Catalog, Schema, Table
 
 # ---------------------------------------------------------------------------
 # resolve_version tests

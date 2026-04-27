@@ -1,6 +1,6 @@
 """Example VGI worker whose exposed tables vary per requested data version.
 
-Complements :mod:`vgi.examples.versioned` (which validates versions but shows
+Complements :mod:`vgi._test_fixtures.versioned` (which validates versions but shows
 no tables) by exercising the *payload-shaping* side of ATTACH-time versioning.
 
 The catalog advertises data_version_spec ``>=1.0.0,<4.0.0`` and supports four
@@ -20,7 +20,7 @@ resolver accepts:
 * npm ``^X.Y.Z`` — newest ``X.y.z >= X.Y.Z``.
 * npm ``~X.Y.Z`` — newest ``X.Y.z >= X.Y.Z``.
 
-Registered as the ``vgi-example-versioned-tables-worker`` entry point.
+Registered as the ``vgi-fixture-versioned-tables-worker`` entry point.
 """
 
 from __future__ import annotations
@@ -96,9 +96,7 @@ _PLANTS_ROWS: dict[str, list[Any]] = {
 
 _ANIMALS_SCHEMA_V1 = schema(name=pa.string(), legs=pa.int64(), sound=pa.string())
 
-_ANIMALS_SCHEMA_V1_1 = schema(
-    name=pa.string(), legs=pa.int64(), sound=pa.string(), color=pa.string()
-)
+_ANIMALS_SCHEMA_V1_1 = schema(name=pa.string(), legs=pa.int64(), sound=pa.string(), color=pa.string())
 
 _PLANTS_SCHEMA = schema(name=pa.string(), kind=pa.string(), height_m=pa.float64())
 

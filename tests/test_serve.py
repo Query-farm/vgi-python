@@ -57,15 +57,15 @@ class TestLoadWorkerClass:
 
     def test_module_colon_classname(self) -> None:
         """module:ClassName loads the exact class."""
-        cls = load_worker_class("vgi.examples.worker:ExampleWorker")
-        from vgi.examples.worker import ExampleWorker
+        cls = load_worker_class("vgi._test_fixtures.worker:ExampleWorker")
+        from vgi._test_fixtures.worker import ExampleWorker
 
         assert cls is ExampleWorker
 
     def test_auto_discover(self) -> None:
         """Bare module auto-discovers the single Worker subclass."""
-        cls = load_worker_class("vgi.examples.worker")
-        from vgi.examples.worker import ExampleWorker
+        cls = load_worker_class("vgi._test_fixtures.worker")
+        from vgi._test_fixtures.worker import ExampleWorker
 
         assert cls is ExampleWorker
 
@@ -140,12 +140,12 @@ class TestLoadWorkerClass:
     def test_bad_classname_exits(self) -> None:
         """module:NonExistent exits with error."""
         with pytest.raises(SystemExit):
-            load_worker_class("vgi.examples.worker:NonExistent")
+            load_worker_class("vgi._test_fixtures.worker:NonExistent")
 
     def test_not_a_worker_exits(self) -> None:
         """module:NotAWorker exits with error."""
         with pytest.raises(SystemExit):
-            load_worker_class("vgi.examples.worker:ExampleWorker.Settings")
+            load_worker_class("vgi._test_fixtures.worker:ExampleWorker.Settings")
 
     def test_bad_module_exits(self) -> None:
         """Non-existent module exits with error."""
@@ -163,7 +163,7 @@ class TestLoadWorkerClass:
         with open(p, "w") as f:
             f.write(
                 textwrap.dedent("""\
-                from vgi.examples.worker import ExampleWorker  # noqa: F401
+                from vgi._test_fixtures.worker import ExampleWorker  # noqa: F401
                 from vgi.worker import Worker
 
                 class LocalWorker(Worker):
@@ -425,7 +425,7 @@ class TestCLI:
                 sys.executable,
                 "-m",
                 "vgi.serve",
-                "vgi.examples.worker:ExampleWorker",
+                "vgi._test_fixtures.worker:ExampleWorker",
                 "--http",
                 "--host",
                 "127.0.0.1",
@@ -467,7 +467,7 @@ class TestCLI:
                 sys.executable,
                 "-m",
                 "vgi.serve",
-                "vgi.examples.worker:ExampleWorker",
+                "vgi._test_fixtures.worker:ExampleWorker",
                 "--http",
                 "--host",
                 "127.0.0.1",
@@ -493,7 +493,7 @@ class TestCLI:
                 sys.executable,
                 "-m",
                 "vgi.serve",
-                "vgi.examples.worker",
+                "vgi._test_fixtures.worker",
                 "--http",
                 "--host",
                 "127.0.0.1",
@@ -525,7 +525,7 @@ class TestCLI:
                 sys.executable,
                 "-m",
                 "vgi.serve",
-                "vgi.examples.worker:ExampleWorker",
+                "vgi._test_fixtures.worker:ExampleWorker",
                 "--http",
                 "--host",
                 "127.0.0.1",
@@ -563,7 +563,7 @@ class TestCLI:
                 sys.executable,
                 "-m",
                 "vgi.serve",
-                "vgi.examples.worker:ExampleWorker",
+                "vgi._test_fixtures.worker:ExampleWorker",
                 "--http",
                 "--host",
                 "127.0.0.1",

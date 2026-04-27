@@ -135,7 +135,7 @@ def _is_lint_only(example: CodeExample) -> bool:
         "my_catalog_worker",
         "from my_lib import",
         "./my_worker.py",
-        "vgi-example-worker",
+        "vgi-fixture-worker",
         # Database/file access
         "sqlite3.connect(",
         'open("',

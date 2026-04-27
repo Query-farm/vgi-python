@@ -55,7 +55,7 @@ See Also
 --------
 vgi.client.Client : Spawns workers and sends data to them
 vgi.function.Function : Base class for all functions
-vgi.examples.worker : Example worker with built-in functions
+vgi._test_fixtures.worker : Example worker with built-in functions
 
 """
 

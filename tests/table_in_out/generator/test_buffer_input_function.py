@@ -9,9 +9,9 @@ from vgi.client import Client
 class TestBufferInputFunction:
     """Tests for the buffer_input function (collect then emit)."""
 
-    def test_buffer_emits_on_finalize(self, example_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
+    def test_buffer_emits_on_finalize(self, fixture_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
         """Buffer should emit all batches during finalization."""
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="buffer_input",
@@ -23,9 +23,9 @@ class TestBufferInputFunction:
         # During finalize, it returns all buffered batches
         assert total_rows(output_batches) == total_rows(simple_batches)
 
-    def test_buffer_preserves_order(self, example_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
+    def test_buffer_preserves_order(self, fixture_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
         """Buffer should emit batches in the order they were received."""
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="buffer_input",

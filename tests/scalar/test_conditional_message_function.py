@@ -12,12 +12,12 @@ from vgi.client import Client
 class TestConditionalMessageFunction:
     """Tests for ConditionalMessageFunction via Client subprocess."""
 
-    def test_conditional_message_basic(self, example_worker: str) -> None:
+    def test_conditional_message_basic(self, fixture_worker: str) -> None:
         """Repeat message 3 times when condition is true, empty otherwise."""
         s = schema(condition=pa.bool_())
         batch = pa.RecordBatch.from_pydict({"condition": [True, False, True]}, schema=s)
 
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="conditional_message",
@@ -31,12 +31,12 @@ class TestConditionalMessageFunction:
         assert len(outputs) == 1
         assert outputs[0].to_pydict() == {"result": ["Hi! Hi! Hi! ", "", "Hi! Hi! Hi! "]}
 
-    def test_conditional_message_all_false(self, example_worker: str) -> None:
+    def test_conditional_message_all_false(self, fixture_worker: str) -> None:
         """All false conditions produce all empty strings."""
         s = schema(condition=pa.bool_())
         batch = pa.RecordBatch.from_pydict({"condition": [False, False, False]}, schema=s)
 
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="conditional_message",

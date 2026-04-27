@@ -129,7 +129,7 @@ class TestOutputWriter:
 class TestCLIValidation:
     """Tests for CLI argument validation."""
 
-    def test_invalid_json_args(self, example_worker: str) -> None:
+    def test_invalid_json_args(self, fixture_worker: str) -> None:
         """Invalid JSON in --args should raise error."""
         runner = CliRunner()
         result = runner.invoke(
@@ -140,13 +140,13 @@ class TestCLIValidation:
                 "--args",
                 "not valid json",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code != 0
         assert "Invalid JSON" in result.output
 
-    def test_args_not_array(self, example_worker: str) -> None:
+    def test_args_not_array(self, fixture_worker: str) -> None:
         """--args must be a JSON array, not object."""
         runner = CliRunner()
         result = runner.invoke(
@@ -157,13 +157,13 @@ class TestCLIValidation:
                 "--args",
                 '{"key": "value"}',
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code != 0
         assert "must be a JSON array" in result.output
 
-    def test_table_input_position_without_input(self, example_worker: str) -> None:
+    def test_table_input_position_without_input(self, fixture_worker: str) -> None:
         """--table-input-position requires --input."""
         runner = CliRunner()
         result = runner.invoke(
@@ -176,13 +176,13 @@ class TestCLIValidation:
                 "--table-input-position",
                 "1",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code != 0
         assert "requires --input" in result.output
 
-    def test_table_input_position_negative(self, example_worker: str, input_parquet: Path) -> None:
+    def test_table_input_position_negative(self, fixture_worker: str, input_parquet: Path) -> None:
         """--table-input-position must be non-negative."""
         runner = CliRunner()
         result = runner.invoke(
@@ -195,13 +195,13 @@ class TestCLIValidation:
                 "--table-input-position",
                 "-1",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code != 0
         assert "non-negative" in result.output
 
-    def test_table_input_position_out_of_range(self, example_worker: str, input_parquet: Path) -> None:
+    def test_table_input_position_out_of_range(self, fixture_worker: str, input_parquet: Path) -> None:
         """--table-input-position out of range for args."""
         runner = CliRunner()
         result = runner.invoke(
@@ -216,13 +216,13 @@ class TestCLIValidation:
                 "--table-input-position",
                 "5",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code != 0
         assert "out of range" in result.output
 
-    def test_invalid_attach_id_hex(self, example_worker: str) -> None:
+    def test_invalid_attach_id_hex(self, fixture_worker: str) -> None:
         """--attach-id must be valid hex."""
         runner = CliRunner()
         result = runner.invoke(
@@ -235,7 +235,7 @@ class TestCLIValidation:
                 "--attach-id",
                 "not_hex_string",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code != 0
@@ -253,7 +253,7 @@ class TestCLIValidation:
 class TestCLITableFunction:
     """Tests for CLI table function invocation (no input)."""
 
-    def test_table_function_invocation(self, example_worker: str) -> None:
+    def test_table_function_invocation(self, fixture_worker: str) -> None:
         """Invoke a table function without input."""
         runner = CliRunner()
         result = runner.invoke(
@@ -264,12 +264,12 @@ class TestCLITableFunction:
                 "--args",
                 "[5]",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
 
-    def test_table_function_with_output_file(self, example_worker: str, tmp_path: Path) -> None:
+    def test_table_function_with_output_file(self, fixture_worker: str, tmp_path: Path) -> None:
         """Table function with output to file."""
         output_file = tmp_path / "output.jsonl"
         runner = CliRunner()
@@ -285,7 +285,7 @@ class TestCLITableFunction:
                 "--format",
                 "json",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -297,7 +297,7 @@ class TestCLITableFunction:
 class TestCLITableInOutFunction:
     """Tests for CLI table-in-out function invocation (with input)."""
 
-    def test_table_in_out_function_invocation(self, example_worker: str, input_parquet: Path) -> None:
+    def test_table_in_out_function_invocation(self, fixture_worker: str, input_parquet: Path) -> None:
         """Invoke a table-in-out function with input."""
         runner = CliRunner()
         result = runner.invoke(
@@ -308,12 +308,12 @@ class TestCLITableInOutFunction:
                 "--function",
                 "echo",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
 
-    def test_table_in_out_with_output_file(self, example_worker: str, input_parquet: Path, tmp_path: Path) -> None:
+    def test_table_in_out_with_output_file(self, fixture_worker: str, input_parquet: Path, tmp_path: Path) -> None:
         """Table-in-out function with output to file."""
         output_file = tmp_path / "output.jsonl"
         runner = CliRunner()
@@ -329,7 +329,7 @@ class TestCLITableInOutFunction:
                 "--function",
                 "echo",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -341,7 +341,7 @@ class TestCLITableInOutFunction:
 class TestCLIOutputFormats:
     """Tests for CLI output format options."""
 
-    def test_output_format_json(self, example_worker: str, input_parquet: Path, tmp_path: Path) -> None:
+    def test_output_format_json(self, fixture_worker: str, input_parquet: Path, tmp_path: Path) -> None:
         """JSON output format."""
         output_file = tmp_path / "output.json"
         runner = CliRunner()
@@ -357,7 +357,7 @@ class TestCLIOutputFormats:
                 "--function",
                 "echo",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -365,7 +365,7 @@ class TestCLIOutputFormats:
         for line in output_file.read_text().strip().split("\n"):
             json.loads(line)
 
-    def test_output_format_csv(self, example_worker: str, input_parquet: Path, tmp_path: Path) -> None:
+    def test_output_format_csv(self, fixture_worker: str, input_parquet: Path, tmp_path: Path) -> None:
         """CSV output format."""
         output_file = tmp_path / "output.csv"
         runner = CliRunner()
@@ -381,14 +381,14 @@ class TestCLIOutputFormats:
                 "--function",
                 "echo",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
         content = output_file.read_text()
         assert "id" in content  # Header present
 
-    def test_output_format_parquet(self, example_worker: str, input_parquet: Path, tmp_path: Path) -> None:
+    def test_output_format_parquet(self, fixture_worker: str, input_parquet: Path, tmp_path: Path) -> None:
         """Parquet output format."""
         output_file = tmp_path / "output.parquet"
         runner = CliRunner()
@@ -404,7 +404,7 @@ class TestCLIOutputFormats:
                 "--function",
                 "echo",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -412,7 +412,7 @@ class TestCLIOutputFormats:
         table = pq.read_table(str(output_file))
         assert table.num_rows == 3
 
-    def test_output_format_arrow_ipc(self, example_worker: str, input_parquet: Path, tmp_path: Path) -> None:
+    def test_output_format_arrow_ipc(self, fixture_worker: str, input_parquet: Path, tmp_path: Path) -> None:
         """Arrow IPC streaming output format."""
         from pyarrow import ipc
 
@@ -430,7 +430,7 @@ class TestCLIOutputFormats:
                 "--function",
                 "echo",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -445,7 +445,7 @@ class TestCLIOutputFormats:
 class TestCLIOptions:
     """Tests for various CLI options."""
 
-    def test_max_workers_option(self, example_worker: str, input_parquet: Path) -> None:
+    def test_max_workers_option(self, fixture_worker: str, input_parquet: Path) -> None:
         """--max-workers option is passed correctly."""
         runner = CliRunner()
         result = runner.invoke(
@@ -458,12 +458,12 @@ class TestCLIOptions:
                 "--max-workers",
                 "2",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
 
-    def test_worker_stderr_passthrough(self, example_worker: str, input_parquet: Path) -> None:
+    def test_worker_stderr_passthrough(self, fixture_worker: str, input_parquet: Path) -> None:
         """--worker-stderr flag works."""
         runner = CliRunner()
         result = runner.invoke(
@@ -475,12 +475,12 @@ class TestCLIOptions:
                 "echo",
                 "--worker-stderr",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
 
-    def test_valid_attach_id(self, example_worker: str) -> None:
+    def test_valid_attach_id(self, fixture_worker: str) -> None:
         """Valid hex attach-id is accepted."""
         runner = CliRunner()
         result = runner.invoke(
@@ -493,12 +493,12 @@ class TestCLIOptions:
                 "--attach-id",
                 "deadbeef",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
 
-    def test_projection_ids(self, example_worker: str, input_parquet: Path) -> None:
+    def test_projection_ids(self, fixture_worker: str, input_parquet: Path) -> None:
         """--projection-id option works."""
         runner = CliRunner()
         result = runner.invoke(
@@ -513,12 +513,12 @@ class TestCLIOptions:
                 "--projection-id",
                 "1",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
 
-    def test_table_input_position_valid(self, example_worker: str, input_parquet: Path) -> None:
+    def test_table_input_position_valid(self, fixture_worker: str, input_parquet: Path) -> None:
         """Valid --table-input-position is accepted."""
         runner = CliRunner()
         result = runner.invoke(
@@ -533,7 +533,7 @@ class TestCLIOptions:
                 "--table-input-position",
                 "0",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -542,7 +542,7 @@ class TestCLIOptions:
 class TestCLIErrorHandling:
     """Tests for CLI error handling."""
 
-    def test_nonexistent_function(self, example_worker: str) -> None:
+    def test_nonexistent_function(self, fixture_worker: str) -> None:
         """Non-existent function returns error."""
         runner = CliRunner()
         result = runner.invoke(
@@ -551,12 +551,12 @@ class TestCLIErrorHandling:
                 "--function",
                 "nonexistent_function_xyz",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code != 0
 
-    def test_stdout_output_json(self, example_worker: str) -> None:
+    def test_stdout_output_json(self, fixture_worker: str) -> None:
         """Output to stdout with - works."""
         runner = CliRunner()
         result = runner.invoke(
@@ -571,7 +571,7 @@ class TestCLIErrorHandling:
                 "--format",
                 "json",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -590,7 +590,7 @@ class TestCLIScalarFunction:
         pq.write_table(pa.Table.from_batches([batch]), str(input_file))
         return input_file
 
-    def test_scalar_function_invocation(self, example_worker: str, scalar_input_parquet: Path) -> None:
+    def test_scalar_function_invocation(self, fixture_worker: str, scalar_input_parquet: Path) -> None:
         """Invoke a scalar function with --type scalar."""
         runner = CliRunner()
         result = runner.invoke(
@@ -605,13 +605,13 @@ class TestCLIScalarFunction:
                 "--type",
                 "scalar",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
 
     def test_scalar_function_with_output_file(
-        self, example_worker: str, scalar_input_parquet: Path, tmp_path: Path
+        self, fixture_worker: str, scalar_input_parquet: Path, tmp_path: Path
     ) -> None:
         """Scalar function with output to file."""
         output_file = tmp_path / "output.jsonl"
@@ -632,7 +632,7 @@ class TestCLIScalarFunction:
                 "--type",
                 "scalar",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -645,7 +645,7 @@ class TestCLIScalarFunction:
         assert first_row["result"] == 2
 
     def test_scalar_function_parquet_output(
-        self, example_worker: str, scalar_input_parquet: Path, tmp_path: Path
+        self, fixture_worker: str, scalar_input_parquet: Path, tmp_path: Path
     ) -> None:
         """Scalar function with parquet output."""
         output_file = tmp_path / "output.parquet"
@@ -666,7 +666,7 @@ class TestCLIScalarFunction:
                 "--type",
                 "scalar",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -676,7 +676,7 @@ class TestCLIScalarFunction:
         assert table.column_names == ["result"]
         assert table.column("result").to_pylist() == [2, 4, 6, 8, 10]
 
-    def test_scalar_type_requires_input(self, example_worker: str) -> None:
+    def test_scalar_type_requires_input(self, fixture_worker: str) -> None:
         """--type scalar requires --input."""
         runner = CliRunner()
         result = runner.invoke(
@@ -689,13 +689,13 @@ class TestCLIScalarFunction:
                 "--type",
                 "scalar",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code != 0
         assert "requires --input" in result.output
 
-    def test_table_in_out_type_requires_input(self, example_worker: str) -> None:
+    def test_table_in_out_type_requires_input(self, fixture_worker: str) -> None:
         """--type table-in-out requires --input."""
         runner = CliRunner()
         result = runner.invoke(
@@ -706,13 +706,13 @@ class TestCLIScalarFunction:
                 "--type",
                 "table-in-out",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code != 0
         assert "requires --input" in result.output
 
-    def test_table_type_rejects_input(self, example_worker: str, scalar_input_parquet: Path) -> None:
+    def test_table_type_rejects_input(self, fixture_worker: str, scalar_input_parquet: Path) -> None:
         """--type table does not accept --input."""
         runner = CliRunner()
         result = runner.invoke(
@@ -727,14 +727,14 @@ class TestCLIScalarFunction:
                 "--type",
                 "table",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code != 0
         assert "does not accept --input" in result.output
 
     def test_auto_type_with_input_uses_table_in_out(
-        self, example_worker: str, scalar_input_parquet: Path, tmp_path: Path
+        self, fixture_worker: str, scalar_input_parquet: Path, tmp_path: Path
     ) -> None:
         """--type auto with --input uses table-in-out (echo function)."""
         output_file = tmp_path / "output.jsonl"
@@ -753,7 +753,7 @@ class TestCLIScalarFunction:
                 "--type",
                 "auto",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -761,7 +761,7 @@ class TestCLIScalarFunction:
         content = output_file.read_text()
         assert '"x"' in content
 
-    def test_auto_type_without_input_uses_table(self, example_worker: str, tmp_path: Path) -> None:
+    def test_auto_type_without_input_uses_table(self, fixture_worker: str, tmp_path: Path) -> None:
         """--type auto without --input uses table function."""
         output_file = tmp_path / "output.jsonl"
         runner = CliRunner()
@@ -779,14 +779,14 @@ class TestCLIScalarFunction:
                 "--type",
                 "auto",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
         lines = output_file.read_text().strip().split("\n")
         assert len(lines) == 3
 
-    def test_scalar_with_add_values(self, example_worker: str, tmp_path: Path) -> None:
+    def test_scalar_with_add_values(self, fixture_worker: str, tmp_path: Path) -> None:
         """Test add_values scalar function via CLI."""
         # Create input with two columns
         batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3], "b": [10, 20, 30]})
@@ -811,7 +811,7 @@ class TestCLIScalarFunction:
                 "--type",
                 "scalar",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -821,7 +821,7 @@ class TestCLIScalarFunction:
         results = [json.loads(line)["result"] for line in lines]
         assert results == [11, 22, 33]
 
-    def test_scalar_with_upper_case(self, example_worker: str, tmp_path: Path) -> None:
+    def test_scalar_with_upper_case(self, fixture_worker: str, tmp_path: Path) -> None:
         """Test upper_case scalar function via CLI."""
         batch = pa.RecordBatch.from_pydict({"name": ["alice", "bob"]})
         input_file = tmp_path / "input.parquet"
@@ -845,7 +845,7 @@ class TestCLIScalarFunction:
                 "--type",
                 "scalar",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -857,7 +857,7 @@ class TestCLIScalarFunction:
 class TestCLISettings:
     """Tests for CLI --setting option."""
 
-    def test_setting_passed_to_table_function(self, example_worker: str, tmp_path: Path) -> None:
+    def test_setting_passed_to_table_function(self, fixture_worker: str, tmp_path: Path) -> None:
         """Settings should be passed to table functions."""
         output_file = tmp_path / "output.jsonl"
         runner = CliRunner()
@@ -879,7 +879,7 @@ class TestCLISettings:
                 "--format",
                 "json",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -897,7 +897,7 @@ class TestCLISettings:
         values = [json.loads(line)["value"] for line in lines]
         assert values == [0.0, 5.0, 10.0]
 
-    def test_setting_short_option(self, example_worker: str, tmp_path: Path) -> None:
+    def test_setting_short_option(self, fixture_worker: str, tmp_path: Path) -> None:
         """Short -s option should work for settings."""
         output_file = tmp_path / "output.jsonl"
         runner = CliRunner()
@@ -919,7 +919,7 @@ class TestCLISettings:
                 "--format",
                 "json",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -929,7 +929,7 @@ class TestCLISettings:
         row0 = json.loads(lines[0])
         assert row0["greeting"] == "Hello"
 
-    def test_setting_verbose_mode_adds_details(self, example_worker: str, tmp_path: Path) -> None:
+    def test_setting_verbose_mode_adds_details(self, fixture_worker: str, tmp_path: Path) -> None:
         """vgi_verbose_mode=true should add details column."""
         output_file = tmp_path / "output.jsonl"
         runner = CliRunner()
@@ -951,7 +951,7 @@ class TestCLISettings:
                 "--format",
                 "json",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -962,7 +962,7 @@ class TestCLISettings:
         assert "details" in row0
         assert row0["details"] == "row_0"
 
-    def test_setting_invalid_format_raises_error(self, example_worker: str) -> None:
+    def test_setting_invalid_format_raises_error(self, fixture_worker: str) -> None:
         """Invalid setting format (missing =) should raise error."""
         runner = CliRunner()
         result = runner.invoke(
@@ -975,13 +975,13 @@ class TestCLISettings:
                 "--setting",
                 "invalid_setting_no_equals",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code != 0
         assert "Invalid --setting format" in result.output
 
-    def test_multiple_settings_combined(self, example_worker: str, tmp_path: Path) -> None:
+    def test_multiple_settings_combined(self, fixture_worker: str, tmp_path: Path) -> None:
         """Multiple settings should all be passed through."""
         output_file = tmp_path / "output.jsonl"
         runner = CliRunner()
@@ -1003,7 +1003,7 @@ class TestCLISettings:
                 "--format",
                 "json",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0
@@ -1015,7 +1015,7 @@ class TestCLISettings:
         assert row0["value"] == 0.0
         assert "details" in row0  # verbose mode on
 
-    def test_setting_with_equals_in_value(self, example_worker: str, tmp_path: Path) -> None:
+    def test_setting_with_equals_in_value(self, fixture_worker: str, tmp_path: Path) -> None:
         """Settings with = in value should parse correctly."""
         output_file = tmp_path / "output.jsonl"
         runner = CliRunner()
@@ -1037,7 +1037,7 @@ class TestCLISettings:
                 "--format",
                 "json",
                 "--worker",
-                example_worker,
+                fixture_worker,
             ],
         )
         assert result.exit_code == 0

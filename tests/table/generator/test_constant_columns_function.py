@@ -12,9 +12,9 @@ from vgi.client import Client
 class TestConstantColumnsFunction:
     """Tests for ConstantColumnsFunction via Client subprocess."""
 
-    def test_constant_columns_basic(self, example_worker: str) -> None:
+    def test_constant_columns_basic(self, fixture_worker: str) -> None:
         """Count=3, values 42 and 'hello' produces 3 rows with 2 columns."""
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             outputs = list(
                 client.table_function(
                     function_name="constant_columns",
@@ -33,9 +33,9 @@ class TestConstantColumnsFunction:
         assert all_col0 == [42, 42, 42]
         assert all_col1 == ["hello", "hello", "hello"]
 
-    def test_constant_columns_single_value(self, example_worker: str) -> None:
+    def test_constant_columns_single_value(self, fixture_worker: str) -> None:
         """Single vararg value produces one column."""
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             outputs = list(
                 client.table_function(
                     function_name="constant_columns",

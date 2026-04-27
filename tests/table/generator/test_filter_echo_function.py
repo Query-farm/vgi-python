@@ -11,7 +11,7 @@ class TestFilterEchoFunction:
 
     def test_no_filter_output(self) -> None:
         """Without filters, pushed_filters should be '(none)' for all rows."""
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             batches = list(
                 client.table_function(
                     function_name="filter_echo",
@@ -33,7 +33,7 @@ class TestFilterEchoFunction:
 
     def test_count_argument(self) -> None:
         """Verify row count matches the count argument."""
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             batches = list(
                 client.table_function(
                     function_name="filter_echo",
@@ -46,7 +46,7 @@ class TestFilterEchoFunction:
 
     def test_s_column_values(self) -> None:
         """The s column should match 'row_{n}' pattern."""
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             batches = list(
                 client.table_function(
                     function_name="filter_echo",

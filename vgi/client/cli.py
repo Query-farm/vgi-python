@@ -27,12 +27,12 @@ Usage:
     vgi-client --function echo --input data.parquet --format arrow-ipc -o -
 
     # Catalog operations (all nested under 'catalog'):
-    vgi-client catalog list --worker vgi-example-worker
-    vgi-client catalog attach example --worker vgi-example-worker
-    vgi-client catalog schema list $ATTACH_ID --worker vgi-example-worker
-    vgi-client catalog schema contents $ATTACH_ID main --worker vgi-example-worker
-    vgi-client catalog table get $ATTACH_ID main users --worker vgi-example-worker
-    vgi-client catalog transaction begin $ATTACH_ID --worker vgi-example-worker
+    vgi-client catalog list --worker vgi-fixture-worker
+    vgi-client catalog attach example --worker vgi-fixture-worker
+    vgi-client catalog schema list $ATTACH_ID --worker vgi-fixture-worker
+    vgi-client catalog schema contents $ATTACH_ID main --worker vgi-fixture-worker
+    vgi-client catalog table get $ATTACH_ID main users --worker vgi-fixture-worker
+    vgi-client catalog transaction begin $ATTACH_ID --worker vgi-fixture-worker
 
 """
 
@@ -187,8 +187,8 @@ EXAMPLES:
   vgi-client --function sequence --args '[5]' -o - -f arrow-ipc
 \b
   # Catalog operations
-  vgi-client catalog list -w vgi-example-worker
-  vgi-client catalog attach mydb -w vgi-example-worker
+  vgi-client catalog list -w vgi-fixture-worker
+  vgi-client catalog attach mydb -w vgi-fixture-worker
 
 \b
 FUNCTION TYPES:
@@ -282,9 +282,9 @@ def _create_cli() -> Any:
         "--worker",
         "-w",
         "worker_path",
-        default="vgi-example-worker",
+        default="vgi-fixture-worker",
         type=str,
-        help="VGI worker command or path. Default: vgi-example-worker.",
+        help="VGI worker command or path. Default: vgi-fixture-worker.",
     )
     @click.option(
         "--type",

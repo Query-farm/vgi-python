@@ -2,11 +2,11 @@
 
 Usage::
 
-    vgi-example-http
-    vgi-example-http --port 9000
-    vgi-example-http --host 0.0.0.0 --port 8080 --debug
-    vgi-example-http --s3-bucket rusty-vgi-test
-    vgi-example-http --demo-storage
+    vgi-fixture-http
+    vgi-fixture-http --port 9000
+    vgi-fixture-http --host 0.0.0.0 --port 8080 --debug
+    vgi-fixture-http --s3-bucket rusty-vgi-test
+    vgi-fixture-http --demo-storage
 
 Requires the ``http`` extra: ``pip install vgi[http]``
 For S3 offload support, also install: ``pip install vgi-rpc[s3]``
@@ -19,7 +19,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from vgi.examples.worker import ExampleWorker
+from vgi._test_fixtures.worker import ExampleWorker
 from vgi.logging_config import LogFormat, LogLevel, configure_worker_logging
 
 if TYPE_CHECKING:
@@ -106,7 +106,7 @@ class _SigV4S3Storage:
 
 
 def main() -> None:
-    """Run the example worker as an HTTP server.
+    """Run the fixture worker as an HTTP server.
 
     When ``--s3-bucket`` is provided (or ``VGI_HTTP_S3_BUCKET`` is set),
     response batches larger than ``--externalize-threshold-bytes`` are uploaded

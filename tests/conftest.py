@@ -69,14 +69,14 @@ def test_logger() -> logging.Logger:
 
 
 @pytest.fixture
-def example_worker() -> str:
+def fixture_worker() -> str:
     """Return the path to the example worker."""
-    return "vgi-example-worker"
+    return "vgi-fixture-worker"
 
 
 @pytest.fixture(scope="session")
 def http_worker() -> Any:
-    """Start ``vgi-example-http`` lazily, sharing one server per (extra_args, env) combo.
+    """Start ``vgi-fixture-http`` lazily, sharing one server per (extra_args, env) combo.
 
     Usage::
 
@@ -149,7 +149,7 @@ def _shared_http_base_url() -> Any:
 @pytest.fixture(params=_CLIENT_TRANSPORT_MODES)
 def client_transport(
     request: pytest.FixtureRequest,
-    example_worker: str,
+    fixture_worker: str,
     _shared_http_base_url: Any,
 ) -> Any:
     """Parametrized factory that builds a configured ``Client`` for each transport.
@@ -161,7 +161,7 @@ def client_transport(
         subprocess-pooled: Pool-backed subprocess (the default path).
         subprocess-direct: ``pool=None`` — direct Popen management.
         http: ``Client.from_http(base_url)`` backed by a per-test
-            ``vgi-example-http`` subprocess. Skips if the HTTP transport
+            ``vgi-fixture-http`` subprocess. Skips if the HTTP transport
             isn't wired yet.
     """
     from vgi.client.client import _HTTP_TRANSPORT_READY, Client, _default_pool
@@ -170,9 +170,9 @@ def client_transport(
 
     def _make() -> Client:
         if mode == "subprocess-pooled":
-            return Client(example_worker, pool=_default_pool)
+            return Client(fixture_worker, pool=_default_pool)
         if mode == "subprocess-direct":
-            return Client(example_worker, pool=None)
+            return Client(fixture_worker, pool=None)
         if mode == "http":
             if not _HTTP_TRANSPORT_READY:
                 pytest.skip("Client HTTP transport arrives in Phase 2 of whimsical-mccarthy plan")

@@ -12,7 +12,7 @@ from vgi.client import Client
 class TestBinaryPacketFunction:
     """Tests for BinaryPacketFunction via Client subprocess."""
 
-    def test_binary_packet_basic(self, example_worker: str) -> None:
+    def test_binary_packet_basic(self, fixture_worker: str) -> None:
         """Header + payload + config suffix concatenation."""
         s = schema(payload=pa.binary())
         batch = pa.RecordBatch.from_pydict({"payload": [b"\x01\x02", b"\x03\x04"]}, schema=s)
@@ -24,7 +24,7 @@ class TestBinaryPacketFunction:
             type=pa.struct([("label", pa.string()), ("version", pa.int64())]),
         )
 
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="binary_packet",
@@ -39,7 +39,7 @@ class TestBinaryPacketFunction:
         assert results[0] == b"\xca\xfe\x01\x02v1\x01"
         assert results[1] == b"\xca\xfe\x03\x04v1\x01"
 
-    def test_binary_packet_null_payload(self, example_worker: str) -> None:
+    def test_binary_packet_null_payload(self, fixture_worker: str) -> None:
         """Null payload gets header + suffix only."""
         s = schema(payload=pa.binary())
         batch = pa.RecordBatch.from_pydict({"payload": [None]}, schema=s)
@@ -50,7 +50,7 @@ class TestBinaryPacketFunction:
             type=pa.struct([("label", pa.string()), ("version", pa.int64())]),
         )
 
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="binary_packet",

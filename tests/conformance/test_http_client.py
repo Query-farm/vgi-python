@@ -12,6 +12,8 @@ and makes the HTTP code paths a first-class, reviewable slice.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pyarrow as pa
 import pytest
 
@@ -22,8 +24,8 @@ pytest.importorskip("vgi_rpc.http")
 
 
 @pytest.fixture(scope="module")
-def http_example_base_url() -> str:
-    """Spawn ``vgi-example-http`` once per module and yield its base URL."""
+def http_example_base_url() -> Iterator[str]:
+    """Spawn ``vgi-fixture-http`` once per module and yield its base URL."""
     from contextlib import ExitStack
 
     from tests._http_fixtures import free_port, run_example_http_server, wait_for_http_server
@@ -140,7 +142,7 @@ def test_server_capabilities_requires_http() -> None:
     """``server_capabilities`` is HTTP-only; subprocess clients must reject it."""
     from vgi.client.client import Client, ClientError
 
-    with Client("vgi-example-worker") as client, pytest.raises(ClientError, match="HTTP"):
+    with Client("vgi-fixture-worker") as client, pytest.raises(ClientError, match="HTTP"):
         client.server_capabilities()
 
 
@@ -150,8 +152,8 @@ def test_server_capabilities_requires_http() -> None:
 
 
 @pytest.fixture(scope="module")
-def http_example_bearer_base_url() -> str:
-    """Spawn ``vgi-example-http`` with a static bearer token required."""
+def http_example_bearer_base_url() -> Iterator[str]:
+    """Spawn ``vgi-fixture-http`` with a static bearer token required."""
     from contextlib import ExitStack
 
     from tests._http_fixtures import free_port, run_example_http_server, wait_for_http_server

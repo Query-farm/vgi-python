@@ -17,7 +17,7 @@ class TestBindExceptionHandling:
 
     def test_missing_required_setting_raises_client_error(self) -> None:
         """Missing required setting during bind should raise ClientError."""
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
                     client.table_function(
@@ -32,7 +32,7 @@ class TestBindExceptionHandling:
 
     def test_bind_exception_contains_traceback(self) -> None:
         """Bind-time exceptions should include traceback information."""
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
                     client.table_function(
@@ -56,7 +56,7 @@ class TestBindExceptionHandling:
         thing ``RpcError.__init__`` sets), and optional sections (remote
         traceback, worker stderr) follow after a blank line.
         """
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
                     client.table_function(
@@ -76,7 +76,7 @@ class TestBindExceptionHandling:
 
     def test_unknown_function_raises_client_error(self) -> None:
         """Calling unknown function should raise ClientError with helpful message."""
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
                     client.table_function(
@@ -93,7 +93,7 @@ class TestBindExceptionHandling:
 
     def test_argument_mismatch_raises_error(self) -> None:
         """Wrong number of arguments should raise error during bind."""
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             with pytest.raises(ClientError) as exc_info:
                 # sequence expects 1 argument but we provide none
                 list(

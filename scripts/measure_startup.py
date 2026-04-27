@@ -105,7 +105,7 @@ def profile_startup_phases() -> None:
     profiler.enable()
 
     # Import the worker module
-    import vgi.examples.worker  # noqa: F401
+    import vgi._test_fixtures.worker  # noqa: F401
 
     profiler.disable()
 
@@ -138,8 +138,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--worker",
-        default="vgi-example-worker",
-        help="Worker command to measure (default: vgi-example-worker)",
+        default="vgi-fixture-worker",
+        help="Worker command to measure (default: vgi-fixture-worker)",
     )
     args = parser.parse_args()
 
@@ -154,7 +154,7 @@ def main() -> None:
 
     if args.importtime:
         print("\n### Import Time Analysis ###\n")
-        import_times = measure_importtime("vgi.examples.worker")
+        import_times = measure_importtime("vgi._test_fixtures.worker")
 
         # Sort by cumulative time (descending)
         sorted_times = sorted(import_times.items(), key=lambda x: -x[1])
@@ -190,7 +190,7 @@ def main() -> None:
 
     # Also show import time summary
     print("\n### Top 10 Slowest Imports ###\n")
-    import_times = measure_importtime("vgi.examples.worker")
+    import_times = measure_importtime("vgi._test_fixtures.worker")
     sorted_times = sorted(import_times.items(), key=lambda x: -x[1])
 
     print(f"{'Module':<50} {'Time (ms)':>10}")

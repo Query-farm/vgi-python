@@ -6,7 +6,7 @@ table definitions. Generic scan/insert/update/delete functions serve any table.
 
 Usage::
 
-    vgi-writable-worker
+    vgi-fixture-writable-worker
 """
 
 from __future__ import annotations
@@ -21,6 +21,13 @@ import pyarrow as pa
 if TYPE_CHECKING:
     from vgi_rpc.rpc import CallContext
 
+from vgi._test_fixtures.writable.generic import (
+    GenericTableDelete,
+    GenericTableInsert,
+    GenericTableScan,
+    GenericTableUpdate,
+)
+from vgi._test_fixtures.writable.table import transactor_proxy
 from vgi.catalog import (
     AttachId,
     Catalog,
@@ -39,13 +46,6 @@ from vgi.catalog import (
     TransactionId,
     ViewInfo,
 )
-from vgi.examples.writable_generic import (
-    GenericTableDelete,
-    GenericTableInsert,
-    GenericTableScan,
-    GenericTableUpdate,
-)
-from vgi.examples.writable_table import transactor_proxy
 from vgi.worker import Worker
 
 logger = logging.getLogger("vgi.writable_worker")
@@ -1074,6 +1074,18 @@ class WritableWorker(Worker):
 
 def main() -> None:
     """Run the writable worker process."""
+    # Surface a friendly install message instead of crashing mid-DDL
+    # when sqlglot (the transactor's lazy dep) is missing.
+    try:
+        import sqlglot  # noqa: F401
+    except ImportError:
+        import sys as _sys
+
+        _sys.exit(
+            "vgi-fixture-writable-worker requires the test-fixtures-writable extra. "
+            "Install with: pip install 'vgi[test-fixtures-writable]'"
+        )
+
     WritableWorker.main()
 
 

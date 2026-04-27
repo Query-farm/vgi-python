@@ -64,7 +64,7 @@ ensure all tests pass — not just the new/changed test file. Adding a function 
 **Subprocess transport** (worker spawned as a child process):
 ```bash
 cd ~/Development/vgi
-VGI_TEST_WORKER="uv run --project ~/Development/vgi-python vgi-example-worker" \
+VGI_TEST_WORKER="uv run --project ~/Development/vgi-python vgi-fixture-worker" \
     ./build/release/test/unittest "test/sql/integration/*"
 ```
 
@@ -110,7 +110,7 @@ with elapsed milliseconds. This helps identify slow queries and bottlenecks.
 ```bash
 # Timing output goes to stderr, grep for the bracket-prefixed lines:
 cd ~/Development/vgi
-VGI_TEST_WORKER="uv run --project ~/Development/vgi-python vgi-example-worker" \
+VGI_TEST_WORKER="uv run --project ~/Development/vgi-python vgi-fixture-worker" \
     ./build/release/test/unittest "test/sql/integration/table/writable_table*" \
     2>&1 | grep "^\[stmt\|^\[query" | sort -t']' -k2 -rn
 ```
@@ -157,7 +157,7 @@ Subprocess worker wrapper (`/tmp/vgi-coverage-worker.sh`):
 ```bash
 #!/bin/bash
 cd /Users/rusty/Development/vgi-python
-exec uv run coverage run --parallel-mode -m vgi.examples.worker "$@"
+exec uv run coverage run --parallel-mode -m vgi._test_fixtures.worker "$@"
 ```
 
 HTTP server wrapper (`~/Development/vgi/test/run_http_integration_coverage.sh`):
@@ -189,8 +189,8 @@ external record batch offloading without S3 or any cloud infrastructure.
 
 **Running the example server with demo storage:**
 ```bash
-vgi-example-http --demo-storage
-vgi-example-http --demo-storage --externalize-threshold-bytes 4096 --externalize-compression zstd
+vgi-fixture-http --demo-storage
+vgi-fixture-http --demo-storage --externalize-threshold-bytes 4096 --externalize-compression zstd
 ```
 
 When `--demo-storage` is enabled:
@@ -230,9 +230,9 @@ FIXME: complete this.
 ## CLI Commands
 
 ```bash
-vgi-example-worker                                                    # Run example worker
-vgi-client --input data.parquet --function echo --worker vgi-example-worker
-vgi-client --input data.parquet --function sum_all_columns --worker vgi-example-worker
+vgi-fixture-worker                                                    # Run example worker
+vgi-client --input data.parquet --function echo --worker vgi-fixture-worker
+vgi-client --input data.parquet --function sum_all_columns --worker vgi-fixture-worker
 ```
 
 ## Environment Variables
@@ -276,7 +276,7 @@ Set `VGI_WORKER_DEBUG=1` to enable comprehensive debugging for worker failures. 
 2. **Client side**: Forces `passthrough_stderr=True`, streaming worker logs to the terminal in real-time
 
 ```bash
-VGI_WORKER_DEBUG=1 vgi-example-worker
+VGI_WORKER_DEBUG=1 vgi-fixture-worker
 ```
 
 When used from the Python client without this env var, errors from worker failures automatically include captured stderr (last 50 lines) in the `ClientError` message. This means integrators using C++ or other clients get the Python traceback in the error message instead of just a generic exit code.
@@ -301,7 +301,7 @@ Accepts `1`, `true`, or `yes` (case-insensitive). Zero overhead when not set.
 Enable `VGI_FILTER_DEBUG=1` to trace filter pushdown deserialization, parsing, and evaluation. Useful for debugging filter pushdown issues and understanding how filters are applied.
 
 ```bash
-VGI_FILTER_DEBUG=1 vgi-example-worker
+VGI_FILTER_DEBUG=1 vgi-fixture-worker
 ```
 
 **Key events logged:**
@@ -415,7 +415,7 @@ during the bind phase, allowing output schema to depend on setting values.
 Client passes settings when invoking a method:
 
 ```python
-with Client("vgi-example-worker") as client:
+with Client("vgi-fixture-worker") as client:
     for batch in client.table_function(
         function_name="settings_aware",
         arguments=Arguments(positional=(pa.scalar(10),)),

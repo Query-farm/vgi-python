@@ -14,6 +14,8 @@ from the same transparent resolution.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pyarrow as pa
 import pytest
 
@@ -24,8 +26,8 @@ pytest.importorskip("aiohttp", reason="aiohttp required for external location re
 
 
 @pytest.fixture(scope="module")
-def demo_storage_base_url() -> str:
-    """Spawn ``vgi-example-http --demo-storage`` with a tiny externalize threshold."""
+def demo_storage_base_url() -> Iterator[str]:
+    """Spawn ``vgi-fixture-http --demo-storage`` with a tiny externalize threshold."""
     from contextlib import ExitStack
 
     from tests._http_fixtures import free_port, run_example_http_server, wait_for_http_server

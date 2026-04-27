@@ -1579,10 +1579,8 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "duckdb" },
-    { name = "numpy" },
     { name = "platformdirs" },
     { name = "pyarrow" },
-    { name = "sqlglot" },
     { name = "typer" },
     { name = "vgi-rpc" },
 ]
@@ -1593,14 +1591,18 @@ azure = [
     { name = "pymssql" },
 ]
 dev = [
+    { name = "azure-identity" },
     { name = "mypy" },
+    { name = "numpy" },
     { name = "pyarrow-stubs" },
+    { name = "pymssql" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-examples" },
     { name = "pytest-ruff" },
     { name = "pytest-xdist" },
     { name = "ruff" },
+    { name = "sqlglot" },
     { name = "vgi-rpc", extra = ["conformance", "external", "http", "oauth", "otel"] },
 ]
 http = [
@@ -1611,6 +1613,16 @@ oauth = [
 ]
 otel = [
     { name = "vgi-rpc", extra = ["otel"] },
+]
+test-fixtures = [
+    { name = "numpy" },
+]
+test-fixtures-writable = [
+    { name = "numpy" },
+    { name = "sqlglot" },
+]
+transactor = [
+    { name = "sqlglot" },
 ]
 
 [package.dev-dependencies]
@@ -1626,7 +1638,7 @@ requires-dist = [
     { name = "click" },
     { name = "duckdb", specifier = ">=1.5.0" },
     { name = "mypy", marker = "extra == 'dev'" },
-    { name = "numpy", specifier = ">=2.4.1" },
+    { name = "numpy", marker = "extra == 'test-fixtures'", specifier = ">=2.4.1" },
     { name = "platformdirs" },
     { name = "pyarrow" },
     { name = "pyarrow-stubs", marker = "extra == 'dev'" },
@@ -1637,15 +1649,18 @@ requires-dist = [
     { name = "pytest-ruff", marker = "extra == 'dev'" },
     { name = "pytest-xdist", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },
-    { name = "sqlglot" },
+    { name = "sqlglot", marker = "extra == 'transactor'" },
     { name = "typer", specifier = ">=0.9" },
+    { name = "vgi", extras = ["test-fixtures"], marker = "extra == 'test-fixtures-writable'" },
+    { name = "vgi", extras = ["test-fixtures", "test-fixtures-writable", "http", "oauth", "otel", "azure"], marker = "extra == 'dev'" },
+    { name = "vgi", extras = ["transactor"], marker = "extra == 'test-fixtures-writable'" },
     { name = "vgi-rpc", directory = "/Users/rusty/Development/vgi-rpc" },
     { name = "vgi-rpc", extras = ["conformance", "external", "http", "oauth", "otel"], marker = "extra == 'dev'" },
     { name = "vgi-rpc", extras = ["http"], marker = "extra == 'http'" },
     { name = "vgi-rpc", extras = ["oauth"], marker = "extra == 'oauth'" },
     { name = "vgi-rpc", extras = ["otel"], marker = "extra == 'otel'" },
 ]
-provides-extras = ["http", "oauth", "otel", "azure", "dev"]
+provides-extras = ["http", "oauth", "otel", "azure", "test-fixtures", "transactor", "test-fixtures-writable", "dev"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -1,6 +1,6 @@
 """Fail when the example worker registers a function the Python probe can't reach.
 
-The example worker at ``vgi-example-worker`` registers every example function
+The example worker at ``vgi-fixture-worker`` registers every example function
 VGI is meant to support (scalar, table, table-in-out, aggregate, macro, view,
 data-scan). This test enumerates them through the catalog protocol and, for
 each *category*, asserts that ``Client`` provides a matching invocation
@@ -77,7 +77,7 @@ _COVERAGE_MAP: dict[SchemaObjectType, TypeCoverage] = {
 @pytest.fixture(scope="module")
 def attached_example() -> tuple[str, AttachId]:
     """Attach to the ``example`` catalog once per module and yield ``(worker, attach_id)``."""
-    worker = "vgi-example-worker"
+    worker = "vgi-fixture-worker"
     client = Client(worker)
     result = client.catalog_attach(
         name=EXAMPLE_CATALOG_NAME,
@@ -90,7 +90,7 @@ def attached_example() -> tuple[str, AttachId]:
 
 def test_example_catalog_is_attachable() -> None:
     """Sanity: the example worker advertises a catalog named ``example``."""
-    client = Client("vgi-example-worker")
+    client = Client("vgi-fixture-worker")
     names = [c.name for c in client.catalogs()]
     assert EXAMPLE_CATALOG_NAME in names, (
         f"Example worker should advertise the {EXAMPLE_CATALOG_NAME!r} catalog; got {names!r}"
@@ -136,7 +136,7 @@ def test_coverage_gaps_are_documented() -> None:
         SchemaObjectType.AGGREGATE_FUNCTION,
     ],
 )
-def test_example_worker_registers_at_least_one_per_category(
+def test_fixture_worker_registers_at_least_one_per_category(
     attached_example: tuple[str, AttachId],
     schema_type: SchemaObjectType,
 ) -> None:
@@ -147,7 +147,7 @@ def test_example_worker_registers_at_least_one_per_category(
     broken — both are drift we want to catch.
     """
     _worker, attach_id = attached_example
-    client = Client("vgi-example-worker")
+    client = Client("vgi-fixture-worker")
     infos = client.schema_contents(
         attach_id=attach_id,
         name=EXAMPLE_SCHEMA_NAME,

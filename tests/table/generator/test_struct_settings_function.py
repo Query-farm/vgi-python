@@ -11,7 +11,7 @@ class TestStructSettingsFunction:
 
     def test_struct_setting_basic(self) -> None:
         """Struct setting should configure sequence generation."""
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             outputs = list(
                 client.table_function(
                     function_name="struct_settings",
@@ -29,7 +29,7 @@ class TestStructSettingsFunction:
 
     def test_struct_setting_different_values(self) -> None:
         """Different struct values should produce different output."""
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             outputs = list(
                 client.table_function(
                     function_name="struct_settings",

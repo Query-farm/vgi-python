@@ -38,11 +38,11 @@ def _run_demo_http_server(
     threshold_bytes: int,
     compression: str = "none",
 ) -> Iterator[None]:
-    """Run vgi.examples.http_server with --demo-storage in a subprocess."""
+    """Run vgi._test_fixtures.http_server with --demo-storage in a subprocess."""
     cmd = [
         sys.executable,
         "-m",
-        "vgi.examples.http_server",
+        "vgi._test_fixtures.http_server",
         "--host",
         "127.0.0.1",
         "--port",

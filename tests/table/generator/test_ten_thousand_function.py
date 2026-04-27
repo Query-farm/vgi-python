@@ -9,9 +9,9 @@ from vgi.client import Client
 class TestTenThousandFunction:
     """Tests for TenThousandFunction via Client subprocess."""
 
-    def test_ten_thousand_basic(self, example_worker: str) -> None:
+    def test_ten_thousand_basic(self, fixture_worker: str) -> None:
         """Returns exactly 10000 rows with values 0..9999."""
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             outputs = list(
                 client.table_function(
                     function_name="ten_thousand",

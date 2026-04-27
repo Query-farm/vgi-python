@@ -3,9 +3,9 @@
 import pyarrow as pa
 import pytest
 
+from vgi._test_fixtures.table import SettingsAwareFunction
 from vgi.arguments import Arguments
 from vgi.client.client import Client, ClientError
-from vgi.examples.table import SettingsAwareFunction
 
 
 class TestSettingsViaClient:
@@ -13,7 +13,7 @@ class TestSettingsViaClient:
 
     def test_settings_passed_to_function_verbose_false(self) -> None:
         """Settings should be passed through Client to function (typed values)."""
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             outputs = list(
                 client.table_function(
                     function_name="settings_aware",
@@ -36,7 +36,7 @@ class TestSettingsViaClient:
 
     def test_settings_passed_to_function_verbose_true(self) -> None:
         """Verbose mode should add details column (typed bool)."""
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             outputs = list(
                 client.table_function(
                     function_name="settings_aware",
@@ -59,7 +59,7 @@ class TestSettingsViaClient:
 
     def test_settings_as_strings_backward_compat(self) -> None:
         """String settings should still work for backward compatibility."""
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             outputs = list(
                 client.table_function(
                     function_name="settings_aware",
@@ -82,7 +82,7 @@ class TestSettingsViaClient:
 
     def test_missing_required_setting_fails(self) -> None:
         """Missing required setting should raise error."""
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             with pytest.raises(ClientError) as exc_info:
                 # Call without required settings - worker should send bind error
                 list(

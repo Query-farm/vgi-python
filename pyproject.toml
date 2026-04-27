@@ -7,10 +7,8 @@ requires-python = ">=3.13"
 dependencies = [
     "click",
     "pyarrow",
-    "sqlglot",
     "typer>=0.9",
     "platformdirs",
-    "numpy>=2.4.1",
     "vgi-rpc @ file:///Users/rusty/Development/vgi-rpc",
     "duckdb>=1.5.0",
 ]
@@ -23,6 +21,12 @@ azure = [
     "pymssql>=2.3.0",
     "azure-identity>=1.16.0",
 ]
+test-fixtures = ["numpy>=2.4.1"]
+transactor = ["sqlglot"]
+test-fixtures-writable = [
+    "vgi[test-fixtures]",
+    "vgi[transactor]",
+]
 dev = [
     "mypy",
     "pyarrow-stubs",
@@ -32,17 +36,18 @@ dev = [
     "pytest-ruff",
     "pytest-xdist",
     "ruff",
+    "vgi[test-fixtures,test-fixtures-writable,http,oauth,otel,azure]",
     "vgi-rpc[conformance,external,http,oauth,otel]",
 ]
 [project.scripts]
 vgi-serve = "vgi.serve:main"
 vgi-client = "vgi.client.cli:main"
-vgi-example-worker = "vgi.examples.worker:main"
-vgi-example-http = "vgi.examples.http_server:main"
-vgi-example-versioned-worker = "vgi.examples.versioned:main"
-vgi-example-versioned-tables-worker = "vgi.examples.versioned_tables:main"
-vgi-example-attach-options-worker = "vgi.examples.attach_options:main"
-vgi-example-writable-worker = "vgi.examples.writable_worker:main"
+vgi-fixture-worker = "vgi._test_fixtures.worker:main"
+vgi-fixture-http = "vgi._test_fixtures.http_server:main"
+vgi-fixture-versioned-worker = "vgi._test_fixtures.versioned:main"
+vgi-fixture-versioned-tables-worker = "vgi._test_fixtures.versioned_tables:main"
+vgi-fixture-attach-options-worker = "vgi._test_fixtures.attach_options:main"
+vgi-fixture-writable-worker = "vgi._test_fixtures.writable.worker:main"
 vgi-transactor = "vgi.transactor.server:main"
 
 [tool.hatch.metadata]
@@ -85,7 +90,7 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # These files have type: ignore comments for ty that mypy doesn't need
-module = ["vgi.examples.scalar", "vgi.table_function"]
+module = ["vgi._test_fixtures.scalar", "vgi.table_function"]
 warn_unused_ignores = false
 
 [tool.ty.environment]
@@ -107,8 +112,8 @@ sigterm = true
 branch = true
 # What to measure
 source = ["vgi"]
-# Omit test files and examples from coverage
-omit = ["vgi/examples/*", "tests/*"]
+# Omit test fixtures and tests from coverage
+omit = ["vgi/_test_fixtures/*", "tests/*"]
 
 [tool.coverage.report]
 # Fail if coverage drops below this threshold

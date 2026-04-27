@@ -16,7 +16,7 @@ class TestProjectionEnforcement:
 
     def test_projection_ids_ignored_when_pushdown_false(self) -> None:
         """Non-projecting function should return all columns even when projection_ids sent."""
-        with Client("vgi-example-worker", worker_limit=1) as client:
+        with Client("vgi-fixture-worker", worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="named_params_echo",
@@ -33,7 +33,7 @@ class TestProjectionEnforcement:
 
     def test_projection_ids_applied_when_pushdown_true(self) -> None:
         """Projecting function should return only projected columns."""
-        with Client("vgi-example-worker", worker_limit=1) as client:
+        with Client("vgi-fixture-worker", worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="projected_data",
@@ -49,7 +49,7 @@ class TestProjectionEnforcement:
 
     def test_no_projection_ids_returns_all_columns(self) -> None:
         """Both functions return all columns when no projection_ids specified."""
-        with Client("vgi-example-worker", worker_limit=1) as client:
+        with Client("vgi-fixture-worker", worker_limit=1) as client:
             echo_outputs = list(
                 client.table_function(
                     function_name="named_params_echo",

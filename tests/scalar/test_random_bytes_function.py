@@ -14,12 +14,12 @@ from vgi.client import Client
 class TestRandomBytesFunction:
     """Tests for random_bytes() function behavior."""
 
-    def test_random_bytes_returns_expected_lengths(self, example_worker: str) -> None:
+    def test_random_bytes_returns_expected_lengths(self, fixture_worker: str) -> None:
         """Each row should contain a blob matching the requested length."""
         s = schema(dummy=pa.int64())
         batch = pa.RecordBatch.from_pydict({"dummy": [1, 2, 3, 4, 5]}, schema=s)
 
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="random_bytes",
@@ -34,12 +34,12 @@ class TestRandomBytesFunction:
         assert len(values) == 5
         assert all(len(v) == 16 for v in values)
 
-    def test_random_bytes_supports_zero_length(self, example_worker: str) -> None:
+    def test_random_bytes_supports_zero_length(self, fixture_worker: str) -> None:
         """Length=0 should return empty blobs."""
         s = schema(dummy=pa.int64())
         batch = pa.RecordBatch.from_pydict({"dummy": [1, 2, 3]}, schema=s)
 
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             outputs = list(
                 client.scalar_function(
                     function_name="random_bytes",
@@ -52,12 +52,12 @@ class TestRandomBytesFunction:
         values = cast(list[bytes], outputs[0].column("result").to_pylist())
         assert values == [b"", b"", b""]
 
-    def test_random_bytes_same_seed_same_output(self, example_worker: str) -> None:
+    def test_random_bytes_same_seed_same_output(self, fixture_worker: str) -> None:
         """Separate calls with the same seed should return identical blobs."""
         s = schema(dummy=pa.int64())
         batch = pa.RecordBatch.from_pydict({"dummy": list(range(16))}, schema=s)
 
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             first = list(
                 client.scalar_function(
                     function_name="random_bytes",
@@ -77,12 +77,12 @@ class TestRandomBytesFunction:
         second_values = cast(list[bytes], second[0].column("result").to_pylist())
         assert first_values == second_values
 
-    def test_random_bytes_different_seed_different_output(self, example_worker: str) -> None:
+    def test_random_bytes_different_seed_different_output(self, fixture_worker: str) -> None:
         """Different seeds should produce different output."""
         s = schema(dummy=pa.int64())
         batch = pa.RecordBatch.from_pydict({"dummy": list(range(16))}, schema=s)
 
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             first = list(
                 client.scalar_function(
                     function_name="random_bytes",

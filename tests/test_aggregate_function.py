@@ -675,7 +675,7 @@ class TestNullSemantics:
 
     def test_sum_finalize_with_none_state(self) -> None:
         """SumFunction.finalize with None state produces NULL."""
-        from vgi.examples.aggregate import SumFunction
+        from vgi._test_fixtures.aggregate import SumFunction
 
         group_ids = pa.array([0], type=pa.int64())
         states: dict[int, Any] = {0: None}
@@ -685,7 +685,7 @@ class TestNullSemantics:
 
     def test_count_finalize_with_none_state(self) -> None:
         """CountFunction.finalize with None state produces 0."""
-        from vgi.examples.aggregate import CountFunction
+        from vgi._test_fixtures.aggregate import CountFunction
 
         group_ids = pa.array([0], type=pa.int64())
         states: dict[int, Any] = {0: None}
@@ -694,7 +694,7 @@ class TestNullSemantics:
 
     def test_sum_finalize_with_real_state(self) -> None:
         """SumFunction.finalize with real state produces correct value."""
-        from vgi.examples.aggregate import SumFunction, SumState
+        from vgi._test_fixtures.aggregate import SumFunction, SumState
 
         group_ids = pa.array([0], type=pa.int64())
         states: dict[int, SumState] = {0: SumState(total=42)}

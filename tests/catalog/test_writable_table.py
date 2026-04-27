@@ -12,13 +12,55 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     WriteFunctionResult,
 )
-from vgi.examples.writable_table import (
-    WritableTableDelete,
-    WritableTableInsert,
-    WritableTableScan,
-    WritableTableUpdate,
-)
 from vgi.exceptions import CatalogReadOnlyError
+from vgi.invocation import BindResponse
+from vgi.table_function import BindParams, TableFunctionGenerator
+from vgi.table_in_out_function import TableInOutGenerator
+
+
+# Minimal stub functions: just enough for the Table descriptor's bind() probe.
+# We keep them here (instead of importing the real Generic* writable functions)
+# because those require a live transactor/attach_id to bind successfully.
+class WritableTableScan(TableFunctionGenerator[None, None]):
+    """Stub scan for descriptor tests."""
+
+    class Meta:
+        """Metadata."""
+
+        name = "generic_writable_scan"
+
+    @classmethod
+    def on_bind(cls, params: BindParams[None]) -> BindResponse:
+        """Return a fixed schema."""
+        del params
+        return BindResponse(output_schema=pa.schema([("id", pa.int64())]))
+
+
+class WritableTableInsert(TableInOutGenerator[None, None]):
+    """Stub insert for descriptor tests."""
+
+    class Meta:
+        """Metadata."""
+
+        name = "generic_writable_insert"
+
+
+class WritableTableUpdate(TableInOutGenerator[None, None]):
+    """Stub update for descriptor tests."""
+
+    class Meta:
+        """Metadata."""
+
+        name = "generic_writable_update"
+
+
+class WritableTableDelete(TableInOutGenerator[None, None]):
+    """Stub delete for descriptor tests."""
+
+    class Meta:
+        """Metadata."""
+
+        name = "generic_writable_delete"
 
 
 class TestWriteFunctionResultAlias:
@@ -184,7 +226,7 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
             schema_name="main",
             name="writable",
         )
-        assert result.function_name == "writable_table_insert"
+        assert result.function_name == "generic_writable_insert"
 
     def test_update_function_get(self, catalog_with_writable_table: ReadOnlyCatalogInterface) -> None:
         """Returns the update function name for a writable table."""
@@ -194,7 +236,7 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
             schema_name="main",
             name="writable",
         )
-        assert result.function_name == "writable_table_update"
+        assert result.function_name == "generic_writable_update"
 
     def test_delete_function_get(self, catalog_with_writable_table: ReadOnlyCatalogInterface) -> None:
         """Returns the delete function name for a writable table."""
@@ -204,7 +246,7 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
             schema_name="main",
             name="writable",
         )
-        assert result.function_name == "writable_table_delete"
+        assert result.function_name == "generic_writable_delete"
 
     def test_readonly_table_raises_on_insert(self, catalog_with_writable_table: ReadOnlyCatalogInterface) -> None:
         """Read-only tables raise CatalogReadOnlyError on insert."""
@@ -254,7 +296,7 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
             schema_name="MAIN",
             name="WRITABLE",
         )
-        assert result.function_name == "writable_table_insert"
+        assert result.function_name == "generic_writable_insert"
 
 
 class TestWriteFunctionAutoRegistration:
@@ -262,12 +304,12 @@ class TestWriteFunctionAutoRegistration:
 
     def test_write_functions_in_registry(self) -> None:
         """Write functions from table descriptors appear in the worker's function registry."""
-        from vgi.examples.writable_worker import WritableWorker
+        from vgi._test_fixtures.writable.worker import WritableWorker
 
         # Reset cached registry so it rebuilds with our changes
         WritableWorker._registry = None
         registry = WritableWorker._build_registry()
-        assert "writable_table_scan" in registry
-        assert "writable_table_insert" in registry
-        assert "writable_table_update" in registry
-        assert "writable_table_delete" in registry
+        assert "generic_writable_scan" in registry
+        assert "generic_writable_insert" in registry
+        assert "generic_writable_update" in registry
+        assert "generic_writable_delete" in registry

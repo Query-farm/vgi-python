@@ -17,7 +17,7 @@ class TestSequenceFunctionClient:
         def capture_bind_result(result: BindResponse) -> None:
             bind_results.append(result)
 
-        with Client("vgi-example-worker") as client:
+        with Client("vgi-fixture-worker") as client:
             list(
                 client.table_function(
                     function_name="sequence",

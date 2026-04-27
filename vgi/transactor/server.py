@@ -694,6 +694,16 @@ class _ScanState(ProducerState):
 
 def main() -> None:
     """Entry point for the vgi-transactor command."""
+    # sqlglot is imported lazily inside ``strip_catalog_refs``, but DDL paths
+    # require it. Surface a clear install message at startup instead of
+    # blowing up mid-transaction.
+    try:
+        import sqlglot  # noqa: F401
+    except ImportError:
+        import sys as _sys
+
+        _sys.exit("vgi-transactor requires the transactor extra. Install with: pip install 'vgi[transactor]'")
+
     parser = argparse.ArgumentParser(description="VGI db-transactor server")
     parser.add_argument("--db-dir", required=True, help="Directory for DuckDB database files")
     parser.add_argument("--socket", required=True, help="Unix domain socket path to listen on")

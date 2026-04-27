@@ -6,6 +6,7 @@ interface, allowing clients to discover available functions.
 
 import pyarrow as pa
 
+from vgi._test_fixtures.worker import ExampleWorker
 from vgi.catalog import (
     AttachId,
     FunctionInfo,
@@ -17,10 +18,9 @@ from vgi.catalog import (
     ViewInfo,
 )
 from vgi.client import Client
-from vgi.examples.worker import ExampleWorker
 
 # Worker command for catalog tests
-EXAMPLE_WORKER = "vgi-example-worker"
+EXAMPLE_WORKER = "vgi-fixture-worker"
 
 
 def _get_expected_function_names() -> set[str]:
@@ -132,8 +132,17 @@ class TestExampleWorkerCatalog:
             )
         )
 
+        # Get aggregate functions
+        aggregate_funcs = list(
+            client.schema_contents(
+                attach_id=attach_result.attach_id,
+                name="main",
+                type=SchemaObjectType.AGGREGATE_FUNCTION,
+            )
+        )
+
         # Combine all functions
-        contents = table_funcs + scalar_funcs
+        contents = table_funcs + scalar_funcs + aggregate_funcs
 
         # Get function names
         function_names = {item.name for item in contents}

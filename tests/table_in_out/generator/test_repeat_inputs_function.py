@@ -12,10 +12,10 @@ from vgi.client import Client
 class TestRepeatInputsFunction:
     """Tests for the repeat_inputs function (explosion)."""
 
-    def test_repeat_custom_count(self, example_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
+    def test_repeat_custom_count(self, fixture_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
         """Should respect custom repeat count argument."""
         repeat_count = 3
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="repeat_inputs",
@@ -26,9 +26,9 @@ class TestRepeatInputsFunction:
 
         assert total_rows(output_batches) == total_rows(simple_batches) * repeat_count
 
-    def test_repeat_single_time(self, example_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
+    def test_repeat_single_time(self, fixture_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
         """Repeat count of 1 should act like echo."""
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="repeat_inputs",
@@ -39,7 +39,7 @@ class TestRepeatInputsFunction:
 
         assert total_rows(output_batches) == total_rows(simple_batches)
 
-    def test_repeat_distributed_many_batches(self, example_worker: str) -> None:
+    def test_repeat_distributed_many_batches(self, fixture_worker: str) -> None:
         """Should correctly repeat across many batches with multiple workers."""
         schema = make_schema([pa.field("a", pa.int64()), pa.field("b", pa.float64())])
 
@@ -58,7 +58,7 @@ class TestRepeatInputsFunction:
             batch = pa.RecordBatch.from_pydict({"a": a_values, "b": b_values}, schema=schema)
             batches.append(batch)
 
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="repeat_inputs",
@@ -69,7 +69,7 @@ class TestRepeatInputsFunction:
 
         assert total_rows(output_batches) == total_rows(batches) * repeat_count
 
-    def test_repeat_distributed_preserves_data(self, example_worker: str) -> None:
+    def test_repeat_distributed_preserves_data(self, fixture_worker: str) -> None:
         """Should preserve data correctly when repeated across workers."""
         schema = make_schema([pa.field("id", pa.int64()), pa.field("value", pa.string())])
 
@@ -82,7 +82,7 @@ class TestRepeatInputsFunction:
 
         repeat_count = 2
 
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="repeat_inputs",

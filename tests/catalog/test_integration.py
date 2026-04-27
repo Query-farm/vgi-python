@@ -7,6 +7,7 @@ The module-level _catalog_pool is replaced with a fresh pool between tests
 to ensure each test gets a fresh worker process with a fresh InMemoryCatalog.
 """
 
+import sys
 from collections.abc import Iterator
 
 import pyarrow as pa
@@ -19,7 +20,7 @@ from vgi.client import Client
 from vgi.client import catalog_mixin as _cm
 from vgi.client.catalog_mixin import CatalogClientError
 
-CATALOG_WORKER = "vgi-example-catalog-worker"
+CATALOG_WORKER = f"{sys.executable} -m vgi._test_fixtures.catalog"
 
 
 @pytest.fixture(autouse=True)
@@ -56,9 +57,7 @@ class TestCatalogBasic:
         """Attaching to nonexistent catalog raises CatalogClientError."""
         client = Client(CATALOG_WORKER)
         with pytest.raises(CatalogClientError, match="not found"):
-            client.catalog_attach(
-                name="nonexistent", options={}, data_version_spec=None, implementation_version=None
-            )
+            client.catalog_attach(name="nonexistent", options={}, data_version_spec=None, implementation_version=None)
 
     def test_detach(self) -> None:
         """Can detach from an attached catalog."""

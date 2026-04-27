@@ -3,7 +3,7 @@
 This package contains example functions and servers for testing and reference.
 """
 
-from vgi.examples.table_in_out import (
+from vgi._test_fixtures.table_in_out import (
     BufferInputFunction,
     EchoFunction,
     RepeatInputsFunction,

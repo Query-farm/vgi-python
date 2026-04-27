@@ -7,8 +7,8 @@ from typing import Annotated, Any
 
 import pyarrow as pa
 
+from vgi._test_fixtures.worker import ExampleWorker
 from vgi.catalog import Catalog, Schema, Setting, Table, View
-from vgi.examples.worker import ExampleWorker
 from vgi.http.worker_page import (
     WorkerPageResource,
     _display_function_type,
@@ -290,21 +290,21 @@ class TestBuildWorkerPageLegacy:
 class TestExampleWorkerPage:
     """Tests for the real ExampleWorker page."""
 
-    def test_example_worker_builds(self) -> None:
+    def test_fixture_worker_builds(self) -> None:
         """Smoke test: the real ExampleWorker page renders without error."""
         result = build_worker_page(ExampleWorker, "/vgi")
         assert isinstance(result, bytes)
         html = result.decode()
         assert "ExampleWorker" in html
 
-    def test_example_worker_has_settings(self) -> None:
+    def test_fixture_worker_has_settings(self) -> None:
         """ExampleWorker settings appear in the page."""
         html = build_worker_page(ExampleWorker, "/vgi").decode()
         assert "vgi_verbose_mode" in html
         assert "greeting" in html
         assert "multiplier" in html
 
-    def test_example_worker_has_schemas(self) -> None:
+    def test_fixture_worker_has_schemas(self) -> None:
         """ExampleWorker schemas appear in the page."""
         html = build_worker_page(ExampleWorker, "/vgi").decode()
         assert "data" in html

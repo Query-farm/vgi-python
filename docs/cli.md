@@ -7,8 +7,7 @@ VGI provides CLI tools for invoking functions and managing catalogs without writ
 | Command | Description |
 |---------|-------------|
 | `vgi-client` | Invoke functions and manage catalogs |
-| `vgi-example-worker` | Run the example worker with demo functions |
-| `vgi-example-catalog-worker` | Run an in-memory catalog for testing |
+| `vgi-fixture-worker` | Run the example worker with demo functions |
 
 ---
 
@@ -31,7 +30,7 @@ vgi-client [OPTIONS]
 | `--format FORMAT` | Output format: `json` (default), `csv`, `parquet` |
 | `--function NAME` | Function name to invoke |
 | `--args JSON` | Function arguments as JSON array (default: `[]`) |
-| `--worker PATH` | Worker command (default: `vgi-example-worker`) |
+| `--worker PATH` | Worker command (default: `vgi-fixture-worker`) |
 | `--type TYPE` | Function type: `auto`, `table`, `table-in-out`, `scalar` |
 | `--projection-id N` | Column IDs to project (repeatable) |
 | `--max-workers N` | Limit parallel workers |
@@ -492,7 +491,7 @@ vgi-client catalog detach $ATTACH_ID --worker ./worker.py
 
 ## Worker Logging
 
-All workers that use `Worker.main()` (including `vgi-example-worker`) support
+All workers that use `Worker.main()` (including `vgi-fixture-worker`) support
 logging options on the command line. Logs are written to stderr.
 
 ### Options
@@ -511,16 +510,16 @@ logging options on the command line. Logs are written to stderr.
 
 ```bash
 # Enable debug logging
-vgi-example-worker --debug
+vgi-fixture-worker --debug
 
 # Set WARNING level only
-vgi-example-worker --log-level WARNING
+vgi-fixture-worker --log-level WARNING
 
 # Target a specific logger at DEBUG
-vgi-example-worker --log-level DEBUG --log-logger vgi.worker
+vgi-fixture-worker --log-level DEBUG --log-logger vgi.worker
 
 # JSON-formatted logs (for structured log pipelines)
-vgi-example-worker --log-format json
+vgi-fixture-worker --log-format json
 ```
 
 ### Available Loggers
@@ -594,12 +593,12 @@ app = create_app(
 
 ## Example Workers
 
-### vgi-example-worker
+### vgi-fixture-worker
 
 Runs the built-in example worker with demo functions.
 
 ```bash
-vgi-example-worker
+vgi-fixture-worker
 ```
 
 **Available functions:**
@@ -628,12 +627,13 @@ vgi-example-worker
 | `bernoulli` | scalar | Generate random booleans (VOLATILE) |
 | `random_bytes` | scalar | Generate pseudo-random binary blobs |
 
-### vgi-example-catalog-worker
+### In-memory catalog example
 
-Runs an in-memory catalog implementation for testing.
+The mutable catalog demo (`vgi/examples/catalog.py`) is no longer installed as a
+console script. Run it from a source checkout via:
 
 ```bash
-vgi-example-catalog-worker
+python -m vgi._test_fixtures.catalog
 ```
 
 ---

@@ -433,10 +433,10 @@ without S3 or any cloud infrastructure:
 
 ```bash
 # Start with demo storage (4 KiB threshold for testing)
-vgi-example-http --demo-storage --externalize-threshold-bytes 4096
+vgi-fixture-http --demo-storage --externalize-threshold-bytes 4096
 
 # With zstd compression
-vgi-example-http --demo-storage --externalize-threshold-bytes 4096 --externalize-compression zstd
+vgi-fixture-http --demo-storage --externalize-threshold-bytes 4096 --externalize-compression zstd
 ```
 
 When `--demo-storage` is enabled:
@@ -465,13 +465,13 @@ Workers support `--debug`, `--log-level`, `--log-format`, and `--log-logger` opt
 
 ```bash
 # Enable debug logging
-vgi-example-worker --debug
+vgi-fixture-worker --debug
 
 # JSON-formatted logs for structured pipelines
-vgi-example-worker --log-format json
+vgi-fixture-worker --log-format json
 
 # Target a specific logger
-vgi-example-worker --log-level DEBUG --log-logger vgi.worker
+vgi-fixture-worker --log-level DEBUG --log-logger vgi.worker
 ```
 
 You can also use the `VGI_WORKER_DEBUG=1` environment variable, which enables `--debug` on the worker and stderr passthrough on the client without changing any code or CLI flags:

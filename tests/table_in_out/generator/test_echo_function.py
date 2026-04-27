@@ -9,13 +9,13 @@ from vgi.client import Client
 class TestEchoFunction:
     """Tests for the echo function (passthrough)."""
 
-    def test_echo_preserves_data(self, example_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
+    def test_echo_preserves_data(self, fixture_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
         """Echo should return the same data it receives.
 
         Note: With parallel processing, batch order may not be preserved,
         so we compare by combining all data and checking totals match.
         """
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
@@ -38,9 +38,9 @@ class TestEchoFunction:
         output_sorted = output_table.sort_by("id").to_pydict()
         assert output_sorted == input_sorted
 
-    def test_echo_preserves_schema(self, example_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
+    def test_echo_preserves_schema(self, fixture_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
         """Echo should preserve the input schema exactly."""
-        with Client(example_worker) as client:
+        with Client(fixture_worker) as client:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
