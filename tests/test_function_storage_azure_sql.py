@@ -16,21 +16,21 @@ class _MockCursor:
     """Reusable mock cursor that tracks SQL and simulates fetchone/fetchall."""
 
     def __init__(self) -> None:
-        self.executed: list[tuple[str, tuple]] = []
-        self._results: list[tuple] = []
+        self.executed: list[tuple[str, tuple[object, ...]]] = []
+        self._results: list[tuple[object, ...]] = []
         self._rowcount = 0
 
-    def execute(self, sql: str, params: tuple = ()) -> None:
+    def execute(self, sql: str, params: tuple[object, ...] = ()) -> None:
         self.executed.append((sql.strip(), params))
 
-    def executemany(self, sql: str, params_list: list[tuple]) -> None:
+    def executemany(self, sql: str, params_list: list[tuple[object, ...]]) -> None:
         for params in params_list:
             self.executed.append((sql.strip(), params))
 
-    def fetchone(self) -> tuple | None:
+    def fetchone(self) -> tuple[object, ...] | None:
         return self._results.pop(0) if self._results else None
 
-    def fetchall(self) -> list[tuple]:
+    def fetchall(self) -> list[tuple[object, ...]]:
         results = list(self._results)
         self._results.clear()
         return results
@@ -43,7 +43,7 @@ class _MockCursor:
     def rowcount(self, value: int) -> None:
         self._rowcount = value
 
-    def set_results(self, results: list[tuple]) -> None:
+    def set_results(self, results: list[tuple[object, ...]]) -> None:
         self._results = list(results)
         self._rowcount = len(results)
 
@@ -81,7 +81,7 @@ def storage(mock_cursor: _MockCursor) -> FunctionStorageAzureSql:
         password="testpass",
     )
     # Patch _connect to return our mock for subsequent calls
-    s._connect = lambda: mock_conn  # type: ignore[assignment]
+    s._connect = lambda: mock_conn  # type: ignore[assignment,return-value]
     return s
 
 
@@ -293,7 +293,7 @@ class TestFunctionStorageAzureSql:
             user="testuser",
             password="testpass",
         )
-        s._connect = lambda: mock_conn  # type: ignore[assignment]
+        s._connect = lambda: mock_conn  # type: ignore[assignment,return-value]
         s.ensure_tables()
 
         # Verify table creation SQL was executed
@@ -337,9 +337,9 @@ class TestLazyStorageDescriptor:
 
         # Create a subclass with explicit storage
         class MyFunction(Function):
-            storage = mock_storage  # type: ignore[assignment]
+            storage = mock_storage
 
-            def compute(self) -> None:  # type: ignore[override]
+            def compute(self) -> None:
                 pass
 
         assert MyFunction.storage is mock_storage

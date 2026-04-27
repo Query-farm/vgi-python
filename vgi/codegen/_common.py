@@ -141,7 +141,8 @@ def collect_schemas() -> list[EmittedSchema]:
     # skipped automatically.
     declared = set(INFO_TYPES)
     missing = {
-        c for c in _all_info_subclasses()
+        c
+        for c in _all_info_subclasses()
         if hasattr(c, "ARROW_SCHEMA") and isinstance(getattr(c, "ARROW_SCHEMA", None), pa.Schema)
     } - declared
     if missing:
@@ -178,7 +179,9 @@ def collect_schemas() -> list[EmittedSchema]:
         seen_names.add(name)
         out.append(
             EmittedSchema(
-                name=name, schema=inner, origin=f"method '{method_name}' result",
+                name=name,
+                schema=inner,
+                origin=f"method '{method_name}' result",
             ),
         )
 
@@ -191,7 +194,9 @@ def collect_schemas() -> list[EmittedSchema]:
         seen_names.add(name)
         out.append(
             EmittedSchema(
-                name=name, schema=info.params_schema, origin=f"method '{method_name}' params",
+                name=name,
+                schema=info.params_schema,
+                origin=f"method '{method_name}' params",
             ),
         )
 

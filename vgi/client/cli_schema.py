@@ -195,7 +195,7 @@ def schema_drop(
 @click.option(
     "--type",
     "object_type",
-    type=click.Choice(["table", "view", "scalar_function", "table_function"]),
+    type=click.Choice(["table", "view", "scalar_function", "table_function", "aggregate_function"]),
     required=True,
     help="Object type to list (required)",
 )

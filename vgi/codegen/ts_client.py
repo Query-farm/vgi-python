@@ -236,8 +236,9 @@ def _ts_name_for(cls: type, ctx: _Ctx) -> str:
     the class's last module segment (capitalized) as a prefix for the later one so
     both round-trip cleanly.
     """
-    existing = {ctx.dataclasses_seen.get(c) or ctx.enums_seen.get(c): c
-                for c in (*ctx.dataclasses_seen, *ctx.enums_seen)}
+    existing = {
+        ctx.dataclasses_seen.get(c) or ctx.enums_seen.get(c): c for c in (*ctx.dataclasses_seen, *ctx.enums_seen)
+    }
     name = cls.__name__
     if name not in existing:
         return name
@@ -315,10 +316,7 @@ def _render_dataclass(cls: type, ctx: _Ctx) -> str:
             continue
 
         t = hints.get(f.name, f.type)
-        has_default = (
-            f.default is not dataclasses.MISSING
-            or f.default_factory is not dataclasses.MISSING
-        )
+        has_default = f.default is not dataclasses.MISSING or f.default_factory is not dataclasses.MISSING
         optional = "?" if has_default else ""
         ts = _emit_type(t, ctx)
         tag = _inner_opaque_semantic(t)
@@ -355,9 +353,7 @@ def emit(out: TextIO) -> None:
     body = io.StringIO()
     # Imports for the codec wrappers emitted at the bottom of the file.
     body.write('import { encodeASD, decodeASD } from "../codec/asd.js";\n')
-    info_schema_imports = sorted(
-        f"{cls.__name__}Schema" for cls in INFO_ENVELOPES.values()
-    )
+    info_schema_imports = sorted(f"{cls.__name__}Schema" for cls in INFO_ENVELOPES.values())
     body.write("import {\n")
     for s in info_schema_imports:
         body.write(f"  {s},\n")
@@ -379,17 +375,16 @@ def emit(out: TextIO) -> None:
     body.write("// Codec wrappers: turn the typed interfaces above into actual wire bytes.\n")
     body.write("// ----------------------------------------------------------------------------\n\n")
     for info_cls in sorted(
-        set(INFO_ENVELOPES.values()), key=lambda c: c.__name__,
+        set(INFO_ENVELOPES.values()),
+        key=lambda c: c.__name__,
     ):
         ts_name = ctx.dataclasses_seen[info_cls]
         schema_ref = f"{info_cls.__name__}Schema"
         body.write(
-            f"export const encode{ts_name} = (v: {ts_name}): Uint8Array => "
-            f"encodeASD({schema_ref}, v);\n",
+            f"export const encode{ts_name} = (v: {ts_name}): Uint8Array => encodeASD({schema_ref}, v);\n",
         )
         body.write(
-            f"export const decode{ts_name} = (b: Uint8Array): {ts_name} => "
-            f"decodeASD<{ts_name}>({schema_ref}, b);\n",
+            f"export const decode{ts_name} = (b: Uint8Array): {ts_name} => decodeASD<{ts_name}>({schema_ref}, b);\n",
         )
     body.write("\n")
 

@@ -27,13 +27,7 @@ def _vgi_go_generated_path() -> Path:
     override = os.environ.get("VGI_GO_GENERATED_GO")
     if override:
         return Path(override)
-    return (
-        Path(__file__).resolve().parents[2]
-        / "vgi-go"
-        / "vgi"
-        / "generated"
-        / "protocol_schemas.go"
-    )
+    return Path(__file__).resolve().parents[2] / "vgi-go" / "vgi" / "generated" / "protocol_schemas.go"
 
 
 _REGEN_HINT = (
@@ -44,13 +38,12 @@ _REGEN_HINT = (
 
 
 def test_generator_is_deterministic() -> None:
+    """Calling emit() twice produces byte-identical output."""
     out1 = io.StringIO()
     emit(out1)
     out2 = io.StringIO()
     emit(out2)
-    assert out1.getvalue() == out2.getvalue(), (
-        "go_schemas generator is non-deterministic"
-    )
+    assert out1.getvalue() == out2.getvalue(), "go_schemas generator is non-deterministic"
 
 
 # Match one `var XxxSchema = arrow.NewSchema(...)` declaration. Body (group 2)
@@ -164,6 +157,7 @@ def _parse_generated_go(text: str) -> dict[str, pa.Schema]:
 
 
 def test_checked_in_generated_go_matches_generator() -> None:
+    """Drift check: checked-in generated Go matches what the generator produces."""
     path = _vgi_go_generated_path()
     if not path.exists():
         pytest.skip(
@@ -189,6 +183,7 @@ def test_checked_in_generated_go_matches_generator() -> None:
 
 
 def test_parser_roundtrip_self_test() -> None:
+    """Self-test: the local parser round-trips the generator's own output."""
     buf = io.StringIO()
     emit(buf)
     parsed = _parse_generated_go(buf.getvalue())

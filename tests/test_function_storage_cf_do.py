@@ -15,7 +15,7 @@ from vgi.function_storage_cf_do import FunctionStorageCfDo
 class _MockResponse:
     """Mock HTTP response."""
 
-    def __init__(self, status: int, body: dict) -> None:
+    def __init__(self, status: int, body: dict[str, object]) -> None:
         self.status = status
         self._body = json.dumps(body).encode()
 
@@ -27,13 +27,13 @@ class _MockConnection:
     """Mock HTTP connection that records requests and returns canned responses."""
 
     def __init__(self) -> None:
-        self.requests: list[tuple[str, str, bytes, dict]] = []
+        self.requests: list[tuple[str, str, bytes, dict[str, str]]] = []
         self._responses: list[_MockResponse] = []
 
-    def queue_response(self, status: int, body: dict) -> None:
+    def queue_response(self, status: int, body: dict[str, object]) -> None:
         self._responses.append(_MockResponse(status, body))
 
-    def request(self, method: str, path: str, body: bytes | None = None, headers: dict | None = None) -> None:
+    def request(self, method: str, path: str, body: bytes | None = None, headers: dict[str, str] | None = None) -> None:
         self.requests.append((method, path, body or b"", headers or {}))
 
     def getresponse(self) -> _MockResponse:
@@ -55,7 +55,7 @@ def storage(mock_conn: _MockConnection) -> FunctionStorageCfDo:
     s = FunctionStorageCfDo(url="https://vgi-storage.example.workers.dev", token="test-token")
     s._conn = mock_conn  # type: ignore[assignment]
     # Patch _new_connection to return our mock on reconnect
-    s._new_connection = lambda: mock_conn  # type: ignore[assignment]
+    s._new_connection = lambda: mock_conn  # type: ignore[assignment,return-value]
     return s
 
 
@@ -254,7 +254,7 @@ class TestFunctionStorageCfDo:
                 raise ConnectionError("connection reset")
             original_request(*args, **kwargs)  # type: ignore[arg-type]
 
-        mock_conn.request = failing_then_succeeding  # type: ignore[assignment]
+        mock_conn.request = failing_then_succeeding  # type: ignore[method-assign]
         mock_conn.queue_response(200, {"states": []})
 
         states = storage.worker_collect(b"\x01" * 16)

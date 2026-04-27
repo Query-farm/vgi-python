@@ -24,13 +24,7 @@ def _vgi_ts_client_path() -> Path:
     override = os.environ.get("VGI_TS_GENERATED_CLIENT")
     if override:
         return Path(override)
-    return (
-        Path(__file__).resolve().parents[2]
-        / "vgi-typescript"
-        / "src"
-        / "generated"
-        / "vgi-client.ts"
-    )
+    return Path(__file__).resolve().parents[2] / "vgi-typescript" / "src" / "generated" / "vgi-client.ts"
 
 
 _REGEN_HINT = (
@@ -78,8 +72,7 @@ def test_checked_in_client_matches_generator() -> None:
     path = _vgi_ts_client_path()
     if not path.exists():
         pytest.skip(
-            f"{path} not found; set VGI_TS_GENERATED_CLIENT or check out "
-            "vgi-typescript next to vgi-python",
+            f"{path} not found; set VGI_TS_GENERATED_CLIENT or check out vgi-typescript next to vgi-python",
         )
 
     buf = io.StringIO()
@@ -92,8 +85,7 @@ def test_checked_in_client_matches_generator() -> None:
         exp_lines = expected.splitlines()
         act_lines = actual.splitlines()
         first_diff = next(
-            (i for i in range(min(len(exp_lines), len(act_lines)))
-             if exp_lines[i] != act_lines[i]),
+            (i for i in range(min(len(exp_lines), len(act_lines))) if exp_lines[i] != act_lines[i]),
             min(len(exp_lines), len(act_lines)),
         )
         context = 3

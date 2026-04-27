@@ -108,15 +108,11 @@ def _emit_type(dtype: pa.DataType, *, origin: str) -> str:
         value_type = _emit_type(dtype.value_type, origin=f"{origin}[dict value]")
         index_type = _emit_type(dtype.index_type, origin=f"{origin}[dict index]")
         ordered = "true" if dtype.ordered else "false"
-        return (
-            f"&arrow.DictionaryType{{IndexType: {index_type}, "
-            f"ValueType: {value_type}, Ordered: {ordered}}}"
-        )
+        return f"&arrow.DictionaryType{{IndexType: {index_type}, ValueType: {value_type}, Ordered: {ordered}}}"
 
     if pa.types.is_struct(dtype):
         child_exprs = [
-            _emit_field_literal(dtype.field(i), origin=f"{origin}[struct child {i}]")
-            for i in range(dtype.num_fields)
+            _emit_field_literal(dtype.field(i), origin=f"{origin}[struct child {i}]") for i in range(dtype.num_fields)
         ]
         return "arrow.StructOf(\n" + ",\n".join("\t\t" + c for c in child_exprs) + ",\n\t)"
 

@@ -27,13 +27,7 @@ def _vgi_generated_path() -> Path:
     override = os.environ.get("VGI_GENERATED_HPP")
     if override:
         return Path(override)
-    return (
-        Path(__file__).resolve().parents[2]
-        / "vgi"
-        / "src"
-        / "generated"
-        / "vgi_protocol_schemas.hpp"
-    )
+    return Path(__file__).resolve().parents[2] / "vgi" / "src" / "generated" / "vgi_protocol_schemas.hpp"
 
 
 _REGEN_HINT = (

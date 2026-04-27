@@ -27,13 +27,7 @@ def _vgi_ts_generated_path() -> Path:
     override = os.environ.get("VGI_TS_GENERATED_TS")
     if override:
         return Path(override)
-    return (
-        Path(__file__).resolve().parents[2]
-        / "vgi-typescript"
-        / "src"
-        / "generated"
-        / "vgi-protocol-schemas.ts"
-    )
+    return Path(__file__).resolve().parents[2] / "vgi-typescript" / "src" / "generated" / "vgi-protocol-schemas.ts"
 
 
 _REGEN_HINT = (
@@ -44,13 +38,12 @@ _REGEN_HINT = (
 
 
 def test_generator_is_deterministic() -> None:
+    """Calling emit() twice produces byte-identical output."""
     out1 = io.StringIO()
     emit(out1)
     out2 = io.StringIO()
     emit(out2)
-    assert out1.getvalue() == out2.getvalue(), (
-        "ts_schemas generator is non-deterministic"
-    )
+    assert out1.getvalue() == out2.getvalue(), "ts_schemas generator is non-deterministic"
 
 
 # Match one exported Schema const. Body (group 2) is empty for `new Schema([])`
@@ -188,6 +181,7 @@ def _parse_generated_ts(text: str) -> dict[str, pa.Schema]:
 
 
 def test_checked_in_generated_ts_matches_generator() -> None:
+    """Drift check: checked-in generated TS matches what the generator produces."""
     path = _vgi_ts_generated_path()
     if not path.exists():
         pytest.skip(f"{path} not found; set VGI_TS_GENERATED_TS or check out vgi-typescript next to vgi-python")
@@ -211,6 +205,7 @@ def test_checked_in_generated_ts_matches_generator() -> None:
 
 
 def test_parser_roundtrip_self_test() -> None:
+    """Self-test: the local parser round-trips the generator's own output."""
     buf = io.StringIO()
     emit(buf)
     parsed = _parse_generated_ts(buf.getvalue())

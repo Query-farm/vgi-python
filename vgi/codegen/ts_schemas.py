@@ -157,8 +157,7 @@ def _emit_type(dtype: pa.DataType, *, origin: str) -> str:
         _use("Struct")
         _use("Field")
         child_exprs = [
-            _emit_field(dtype.field(i), origin=f"{origin}[struct child {i}]")
-            for i in range(dtype.num_fields)
+            _emit_field(dtype.field(i), origin=f"{origin}[struct child {i}]") for i in range(dtype.num_fields)
         ]
         return "new Struct([" + ", ".join(child_exprs) + "])"
 

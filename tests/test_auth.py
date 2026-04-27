@@ -167,8 +167,8 @@ class TestTableFunctionAuth:
 
         params = ProcessParams(
             args=None,
-            init_call=None,  # type: ignore[arg-type]
-            init_response=None,  # type: ignore[arg-type]
+            init_call=None,
+            init_response=None,
             output_schema=pa.schema([]),
             settings={},
             secrets={},
@@ -184,8 +184,8 @@ class TestTableFunctionAuth:
         auth = AuthContext(principal="bob", authenticated=True, domain="jwt")
         params = ProcessParams(
             args=None,
-            init_call=None,  # type: ignore[arg-type]
-            init_response=None,  # type: ignore[arg-type]
+            init_call=None,
+            init_response=None,
             output_schema=pa.schema([]),
             settings={},
             secrets={},

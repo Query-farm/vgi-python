@@ -108,8 +108,7 @@ def _emit_type(dtype: pa.DataType, *, origin: str) -> str:
 
     if pa.types.is_struct(dtype):
         child_exprs = [
-            _emit_field(dtype.field(i), origin=f"{origin}[struct child {i}]")
-            for i in range(dtype.num_fields)
+            _emit_field(dtype.field(i), origin=f"{origin}[struct child {i}]") for i in range(dtype.num_fields)
         ]
         return "arrow::struct_({" + ", ".join(child_exprs) + "})"
 
@@ -132,18 +131,12 @@ def _emit_field(field: pa.Field[Any], *, origin: str) -> str:
 
 
 def _emit_factory(es: EmittedSchema) -> str:
-    body = (
-        f"// Origin: {es.origin}\n"
-        f"inline const std::shared_ptr<arrow::Schema> &{es.name}Schema() {{\n"
-    )
+    body = f"// Origin: {es.origin}\ninline const std::shared_ptr<arrow::Schema> &{es.name}Schema() {{\n"
     if len(es.schema) == 0:
         body += "\tstatic const auto schema = arrow::schema({});\n"
     else:
         body += "\tstatic const auto schema = arrow::schema({\n"
-        lines = [
-            "\t    " + _emit_field(f, origin=f"{es.name}.{f.name}")
-            for f in es.schema
-        ]
+        lines = ["\t    " + _emit_field(f, origin=f"{es.name}.{f.name}") for f in es.schema]
         body += ",\n".join(lines) + ",\n"
         body += "\t});\n"
     body += "\treturn schema;\n"

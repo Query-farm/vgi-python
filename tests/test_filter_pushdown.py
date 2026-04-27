@@ -1045,7 +1045,7 @@ class TestJoinKeysBatch:
             pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"}),
             pa.field("_val_0", pa.int64()),
         ]
-        batch = pa.RecordBatch.from_pydict({"filter_spec": [spec], "_val_0": [42]}, schema=pa.schema(fields))
+        batch = pa.RecordBatch.from_pydict({"filter_spec": [spec], "_val_0": [42]}, schema=pa.schema(fields))  # type: ignore[arg-type]
         pf = deserialize_filters(batch)
 
         assert pf.get_join_keys_batch() is None
@@ -1177,7 +1177,7 @@ class TestJoinKeysBatch:
             pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"}),
             pa.field("_val_0", pa.int64()),
         ]
-        batch = pa.RecordBatch.from_pydict({"filter_spec": [spec], "_val_0": [0]}, schema=pa.schema(fields))
+        batch = pa.RecordBatch.from_pydict({"filter_spec": [spec], "_val_0": [0]}, schema=pa.schema(fields))  # type: ignore[arg-type]
         keys_batch = pa.RecordBatch.from_pydict({"id": [10, 20, 30]})
 
         pf = deserialize_filters(batch, join_keys=[keys_batch])
@@ -1218,7 +1218,7 @@ class TestJoinKeysBatch:
             pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"}),
             pa.field("_val_0", pa.int64()),
         ]
-        batch = pa.RecordBatch.from_pydict({"filter_spec": [spec], "_val_0": [42]}, schema=pa.schema(fields))
+        batch = pa.RecordBatch.from_pydict({"filter_spec": [spec], "_val_0": [42]}, schema=pa.schema(fields))  # type: ignore[arg-type]
 
         # No join_keys batch — the OR child resolves to None, so entire OR is dropped
         pf = deserialize_filters(batch, join_keys=None)
