@@ -17,6 +17,7 @@ dependencies = [
 http = ["vgi-rpc[http]"]
 oauth = ["vgi-rpc[oauth]"]
 otel = ["vgi-rpc[otel]"]
+sentry = ["vgi-rpc[sentry]"]
 azure = [
     "pymssql>=2.3.0",
     "azure-identity>=1.16.0",
@@ -36,8 +37,8 @@ dev = [
     "pytest-ruff",
     "pytest-xdist",
     "ruff",
-    "vgi[test-fixtures,test-fixtures-writable,http,oauth,otel,azure]",
-    "vgi-rpc[conformance,external,http,oauth,otel]",
+    "vgi[test-fixtures,test-fixtures-writable,http,oauth,otel,sentry,azure]",
+    "vgi-rpc[conformance,external,http,oauth,otel,sentry]",
 ]
 [project.scripts]
 vgi-serve = "vgi.serve:main"
@@ -48,8 +49,6 @@ vgi-fixture-versioned-worker = "vgi._test_fixtures.versioned:main"
 vgi-fixture-versioned-tables-worker = "vgi._test_fixtures.versioned_tables:main"
 vgi-fixture-attach-options-worker = "vgi._test_fixtures.attach_options:main"
 vgi-fixture-writable-worker = "vgi._test_fixtures.writable.worker:main"
-vgi-fixture-schema-reconcile-worker = "vgi._test_fixtures.schema_reconcile.worker:main"
-vgi-fixture-projection-repro-worker = "vgi._test_fixtures.projection_repro.worker:main"
 vgi-transactor = "vgi.transactor.server:main"
 
 [tool.hatch.metadata]

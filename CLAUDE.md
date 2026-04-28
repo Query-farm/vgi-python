@@ -258,6 +258,10 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-fixture-
 | `VGI_OTEL_CLAIM_ATTRIBUTES` | Comma-separated `claim_key=span_attr_name` pairs for claim extraction |
 | `VGI_OTEL_DISABLE_TRACING` | Disable tracing only (`1`/`true`/`yes`) |
 | `VGI_OTEL_DISABLE_METRICS` | Disable metrics only (`1`/`true`/`yes`) |
+| `SENTRY_DSN` | Enable Sentry error reporting (requires `[sentry]` extra). When set, `vgi-serve` calls `sentry_sdk.init()` before constructing the worker so vgi-rpc's auto-attach picks up RPC dispatch errors and VGI enriches with `vgi.function.name`, `vgi.attach_id`, `vgi.transaction_id`, etc. |
+| `SENTRY_ENVIRONMENT` | Environment tag passed to `sentry_sdk.init()` (e.g. `production`, `staging`) |
+| `SENTRY_RELEASE` | Release identifier passed to `sentry_sdk.init()` (e.g. git SHA) |
+| `SENTRY_TRACES_SAMPLE_RATE` | Float in `[0, 1]` for performance sampling (Sentry's standard knob) |
 | `VGI_WORKER_SHARED_STORAGE` | Storage backend: `sqlite` (default), `azure-sql` (requires `[azure]` extra), or `cloudflare-do` |
 | `VGI_AZURE_SQL_SERVER` | Azure SQL server hostname (required when `azure-sql`) |
 | `VGI_AZURE_SQL_DATABASE` | Azure SQL database name (required when `azure-sql`) |
@@ -327,6 +331,18 @@ auto_apply_complete           function=SequenceFunction input_rows=100 output_ro
 ```
 
 **Performance:** Zero overhead when disabled (just a boolean check).
+
+### Sentry Error Reporting
+
+Set `SENTRY_DSN` (and install `vgi[sentry]`) to forward unhandled exceptions to Sentry. `vgi-serve` calls `sentry_sdk.init()` automatically before building the worker, which lets vgi-rpc's auto-attach hook (added in `vgi-rpc 0.12.0`) wire RPC-level instrumentation onto every `RpcServer`. VGI then layers on:
+
+- **Dispatch-scoped scope tags** — `vgi.function.name`, `vgi.function.type`, `vgi.attach_id`, `vgi.transaction_id`, `vgi.principal`, `vgi.auth_domain`, `vgi.authenticated`, plus init-time fields (`vgi.init.execution_id`, `vgi.init.phase`).
+- **Per-batch breadcrumbs** under category `vgi.execute` carrying `function_name`, `function_type`, `duration_ms`, `input_rows`, `output_rows`, `input_bytes`, `output_bytes`, and `execution_id`. If a stream crashes mid-flight, the event timeline shows the size and shape of every preceding batch.
+- **Catalog-lifecycle breadcrumbs** under categories `catalog.attach`, `catalog.detach`, `catalog.create`, `catalog.transaction.begin`, `catalog.transaction.commit`, `catalog.transaction.rollback`. These provide the mapping from opaque `attach_id` and `transaction_id` hex strings back to catalog names — without them, an event tagged `vgi.attach_id=4f3c...` is unreadable to a developer.
+
+**Attach options redaction:** by default *no* options are logged in the `catalog.attach` / `catalog.create` breadcrumbs because options routinely carry credentials. Implementers opt in via `CatalogInterface.loggable_attach_options(options) -> Mapping`, which returns a redacted, safe-to-log subset (host, region, bucket — never password/token/secret). When the override returns an empty mapping (the default), the `options` field is omitted from the breadcrumb entirely. See `docs/catalog-interface.md` for details.
+
+The same enrichment applies to OTel spans when `VGI_OTEL_ENABLED=1` — both backends read from the same `VgiTracer.set_current_span_attributes()` call sites in `vgi/otel.py`. Either, neither, or both can be active in a process.
 
 ### Type Inference Rules
 

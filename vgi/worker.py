@@ -729,11 +729,13 @@ class Worker:
 
             if http:
                 from vgi.serve import (
+                    _maybe_init_sentry,
                     _resolve_authenticate,
                     _resolve_oauth_resource_metadata,
                     _resolve_otel_config,
                 )
 
+                _maybe_init_sentry()
                 authenticate = _resolve_authenticate()
                 oauth_metadata = _resolve_oauth_resource_metadata()
                 otel_config = _resolve_otel_config()
@@ -750,8 +752,9 @@ class Worker:
                     port_file=port_file,
                 )
             else:
-                from vgi.serve import _resolve_otel_config
+                from vgi.serve import _maybe_init_sentry, _resolve_otel_config
 
+                _maybe_init_sentry()
                 otel_config = _resolve_otel_config()
                 cls(quiet=quiet, log_level=effective_level).run(otel_config=otel_config)
 
@@ -803,11 +806,13 @@ class Worker:
             )
 
             from vgi.serve import (
+                _maybe_init_sentry,
                 _resolve_authenticate,
                 _resolve_oauth_resource_metadata,
                 _resolve_otel_config,
             )
 
+            _maybe_init_sentry()
             authenticate = _resolve_authenticate()
             oauth_metadata = _resolve_oauth_resource_metadata()
             otel_config = _resolve_otel_config()
@@ -1377,6 +1382,8 @@ class Worker:
                 "vgi.principal": ctx.auth.principal,
                 "vgi.auth_domain": ctx.auth.domain,
                 "vgi.authenticated": ctx.auth.authenticated,
+                "vgi.attach_id": request.attach_id.hex() if request.attach_id else None,
+                "vgi.transaction_id": request.transaction_id.hex() if request.transaction_id else None,
             }
         )
         func_cls = self._resolve_function(request)
@@ -1996,6 +2003,10 @@ class Worker:
                 "vgi.principal": ctx.auth.principal,
                 "vgi.auth_domain": ctx.auth.domain,
                 "vgi.authenticated": ctx.auth.authenticated,
+                "vgi.attach_id": request.bind_call.attach_id.hex() if request.bind_call.attach_id else None,
+                "vgi.transaction_id": (
+                    request.bind_call.transaction_id.hex() if request.bind_call.transaction_id else None
+                ),
             }
         )
         func_cls = self._resolve_function(request.bind_call)
@@ -2119,6 +2130,30 @@ class Worker:
         """Add catalog-specific attributes to the current vgi_rpc span."""
         self._vgi_tracer.set_current_span_attributes(attrs)
 
+    def _log_catalog_lifecycle(self, event: str, **fields: Any) -> None:
+        """Emit a structured log line and Sentry breadcrumb for a catalog event.
+
+        ``event`` is a dotted name such as ``"catalog.attach"`` and is used
+        both as the log message and the breadcrumb category.  ``fields``
+        are merged into the log record's ``extra`` and the breadcrumb data;
+        callers must omit credentials.  See
+        :meth:`CatalogInterface.loggable_attach_options` for the
+        opt-in option-redaction hook.
+        """
+        # Drop None values so logs and breadcrumbs stay tidy.
+        clean = {k: v for k, v in fields.items() if v is not None}
+        _logger.info(event, extra=clean)
+        if "sentry_sdk" in sys.modules:
+            import sentry_sdk
+
+            if sentry_sdk.is_initialized():
+                sentry_sdk.add_breadcrumb(
+                    category=event,
+                    message=event,
+                    level="info",
+                    data=clean,
+                )
+
     def catalog_catalogs(self) -> CatalogsResponse:
         """List available catalog discovery records."""
         cat = self._get_catalog()
@@ -2138,18 +2173,29 @@ class Worker:
         self._enrich_catalog_span(vgi_catalog_name=request.name)
         cat = self._get_catalog()
         options = self._options_batch_to_dict(request.options)
-        return cat.catalog_attach(
+        result = cat.catalog_attach(
             name=request.name,
             options=options,
             data_version_spec=request.data_version_spec,
             implementation_version=request.implementation_version,
             ctx=ctx,
         )
+        loggable = dict(cat.loggable_attach_options(options))
+        self._log_catalog_lifecycle(
+            "catalog.attach",
+            catalog_name=request.name,
+            attach_id=result.attach_id.hex() if result.attach_id else None,
+            data_version_spec=request.data_version_spec,
+            implementation_version=request.implementation_version,
+            options=loggable or None,
+        )
+        return result
 
     def catalog_detach(self, attach_id: bytes) -> None:
         """Detach from a catalog."""
         cat = self._get_catalog()
         cat.catalog_detach(attach_id=AttachId(attach_id))
+        self._log_catalog_lifecycle("catalog.detach", attach_id=attach_id.hex())
 
     def catalog_create(self, request: CatalogCreateRequest) -> None:
         """Create a new catalog."""
@@ -2157,6 +2203,13 @@ class Worker:
         cat = self._get_catalog()
         options = self._options_batch_to_dict(request.options)
         cat.catalog_create(name=request.name, on_conflict=request.on_conflict, options=options)
+        loggable = dict(cat.loggable_attach_options(options))
+        self._log_catalog_lifecycle(
+            "catalog.create",
+            catalog_name=request.name,
+            on_conflict=request.on_conflict.value,
+            options=loggable or None,
+        )
 
     def catalog_drop(self, name: str) -> None:
         """Drop a catalog."""
@@ -2188,6 +2241,11 @@ class Worker:
         """Begin a new transaction."""
         cat = self._get_catalog()
         tx_id = cat.catalog_transaction_begin(attach_id=AttachId(attach_id))
+        self._log_catalog_lifecycle(
+            "catalog.transaction.begin",
+            attach_id=attach_id.hex(),
+            transaction_id=bytes(tx_id).hex() if tx_id else None,
+        )
         return TransactionBeginResponse(transaction_id=bytes(tx_id) if tx_id else None)
 
     def catalog_transaction_commit(self, attach_id: bytes, transaction_id: bytes) -> None:
@@ -2197,6 +2255,11 @@ class Worker:
             attach_id=AttachId(attach_id),
             transaction_id=TransactionId(transaction_id),
         )
+        self._log_catalog_lifecycle(
+            "catalog.transaction.commit",
+            attach_id=attach_id.hex(),
+            transaction_id=transaction_id.hex(),
+        )
 
     def catalog_transaction_rollback(self, attach_id: bytes, transaction_id: bytes) -> None:
         """Rollback a transaction."""
@@ -2204,6 +2267,11 @@ class Worker:
         cat.catalog_transaction_rollback(
             attach_id=AttachId(attach_id),
             transaction_id=TransactionId(transaction_id),
+        )
+        self._log_catalog_lifecycle(
+            "catalog.transaction.rollback",
+            attach_id=attach_id.hex(),
+            transaction_id=transaction_id.hex(),
         )
 
     # ---------------------------------------------------------------------------

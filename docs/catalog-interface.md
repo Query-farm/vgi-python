@@ -222,6 +222,27 @@ class MyCatalog(CatalogInterface):
 | | `view_drop()` | `NotImplementedError` |
 | | `view_rename()` | `NotImplementedError` |
 | | `view_comment_set()` | `NotImplementedError` |
+| **Observability** | `loggable_attach_options()` | Returns `{}` (no options logged — see below) |
+
+---
+
+## Logging Attach Options Safely
+
+The worker emits structured `_logger.info` records and Sentry breadcrumbs for catalog lifecycle events (`catalog.attach`, `catalog.detach`, `catalog.create`, `catalog.transaction.begin`, `catalog.transaction.commit`, `catalog.transaction.rollback`). These let an operator correlate an opaque `attach_id` (a hex-encoded random byte string used in error scope tags) back to the catalog it represents.
+
+The `options` dict passed to `catalog_attach()` and `catalog_create()` routinely carries credentials — passwords, tokens, OAuth secrets, connection strings. To avoid leaking these to logs and Sentry, the worker **does not** log option fields by default. Implementers opt in by overriding `loggable_attach_options()`:
+
+```python test="skip"
+class MyCatalog(CatalogInterface):
+    def loggable_attach_options(self, options: Mapping[str, Any]) -> Mapping[str, Any]:
+        # Allowlist the keys you know are safe.  Never include password / token / secret.
+        safe_keys = {"host", "region", "bucket", "database"}
+        return {k: v for k, v in options.items() if k in safe_keys}
+```
+
+When the override returns an empty mapping (the default behaviour for catalogs that haven't opted in), the `options` field is omitted from the lifecycle event entirely — fail-closed: nothing is preferred over partial-leak.
+
+The catalog name, attach id, transaction id, and version specs are always logged regardless.
 
 ---
 

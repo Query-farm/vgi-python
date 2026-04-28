@@ -198,6 +198,7 @@ def create_app(
     authenticate: Callable[[falcon.Request], AuthContext] | None = None,
     oauth_resource_metadata: Any = None,
     otel_config: OtelConfig | None = None,
+    max_stream_response_bytes: int | None = None,
 ) -> falcon.App[Any, Any]:
     """Create a WSGI app for a VGI worker.
 
@@ -221,6 +222,11 @@ def create_app(
             RFC 9728 discovery endpoint.
         otel_config: Optional OpenTelemetry configuration.  When provided,
             instruments the RPC server with tracing and/or metrics.
+        max_stream_response_bytes: HTTP-only.  When set, producer stream
+            responses may pack multiple Arrow batches into a single HTTP
+            response up to this byte budget before emitting a continuation
+            token.  Default ``None`` keeps the current one-batch-per-response
+            behaviour.
 
     Returns:
         A Falcon WSGI application.
@@ -252,6 +258,7 @@ def create_app(
         authenticate=authenticate,
         oauth_resource_metadata=oauth_resource_metadata,
         otel_config=otel_config,
+        max_stream_response_bytes=max_stream_response_bytes,
         enable_landing_page=False,
     )
 
@@ -313,6 +320,15 @@ def main() -> None:
         describe: bool = typer.Option(  # noqa: B008
             True, "--describe/--no-describe", help="Enable description pages (worker + RPC API)"
         ),
+        max_stream_response_bytes: int | None = typer.Option(  # noqa: B008
+            None,
+            "--max-stream-response-bytes",
+            help=(
+                "HTTP-only. When set, producer-stream responses pack multiple "
+                "Arrow batches into a single HTTP body up to this byte budget "
+                "before emitting a continuation token. Default: one batch per response."
+            ),
+        ),
     ) -> None:
         env_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
         effective_debug = debug or env_debug
@@ -326,6 +342,10 @@ def main() -> None:
         # Resolve env var overrides
         describe = _resolve_describe(describe)
         signing_key = _resolve_signing_key()
+
+        # Initialise Sentry before constructing any RpcServer so that
+        # vgi-rpc's auto-attach hook picks up the SDK.
+        _maybe_init_sentry()
 
         worker_cls = load_worker_class(worker_ref)
 
@@ -345,6 +365,7 @@ def main() -> None:
                 authenticate=authenticate,
                 oauth_resource_metadata=oauth_metadata,
                 otel_config=otel_config,
+                max_stream_response_bytes=max_stream_response_bytes,
             )
         else:
             otel_config = _resolve_otel_config()
@@ -545,6 +566,48 @@ def _resolve_oauth_resource_metadata() -> Any:
         sys.exit(1)
 
 
+def _maybe_init_sentry() -> None:
+    """Initialise ``sentry_sdk`` from environment when ``SENTRY_DSN`` is set.
+
+    Reads the standard Sentry env vars (``SENTRY_DSN``, ``SENTRY_ENVIRONMENT``,
+    ``SENTRY_RELEASE``, ``SENTRY_TRACES_SAMPLE_RATE``) and calls
+    ``sentry_sdk.init()`` so that ``vgi-rpc``'s auto-attach hook in
+    ``RpcServer.__init__`` picks up Sentry instrumentation.
+
+    Silent no-op when ``SENTRY_DSN`` is unset or ``vgi[sentry]`` is not
+    installed.
+    """
+    if not os.environ.get("SENTRY_DSN"):
+        return
+    try:
+        import sentry_sdk
+    except ImportError:
+        sys.stderr.write(
+            "Warning: SENTRY_DSN is set but sentry-sdk is not installed.\n"
+            "Install with: pip install vgi[sentry]  (or: uv sync --extra sentry)\n"
+        )
+        return
+
+    if sentry_sdk.is_initialized():
+        return
+
+    init_kwargs: dict[str, Any] = {}
+    environment = os.environ.get("SENTRY_ENVIRONMENT")
+    if environment:
+        init_kwargs["environment"] = environment
+    release = os.environ.get("SENTRY_RELEASE")
+    if release:
+        init_kwargs["release"] = release
+    sample_raw = os.environ.get("SENTRY_TRACES_SAMPLE_RATE")
+    if sample_raw:
+        try:
+            init_kwargs["traces_sample_rate"] = float(sample_raw)
+        except ValueError:
+            sys.stderr.write(f"Error: SENTRY_TRACES_SAMPLE_RATE must be a float, got {sample_raw!r}\n")
+            sys.exit(1)
+    sentry_sdk.init(**init_kwargs)
+
+
 def _resolve_otel_config() -> Any:
     """Build an ``OtelConfig`` from environment variables.
 
@@ -629,6 +692,7 @@ def _serve_http(
     authenticate: Callable[..., Any] | None = None,
     oauth_resource_metadata: Any = None,
     otel_config: Any = None,
+    max_stream_response_bytes: int | None = None,
 ) -> None:
     """Start the worker as an HTTP server."""
     import socket
@@ -661,6 +725,7 @@ def _serve_http(
         authenticate=authenticate,
         oauth_resource_metadata=oauth_resource_metadata,
         otel_config=otel_config,
+        max_stream_response_bytes=max_stream_response_bytes,
     )
 
     # Machine-readable port for process managers and test harnesses

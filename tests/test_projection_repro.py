@@ -62,7 +62,7 @@ class TestProjReproStrictDirect:
 
     def test_no_projection_returns_all_columns(self) -> None:
         """Without projection_ids, all 12 columns come back."""
-        with Client("vgi-fixture-projection-repro-worker", worker_limit=1) as client:
+        with Client("vgi-fixture-worker", worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_strict",
@@ -81,7 +81,7 @@ class TestProjReproStrictDirect:
         12-column FIXED_SCHEMA instead of the 1-column projected
         schema.
         """
-        with Client("vgi-fixture-projection-repro-worker", worker_limit=1) as client:
+        with Client("vgi-fixture-worker", worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_strict",
@@ -92,8 +92,7 @@ class TestProjReproStrictDirect:
         table = pa.Table.from_batches(outputs)
         assert table.num_rows == 5
         assert table.num_columns == 1, (
-            f"expected 1 column for projection_ids={projection_ids}, "
-            f"got {table.num_columns}: {table.schema.names}"
+            f"expected 1 column for projection_ids={projection_ids}, got {table.num_columns}: {table.schema.names}"
         )
 
     def test_empty_projection_count_star(self) -> None:
@@ -104,7 +103,7 @@ class TestProjReproStrictDirect:
         must preserve the row count even when the output schema is
         empty — DuckDB's count(*) needs N, not 0.
         """
-        with Client("vgi-fixture-projection-repro-worker", worker_limit=1) as client:
+        with Client("vgi-fixture-worker", worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_strict",
@@ -119,8 +118,7 @@ class TestProjReproStrictDirect:
         # Every emitted batch should have 0 columns (the projected schema).
         for b in outputs:
             assert b.num_columns == 0, (
-                f"expected 0-column batch for projection_ids=[], "
-                f"got {b.num_columns}: {b.schema.names}"
+                f"expected 0-column batch for projection_ids=[], got {b.num_columns}: {b.schema.names}"
             )
 
     def test_two_col_projection_works(self) -> None:
@@ -130,7 +128,7 @@ class TestProjReproStrictDirect:
         ``test_projection_enforcement`` coverage on the canonical
         ``projected_data`` fixture.
         """
-        with Client("vgi-fixture-projection-repro-worker", worker_limit=1) as client:
+        with Client("vgi-fixture-worker", worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_strict",
@@ -144,7 +142,7 @@ class TestProjReproStrictDirect:
 
     def test_all_columns_projection(self) -> None:
         """Projecting every column should be equivalent to no projection."""
-        with Client("vgi-fixture-projection-repro-worker", worker_limit=1) as client:
+        with Client("vgi-fixture-worker", worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_strict",
@@ -191,7 +189,7 @@ class TestProjReproFullSchema:
         """
         # value_schema_id is index 10 in WIDE_SCHEMA.
         value_schema_id_idx = 10
-        with Client("vgi-fixture-projection-repro-worker", worker_limit=1) as client:
+        with Client("vgi-fixture-worker", worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_full_schema",
@@ -219,7 +217,7 @@ class TestProjReproFullSchema:
         are not matching`` cast error means the projection-emit
         handshake is broken.
         """
-        with Client("vgi-fixture-projection-repro-worker", worker_limit=1) as client:
+        with Client("vgi-fixture-worker", worker_limit=1) as client:
             try:
                 outputs = list(
                     client.table_function(
@@ -234,9 +232,7 @@ class TestProjReproFullSchema:
                 # "different schema".
                 msg = str(exc)
                 if "different schema" in msg.lower() or "not matching" in msg.lower():
-                    pytest.fail(
-                        f"projection mismatch surfaced as opaque cast error: {msg}"
-                    )
+                    pytest.fail(f"projection mismatch surfaced as opaque cast error: {msg}")
                 # Otherwise — a clear projection-related error — that's OK,
                 # we just want the framework to be deterministic about it.
                 return

@@ -1,7 +1,8 @@
 """Schema-reconcile fixture worker.
 
-Run as ``vgi-fixture-schema-reconcile-worker`` (entry point in pyproject.toml).
-Used by the ``test/sql/integration/schema_reconcile.test`` regression test in
+Hosted inside the consolidated ``vgi-fixture-worker`` (entry point in
+pyproject.toml) alongside the other reproducer catalogs. Used by the
+``test/sql/integration/schema_reconcile.test`` regression test in
 ``~/Development/vgi`` to exercise the C++ ``ReconcileBatchToSchema`` helper
 across INSERT, UPDATE, DELETE, and SELECT batch flows.
 
@@ -22,7 +23,6 @@ User columns (id/ts/nested/tags) are identical across tables.
 
 from __future__ import annotations
 
-import datetime as _dt
 import os
 import pickle
 import sqlite3
@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
+from vgi_rpc.rpc import OutputCollector
 
 from vgi import Worker
 from vgi.catalog import Catalog, Schema
@@ -38,8 +39,8 @@ from vgi.catalog.catalog_interface import (
     AttachId,
     ReadOnlyCatalogInterface,
     ScanFunctionResult,
-    SerializedSchema,
     SchemaObjectType,
+    SerializedSchema,
     TableInfo,
     TransactionId,
 )
@@ -51,8 +52,6 @@ from vgi.table_function import (
     TableFunctionGenerator,
 )
 from vgi.table_in_out_function import TableInOutGenerator
-from vgi_rpc.rpc import OutputCollector
-
 
 CATALOG_NAME = "schema_reconcile"
 _SCHEMA_NAME = "main"
@@ -152,9 +151,7 @@ TABLES: dict[str, TableSpec] = {
 }
 
 
-_COUNT_SCHEMA: pa.Schema = pa.schema(
-    [pa.field("count", pa.int64(), nullable=False)]
-)
+_COUNT_SCHEMA: pa.Schema = pa.schema([pa.field("count", pa.int64(), nullable=False)])
 
 
 # ---------------------------------------------------------------------------
@@ -168,9 +165,7 @@ _lock = threading.Lock()
 
 
 def _db_path() -> str:
-    return os.environ.get(
-        "VGI_SCHEMA_RECONCILE_DB", "/tmp/vgi_schema_reconcile.sqlite"
-    )
+    return os.environ.get("VGI_SCHEMA_RECONCILE_DB", "/tmp/vgi_schema_reconcile.sqlite")
 
 
 def _connect() -> sqlite3.Connection:
@@ -178,10 +173,7 @@ def _connect() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     for spec in TABLES.values():
         conn.execute(
-            f"CREATE TABLE IF NOT EXISTS {spec.storage_table} ("
-            "  rid_blob BLOB PRIMARY KEY,"
-            "  payload BLOB NOT NULL"
-            ")"
+            f"CREATE TABLE IF NOT EXISTS {spec.storage_table} (  rid_blob BLOB PRIMARY KEY,  payload BLOB NOT NULL)"
         )
     return conn
 
@@ -193,9 +185,7 @@ def _rid_key(rid: Any) -> bytes:
 def _all_rows(spec: TableSpec) -> list[tuple[Any, dict[str, Any]]]:
     with _lock, _connect() as conn:
         out: list[tuple[Any, dict[str, Any]]] = []
-        for rid_blob, payload in conn.execute(
-            f"SELECT rid_blob, payload FROM {spec.storage_table}"
-        ):
+        for rid_blob, payload in conn.execute(f"SELECT rid_blob, payload FROM {spec.storage_table}"):
             out.append((pickle.loads(rid_blob), pickle.loads(payload)))
         return out
 
@@ -237,9 +227,7 @@ def _delete_row(spec: TableSpec, rid: Any) -> bool:
 def _next_int_rowid(spec: TableSpec) -> int:
     """For the int64-rowid table, autoincrement-ish."""
     with _lock, _connect() as conn:
-        max_row = conn.execute(
-            f"SELECT payload FROM {spec.storage_table}"
-        ).fetchall()
+        max_row = conn.execute(f"SELECT payload FROM {spec.storage_table}").fetchall()
         # The int rowid is stored in the payload as ``__rid__`` for convenience
         # of monotonic generation.
         existing = [pickle.loads(p[0]).get("__rid__", 0) for p in max_row]
@@ -279,13 +267,9 @@ def _strict_assert_schema(label: str, actual: pa.Schema, expected: pa.Schema) ->
         if af.name != ef.name:
             detail.append(f"field[{i}].name: actual={af.name!r} expected={ef.name!r}")
         if af.nullable != ef.nullable:
-            detail.append(
-                f"field[{i}={af.name!r}].nullable: actual={af.nullable} expected={ef.nullable}"
-            )
+            detail.append(f"field[{i}={af.name!r}].nullable: actual={af.nullable} expected={ef.nullable}")
         if not af.type.equals(ef.type):
-            detail.append(
-                f"field[{i}={af.name!r}].type: actual={af.type} expected={ef.type}"
-            )
+            detail.append(f"field[{i}={af.name!r}].type: actual={af.type} expected={ef.type}")
     raise ValueError(
         f"[schema_reconcile] {label} batch schema mismatch (reconciliation regression?):\n"
         + "\n".join(f"  - {d}" for d in detail)
@@ -365,7 +349,8 @@ class SchemaReconcileInsert(TableInOutGenerator[None, None]):
 
 class SchemaReconcileUpdate(TableInOutGenerator[None, None]):
     """UPDATE handler — asserts batch is rowid + selected user columns,
-    every field with the worker-declared flags/types intact."""
+    every field with the worker-declared flags/types intact.
+    """
 
     class Meta:
         name = "schema_reconcile_update"
@@ -387,9 +372,7 @@ class SchemaReconcileUpdate(TableInOutGenerator[None, None]):
         spec = _spec_from_args(params.init_call.bind_call.arguments.positional)
         cols = batch.schema.names
         if "rowid" not in cols:
-            raise ValueError(
-                f"[schema_reconcile] UPDATE[{spec.name}] missing rowid column; got: {cols}"
-            )
+            raise ValueError(f"[schema_reconcile] UPDATE[{spec.name}] missing rowid column; got: {cols}")
         full = spec.table_schema
         for f in batch.schema:
             expected = full.field(full.get_field_index(f.name))
@@ -432,9 +415,7 @@ class SchemaReconcileDelete(TableInOutGenerator[None, None]):
     ) -> None:
         assert params.init_call is not None
         spec = _spec_from_args(params.init_call.bind_call.arguments.positional)
-        _strict_assert_schema(
-            f"DELETE[{spec.name}]", batch.schema, spec.delete_input_schema
-        )
+        _strict_assert_schema(f"DELETE[{spec.name}]", batch.schema, spec.delete_input_schema)
         n = 0
         for i in range(batch.num_rows):
             rid = batch.column("rowid")[i].as_py()
@@ -461,9 +442,7 @@ class SchemaReconcileScan(TableFunctionGenerator[None, None]):
         return GlobalInitResponse(max_workers=1)
 
     @classmethod
-    def process(
-        cls, params: ProcessParams[None], state: None, out: OutputCollector
-    ) -> None:
+    def process(cls, params: ProcessParams[None], state: None, out: OutputCollector) -> None:
         assert params.init_call is not None
         spec = _spec_from_args(params.init_call.bind_call.arguments.positional)
         out_schema = params.output_schema
@@ -542,9 +521,7 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
     ) -> Any:
         if name.lower() == _SCHEMA_NAME and type == SchemaObjectType.TABLE:
             return [self._table_info(spec) for spec in TABLES.values()]
-        return super().schema_contents(
-            attach_id=attach_id, transaction_id=transaction_id, name=name, type=type
-        )
+        return super().schema_contents(attach_id=attach_id, transaction_id=transaction_id, name=name, type=type)
 
     def table_get(
         self,
@@ -624,12 +601,3 @@ class SchemaReconcileWorker(Worker):
     catalog_name = CATALOG_NAME
     catalog = _CATALOG
     functions = list(_FUNCTIONS)
-
-
-def main() -> None:
-    """Entry point — ``vgi-fixture-schema-reconcile-worker``."""
-    SchemaReconcileWorker.main()
-
-
-if __name__ == "__main__":
-    main()

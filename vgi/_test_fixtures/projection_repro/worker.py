@@ -40,7 +40,6 @@ from vgi_rpc.rpc import OutputCollector
 
 from vgi import Worker
 from vgi.arguments import Arg
-from vgi.invocation import GlobalInitResponse
 from vgi.catalog import Catalog, Schema
 from vgi.catalog.catalog_interface import (
     AttachId,
@@ -51,6 +50,8 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     TransactionId,
 )
+from vgi.function import Function
+from vgi.invocation import GlobalInitResponse
 from vgi.table_function import (
     ProcessParams,
     TableFunctionGenerator,
@@ -144,11 +145,7 @@ class ProjReproStrict(TableFunctionGenerator[_Args, None]):
             # build a 1-column placeholder array of the right length and
             # then ``select([])`` it down to zero columns. This preserves
             # the row count, which is what DuckDB's count(*) needs.
-            out.emit(
-                pa.RecordBatch.from_arrays(
-                    [pa.nulls(n)], names=[""]
-                ).select([])
-            )
+            out.emit(pa.RecordBatch.from_arrays([pa.nulls(n)], names=[""]).select([]))
         else:
             rows: list[dict[str, object]] = []
             for i in range(n):
@@ -305,7 +302,12 @@ class ProjReproMultiWorker(TableFunctionGenerator[_Args, _ChunkedState]):
             out.finish()
 
 
-_FUNCTIONS = [ProjReproStrict, ProjReproFullSchema, ProjReproChunked, ProjReproMultiWorker]
+_FUNCTIONS: list[type[Function]] = [
+    ProjReproStrict,
+    ProjReproFullSchema,
+    ProjReproChunked,
+    ProjReproMultiWorker,
+]
 
 
 _CATALOG = Catalog(
@@ -363,9 +365,7 @@ class ProjReproCatalog(ReadOnlyCatalogInterface):
     ) -> Any:
         if name.lower() == "main" and type == SchemaObjectType.TABLE:
             return [self._info(table_name) for table_name in _TABLE_NAMES]
-        return super().schema_contents(
-            attach_id=attach_id, transaction_id=transaction_id, name=name, type=type
-        )
+        return super().schema_contents(attach_id=attach_id, transaction_id=transaction_id, name=name, type=type)
 
     def table_get(
         self,
@@ -413,12 +413,3 @@ class ProjReproWorker(Worker):
     catalog_name = CATALOG_NAME
     catalog = _CATALOG
     functions = list(_FUNCTIONS)
-
-
-def main() -> None:
-    """Entry point — ``vgi-fixture-projection-repro-worker``."""
-    ProjReproWorker.main()
-
-
-if __name__ == "__main__":
-    main()

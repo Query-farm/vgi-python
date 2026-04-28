@@ -1480,6 +1480,19 @@ wheels = [
 ]
 
 [[package]]
+name = "sentry-sdk"
+version = "2.58.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/26/b3/fb8291170d0e844173164709fc0fa0c221ed75a5da740c8746f2a83b4eb1/sentry_sdk-2.58.0.tar.gz", hash = "sha256:c1144d947352d54e5b7daa63596d9f848adf684989c06c4f5a659f0c85a18f6f", size = 438764, upload-time = "2026-04-13T17:23:26.265Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fa/eb/d875669993b762556ae8b2efd86219943b4c0864d22204d622a9aee3052b/sentry_sdk-2.58.0-py2.py3-none-any.whl", hash = "sha256:688d1c704ddecf382ea3326f21a67453d4caa95592d722b7c780a36a9d23109e", size = 460919, upload-time = "2026-04-13T17:23:24.675Z" },
+]
+
+[[package]]
 name = "shellingham"
 version = "1.5.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1603,7 +1616,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "ruff" },
     { name = "sqlglot" },
-    { name = "vgi-rpc", extra = ["conformance", "external", "http", "oauth", "otel"] },
+    { name = "vgi-rpc", extra = ["conformance", "external", "http", "oauth", "otel", "sentry"] },
 ]
 http = [
     { name = "vgi-rpc", extra = ["http"] },
@@ -1613,6 +1626,9 @@ oauth = [
 ]
 otel = [
     { name = "vgi-rpc", extra = ["otel"] },
+]
+sentry = [
+    { name = "vgi-rpc", extra = ["sentry"] },
 ]
 test-fixtures = [
     { name = "numpy" },
@@ -1652,15 +1668,16 @@ requires-dist = [
     { name = "sqlglot", marker = "extra == 'transactor'" },
     { name = "typer", specifier = ">=0.9" },
     { name = "vgi", extras = ["test-fixtures"], marker = "extra == 'test-fixtures-writable'" },
-    { name = "vgi", extras = ["test-fixtures", "test-fixtures-writable", "http", "oauth", "otel", "azure"], marker = "extra == 'dev'" },
+    { name = "vgi", extras = ["test-fixtures", "test-fixtures-writable", "http", "oauth", "otel", "sentry", "azure"], marker = "extra == 'dev'" },
     { name = "vgi", extras = ["transactor"], marker = "extra == 'test-fixtures-writable'" },
     { name = "vgi-rpc", directory = "/Users/rusty/Development/vgi-rpc" },
-    { name = "vgi-rpc", extras = ["conformance", "external", "http", "oauth", "otel"], marker = "extra == 'dev'" },
+    { name = "vgi-rpc", extras = ["conformance", "external", "http", "oauth", "otel", "sentry"], marker = "extra == 'dev'" },
     { name = "vgi-rpc", extras = ["http"], marker = "extra == 'http'" },
     { name = "vgi-rpc", extras = ["oauth"], marker = "extra == 'oauth'" },
     { name = "vgi-rpc", extras = ["otel"], marker = "extra == 'otel'" },
+    { name = "vgi-rpc", extras = ["sentry"], marker = "extra == 'sentry'" },
 ]
-provides-extras = ["http", "oauth", "otel", "azure", "test-fixtures", "transactor", "test-fixtures-writable", "dev"]
+provides-extras = ["http", "oauth", "otel", "sentry", "azure", "test-fixtures", "transactor", "test-fixtures-writable", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1671,7 +1688,7 @@ dev = [
 
 [[package]]
 name = "vgi-rpc"
-version = "0.10.0"
+version = "0.12.0"
 source = { directory = "/Users/rusty/Development/vgi-rpc" }
 dependencies = [
     { name = "docstring-parser" },
@@ -1700,6 +1717,9 @@ oauth = [
 otel = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-sdk" },
+]
+sentry = [
+    { name = "sentry-sdk" },
 ]
 
 [package.metadata]

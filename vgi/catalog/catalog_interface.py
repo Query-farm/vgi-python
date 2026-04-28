@@ -5,7 +5,7 @@ catalog interfaces in VGI workers, enabling DuckDB ATTACH support.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
@@ -711,6 +711,34 @@ class CatalogInterface(ABC):
         The default implementation returns an empty set.
         """
         return set()
+
+    def loggable_attach_options(self, options: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Return a redacted view of attach/create options safe for logs and Sentry breadcrumbs.
+
+        Called by the worker when emitting catalog lifecycle events
+        (``catalog.attach``, ``catalog.create``).  Override to opt in to
+        logging the option fields you know are safe — host names, regions,
+        bucket names, etc.  Never return credentials such as passwords,
+        tokens, or connection strings containing secrets.
+
+        Default returns an empty mapping, so by default **nothing** from the
+        ``options`` dict is logged.  This fail-closed behaviour avoids
+        leaking credentials when an implementer has not explicitly chosen
+        which fields are safe to emit.
+
+        Args:
+            options: The raw options dict the client passed to ATTACH /
+                CREATE (the same ``dict`` handed to :meth:`catalog_attach`
+                or :meth:`catalog_create`).
+
+        Returns:
+            A mapping of safe-to-log key/value pairs.  Returning an empty
+            mapping (the default) suppresses the ``options`` field from
+            lifecycle events entirely.
+
+        """
+        del options
+        return {}
 
     @abstractmethod
     def catalogs(self) -> list[CatalogInfo]:
