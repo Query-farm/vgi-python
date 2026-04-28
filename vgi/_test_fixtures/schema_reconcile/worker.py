@@ -65,7 +65,7 @@ _SCHEMA_NAME = "main"
 # DuckDB's Arrow round-trip cannot preserve.
 # ---------------------------------------------------------------------------
 
-USER_FIELDS: list[pa.Field] = [
+USER_FIELDS: list[pa.Field[Any]] = [
     pa.field("id", pa.int64(), nullable=False),
     pa.field("ts", pa.timestamp("ms", tz="UTC"), nullable=False),
     pa.field(
@@ -104,7 +104,7 @@ USER_SCHEMA: pa.Schema = pa.schema(USER_FIELDS)
 # ---------------------------------------------------------------------------
 
 
-def _rowid_field(arrow_type: pa.DataType) -> pa.Field:
+def _rowid_field(arrow_type: pa.DataType) -> pa.Field[Any]:
     """A rowid field with the ``is_row_id`` metadata that the C++ side keys on.
 
     Always declared NOT NULL to exercise the rowid reshape path in
@@ -130,7 +130,7 @@ _STRUCT_ROWID = _rowid_field(
 @dataclass(frozen=True)
 class TableSpec:
     name: str
-    rowid_field: pa.Field
+    rowid_field: pa.Field[Any]
     storage_table: str  # Underlying SQLite table name.
 
     @property
@@ -302,7 +302,7 @@ def _emit_count(out: OutputCollector, n: int) -> None:
     out.emit(pa.RecordBatch.from_pydict({"count": [n]}, schema=_COUNT_SCHEMA))
 
 
-def _spec_from_args(positional: tuple) -> TableSpec:
+def _spec_from_args(positional: tuple[Any, ...]) -> TableSpec:
     if not positional or positional[0] is None:
         raise ValueError("schema_reconcile handler: missing table_name positional[0]")
     name = str(positional[0].as_py())
@@ -532,14 +532,21 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
             supports_delete=True,
         )
 
-    def schema_contents(self, *, attach_id, transaction_id, name, type):  # type: ignore[override]
+    def schema_contents(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        name: str,
+        type: Any,
+    ) -> Any:
         if name.lower() == _SCHEMA_NAME and type == SchemaObjectType.TABLE:
             return [self._table_info(spec) for spec in TABLES.values()]
         return super().schema_contents(
             attach_id=attach_id, transaction_id=transaction_id, name=name, type=type
         )
 
-    def table_get(  # type: ignore[override]
+    def table_get(
         self,
         *,
         attach_id: AttachId,
@@ -562,23 +569,45 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
             required_extensions=[],
         )
 
-    def table_scan_function_get(  # type: ignore[override]
-        self, *, attach_id, transaction_id, schema_name, name, at_unit, at_value
+    def table_scan_function_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
+        at_unit: str | None,
+        at_value: str | None,
     ) -> ScanFunctionResult:
         return self._route("schema_reconcile_scan", schema_name, name)
 
-    def table_insert_function_get(  # type: ignore[override]
-        self, *, attach_id, transaction_id, schema_name, name
+    def table_insert_function_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
     ) -> ScanFunctionResult:
         return self._route("schema_reconcile_insert", schema_name, name)
 
-    def table_update_function_get(  # type: ignore[override]
-        self, *, attach_id, transaction_id, schema_name, name
+    def table_update_function_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
     ) -> ScanFunctionResult:
         return self._route("schema_reconcile_update", schema_name, name)
 
-    def table_delete_function_get(  # type: ignore[override]
-        self, *, attach_id, transaction_id, schema_name, name
+    def table_delete_function_get(
+        self,
+        *,
+        attach_id: AttachId,
+        transaction_id: TransactionId | None,
+        schema_name: str,
+        name: str,
     ) -> ScanFunctionResult:
         return self._route("schema_reconcile_delete", schema_name, name)
 
