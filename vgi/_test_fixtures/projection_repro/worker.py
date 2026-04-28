@@ -40,6 +40,7 @@ from vgi_rpc.rpc import OutputCollector
 
 from vgi import Worker
 from vgi.arguments import Arg
+from vgi.invocation import GlobalInitResponse
 from vgi.catalog import Catalog, Schema
 from vgi.catalog.catalog_interface import (
     AttachId,
@@ -203,7 +204,108 @@ class ProjReproFullSchema(TableFunctionGenerator[_Args, None]):
 # ---------------------------------------------------------------------------
 
 
-_FUNCTIONS = [ProjReproStrict, ProjReproFullSchema]
+@dataclass(slots=True)
+class _ChunkedState:
+    emitted: int = 0
+
+
+@init_single_worker
+@bind_fixed_schema
+class ProjReproChunked(TableFunctionGenerator[_Args, _ChunkedState]):
+    """Multi-tick variant — emits one small batch per ``process()`` call.
+
+    Mirrors ``kafka_consume``'s shard-queue pattern where each ``process()``
+    tick emits one batch and returns, letting the framework reschedule.
+    Multi-tick output is where we observed the projection bug in
+    vgi-kafka: ``count(*) WHERE value_schema_id IS NOT NULL`` returned
+    a non-zero count even though the worker emitted ``None`` for every
+    row's ``value_schema_id``.
+    """
+
+    FunctionArguments = _Args
+
+    class Meta:
+        name = "proj_repro_chunked"
+        description = "projection-pushdown reproducer (multi-tick, full FIXED_SCHEMA)"
+        projection_pushdown = True
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = WIDE_SCHEMA
+
+    @classmethod
+    def initial_state(cls, params: Any) -> _ChunkedState:
+        return _ChunkedState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_Args],
+        state: _ChunkedState,
+        out: OutputCollector,
+    ) -> None:
+        n = params.args.n
+        chunk = 2  # tiny — exercise multi-batch shape like kafka shard ticks
+        if state.emitted >= n:
+            out.finish()
+            return
+        end = min(state.emitted + chunk, n)
+        rows = [_build_row_dict(i) for i in range(state.emitted, end)]
+        out.emit(pa.RecordBatch.from_pylist(rows, schema=cls.FIXED_SCHEMA))
+        state.emitted = end
+        if state.emitted >= n:
+            out.finish()
+
+
+@bind_fixed_schema
+class ProjReproMultiWorker(TableFunctionGenerator[_Args, _ChunkedState]):
+    """Multi-worker, multi-tick variant.
+
+    Mirrors ``kafka_consume`` with 4 partitions: ``on_init`` requests
+    ``max_workers=4`` and each worker emits chunks of 2 rows per
+    ``process()`` tick. Together with full-FIXED_SCHEMA emission and
+    projection_pushdown, this exercises the same code path that
+    misbehaved in vgi-kafka where ``count(*) WHERE value_schema_id IS
+    NOT NULL`` returned 4 instead of 0 on a topic where every emitted
+    row had ``value_schema_id=None``.
+    """
+
+    FunctionArguments = _Args
+
+    class Meta:
+        name = "proj_repro_multi_worker"
+        description = "projection-pushdown reproducer (4 workers, multi-tick, full FIXED_SCHEMA)"
+        projection_pushdown = True
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = WIDE_SCHEMA
+
+    @classmethod
+    def on_init(cls, params: Any) -> GlobalInitResponse:
+        return GlobalInitResponse(max_workers=4)
+
+    @classmethod
+    def initial_state(cls, params: Any) -> _ChunkedState:
+        return _ChunkedState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_Args],
+        state: _ChunkedState,
+        out: OutputCollector,
+    ) -> None:
+        n = params.args.n
+        chunk = 2
+        if state.emitted >= n:
+            out.finish()
+            return
+        end = min(state.emitted + chunk, n)
+        rows = [_build_row_dict(i) for i in range(state.emitted, end)]
+        out.emit(pa.RecordBatch.from_pylist(rows, schema=cls.FIXED_SCHEMA))
+        state.emitted = end
+        if state.emitted >= n:
+            out.finish()
+
+
+_FUNCTIONS = [ProjReproStrict, ProjReproFullSchema, ProjReproChunked, ProjReproMultiWorker]
 
 
 _CATALOG = Catalog(

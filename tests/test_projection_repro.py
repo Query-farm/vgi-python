@@ -173,6 +173,43 @@ class TestProjReproFullSchema:
     server-side rather than fail with an opaque cast error.
     """
 
+    def test_full_emit_projected_to_all_null_column_stays_null(self) -> None:
+        """Worker emits 12 cols; projection picks ``value_schema_id`` (all NULL).
+
+        Reproduces a bug observed in vgi-kafka: a column declared
+        ``pa.int32()`` nullable that the worker fills with all-None
+        comes back from a projected scan with non-null values. The
+        projected wire batch carries one column (``value_schema_id``)
+        but DuckDB / the framework reads it back from a different
+        position than the worker wrote, so unrelated bytes appear in
+        the int32 cells.
+
+        ``proj_repro_full_schema`` builds the full WIDE_SCHEMA per
+        ``_build_row_dict``, which sets ``value_schema_id=None`` for
+        every row. After projection, the resulting column must still
+        be all-NULL.
+        """
+        # value_schema_id is index 10 in WIDE_SCHEMA.
+        value_schema_id_idx = 10
+        with Client("vgi-fixture-projection-repro-worker", worker_limit=1) as client:
+            outputs = list(
+                client.table_function(
+                    function_name="proj_repro_full_schema",
+                    arguments=Arguments(positional=(pa.scalar(8),)),
+                    projection_ids=[value_schema_id_idx],
+                )
+            )
+        table = pa.Table.from_batches(outputs)
+        assert table.num_rows == 8
+        assert table.num_columns == 1
+        assert table.schema.names == ["value_schema_id"]
+        values = table.column("value_schema_id").to_pylist()
+        assert values == [None] * 8, (
+            f"projected all-NULL int32 column came back with non-null "
+            f"values: {values} — projection plumbing is mis-mapping "
+            f"column positions between emit and read."
+        )
+
     def test_full_emit_with_projection_does_not_cast_crash(self) -> None:
         """Worker emitting 12 cols against a 1-col projection lands cleanly.
 
