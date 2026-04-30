@@ -159,13 +159,30 @@ _COUNT_SCHEMA: pa.Schema = pa.schema([pa.field("count", pa.int64(), nullable=Fal
 # Rowid is opaque (pickled tuple), so this works for int, timestamp, and
 # struct rowids alike. The Arrow schema (the thing under test) is
 # reconstructed from TABLES on read.
+#
+# The C++ extension's worker pool freely spawns multiple worker processes
+# for one ATTACH (POOL_MAX caps idle pool size, not concurrency), so the
+# fixture needs cross-process state; SQLite is the cheapest such store.
+# To avoid leftover rows from a previous test run poisoning the next,
+# the DB filename is keyed on the parent (DuckDB) PID — every test
+# session gets its own file, and all worker processes spawned from the
+# same DuckDB process share it without any cross-process synchronization.
 # ---------------------------------------------------------------------------
 
 _lock = threading.Lock()
 
 
 def _db_path() -> str:
-    return os.environ.get("VGI_SCHEMA_RECONCILE_DB", "/tmp/vgi_schema_reconcile.sqlite")
+    override = os.environ.get("VGI_SCHEMA_RECONCILE_DB")
+    if override:
+        return override
+    # Use the worker's process-group ID so every worker subprocess spawned
+    # by the same DuckDB process shares one SQLite file, while distinct
+    # test invocations land on different files. PPID alone is unstable
+    # because ``uv run`` inserts an intermediate process per worker; PGID
+    # propagates across fork/exec by default and stays stable for the
+    # life of one test session.
+    return f"/tmp/vgi_schema_reconcile.{os.getpgrp()}.sqlite"
 
 
 def _connect() -> sqlite3.Connection:
@@ -227,19 +244,11 @@ def _delete_row(spec: TableSpec, rid: Any) -> bool:
 def _next_int_rowid(spec: TableSpec) -> int:
     """For the int64-rowid table, autoincrement-ish."""
     with _lock, _connect() as conn:
-        max_row = conn.execute(f"SELECT payload FROM {spec.storage_table}").fetchall()
+        rows = conn.execute(f"SELECT payload FROM {spec.storage_table}").fetchall()
         # The int rowid is stored in the payload as ``__rid__`` for convenience
         # of monotonic generation.
-        existing = [pickle.loads(p[0]).get("__rid__", 0) for p in max_row]
+        existing = [pickle.loads(p[0]).get("__rid__", 0) for p in rows]
         return (max(existing) + 1) if existing else 1
-
-
-def _reset_storage() -> None:
-    """Test hook — drop the on-disk store."""
-    p = _db_path()
-    for ext in ("", "-wal", "-shm"):
-        if os.path.exists(p + ext):
-            os.unlink(p + ext)
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +450,8 @@ class SchemaReconcileScan(TableFunctionGenerator[None, None]):
 
     @classmethod
     def on_init(cls, params: InitParams[None]) -> GlobalInitResponse:
+        # One worker emits the full table; with parallel workers each
+        # would duplicate every row.
         return GlobalInitResponse(max_workers=1)
 
     @classmethod
