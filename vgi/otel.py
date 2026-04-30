@@ -3,7 +3,7 @@
 Provides ``VgiTracer`` — a thin wrapper that enriches both OTel spans and
 Sentry scopes with VGI-level attributes (function name, attach_id, etc.)
 and creates ``vgi.execute.*`` per-batch records (OTel spans + Sentry
-breadcrumbs).
+spans + Sentry breadcrumbs).
 
 All OTel and Sentry imports are deferred to ``VgiTracer.create()`` so that
 ``import vgi.otel`` works even when neither dependency is installed.  When
@@ -14,6 +14,15 @@ backends.  vgi-rpc's own Sentry auto-attach handles RPC-layer fields
 (method name, server id, auth principal); the helpers here add VGI-layer
 fields (function name, function type, attach id, transaction id, per-batch
 row counts) on top.
+
+Sentry spans:  every exchange creates a child span ``op=vgi.execute``,
+``name=<function_name>`` under the active RPC transaction.  Row counts and
+byte sizes land as ``vgi.execute.*`` span attributes — searchable in Trace
+Explorer (e.g. ``span.op:vgi.execute vgi.function.name:scan_orders ->
+p99(span.duration) GROUP BY vgi.execute.input_rows``).  Breadcrumbs are
+still emitted for the Issues-side chronological view of recent batches
+when an exception fires later.  High-volume streams may hit Sentry's
+per-transaction span cap (~1000); use ``traces_sample_rate`` to scale.
 """
 
 from __future__ import annotations
@@ -247,6 +256,8 @@ class _ExchangeTimer:
         "_execution_id",
         "_span_ctx",
         "_span",
+        "_sentry_span_ctx",
+        "_sentry_span",
         "_start",
     )
 
@@ -265,6 +276,8 @@ class _ExchangeTimer:
         self._execution_id = execution_id
         self._span_ctx: Any = None
         self._span: Any = None
+        self._sentry_span_ctx: Any = None
+        self._sentry_span: Any = None
         self._start = 0.0
 
     def __enter__(self) -> _ExchangeTimer:
@@ -273,31 +286,52 @@ class _ExchangeTimer:
         # Always start the wall clock so Sentry breadcrumbs report duration
         # even in Sentry-only deployments without OTel.
         self._start = time.monotonic()
-        if not self._vgi_tracer.enabled:
-            return self
-        attrs: dict[str, Any] = {
-            "vgi.function.name": self._function_name,
-            "vgi.function.type": self._function_type,
-        }
-        if self._execution_id is not None:
-            attrs["vgi.execute.execution_id"] = self._execution_id.hex()
-        self._span_ctx = self._vgi_tracer.start_span(self._span_name, attributes=attrs)
-        self._span = self._span_ctx.__enter__()
+        if self._vgi_tracer.enabled:
+            attrs: dict[str, Any] = {
+                "vgi.function.name": self._function_name,
+                "vgi.function.type": self._function_type,
+            }
+            if self._execution_id is not None:
+                attrs["vgi.execute.execution_id"] = self._execution_id.hex()
+            self._span_ctx = self._vgi_tracer.start_span(self._span_name, attributes=attrs)
+            self._span = self._span_ctx.__enter__()
+        if self._vgi_tracer.sentry_enabled:
+            import sentry_sdk
+
+            # Child span under the RPC transaction's root span.  ``op``
+            # groups all vgi user-code spans in Trace Explorer; ``name`` is
+            # the user function so per-function aggregations work directly.
+            # When tracing is sampled out (``traces_sample_rate=0``) Sentry
+            # returns a NoOpSpan that silently absorbs ``set_data``/__exit__.
+            self._sentry_span_ctx = sentry_sdk.start_span(
+                op="vgi.execute",
+                name=self._function_name,
+            )
+            self._sentry_span = self._sentry_span_ctx.__enter__()
+            self._sentry_span.set_data("vgi.function.name", self._function_name)
+            self._sentry_span.set_data("vgi.function.type", self._function_type)
+            if self._execution_id is not None:
+                self._sentry_span.set_data("vgi.execute.execution_id", self._execution_id.hex())
         return self
 
     def __exit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, *a: object) -> None:
         if self._span is not None:
-            if exc_val is not None:
-                from opentelemetry.trace import StatusCode
+            from opentelemetry.trace import StatusCode
 
+            if exc_val is not None:
                 self._span.set_status(StatusCode.ERROR, str(exc_val))
                 self._span.record_exception(exc_val)
             else:
-                from opentelemetry.trace import StatusCode
-
                 self._span.set_status(StatusCode.OK)
         if self._span_ctx is not None:
             self._span_ctx.__exit__(exc_type, exc_val, *a)
+        if self._sentry_span is not None:
+            if exc_val is not None:
+                self._sentry_span.set_status("internal_error")
+            else:
+                self._sentry_span.set_status("ok")
+        if self._sentry_span_ctx is not None:
+            self._sentry_span_ctx.__exit__(exc_type, exc_val, *a)
 
     def record(
         self,
@@ -333,6 +367,20 @@ class _ExchangeTimer:
         if self._vgi_tracer.sentry_enabled:
             import sentry_sdk
 
+            # Span attributes — searchable in Trace Explorer / Insights.
+            if self._sentry_span is not None:
+                if input_rows is not None:
+                    self._sentry_span.set_data("vgi.execute.input_rows", input_rows)
+                if output_rows is not None:
+                    self._sentry_span.set_data("vgi.execute.output_rows", output_rows)
+                if input_bytes is not None:
+                    self._sentry_span.set_data("vgi.execute.input_bytes", input_bytes)
+                if output_bytes is not None:
+                    self._sentry_span.set_data("vgi.execute.output_bytes", output_bytes)
+
+            # Breadcrumb — chronological diagnostic visible in the Issues
+            # panel if an exception fires later in the same transaction.
+            # Complementary to the span (which only shows in Performance).
             data: dict[str, Any] = {
                 "function_name": self._function_name,
                 "function_type": self._function_type,

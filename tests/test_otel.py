@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 import pytest
@@ -250,6 +250,158 @@ class TestExchangeTimer:
         assert span.attributes["vgi.execute.output_rows"] == 50
         assert span.attributes["vgi.execute.input_bytes"] == 2048
         assert span.attributes["vgi.execute.output_bytes"] == 2048
+
+
+class TestExchangeTimerSentrySpans:
+    """Sentry-side behavior of _ExchangeTimer — spans + breadcrumb dual-write."""
+
+    def _make_sentry_tracer(self) -> VgiTracer:
+        """Build a tracer with sentry_enabled=True and OTel disabled."""
+        return VgiTracer(enabled=False, sentry_enabled=True)
+
+    def _patch_sentry(self) -> tuple[MagicMock, MagicMock, MagicMock]:
+        """Patch sentry_sdk in vgi.otel.  Returns (sdk_mock, span_mock, span_ctx_mock)."""
+        mock_sdk = MagicMock()
+        # ``start_span`` returns a context manager whose ``__enter__`` yields
+        # the span object; both objects need separate identities so we can
+        # distinguish ``span.set_data`` from ``ctx.__exit__`` calls.
+        mock_span = MagicMock()
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__.return_value = mock_span
+        mock_sdk.start_span.return_value = mock_ctx
+        return mock_sdk, mock_span, mock_ctx
+
+    def test_span_started_on_enter(self) -> None:
+        """Entering the timer with sentry enabled starts a child span."""
+        tracer = self._make_sentry_tracer()
+        mock_sdk, mock_span, _ = self._patch_sentry()
+        timer = _timed_exchange(tracer, "ignored", "scan_orders", "table", b"\xab")
+        with (
+            patch("sentry_sdk.start_span", mock_sdk.start_span),
+            patch("sentry_sdk.add_breadcrumb", mock_sdk.add_breadcrumb),
+            timer,
+        ):
+            timer.record(input_rows=10, output_rows=10)
+        mock_sdk.start_span.assert_called_once_with(op="vgi.execute", name="scan_orders")
+        # Identity attributes set immediately on enter.
+        data_calls = {call[0][0]: call[0][1] for call in mock_span.set_data.call_args_list}
+        assert data_calls["vgi.function.name"] == "scan_orders"
+        assert data_calls["vgi.function.type"] == "table"
+        assert data_calls["vgi.execute.execution_id"] == "ab"
+
+    def test_record_sets_span_data(self) -> None:
+        """record() copies row + byte counts onto the Sentry span as set_data."""
+        tracer = self._make_sentry_tracer()
+        mock_sdk, mock_span, _ = self._patch_sentry()
+        timer = _timed_exchange(tracer, "ignored", "scan_orders", "table", None)
+        with (
+            patch("sentry_sdk.start_span", mock_sdk.start_span),
+            patch("sentry_sdk.add_breadcrumb", mock_sdk.add_breadcrumb),
+            timer,
+        ):
+            timer.record(input_rows=100, output_rows=99, input_bytes=4096, output_bytes=4000)
+        data_calls = {call[0][0]: call[0][1] for call in mock_span.set_data.call_args_list}
+        assert data_calls["vgi.execute.input_rows"] == 100
+        assert data_calls["vgi.execute.output_rows"] == 99
+        assert data_calls["vgi.execute.input_bytes"] == 4096
+        assert data_calls["vgi.execute.output_bytes"] == 4000
+
+    def test_breadcrumb_still_emitted(self) -> None:
+        """Breadcrumb is still added (Issues-side chronological diagnostic)."""
+        tracer = self._make_sentry_tracer()
+        mock_sdk, _, _ = self._patch_sentry()
+        timer = _timed_exchange(tracer, "ignored", "scan_orders", "table", b"\xff\xee")
+        with (
+            patch("sentry_sdk.start_span", mock_sdk.start_span),
+            patch("sentry_sdk.add_breadcrumb", mock_sdk.add_breadcrumb),
+            timer,
+        ):
+            timer.record(input_rows=5, output_rows=5)
+        mock_sdk.add_breadcrumb.assert_called_once()
+        crumb_kwargs = mock_sdk.add_breadcrumb.call_args.kwargs
+        assert crumb_kwargs["category"] == "vgi.execute"
+        assert "scan_orders" in crumb_kwargs["message"]
+        assert crumb_kwargs["data"]["function_name"] == "scan_orders"
+        assert crumb_kwargs["data"]["execution_id"] == "ffee"
+        assert crumb_kwargs["data"]["input_rows"] == 5
+
+    def test_status_ok_on_clean_exit(self) -> None:
+        """Successful exit sets the span status to ``ok``."""
+        tracer = self._make_sentry_tracer()
+        mock_sdk, mock_span, mock_ctx = self._patch_sentry()
+        timer = _timed_exchange(tracer, "ignored", "f", "scalar", None)
+        with (
+            patch("sentry_sdk.start_span", mock_sdk.start_span),
+            patch("sentry_sdk.add_breadcrumb", mock_sdk.add_breadcrumb),
+            timer,
+        ):
+            pass
+        mock_span.set_status.assert_called_with("ok")
+        mock_ctx.__exit__.assert_called_once()
+
+    def test_status_error_on_exception(self) -> None:
+        """Exception in the timer body sets the span status to ``internal_error``."""
+        tracer = self._make_sentry_tracer()
+        mock_sdk, mock_span, mock_ctx = self._patch_sentry()
+        timer = _timed_exchange(tracer, "ignored", "f", "scalar", None)
+        with (
+            patch("sentry_sdk.start_span", mock_sdk.start_span),
+            patch("sentry_sdk.add_breadcrumb", mock_sdk.add_breadcrumb),
+            pytest.raises(RuntimeError, match="boom"),
+            timer,
+        ):
+            raise RuntimeError("boom")
+        mock_span.set_status.assert_called_with("internal_error")
+        # Context manager still exited cleanly so Sentry can finalise the span.
+        mock_ctx.__exit__.assert_called_once()
+
+    def test_no_sentry_calls_when_disabled(self) -> None:
+        """When neither OTel nor Sentry is enabled the timer must not touch sentry_sdk."""
+        tracer = get_noop_tracer()
+        mock_sdk, _, _ = self._patch_sentry()
+        timer = _timed_exchange(tracer, "ignored", "f", "scalar", None)
+        with (
+            patch("sentry_sdk.start_span", mock_sdk.start_span),
+            patch("sentry_sdk.add_breadcrumb", mock_sdk.add_breadcrumb),
+            timer,
+        ):
+            timer.record(input_rows=1, output_rows=1)
+        mock_sdk.start_span.assert_not_called()
+        mock_sdk.add_breadcrumb.assert_not_called()
+
+    def test_sentry_and_otel_dual_write(self) -> None:
+        """When both backends are active, OTel span and Sentry span are both populated."""
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from vgi_rpc.otel import OtelConfig
+
+        exporter = _CollectingExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+        with patch("opentelemetry.trace.get_tracer") as mock_get_tracer:
+            mock_get_tracer.return_value = provider.get_tracer("vgi")
+            tracer = VgiTracer.create(OtelConfig())
+        # Force sentry_enabled=True without actually initialising the SDK.
+        tracer._sentry_enabled = True
+
+        mock_sdk, mock_span, _ = self._patch_sentry()
+        timer = _timed_exchange(tracer, "vgi.execute.scalar", "dual", "scalar", None)
+        with (
+            patch("sentry_sdk.start_span", mock_sdk.start_span),
+            patch("sentry_sdk.add_breadcrumb", mock_sdk.add_breadcrumb),
+            timer,
+        ):
+            timer.record(input_rows=7, output_rows=7)
+
+        # OTel side
+        otel_spans = exporter.spans
+        assert len(otel_spans) == 1
+        assert otel_spans[0].attributes["vgi.execute.input_rows"] == 7
+        # Sentry side
+        mock_sdk.start_span.assert_called_once()
+        data_calls = {call[0][0]: call[0][1] for call in mock_span.set_data.call_args_list}
+        assert data_calls["vgi.execute.input_rows"] == 7
 
 
 class TestBatchBytes:
