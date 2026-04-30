@@ -5,6 +5,7 @@ from typing import Annotated
 
 import pyarrow as pa
 import pytest
+from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import AuthContext, CallContext, OutputCollector
 from vgi_rpc.utils import deserialize_record_batch
 
@@ -17,7 +18,12 @@ from vgi.protocol import (
     TableFunctionCardinalityRequest,
     TableFunctionStatisticsRequest,
 )
-from vgi.scalar_function import ScalarFunction
+from vgi.scalar_function import (
+    BindParameters,
+    BindResult,
+    ScalarFunction,
+    ScalarFunctionGenerator,
+)
 from vgi.table_function import (
     BindParams,
     ProcessParams,
@@ -1504,3 +1510,121 @@ class TestGeoFunctions:
             candidates=[func_cls],
         )
         assert result is func_cls
+
+
+# ---------------------------------------------------------------------------
+# Typed BindResult.opaque_data round-trip
+#
+# The user-facing API on BindResult takes a typed
+# ``ArrowSerializableDataclass | None``. The framework serializes it to
+# bytes at the bind→response boundary; the wire-facing
+# ``BindResponse.opaque_data`` field is ``bytes | None``. Consumers
+# (process(), on_init(), table-function variants) reconstruct via
+# ``MyConcreteDataclass.deserialize_from_bytes(raw)`` — the framework
+# can't reconstruct the abstract base back to its concrete subclass
+# without a class-name registry, so we keep the wire honest about being
+# bytes and the consumer explicit about what type it expects.
+#
+# This test locks in that contract end-to-end.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _OpaquePayload(ArrowSerializableDataclass):
+    """Concrete payload to round-trip through BindResult.opaque_data."""
+
+    schema_id: int
+    label: str
+
+
+class _OpaqueDataFunc(ScalarFunctionGenerator):
+    """Scalar that stashes a typed payload in BindResult.opaque_data."""
+
+    class Meta:
+        name = "opaque_probe"
+
+    _compute_params: dict[str, Arg] = {
+        "value": Arg(0, arrow_type=pa.int64(), doc="dummy column"),
+    }
+    _const_params: dict[str, Arg] = {}
+
+    @classmethod
+    def output_type(cls, params: BindParameters) -> pa.DataType:
+        return pa.int64()
+
+    @classmethod
+    def catalog_output_schema(cls) -> pa.Schema:
+        return pa.schema([pa.field("result", pa.int64())])
+
+    @classmethod
+    def on_bind(cls, params: BindParameters) -> BindResult:
+        return BindResult(
+            output_type=pa.int64(),
+            opaque_data=_OpaquePayload(schema_id=42, label="hi"),
+        )
+
+    @classmethod
+    def process(cls, *, batch, init_call, init_response, storage, auth_context):
+        # Not exercised by this test, but required to be defined since
+        # ScalarFunctionGenerator declares it abstract.
+        return batch
+
+
+class TestBindOpaqueDataRoundTrip:
+    """Lock in the typed-producer / bytes-wire / explicit-consumer contract."""
+
+    def test_bind_serializes_typed_opaque_data_to_bytes(self) -> None:
+        """on_bind returns a typed dataclass; framework wraps to bytes on the wire."""
+        bind_request = BindRequest(
+            function_name="opaque_probe",
+            arguments=Arguments(positional=()),
+            function_type=FunctionType.SCALAR,
+            input_schema=pa.schema([pa.field("value", pa.int64())]),
+        )
+        response = _OpaqueDataFunc.bind(bind_request)
+        assert response.opaque_data is not None
+        # Wire-facing field is bytes (no longer the abstract base).
+        assert isinstance(response.opaque_data, bytes)
+
+    def test_consumer_reconstructs_via_deserialize_from_bytes(self) -> None:
+        """A consumer that knows the concrete type round-trips the payload exactly."""
+        bind_request = BindRequest(
+            function_name="opaque_probe",
+            arguments=Arguments(positional=()),
+            function_type=FunctionType.SCALAR,
+            input_schema=pa.schema([pa.field("value", pa.int64())]),
+        )
+        response = _OpaqueDataFunc.bind(bind_request)
+        assert response.opaque_data is not None
+        # Consumer-side reconstruction. The framework doesn't try to be
+        # clever here — the consumer always knows what concrete type to
+        # expect, and explicit reconstruction is preferred over a class-
+        # name registry (loading-order footguns, name collisions in
+        # ``__main__``, security implications around ``importlib`` over
+        # network bytes).
+        payload = _OpaquePayload.deserialize_from_bytes(response.opaque_data)
+        assert payload == _OpaquePayload(schema_id=42, label="hi")
+
+    def test_bytes_flow_through_init_request(self) -> None:
+        """The bytes from BindResponse can be embedded in a subsequent InitRequest."""
+        from vgi.protocol import InitRequest
+
+        bind_request = BindRequest(
+            function_name="opaque_probe",
+            arguments=Arguments(positional=()),
+            function_type=FunctionType.SCALAR,
+            input_schema=pa.schema([pa.field("value", pa.int64())]),
+        )
+        bind_response = _OpaqueDataFunc.bind(bind_request)
+        # The bytes flow through unchanged into InitRequest.bind_opaque_data,
+        # whose declared type is also bytes | None — no serialization
+        # round-trip in the middle.
+        init_request = InitRequest(
+            bind_call=bind_request,
+            output_schema=pa.schema([pa.field("result", pa.int64())]),
+            bind_opaque_data=bind_response.opaque_data,
+        )
+        assert isinstance(init_request.bind_opaque_data, bytes)
+        # And reconstruction off the InitRequest works the same way.
+        payload = _OpaquePayload.deserialize_from_bytes(init_request.bind_opaque_data)
+        assert payload == _OpaquePayload(schema_id=42, label="hi")

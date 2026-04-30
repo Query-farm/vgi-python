@@ -133,7 +133,14 @@ class InitRequest(ArrowSerializableDataclass):
     # Core (always present)
     bind_call: BindRequest
     output_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
-    bind_opaque_data: Annotated[ArrowSerializableDataclass | None, ArrowType(pa.binary())] = None
+    # Wire-facing — bytes the framework produced from the typed
+    # ``BindResult.opaque_data``. Consumers reconstruct via
+    # ``MyConcreteDataclass.deserialize_from_bytes(raw)``. See
+    # ``BindResponse.opaque_data`` in vgi/invocation.py for the full
+    # contract rationale (typed producer / bytes wire / explicit
+    # consumer; abstract-base reconstruction can't be done in Python
+    # without a class registry).
+    bind_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
     # Table function extras (None for scalar)
     projection_ids: list[int] | None = None
@@ -145,7 +152,8 @@ class InitRequest(ArrowSerializableDataclass):
 
     # Secondary init (None = global init, set = secondary)
     execution_id: bytes | None = None
-    init_opaque_data: Annotated[ArrowSerializableDataclass | None, ArrowType(pa.binary())] = None
+    # Same contract as ``bind_opaque_data`` above.
+    init_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
     # Order pushdown hint from DuckDB's RowGroupPruner optimizer (all None when no hint)
     order_by_column_name: str | None = None
@@ -168,7 +176,8 @@ class TableFunctionCardinalityRequest(ArrowSerializableDataclass):
     """Consolidated request for table function cardinality."""
 
     bind_call: BindRequest
-    bind_opaque_data: Annotated[ArrowSerializableDataclass | None, ArrowType(pa.binary())] = None
+    # Same contract as InitRequest.bind_opaque_data above.
+    bind_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -181,7 +190,8 @@ class TableFunctionStatisticsRequest(ArrowSerializableDataclass):
     """
 
     bind_call: BindRequest
-    bind_opaque_data: Annotated[ArrowSerializableDataclass | None, ArrowType(pa.binary())] = None
+    # Same contract as InitRequest.bind_opaque_data above.
+    bind_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
 
 # ---------------------------------------------------------------------------

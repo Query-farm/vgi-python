@@ -77,7 +77,7 @@ from queue import Queue
 from typing import IO, Any, Literal, cast
 
 import pyarrow as pa
-from vgi_rpc import ArrowSerializableDataclass, WorkerPool
+from vgi_rpc import WorkerPool
 from vgi_rpc.log import Message
 from vgi_rpc.rpc import (
     AnnotatedBatch,
@@ -885,7 +885,7 @@ class Client(CatalogClientMixin):
         pushdown_filters_batch: pa.RecordBatch | None = None,
         phase: TableInOutFunctionInitPhase | None = None,
         execution_id: bytes | None = None,
-        init_opaque_data: ArrowSerializableDataclass | None = None,
+        init_opaque_data: bytes | None = None,
     ) -> StreamSession:
         """Call init on a worker proxy and return a StreamSession.
 

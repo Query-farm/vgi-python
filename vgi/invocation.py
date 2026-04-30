@@ -71,7 +71,14 @@ class BindResponse(ArrowSerializableDataclass):
     """
 
     output_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
-    opaque_data: Annotated[ArrowSerializableDataclass | None, ArrowType(pa.binary())] = None
+    # Wire-facing field — the bytes are produced by the framework calling
+    # ``.serialize_to_bytes()`` on the typed ``BindResult.opaque_data`` at
+    # the bind→response boundary (see vgi.scalar_function /
+    # vgi.table_function / vgi.table_in_out_function). Consumers
+    # reconstruct via ``MyConcreteDataclass.deserialize_from_bytes(raw)``;
+    # the abstract-base typed-roundtrip can't be done in Python without a
+    # class registry, so we kept the wire honest about being bytes.
+    opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
     lookup_secret_types: list[str] = field(default_factory=list)
     lookup_scopes: list[str] = field(default_factory=list)
     lookup_names: list[str] = field(default_factory=list)
@@ -124,7 +131,10 @@ class BaseInitResponse(ArrowSerializableDataclass):
     """
 
     execution_id: bytes = field(default_factory=lambda: uuid.uuid4().bytes)
-    opaque_data: Annotated[ArrowSerializableDataclass | None, ArrowType(pa.binary())] = None
+    # Wire-facing field — see comment on ``BindResponse.opaque_data``
+    # above for the typed-producer / bytes-wire / explicit-consumer
+    # contract.
+    opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -619,9 +619,20 @@ class ScalarFunctionGenerator(vgi.function.Function):
         if secrets_accessor.needs_resolution:
             return BindResponse.secret_scope_request(secrets_accessor.pending_lookups)
 
+        # Serialize the typed BindResult.opaque_data to bytes before
+        # putting it on the wire. The user-facing API stays typed
+        # (BindResult.opaque_data: ArrowSerializableDataclass | None) but
+        # the wire field is bytes; the framework owns this single
+        # boundary shim so workers don't write per-callsite serialization
+        # boilerplate. See vgi/invocation.py:BindResponse.opaque_data for
+        # the full contract.
+        opaque_bytes: bytes | None = None
+        if result.opaque_data is not None:
+            opaque_bytes = result.opaque_data.serialize_to_bytes()
+
         return BindResponse(
             output_schema=schema(result=result.output_type),
-            opaque_data=result.opaque_data,
+            opaque_data=opaque_bytes,
         )
 
     @classmethod
@@ -629,7 +640,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
         cls,
         *,
         bind_call: BindRequest,
-        opaque_data: ArrowSerializableDataclass | None,
+        opaque_data: bytes | None,
         storage: BoundStorage,
     ) -> GlobalInitResponse:
         """Initialize the function during the init API call.
@@ -639,7 +650,13 @@ class ScalarFunctionGenerator(vgi.function.Function):
 
         Args:
             bind_call: The original BindCall with arguments and schema.
-            opaque_data: Data from on_bind(), if any was returned.
+            opaque_data: Bytes from on_bind()'s ``BindResult.opaque_data``
+                (after the framework's serialize-to-bytes shim), or None
+                if on_bind didn't set it. Reconstruct via
+                ``MyConcreteDataclass.deserialize_from_bytes(opaque_data)``
+                — the consumer always knows what concrete type to expect,
+                so explicit reconstruction is preferred over a framework-
+                level class-name registry.
             storage: BoundStorage for storing data across calls.
 
         Returns:
