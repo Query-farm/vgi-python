@@ -890,7 +890,21 @@ class Worker:
         sys.stderr.write(f"Serving {cls.__name__} on http://{host}:{port}{prefix}\n")
         sys.stderr.flush()
 
-        waitress.serve(wsgi_app, host=host, port=port, _quiet=True)
+        # ``asyncore_use_poll=True`` switches waitress's asyncore loop from
+        # ``select.select()`` to ``select.poll()``. Plain select() carries the
+        # POSIX FD_SETSIZE cap (1024 on Darwin/Linux) — when a long-running
+        # worker accumulates enough fds (broker connections, TLS sockets,
+        # http keep-alives, etc.) past that limit the asyncore loop dies
+        # with ``ValueError: filedescriptor out of range in select()`` and
+        # the HTTP server stops accepting connections. ``poll()`` has no
+        # such limit; on Linux/macOS this is the safe default for any
+        # worker that holds many sockets open. The tradeoff is one less
+        # syscall path that's been around since the 1970s, but waitress
+        # has supported the poll backend since its initial release and
+        # it's how every other production-grade WSGI server runs.
+        waitress.serve(
+            wsgi_app, host=host, port=port, _quiet=True, asyncore_use_poll=True
+        )
 
     @staticmethod
     def _match_function_arguments(
