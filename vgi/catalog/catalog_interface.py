@@ -210,6 +210,11 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     supports_insert: bool = False
     supports_update: bool = False
     supports_delete: bool = False
+    # When False (the default), the C++ extension rejects INSERT/UPDATE/DELETE
+    # ... RETURNING at plan time with a BinderException. Workers that can emit
+    # the affected rows from their write functions must opt in by setting this
+    # to True.
+    supports_returning: bool = False
 
     # Statistics capability flag — indicates this table can provide column statistics.
     supports_column_statistics: bool = False

@@ -854,6 +854,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             supports_insert=True,
             supports_update=True,
             supports_delete=True,
+            supports_returning=True,
             comment=table_comment,
             tags={},
         )

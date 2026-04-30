@@ -1393,10 +1393,11 @@ class Worker:
                 "vgi.principal": ctx.auth.principal,
                 "vgi.auth_domain": ctx.auth.domain,
                 "vgi.authenticated": ctx.auth.authenticated,
-                "vgi.attach_id": request.attach_id.hex() if request.attach_id else None,
-                "vgi.transaction_id": request.transaction_id.hex() if request.transaction_id else None,
             }
         )
+        # vgi.attach_id / vgi.transaction_id are auto-tagged by vgi-rpc's
+        # Sentry dispatch hook (short-hash form) on every method that
+        # carries them.
         func_cls = self._resolve_function(request)
         self._validate_required_settings(func_cls, request)
 
@@ -2035,12 +2036,11 @@ class Worker:
                 "vgi.principal": ctx.auth.principal,
                 "vgi.auth_domain": ctx.auth.domain,
                 "vgi.authenticated": ctx.auth.authenticated,
-                "vgi.attach_id": request.bind_call.attach_id.hex() if request.bind_call.attach_id else None,
-                "vgi.transaction_id": (
-                    request.bind_call.transaction_id.hex() if request.bind_call.transaction_id else None
-                ),
             }
         )
+        # vgi.attach_id / vgi.transaction_id are auto-tagged by vgi-rpc's
+        # Sentry dispatch hook (short-hash form) on every method that
+        # carries them — including this one (descends bind_call).
         func_cls = self._resolve_function(request.bind_call)
         instance = func_cls(logger=_logger)
 
@@ -2171,6 +2171,11 @@ class Worker:
         callers must omit credentials.  See
         :meth:`CatalogInterface.loggable_attach_options` for the
         opt-in option-redaction hook.
+
+        Also short-hashes ``attach_id`` / ``transaction_id`` (when present
+        in *fields*) into Sentry scope tags on the current transaction so
+        catalog operations share the same queryable tag form that vgi-rpc's
+        dispatch hook sets on every other method.
         """
         # Drop None values so logs and breadcrumbs stay tidy.
         clean = {k: v for k, v in fields.items() if v is not None}
@@ -2179,6 +2184,15 @@ class Worker:
             import sentry_sdk
 
             if sentry_sdk.is_initialized():
+                from vgi_rpc.sentry import short_hash
+
+                scope = sentry_sdk.get_current_scope()
+                for fld in ("attach_id", "transaction_id"):
+                    raw = clean.get(fld)
+                    if raw:
+                        hashed = short_hash(raw)
+                        if hashed is not None:
+                            scope.set_tag(f"vgi.{fld}", hashed)
                 sentry_sdk.add_breadcrumb(
                     category=event,
                     message=event,
@@ -2203,6 +2217,13 @@ class Worker:
     ) -> CatalogAttachResult:
         """Attach to a catalog with options."""
         self._enrich_catalog_span(vgi_catalog_name=request.name)
+        self._vgi_tracer.set_current_span_attributes(
+            {
+                "vgi.catalog.name": request.name,
+                "vgi.data_version_spec": request.data_version_spec,
+                "vgi.implementation_version": request.implementation_version,
+            }
+        )
         cat = self._get_catalog()
         options = self._options_batch_to_dict(request.options)
         result = cat.catalog_attach(

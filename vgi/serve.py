@@ -598,6 +598,17 @@ def _maybe_init_sentry() -> None:
     if environment:
         init_kwargs["environment"] = environment
     release = os.environ.get("SENTRY_RELEASE")
+    if not release:
+        # Fall back to the installed vgi package version so non-deploy runs
+        # still get a Sentry release tag (Sentry's UI degrades when release
+        # is unset).  Production deploys should set SENTRY_RELEASE to a git
+        # SHA or tag for commit tracking.
+        try:
+            from importlib.metadata import PackageNotFoundError, version
+
+            release = version("vgi")
+        except PackageNotFoundError:
+            release = None
     if release:
         init_kwargs["release"] = release
     sample_raw = os.environ.get("SENTRY_TRACES_SAMPLE_RATE")
