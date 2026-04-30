@@ -47,6 +47,7 @@ from vgi.arguments import (
     ARRAY_CLASS_TO_DATATYPE,
     COMPLEX_ARRAY_CLASSES,
     Arg,
+    ArgumentValidationError,
     Arguments,
     Auth,
     ConstParam,
@@ -541,6 +542,33 @@ class ScalarFunctionGenerator(vgi.function.Function):
 
     @final
     @classmethod
+    def _validate_param_varargs_min(cls, input_schema: pa.Schema) -> None:
+        """Ensure varargs Params receive at least one column.
+
+        Mirrors the ``Arg.varargs`` rule for table-function arguments: a
+        ``Param(varargs=True)`` must bind to >= 1 input column. Without this
+        guard, ``on_bind`` implementations that index ``arguments_schema``
+        crash with an opaque ``IndexError`` when callers invoke a varargs
+        scalar with zero values.
+        """
+        compute_params: dict[str, Arg[Any]] | None = getattr(cls, "_compute_params", None)
+        if not compute_params:
+            return
+        for name, arg in compute_params.items():
+            if not arg.varargs:
+                continue
+            col_idx = cast(int, arg._resolution_index)
+            if col_idx >= len(input_schema):
+                raise ArgumentValidationError(
+                    f"Varargs parameter '{name}' requires at least 1 value.",
+                    arg_name=name,
+                    position=arg.position,
+                    constraint="varargs requires at least 1 value",
+                    doc=arg.doc if arg.doc else None,
+                )
+
+    @final
+    @classmethod
     def bind(
         cls,
         input: BindRequest,
@@ -556,6 +584,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
 
         """
         assert input.input_schema is not None
+        cls._validate_param_varargs_min(input.input_schema)
         cls._validate_param_type_bounds(input.input_schema)
 
         # Auto-request secrets declared via Secret() annotations on compute()

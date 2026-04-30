@@ -475,7 +475,12 @@ class TableFunctionBase[TArgs](vgi.function.Function):
                         assert isinstance(meta.position, int)
                         kwargs[attr_name] = tuple(arguments.positional[meta.position :])
                     else:
-                        kwargs[attr_name] = arguments.get(meta.position, default=meta.default)
+                        value = arguments.get(meta.position, default=meta.default)
+                        # Run Arg constraint validation (ge/le/gt/lt/choices/pattern).
+                        # Skip for None — explicit SQL NULL or default=None.
+                        if value is not None:
+                            meta._validate(value)
+                        kwargs[attr_name] = value
                     break
 
         return args_class(**kwargs)

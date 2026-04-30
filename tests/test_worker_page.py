@@ -7,8 +7,20 @@ from typing import Annotated, Any
 
 import pyarrow as pa
 
+from vgi._test_fixtures.attach_options import AttachOptionsWorker
 from vgi._test_fixtures.worker import ExampleWorker
-from vgi.catalog import Catalog, Schema, Setting, Table, View
+from vgi.catalog import (
+    AttachId,
+    Catalog,
+    CatalogAttachResult,
+    CatalogInfo,
+    ReadOnlyCatalogInterface,
+    Schema,
+    Setting,
+    Table,
+    View,
+)
+from vgi.catalog.attach_option import AttachOption, extract_attach_option_specs
 from vgi.http.worker_page import (
     WorkerPageResource,
     _display_function_type,
@@ -280,11 +292,15 @@ class TestBuildWorkerPageLegacy:
         assert "add" in html
         assert "seq" in html
 
-    def test_no_schema_heading(self) -> None:
-        """Legacy workers have no schema grouping."""
+    def test_legacy_schema_grouping(self) -> None:
+        """Legacy workers (Worker.functions list) get a default ``main`` schema.
+
+        Pre-dynamic enumeration this used to render a flat function list, but
+        the worker's auto-generated ReadOnlyCatalogInterface really does
+        expose a ``main`` schema, and the page now reflects that.
+        """
         html = build_worker_page(_LegacyWorker, "/vgi").decode()
-        # No <h2 class="schema-heading"> elements (CSS class exists in style block)
-        assert '<h2 class="schema-heading">' not in html
+        assert '<h2 class="schema-heading">main</h2>' in html
 
 
 class TestExampleWorkerPage:
@@ -313,18 +329,357 @@ class TestExampleWorkerPage:
 class TestWorkerPageResource:
     """Tests for the Falcon resource class."""
 
-    def test_on_get(self) -> None:
-        """WorkerPageResource returns pre-rendered body."""
-        body = b"<html>test</html>"
-        resource = WorkerPageResource(body)
+    class _FakeReq:
+        """Minimal Falcon-request stand-in returning fixed query params."""
 
-        class FakeResp:
-            """Fake response object."""
+        def __init__(self, params: dict[str, str] | None = None) -> None:
+            self._params = params or {}
 
-            content_type: str = ""
-            data: bytes = b""
+        def get_param(self, name: str) -> str | None:
+            return self._params.get(name)
 
-        resp = FakeResp()
-        resource.on_get(None, resp)  # type: ignore[arg-type]
+    class _FakeResp:
+        """Minimal Falcon-response stand-in capturing content-type + data."""
+
+        content_type: str = ""
+        data: bytes = b""
+
+    def test_on_get_returns_html_for_minimal_worker(self) -> None:
+        """WorkerPageResource renders the page on every GET."""
+        resource = WorkerPageResource(_MinimalWorker, "/vgi")
+        resp = self._FakeResp()
+        resource.on_get(self._FakeReq(), resp)  # type: ignore[arg-type]
         assert resp.content_type == "text/html; charset=utf-8"
-        assert resp.data == body
+        assert b"<!DOCTYPE html>" in resp.data
+        assert b"_MinimalWorker" in resp.data
+
+    def test_on_get_passes_query_params_through(self) -> None:
+        """``?catalog=`` + ``?data_version_spec=`` reach the renderer."""
+        resource = WorkerPageResource(_MultiCatalogWorker, "/vgi")
+        resp = self._FakeResp()
+        req = self._FakeReq({"catalog": "staging", "data_version_spec": "1.2.3"})
+        resource.on_get(req, resp)  # type: ignore[arg-type]
+        # The staging panel ends up active (no `hidden` attr).
+        assert b'<div class="catalog-panel" id="catpanel-1" role="tabpanel" data-catalog="staging">' in resp.data
+        # The ATTACH SQL clause is baked in (no `hidden` on the dv-clause).
+        # Note: staging's data_version_spec is None, so even with an active
+        # request the dv-clause/dv-value spans don't appear on its panel.
+        # Switch to prod to verify the SQL bake.
+        prod_resp = self._FakeResp()
+        resource.on_get(self._FakeReq({"catalog": "prod", "data_version_spec": "1.2.3"}), prod_resp)  # type: ignore[arg-type]
+        assert b'class="dv-clause">, data_version_spec' in prod_resp.data
+        assert b'class="dv-value">1.2.3</span>' in prod_resp.data
+
+    def test_body_transform_applied(self) -> None:
+        """``body_transform`` lets vgi-serve inject PKCE user-info markup."""
+        resource = WorkerPageResource(
+            _MinimalWorker,
+            "/vgi",
+            body_transform=lambda b: b.replace(b"</body>", b"<div id=injected/></body>"),
+        )
+        resp = self._FakeResp()
+        resource.on_get(self._FakeReq(), resp)  # type: ignore[arg-type]
+        assert b"<div id=injected/>" in resp.data
+
+
+# ---------------------------------------------------------------------------
+# Fixtures: multi-catalog + version-bearing worker
+# ---------------------------------------------------------------------------
+
+
+class _ProdAttachOptions:
+    """Two-option declaration used by the multi-catalog test fixture."""
+
+    region: Annotated[str, AttachOption(desc="AWS region")] = "us-east-1"
+    bucket: Annotated[str, AttachOption(desc="S3 bucket name")] = "prod-bucket"
+
+
+_PROD_OPTION_SPECS = extract_attach_option_specs(_ProdAttachOptions)
+
+
+_TEST_PROD_CATALOG = Catalog(
+    name="prod",
+    comment="Production warehouse",
+    schemas=[Schema(name="main", functions=[_AddFunc])],
+)
+
+
+class _TestMultiCatalogInterface(ReadOnlyCatalogInterface):
+    """Two catalogs: prod (versioned + options) and staging (no version)."""
+
+    catalog = _TEST_PROD_CATALOG
+    catalog_name = "prod"
+
+    def catalogs(self) -> list[CatalogInfo]:
+        """Advertise prod (versioned + options) and staging (vanilla)."""
+        return [
+            CatalogInfo(
+                name="prod",
+                implementation_version="2.4.0",
+                data_version_spec=">=2.0.0,<3.0.0",
+                attach_option_specs=[s.serialize() for s in _PROD_OPTION_SPECS],
+            ),
+            CatalogInfo(
+                name="staging",
+                implementation_version=None,
+                data_version_spec=None,
+                attach_option_specs=[],
+            ),
+        ]
+
+    def catalog_attach(
+        self,
+        *,
+        name: str,
+        options: dict[str, Any],
+        data_version_spec: str | None,
+        implementation_version: str | None,
+        ctx: Any = None,
+    ) -> CatalogAttachResult:
+        """Stub — describe-page tests don't actually attach."""
+        del options, data_version_spec, implementation_version, ctx, name
+        return CatalogAttachResult(
+            attach_id=AttachId(b"\x00" * 16),
+            supports_transactions=False,
+            supports_time_travel=False,
+            catalog_version_frozen=True,
+            catalog_version=1,
+            attach_id_required=False,
+            default_schema="main",
+            settings=[],
+            secret_types=[],
+            comment=None,
+            tags={},
+            resolved_data_version=None,
+            resolved_implementation_version=None,
+        )
+
+
+class _MultiCatalogWorker(Worker):
+    """Test worker exposing two catalogs via ``catalogs()``."""
+
+    catalog_interface = _TestMultiCatalogInterface
+    catalog = _TEST_PROD_CATALOG
+
+
+# ---------------------------------------------------------------------------
+# Tests for the new sections (Cupola button, multi-catalog tabs, attach
+# options table, version display, Cupola deep link)
+# ---------------------------------------------------------------------------
+
+
+class TestCupolaButton:
+    """The "Explore this data in Cupola" button on every describe page."""
+
+    def test_renders_id_and_text(self) -> None:
+        """Cupola anchor element is present with the user-visible label."""
+        html = build_worker_page(_MinimalWorker, "/vgi").decode()
+        assert 'id="cupola-btn"' in html
+        assert "Explore this data in Cupola" in html
+
+    def test_links_to_cupola_service_url(self) -> None:
+        """Default href points at the Cupola entry point."""
+        html = build_worker_page(_MinimalWorker, "/vgi").decode()
+        assert "cupola.query-farm.services" in html
+        # JS rewrites to ?service=… at runtime; the static href is the bare URL.
+        assert 'href="https://cupola.query-farm.services/"' in html
+
+    def test_barn_icon_present(self) -> None:
+        """Decorative barn-with-cupola SVG renders inside the button."""
+        html = build_worker_page(_MinimalWorker, "/vgi").decode()
+        # Presence of the cupola-icon span and the gambrel-roof path is enough.
+        assert 'class="cupola-icon"' in html
+
+
+class TestMultiCatalog:
+    """Catalog tab strip behaviour."""
+
+    def test_single_catalog_no_tabs(self) -> None:
+        """Workers with one catalog do not render the tab strip."""
+        html = build_worker_page(_MinimalWorker, "/vgi").decode()
+        assert 'class="catalog-tabs"' not in html
+        assert 'class="catalog-tab"' not in html
+        assert 'class="catalog-tab active"' not in html
+
+    def test_multi_catalog_renders_tabs(self) -> None:
+        """Workers exposing >1 catalog render one tab per catalog name."""
+        html = build_worker_page(_MultiCatalogWorker, "/vgi").decode()
+        assert 'class="catalog-tabs"' in html
+        # Both catalog names appear inside catalog-tab buttons.
+        assert ">prod</button>" in html
+        assert ">staging</button>" in html
+
+    def test_first_panel_visible_others_hidden(self) -> None:
+        """First catalog panel is visible; subsequent ones use the hidden attr."""
+        html = build_worker_page(_MultiCatalogWorker, "/vgi").decode()
+        # Panel 0 has no `hidden` attribute on the opening div.
+        assert '<div class="catalog-panel" id="catpanel-0" role="tabpanel" data-catalog="prod">' in html
+        # Panel 1 is hidden (a real HTML attribute, not in the class list).
+        assert '<div class="catalog-panel" id="catpanel-1" role="tabpanel" data-catalog="staging" hidden>' in html
+
+
+class TestAttachOptions:
+    """Per-catalog attach options table."""
+
+    def test_no_options_no_section(self) -> None:
+        """Catalogs without declared options omit the Attach options heading."""
+        html = build_worker_page(_MinimalWorker, "/vgi").decode()
+        assert "Attach options" not in html
+
+    def test_options_render_with_types_and_defaults(self) -> None:
+        """The AttachOptionsWorker fixture surfaces every declared option."""
+        html = build_worker_page(AttachOptionsWorker, "/vgi").decode()
+        assert "Attach options" in html
+        # A handful of distinctive declared options.
+        assert "opt_bool" in html
+        assert "opt_string" in html
+        assert "opt_decimal" in html
+        # Their declared types appear (as Arrow type strings).
+        assert "decimal128(18, 4)" in html
+        # Defaults render via repr() and HTML-escape the quotes.
+        assert "&#x27;hello&#x27;" in html
+
+
+class TestVersionDisplay:
+    """Implementation chip + Data version input."""
+
+    def test_impl_chip_renders_when_set(self) -> None:
+        """Catalogs with implementation_version surface the impl chip."""
+        html = build_worker_page(_MultiCatalogWorker, "/vgi").decode()
+        assert 'class="impl-chip"' in html
+        # Verbatim version string lands inside a <code> tag.
+        assert "<code>2.4.0</code>" in html
+
+    def test_dv_input_renders_when_spec_set(self) -> None:
+        """Catalogs with data_version_spec surface a labeled input."""
+        html = build_worker_page(_MultiCatalogWorker, "/vgi").decode()
+        assert 'class="dv-input"' in html
+        assert 'placeholder="latest"' in html
+        # Supported range is shown verbatim — `<` and `>` HTML-escape.
+        assert "&gt;=2.0.0,&lt;3.0.0" in html
+
+    def test_minimal_worker_no_version_ui(self) -> None:
+        """Workers without version metadata render neither chip nor input."""
+        html = build_worker_page(_MinimalWorker, "/vgi").decode()
+        assert 'class="impl-chip"' not in html
+        assert 'class="dv-input"' not in html
+
+
+class TestVersionValidation:
+    """Server-side pre-attach + error banner."""
+
+    def test_supported_version_no_banner(self) -> None:
+        """A version inside the supported set renders the page cleanly."""
+        from vgi._test_fixtures.versioned import VersionedWorker
+
+        html = build_worker_page(
+            VersionedWorker,
+            "/vgi",
+            active_catalog="versioned",
+            requested_data_version="1.1.0",  # in SUPPORTED_DATA_VERSIONS
+        ).decode()
+        assert 'class="dv-error"' not in html
+
+    def test_unsupported_version_shows_error_banner(self) -> None:
+        """The worker's catalog_attach error surfaces in a red banner."""
+        from vgi._test_fixtures.versioned import VersionedWorker
+
+        html = build_worker_page(
+            VersionedWorker,
+            "/vgi",
+            active_catalog="versioned",
+            requested_data_version="1.1.1",  # NOT in SUPPORTED_DATA_VERSIONS
+        ).decode()
+        assert 'class="dv-error"' in html
+        # The worker's verbatim message lands in the banner.
+        assert "Unsupported data_version_spec" in html
+        assert "1.1.1" in html
+
+    def test_no_version_no_banner(self) -> None:
+        """Without ?data_version_spec the page renders without validating."""
+        from vgi._test_fixtures.versioned import VersionedWorker
+
+        html = build_worker_page(VersionedWorker, "/vgi").decode()
+        assert 'class="dv-error"' not in html
+
+    def test_version_without_active_catalog_falls_back_to_first(self) -> None:
+        """No ``catalog`` query param: attach uses the first advertised catalog.
+
+        VersionedWorker advertises one catalog (``versioned``) so the version
+        gets validated against it even without an explicit ``?catalog=``.
+        """
+        from vgi._test_fixtures.versioned import VersionedWorker
+
+        html = build_worker_page(
+            VersionedWorker,
+            "/vgi",
+            requested_data_version="1.1.1",
+        ).decode()
+        # Banner DOES appear because we attach against the only catalog the
+        # worker exposes — that's the desired form-submit behaviour.
+        assert 'class="dv-error"' in html
+
+
+class TestApplyForm:
+    """Apply form: GET reload with ?catalog=&data_version_spec= bakes state."""
+
+    def test_form_renders_with_apply_button(self) -> None:
+        """Each panel with a data_version_spec wraps the input in a GET form."""
+        html = build_worker_page(_MultiCatalogWorker, "/vgi").decode()
+        assert 'class="dv-form" method="get"' in html
+        assert "Apply</button>" in html
+        # The input's `name` is what ends up in the URL after submit.
+        assert 'name="data_version_spec"' in html
+        assert 'name="catalog"' in html
+
+    def test_requested_version_pre_fills_input_and_sql(self) -> None:
+        """``requested_data_version`` shows up in the input value and SQL."""
+        html = build_worker_page(
+            _MultiCatalogWorker,
+            "/vgi",
+            active_catalog="prod",
+            requested_data_version="2.1.0",
+        ).decode()
+        assert 'value="2.1.0"' in html
+        # SQL clause renders inline (no `hidden` attribute) with the value
+        # nested inside a span — search for the markup, not the rendered text.
+        assert 'class="dv-clause">, data_version_spec' in html
+        assert 'class="dv-value">2.1.0</span>' in html
+        # And the chosen catalog tab is active without `hidden`.
+        assert '<div class="catalog-panel" id="catpanel-0" role="tabpanel" data-catalog="prod">' in html
+
+    def test_requested_version_only_applies_to_active_panel(self) -> None:
+        """Inactive panels keep their hidden dv-clause and empty input."""
+        html = build_worker_page(
+            _MultiCatalogWorker,
+            "/vgi",
+            active_catalog="prod",
+            requested_data_version="2.1.0",
+        ).decode()
+        # Staging panel (inactive) has no dv-input at all because its
+        # data_version_spec is None — but if it had one it would be unfilled.
+        # Ensure its panel is hidden.
+        assert '<div class="catalog-panel" id="catpanel-1" role="tabpanel" data-catalog="staging" hidden>' in html
+
+
+class TestCupolaDeepLink:
+    """Cupola button href reflects the active catalog and data version."""
+
+    def test_helper_function_present(self) -> None:
+        """The href update helper is wired into the page script."""
+        html = build_worker_page(_MultiCatalogWorker, "/vgi").decode()
+        assert "function updateCupolaHref()" in html
+        # And it runs at startup so the initial href is correct.
+        assert "updateCupolaHref();" in html
+
+    def test_dv_clause_template_in_attach_sql(self) -> None:
+        """The hidden dv-clause span is part of every catalog's ATTACH SQL."""
+        html = build_worker_page(_MultiCatalogWorker, "/vgi").decode()
+        assert 'class="dv-clause" hidden' in html
+        assert 'class="dv-value"' in html
+
+    def test_dv_input_emits_input_listener(self) -> None:
+        """Typing into the dv-input updates the SQL clause and the Cupola href."""
+        html = build_worker_page(_MultiCatalogWorker, "/vgi").decode()
+        assert "updateDvClause(inp)" in html
+        assert "updateCupolaHref()" in html

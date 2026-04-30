@@ -474,10 +474,13 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
         for field in params.output_schema:
             sums[field.name] = pa.scalar(0, type=field.type)
 
-        # Retrieve the accumulated sums from function storage and merge
-        all_tables = pa.Table.from_batches(
-            [params.storage.deserialize_record_batch(item) for item in params.storage.collect()]
-        )
+        # Retrieve the accumulated sums from function storage and merge.
+        # When process() never stored anything (empty input, or a subclass
+        # like ExceptionProcessFunction that doesn't call super().process()),
+        # storage.collect() returns []. pa.Table.from_batches([]) requires a
+        # schema, so pass it explicitly to avoid a confusing ValueError.
+        batches = [params.storage.deserialize_record_batch(item) for item in params.storage.collect()]
+        all_tables = pa.Table.from_batches(batches, schema=params.output_schema)
 
         for field in params.output_schema:
             col_sum = pc.sum(all_tables.column(field.name))

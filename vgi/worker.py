@@ -1451,6 +1451,27 @@ class Worker:
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
+        # Mirror the scalar varargs guard: a Param(varargs=True) on update()
+        # must bind to at least one input column. Without this check, calling
+        # a varargs aggregate with zero columns crashes much later inside
+        # update() with an opaque "missing 1 required positional argument".
+        compute_params = getattr(func_cls, "_compute_params", {}) or {}
+        for name, arg in compute_params.items():
+            if not getattr(arg, "varargs", False):
+                continue
+            col_idx = arg._resolution_index if arg._resolution_index is not None else 0
+            n_cols = len(request.input_schema) if request.input_schema is not None else 0
+            if col_idx >= n_cols:
+                from vgi.arguments import ArgumentValidationError
+
+                raise ArgumentValidationError(
+                    f"Varargs parameter '{name}' requires at least 1 value.",
+                    arg_name=name,
+                    position=arg.position,
+                    constraint="varargs requires at least 1 value",
+                    doc=arg.doc if arg.doc else None,
+                )
+
         execution_id = uuid.uuid4().bytes
         bind_params = AggregateBindParams(
             args=request.arguments,

@@ -196,6 +196,72 @@ class FunctionStorage(Protocol):
         """
         ...
 
+    # --- Transaction State (per-transaction K/V; visible across executions) ---
+    #
+    # Unlike ``worker_state`` and ``aggregate_state`` (both keyed by
+    # ``execution_id`` — i.e. one query/init), transaction state is keyed by
+    # ``transaction_id`` so that every execution within a SQL transaction
+    # sees the same store. The intended use is "snapshot data the user
+    # expects to be stable for the lifetime of the transaction" —
+    # e.g. Kafka topic watermarks. Repeated reads of the same key return
+    # the same bytes regardless of the broker's current state, so a user
+    # who does ``BEGIN; SELECT ...; SELECT ...; COMMIT;`` gets the
+    # row count they expect.
+    #
+    # Implementations should bound staleness via ``cleanup_old_entries``
+    # (transaction_id never reused after rollback/commit, but we don't
+    # always get a callback).
+
+    def transaction_state_get(
+        self, transaction_id: bytes, keys: list[bytes]
+    ) -> list[bytes | None]:
+        """Load transaction-scoped state values for the given keys.
+
+        Returns a list parallel to ``keys``: each element is the stored
+        ``bytes`` value or ``None`` if the (transaction_id, key) pair is
+        unknown. Non-destructive — repeated calls return the same bytes.
+
+        Args:
+            transaction_id: Caller-supplied transaction identifier
+                (typically the framework's catalog ``transaction_id``).
+            keys: List of binary keys to look up.
+
+        Returns:
+            List parallel to ``keys`` with found values or ``None``.
+
+        """
+        ...
+
+    def transaction_state_put(
+        self, transaction_id: bytes, items: list[tuple[bytes, bytes]]
+    ) -> None:
+        """Unconditionally write transaction-scoped state values.
+
+        ``INSERT OR REPLACE`` semantics — existing values for the same
+        ``(transaction_id, key)`` are overwritten. Implementations
+        should be safe to call concurrently from multiple workers.
+
+        Args:
+            transaction_id: Caller-supplied transaction identifier.
+            items: List of ``(key, value)`` byte tuples.
+
+        """
+        ...
+
+    def transaction_state_clear(self, transaction_id: bytes) -> None:
+        """Drop all state for a transaction.
+
+        Called by the catalog implementation when it observes a commit
+        or rollback. Implementations also cleanup old entries via TTL
+        sweep so a leaked transaction_id eventually GCs even without
+        the explicit clear.
+
+        Args:
+            transaction_id: Caller-supplied transaction identifier.
+
+        """
+        ...
+
     # --- Aggregate Window Partition (per-partition cached input for windowed aggregates) ---
 
     def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes) -> None:
@@ -224,10 +290,52 @@ class FunctionStorage(Protocol):
         ...
 
 
+class TransactionBoundStorage:
+    """Convenience wrapper bound to a single transaction_id.
+
+    Lets a function read/write transaction-scoped state without
+    threading the transaction_id through every call site. Get one via
+    ``BoundStorage.transaction(transaction_id)``.
+    """
+
+    def __init__(self, storage: "FunctionStorage", transaction_id: bytes) -> None:
+        self._base = storage
+        self._transaction_id = transaction_id
+
+    def get(self, keys: list[bytes]) -> list[bytes | None]:
+        """Load values for a list of keys; parallel return list."""
+        return self._base.transaction_state_get(self._transaction_id, keys)
+
+    def get_one(self, key: bytes) -> bytes | None:
+        """Load a single value, or None if missing."""
+        return self.get([key])[0]
+
+    def put(self, items: list[tuple[bytes, bytes]]) -> None:
+        """Write a batch of (key, value) pairs."""
+        self._base.transaction_state_put(self._transaction_id, items)
+
+    def put_one(self, key: bytes, value: bytes) -> None:
+        """Write a single (key, value) pair."""
+        self.put([(key, value)])
+
+    def clear(self) -> None:
+        """Drop every value for this transaction."""
+        self._base.transaction_state_clear(self._transaction_id)
+
+
 class BoundStorage:
     def __init__(self, storage: FunctionStorage, execution_id: bytes):
         self._base = storage
         self._execution_id = execution_id
+
+    def transaction(self, transaction_id: bytes) -> TransactionBoundStorage:
+        """Return a transaction-scoped storage view.
+
+        Used for state that the user expects to be stable across
+        multiple statements in one SQL transaction (e.g. Kafka topic
+        watermarks, for snapshot-isolation reads).
+        """
+        return TransactionBoundStorage(self._base, transaction_id)
 
     def put(self, state: bytes) -> None:
         """Store state for a specific worker."""
@@ -405,6 +513,19 @@ class FunctionStorageSqlite:
                     state_data BLOB NOT NULL,
                     created_at REAL DEFAULT (julianday('now')),
                     PRIMARY KEY (execution_id, group_id)
+                )
+            """)
+            # Transaction state - per-(transaction_id, key) storage for state
+            # the user expects to be stable across multiple statements
+            # within one SQL transaction (e.g. Kafka topic watermarks for
+            # snapshot isolation).
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS transaction_state (
+                    transaction_id BLOB NOT NULL,
+                    key BLOB NOT NULL,
+                    value BLOB NOT NULL,
+                    created_at REAL DEFAULT (julianday('now')),
+                    PRIMARY KEY (transaction_id, key)
                 )
             """)
             # Aggregate window partitions - per-partition cached input for windowed aggregates
@@ -606,6 +727,70 @@ class FunctionStorageSqlite:
         finally:
             conn.close()
 
+    # --- Transaction State ---
+
+    def transaction_state_get(
+        self, transaction_id: bytes, keys: list[bytes]
+    ) -> list[bytes | None]:
+        """Load transaction-scoped values for the given keys."""
+        if not keys:
+            return []
+        conn = self._connect()
+        try:
+            found: dict[bytes, bytes] = {}
+            chunk_size = 500  # stay under SQLite's 999-parameter limit
+            for i in range(0, len(keys), chunk_size):
+                chunk = keys[i : i + chunk_size]
+                placeholders = ",".join("?" * len(chunk))
+                cursor = conn.execute(
+                    f"SELECT key, value FROM transaction_state "  # noqa: S608
+                    f"WHERE transaction_id = ? AND key IN ({placeholders})",
+                    (transaction_id, *chunk),
+                )
+                for row in cursor.fetchall():
+                    found[row[0]] = row[1]
+            return [found.get(k) for k in keys]
+        finally:
+            conn.close()
+
+    def transaction_state_put(
+        self, transaction_id: bytes, items: list[tuple[bytes, bytes]]
+    ) -> None:
+        """Write transaction-scoped values."""
+        if not items:
+            return
+        # Opportunistically clean old entries (1% of calls). Transaction
+        # state is short-lived and dropped explicitly on commit/rollback,
+        # but a TTL sweep covers leaks from missed callbacks.
+        if random.random() < 0.01:
+            self.cleanup_old_entries(max_age_days=1.0)
+
+        conn = self._connect()
+        try:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO transaction_state
+                (transaction_id, key, value, created_at)
+                VALUES (?, ?, ?, julianday('now'))
+                """,
+                [(transaction_id, k, v) for k, v in items],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def transaction_state_clear(self, transaction_id: bytes) -> None:
+        """Drop all state for a transaction."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "DELETE FROM transaction_state WHERE transaction_id = ?",
+                (transaction_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     # --- Aggregate Window Partition ---
 
     def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes) -> None:
@@ -719,6 +904,13 @@ class FunctionStorageSqlite:
                 """,
                 (max_age_days,),
             )
+            cursor7 = conn.execute(
+                """
+                DELETE FROM transaction_state
+                WHERE julianday('now') - created_at > ?
+                """,
+                (max_age_days,),
+            )
             conn.commit()
             return (
                 int(cursor1.rowcount)
@@ -727,6 +919,7 @@ class FunctionStorageSqlite:
                 + int(cursor4.rowcount)
                 + int(cursor5.rowcount)
                 + int(cursor6.rowcount)
+                + int(cursor7.rowcount)
             )
         finally:
             conn.close()

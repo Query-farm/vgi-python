@@ -13,8 +13,11 @@ as a Falcon resource at ``{prefix}/worker``.
 from __future__ import annotations
 
 import html as _html
+import logging
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from importlib.metadata import version as _pkg_version
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import falcon
 
@@ -26,12 +29,23 @@ from vgi.metadata import (
 )
 
 if TYPE_CHECKING:
+    from vgi.catalog.attach_option import AttachOptionSpec
+    from vgi.catalog.catalog_interface import (
+        AttachId,
+        CatalogInterface,
+        FunctionInfo,
+        SchemaInfo,
+        TableInfo,
+        ViewInfo,
+    )
     from vgi.worker import Worker
 
 __all__ = [
     "WorkerPageResource",
     "build_worker_page",
 ]
+
+_logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +235,487 @@ def _build_view_card(view) -> str:  # type: ignore[no-untyped-def]  # catalog Vi
     return "\n".join(parts)
 
 
+@dataclass(frozen=True)
+class _CatalogPanel:
+    """Per-catalog descriptor used to render the connect section."""
+
+    name: str
+    implementation_version: str | None = None
+    data_version_spec: str | None = None
+    attach_option_specs: tuple[AttachOptionSpec, ...] = ()
+    comment: str | None = None
+
+
+def _collect_catalog_panels(worker_cls: type[Worker]) -> list[_CatalogPanel]:
+    """Enumerate the catalogs this worker exposes, with their attach options.
+
+    Tries to instantiate the worker's catalog interface and call ``catalogs()``,
+    so workers that override discovery to advertise multiple catalogs surface
+    correctly. Falls back to the static ``cls.catalog`` descriptor (or the
+    legacy ``catalog_name``) when instantiation isn't viable at page-build time.
+    """
+    from vgi_rpc.utils import deserialize_record_batch
+
+    from vgi.catalog.attach_option import AttachOptionSpec
+
+    static_catalog = getattr(worker_cls, "catalog", None)
+    static_name = static_catalog.name if static_catalog is not None else None
+    static_comment = static_catalog.comment if static_catalog is not None else None
+
+    iface_cls = None
+    try:
+        iface_cls = worker_cls._get_catalog_interface()
+    except Exception:  # noqa: BLE001 — best-effort discovery
+        _logger.debug("could not resolve catalog interface for %s", worker_cls.__name__, exc_info=True)
+
+    if iface_cls is not None:
+        try:
+            iface = iface_cls()
+            infos = list(iface.catalogs())
+        except Exception:  # noqa: BLE001 — fall back to static descriptor
+            _logger.debug("catalog_interface.catalogs() failed for %s", worker_cls.__name__, exc_info=True)
+            infos = []
+
+        panels: list[_CatalogPanel] = []
+        for info in infos:
+            specs: list[AttachOptionSpec] = []
+            for raw in info.attach_option_specs or ():
+                try:
+                    batch, _ = deserialize_record_batch(bytes(raw))
+                    specs.append(AttachOptionSpec.deserialize(batch))
+                except Exception:  # noqa: BLE001 — drop unparseable spec, keep the page
+                    _logger.debug("failed to deserialize attach option spec", exc_info=True)
+            panels.append(
+                _CatalogPanel(
+                    name=info.name,
+                    implementation_version=info.implementation_version,
+                    data_version_spec=info.data_version_spec,
+                    attach_option_specs=tuple(specs),
+                    comment=static_comment if info.name == static_name else None,
+                )
+            )
+        if panels:
+            return panels
+
+    # Fallback: single catalog from the static descriptor or legacy attribute.
+    fallback_name = static_name or getattr(worker_cls, "catalog_name", None) or worker_cls.__name__.lower()
+    static_specs = tuple(getattr(worker_cls, "_attach_option_specs", ()) or ())
+    return [
+        _CatalogPanel(
+            name=fallback_name,
+            attach_option_specs=static_specs,
+            comment=static_comment,
+        )
+    ]
+
+
+def _attach_for_describe(
+    worker_cls: type[Worker],
+    catalog_name: str,
+    requested_data_version: str | None,
+) -> tuple[CatalogInterface | None, AttachId | None, str | None]:
+    """Pre-attach to validate the requested version and capture an attach_id.
+
+    Returns ``(iface, attach_id, error)``:
+
+    * ``iface`` is the instantiated catalog interface (or ``None`` if the
+      worker has none).
+    * ``attach_id`` is non-``None`` when the attach succeeded; the page uses
+      it to dynamically enumerate schemas/tables/views/functions for the
+      resolved data version.
+    * ``error`` is non-``None`` when the worker rejected the requested
+      version (e.g. ``"Unsupported data_version_spec '1.1.1'; this worker
+      serves one of ['1.0.0', '1.1.0', '1.2.0']"``). The describe page
+      surfaces it as a red banner; the Apply form stays interactive so the
+      user can fix the value and resubmit.
+    """
+    iface_cls = None
+    try:
+        iface_cls = worker_cls._get_catalog_interface()
+    except Exception:  # noqa: BLE001 — best-effort; absence of interface is fine
+        _logger.debug("could not resolve catalog interface for %s", worker_cls.__name__, exc_info=True)
+    if iface_cls is None:
+        return None, None, None
+    try:
+        iface = iface_cls()
+    except Exception:  # noqa: BLE001 — instantiation failure shouldn't kill the page
+        _logger.debug("catalog interface instantiation failed for %s", worker_cls.__name__, exc_info=True)
+        return None, None, None
+    try:
+        result = iface.catalog_attach(
+            name=catalog_name,
+            options={},
+            data_version_spec=requested_data_version,
+            implementation_version=None,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface whatever the worker raises
+        return iface, None, str(exc) or exc.__class__.__name__
+    return iface, result.attach_id, None
+
+
+def _build_dynamic_table_card(t: TableInfo) -> str:
+    """Render a TableInfo (from iface.schema_contents) as a card."""
+    import pyarrow as pa
+
+    parts: list[str] = [
+        '<div class="card">',
+        '<div class="card-header">',
+        f'<span class="method-name">{_esc(t.name)}</span>',
+        '<span class="badge badge-table-obj">table</span>',
+        "</div>",
+    ]
+    if t.comment:
+        parts.append(f'<p class="docstring">{_esc(t.comment)}</p>')
+    schema = None
+    try:
+        schema = pa.ipc.read_schema(pa.py_buffer(bytes(t.columns)))
+    except Exception:  # noqa: BLE001
+        _logger.debug("failed to deserialize table columns for %s", t.name, exc_info=True)
+    if schema is not None and len(schema) > 0:
+        parts.append('<div class="section-label">Columns</div>')
+        parts.append("<table><tr><th>Name</th><th>Type</th></tr>")
+        for fld in schema:
+            parts.append(f"<tr><td><code>{_esc(fld.name)}</code></td><td><code>{_esc(str(fld.type))}</code></td></tr>")
+        parts.append("</table>")
+    parts.append("</div>")
+    return "\n".join(parts)
+
+
+def _build_dynamic_view_card(v: ViewInfo) -> str:
+    """Render a ViewInfo as a card."""
+    parts: list[str] = [
+        '<div class="card">',
+        '<div class="card-header">',
+        f'<span class="method-name">{_esc(v.name)}</span>',
+        '<span class="badge badge-view">view</span>',
+        "</div>",
+    ]
+    if v.comment:
+        parts.append(f'<p class="docstring">{_esc(v.comment)}</p>')
+    parts.append('<div class="section-label">Definition</div>')
+    parts.append(f"<pre><code>{_esc(v.definition)}</code></pre>")
+    parts.append("</div>")
+    return "\n".join(parts)
+
+
+def _build_dynamic_function_card(fn: FunctionInfo) -> str:
+    """Render a FunctionInfo as a card.
+
+    FunctionInfo doesn't preserve the table-vs-table-in-out distinction —
+    the protocol-level ``function_type`` lumps them together. Use
+    ``has_finalize`` as a heuristic for table-in-out so the badge stays
+    accurate where possible.
+    """
+    import pyarrow as pa
+
+    from vgi.catalog.catalog_interface import FunctionType
+
+    if fn.function_type == FunctionType.SCALAR:
+        display = "scalar"
+    elif fn.function_type == FunctionType.AGGREGATE:
+        display = "aggregate"
+    elif fn.has_finalize:
+        display = "table-in-out"
+    else:
+        display = "table"
+    badge_cls = _BADGE_CSS_CLASS.get(display, "badge-table")
+
+    parts: list[str] = [
+        '<div class="card">',
+        '<div class="card-header">',
+        f'<span class="method-name">{_esc(fn.name)}</span>',
+        f'<span class="badge {badge_cls}">{_esc(display)}</span>',
+    ]
+    if fn.stability is not None and fn.stability != FunctionStability.CONSISTENT:
+        parts.append(f'<span class="badge badge-stability">{_esc(fn.stability.name.lower())}</span>')
+    parts.append("</div>")
+
+    if fn.description:
+        parts.append(f'<p class="docstring">{_esc(fn.description)}</p>')
+
+    args_schema = None
+    try:
+        args_schema = pa.ipc.read_schema(pa.py_buffer(bytes(fn.arguments)))
+    except Exception:  # noqa: BLE001
+        _logger.debug("failed to deserialize function arguments for %s", fn.name, exc_info=True)
+    if args_schema is not None and len(args_schema) > 0:
+        parts.append('<div class="section-label">Parameters</div>')
+        parts.append("<table><tr><th>Name</th><th>Type</th></tr>")
+        for fld in args_schema:
+            parts.append(f"<tr><td><code>{_esc(fld.name)}</code></td><td><code>{_esc(str(fld.type))}</code></td></tr>")
+        parts.append("</table>")
+    else:
+        parts.append('<p class="no-params">No parameters</p>')
+
+    if fn.examples:
+        parts.append('<div class="section-label">Examples</div>')
+        for ex in fn.examples:
+            if ex.description:
+                parts.append(f'<p class="example-desc">{_esc(ex.description)}</p>')
+            parts.append(f"<pre><code>{_esc(ex.sql)}</code></pre>")
+
+    caps: list[str] = []
+    if fn.filter_pushdown:
+        caps.append("filter pushdown")
+    if fn.projection_pushdown:
+        caps.append("projection pushdown")
+    if fn.max_workers is not None:
+        caps.append(f"max_workers={fn.max_workers}")
+    if caps:
+        parts.append('<div class="section-label">Capabilities</div>')
+        parts.append(
+            '<div class="caps">' + " ".join(f'<span class="cap-tag">{_esc(c)}</span>' for c in caps) + "</div>"
+        )
+
+    parts.append("</div>")
+    return "\n".join(parts)
+
+
+def _render_dynamic_schemas(iface: CatalogInterface, attach_id: AttachId) -> list[str]:
+    """Enumerate schemas/tables/views/functions from the attached catalog.
+
+    Returns a flat list of HTML fragments (matching the static path's
+    ``body_parts`` shape). Best-effort: any exception from the interface
+    falls through to an empty list so the page still renders.
+    """
+    from vgi.catalog.catalog_interface import SchemaObjectType
+
+    try:
+        schemas: Sequence[SchemaInfo] = iface.schemas(attach_id=attach_id, transaction_id=None)
+    except Exception:  # noqa: BLE001
+        _logger.debug("iface.schemas() failed", exc_info=True)
+        return []
+
+    def _safe_contents(name: str, kind: SchemaObjectType) -> list[Any]:
+        # The overloads on schema_contents key off Literal[...] values;
+        # passing a runtime variable defeats the dispatch, so we cast to
+        # Any to fall through to the implementation method.
+        contents: Any = iface.schema_contents
+        try:
+            result = contents(attach_id=attach_id, transaction_id=None, name=name, type=kind)
+        except Exception:  # noqa: BLE001
+            _logger.debug("schema_contents(%s) failed for %s", kind, name, exc_info=True)
+            return []
+        return list(result)
+
+    out: list[str] = []
+    for schema_info in schemas:
+        out.append(f'<h2 class="schema-heading">{_esc(schema_info.name)}</h2>')
+        if schema_info.comment:
+            out.append(f'<p class="schema-comment">{_esc(schema_info.comment)}</p>')
+
+        # Functions (scalar / table / aggregate, sorted by type then name).
+        funcs: list[FunctionInfo] = []
+        funcs.extend(_safe_contents(schema_info.name, SchemaObjectType.SCALAR_FUNCTION))
+        funcs.extend(_safe_contents(schema_info.name, SchemaObjectType.TABLE_FUNCTION))
+        funcs.extend(_safe_contents(schema_info.name, SchemaObjectType.AGGREGATE_FUNCTION))
+        if funcs:
+            out.append('<div class="section-label">Functions</div>')
+            for fn in sorted(funcs, key=lambda f: (f.function_type.value, f.name)):
+                out.append(_build_dynamic_function_card(fn))
+
+        # Tables.
+        tables = list(_safe_contents(schema_info.name, SchemaObjectType.TABLE))
+        if tables:
+            out.append('<div class="section-label">Tables</div>')
+            for t in tables:
+                out.append(_build_dynamic_table_card(t))
+
+        # Views.
+        views = list(_safe_contents(schema_info.name, SchemaObjectType.VIEW))
+        if views:
+            out.append('<div class="section-label">Views</div>')
+            for v in views:
+                out.append(_build_dynamic_view_card(v))
+
+    return out
+
+
+def _build_attach_options_table(specs: tuple[AttachOptionSpec, ...]) -> str:
+    """Render the attach-options table for a single catalog."""
+    if not specs:
+        return ""
+    parts: list[str] = [
+        '<div class="section-label">Attach options</div>',
+        "<table><tr><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr>",
+    ]
+    for spec in specs:
+        default_str = _esc(repr(spec.default)) if spec.default is not None else "&mdash;"
+        desc_str = _esc(spec.desc) if spec.desc else "&mdash;"
+        parts.append(
+            f"<tr><td><code>{_esc(spec.name)}</code></td>"
+            f"<td><code>{_esc(str(spec.type))}</code></td>"
+            f"<td>{default_str}</td>"
+            f"<td>{desc_str}</td></tr>"
+        )
+    parts.append("</table>")
+    return "\n".join(parts)
+
+
+def _build_attach_sql(catalog_name: str, panel_id: str, requested_version: str | None) -> str:
+    """Render the ATTACH SQL block (with copy button) for one catalog.
+
+    When ``requested_version`` is provided (the user clicked Apply), the
+    ``data_version_spec`` clause renders inline so the SQL the user copies
+    matches the version they submitted. Otherwise the clause is hidden and
+    JS toggles it as the user edits the input.
+    """
+    if requested_version:
+        clause = (
+            '<span class="dv-clause">, data_version_spec \''
+            f'<span class="dv-value">{_esc(requested_version)}</span>\'</span>'
+        )
+    else:
+        clause = '<span class="dv-clause" hidden>, data_version_spec \'<span class="dv-value"></span>\'</span>'
+    return (
+        '<div class="connect-label">Connect with DuckDB'
+        f'<button class="copy-btn" data-copy-target="sql-{panel_id}" title="Copy to clipboard">'
+        '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">'
+        '<rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/>'
+        '<path d="M10.5 5.5V2.5a1 1 0 00-1-1h-7a1 1 0 00-1 1v7a1 1 0 001 1h3"/>'
+        "</svg></button></div>"
+        f'<pre><code id="sql-{panel_id}" class="connect-sql" data-catalog="{_esc(catalog_name)}">'
+        f"ATTACH '{_esc(catalog_name)}' AS {_esc(catalog_name)}"
+        " (TYPE vgi, LOCATION '<span class=\"connect-url\">{location}</span>'"
+        f"{clause}"
+        ");</code></pre>"
+    )
+
+
+def _build_connect_section(
+    panels: list[_CatalogPanel],
+    prefix: str,
+    *,
+    active_catalog: str | None = None,
+    requested_data_version: str | None = None,
+) -> str:
+    """Build the Connect section: optional catalog selector + per-catalog panel.
+
+    ``active_catalog`` and ``requested_data_version`` come from the request
+    query string. When ``active_catalog`` matches a panel, that panel is the
+    one rendered without ``hidden``; the data version input on that panel is
+    pre-filled with ``requested_data_version`` and the ATTACH SQL bakes the
+    clause inline.
+    """
+    active_index = 0
+    if active_catalog is not None:
+        for i, panel in enumerate(panels):
+            if panel.name == active_catalog:
+                active_index = i
+                break
+
+    parts: list[str] = ['<div class="connect-box">']
+
+    multi = len(panels) > 1
+    if multi:
+        parts.append('<div class="catalog-tabs" role="tablist">')
+        for i, panel in enumerate(panels):
+            active = " active" if i == active_index else ""
+            parts.append(
+                f'<button class="catalog-tab{active}" role="tab" data-panel="catpanel-{i}">{_esc(panel.name)}</button>'
+            )
+        parts.append("</div>")
+
+    for i, panel in enumerate(panels):
+        hidden_attr = "" if i == active_index else " hidden"
+        parts.append(
+            f'<div class="catalog-panel" id="catpanel-{i}" role="tabpanel" '
+            f'data-catalog="{_esc(panel.name)}"{hidden_attr}>'
+        )
+
+        if panel.comment:
+            parts.append(f'<p class="catalog-comment">{_esc(panel.comment)}</p>')
+
+        if panel.implementation_version:
+            parts.append(
+                f'<div class="impl-chip">Implementation <code>{_esc(panel.implementation_version)}</code></div>'
+            )
+
+        # Apply form: GET reload with ?catalog=&data_version_spec= so the URL
+        # is the source of truth for the user's chosen version.
+        is_active_panel = i == active_index
+        prefilled = requested_data_version if is_active_panel else None
+        sql_version = prefilled if prefilled else None
+        value_attr = f' value="{_esc(prefilled)}"' if prefilled else ""
+
+        if panel.data_version_spec:
+            parts.append(
+                f'<form class="dv-form" method="get" data-catalog="{_esc(panel.name)}">'
+                f'<input type="hidden" name="catalog" value="{_esc(panel.name)}">'
+                '<label class="dv-row">'
+                '<span class="dv-label">Data version</span>'
+                f'<input type="text" class="dv-input" name="data_version_spec" placeholder="latest"'
+                f' data-catalog="{_esc(panel.name)}"'
+                f' aria-label="Data version for {_esc(panel.name)}"{value_attr}>'
+                '<button type="submit" class="dv-apply">Apply</button>'
+                f'<span class="dv-hint">supported: <code>{_esc(panel.data_version_spec)}</code></span>'
+                "</label>"
+                "</form>"
+            )
+
+        parts.append(_build_attach_sql(panel.name, str(i), sql_version))
+        parts.append(_build_attach_options_table(panel.attach_option_specs))
+
+        parts.append("</div>")  # /catalog-panel
+
+    # JS: substitute {location}, wire copy buttons + tab switching + data
+    # version input, and keep the Cupola button href in sync with the active
+    # catalog and (when set) data_version_spec. Wrapped in DOMContentLoaded
+    # because the Cupola button element lives outside this connect-section
+    # (rendered later by build_worker_page).
+    parts.append(
+        '<script>document.addEventListener("DOMContentLoaded",function(){'
+        f'var u=location.origin+"{_esc(prefix)}";'
+        'document.querySelectorAll(".connect-sql").forEach(function(el){'
+        'el.innerHTML=el.innerHTML.replace("{location}",u);});'
+        # Copy buttons
+        'document.querySelectorAll(".copy-btn").forEach(function(btn){'
+        'btn.addEventListener("click",function(){'
+        "var t=document.getElementById(btn.dataset.copyTarget);if(!t)return;"
+        "navigator.clipboard.writeText(t.textContent).then(function(){"
+        'btn.classList.add("copied");'
+        'setTimeout(function(){btn.classList.remove("copied")},1500);});});});'
+        # Data version input — toggle SQL clause
+        "function updateDvClause(inp){"
+        "var name=inp.dataset.catalog;"
+        "var sql=document.querySelector('.connect-sql[data-catalog=\"'+name+'\"]');"
+        "if(!sql)return;"
+        'var clause=sql.querySelector(".dv-clause");'
+        'var slot=sql.querySelector(".dv-value");'
+        "var v=inp.value.trim();"
+        "if(v){slot.textContent=v;clause.hidden=false;}"
+        "else{clause.hidden=true;}"
+        "}"
+        'document.querySelectorAll(".dv-input").forEach(function(inp){'
+        'inp.addEventListener("input",function(){updateDvClause(inp);updateCupolaHref();});});'
+        # Tab switching
+        'document.querySelectorAll(".catalog-tab").forEach(function(tab){'
+        'tab.addEventListener("click",function(){'
+        'document.querySelectorAll(".catalog-tab").forEach(function(t){t.classList.remove("active");});'
+        'document.querySelectorAll(".catalog-panel").forEach(function(p){p.hidden=true;});'
+        'tab.classList.add("active");'
+        "var p=document.getElementById(tab.dataset.panel);if(p)p.hidden=false;"
+        "updateCupolaHref();});});"
+        # Cupola deep-link — reflects active panel + dv input
+        "function updateCupolaHref(){"
+        'var cb=document.getElementById("cupola-btn");if(!cb)return;'
+        'var active=document.querySelector(".catalog-panel:not([hidden])");'
+        'var url="https://cupola.query-farm.services/?service="+encodeURIComponent(u);'
+        "if(active){"
+        'url+="&catalog="+encodeURIComponent(active.dataset.catalog);'
+        'var dv=active.querySelector(".dv-input");'
+        "if(dv&&dv.value.trim()){"
+        'url+="&data_version_spec="+encodeURIComponent(dv.value.trim());'
+        "}}"
+        "cb.href=url;"
+        "}"
+        "updateCupolaHref();"
+        "});</script>"
+    )
+    parts.append("</div>")  # /connect-box
+    return "\n".join(parts)
+
+
 def _build_settings_section(setting_specs: list) -> str:  # type: ignore[type-arg]
     """Build the settings section HTML."""
     if not setting_specs:
@@ -246,16 +741,29 @@ def _build_settings_section(setting_specs: list) -> str:  # type: ignore[type-ar
 # ---------------------------------------------------------------------------
 
 
-def build_worker_page(worker_cls: type[Worker], prefix: str) -> bytes:
-    """Pre-render the worker description page HTML.
+def build_worker_page(
+    worker_cls: type[Worker],
+    prefix: str,
+    *,
+    active_catalog: str | None = None,
+    requested_data_version: str | None = None,
+) -> bytes:
+    """Render the worker description page HTML.
 
     Extracts metadata from the worker class (functions, catalog, settings)
-    and generates a complete HTML page.  The result is UTF-8 encoded bytes
-    suitable for serving as a static response.
+    and generates a complete HTML page.
+
+    ``active_catalog`` and ``requested_data_version`` come from the request
+    query string and let the page reflect the user's submitted form state:
+    the named catalog tab is opened, the data-version input is pre-filled,
+    and the ATTACH SQL bakes the version clause inline.
 
     Args:
         worker_cls: The Worker subclass to describe.
         prefix: URL prefix (e.g. ``/api``).
+        active_catalog: Catalog name to mark active (from ``?catalog=``).
+        requested_data_version: Data version to pre-fill (from
+            ``?data_version_spec=``) on the active catalog only.
 
     Returns:
         UTF-8 encoded HTML bytes.
@@ -274,42 +782,93 @@ def build_worker_page(worker_cls: type[Worker], prefix: str) -> bytes:
     # Collect sections
     body_parts: list[str] = []
 
-    # Connection snippet
-    catalog = getattr(worker_cls, "catalog", None)
-    catalog_name = catalog.name if catalog is not None else worker_name.lower()
+    # Connect section: per-catalog ATTACH SQL + attach options.
+    panels = _collect_catalog_panels(worker_cls)
+
+    # Pick the catalog to attach against. When the user submitted via Apply
+    # we honour ``active_catalog``; otherwise we fall back to the first
+    # advertised catalog so the schema/tables list always reflects a real
+    # attach (the only way to surface version-dependent content).
+    target_catalog = active_catalog or (panels[0].name if panels else None)
+
+    attach_iface: CatalogInterface | None = None
+    attach_id: AttachId | None = None
+    attach_error: str | None = None
+    if target_catalog is not None:
+        attach_iface, attach_id, raw_error = _attach_for_describe(worker_cls, target_catalog, requested_data_version)
+        # Only surface the error in the UI if the user explicitly requested a
+        # version. A failure with no version requested is silent (defaults
+        # might just be unsupported under unusual configurations).
+        if raw_error is not None and requested_data_version:
+            attach_error = raw_error
+
+    if attach_error is not None:
+        body_parts.append(
+            '<div class="dv-error" role="alert">'
+            "<strong>Cannot attach with <code>data_version_spec</code> "
+            f"<code>{_esc(requested_data_version)}</code>:</strong> "
+            f"{_esc(attach_error)}"
+            "</div>"
+        )
+
     body_parts.append(
-        f'<div class="connect-box">'
-        f'<div class="connect-label">Connect with DuckDB'
-        f'<button class="copy-btn" id="copy-btn" title="Copy to clipboard">'
-        f'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">'
-        f'<rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/>'
-        f'<path d="M10.5 5.5V2.5a1 1 0 00-1-1h-7a1 1 0 00-1 1v7a1 1 0 001 1h3"/>'
-        f"</svg>"
-        f"</button>"
-        f"</div>"
-        f'<pre><code id="connect-sql">'
-        f"ATTACH '{_esc(catalog_name)}' AS {_esc(catalog_name)}"
-        f" (TYPE vgi, LOCATION '<span class=\"connect-url\">{{location}}</span>');"
-        f"</code></pre>"
-        f"<script>"
-        f'(function(){{var u=location.origin+"{_esc(prefix)}";'
-        f'var el=document.getElementById("connect-sql");'
-        f'if(el)el.innerHTML=el.innerHTML.replace("{{location}}",u);'
-        f'var btn=document.getElementById("copy-btn");'
-        f"if(btn)btn.onclick=function(){{var t=el.textContent;"
-        f'navigator.clipboard.writeText(t).then(function(){{btn.classList.add("copied");'
-        f'setTimeout(function(){{btn.classList.remove("copied")}},1500)}})}};}})();'
-        f"</script>"
-        f"</div>"
+        _build_connect_section(
+            panels,
+            prefix,
+            active_catalog=active_catalog,
+            requested_data_version=requested_data_version,
+        )
+    )
+
+    # Cupola explore button
+    body_parts.append(
+        '<a class="cupola-box" id="cupola-btn" href="https://cupola.query-farm.services/"'
+        ' target="_blank" rel="noopener">'
+        '<span class="cupola-icon" aria-hidden="true">'
+        '<svg viewBox="0 0 40 40" width="36" height="36" fill="none" stroke="currentColor"'
+        ' stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">'
+        '<circle cx="20" cy="3" r="0.9" fill="currentColor" stroke="none"/>'
+        '<line x1="20" y1="3.8" x2="20" y2="6"/>'
+        '<path d="M16 11 C 16 7 17 6 20 6 C 23 6 24 7 24 11"/>'
+        '<rect x="15.5" y="11" width="9" height="4.5"/>'
+        '<path d="M17.3 14.8 V13 a0.9 0.9 0 0 1 1.8 0 V14.8"/>'
+        '<path d="M20.9 14.8 V13 a0.9 0.9 0 0 1 1.8 0 V14.8"/>'
+        '<path d="M20 15.5 L 10 21 L 6 26"/>'
+        '<path d="M20 15.5 L 30 21 L 34 26"/>'
+        '<line x1="6" y1="26" x2="34" y2="26"/>'
+        '<rect x="6" y="26" width="28" height="12"/>'
+        '<rect x="18" y="20.5" width="4" height="3"/>'
+        '<rect x="15.5" y="29" width="9" height="9"/>'
+        '<line x1="20" y1="29" x2="20" y2="38"/>'
+        '<line x1="15.5" y1="29" x2="20" y2="33.5"/>'
+        '<line x1="24.5" y1="29" x2="20" y2="33.5"/>'
+        "</svg>"
+        "</span>"
+        '<span class="cupola-text">'
+        '<span class="cupola-title">Explore this data in Cupola</span>'
+        '<span class="cupola-subtitle">Browse schemas, tables, views, and functions interactively'
+        " &mdash; no install required.</span>"
+        "</span>"
+        '<span class="cupola-arrow" aria-hidden="true">'
+        '<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor"'
+        ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M5 3l6 5-6 5"/>'
+        "</svg>"
+        "</span>"
+        "</a>"
     )
 
     # Settings
     if worker_cls._setting_specs:
         body_parts.append(_build_settings_section(list(worker_cls._setting_specs)))
 
-    # Build per-schema content
-    catalog = getattr(worker_cls, "catalog", None)
-    if catalog is not None:
+    # Schema content. Prefer dynamic enumeration via the attached catalog —
+    # that's the only way version-dependent tables (e.g. versioned_tables)
+    # show up. Fall back to the static descriptor when the worker has no
+    # catalog interface at all (legacy ``Worker.functions`` pattern).
+    if attach_iface is not None and attach_id is not None:
+        body_parts.extend(_render_dynamic_schemas(attach_iface, attach_id))
+    elif (catalog := getattr(worker_cls, "catalog", None)) is not None:
         for schema in catalog.schemas:
             body_parts.append(f'<h2 class="schema-heading">{_esc(schema.name)}</h2>')
             if schema.comment:
@@ -374,18 +933,41 @@ def build_worker_page(worker_cls: type[Worker], prefix: str) -> bytes:
 
 
 class WorkerPageResource:
-    """Falcon resource serving the pre-rendered worker description page."""
+    """Falcon resource serving the worker description page.
 
-    __slots__ = ("_body",)
+    Renders per request so the page can reflect ``?catalog=`` and
+    ``?data_version_spec=`` query params submitted via the Apply form.
+    Optional ``body_transform`` is applied to the rendered bytes (used by
+    ``vgi-serve`` to inject the OAuth/PKCE user-info script).
+    """
 
-    def __init__(self, body: bytes) -> None:
-        """Store pre-rendered HTML body."""
-        self._body = body
+    __slots__ = ("_body_transform", "_prefix", "_worker_cls")
+
+    def __init__(
+        self,
+        worker_cls: type[Worker],
+        prefix: str,
+        body_transform: Callable[[bytes], bytes] | None = None,
+    ) -> None:
+        """Store the worker class + prefix + optional post-render transform."""
+        self._worker_cls = worker_cls
+        self._prefix = prefix
+        self._body_transform = body_transform
 
     def on_get(self, req: falcon.Request, resp: falcon.Response) -> None:
-        """Return the worker description page HTML."""
+        """Render the worker description page, honouring query params."""
+        active_catalog = req.get_param("catalog") if req is not None else None
+        requested_dv = req.get_param("data_version_spec") if req is not None else None
+        body = build_worker_page(
+            self._worker_cls,
+            self._prefix,
+            active_catalog=active_catalog,
+            requested_data_version=requested_dv,
+        )
+        if self._body_transform is not None:
+            body = self._body_transform(body)
         resp.content_type = "text/html; charset=utf-8"
-        resp.data = self._body
+        resp.data = body
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +1043,57 @@ _PAGE_TEMPLATE = (
   .copy-btn:hover {{ color: #2d5016; border-color: #4a7c23; }}
   .copy-btn.copied {{ color: #4a7c23; border-color: #4a7c23; }}
   .connect-url {{ color: #4a7c23; }}
+  .catalog-tabs {{ display: flex; gap: 4px; margin-bottom: 12px;
+                    border-bottom: 1px solid #e0dcd0; flex-wrap: wrap; }}
+  .catalog-tab {{ background: none; border: none; padding: 8px 14px;
+                   margin-bottom: -1px; cursor: pointer; font-family: inherit;
+                   font-size: 0.9em; font-weight: 600; color: #6b6b5a;
+                   border-bottom: 2px solid transparent;
+                   transition: color 0.15s, border-color 0.15s; }}
+  .catalog-tab:hover {{ color: #2d5016; }}
+  .catalog-tab.active {{ color: #2d5016; border-bottom-color: #2d5016; }}
+  .catalog-panel[hidden] {{ display: none; }}
+  .catalog-comment {{ color: #6b6b5a; margin: 0 0 8px; font-size: 0.9em; }}
+  .impl-chip {{ display: inline-block; font-size: 0.8em; color: #6b6b5a;
+                 background: #f0ece0; padding: 3px 10px; border-radius: 999px;
+                 margin: 0 0 10px; }}
+  .impl-chip code {{ background: none; padding: 0; color: #2d5016; font-weight: 600; }}
+  .dv-row {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+              margin: 0 0 10px; font-size: 0.9em; }}
+  .dv-label {{ font-weight: 600; color: #2c2c1e; }}
+  .dv-input {{ font-family: 'JetBrains Mono', monospace; font-size: 0.9em;
+                padding: 4px 8px; border: 1px solid #e0dcd0; border-radius: 4px;
+                background: #faf8f0; color: #2c2c1e; min-width: 140px; }}
+  .dv-input:focus {{ outline: none; border-color: #4a7c23; }}
+  .dv-apply {{ font-family: inherit; font-size: 0.85em; font-weight: 600;
+                background: #2d5016; color: #faf8f0; border: 1px solid #2d5016;
+                padding: 5px 14px; border-radius: 4px; cursor: pointer;
+                transition: background 0.15s, border-color 0.15s; }}
+  .dv-apply:hover {{ background: #4a7c23; border-color: #4a7c23; }}
+  .dv-form {{ margin: 0 0 10px; }}
+  .dv-hint {{ color: #6b6b5a; font-size: 0.85em; }}
+  .dv-hint code {{ color: #2d5016; }}
+  .dv-error {{ background: #fdecea; border: 1px solid #c33; color: #6b1414;
+                border-radius: 6px; padding: 12px 16px; margin-bottom: 18px;
+                font-size: 0.95em; }}
+  .dv-error code {{ background: rgba(195,51,51,0.10); color: #6b1414; }}
+  .dv-error strong {{ font-weight: 700; }}
+  .cupola-box {{ display: flex; align-items: center; gap: 16px;
+                  border: 1px solid #2d5016; border-radius: 8px; padding: 16px 20px;
+                  margin-bottom: 32px; background: #2d5016; color: #faf8f0;
+                  text-decoration: none; transition: background 0.15s ease,
+                  border-color 0.15s ease, transform 0.15s ease; }}
+  .cupola-box:hover {{ background: #3d6a1f; border-color: #4a7c23;
+                        color: #faf8f0; transform: translateY(-1px); }}
+  .cupola-icon {{ flex: 0 0 auto; display: inline-flex; align-items: center;
+                   justify-content: center; width: 56px; height: 56px;
+                   border-radius: 50%; background: rgba(255,255,255,0.10);
+                   color: #faf8f0; }}
+  .cupola-text {{ flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; }}
+  .cupola-title {{ font-size: 1.05em; font-weight: 700; letter-spacing: 0.01em; }}
+  .cupola-subtitle {{ font-size: 0.88em; color: #cfd8be; line-height: 1.4; }}
+  .cupola-arrow {{ flex: 0 0 auto; color: #cfd8be; transition: transform 0.15s ease; }}
+  .cupola-box:hover .cupola-arrow {{ transform: translateX(3px); color: #faf8f0; }}
   .docstring {{ color: #6b6b5a; margin-bottom: 12px; line-height: 1.5; }}
   .example-desc {{ color: #6b6b5a; font-size: 0.9em; margin-bottom: 4px; }}
   table {{ width: 100%; border-collapse: collapse; font-size: 0.9em; }}

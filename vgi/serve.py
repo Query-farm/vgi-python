@@ -269,19 +269,21 @@ def create_app(
         _FrontendRedirectResource = _make_frontend_redirect(frontend_url, prefix)
         wsgi_app.add_route(prefix or "/", _FrontendRedirectResource)
     elif describe:
-        from vgi.http.worker_page import WorkerPageResource, build_worker_page
+        from vgi.http.worker_page import WorkerPageResource
 
-        worker_page_body = build_worker_page(worker_cls, prefix)
-        # Inject PKCE user-info JS if OAuth PKCE is active
+        # Inject PKCE user-info JS if OAuth PKCE is active.
+        body_transform = None
         if oauth_resource_metadata is not None and getattr(oauth_resource_metadata, "client_id", None) is not None:
             try:
                 from vgi_rpc.http._oauth_pkce import build_user_info_html
 
-                user_info = build_user_info_html(prefix)
-                worker_page_body = worker_page_body.replace(b"</body>", user_info.encode() + b"\n</body>")
+                user_info_html = build_user_info_html(prefix).encode()
+
+                def body_transform(body: bytes, _html: bytes = user_info_html) -> bytes:
+                    return body.replace(b"</body>", _html + b"\n</body>")
             except ImportError:
                 pass
-        wsgi_app.add_route(prefix or "/", WorkerPageResource(worker_page_body))
+        wsgi_app.add_route(prefix or "/", WorkerPageResource(worker_cls, prefix, body_transform))
 
     return wsgi_app
 

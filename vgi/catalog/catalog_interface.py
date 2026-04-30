@@ -2123,6 +2123,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             sampling_pushdown=None if is_scalar else meta.sampling_pushdown,
             supported_expression_filters=[] if is_scalar else meta.supported_expression_filters,
             order_preservation=None if is_scalar else meta.preserves_order,
+            max_workers=None if is_scalar else meta.max_workers,
             # Aggregate function fields
             order_dependent=meta.order_dependent,
             distinct_dependent=meta.distinct_dependent,

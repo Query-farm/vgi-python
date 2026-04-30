@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import struct
 from dataclasses import dataclass
 from typing import Annotated, ClassVar
@@ -14,10 +15,12 @@ from vgi._test_fixtures.table._common import (
     _cardinality_from_count,
 )
 from vgi.arguments import Arg
+from vgi.invocation import GlobalInitResponse
 from vgi.metadata import FunctionExample
 from vgi.schema_utils import schema
 from vgi.table_filter_pushdown import PushdownFilters
 from vgi.table_function import (
+    InitParams,
     ProcessParams,
     TableFunctionGenerator,
     bind_fixed_schema,
@@ -508,3 +511,140 @@ class ExpressionFilterTestFunction(TableFunctionGenerator[_ExprFilterTestArgs, _
 
         state.current_index += size
         state.remaining -= size
+
+
+# ============================================================================
+# FilterEchoPartitionedFunction — multi-worker fixture that exercises filter
+# pushdown across parallel workers. Combines the queue-based work distribution
+# of PartitionedSequenceFunction with the filter-capture pattern of
+# FilterEchoFunction so each worker echoes the filter it observed.
+# ============================================================================
+
+
+_FILTER_ECHO_PARTITIONED_SCHEMA = schema(
+    {
+        "n": pa.int64(),
+        "worker_pid": pa.int64(),
+        "pushed_filters": pa.utf8(),
+    }
+)
+
+
+@dataclass(slots=True, frozen=True)
+class _FilterEchoPartitionedArgs:
+    """Arguments for FilterEchoPartitionedFunction."""
+
+    count: Annotated[int, Arg(0, doc="Total number of integers to generate", ge=0)]
+
+
+@dataclass(kw_only=True)
+class _FilterEchoPartitionedState(ArrowSerializableDataclass):
+    """Per-worker state. Re-derives filter_str from init_call after rehydrate."""
+
+    current_start: int | None = None
+    current_end: int | None = None
+    current_idx: int = 0
+    filter_str: Annotated[str, Transient()] = "(none)"
+
+
+@bind_fixed_schema
+@_cardinality_from_count
+class FilterEchoPartitionedFunction(TableFunctionGenerator[_FilterEchoPartitionedArgs, _FilterEchoPartitionedState]):
+    """Multi-worker filter-echo: queue-distributed sequence with filter pushdown.
+
+    Verifies that predicates DuckDB pushes down are observed *and* applied by
+    every parallel worker. Each worker pulls chunks from a shared queue and
+    independently deserializes the same pushed filter spec at init. The
+    framework auto-applies filters per emitted batch.
+
+    SCHEMA
+    ------
+    Output: {"n": int64, "worker_pid": int64, "pushed_filters": string}
+
+    PARALLELIZATION
+    ---------------
+    Uses a shared work queue: ``on_init`` enqueues 1000-row chunks. Workers
+    (up to DuckDB's parallel scan limit) pop chunks atomically.
+    ``worker_pid`` reveals which OS process produced each row — under
+    subprocess transport that is one PID per worker; HTTP workers share a
+    process so the column collapses to a single value there.
+
+    """
+
+    class Meta:
+        """Metadata for FilterEchoPartitionedFunction."""
+
+        name = "filter_echo_partitioned"
+        description = "Multi-worker partitioned sequence that echoes pushed-down filters"
+        categories = ["generator", "diagnostic", "testing"]
+        filter_pushdown = True
+        auto_apply_filters = True
+        projection_pushdown = True
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM filter_echo_partitioned(10) WHERE n >= 8",
+                description="Multi-worker generation with filter pushdown",
+            ),
+        ]
+
+    CHUNK_SIZE: ClassVar[int] = 1000
+    BATCH_SIZE: ClassVar[int] = 1000
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = _FILTER_ECHO_PARTITIONED_SCHEMA
+
+    @classmethod
+    def on_init(
+        cls,
+        params: InitParams[_FilterEchoPartitionedArgs],
+    ) -> GlobalInitResponse:
+        """Populate the work queue with (start, end) chunks for parallel consumption."""
+        work_items: list[bytes] = []
+        for start_idx in range(0, params.args.count, cls.CHUNK_SIZE):
+            end_idx = min(start_idx + cls.CHUNK_SIZE, params.args.count)
+            work_items.append(struct.pack(">QQ", start_idx, end_idx))
+        params.storage.queue_push(work_items)
+        return GlobalInitResponse()
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_FilterEchoPartitionedArgs]) -> _FilterEchoPartitionedState:
+        """Initialize per-worker state and capture the pushed filter string."""
+        assert params.init_call is not None
+        pf = params.init_call.pushdown_filters
+        jk = params.init_call.join_keys
+        filters = cls.pushdown_filters(pf, join_keys=jk) if pf is not None else None
+        return _FilterEchoPartitionedState(filter_str=_format_pushed_filters(filters))
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_FilterEchoPartitionedArgs],
+        state: _FilterEchoPartitionedState,
+        out: OutputCollector,
+    ) -> None:
+        """Pop a work chunk and emit a batch tagged with worker_pid and pushed_filters."""
+        if state.current_start is None or state.current_idx >= (state.current_end or 0):
+            work_data = params.storage.queue_pop()
+            if work_data is None:
+                out.finish()
+                return
+            state.current_start, state.current_end = struct.unpack(">QQ", work_data)
+            assert state.current_start is not None
+            state.current_idx = state.current_start
+
+        batch_end_idx = min(state.current_idx + cls.BATCH_SIZE, state.current_end or 0)
+        size = batch_end_idx - state.current_idx
+        ns = list(range(state.current_idx, batch_end_idx))
+        pid = os.getpid()
+
+        out.emit(
+            pa.RecordBatch.from_pydict(
+                {
+                    "n": ns,
+                    "worker_pid": [pid] * size,
+                    "pushed_filters": [state.filter_str] * size,
+                },
+                schema=params.output_schema,
+            )
+        )
+
+        state.current_idx = batch_end_idx

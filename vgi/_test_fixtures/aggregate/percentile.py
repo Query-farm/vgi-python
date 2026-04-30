@@ -70,8 +70,26 @@ class PercentileFunction(AggregateFunction[PercentileState]):
         states: dict[int, PercentileState],
         params: ProcessParams[None],
     ) -> Annotated[pa.RecordBatch, Returns(pa.float64())]:
+        import math
+        from decimal import Decimal
+
         # Access percentile via params.args (loaded from FunctionStorage)
-        pct = params.args.positional[0].as_py() if params.args and params.args.positional else 0.5
+        raw_pct = params.args.positional[0].as_py() if params.args and params.args.positional else 0.5
+        # Validate the percentile constant explicitly so callers see a clear
+        # error instead of an opaque NumPy/builtin TypeError downstream.
+        if raw_pct is None:
+            raise ValueError("vgi_percentile: percentile must not be NULL")
+        # Accept Python int/float and Decimal (DuckDB DECIMAL literals decode as Decimal).
+        if isinstance(raw_pct, Decimal):
+            pct = float(raw_pct)
+        elif isinstance(raw_pct, (int, float)):
+            pct = float(raw_pct)
+        else:
+            raise ValueError(f"vgi_percentile: percentile must be a number, got {type(raw_pct).__name__}")
+        if math.isnan(pct) or math.isinf(pct):
+            raise ValueError(f"vgi_percentile: percentile must be a finite number, got {raw_pct!r}")
+        if pct < 0.0 or pct > 1.0:
+            raise ValueError(f"vgi_percentile: percentile must be in [0, 1], got {pct}")
         results: list[float | None] = []
         for gid in group_ids:
             s = states[gid.as_py()]

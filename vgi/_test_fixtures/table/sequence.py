@@ -596,8 +596,24 @@ class RowIdSequenceFunctionArgs:
     """Arguments for RowIdSequenceFunction."""
 
     count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
-    layout: Annotated[str, Arg("layout", default="first", doc="Row ID column position: first, middle, last")]
-    row_id_type: Annotated[str, Arg("row_id_type", default="int64", doc="Row ID type: int64, string, struct")]
+    layout: Annotated[
+        str,
+        Arg(
+            "layout",
+            default="first",
+            doc="Row ID column position",
+            choices=("first", "middle", "last"),
+        ),
+    ]
+    row_id_type: Annotated[
+        str,
+        Arg(
+            "row_id_type",
+            default="int64",
+            doc="Row ID type",
+            choices=("int64", "string", "struct"),
+        ),
+    ]
 
 
 @init_single_worker

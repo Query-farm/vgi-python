@@ -53,7 +53,11 @@ class RandomIntFunction(ScalarFunction):
         """Generate random integers for each row."""
         import numpy as np
 
-        result = np.random.randint(min_val.to_numpy(), max_val.to_numpy() + 1)
+        # Use np.random.default_rng().integers(..., endpoint=True) so we don't
+        # have to add 1 to max_val (which overflows int64 when max_val is
+        # INT64_MAX, wrapping to a negative value and triggering "high <= 0").
+        rng = np.random.default_rng()
+        result = rng.integers(min_val.to_numpy(), max_val.to_numpy(), endpoint=True)
         return pa.array(result, type=pa.int64())
 
 

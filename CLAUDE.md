@@ -61,7 +61,38 @@ considering the work complete. Always run the **full** test suite (`test/sql/int
 ensure all tests pass — not just the new/changed test file. Adding a function can break
 `function_registration.test` counts, for example.
 
-**Subprocess transport** (worker spawned as a child process):
+**Run-once, inspect-many: use `scripts/run_all_tests.sh`.** The full subprocess
+integration suite takes minutes. Re-running it just to grep its output is
+wasteful — instead, run it through this wrapper, which captures the full log
+and pre-extracts failure context to disk:
+
+```bash
+scripts/run_all_tests.sh                    # pytest + integration in parallel
+scripts/run_all_tests.sh --integration-only # just DuckDB integration
+scripts/run_all_tests.sh --pytest-only      # just pytest
+scripts/run_all_tests.sh --show             # print summaries from cache (no run)
+```
+
+Outputs land in `/tmp/vgi-test-cache/`:
+
+| File | What it contains |
+|---|---|
+| `integration.log` | full unittest stdout/stderr |
+| `integration.summary` | pass/fail totals + 25-line context windows around every failure |
+| `integration.failures` | unique failing `.test` paths, one per line |
+| `pytest.log` | full pytest stdout/stderr |
+| `pytest.summary` | totals, FAILED/ERROR lines, full traceback blocks |
+| `pytest.failures` | failing pytest node ids |
+
+**Investigate failures by reading the cache, not by re-running.** `cat
+/tmp/vgi-test-cache/integration.summary` to see every failure with context;
+`cat /tmp/vgi-test-cache/integration.failures` to get just the file list. Only
+re-run after you've made a code change you want to verify. The integration
+log is fully reproducible across runs — re-grepping with different flags is
+free; re-running is not.
+
+**Direct invocation** (use only when you genuinely need to bypass the cache,
+e.g. to pass an unusual filter to `unittest`):
 ```bash
 cd ~/Development/vgi
 VGI_TEST_WORKER="uv run --project ~/Development/vgi-python vgi-fixture-worker" \

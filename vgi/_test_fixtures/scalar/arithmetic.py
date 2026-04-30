@@ -7,7 +7,7 @@ from typing import Annotated, Any
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from vgi._test_fixtures.scalar._common import _is_addable_type, _promote_for_addition
+from vgi._test_fixtures.scalar._common import _is_addable_type, _is_multipliable_type, _promote_for_addition
 from vgi.arguments import ConstParam, Param, Returns
 from vgi.metadata import FunctionExample
 from vgi.scalar_function import BindParameters, BindResult, ScalarFunction
@@ -96,10 +96,27 @@ class DoubleFunction(ScalarFunction):
         cls,
         value: Annotated[
             pa.Array[Any],
-            Param(doc="Numeric value to double", type_bound=_is_addable_type),
+            Param(doc="Numeric value to double", type_bound=_is_multipliable_type),
         ],
     ) -> Annotated[pa.Array[Any], Returns()]:
         """Double the input values."""
+        if pa.types.is_decimal(value.type):
+            # pc.multiply on decimals follows the SQL rule
+            # decimal(p1,s1) * decimal(p2,s2) -> decimal(p1+p2+1, s1+s2);
+            # multiplying by the literal 2 (decimal128(19, 0)) blows past
+            # decimal128's 38-digit cap for any input wider than ~18 digits.
+            # Compute `value + value` (which only adds 1 to precision) and
+            # cast the result to the declared output type. We do the add at
+            # the input precision, then cast — for inputs at the 38-digit
+            # cap we need decimal256 just to hold the +1 intermediate.
+            in_p, in_s = value.type.precision, value.type.scale
+            work_type = pa.decimal256(in_p, in_s) if in_p >= 38 else value.type
+            casted = pc.cast(value, work_type) if work_type != value.type else value
+            summed: pa.Array[Any] = pc.add(casted, casted)  # decimal(p+1, s)
+            out_type = _promote_for_addition(value.type)
+            if summed.type == out_type:
+                return summed
+            return pc.cast(summed, out_type)
         result: pa.Array[Any] = pc.multiply(value, 2)
         return result
 

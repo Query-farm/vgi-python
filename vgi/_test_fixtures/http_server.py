@@ -295,10 +295,9 @@ def main() -> None:
             add_blob_routes(wsgi_app, demo_blob_storage, prefix=prefix)
 
         if describe:
-            from vgi.http.worker_page import WorkerPageResource, build_worker_page
+            from vgi.http.worker_page import WorkerPageResource
 
-            worker_page_body = build_worker_page(ExampleWorker, prefix)
-            wsgi_app.add_route(f"{prefix}/worker", WorkerPageResource(worker_page_body))
+            wsgi_app.add_route(f"{prefix}/worker", WorkerPageResource(ExampleWorker, prefix))
 
         # Wrap with 413 middleware after all Falcon routes are registered.
         serving_app: Any = wsgi_app

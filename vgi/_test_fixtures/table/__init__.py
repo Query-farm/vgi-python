@@ -31,6 +31,7 @@ from vgi._test_fixtures.table.filters import (
     DynamicFilterEchoFunction,
     ExpressionFilterTestFunction,
     FilterEchoFunction,
+    FilterEchoPartitionedFunction,
     SpatialFilterExampleFunction,
 )
 from vgi._test_fixtures.table.make_series import (
@@ -98,6 +99,7 @@ __all__ = [
     "EmployeesScanFunction",
     "ExpressionFilterTestFunction",
     "FilterEchoFunction",
+    "FilterEchoPartitionedFunction",
     "GeneratorExceptionFunction",
     "LoggingGeneratorFunction",
     "MakePairsIntFunction",
