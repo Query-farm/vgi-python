@@ -22,6 +22,10 @@ test-data/v.parquet
 # IDE / editor
 .vscode/
 .idea/
+*.swp
+
+# Claude Code agent state
+.claude/
 
 # Playwright MCP
 .playwright-mcp/
