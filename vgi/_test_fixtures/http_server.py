@@ -19,8 +19,11 @@ import sys
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from vgi._test_fixtures.projection_repro.worker import ProjReproWorker
+from vgi._test_fixtures.schema_reconcile.worker import SchemaReconcileWorker
 from vgi._test_fixtures.worker import ExampleWorker
 from vgi.logging_config import LogFormat, LogLevel, configure_worker_logging
+from vgi.meta_worker import MetaWorker
 
 if TYPE_CHECKING:
     from vgi_rpc.external import UploadUrl
@@ -270,7 +273,19 @@ def main() -> None:
 
         from vgi.worker import _get_vgi_version
 
-        worker = ExampleWorker(quiet=True, log_level=effective_level)
+        # Match vgi-fixture-worker (subprocess transport): always serve the
+        # base ExampleWorker plus the projection_repro and schema_reconcile
+        # reproducer catalogs. Add the writable catalog when its extra is
+        # installed.
+        worker_classes: list[type] = [ExampleWorker, ProjReproWorker, SchemaReconcileWorker]
+        try:
+            from vgi._test_fixtures.writable.worker import WritableWorker
+        except ImportError:
+            pass
+        else:
+            worker_classes.append(WritableWorker)
+        workers = [wc(quiet=True, log_level=effective_level) for wc in worker_classes]
+        worker: Any = workers[0] if len(workers) == 1 else MetaWorker(workers)
         server = RpcServer(
             VgiProtocol,
             worker,

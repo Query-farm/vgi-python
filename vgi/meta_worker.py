@@ -21,14 +21,16 @@ import logging
 from typing import Any
 
 from vgi_rpc import RpcServer
-from vgi_rpc.rpc import CallContext, serve_stdio
+from vgi_rpc.rpc import CallContext, Stream, serve_stdio
 
 from vgi.catalog.catalog_interface import AttachId, CatalogAttachResult
+from vgi.invocation import GlobalInitResponse
 from vgi.protocol import (
     BindRequest,
     CatalogAttachRequest,
     CatalogsResponse,
     InitRequest,
+    ProcessState,
 )
 from vgi.worker import Worker
 
@@ -115,6 +117,11 @@ class MetaWorker:
         """Initialize with a list of Worker instances."""
         self._workers = workers
         self._name_to_index: dict[str, int] = {}
+        # The HTTP transport's state-rehydration path expects the
+        # implementation to expose ``_vgi_tracer`` directly. Borrow the
+        # first worker's tracer; all workers in one process share whatever
+        # the otel config produced.
+        self._vgi_tracer = workers[0]._vgi_tracer
 
         for i, w in enumerate(workers):
             try:
@@ -129,6 +136,20 @@ class MetaWorker:
             len(workers),
             list(self._name_to_index.keys()),
         )
+
+    def _resolve_function(self, request: BindRequest) -> Any:
+        """Dispatch function-class resolution to the worker that hosts it.
+
+        The HTTP state-rehydration path calls this on the implementation
+        without any attach_id, so route by function name across all
+        sub-workers.
+        """
+        for w in self._workers:
+            registry = type(w)._build_registry()
+            if request.function_name in registry:
+                return w._resolve_function(request)
+        msg = f"Unknown function: '{request.function_name}'"
+        raise ValueError(msg)
 
     # ========== attach_id wrapping ==========
 
@@ -246,7 +267,7 @@ class MetaWorker:
         msg = f"Unknown function '{request.function_name}'"
         raise ValueError(msg)
 
-    def init(self, request: InitRequest, ctx: CallContext) -> Any:
+    def init(self, request: InitRequest, ctx: CallContext) -> Stream[ProcessState, GlobalInitResponse]:
         """Dispatch init to the right worker."""
         if request.bind_call and request.bind_call.attach_id:
             try:
