@@ -20,6 +20,7 @@ Registered as the ``vgi-fixture-versioned-worker`` entry point.
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -101,10 +102,8 @@ class VersionedCatalog(ReadOnlyCatalogInterface):
         # raises RuntimeError — ignore it silently so the same worker works
         # under both transports.
         if ctx is not None:
-            try:
+            with contextlib.suppress(RuntimeError):
                 ctx.set_cookie(STICKY_COOKIE_NAME, uuid.uuid4().hex)
-            except RuntimeError:
-                pass
 
         return CatalogAttachResult(
             attach_id=AttachId(uuid.uuid4().bytes),

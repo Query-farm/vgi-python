@@ -198,6 +198,7 @@ GENERATOR_VERSION = "1"
 
 
 def emit(out: TextIO) -> None:
+    """Emit the generated TypeScript schemas module to *out*."""
     schemas = collect_schemas()
 
     # Render all schemas FIRST to capture which arrow-js symbols were used.
@@ -236,6 +237,7 @@ def emit(out: TextIO) -> None:
 
 
 def main() -> None:
+    """Console-script entrypoint — write the TypeScript schemas module to stdout."""
     try:
         emit(sys.stdout)
     except GeneratorError as e:

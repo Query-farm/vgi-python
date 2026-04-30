@@ -104,7 +104,7 @@ USER_SCHEMA: pa.Schema = pa.schema(USER_FIELDS)
 
 
 def _rowid_field(arrow_type: pa.DataType) -> pa.Field[Any]:
-    """A rowid field with the ``is_row_id`` metadata that the C++ side keys on.
+    """Build a rowid field with the ``is_row_id`` metadata that the C++ side keys on.
 
     Always declared NOT NULL to exercise the rowid reshape path in
     ReconcileBatchToSchema.
@@ -348,8 +348,10 @@ class SchemaReconcileInsert(TableInOutGenerator[None, None]):
 
 
 class SchemaReconcileUpdate(TableInOutGenerator[None, None]):
-    """UPDATE handler — asserts batch is rowid + selected user columns,
-    every field with the worker-declared flags/types intact.
+    """UPDATE handler — assert rowid + selected user columns are present.
+
+    Asserts batch is rowid + selected user columns, every field with the
+    worker-declared flags/types intact.
     """
 
     class Meta:

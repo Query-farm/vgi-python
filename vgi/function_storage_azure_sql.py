@@ -463,27 +463,17 @@ class FunctionStorageAzureSql:
 
     # --- Transaction State ---
 
-    def transaction_state_get(
-        self, transaction_id: bytes, keys: list[bytes]
-    ) -> list[bytes | None]:
+    def transaction_state_get(self, transaction_id: bytes, keys: list[bytes]) -> list[bytes | None]:
         """Not yet supported on Azure SQL."""
-        raise NotImplementedError(
-            "Transaction state is not yet supported with the Azure SQL storage backend."
-        )
+        raise NotImplementedError("Transaction state is not yet supported with the Azure SQL storage backend.")
 
-    def transaction_state_put(
-        self, transaction_id: bytes, items: list[tuple[bytes, bytes]]
-    ) -> None:
+    def transaction_state_put(self, transaction_id: bytes, items: list[tuple[bytes, bytes]]) -> None:
         """Not yet supported on Azure SQL."""
-        raise NotImplementedError(
-            "Transaction state is not yet supported with the Azure SQL storage backend."
-        )
+        raise NotImplementedError("Transaction state is not yet supported with the Azure SQL storage backend.")
 
     def transaction_state_clear(self, transaction_id: bytes) -> None:
         """Not yet supported on Azure SQL."""
-        raise NotImplementedError(
-            "Transaction state is not yet supported with the Azure SQL storage backend."
-        )
+        raise NotImplementedError("Transaction state is not yet supported with the Azure SQL storage backend.")
 
     def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes) -> None:
         """Not yet supported on Azure SQL."""

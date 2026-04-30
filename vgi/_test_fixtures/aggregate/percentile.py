@@ -80,9 +80,7 @@ class PercentileFunction(AggregateFunction[PercentileState]):
         if raw_pct is None:
             raise ValueError("vgi_percentile: percentile must not be NULL")
         # Accept Python int/float and Decimal (DuckDB DECIMAL literals decode as Decimal).
-        if isinstance(raw_pct, Decimal):
-            pct = float(raw_pct)
-        elif isinstance(raw_pct, (int, float)):
+        if isinstance(raw_pct, (Decimal, int, float)):
             pct = float(raw_pct)
         else:
             raise ValueError(f"vgi_percentile: percentile must be a number, got {type(raw_pct).__name__}")

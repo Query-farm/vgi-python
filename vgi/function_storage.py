@@ -212,9 +212,7 @@ class FunctionStorage(Protocol):
     # (transaction_id never reused after rollback/commit, but we don't
     # always get a callback).
 
-    def transaction_state_get(
-        self, transaction_id: bytes, keys: list[bytes]
-    ) -> list[bytes | None]:
+    def transaction_state_get(self, transaction_id: bytes, keys: list[bytes]) -> list[bytes | None]:
         """Load transaction-scoped state values for the given keys.
 
         Returns a list parallel to ``keys``: each element is the stored
@@ -232,9 +230,7 @@ class FunctionStorage(Protocol):
         """
         ...
 
-    def transaction_state_put(
-        self, transaction_id: bytes, items: list[tuple[bytes, bytes]]
-    ) -> None:
+    def transaction_state_put(self, transaction_id: bytes, items: list[tuple[bytes, bytes]]) -> None:
         """Unconditionally write transaction-scoped state values.
 
         ``INSERT OR REPLACE`` semantics — existing values for the same
@@ -729,9 +725,7 @@ class FunctionStorageSqlite:
 
     # --- Transaction State ---
 
-    def transaction_state_get(
-        self, transaction_id: bytes, keys: list[bytes]
-    ) -> list[bytes | None]:
+    def transaction_state_get(self, transaction_id: bytes, keys: list[bytes]) -> list[bytes | None]:
         """Load transaction-scoped values for the given keys."""
         if not keys:
             return []
@@ -753,9 +747,7 @@ class FunctionStorageSqlite:
         finally:
             conn.close()
 
-    def transaction_state_put(
-        self, transaction_id: bytes, items: list[tuple[bytes, bytes]]
-    ) -> None:
+    def transaction_state_put(self, transaction_id: bytes, items: list[tuple[bytes, bytes]]) -> None:
         """Write transaction-scoped values."""
         if not items:
             return

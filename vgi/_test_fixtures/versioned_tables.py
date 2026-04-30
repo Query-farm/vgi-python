@@ -25,6 +25,7 @@ Registered as the ``vgi-fixture-versioned-tables-worker`` entry point.
 
 from __future__ import annotations
 
+import contextlib
 import re
 import uuid
 from dataclasses import dataclass
@@ -382,10 +383,8 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
 
         # Pin HTTP sessions. Ignored by subprocess transport.
         if ctx is not None:
-            try:
+            with contextlib.suppress(RuntimeError):
                 ctx.set_cookie(STICKY_COOKIE_NAME, uuid.uuid4().hex)
-            except RuntimeError:
-                pass
 
         return CatalogAttachResult(
             attach_id=attach_id,

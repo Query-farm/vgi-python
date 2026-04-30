@@ -147,6 +147,7 @@ GENERATOR_VERSION = "1"
 
 
 def emit(out: TextIO) -> None:
+    """Emit the generated Go schemas package to *out*."""
     schemas = collect_schemas()
 
     body = io.StringIO()
@@ -180,6 +181,7 @@ def emit(out: TextIO) -> None:
 
 
 def main() -> None:
+    """Console-script entrypoint — write the Go schemas package to stdout."""
     try:
         emit(sys.stdout)
     except GeneratorError as e:

@@ -151,9 +151,11 @@ class AttachOption:
     _name: str = field(default="", init=False, repr=False)
 
     def __set_name__(self, owner: type, name: str) -> None:
+        """Capture the attribute name when bound to a class."""
         self._name = name
 
     def __get__(self, obj: object | None, objtype: type | None = None) -> Any:
+        """Return the descriptor itself on class access; the bound value on instance access."""
         if obj is None:
             return self
         return getattr(type(obj), self._name, None)

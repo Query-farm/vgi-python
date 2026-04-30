@@ -154,6 +154,7 @@ GENERATOR_VERSION = "1"
 
 
 def emit(out: TextIO) -> None:
+    """Emit the generated C++ schemas header to *out*."""
     schemas = collect_schemas()
 
     body = io.StringIO()
@@ -191,6 +192,7 @@ def emit(out: TextIO) -> None:
 
 
 def main() -> None:
+    """Console-script entrypoint — write the C++ schemas header to stdout."""
     try:
         emit(sys.stdout)
     except GeneratorError as e:

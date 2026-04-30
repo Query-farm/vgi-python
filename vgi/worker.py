@@ -61,6 +61,7 @@ vgi._test_fixtures.worker : Example worker with built-in functions
 
 from __future__ import annotations
 
+import contextlib
 import importlib.metadata
 import logging
 import os
@@ -190,10 +191,8 @@ def _write_port_file(path: str, port: int) -> None:
         os.replace(tmp, path)
     except BaseException:
         # Best-effort cleanup of the tmp on any failure before the rename.
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
 
 
@@ -902,9 +901,7 @@ class Worker:
         # syscall path that's been around since the 1970s, but waitress
         # has supported the poll backend since its initial release and
         # it's how every other production-grade WSGI server runs.
-        waitress.serve(
-            wsgi_app, host=host, port=port, _quiet=True, asyncore_use_poll=True
-        )
+        waitress.serve(wsgi_app, host=host, port=port, _quiet=True, asyncore_use_poll=True)
 
     @staticmethod
     def _match_function_arguments(
