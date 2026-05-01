@@ -284,11 +284,21 @@ _WINDOW_PARTITION_CACHE_MAX = 256
 
 @dataclass(slots=True)
 class _CachedWindowPartition:
-    """Fully-decoded partition ready to hand to the user's ``window()``."""
+    """Fully-decoded partition ready to hand to the user's ``window()``.
+
+    ``prepared_state`` holds the result of ``AggregateFunction.window_prepare``
+    if the user defines that hook — typically the deserialized
+    ``window_state`` plus any per-partition derived structures (NumPy views,
+    dictionary lookups, etc.). It lives only in this in-memory cache and is
+    regenerated whenever the partition is reloaded from FunctionStorage.
+    Defaults to ``window_state`` when no hook is defined, so existing
+    aggregates see the placeholder unchanged.
+    """
 
     partition: Any  # vgi.aggregate_function.WindowPartition (avoid import cycle)
     output_schema: pa.Schema
     window_state: Any  # _WindowStatePlaceholder | None
+    prepared_state: Any = None
 
 
 class _WindowPartitionCache:
@@ -1832,6 +1842,12 @@ class Worker:
                 raw_bytes=window_state_bytes,
                 class_name=type(window_state).__name__,
             )
+        # Hand the just-built window_state (the typed dataclass, not the
+        # placeholder) to the optional window_prepare hook. Result lives
+        # alongside the placeholder in the in-memory cache.
+        prepared_state = func_cls.window_prepare(
+            partition, window_state, params,
+        )
         _window_partition_cache.put(
             request.execution_id,
             request.partition_id,
@@ -1839,6 +1855,7 @@ class Worker:
                 partition=partition,
                 output_schema=request.output_schema,
                 window_state=cache_window_state,
+                prepared_state=prepared_state,
             ),
         )
 
@@ -1864,7 +1881,6 @@ class Worker:
         )
         partition = cached.partition
         output_schema = cached.output_schema
-        window_state = cached.window_state
 
         const_args = self._load_aggregate_const_args(func_cls, storage)
         params = ProcessParams(
@@ -1878,8 +1894,18 @@ class Worker:
             auth_context=ctx.auth,
         )
 
+        # Lazily populate prepared_state on first access — covers cold reloads
+        # from FunctionStorage where _load_cached_window_partition can't yet
+        # call window_prepare (no params available there).
+        if cached.prepared_state is None:
+            cached.prepared_state = func_cls.window_prepare(
+                partition, cached.window_state, params,
+            )
+
         subframes = list(zip(request.frame_starts, request.frame_ends, strict=True))
-        result_value = func_cls.window(request.rid, subframes, partition, window_state, params)
+        result_value = func_cls.window(
+            request.rid, subframes, partition, cached.prepared_state, params,
+        )
 
         # Build a one-row result batch matching output_schema
         result_batch = _build_scalar_result_batch(result_value, output_schema)
@@ -1901,6 +1927,11 @@ class Worker:
         Falls back to storage on a cache miss (multi-process HTTP, LRU
         eviction, or worker restart). Raises IOError if the partition is
         unknown — window_init never ran, or the destructor already fired.
+
+        ``prepared_state`` is left as ``None`` on cold reload; the dispatcher
+        (aggregate_window or aggregate_window_batch) will lazily populate it
+        on first access via ``func_cls.window_prepare``. That keeps this
+        function params-free, matching its previous signature.
         """
         from vgi.aggregate_function import WindowPartition
 
@@ -1938,6 +1969,7 @@ class Worker:
             partition=partition,
             output_schema=output_schema,
             window_state=window_state,
+            prepared_state=None,  # populated lazily by the dispatcher
         )
         _window_partition_cache.put(execution_id, partition_id, cached)
         return cached
@@ -1962,7 +1994,6 @@ class Worker:
         )
         partition = cached.partition
         output_schema = cached.output_schema
-        window_state = cached.window_state
 
         const_args = self._load_aggregate_const_args(func_cls, storage)
         params = ProcessParams(
@@ -1975,6 +2006,14 @@ class Worker:
             storage=storage,
             auth_context=ctx.auth,
         )
+
+        # Lazily populate prepared_state on first batch — covers cold reloads
+        # from FunctionStorage where _load_cached_window_partition can't yet
+        # call window_prepare (no params available there).
+        if cached.prepared_state is None:
+            cached.prepared_state = func_cls.window_prepare(
+                partition, cached.window_state, params,
+            )
 
         # Unflatten subframes: frame_starts/frame_ends are concatenated across
         # all rows, frames_per_row[i] gives the slice length for row i.
@@ -1993,7 +2032,9 @@ class Worker:
             subframes = [(starts[offset + k], ends[offset + k]) for k in range(n)]
             offset += n
             rid = request.row_idx + i
-            results.append(func_cls.window(rid, subframes, partition, window_state, params))
+            results.append(
+                func_cls.window(rid, subframes, partition, cached.prepared_state, params)
+            )
 
         result_batch = _build_batch_result(results, output_schema)
         sink = pa.BufferOutputStream()

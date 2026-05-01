@@ -414,6 +414,40 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
         return None
 
     @classmethod
+    def window_prepare(
+        cls,
+        partition: WindowPartition,
+        window_state: Any,
+        params: ProcessParams[Any],
+    ) -> Any:
+        """Optional hook: derive per-partition state for the window() loop.
+
+        Called once per partition, after ``window_init`` (or after the state
+        is rehydrated from storage on a cold reload), before any
+        ``window()`` call. The return value is passed as ``window_state``
+        to every ``window()`` call against this partition, replacing the
+        opaque ``_WindowStatePlaceholder`` user code would otherwise
+        receive.
+
+        Use this hook for one-shot per-partition work that ``window()``
+        would otherwise have to redo on every call: deserialise the
+        ``_WindowStatePlaceholder``, reshape NumPy buffers from
+        ``window_init``'s state, build symbol→index lookups, etc.
+        Anything you would otherwise be tempted to memoise via a
+        module-level dict.
+
+        The result lives in the framework's per-partition cache and is
+        dropped automatically when the partition is evicted from the LRU
+        or its destructor fires.
+
+        Default implementation returns ``window_state`` unchanged — for
+        aggregates that don't define this hook, ``window()`` receives the
+        placeholder (or ``None``) exactly as it did before. Backward
+        compatible.
+        """
+        return window_state
+
+    @classmethod
     def window(
         cls,
         rid: int,
@@ -429,7 +463,10 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
             subframes: Frame ranges ``[(begin, end), ...]`` — 1 for the default
                 frame, 3 when ``EXCLUDE`` produces multiple subframes.
             partition: The cached partition data.
-            window_state: Value returned by ``window_init()`` (may be ``None``).
+            window_state: ``window_prepare()``'s return value if the function
+                defines that hook; otherwise the value returned by
+                ``window_init()`` (may be ``None``), wrapped in a
+                ``_WindowStatePlaceholder`` on cold reload.
             params: Shared ``ProcessParams``.
 
         Returns:
