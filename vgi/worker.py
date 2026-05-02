@@ -289,6 +289,30 @@ def _format_arguments_for_error(args: Arguments) -> str:
 _WINDOW_PARTITION_CACHE_MAX = 256
 
 
+class _UpdateTrackingDict[K, V](dict[K, V]):
+    """A dict that records explicit ``__setitem__`` writes.
+
+    Used by ``aggregate_update`` to tell apart "user's update() reassigned
+    state for this group" from "we pre-populated the entry with initial
+    state and the user's update() chose not to touch it (e.g. saw only
+    NULL inputs)". The framework then persists only entries the user
+    actually wrote, so a no-op update on a freshly-seeded group does not
+    overwrite the absence of stored state — preserving SQL-standard
+    NULL semantics for ``SUM`` of all NULLs.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.written: set[K] = set()
+
+    def __setitem__(self, key: K, value: V) -> None:
+        super().__setitem__(key, value)
+        self.written.add(key)
+
+    def clear_writes(self) -> None:
+        self.written.clear()
+
+
 @dataclass(slots=True)
 class _CachedWindowPartition:
     """Fully-decoded partition ready to hand to the user's ``window()``.
@@ -1686,19 +1710,34 @@ class Worker:
             storage=storage,
             auth_context=ctx.auth,
         )
-        states: dict[int, Any] = {}
-        new_gids: set[int] = set()  # Track groups created in this batch
-        initial_bytes: dict[int, bytes] = {}  # Snapshot initial state for new groups
+        # ``states`` is a tracking dict that records every gid the user's
+        # ``update()`` reassigns. Earlier this method used a plain dict and
+        # then heuristically skipped persisting "new groups whose serialized
+        # state didn't change". That heuristic conflated two cases:
+        #
+        #   1. ``update()`` saw rows but chose not to mutate state (e.g.
+        #      SumFunction skipping all-NULL value_sum) → finalize should
+        #      return NULL because the group effectively had no rows.
+        #   2. ``update()`` saw rows and assigned a state that happens to be
+        #      byte-equal to the initial state (e.g. ``SumState(total=0)``
+        #      after summing zeros) → finalize should return that state.
+        #
+        # The fix: persist a state iff the user explicitly wrote it during
+        # this batch's ``update()``. Pre-existing entries from prior batches
+        # are also persisted so multi-batch state survives.
+        existing_gids: set[int] = set()
+        states: _UpdateTrackingDict[int, Any] = _UpdateTrackingDict()
         stored = storage.aggregate_get(unique_gids)
         for i, gid in enumerate(unique_gids):
             result = stored[i]
             if result is not None:
                 states[gid] = func_cls.state_class.deserialize_from_bytes(result[1])
+                existing_gids.add(gid)
             else:
-                state = func_cls.initial_state(params)
-                states[gid] = state
-                new_gids.add(gid)
-                initial_bytes[gid] = state.serialize_to_bytes()
+                states[gid] = func_cls.initial_state(params)
+        # Snapshot the writes made during seeding so we don't count them as
+        # user-initiated mutations.
+        states.clear_writes()
 
         # Call user's update() with column arrays and const scalars as kwargs
         kwargs: dict[str, Any] = {"states": states, "group_ids": group_ids}
@@ -1731,15 +1770,11 @@ class Worker:
             kwargs["params"] = params
         func_cls.update(**kwargs)
 
-        # Save updated states. Skip new groups whose state wasn't modified —
-        # this ensures groups that received only NULL values (NullHandling.DEFAULT
-        # skips them) don't get stored, so finalize() sees None → returns NULL.
-        state_data: list[tuple[int, bytes]] = []
-        for gid in states:
-            serialized = states[gid].serialize_to_bytes()
-            if gid in new_gids and serialized == initial_bytes[gid]:
-                continue  # New group, not modified by update() — don't persist
-            state_data.append((gid, serialized))
+        # Persist (a) every gid that already had storage from a prior batch
+        # (its state may have been mutated by the user) and (b) every gid the
+        # user's ``update()`` explicitly wrote during this batch.
+        gids_to_persist = existing_gids | states.written
+        state_data: list[tuple[int, bytes]] = [(gid, states[gid].serialize_to_bytes()) for gid in gids_to_persist]
         if state_data:
             storage.aggregate_put(state_data)
 
