@@ -515,3 +515,90 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
             cls.window(rid, frames, partition, window_state, params)
             for rid, frames in zip(row_ids, subframes, strict=True)
         ]
+
+    # ------------------------------------------------------------------
+    # Optional streaming-partitioned callbacks
+    # ------------------------------------------------------------------
+    # Enable by setting ``Meta.streaming_partitioned = True`` and overriding
+    # ``streaming_chunk()`` (and optionally ``streaming_open`` /
+    # ``streaming_close``).
+    #
+    # Streaming-partitioned aggregates handle queries shaped like
+    # ``f(...) OVER (PARTITION BY p ORDER BY o)`` with a cumulative frame
+    # (``UNBOUNDED PRECEDING -> CURRENT ROW``) where the input is too large
+    # to materialise in DuckDB memory but compresses heavily into per-
+    # partition state. The framework streams input chunks to the worker;
+    # the worker maintains concurrent per-partition state in a hash map and
+    # emits one output row per input row.
+
+    @classmethod
+    def streaming_open(cls, params: ProcessParams[Any]) -> Any:
+        """Build cross-partition global state for a streaming session.
+
+        Called once when ``aggregate_streaming_open`` arrives, before any
+        chunk is processed. Return any object (it lives in an in-process
+        cache keyed by ``execution_id`` for the duration of the session).
+
+        Typical contents: a ``dict`` of per-partition aggregate states
+        (populated lazily as new partition keys appear in input chunks),
+        plus any cross-partition resources to share — symbol intern
+        tables, allocator pools, prepared output buffers.
+
+        Default implementation returns ``None`` (no shared state); the
+        function still works if ``streaming_chunk`` keeps everything in
+        local variables, but per-partition state would have to live
+        somewhere caller-supplied.
+        """
+        return None
+
+    @classmethod
+    def streaming_chunk(
+        cls,
+        chunk: pa.RecordBatch,
+        streaming_state: Any,
+        partition_key_count: int,
+        order_key_count: int,
+        params: ProcessParams[Any],
+    ) -> "pa.Array | list[Any]":
+        """Process one chunk of streaming input.
+
+        Args:
+            chunk: Input rows for this batch. Schema layout is
+                ``[partition_key_cols..., order_key_cols..., value_cols...]``
+                — the first ``partition_key_count`` columns are partition
+                keys (used to dispatch to the right per-partition state),
+                the next ``order_key_count`` are order keys (informational;
+                may be used to verify monotonicity), the rest are the
+                function's value arguments in declaration order.
+            streaming_state: Whatever ``streaming_open`` returned. The
+                framework passes the same object on every chunk; mutate
+                in place to accumulate state across chunks.
+            partition_key_count: Number of leading columns that form the
+                partition key.
+            order_key_count: Number of columns following the partition key
+                that form the order key.
+            params: Shared ``ProcessParams``.
+
+        Returns:
+            Either a :class:`pa.Array` of length ``chunk.num_rows`` matching
+            the function's output type, or a list of the same length
+            (which the framework converts via ``pa.array``). Each output
+            value is the cumulative aggregate snapshot at that input
+            row's position in its partition's order.
+        """
+        raise NotImplementedError(
+            f"{cls.__name__}: Meta.streaming_partitioned=True requires overriding streaming_chunk()"
+        )
+
+    @classmethod
+    def streaming_close(cls, streaming_state: Any, params: ProcessParams[Any]) -> None:
+        """Tear down streaming session state.
+
+        Called once when ``aggregate_streaming_close`` arrives, after the
+        last chunk. Use to release any external resources held by
+        ``streaming_state``. The framework drops its reference after this
+        call, so anything not held elsewhere is GCed naturally.
+
+        Default implementation is a no-op.
+        """
+        return None

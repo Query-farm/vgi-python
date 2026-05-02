@@ -367,6 +367,11 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     distinct_dependent: DistinctDependence = DistinctDependence.NOT_DISTINCT_DEPENDENT
     # True if the aggregate implements the window() callback
     supports_window: bool = False
+    # True if the aggregate opts into the streaming-partitioned protocol —
+    # ``aggregate_streaming_open`` / ``_chunk`` / ``_close``. The DuckDB
+    # extension's optimizer rule may rewrite eligible LogicalWindow nodes to
+    # use this path.
+    streaming_partitioned: bool = False
 
     # True if a table-in-out function declares a finalize/finish stage.
     # The C++ extension uses this to conditionally register
@@ -2133,6 +2138,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             order_dependent=meta.order_dependent,
             distinct_dependent=meta.distinct_dependent,
             supports_window=meta.supports_window,
+            streaming_partitioned=meta.streaming_partitioned,
             has_finalize=meta.has_finalize,
             # Settings
             required_settings=meta.required_settings,

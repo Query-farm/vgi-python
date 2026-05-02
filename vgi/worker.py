@@ -65,6 +65,7 @@ import contextlib
 import importlib.metadata
 import logging
 import os
+import pickle
 import sys
 import uuid
 from collections import OrderedDict
@@ -156,6 +157,12 @@ if TYPE_CHECKING:
         AggregateDestructorResponse,
         AggregateFinalizeRequest,
         AggregateFinalizeResponse,
+        AggregateStreamingChunkRequest,
+        AggregateStreamingChunkResponse,
+        AggregateStreamingCloseRequest,
+        AggregateStreamingCloseResponse,
+        AggregateStreamingOpenRequest,
+        AggregateStreamingOpenResponse,
         AggregateUpdateRequest,
         AggregateUpdateResponse,
         AggregateWindowBatchRequest,
@@ -342,6 +349,104 @@ class _WindowPartitionCache:
 
 
 _window_partition_cache = _WindowPartitionCache()
+
+
+# Streaming-partitioned aggregate sessions: session state is held in an
+# in-process LRU cache for the fast path, and persisted to FunctionStorage
+# (under partition_id=0) so chunk RPCs that land on a different pool worker
+# can rehydrate. Same pattern as aggregate_window_partition_put/_get.
+#
+# State persisted: pickled dict containing streaming_state plus the schema
+# fields that streaming_chunk needs to reconstruct ProcessParams without
+# the open request.
+_STREAMING_SESSION_STORAGE_KEY = 0
+
+
+@dataclass(slots=True)
+class _StreamingSession:
+    """Per-execution_id state for a streaming-partitioned aggregate session."""
+
+    func_cls: type
+    streaming_state: Any
+    output_schema: pa.Schema
+    partition_key_count: int
+    order_key_count: int
+
+
+def _encode_streaming_session(session: _StreamingSession) -> bytes:
+    """Pickle a session for FunctionStorage. ``func_cls`` is *not* pickled —
+    it's resolved on the fly from the function name on cold reload."""
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, session.output_schema) as writer:
+        pass  # schema-only stream is enough to round-trip the schema
+    output_schema_bytes = sink.getvalue().to_pybytes()
+    return pickle.dumps({
+        "streaming_state": session.streaming_state,
+        "output_schema_bytes": output_schema_bytes,
+        "partition_key_count": session.partition_key_count,
+        "order_key_count": session.order_key_count,
+    })
+
+
+def _decode_streaming_session(payload: bytes, func_cls: type) -> _StreamingSession:
+    d = pickle.loads(payload)
+    return _StreamingSession(
+        func_cls=func_cls,
+        streaming_state=d["streaming_state"],
+        output_schema=pa.ipc.open_stream(d["output_schema_bytes"]).schema,
+        partition_key_count=d["partition_key_count"],
+        order_key_count=d["order_key_count"],
+    )
+
+
+class _StreamingSessionCache:
+    """Process-local map ``execution_id -> _StreamingSession``."""
+
+    def __init__(self) -> None:
+        self._entries: dict[bytes, _StreamingSession] = {}
+        self._lock = Lock()
+
+    def put(self, execution_id: bytes, session: _StreamingSession) -> None:
+        with self._lock:
+            self._entries[execution_id] = session
+
+    def get(self, execution_id: bytes) -> _StreamingSession | None:
+        with self._lock:
+            return self._entries.get(execution_id)
+
+    def pop(self, execution_id: bytes) -> _StreamingSession | None:
+        with self._lock:
+            return self._entries.pop(execution_id, None)
+
+
+_streaming_session_cache = _StreamingSessionCache()
+
+
+# Process-local instrumentation for the streaming-aggregate path. Phase
+# timers accumulate across all chunks of a session; dumped on close.
+_streaming_persist_lock = Lock()
+_streaming_persist_stats = {
+    "encode_session_seconds": 0.0,
+    "storage_put_seconds": 0.0,
+    "storage_get_seconds": 0.0,
+    "rpc_chunk_total_seconds": 0.0,
+    "n_chunks": 0,
+    "n_persists": 0,
+    "n_cold_loads": 0,
+    "bytes_persisted": 0,
+}
+
+
+def _record_persist_timing(
+    encode_seconds: float,
+    put_seconds: float,
+    payload_bytes: int,
+) -> None:
+    with _streaming_persist_lock:
+        _streaming_persist_stats["encode_session_seconds"] += encode_seconds
+        _streaming_persist_stats["storage_put_seconds"] += put_seconds
+        _streaming_persist_stats["n_persists"] += 1
+        _streaming_persist_stats["bytes_persisted"] += payload_bytes
 
 
 def _unpack_bool_mask(data: bytes, length: int) -> pa.BooleanArray:
@@ -2088,6 +2193,242 @@ class Worker:
         storage.aggregate_window_partition_delete(request.partition_id)
         _window_partition_cache.delete(request.execution_id, request.partition_id)
         return AggregateWindowDestructorResponse()
+
+    def aggregate_streaming_open(
+        self,
+        request: AggregateStreamingOpenRequest,
+        ctx: CallContext,
+    ) -> AggregateStreamingOpenResponse:
+        """Open a streaming-partitioned aggregate session."""
+        from vgi.protocol import AggregateStreamingOpenResponse
+
+        func_cls = self._resolve_function_by_name(
+            request.function_name, request.attach_id, function_type=AggregateFunction
+        )
+        if not issubclass(func_cls, AggregateFunction):
+            raise TypeError(
+                f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})"
+            )
+
+        execution_id = uuid.uuid4().bytes
+
+        # Stash const args (mirrors aggregate_bind behavior) so streaming_chunk
+        # can rehydrate them via _load_aggregate_const_args if the function
+        # declares const params.
+        if request.arguments and request.arguments.positional:
+            storage = BoundStorage(func_cls.storage, execution_id)
+            storage.aggregate_put([(-2, request.arguments.serialize_to_bytes())])
+
+        storage = BoundStorage(func_cls.storage, execution_id)
+        const_args = self._load_aggregate_const_args(func_cls, storage)
+        params = ProcessParams(
+            args=const_args,
+            init_call=None,
+            init_response=None,
+            output_schema=request.output_schema,
+            settings=_batch_to_scalar_dict(request.settings),
+            secrets={},
+            storage=storage,
+            auth_context=ctx.auth,
+        )
+
+        streaming_state = func_cls.streaming_open(params)
+
+        session = _StreamingSession(
+            func_cls=func_cls,
+            streaming_state=streaming_state,
+            output_schema=request.output_schema,
+            partition_key_count=request.partition_key_count,
+            order_key_count=request.order_key_count,
+        )
+        _streaming_session_cache.put(execution_id, session)
+        # Also persist to FunctionStorage so a chunk RPC landing on a
+        # different pool worker can reload the session.
+        storage.aggregate_window_partition_put(
+            _STREAMING_SESSION_STORAGE_KEY, _encode_streaming_session(session)
+        )
+        return AggregateStreamingOpenResponse(execution_id=execution_id)
+
+    def aggregate_streaming_chunk(
+        self,
+        request: AggregateStreamingChunkRequest,
+        ctx: CallContext,
+    ) -> AggregateStreamingChunkResponse:
+        """Process one chunk of streaming input."""
+        from vgi.protocol import AggregateStreamingChunkResponse
+
+        session = _streaming_session_cache.get(request.execution_id)
+        if session is None:
+            # Cold reload — the session may have been opened on a different
+            # pool worker. Look it up in FunctionStorage.
+            func_cls = self._resolve_function_by_name(
+                request.function_name, request.attach_id, function_type=AggregateFunction
+            )
+            if not issubclass(func_cls, AggregateFunction):
+                raise TypeError(
+                    f"Function '{request.function_name}' is not an AggregateFunction "
+                    f"(got {func_cls.__name__})"
+                )
+            cold_storage = BoundStorage(func_cls.storage, request.execution_id)
+            import time as _t
+
+            t_get_start = _t.perf_counter()
+            payload = cold_storage.aggregate_window_partition_get(_STREAMING_SESSION_STORAGE_KEY)
+            t_get = _t.perf_counter() - t_get_start
+            with _streaming_persist_lock:
+                _streaming_persist_stats["storage_get_seconds"] += t_get
+                _streaming_persist_stats["n_cold_loads"] += 1
+            if payload is None:
+                raise OSError(
+                    f"aggregate_streaming_chunk: unknown execution_id "
+                    f"(streaming_open never ran or close already fired)"
+                )
+            session = _decode_streaming_session(payload, func_cls)
+            _streaming_session_cache.put(request.execution_id, session)
+
+        chunk = pa.ipc.open_stream(request.input_batch).read_next_batch()
+
+        storage = BoundStorage(session.func_cls.storage, request.execution_id)
+        const_args = self._load_aggregate_const_args(session.func_cls, storage)
+        params = ProcessParams(
+            args=const_args,
+            init_call=None,
+            init_response=None,
+            output_schema=session.output_schema,
+            settings={},
+            secrets={},
+            storage=storage,
+            auth_context=ctx.auth,
+        )
+
+        result = session.func_cls.streaming_chunk(
+            chunk,
+            session.streaming_state,
+            session.partition_key_count,
+            session.order_key_count,
+            params,
+        )
+
+        # Accept either a pa.Array (preferred) or a Python list. Coerce to
+        # an Arrow array of the function's output type, then wrap in a
+        # one-column RecordBatch for IPC transport.
+        if isinstance(result, pa.Array):
+            result_array = result
+        else:
+            result_array = pa.array(result, type=session.output_schema.field(0).type)
+
+        if len(result_array) != chunk.num_rows:
+            raise ValueError(
+                f"streaming_chunk returned {len(result_array)} values for "
+                f"{chunk.num_rows} input rows"
+            )
+
+        result_batch = pa.RecordBatch.from_arrays([result_array], schema=session.output_schema)
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, result_batch.schema) as writer:
+            writer.write_batch(result_batch)
+        # Persist updated session so the next chunk (possibly on a different
+        # pool worker) sees the same state.
+        import time as _t
+
+        t_enc_start = _t.perf_counter()
+        payload = _encode_streaming_session(session)
+        t_enc = _t.perf_counter() - t_enc_start
+        t_put_start = _t.perf_counter()
+        storage.aggregate_window_partition_put(_STREAMING_SESSION_STORAGE_KEY, payload)
+        t_put = _t.perf_counter() - t_put_start
+        _record_persist_timing(t_enc, t_put, len(payload))
+        with _streaming_persist_lock:
+            _streaming_persist_stats["n_chunks"] += 1
+        return AggregateStreamingChunkResponse(result_batch=sink.getvalue().to_pybytes())
+
+    def aggregate_streaming_close(
+        self,
+        request: AggregateStreamingCloseRequest,
+        ctx: CallContext,
+    ) -> AggregateStreamingCloseResponse:
+        """End a streaming-partitioned aggregate session."""
+        from vgi.protocol import AggregateStreamingCloseResponse
+
+        session = _streaming_session_cache.pop(request.execution_id)
+        if session is None:
+            # Cold close — session may have been opened on a different pool
+            # worker. Best-effort load to fire streaming_close on the user's
+            # state (so they get the cleanup callback they expect), then
+            # delete from storage. If load fails too, just drop.
+            try:
+                func_cls = self._resolve_function_by_name(
+                    request.function_name, request.attach_id, function_type=AggregateFunction
+                )
+            except Exception:  # noqa: BLE001
+                func_cls = None
+            if func_cls is not None and issubclass(func_cls, AggregateFunction):
+                cold_storage = BoundStorage(func_cls.storage, request.execution_id)
+                payload = cold_storage.aggregate_window_partition_get(_STREAMING_SESSION_STORAGE_KEY)
+                if payload is not None:
+                    session = _decode_streaming_session(payload, func_cls)
+                cold_storage.aggregate_window_partition_delete(_STREAMING_SESSION_STORAGE_KEY)
+            if session is None:
+                # Idempotent: nothing to clean up.
+                return AggregateStreamingCloseResponse()
+
+        storage = BoundStorage(session.func_cls.storage, request.execution_id)
+        const_args = self._load_aggregate_const_args(session.func_cls, storage)
+        params = ProcessParams(
+            args=const_args,
+            init_call=None,
+            init_response=None,
+            output_schema=session.output_schema,
+            settings={},
+            secrets={},
+            storage=storage,
+            auth_context=ctx.auth,
+        )
+        try:
+            session.func_cls.streaming_close(session.streaming_state, params)
+        except Exception:  # noqa: BLE001
+            _logger.exception("streaming_close raised; session dropped anyway")
+
+        # Drop the persisted state.
+        storage.aggregate_window_partition_delete(_STREAMING_SESSION_STORAGE_KEY)
+
+        # Dump worker-side persist stats accumulated for this session.
+        with _streaming_persist_lock:
+            stats = dict(_streaming_persist_stats)
+            _streaming_persist_stats["encode_session_seconds"] = 0.0
+            _streaming_persist_stats["storage_put_seconds"] = 0.0
+            _streaming_persist_stats["storage_get_seconds"] = 0.0
+            _streaming_persist_stats["rpc_chunk_total_seconds"] = 0.0
+            _streaming_persist_stats["n_chunks"] = 0
+            _streaming_persist_stats["n_persists"] = 0
+            _streaming_persist_stats["n_cold_loads"] = 0
+            _streaming_persist_stats["bytes_persisted"] = 0
+
+        if stats["n_chunks"] > 0:
+            n = stats["n_chunks"]
+            mb = stats["bytes_persisted"] / (1024 * 1024)
+            _logger.info(
+                "streaming_persist_summary chunks=%d encode=%.3fs put=%.3fs "
+                "bytes=%.1fMB cold_loads=%d",
+                n,
+                stats["encode_session_seconds"],
+                stats["storage_put_seconds"],
+                mb,
+                stats["n_cold_loads"],
+            )
+            # Also stderr so it's visible in the SQL bench output.
+            import sys as _sys
+
+            print(
+                f"[streaming_persist_summary] chunks={n} "
+                f"encode={stats['encode_session_seconds']:.3f}s "
+                f"put={stats['storage_put_seconds']:.3f}s "
+                f"bytes={mb:.1f}MB "
+                f"cold_loads={stats['n_cold_loads']}",
+                file=_sys.stderr,
+                flush=True,
+            )
+        return AggregateStreamingCloseResponse()
 
     # ========== Function Invocation ==========
 

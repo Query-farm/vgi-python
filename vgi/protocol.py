@@ -1058,6 +1058,93 @@ class AggregateWindowBatchResponse(ArrowSerializableDataclass):
 
 
 # ---------------------------------------------------------------------------
+# Aggregate Streaming-Partitioned RPC Types
+# ---------------------------------------------------------------------------
+# Streaming protocol for partitioned aggregates whose state compresses
+# heavily relative to input rows (e.g. portfolio_agg's positions dict vs
+# millions of fills). DuckDB streams input chunks to the worker; the worker
+# maintains concurrent per-partition state in a hash map keyed by partition
+# key, dispatches each row to its partition's state, and emits one snapshot
+# per input row. No DuckDB-side partition materialisation. Cumulative
+# semantics only (UNBOUNDED PRECEDING -> CURRENT ROW); other frame shapes
+# fall back to the non-streaming path.
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateStreamingOpenRequest(ArrowSerializableDataclass):
+    """Request for aggregate_streaming_open — start a streaming session.
+
+    The worker resolves the function, calls ``streaming_open`` to build the
+    cross-partition global state, and returns an ``execution_id`` that
+    subsequent chunk/close calls reference.
+
+    ``input_schema`` is the schema of every chunk shipped via
+    ``streaming_chunk``. The first ``partition_key_count`` columns are
+    partition-key columns (used by the worker to dispatch rows to the right
+    per-partition state). The next ``order_key_count`` columns are
+    order-key columns (informational; the worker may verify monotonicity).
+    Remaining columns are the function's value arguments, in declaration
+    order.
+    """
+
+    function_name: str
+    arguments: Annotated[Arguments, ArrowType(pa.binary())]
+    input_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
+    partition_key_count: int
+    order_key_count: int
+    output_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
+    settings: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
+    secrets: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
+    attach_id: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateStreamingOpenResponse(ArrowSerializableDataclass):
+    """Response from aggregate_streaming_open — session token."""
+
+    execution_id: bytes
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateStreamingChunkRequest(ArrowSerializableDataclass):
+    """Request for aggregate_streaming_chunk — process one input chunk.
+
+    ``input_batch`` schema must match the ``input_schema`` agreed at
+    ``streaming_open``. The worker iterates rows, dispatches to per-partition
+    state by the partition-key columns, applies the function's update logic,
+    and returns a same-length output array.
+    """
+
+    function_name: str
+    execution_id: bytes
+    input_batch: bytes  # Full IPC stream bytes
+    attach_id: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateStreamingChunkResponse(ArrowSerializableDataclass):
+    """Response from aggregate_streaming_chunk — same-length output batch."""
+
+    result_batch: bytes  # Full IPC stream bytes (one row per input row)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateStreamingCloseRequest(ArrowSerializableDataclass):
+    """Request for aggregate_streaming_close — end the session, free state."""
+
+    function_name: str
+    execution_id: bytes
+    attach_id: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AggregateStreamingCloseResponse(ArrowSerializableDataclass):
+    """Response from aggregate_streaming_close — empty ack."""
+
+    pass
+
+
+# ---------------------------------------------------------------------------
 # VGI Protocol
 # ---------------------------------------------------------------------------
 
@@ -1136,6 +1223,26 @@ class VgiProtocol(Protocol):
 
     def aggregate_window_batch(self, request: AggregateWindowBatchRequest) -> AggregateWindowBatchResponse:
         """Compute ``count`` window output rows in one batched RPC."""
+        ...
+
+    # ========== Aggregate Streaming-Partitioned Methods (optional, all unary) ==========
+
+    def aggregate_streaming_open(
+        self, request: AggregateStreamingOpenRequest
+    ) -> AggregateStreamingOpenResponse:
+        """Start a streaming-partitioned aggregate session."""
+        ...
+
+    def aggregate_streaming_chunk(
+        self, request: AggregateStreamingChunkRequest
+    ) -> AggregateStreamingChunkResponse:
+        """Process one input chunk; returns one output row per input row."""
+        ...
+
+    def aggregate_streaming_close(
+        self, request: AggregateStreamingCloseRequest
+    ) -> AggregateStreamingCloseResponse:
+        """End the streaming session, free per-session state."""
         ...
 
     # ========== Catalog - Discovery ==========

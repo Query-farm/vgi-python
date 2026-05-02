@@ -328,6 +328,7 @@ class ResolvedMetadata:
     order_dependent: OrderDependence = OrderDependence.NOT_ORDER_DEPENDENT
     distinct_dependent: DistinctDependence = DistinctDependence.NOT_DISTINCT_DEPENDENT
     supports_window: bool = False
+    streaming_partitioned: bool = False
 
     # Table-in-out specific: True if the function has a meaningful finalize phase
     # (override of finalize()/finish()). Used by the C++ extension to decide
@@ -359,6 +360,7 @@ class ResolvedMetadata:
             "order_dependent": self.order_dependent.name,
             "distinct_dependent": self.distinct_dependent.name,
             "supports_window": self.supports_window,
+            "streaming_partitioned": self.streaming_partitioned,
             "has_finalize": self.has_finalize,
         }
 
@@ -387,6 +389,7 @@ class ResolvedMetadata:
             order_dependent=OrderDependence[d.get("order_dependent", "NOT_ORDER_DEPENDENT")],
             distinct_dependent=DistinctDependence[d.get("distinct_dependent", "NOT_DISTINCT_DEPENDENT")],
             supports_window=d.get("supports_window", False),
+            streaming_partitioned=d.get("streaming_partitioned", False),
             has_finalize=d.get("has_finalize", False),
         )
 
@@ -777,6 +780,7 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         "order_dependent",
         "distinct_dependent",
         "supports_window",
+        "streaming_partitioned",
         # Scalar function specific
         "output_type",  # pa.DataType | type[AnyArrow] for scalar functions
     }
@@ -941,6 +945,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         order_dependent=attrs.get("order_dependent", OrderDependence.NOT_ORDER_DEPENDENT),
         distinct_dependent=attrs.get("distinct_dependent", DistinctDependence.NOT_DISTINCT_DEPENDENT),
         supports_window=bool(attrs.get("supports_window", False)),
+        streaming_partitioned=bool(attrs.get("streaming_partitioned", False)),
         has_finalize=_detect_has_finalize(cls, function_type),
     )
 
@@ -1028,6 +1033,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("order_dependent", pa.string()),
         pa.field("distinct_dependent", pa.string()),
         pa.field("supports_window", pa.bool_()),
+        pa.field("streaming_partitioned", pa.bool_()),
         pa.field("has_finalize", pa.bool_()),
     ]
 )

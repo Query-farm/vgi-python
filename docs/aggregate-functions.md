@@ -286,6 +286,74 @@ worker = Worker(
 
 The framework automatically detects `AggregateFunction` subclasses and registers them with the correct function type in the catalog.
 
+## Streaming-Partitioned Variant
+
+For `OVER (PARTITION BY ... ORDER BY ...)` queries against unbounded inputs (e.g. running aggregates across years of trade history), the standard windowed path materializes each partition in DuckDB memory before the aggregate sees it — fine for bounded data, OOMs at scale.
+
+The `streaming_partitioned` opt-in routes those queries through a custom physical operator in the VGI DuckDB extension: input chunks pipe directly to the worker, the worker maintains concurrent per-partition state in a hash map keyed by partition tuple, and each input chunk produces a same-length output array of cumulative snapshots. No DuckDB-side partition materialization; memory is bounded by `partitions × state_per_partition`, not by row count.
+
+```python
+class MyRunningAgg(AggregateFunction[MyState]):
+    class Meta:
+        name = "my_running_agg"
+        streaming_partitioned = True   # opt-in
+        # supports_window may also be set; the optimizer chooses the
+        # streaming path for eligible queries and falls back to the
+        # windowed path otherwise.
+
+    @classmethod
+    def streaming_open(cls, params: ProcessParams[None]) -> dict[str, Any]:
+        # Build cross-partition session state. Returned object lives in
+        # an in-process cache for the duration of the session and is
+        # also persisted to FunctionStorage so chunk RPCs landing on a
+        # different pool worker can rehydrate.
+        return {"partition_states": {}}
+
+    @classmethod
+    def streaming_chunk(
+        cls,
+        chunk: pa.RecordBatch,
+        streaming_state: dict[str, Any],
+        partition_key_count: int,
+        order_key_count: int,
+        params: ProcessParams[None],
+    ) -> pa.Array:
+        # Column layout in `chunk`:
+        #   [partition_key_cols..., order_key_cols..., value_cols...]
+        # Return one output value per input row (cumulative snapshot
+        # at that row's position in its partition's order).
+        ...
+
+    @classmethod
+    def streaming_close(cls, streaming_state, params) -> None:
+        # Cleanup hook (called once per session). Default: no-op.
+        ...
+```
+
+**Eligibility for the streaming path** is decided by the extension's optimizer rule and requires:
+
+- `streaming_partitioned = True` on the function's Meta.
+- A cumulative frame: `ROWS/RANGE/GROUPS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` (or the implicit cumulative frame DuckDB emits when only `ORDER BY` is given).
+- No `EXCLUDE`, `DISTINCT`, `FILTER (WHERE ...)`, or aggregate-arg `ORDER BY`.
+- The worker function declares no const-arg parameters (v1 limitation).
+
+Queries that don't satisfy all of these fall back to the standard windowed path automatically. The streaming path is opt-in and additive — it does not replace `update`/`combine`/`finalize`, which still service `GROUP BY` queries normally.
+
+**When pre-aggregation is the better answer.** For most analytics shapes — "EOD positions per book per day, carrying forward across days" — pre-aggregating the input is the cleanest pattern in plain SQL:
+
+```sql
+WITH per_period_net AS (
+  SELECT book, period_key, symbol, SUM(quantity) AS quantity
+  FROM trades GROUP BY book, period_key, symbol
+)
+SELECT book, period_key,
+       my_running_agg(symbol, quantity)
+         OVER (PARTITION BY book ORDER BY period_key) AS running
+FROM per_period_net;
+```
+
+The pre-aggregate collapses fills within each period before the OVER sees them, so the per-row output cardinality of the OVER matches the user's actual intent. The streaming path is the right tool when pre-aggregation isn't viable: per-fill running views, very high symbol cardinality per partition, or aggregates whose state isn't algebraically reducible by a pre-aggregate.
+
 ## Example Functions
 
 See `vgi/examples/aggregate.py` for complete implementations:
