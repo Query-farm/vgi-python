@@ -13,6 +13,7 @@ unchanged.
 * :mod:`.dynamic`     — dynamic_aggregate, dynamic_ml_aggregate
                         (gated on VGI_WORKER_SUPPORTS_DYNAMIC_CODE)
 * :mod:`.window`      — window_sum, window_median, window_listagg
+* :mod:`.streaming`   — streaming_sum (streaming-partitioned protocol)
 """
 
 from vgi._test_fixtures.aggregate._common import ListAggState, SumState
@@ -29,6 +30,7 @@ from vgi._test_fixtures.aggregate.dynamic import (
 from vgi._test_fixtures.aggregate.generic import GenericSumFunction
 from vgi._test_fixtures.aggregate.listagg import ListAggFunction
 from vgi._test_fixtures.aggregate.percentile import PercentileFunction
+from vgi._test_fixtures.aggregate.streaming import StreamingSumFunction
 from vgi._test_fixtures.aggregate.varargs import SumAllFunction
 from vgi._test_fixtures.aggregate.window import (
     WindowListAggFunction,
@@ -46,6 +48,7 @@ __all__ = [
     "ListAggFunction",
     "ListAggState",
     "PercentileFunction",
+    "StreamingSumFunction",
     "SumAllFunction",
     "SumFunction",
     "SumState",

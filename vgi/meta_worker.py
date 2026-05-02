@@ -363,6 +363,18 @@ class MetaWorker:
         """Dispatch aggregate_window_batch to the right worker."""
         return self._dispatch_aggregate(request, "aggregate_window_batch", ctx)
 
+    def aggregate_streaming_open(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch aggregate_streaming_open to the right worker."""
+        return self._dispatch_aggregate(request, "aggregate_streaming_open", ctx)
+
+    def aggregate_streaming_chunk(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch aggregate_streaming_chunk to the right worker."""
+        return self._dispatch_aggregate(request, "aggregate_streaming_chunk", ctx)
+
+    def aggregate_streaming_close(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch aggregate_streaming_close to the right worker."""
+        return self._dispatch_aggregate(request, "aggregate_streaming_close", ctx)
+
     # ========== Serve entry point ==========
 
     @classmethod
