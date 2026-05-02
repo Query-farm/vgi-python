@@ -12,6 +12,8 @@ Classes:
 """
 
 import re
+import types
+import typing
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -193,6 +195,25 @@ class _MissingType:
 
 
 _MISSING: Final = _MissingType()
+
+
+def _accepts_none(annotated_inner_type: Any) -> bool:
+    """Whether a declared Arg type allows ``None``.
+
+    ``annotated_inner_type`` is the first type-arg of an
+    ``Annotated[T, Arg(...)]`` hint — i.e. the user's declared type for
+    the field. Returns True iff the type is a union that includes
+    ``NoneType`` (e.g. ``int | None``, ``Optional[int]``,
+    ``Union[int, None]``). Used by argument resolvers to reject SQL NULL
+    when the user did not opt in to nullable arguments.
+    """
+    if annotated_inner_type is type(None):
+        return True
+    origin = typing.get_origin(annotated_inner_type)
+    if origin is typing.Union or origin is types.UnionType:
+        return type(None) in typing.get_args(annotated_inner_type)
+    return False
+
 
 __all__ = [
     "AnyArrow",
@@ -1076,6 +1097,29 @@ class Arg[ArgT]:
             return f"string matching pattern: {self.pattern}"
 
         return None
+
+    def _reject_none(self) -> "ArgumentValidationError":
+        """Build the error raised when SQL NULL is passed to a non-Optional Arg.
+
+        Callers ``_parse_arguments`` (table_function.py) and ``_resolve``
+        (this module) hit ``_validate`` with a None value when the user
+        wrote e.g. ``my_func(NULL)``. ``_validate``'s numeric/choice/pattern
+        comparisons would then crash with a Python ``TypeError`` deep in
+        the worker — which surfaces in the C++ extension as an opaque
+        traceback rather than a clean argument error. Callers use this
+        helper to emit a structured error before reaching ``_validate``.
+        """
+        arg_name = self._name or str(self.position)
+        return ArgumentValidationError(
+            f"Argument '{arg_name}' cannot be NULL.",
+            arg_name=self._name,
+            position=self.position,
+            value=None,
+            constraint="must not be NULL (declare type as `T | None` to accept SQL NULL)",
+            doc=self.doc if self.doc else None,
+            valid_range=self._describe_valid_range(),
+            default=self.default,
+        )
 
     def _validate(self, value: ArgT) -> None:
         """Validate value against all constraints.

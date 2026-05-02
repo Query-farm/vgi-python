@@ -27,7 +27,15 @@ from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import AuthContext, CallContext, OutputCollector
 
 import vgi.function
-from vgi.arguments import Arg, Arguments, Secret, SecretLookupEntry, TableInput, _extract_setting_secret_params
+from vgi.arguments import (
+    Arg,
+    Arguments,
+    Secret,
+    SecretLookupEntry,
+    TableInput,
+    _accepts_none,
+    _extract_setting_secret_params,
+)
 from vgi.function_storage import BoundStorage
 from vgi.invocation import (
     BaseInitResponse,
@@ -476,8 +484,17 @@ class TableFunctionBase[TArgs](vgi.function.Function):
                         kwargs[attr_name] = tuple(arguments.positional[meta.position :])
                     else:
                         value = arguments.get(meta.position, default=meta.default)
+                        # Reject SQL NULL for non-Optional Args. Without this,
+                        # None silently propagated through validation and
+                        # crashed deep in the user's process()/update() with
+                        # an opaque Python ``TypeError`` (e.g. ``'<=' not
+                        # supported between instances of NoneType and int``)
+                        # that surfaced in the C++ extension as a worker
+                        # exception with no hint at the cause.
+                        if value is None and not _accepts_none(base_type):
+                            raise meta._reject_none()
                         # Run Arg constraint validation (ge/le/gt/lt/choices/pattern).
-                        # Skip for None — explicit SQL NULL or default=None.
+                        # Skip for None — accepted via Optional[T].
                         if value is not None:
                             meta._validate(value)
                         kwargs[attr_name] = value
