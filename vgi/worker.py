@@ -474,13 +474,35 @@ def _build_scalar_result_batch(result_value: Any, output_schema: pa.Schema) -> p
     return pa.record_batch({col_name: arr}, schema=output_schema)
 
 
-def _build_batch_result(results: list[Any], output_schema: pa.Schema) -> pa.RecordBatch:
-    """Build a count-row RecordBatch containing the batched window results."""
+def _build_batch_result(
+    results: "list[Any] | pa.Array",
+    output_schema: pa.Schema,
+    expected_count: int | None = None,
+) -> pa.RecordBatch:
+    """Build a count-row RecordBatch containing the batched window results.
+
+    ``results`` may be either a Python list (fed through ``pa.array(...)``,
+    the default) or a pre-built ``pa.Array`` matching the output type
+    (shipped directly — used by ``window_batch`` overrides that build the
+    output via Arrow primitives to avoid per-row Python overhead).
+    """
     if len(output_schema) != 1:
         raise ValueError(f"Window aggregate output_schema must have 1 field, got {len(output_schema)}")
     output_type = output_schema.field(0).type
     col_name = output_schema.field(0).name
-    arr = pa.array(results, type=output_type)
+    if isinstance(results, pa.Array):
+        if not results.type.equals(output_type):
+            raise TypeError(
+                f"window_batch returned pa.Array of type {results.type}, "
+                f"expected {output_type}"
+            )
+        arr: pa.Array = results
+    else:
+        arr = pa.array(results, type=output_type)
+    if expected_count is not None and len(arr) != expected_count:
+        raise ValueError(
+            f"window_batch returned {len(arr)} rows, expected {expected_count}"
+        )
     return pa.record_batch({col_name: arr}, schema=output_schema)
 
 
@@ -2025,18 +2047,24 @@ class Worker:
                 f"aggregate_window_batch: count={request.count} but frames_per_row has {len(frames_per_row)} entries"
             )
 
+        row_ids: list[int] = [request.row_idx + i for i in range(request.count)]
+        subframes_per_row: list[list[tuple[int, int]]] = []
         offset = 0
-        results: list[Any] = []
-        for i in range(request.count):
-            n = frames_per_row[i]
-            subframes = [(starts[offset + k], ends[offset + k]) for k in range(n)]
-            offset += n
-            rid = request.row_idx + i
-            results.append(
-                func_cls.window(rid, subframes, partition, cached.prepared_state, params)
+        for n in frames_per_row:
+            subframes_per_row.append(
+                [(starts[offset + k], ends[offset + k]) for k in range(n)]
             )
+            offset += n
 
-        result_batch = _build_batch_result(results, output_schema)
+        # User code may override window_batch to build the output as a single
+        # pa.Array — bypassing per-row Python object construction and the
+        # subsequent pa.array(...) conversion. The default falls back to
+        # window() per row, preserving prior behaviour.
+        results = func_cls.window_batch(
+            row_ids, subframes_per_row, partition, cached.prepared_state, params,
+        )
+
+        result_batch = _build_batch_result(results, output_schema, expected_count=request.count)
         sink = pa.BufferOutputStream()
         with pa.ipc.new_stream(sink, result_batch.schema) as writer:
             writer.write_batch(result_batch)

@@ -33,6 +33,7 @@ from vgi._test_fixtures.aggregate.varargs import SumAllFunction
 from vgi._test_fixtures.aggregate.window import (
     WindowListAggFunction,
     WindowMedianFunction,
+    WindowSumBatchFunction,
     WindowSumFunction,
 )
 
@@ -51,5 +52,6 @@ __all__ = [
     "WeightedSumFunction",
     "WindowListAggFunction",
     "WindowMedianFunction",
+    "WindowSumBatchFunction",
     "WindowSumFunction",
 ]

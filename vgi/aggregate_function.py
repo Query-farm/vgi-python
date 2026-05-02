@@ -475,3 +475,43 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
 
         """
         raise NotImplementedError(f"{cls.__name__}: Meta.supports_window=True requires overriding window()")
+
+    @classmethod
+    def window_batch(
+        cls,
+        row_ids: list[int],
+        subframes: list[list[tuple[int, int]]],
+        partition: WindowPartition,
+        window_state: Any,
+        params: ProcessParams[Any],
+    ) -> "pa.Array | list[Any]":
+        """Compute the aggregate value for ``count`` consecutive output rows.
+
+        Default implementation calls :meth:`window` once per row. Override
+        when per-row Python object construction dominates the call cost
+        and you want to build the output as an Arrow array directly,
+        bypassing the framework's default ``pa.array(results, ...)``
+        conversion.
+
+        Args:
+            row_ids: Partition-local row indices being filled. Length is
+                the batch size.
+            subframes: ``subframes[i]`` is the frame ranges for output
+                row ``row_ids[i]``. Same shape as :meth:`window`'s
+                ``subframes`` argument, one per row.
+            partition: The cached partition data.
+            window_state: As :meth:`window`.
+            params: As :meth:`window`.
+
+        Returns:
+            Either a :class:`pa.Array` of length ``len(row_ids)`` matching
+            the function's output type — shipped directly as the response
+            with no further conversion — or a ``list[Any]`` of the same
+            length, fed through ``pa.array(results, type=output_type)``
+            (equivalent to the default per-row path).
+
+        """
+        return [
+            cls.window(rid, frames, partition, window_state, params)
+            for rid, frames in zip(row_ids, subframes, strict=True)
+        ]

@@ -47,6 +47,7 @@ from vgi._test_fixtures.aggregate import (
     WeightedSumFunction,
     WindowListAggFunction,
     WindowMedianFunction,
+    WindowSumBatchFunction,
     WindowSumFunction,
 )
 from vgi._test_fixtures.cancellable import SlowCancellableFunction, SlowCancellableInOutFunction
@@ -361,6 +362,7 @@ _EXAMPLE_CATALOG = Catalog(
                 WeightedSumFunction,
                 WindowListAggFunction,
                 WindowMedianFunction,
+                WindowSumBatchFunction,
                 WindowSumFunction,
             ],
             views=[

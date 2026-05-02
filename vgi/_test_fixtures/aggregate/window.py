@@ -270,3 +270,107 @@ class WindowListAggFunction(AggregateFunction[ListAggState]):
                 if v is not None:
                     parts.append(v)
         return ",".join(parts) if parts else None
+
+
+class WindowSumBatchFunction(AggregateFunction[SumState]):
+    """Windowed running-sum that overrides ``window_batch`` to return a
+    pre-built ``pa.Array`` rather than a Python list.
+
+    Functionally equivalent to :class:`WindowSumFunction`. The point of this
+    fixture is to exercise the framework's polymorphic batch return: when
+    user code returns a ``pa.Array``, the worker should ship it directly
+    without round-tripping through ``pa.array(list, type=...)``.
+
+    Used by the unit tests for ``window_batch`` to confirm the dispatcher
+    accepts both a list and a pa.Array, and that the pa.Array path
+    produces identical answers.
+    """
+
+    class Meta:
+        name = "vgi_window_sum_batch"
+        description = "Windowed sum demonstrating window_batch returning pa.Array"
+        null_handling = NullHandling.DEFAULT
+        order_dependent = OrderDependence.NOT_ORDER_DEPENDENT
+        distinct_dependent = DistinctDependence.NOT_DISTINCT_DEPENDENT
+        supports_window = True
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[None]) -> SumState:
+        return SumState()
+
+    @classmethod
+    def update(
+        cls,
+        states: dict[int, SumState],
+        group_ids: pa.Int64Array,
+        value: Annotated[pa.Int64Array, Param(doc="Column to sum")],
+    ) -> None:
+        table = pa.table({"gid": group_ids, "value": value})
+        grouped = table.group_by("gid").aggregate([("value", "sum")])
+        for i in range(grouped.num_rows):
+            gid: int = grouped.column("gid")[i].as_py()
+            val = grouped.column("value_sum")[i].as_py()
+            if val is not None:
+                states[gid] = SumState(total=states[gid].total + val)
+
+    @classmethod
+    def combine(cls, source: SumState, target: SumState, params: ProcessParams[None]) -> SumState:
+        return SumState(total=source.total + target.total)
+
+    @classmethod
+    def finalize(
+        cls,
+        group_ids: pa.Int64Array,
+        states: dict[int, SumState],
+        params: ProcessParams[None],
+    ) -> Annotated[pa.RecordBatch, Returns(pa.int64())]:
+        results = [s.total if (s := states[gid.as_py()]) is not None else None for gid in group_ids]
+        return pa.record_batch({"result": pa.array(results, type=pa.int64())})
+
+    @classmethod
+    def window(
+        cls,
+        rid: int,
+        subframes: list[tuple[int, int]],
+        partition: WindowPartition,
+        window_state: Any,
+        params: ProcessParams[None],
+    ) -> int | None:
+        # Single-row fallback (still required so plain window() invocations
+        # work in unit tests). Production callers go through window_batch.
+        return cls._sum_one(subframes, partition)
+
+    @classmethod
+    def window_batch(
+        cls,
+        row_ids: list[int],
+        subframes: list[list[tuple[int, int]]],
+        partition: WindowPartition,
+        window_state: Any,
+        params: ProcessParams[None],
+    ) -> pa.Array:
+        out = [cls._sum_one(frames, partition) for frames in subframes]
+        return pa.array(out, type=pa.int64())
+
+    @staticmethod
+    def _sum_one(
+        subframes: list[tuple[int, int]],
+        partition: WindowPartition,
+    ) -> int | None:
+        import pyarrow.compute as pc
+
+        value_col = partition.inputs.column(0)
+        total = 0
+        any_valid = False
+        for begin, end in subframes:
+            if end <= begin:
+                continue
+            slice_ = value_col.slice(begin, end - begin)
+            if partition.filter_mask is not None:
+                mask = partition.filter_mask.slice(begin, end - begin)
+                slice_ = slice_.filter(mask)
+            s = pc.sum(slice_)
+            if s.is_valid:
+                total += s.as_py()
+                any_valid = True
+        return total if any_valid else None

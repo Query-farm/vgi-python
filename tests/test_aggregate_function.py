@@ -724,3 +724,147 @@ def _make_dummy_params(output_type: pa.DataType) -> ProcessParams[None]:
         secrets={},
         storage=BoundStorage(storage, b"dummy"),
     )
+
+
+# =========================================================================
+# Test Group 5: window_batch hook
+# =========================================================================
+
+
+def _make_window_partition(values: list[int | None]) -> Any:
+    """Build a single-column int64 WindowPartition for batch-window tests."""
+    from vgi.aggregate_function import WindowPartition
+
+    arr = pa.array(values, type=pa.int64())
+    batch = pa.record_batch({"value": arr})
+    return WindowPartition(
+        inputs=batch,
+        row_count=len(values),
+        filter_mask=None,
+        frame_stats=((0, 0), (0, 0)),
+        all_valid=[True],
+    )
+
+
+class TestWindowBatchDefault:
+    """Default ``window_batch`` should call ``window`` once per row."""
+
+    def test_dispatches_to_window_per_row(self) -> None:
+        from vgi._test_fixtures.aggregate import WindowSumFunction
+
+        partition = _make_window_partition([1, 2, 3, 4, 5])
+        result = WindowSumFunction.window_batch(
+            row_ids=[0, 1, 2, 3, 4],
+            subframes=[
+                [(0, 1)], [(0, 2)], [(0, 3)], [(0, 4)], [(0, 5)],
+            ],
+            partition=partition,
+            window_state=None,
+            params=_make_dummy_params(pa.int64()),
+        )
+        # Default returns list[Any] — same shape as calling window() per row.
+        assert isinstance(result, list)
+        assert result == [1, 3, 6, 10, 15]
+
+    def test_default_matches_window_per_row(self) -> None:
+        """Per-row window() and default window_batch() return the same values."""
+        from vgi._test_fixtures.aggregate import WindowSumFunction
+
+        partition = _make_window_partition([10, 20, 30])
+        params = _make_dummy_params(pa.int64())
+
+        per_row = [
+            WindowSumFunction.window(rid, [(0, rid + 1)], partition, None, params)
+            for rid in range(3)
+        ]
+        batched = WindowSumFunction.window_batch(
+            row_ids=[0, 1, 2],
+            subframes=[[(0, 1)], [(0, 2)], [(0, 3)]],
+            partition=partition,
+            window_state=None,
+            params=params,
+        )
+        assert per_row == batched
+
+
+class TestWindowBatchOverride:
+    """Overridden ``window_batch`` may return a pa.Array directly."""
+
+    def test_returns_pa_array_when_overridden(self) -> None:
+        from vgi._test_fixtures.aggregate import WindowSumBatchFunction
+
+        partition = _make_window_partition([1, 2, 3, 4, 5])
+        result = WindowSumBatchFunction.window_batch(
+            row_ids=[0, 1, 2, 3, 4],
+            subframes=[
+                [(0, 1)], [(0, 2)], [(0, 3)], [(0, 4)], [(0, 5)],
+            ],
+            partition=partition,
+            window_state=None,
+            params=_make_dummy_params(pa.int64()),
+        )
+        assert isinstance(result, pa.Array)
+        assert result.type == pa.int64()
+        assert result.to_pylist() == [1, 3, 6, 10, 15]
+
+    def test_override_matches_default(self) -> None:
+        """The overriding fixture computes the same answers as the default path."""
+        from vgi._test_fixtures.aggregate import (
+            WindowSumBatchFunction,
+            WindowSumFunction,
+        )
+
+        partition = _make_window_partition([1, 2, 3, 4, 5])
+        params = _make_dummy_params(pa.int64())
+        subframes = [[(0, i + 1)] for i in range(5)]
+
+        default_path = WindowSumFunction.window_batch(
+            row_ids=[0, 1, 2, 3, 4],
+            subframes=subframes,
+            partition=partition,
+            window_state=None,
+            params=params,
+        )
+        override_path = WindowSumBatchFunction.window_batch(
+            row_ids=[0, 1, 2, 3, 4],
+            subframes=subframes,
+            partition=partition,
+            window_state=None,
+            params=params,
+        )
+        assert default_path == override_path.to_pylist()
+
+
+class TestBuildBatchResult:
+    """``_build_batch_result`` accepts both list and pa.Array, validates shape."""
+
+    def test_list_input_packs_via_pa_array(self) -> None:
+        from vgi.worker import _build_batch_result
+
+        schema = pa.schema([("result", pa.int64())])
+        batch = _build_batch_result([1, 2, 3], schema, expected_count=3)
+        assert batch.column("result").to_pylist() == [1, 2, 3]
+
+    def test_pa_array_input_shipped_directly(self) -> None:
+        from vgi.worker import _build_batch_result
+
+        schema = pa.schema([("result", pa.int64())])
+        arr = pa.array([10, 20, 30], type=pa.int64())
+        batch = _build_batch_result(arr, schema, expected_count=3)
+        # The returned column is the same Arrow array we passed in.
+        assert batch.column("result").to_pylist() == [10, 20, 30]
+
+    def test_pa_array_wrong_type_raises(self) -> None:
+        from vgi.worker import _build_batch_result
+
+        schema = pa.schema([("result", pa.int64())])
+        arr = pa.array([1.0, 2.0, 3.0], type=pa.float64())
+        with pytest.raises(TypeError, match="expected int64"):
+            _build_batch_result(arr, schema, expected_count=3)
+
+    def test_count_mismatch_raises(self) -> None:
+        from vgi.worker import _build_batch_result
+
+        schema = pa.schema([("result", pa.int64())])
+        with pytest.raises(ValueError, match="expected 5"):
+            _build_batch_result([1, 2, 3], schema, expected_count=5)

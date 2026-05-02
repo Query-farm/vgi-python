@@ -1587,7 +1587,7 @@ wheels = [
 
 [[package]]
 name = "vgi"
-version = "0.7.1"
+version = "0.7.2"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -1688,7 +1688,7 @@ dev = [
 
 [[package]]
 name = "vgi-rpc"
-version = "0.14.0"
+version = "0.15.0"
 source = { directory = "/Users/rusty/Development/vgi-rpc" }
 dependencies = [
     { name = "docstring-parser" },
