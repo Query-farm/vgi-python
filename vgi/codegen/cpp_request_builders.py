@@ -58,11 +58,14 @@ GENERATOR_VERSION = "1"
 # the generator can't (yet) emit list-of-list / list-of-struct / cross-field
 # invariants. The generator emits a comment for these so the file documents
 # what's still hand-coded; the hand-coded definition lives in vgi_rpc_types.cpp.
-COMPLEX_METHODS: frozenset[str] = frozenset({
-    # list<list<int32>> for unique/PK constraints, list<binary> for FK constraints,
-    # plus an embedded IPC-serialized inner-request wrapper.
-    "catalog_table_create",
-})
+#
+# Currently empty — earlier the set held ``catalog_table_create``, but its
+# outer params schema is just ``{request: binary}`` (the inner
+# TableCreateRequest with list<list<int32>> / list<binary> shapes is
+# IPC-serialized into the binary field by the caller), so there's nothing
+# Complex about the outer wrapper. The inner request body remains hand-coded
+# in BuildTableCreateRequest.
+COMPLEX_METHODS: frozenset[str] = frozenset()
 
 
 # --------------------------------------------------------------------------- #
