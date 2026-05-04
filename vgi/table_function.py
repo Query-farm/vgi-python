@@ -36,7 +36,7 @@ from vgi.arguments import (
     _accepts_none,
     _extract_setting_secret_params,
 )
-from vgi.function_storage import BoundStorage
+from vgi.function_storage import BoundStorage, TransactionBoundStorage
 from vgi.invocation import (
     BaseInitResponse,
     BindResponse,
@@ -294,6 +294,13 @@ class BindParams[TArgs]:
     # Convenient access to settings and secrets, extracted from the bind_call.
     settings: dict[str, pa.Scalar[Any]]
     secrets: SecretsAccessor
+    # Transaction-scoped storage view. Lets ``cardinality()`` and
+    # ``statistics()`` cache expensive lookups (e.g. Kafka watermarks)
+    # in the same store ``on_init`` reads/writes for snapshot isolation
+    # — so a topic's row count is fetched once per SQL transaction
+    # rather than once per bind/cardinality/statistics/init phase.
+    # ``None`` when ``bind_call.transaction_id`` is unset.
+    transaction_storage: TransactionBoundStorage | None = None
     auth_context: AuthContext = AuthContext.anonymous()
 
 
@@ -574,11 +581,13 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         Shared by bind() and table_function_cardinality() to avoid
         duplicating BindParams construction logic.
         """
+        txn_id = input.transaction_id
         return BindParams[TArgs](
             args=cls._parse_arguments(cls.FunctionArguments, input.arguments),
             bind_call=input,
             settings=_batch_to_scalar_dict(input.settings),
             secrets=SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided),
+            transaction_storage=TransactionBoundStorage(cls.storage, txn_id) if txn_id else None,
             auth_context=auth_context if auth_context is not None else AuthContext.anonymous(),
         )
 
