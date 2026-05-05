@@ -399,7 +399,8 @@ class _StreamingSession:
 
 def _encode_streaming_session(session: _StreamingSession) -> bytes:
     """Pickle a session for FunctionStorage. ``func_cls`` is *not* pickled —
-    it's resolved on the fly from the function name on cold reload."""
+    it's resolved on the fly from the function name on cold reload.
+    """
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, session.output_schema) as writer:
         pass  # schema-only stream is enough to round-trip the schema
@@ -604,7 +605,7 @@ def _build_scalar_result_batch(result_value: Any, output_schema: pa.Schema) -> p
 
 
 def _build_batch_result(
-    results: "list[Any] | pa.Array",
+    results: list[Any] | pa.Array,
     output_schema: pa.Schema,
     expected_count: int | None = None,
 ) -> pa.RecordBatch:
@@ -2315,8 +2316,8 @@ class Worker:
                 _streaming_persist_stats["n_cold_loads"] += 1
             if payload is None:
                 raise OSError(
-                    f"aggregate_streaming_chunk: unknown execution_id "
-                    f"(streaming_open never ran or close already fired)"
+                    "aggregate_streaming_chunk: unknown execution_id "
+                    "(streaming_open never ran or close already fired)"
                 )
             session = _decode_streaming_session(payload, func_cls)
             _streaming_session_cache.put(request.execution_id, session)

@@ -22,11 +22,9 @@ windowed callbacks. The streaming methods are additive.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Annotated, Any
 
 import pyarrow as pa
-from vgi_rpc import ArrowSerializableDataclass
 
 from vgi._test_fixtures.aggregate._common import SumState
 from vgi.aggregate_function import AggregateFunction
