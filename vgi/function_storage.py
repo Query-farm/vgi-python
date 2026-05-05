@@ -18,6 +18,7 @@ Implementations:
 import os
 import random
 import sqlite3
+import threading
 from typing import Protocol
 
 import pyarrow as pa
@@ -445,21 +446,18 @@ class FunctionStorageSqlite:
             # instances within a single process don't collide.
             import uuid
 
-            self._memory_uri: str | None = (
-                f"file:vgi_storage_{uuid.uuid4().hex}?mode=memory&cache=shared"
-            )
-            self._anchor_conn: sqlite3.Connection | None = sqlite3.connect(
-                self._memory_uri, uri=True, timeout=30.0
-            )
+            self._memory_uri: str | None = f"file:vgi_storage_{uuid.uuid4().hex}?mode=memory&cache=shared"
+            self._anchor_conn: sqlite3.Connection | None = sqlite3.connect(self._memory_uri, uri=True, timeout=30.0)
             self.db_path = ":memory:"
         else:
             self._memory_uri = None
             self._anchor_conn = None
             self.db_path = db_path if db_path is not None else _get_default_db_path()
+        self._tls = threading.local()
         self._ensure_tables()
 
     def _connect(self) -> sqlite3.Connection:
-        """Create a new database connection."""
+        """Create a new short-lived database connection (used for one-shot DDL)."""
         if self._memory_uri is not None:
             # Memory DBs use MEMORY journal mode implicitly; no WAL,
             # no fsync — the whole point of using :memory: here.
@@ -467,6 +465,38 @@ class FunctionStorageSqlite:
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
+
+    def _conn(self) -> sqlite3.Connection:
+        """Return the calling thread's persistent connection, creating it lazily.
+
+        WAL coordinates writes across processes via file locking; within a
+        process, each thread gets its own connection so SQLite's per-connection
+        locking serializes writers without a Python-level lock and without
+        forfeiting WAL's reader-writer concurrency. Pragmas are applied once
+        per connection — ``synchronous=NORMAL`` is the dominant win, since it
+        skips fsync on every commit and only fsyncs at WAL checkpoint.
+        """
+        conn: sqlite3.Connection | None = getattr(self._tls, "conn", None)
+        if conn is not None:
+            return conn
+        if self._memory_uri is not None:
+            conn = sqlite3.connect(self._memory_uri, uri=True, timeout=30.0)
+        else:
+            conn = sqlite3.connect(self.db_path, timeout=30.0)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute("PRAGMA temp_store=MEMORY")
+            conn.execute("PRAGMA cache_size=-65536")
+        self._tls.conn = conn
+        return conn
+
+    def close(self) -> None:
+        """Close the calling thread's persistent connection, if any."""
+        conn: sqlite3.Connection | None = getattr(self._tls, "conn", None)
+        if conn is not None:
+            conn.close()
+            self._tls.conn = None
 
     def _ensure_tables(self) -> None:
         """Create all storage tables if they don't exist.
@@ -574,62 +604,53 @@ class FunctionStorageSqlite:
         if random.random() < 0.01:
             self.cleanup_old_entries(max_age_days=1.0)
 
-        conn = self._connect()
-        try:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO worker_state
-                (execution_id, process_id, state_data, created_at)
-                VALUES (?, ?, ?, julianday('now'))
-                """,
-                (execution_id, worker_id, state),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        conn = self._conn()
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO worker_state
+            (execution_id, process_id, state_data, created_at)
+            VALUES (?, ?, ?, julianday('now'))
+            """,
+            (execution_id, worker_id, state),
+        )
+        conn.commit()
 
     def worker_collect(self, execution_id: bytes) -> list[bytes]:
         """Atomically collect and delete all worker states."""
-        conn = self._connect()
-        try:
-            cursor = conn.execute(
-                """
-                DELETE FROM worker_state
-                WHERE execution_id = ?
-                RETURNING state_data
-                """,
-                (execution_id,),
-            )
-            states = [row[0] for row in cursor.fetchall()]
-            conn.commit()
-            return states
-        finally:
-            conn.close()
+        conn = self._conn()
+        cursor = conn.execute(
+            """
+            DELETE FROM worker_state
+            WHERE execution_id = ?
+            RETURNING state_data
+            """,
+            (execution_id,),
+        )
+        states = [row[0] for row in cursor.fetchall()]
+        conn.commit()
+        return states
 
     # --- Work Queue ---
 
     def queue_push(self, execution_id: bytes, items: list[bytes]) -> int:
         """Add work items to the queue and register the invocation."""
-        conn = self._connect()
-        try:
-            # Register the execution_id (idempotent)
-            conn.execute(
-                "INSERT OR IGNORE INTO invocation_registry (execution_id) VALUES (?)",
-                (execution_id,),
+        conn = self._conn()
+        # Register the execution_id (idempotent)
+        conn.execute(
+            "INSERT OR IGNORE INTO invocation_registry (execution_id) VALUES (?)",
+            (execution_id,),
+        )
+        # Add work items if any
+        if items:
+            conn.executemany(
+                """
+                INSERT INTO work_queue (execution_id, work_item)
+                VALUES (?, ?)
+                """,
+                [(execution_id, item) for item in items],
             )
-            # Add work items if any
-            if items:
-                conn.executemany(
-                    """
-                    INSERT INTO work_queue (execution_id, work_item)
-                    VALUES (?, ?)
-                    """,
-                    [(execution_id, item) for item in items],
-                )
-            conn.commit()
-            return len(items)
-        finally:
-            conn.close()
+        conn.commit()
+        return len(items)
 
     def queue_pop(self, execution_id: bytes) -> bytes | None:
         """Atomically claim one work item from the queue.
@@ -639,55 +660,48 @@ class FunctionStorageSqlite:
                 queue_push or has been cleared via queue_clear.
 
         """
-        conn = self._connect()
-        try:
-            # Check if invocation is registered
-            reg_cursor = conn.execute(
-                "SELECT 1 FROM invocation_registry WHERE execution_id = ?",
-                (execution_id,),
+        conn = self._conn()
+        # Check if invocation is registered
+        reg_cursor = conn.execute(
+            "SELECT 1 FROM invocation_registry WHERE execution_id = ?",
+            (execution_id,),
+        )
+        if reg_cursor.fetchone() is None:
+            raise UnknownInvocationError(
+                f"Invocation {execution_id.hex()} is not registered. Call queue_push first to register the invocation."
             )
-            if reg_cursor.fetchone() is None:
-                raise UnknownInvocationError(
-                    f"Invocation {execution_id.hex()} is not registered. "
-                    "Call queue_push first to register the invocation."
-                )
 
-            cursor = conn.execute(
-                """
-                DELETE FROM work_queue
-                WHERE id = (
-                    SELECT id FROM work_queue
-                    WHERE execution_id = ?
-                    ORDER BY id ASC
-                    LIMIT 1
-                )
-                RETURNING work_item
-                """,
-                (execution_id,),
+        cursor = conn.execute(
+            """
+            DELETE FROM work_queue
+            WHERE id = (
+                SELECT id FROM work_queue
+                WHERE execution_id = ?
+                ORDER BY id ASC
+                LIMIT 1
             )
-            row = cursor.fetchone()
-            conn.commit()
-            return row[0] if row else None
-        finally:
-            conn.close()
+            RETURNING work_item
+            """,
+            (execution_id,),
+        )
+        row = cursor.fetchone()
+        conn.commit()
+        return row[0] if row else None
 
     def queue_clear(self, execution_id: bytes) -> int:
         """Clear all remaining work items and unregister the invocation."""
-        conn = self._connect()
-        try:
-            cursor = conn.execute(
-                "DELETE FROM work_queue WHERE execution_id = ?",
-                (execution_id,),
-            )
-            # Unregister the invocation
-            conn.execute(
-                "DELETE FROM invocation_registry WHERE execution_id = ?",
-                (execution_id,),
-            )
-            conn.commit()
-            return cursor.rowcount
-        finally:
-            conn.close()
+        conn = self._conn()
+        cursor = conn.execute(
+            "DELETE FROM work_queue WHERE execution_id = ?",
+            (execution_id,),
+        )
+        # Unregister the invocation
+        conn.execute(
+            "DELETE FROM invocation_registry WHERE execution_id = ?",
+            (execution_id,),
+        )
+        conn.commit()
+        return cursor.rowcount
 
     # --- Aggregate State ---
 
@@ -699,23 +713,20 @@ class FunctionStorageSqlite:
         """
         if not group_ids:
             return []
-        conn = self._connect()
-        try:
-            found: dict[int, bytes] = {}
-            chunk_size = 500
-            for i in range(0, len(group_ids), chunk_size):
-                chunk = group_ids[i : i + chunk_size]
-                placeholders = ",".join("?" * len(chunk))
-                cursor = conn.execute(
-                    f"SELECT group_id, state_data FROM aggregate_state "  # noqa: S608
-                    f"WHERE execution_id = ? AND group_id IN ({placeholders})",
-                    (execution_id, *chunk),
-                )
-                for row in cursor.fetchall():
-                    found[row[0]] = row[1]
-            return [(gid, found[gid]) if gid in found else None for gid in group_ids]
-        finally:
-            conn.close()
+        conn = self._conn()
+        found: dict[int, bytes] = {}
+        chunk_size = 500
+        for i in range(0, len(group_ids), chunk_size):
+            chunk = group_ids[i : i + chunk_size]
+            placeholders = ",".join("?" * len(chunk))
+            cursor = conn.execute(
+                f"SELECT group_id, state_data FROM aggregate_state "  # noqa: S608
+                f"WHERE execution_id = ? AND group_id IN ({placeholders})",
+                (execution_id, *chunk),
+            )
+            for row in cursor.fetchall():
+                found[row[0]] = row[1]
+        return [(gid, found[gid]) if gid in found else None for gid in group_ids]
 
     def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]]) -> None:
         """Unconditionally write aggregate states."""
@@ -725,31 +736,25 @@ class FunctionStorageSqlite:
         if random.random() < 0.01:
             self.cleanup_old_entries(max_age_days=1.0)
 
-        conn = self._connect()
-        try:
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO aggregate_state
-                (execution_id, group_id, state_data, created_at)
-                VALUES (?, ?, ?, julianday('now'))
-                """,
-                [(execution_id, gid, state_bytes) for gid, state_bytes in data],
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        conn = self._conn()
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO aggregate_state
+            (execution_id, group_id, state_data, created_at)
+            VALUES (?, ?, ?, julianday('now'))
+            """,
+            [(execution_id, gid, state_bytes) for gid, state_bytes in data],
+        )
+        conn.commit()
 
     def aggregate_state_clear(self, execution_id: bytes) -> None:
         """Remove all aggregate states for an execution_id."""
-        conn = self._connect()
-        try:
-            conn.execute(
-                "DELETE FROM aggregate_state WHERE execution_id = ?",
-                (execution_id,),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        conn = self._conn()
+        conn.execute(
+            "DELETE FROM aggregate_state WHERE execution_id = ?",
+            (execution_id,),
+        )
+        conn.commit()
 
     # --- Transaction State ---
 
@@ -757,23 +762,20 @@ class FunctionStorageSqlite:
         """Load transaction-scoped values for the given keys."""
         if not keys:
             return []
-        conn = self._connect()
-        try:
-            found: dict[bytes, bytes] = {}
-            chunk_size = 500  # stay under SQLite's 999-parameter limit
-            for i in range(0, len(keys), chunk_size):
-                chunk = keys[i : i + chunk_size]
-                placeholders = ",".join("?" * len(chunk))
-                cursor = conn.execute(
-                    f"SELECT key, value FROM transaction_state "  # noqa: S608
-                    f"WHERE transaction_id = ? AND key IN ({placeholders})",
-                    (transaction_id, *chunk),
-                )
-                for row in cursor.fetchall():
-                    found[row[0]] = row[1]
-            return [found.get(k) for k in keys]
-        finally:
-            conn.close()
+        conn = self._conn()
+        found: dict[bytes, bytes] = {}
+        chunk_size = 500  # stay under SQLite's 999-parameter limit
+        for i in range(0, len(keys), chunk_size):
+            chunk = keys[i : i + chunk_size]
+            placeholders = ",".join("?" * len(chunk))
+            cursor = conn.execute(
+                f"SELECT key, value FROM transaction_state "  # noqa: S608
+                f"WHERE transaction_id = ? AND key IN ({placeholders})",
+                (transaction_id, *chunk),
+            )
+            for row in cursor.fetchall():
+                found[row[0]] = row[1]
+        return [found.get(k) for k in keys]
 
     def transaction_state_put(self, transaction_id: bytes, items: list[tuple[bytes, bytes]]) -> None:
         """Write transaction-scoped values."""
@@ -785,31 +787,25 @@ class FunctionStorageSqlite:
         if random.random() < 0.01:
             self.cleanup_old_entries(max_age_days=1.0)
 
-        conn = self._connect()
-        try:
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO transaction_state
-                (transaction_id, key, value, created_at)
-                VALUES (?, ?, ?, julianday('now'))
-                """,
-                [(transaction_id, k, v) for k, v in items],
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        conn = self._conn()
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO transaction_state
+            (transaction_id, key, value, created_at)
+            VALUES (?, ?, ?, julianday('now'))
+            """,
+            [(transaction_id, k, v) for k, v in items],
+        )
+        conn.commit()
 
     def transaction_state_clear(self, transaction_id: bytes) -> None:
         """Drop all state for a transaction."""
-        conn = self._connect()
-        try:
-            conn.execute(
-                "DELETE FROM transaction_state WHERE transaction_id = ?",
-                (transaction_id,),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        conn = self._conn()
+        conn.execute(
+            "DELETE FROM transaction_state WHERE transaction_id = ?",
+            (transaction_id,),
+        )
+        conn.commit()
 
     # --- Aggregate Window Partition ---
 
@@ -817,56 +813,44 @@ class FunctionStorageSqlite:
         """Store a cached windowed-aggregate partition payload."""
         if random.random() < 0.01:
             self.cleanup_old_entries(max_age_days=1.0)
-        conn = self._connect()
-        try:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO aggregate_window_partitions
-                (execution_id, partition_id, payload, created_at)
-                VALUES (?, ?, ?, julianday('now'))
-                """,
-                (execution_id, partition_id, data),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        conn = self._conn()
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO aggregate_window_partitions
+            (execution_id, partition_id, payload, created_at)
+            VALUES (?, ?, ?, julianday('now'))
+            """,
+            (execution_id, partition_id, data),
+        )
+        conn.commit()
 
     def aggregate_window_partition_get(self, execution_id: bytes, partition_id: int) -> bytes | None:
         """Load a cached windowed-aggregate partition payload."""
-        conn = self._connect()
-        try:
-            cursor = conn.execute(
-                "SELECT payload FROM aggregate_window_partitions WHERE execution_id = ? AND partition_id = ?",
-                (execution_id, partition_id),
-            )
-            row = cursor.fetchone()
-            return row[0] if row else None
-        finally:
-            conn.close()
+        conn = self._conn()
+        cursor = conn.execute(
+            "SELECT payload FROM aggregate_window_partitions WHERE execution_id = ? AND partition_id = ?",
+            (execution_id, partition_id),
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
 
     def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int) -> None:
         """Delete a single cached windowed-aggregate partition."""
-        conn = self._connect()
-        try:
-            conn.execute(
-                "DELETE FROM aggregate_window_partitions WHERE execution_id = ? AND partition_id = ?",
-                (execution_id, partition_id),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        conn = self._conn()
+        conn.execute(
+            "DELETE FROM aggregate_window_partitions WHERE execution_id = ? AND partition_id = ?",
+            (execution_id, partition_id),
+        )
+        conn.commit()
 
     def aggregate_window_partition_clear(self, execution_id: bytes) -> None:
         """Remove all cached windowed-aggregate partitions for an execution_id."""
-        conn = self._connect()
-        try:
-            conn.execute(
-                "DELETE FROM aggregate_window_partitions WHERE execution_id = ?",
-                (execution_id,),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        conn = self._conn()
+        conn.execute(
+            "DELETE FROM aggregate_window_partitions WHERE execution_id = ?",
+            (execution_id,),
+        )
+        conn.commit()
 
     # --- Maintenance (not part of protocol) ---
 
@@ -880,66 +864,63 @@ class FunctionStorageSqlite:
             Total number of entries deleted.
 
         """
-        conn = self._connect()
-        try:
-            cursor1 = conn.execute(
-                """
-                DELETE FROM global_state_storage
-                WHERE julianday('now') - created_at > ?
-                """,
-                (max_age_days,),
-            )
-            cursor2 = conn.execute(
-                """
-                DELETE FROM worker_state
-                WHERE julianday('now') - created_at > ?
-                """,
-                (max_age_days,),
-            )
-            cursor3 = conn.execute(
-                """
-                DELETE FROM work_queue
-                WHERE julianday('now') - created_at > ?
-                """,
-                (max_age_days,),
-            )
-            cursor4 = conn.execute(
-                """
-                DELETE FROM invocation_registry
-                WHERE julianday('now') - created_at > ?
-                """,
-                (max_age_days,),
-            )
-            cursor5 = conn.execute(
-                """
-                DELETE FROM aggregate_state
-                WHERE julianday('now') - created_at > ?
-                """,
-                (max_age_days,),
-            )
-            cursor6 = conn.execute(
-                """
-                DELETE FROM aggregate_window_partitions
-                WHERE julianday('now') - created_at > ?
-                """,
-                (max_age_days,),
-            )
-            cursor7 = conn.execute(
-                """
-                DELETE FROM transaction_state
-                WHERE julianday('now') - created_at > ?
-                """,
-                (max_age_days,),
-            )
-            conn.commit()
-            return (
-                int(cursor1.rowcount)
-                + int(cursor2.rowcount)
-                + int(cursor3.rowcount)
-                + int(cursor4.rowcount)
-                + int(cursor5.rowcount)
-                + int(cursor6.rowcount)
-                + int(cursor7.rowcount)
-            )
-        finally:
-            conn.close()
+        conn = self._conn()
+        cursor1 = conn.execute(
+            """
+            DELETE FROM global_state_storage
+            WHERE julianday('now') - created_at > ?
+            """,
+            (max_age_days,),
+        )
+        cursor2 = conn.execute(
+            """
+            DELETE FROM worker_state
+            WHERE julianday('now') - created_at > ?
+            """,
+            (max_age_days,),
+        )
+        cursor3 = conn.execute(
+            """
+            DELETE FROM work_queue
+            WHERE julianday('now') - created_at > ?
+            """,
+            (max_age_days,),
+        )
+        cursor4 = conn.execute(
+            """
+            DELETE FROM invocation_registry
+            WHERE julianday('now') - created_at > ?
+            """,
+            (max_age_days,),
+        )
+        cursor5 = conn.execute(
+            """
+            DELETE FROM aggregate_state
+            WHERE julianday('now') - created_at > ?
+            """,
+            (max_age_days,),
+        )
+        cursor6 = conn.execute(
+            """
+            DELETE FROM aggregate_window_partitions
+            WHERE julianday('now') - created_at > ?
+            """,
+            (max_age_days,),
+        )
+        cursor7 = conn.execute(
+            """
+            DELETE FROM transaction_state
+            WHERE julianday('now') - created_at > ?
+            """,
+            (max_age_days,),
+        )
+        conn.commit()
+        return (
+            int(cursor1.rowcount)
+            + int(cursor2.rowcount)
+            + int(cursor3.rowcount)
+            + int(cursor4.rowcount)
+            + int(cursor5.rowcount)
+            + int(cursor6.rowcount)
+            + int(cursor7.rowcount)
+        )

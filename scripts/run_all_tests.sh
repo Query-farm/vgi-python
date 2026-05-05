@@ -182,7 +182,7 @@ run_pytest_job() {
 run_integration_job() {
   cd /Users/rusty/Development/vgi || exit 99
   VGI_TEST_WORKER="uv run --project /Users/rusty/Development/vgi-python vgi-fixture-worker" \
-    timeout 600 ./build/release/test/unittest "test/sql/integration/*" >"$INT_LOG" 2>&1
+    timeout 600 ./build/release/test/unittest -j 8 "test/sql/integration/*" >"$INT_LOG" 2>&1
   local rc=$?
   summarize_integration "$INT_LOG" "$INT_SUMMARY" "$INT_FAILURES"
   echo "exit=$rc" >>"$INT_SUMMARY"
