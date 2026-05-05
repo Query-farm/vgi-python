@@ -187,6 +187,14 @@ class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
 
     attach_id: AttachId
     name: str
+    # Approximate population per object kind, keyed by the same names the C++
+    # extension uses for its set-cache instrumentation: ``"table"``, ``"view"``,
+    # ``"scalar_function"``, ``"aggregate_function"``, ``"table_function"``,
+    # ``"macro"``, ``"index"``. Used by the client to pick between bulk
+    # ``LoadEntries`` and per-name single-entry RPCs. Workers may omit the
+    # field entirely or any individual key — the client treats absent counts
+    # as 1, so unspecified populations bias toward eager bulk-load.
+    estimated_object_count: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)

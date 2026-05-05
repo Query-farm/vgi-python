@@ -312,13 +312,23 @@ class InMemoryCatalog(CatalogInterface):
         catalog = self._get_catalog(attach_id)
         result = []
         for schema_data in catalog.schemas.values():
-            # Update the attach_id in the returned info
+            # Populate estimated_object_count from the in-memory population so
+            # the C++ side's eager-load gate has a real signal to act on. We
+            # only know about tables/views/macros in the fixture; other kinds
+            # are omitted (the client treats absent keys as 1, biasing toward
+            # eager bulk-load).
+            estimated = {
+                "table": len(schema_data.tables),
+                "view": len(schema_data.views),
+                "macro": len(schema_data.macros),
+            }
             result.append(
                 SchemaInfo(
                     attach_id=attach_id,
                     name=schema_data.info.name,
                     comment=schema_data.info.comment,
                     tags=schema_data.info.tags,
+                    estimated_object_count=estimated,
                 )
             )
         return result

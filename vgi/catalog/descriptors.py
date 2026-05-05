@@ -655,12 +655,29 @@ class Schema:
     indexes: Sequence[Index] = ()
 
     def to_schema_info(self, attach_id: AttachId) -> SchemaInfo:
-        """Convert to SchemaInfo for catalog response."""
+        """Convert to SchemaInfo for catalog response.
+
+        Populates ``estimated_object_count`` from the declared population so
+        the C++ extension's eager-load gate can choose between bulk
+        ``LoadEntries`` and per-name single-entry RPCs without an extra round
+        trip. Splitting functions into scalar / aggregate / table requires a
+        type discriminator we don't have here, so we report the total under
+        the ``scalar_function`` key and leave the others at the client-side
+        default of 1 (i.e. eager-load) — workers wanting finer control can
+        return their own SchemaInfo rather than calling this helper.
+        """
         return SchemaInfo(
             attach_id=attach_id,
             name=self.name,
             comment=self.comment,
             tags=dict(self.tags),
+            estimated_object_count={
+                "table": len(self.tables),
+                "view": len(self.views),
+                "scalar_function": len(self.functions),
+                "macro": len(self.macros),
+                "index": len(self.indexes),
+            },
         )
 
 
