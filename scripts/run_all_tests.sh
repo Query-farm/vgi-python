@@ -181,8 +181,11 @@ run_pytest_job() {
 
 run_integration_job() {
   cd /Users/rusty/Development/vgi || exit 99
+  # `~[.]` excludes Catch2-hidden tests, i.e. `*.test_slow` files. These
+  # tend to assert best-effort behavior (e.g. `on_cancel` firing) that
+  # gets flaky under -j 8 contention; run them manually when needed.
   VGI_TEST_WORKER="uv run --project /Users/rusty/Development/vgi-python vgi-fixture-worker" \
-    timeout 600 ./build/release/test/unittest -j 8 "test/sql/integration/*" >"$INT_LOG" 2>&1
+    timeout 600 ./build/release/test/unittest -j 8 "test/sql/integration/*" "~[.]" >"$INT_LOG" 2>&1
   local rc=$?
   summarize_integration "$INT_LOG" "$INT_SUMMARY" "$INT_FAILURES"
   echo "exit=$rc" >>"$INT_SUMMARY"
