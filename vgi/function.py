@@ -40,7 +40,11 @@ def _resolve_storage() -> FunctionStorage:
     """Resolve the default FunctionStorage backend from environment."""
     backend = os.environ.get("VGI_WORKER_SHARED_STORAGE", "sqlite").lower()
     if backend == "sqlite":
-        return FunctionStorageSqlite()
+        # VGI_WORKER_SQLITE_PATH=":memory:" picks the in-process shared-cache
+        # in-memory backend. Used by single-process test fixtures (notably
+        # the test fixture HTTP server) to avoid per-op WAL fsync cost.
+        db_path = os.environ.get("VGI_WORKER_SQLITE_PATH") or None
+        return FunctionStorageSqlite(db_path=db_path)
     if backend == "azure-sql":
         from vgi.function_storage_azure_sql import FunctionStorageAzureSql
 

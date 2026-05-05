@@ -115,6 +115,13 @@ def main() -> None:
     response batches larger than ``--externalize-threshold-bytes`` are uploaded
     to S3 and replaced by signed URLs on the wire.
     """
+    # The test fixture server is single-process and ephemeral — there's no
+    # value in fsyncing every commit through the WAL. Default to in-memory
+    # storage unless the caller explicitly picked a path. Must run before
+    # any Function.storage access so _DefaultStorageDescriptor caches the
+    # right backend; main() runs before the WSGI app starts handling RPCs.
+    os.environ.setdefault("VGI_WORKER_SQLITE_PATH", ":memory:")
+
     import typer
 
     app = typer.Typer(add_completion=False)

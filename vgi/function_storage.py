@@ -428,14 +428,42 @@ class FunctionStorageSqlite:
 
         Args:
             db_path: Path to the SQLite database file. If None, uses a default
-                location in the user's state directory.
+                location in the user's state directory. Pass ``":memory:"`` to
+                use a process-local in-memory database; the storage uses a
+                shared-cache URI plus an anchor connection so the per-op
+                connections in ``_connect`` see the same DB. Suitable for
+                single-process test fixtures where commit-fsync overhead
+                dominates and persistence isn't needed.
 
         """
-        self.db_path = db_path if db_path is not None else _get_default_db_path()
+        if db_path == ":memory:":
+            # Shared-cache in-memory: every connection to this URI sees the
+            # same database for as long as at least one connection is open.
+            # We hold ``_anchor_conn`` for the storage instance's lifetime so
+            # the DB survives between transient ``_connect`` calls. The
+            # per-instance UUID namespaces the DB so independent storage
+            # instances within a single process don't collide.
+            import uuid
+
+            self._memory_uri: str | None = (
+                f"file:vgi_storage_{uuid.uuid4().hex}?mode=memory&cache=shared"
+            )
+            self._anchor_conn: sqlite3.Connection | None = sqlite3.connect(
+                self._memory_uri, uri=True, timeout=30.0
+            )
+            self.db_path = ":memory:"
+        else:
+            self._memory_uri = None
+            self._anchor_conn = None
+            self.db_path = db_path if db_path is not None else _get_default_db_path()
         self._ensure_tables()
 
     def _connect(self) -> sqlite3.Connection:
         """Create a new database connection."""
+        if self._memory_uri is not None:
+            # Memory DBs use MEMORY journal mode implicitly; no WAL,
+            # no fsync — the whole point of using :memory: here.
+            return sqlite3.connect(self._memory_uri, uri=True, timeout=30.0)
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
