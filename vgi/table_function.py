@@ -302,6 +302,12 @@ class BindParams[TArgs]:
     # rather than once per bind/cardinality/statistics/init phase.
     # ``None`` when ``bind_call.transaction_id`` is unset.
     transaction_storage: TransactionBoundStorage | None = None
+    # Execution-scoped storage view. Populated only on call paths that
+    # carry a ``global_execution_id`` — currently just
+    # ``dynamic_to_string``. ``None`` for ``bind`` / ``cardinality`` /
+    # ``statistics`` (they predate execution and have no
+    # execution_id).
+    storage: BoundStorage | None = None
     auth_context: AuthContext = AuthContext.anonymous()
 
 
@@ -576,11 +582,15 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         input: BindRequest,
         *,
         auth_context: AuthContext | None = None,
+        execution_id: bytes | None = None,
     ) -> BindParams[TArgs]:
         """Construct BindParams from a BindRequest.
 
         Shared by bind() and table_function_cardinality() to avoid
-        duplicating BindParams construction logic.
+        duplicating BindParams construction logic. ``execution_id`` is
+        only populated on call paths that have one (currently just
+        ``dynamic_to_string``); when provided, ``BindParams.storage`` is
+        a ``BoundStorage`` view keyed by it.
         """
         txn_id = input.transaction_id
         return BindParams[TArgs](
@@ -589,6 +599,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             settings=_batch_to_scalar_dict(input.settings),
             secrets=SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided),
             transaction_storage=TransactionBoundStorage(cls.storage, txn_id) if txn_id else None,
+            storage=BoundStorage(cls.storage, execution_id) if execution_id else None,
             auth_context=auth_context if auth_context is not None else AuthContext.anonymous(),
         )
 

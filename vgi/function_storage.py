@@ -99,6 +99,27 @@ class FunctionStorage(Protocol):
         """
         ...
 
+    def worker_scan(self, execution_id: bytes) -> list[tuple[int, bytes]]:
+        """Non-destructive read of all worker states for an execution.
+
+        Companion to ``worker_collect`` for use cases where multiple
+        readers need to observe the same set of worker states without
+        mutating storage. The intended consumer is the table-function
+        ``dynamic_to_string`` hook, which fires once per parallel scan
+        thread at end-of-stream and is best-effort: every thread must
+        be able to read the full set, which precludes the
+        atomic-destructive semantics of ``worker_collect``.
+
+        Args:
+            execution_id: Unique identifier for the function invocation.
+
+        Returns:
+            List of ``(worker_id, state_bytes)`` pairs. Order is
+            implementation-defined.
+
+        """
+        ...
+
     # --- Work Queue (distributed work items) ---
 
     def queue_push(self, execution_id: bytes, items: list[bytes]) -> int:
@@ -341,6 +362,10 @@ class BoundStorage:
     def collect(self) -> list[bytes]:
         """Atomically collect and delete all worker states."""
         return self._base.worker_collect(self._execution_id)
+
+    def worker_scan(self) -> list[tuple[int, bytes]]:
+        """Non-destructive read of (worker_id, state) pairs for this execution."""
+        return self._base.worker_scan(self._execution_id)
 
     def queue_push(self, items: list[bytes]) -> int:
         """Add work items to the queue and register the invocation."""
@@ -629,6 +654,19 @@ class FunctionStorageSqlite:
         states = [row[0] for row in cursor.fetchall()]
         conn.commit()
         return states
+
+    def worker_scan(self, execution_id: bytes) -> list[tuple[int, bytes]]:
+        """Non-destructive read of (process_id, state_data) for execution_id."""
+        conn = self._conn()
+        cursor = conn.execute(
+            """
+            SELECT process_id, state_data
+            FROM worker_state
+            WHERE execution_id = ?
+            """,
+            (execution_id,),
+        )
+        return [(int(row[0]), row[1]) for row in cursor.fetchall()]
 
     # --- Work Queue ---
 

@@ -139,3 +139,44 @@ class TestTableFunctionDynamicToString:
         assert any("dynamic_to_string" in rec.message for rec in caplog.records), (
             "expected an error log when user hook raises"
         )
+
+    def test_bind_params_carries_execution_scoped_storage(self) -> None:
+        """Dispatcher populates BindParams.storage keyed by global_execution_id.
+
+        Lets dynamic_to_string read whatever process() persisted via
+        worker_put without manually reconstructing BoundStorage.
+        """
+
+        @init_single_worker
+        @bind_fixed_schema
+        class _StorageFunc(TableFunctionGenerator[_Args]):
+            class Meta:
+                name = "with_storage"
+
+            FIXED_SCHEMA = pa.schema([pa.field("n", pa.int64())])
+
+            @classmethod
+            def dynamic_to_string(
+                cls, params: BindParams[_Args], execution_id: bytes
+            ) -> Mapping[str, str]:
+                assert params.storage is not None
+                pairs = params.storage.worker_scan()
+                return {f"pid_{wid}": state.decode() for wid, state in sorted(pairs)}
+
+            @classmethod
+            def process(cls, params, state, out) -> None:  # type: ignore[no-untyped-def]
+                out.finish()
+
+        class _MyWorker(Worker):
+            functions = [_StorageFunc]
+
+        worker = _MyWorker()
+        execution_id = b"\x01\x02\x03\x04\x05\x06\x07\x08"
+        _StorageFunc.storage.worker_put(execution_id, worker_id=10, state=b"hello")
+        _StorageFunc.storage.worker_put(execution_id, worker_id=20, state=b"world")
+
+        result = worker.table_function_dynamic_to_string(_request("with_storage"), _ctx())
+        assert dict(zip(result.keys, result.values, strict=True)) == {
+            "pid_10": "hello",
+            "pid_20": "world",
+        }

@@ -1617,7 +1617,11 @@ class Worker:
         if not issubclass(func_cls, TableFunctionGenerator):
             return empty
         try:
-            params = func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth)
+            params = func_cls._make_bind_params(
+                request.bind_call,
+                auth_context=ctx.auth,
+                execution_id=request.global_execution_id,
+            )
             mapping = func_cls.dynamic_to_string(params, request.global_execution_id)
         except Exception:
             _logger.exception("dynamic_to_string: user hook raised on %s", func_cls.__name__)

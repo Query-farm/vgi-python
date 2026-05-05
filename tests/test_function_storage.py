@@ -47,6 +47,34 @@ class TestFunctionStorageSqlite:
         states = storage.worker_collect(invocation_id)
         assert states == [b"new_state"]
 
+    def test_worker_scan_non_destructive(self, storage: FunctionStorageSqlite) -> None:
+        """worker_scan returns (worker_id, state) pairs without deleting."""
+        invocation_id = b"inv-scan"
+
+        storage.worker_put(invocation_id, worker_id=11, state=b"a")
+        storage.worker_put(invocation_id, worker_id=22, state=b"b")
+
+        first = sorted(storage.worker_scan(invocation_id))
+        assert first == [(11, b"a"), (22, b"b")]
+
+        # Repeat read returns the same data — non-destructive.
+        second = sorted(storage.worker_scan(invocation_id))
+        assert second == first
+
+        # And worker_collect after scan still drains.
+        collected = sorted(storage.worker_collect(invocation_id))
+        assert collected == [b"a", b"b"]
+        assert storage.worker_scan(invocation_id) == []
+
+    def test_worker_scan_isolates_executions(self, storage: FunctionStorageSqlite) -> None:
+        """worker_scan only returns rows for the given execution_id."""
+        storage.worker_put(b"exec-A", worker_id=1, state=b"a1")
+        storage.worker_put(b"exec-B", worker_id=1, state=b"b1")
+
+        assert storage.worker_scan(b"exec-A") == [(1, b"a1")]
+        assert storage.worker_scan(b"exec-B") == [(1, b"b1")]
+        assert storage.worker_scan(b"exec-missing") == []
+
     # --- Work Queue Tests ---
 
     def test_queue_push_and_pop(self, storage: FunctionStorageSqlite) -> None:

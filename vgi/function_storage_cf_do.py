@@ -175,6 +175,24 @@ class FunctionStorageCfDo:
         )
         return states
 
+    def worker_scan(self, execution_id: bytes) -> list[tuple[int, bytes]]:
+        """Non-destructive read of (worker_id, state) pairs for execution_id."""
+        t0 = time.monotonic()
+        data = self._post(
+            "worker_scan",
+            {
+                "execution_id": base64.b64encode(execution_id).decode(),
+            },
+        )
+        rows = [(int(r["worker_id"]), base64.b64decode(r["state"])) for r in data["rows"]]
+        _logger.debug(
+            "worker_scan eid=%s rows=%d elapsed_ms=%.1f",
+            execution_id.hex()[:8],
+            len(rows),
+            (time.monotonic() - t0) * 1000,
+        )
+        return rows
+
     # --- Work Queue ---
 
     def queue_push(self, execution_id: bytes, items: list[bytes]) -> int:

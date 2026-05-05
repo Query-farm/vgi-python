@@ -289,6 +289,31 @@ class FunctionStorageAzureSql:
 
         return self._execute_with_retry(_do)
 
+    def worker_scan(self, execution_id: bytes) -> list[tuple[int, bytes]]:
+        """Non-destructive read of (process_id, state_data) for execution_id."""
+
+        def _do(conn: pymssql.Connection) -> list[tuple[int, bytes]]:
+            t0 = time.monotonic()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT process_id, state_data
+                FROM worker_state
+                WHERE execution_id = CAST(%s AS VARBINARY(16))
+                """,
+                (execution_id,),
+            )
+            rows: list[tuple[int, bytes]] = [(int(r[0]), r[1]) for r in cursor.fetchall()]  # type: ignore[misc]
+            _logger.debug(
+                "worker_scan eid=%s rows=%d elapsed_ms=%.1f",
+                execution_id.hex()[:8],
+                len(rows),
+                (time.monotonic() - t0) * 1000,
+            )
+            return rows
+
+        return self._execute_with_retry(_do)
+
     # --- Work Queue ---
 
     def queue_push(self, execution_id: bytes, items: list[bytes]) -> int:
