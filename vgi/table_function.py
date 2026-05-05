@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from abc import abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, is_dataclass
 from enum import Enum, auto
 from typing import (
@@ -603,6 +604,44 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
         """
         return TableCardinality(estimate=None, max=None)
+
+    @classmethod
+    def dynamic_to_string(
+        cls,
+        params: BindParams[TArgs],
+        execution_id: bytes,
+    ) -> Mapping[str, str]:
+        """Return diagnostics rendered as Extra Info under EXPLAIN ANALYZE.
+
+        Fired once per parallel scan thread at end-of-stream. The function
+        class is responsible for persisting whatever diagnostics it cares
+        about during ``process()`` (shared storage, external service,
+        in-memory class state for single-worker setups) and retrieving
+        them by ``execution_id`` here.
+
+        DuckDB merges the per-thread maps with last-write-wins semantics,
+        so the *last* thread to finish — by which time every thread has
+        persisted — supplies the visible final view.
+
+        Best-effort: must not raise. The dispatcher catches exceptions
+        and returns an empty map so EXPLAIN ANALYZE never breaks the
+        query.
+
+        Args:
+            params: Same ``BindParams`` ``cardinality`` and ``statistics``
+                receive — function args, settings, secrets.
+            execution_id: ``VgiTableFunctionGlobalState::global_execution_id``,
+                stable for the duration of the query.
+
+        Returns:
+            Ordered key/value pairs. Insertion order is preserved on the
+            wire and re-emitted into the C++ profiler's
+            ``InsertionOrderPreservingMap``. The C++ wrapper appends
+            intrinsic keys (``Worker``, ``Function``, ``Rows Read``,
+            ``Threads``) after this map; user keys override on conflict.
+
+        """
+        return {}
 
     @classmethod
     def statistics(cls, params: BindParams[TArgs]) -> list[ColumnStatistics] | None:

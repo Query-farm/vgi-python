@@ -86,6 +86,8 @@ __all__ = [
     "ProcessState",
     "ScalarExchangeState",
     "SchemasResponse",
+    "TableFunctionDynamicToStringRequest",
+    "TableFunctionDynamicToStringResponse",
     "TableInOutExchangeState",
     "TableInOutFinalizeState",
     "TableProducerState",
@@ -192,6 +194,36 @@ class TableFunctionStatisticsRequest(ArrowSerializableDataclass):
     bind_call: BindRequest
     # Same contract as InitRequest.bind_opaque_data above.
     bind_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TableFunctionDynamicToStringRequest(ArrowSerializableDataclass):
+    """Post-execution profile-info request, fired once per scan thread.
+
+    Carries ``global_execution_id`` so the function class can retrieve
+    whatever diagnostics it persisted during ``process()`` (shared
+    storage, external service, in-memory class state for single-worker
+    setups, etc.). VGI does not serialize per-thread ``_user_state``
+    across the boundary — the user owns persistence.
+    """
+
+    bind_call: BindRequest
+    # Same contract as InitRequest.bind_opaque_data above.
+    bind_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
+    global_execution_id: bytes
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TableFunctionDynamicToStringResponse(ArrowSerializableDataclass):
+    """Ordered key/value pairs surfaced as Extra Info under EXPLAIN ANALYZE.
+
+    Parallel ``keys``/``values`` lists keep insertion order explicit on
+    the wire. The C++ side reassembles them into an
+    ``InsertionOrderPreservingMap<string>``.
+    """
+
+    keys: Annotated[list[str], ArrowType(pa.list_(pa.string()))]
+    values: Annotated[list[str], ArrowType(pa.list_(pa.string()))]
 
 
 # ---------------------------------------------------------------------------
@@ -1183,6 +1215,20 @@ class VgiProtocol(Protocol):
         """
         ...
 
+    def table_function_dynamic_to_string(
+        self, request: TableFunctionDynamicToStringRequest
+    ) -> TableFunctionDynamicToStringResponse:
+        """Return user-defined diagnostics for EXPLAIN ANALYZE Extra Info.
+
+        Fired once per parallel scan thread at end-of-stream. The function
+        class is responsible for persisting any diagnostics it wants to
+        report and retrieving them by ``global_execution_id`` here.
+
+        Best-effort: must not raise. The dispatcher catches exceptions and
+        returns an empty response so EXPLAIN ANALYZE never breaks the query.
+        """
+        ...
+
     # ========== Aggregate Function Methods (all unary) ==========
 
     def aggregate_bind(self, request: AggregateBindRequest) -> AggregateBindResponse:
@@ -1227,21 +1273,15 @@ class VgiProtocol(Protocol):
 
     # ========== Aggregate Streaming-Partitioned Methods (optional, all unary) ==========
 
-    def aggregate_streaming_open(
-        self, request: AggregateStreamingOpenRequest
-    ) -> AggregateStreamingOpenResponse:
+    def aggregate_streaming_open(self, request: AggregateStreamingOpenRequest) -> AggregateStreamingOpenResponse:
         """Start a streaming-partitioned aggregate session."""
         ...
 
-    def aggregate_streaming_chunk(
-        self, request: AggregateStreamingChunkRequest
-    ) -> AggregateStreamingChunkResponse:
+    def aggregate_streaming_chunk(self, request: AggregateStreamingChunkRequest) -> AggregateStreamingChunkResponse:
         """Process one input chunk; returns one output row per input row."""
         ...
 
-    def aggregate_streaming_close(
-        self, request: AggregateStreamingCloseRequest
-    ) -> AggregateStreamingCloseResponse:
+    def aggregate_streaming_close(self, request: AggregateStreamingCloseRequest) -> AggregateStreamingCloseResponse:
         """End the streaming session, free per-session state."""
         ...
 

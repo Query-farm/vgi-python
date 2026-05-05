@@ -56,6 +56,9 @@ from vgi._test_fixtures.table.pairs import (
     RepeatValueIntFunction,
     RepeatValueStrFunction,
 )
+from vgi._test_fixtures.table.profiling_example import (
+    ProfilingDemoFunction,
+)
 from vgi._test_fixtures.table.sequence import (
     DoubleSequenceFunction,
     NamedParamsEchoFunction,
@@ -115,6 +118,7 @@ __all__ = [
     "OrderEchoFunction",
     "PartitionedSequenceFunction",
     "ProductsScanFunction",
+    "ProfilingDemoFunction",
     "ProjectedDataFunction",
     "ProjectsScanFunction",
     "RepeatValueIntFunction",

@@ -62,6 +62,14 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
             "Covered by C++ integration/table_function paths."
         )
     ),
+    "table_function_dynamic_to_string": NotExposed(
+        reason=(
+            "DuckDB-only profiler hook. Surfaces user diagnostics under EXPLAIN "
+            "ANALYZE Extra Info. Non-DuckDB clients have no equivalent surface. "
+            "Covered by tests/test_table_function_dynamic_to_string.py and "
+            "C++ integration/table/dynamic_to_string.test."
+        )
+    ),
     # ---------- Aggregate (all unary) ----------
     "aggregate_bind": NotExposed(
         reason=(

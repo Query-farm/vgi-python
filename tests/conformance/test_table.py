@@ -17,6 +17,7 @@ skip_area(
         "defaults.test",
         "double_sequence.test",
         "dynamic_filter.test",
+        "dynamic_to_string.test",
         "expression_filter.test",
         "filter_echo.test",
         "filter_pushdown.test",

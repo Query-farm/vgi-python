@@ -122,6 +122,8 @@ from vgi.protocol import (
     SchemasResponse,
     TableCreateRequest,
     TableFunctionCardinalityRequest,
+    TableFunctionDynamicToStringRequest,
+    TableFunctionDynamicToStringResponse,
     TableFunctionStatisticsRequest,
     TableInOutExchangeState,
     TableInOutFinalizeState,
@@ -1596,6 +1598,39 @@ class Worker:
             return None
         return serialize_column_statistics(stats, cache_max_age_seconds=None)
 
+    def table_function_dynamic_to_string(
+        self, request: TableFunctionDynamicToStringRequest, ctx: CallContext
+    ) -> TableFunctionDynamicToStringResponse:
+        """Return user diagnostics for EXPLAIN ANALYZE Extra Info.
+
+        Implements VgiProtocol.table_function_dynamic_to_string(). Fired
+        once per parallel scan thread post-execution. Best-effort: any
+        exception (including a misbehaving user override) is logged and
+        an empty response is returned so the EA query never aborts.
+        """
+        empty = TableFunctionDynamicToStringResponse(keys=[], values=[])
+        try:
+            func_cls = self._resolve_function(request.bind_call)
+        except Exception:
+            _logger.exception("dynamic_to_string: failed to resolve function class")
+            return empty
+        if not issubclass(func_cls, TableFunctionGenerator):
+            return empty
+        try:
+            params = func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth)
+            mapping = func_cls.dynamic_to_string(params, request.global_execution_id)
+        except Exception:
+            _logger.exception("dynamic_to_string: user hook raised on %s", func_cls.__name__)
+            return empty
+        if not mapping:
+            return empty
+        keys: list[str] = []
+        values: list[str] = []
+        for k, v in mapping.items():
+            keys.append(str(k))
+            values.append(str(v))
+        return TableFunctionDynamicToStringResponse(keys=keys, values=values)
+
     # ========== Aggregate Function Methods ==========
 
     def _load_aggregate_const_args(
@@ -2009,7 +2044,9 @@ class Worker:
         # placeholder) to the optional window_prepare hook. Result lives
         # alongside the placeholder in the in-memory cache.
         prepared_state = func_cls.window_prepare(
-            partition, window_state, params,
+            partition,
+            window_state,
+            params,
         )
         _window_partition_cache.put(
             request.execution_id,
@@ -2062,12 +2099,18 @@ class Worker:
         # call window_prepare (no params available there).
         if cached.prepared_state is None:
             cached.prepared_state = func_cls.window_prepare(
-                partition, cached.window_state, params,
+                partition,
+                cached.window_state,
+                params,
             )
 
         subframes = list(zip(request.frame_starts, request.frame_ends, strict=True))
         result_value = func_cls.window(
-            request.rid, subframes, partition, cached.prepared_state, params,
+            request.rid,
+            subframes,
+            partition,
+            cached.prepared_state,
+            params,
         )
 
         # Build a one-row result batch matching output_schema
@@ -2175,7 +2218,9 @@ class Worker:
         # call window_prepare (no params available there).
         if cached.prepared_state is None:
             cached.prepared_state = func_cls.window_prepare(
-                partition, cached.window_state, params,
+                partition,
+                cached.window_state,
+                params,
             )
 
         # Unflatten subframes: frame_starts/frame_ends are concatenated across
@@ -2192,9 +2237,7 @@ class Worker:
         subframes_per_row: list[list[tuple[int, int]]] = []
         offset = 0
         for n in frames_per_row:
-            subframes_per_row.append(
-                [(starts[offset + k], ends[offset + k]) for k in range(n)]
-            )
+            subframes_per_row.append([(starts[offset + k], ends[offset + k]) for k in range(n)])
             offset += n
 
         # User code may override window_batch to build the output as a single
@@ -2202,7 +2245,11 @@ class Worker:
         # subsequent pa.array(...) conversion. The default falls back to
         # window() per row, preserving prior behaviour.
         results = func_cls.window_batch(
-            row_ids, subframes_per_row, partition, cached.prepared_state, params,
+            row_ids,
+            subframes_per_row,
+            partition,
+            cached.prepared_state,
+            params,
         )
 
         result_batch = _build_batch_result(results, output_schema, expected_count=request.count)
@@ -2242,9 +2289,7 @@ class Worker:
             request.function_name, request.attach_id, function_type=AggregateFunction
         )
         if not issubclass(func_cls, AggregateFunction):
-            raise TypeError(
-                f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})"
-            )
+            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
         execution_id = uuid.uuid4().bytes
 
@@ -2280,9 +2325,7 @@ class Worker:
         _streaming_session_cache.put(execution_id, session)
         # Also persist to FunctionStorage so a chunk RPC landing on a
         # different pool worker can reload the session.
-        storage.aggregate_window_partition_put(
-            _STREAMING_SESSION_STORAGE_KEY, _encode_streaming_session(session)
-        )
+        storage.aggregate_window_partition_put(_STREAMING_SESSION_STORAGE_KEY, _encode_streaming_session(session))
         return AggregateStreamingOpenResponse(execution_id=execution_id)
 
     def aggregate_streaming_chunk(
@@ -2302,8 +2345,7 @@ class Worker:
             )
             if not issubclass(func_cls, AggregateFunction):
                 raise TypeError(
-                    f"Function '{request.function_name}' is not an AggregateFunction "
-                    f"(got {func_cls.__name__})"
+                    f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})"
                 )
             cold_storage = BoundStorage(func_cls.storage, request.execution_id)
             import time as _t
@@ -2316,8 +2358,7 @@ class Worker:
                 _streaming_persist_stats["n_cold_loads"] += 1
             if payload is None:
                 raise OSError(
-                    "aggregate_streaming_chunk: unknown execution_id "
-                    "(streaming_open never ran or close already fired)"
+                    "aggregate_streaming_chunk: unknown execution_id (streaming_open never ran or close already fired)"
                 )
             session = _decode_streaming_session(payload, func_cls)
             _streaming_session_cache.put(request.execution_id, session)
@@ -2354,10 +2395,7 @@ class Worker:
             result_array = pa.array(result, type=session.output_schema.field(0).type)
 
         if len(result_array) != chunk.num_rows:
-            raise ValueError(
-                f"streaming_chunk returned {len(result_array)} values for "
-                f"{chunk.num_rows} input rows"
-            )
+            raise ValueError(f"streaming_chunk returned {len(result_array)} values for {chunk.num_rows} input rows")
 
         result_batch = pa.RecordBatch.from_arrays([result_array], schema=session.output_schema)
         sink = pa.BufferOutputStream()
@@ -2444,8 +2482,7 @@ class Worker:
             n = stats["n_chunks"]
             mb = stats["bytes_persisted"] / (1024 * 1024)
             _logger.info(
-                "streaming_persist_summary chunks=%d encode=%.3fs put=%.3fs "
-                "bytes=%.1fMB cold_loads=%d",
+                "streaming_persist_summary chunks=%d encode=%.3fs put=%.3fs bytes=%.1fMB cold_loads=%d",
                 n,
                 stats["encode_session_seconds"],
                 stats["storage_put_seconds"],
