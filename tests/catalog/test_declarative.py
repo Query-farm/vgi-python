@@ -270,6 +270,44 @@ class TestTableWithFunction:
         assert info.update_function is None
         assert info.delete_function is None
 
+    def test_table_inlines_resolved_column_statistics(self) -> None:
+        """``Table.statistics`` flows into ``TableInfo.column_statistics`` as IPC bytes.
+
+        The C++ extension reads the inlined blob and skips the per-scan
+        ``table_function_statistics`` and per-table
+        ``catalog_table_column_statistics_get`` RPCs.
+        """
+        from vgi_rpc.utils import deserialize_record_batch
+
+        from vgi.catalog.descriptors import ColumnStatisticsInput
+
+        table = Table(
+            name="users",
+            function=UsersFunction,
+            statistics={
+                "id": ColumnStatisticsInput(min=0, max=999_999, has_null=False, distinct_count=1_000_000),
+            },
+        )
+        info = table.to_table_info("main")
+        assert info.supports_column_statistics is True
+        assert info.column_statistics is not None
+        # The blob is an Arrow IPC RecordBatch; confirm it deserializes and
+        # carries the column we declared.
+        batch, _ = deserialize_record_batch(info.column_statistics)
+        column_names = batch.column("column_name").to_pylist()
+        assert column_names == ["id"]
+
+    def test_table_without_statistics_omits_column_statistics(self) -> None:
+        """Tables without ``statistics`` set leave column_statistics null.
+
+        Workers without static stats keep the existing on-demand RPC path —
+        no regression.
+        """
+        table = Table(name="users", function=UsersFunction)
+        info = table.to_table_info("main")
+        assert info.supports_column_statistics is False
+        assert info.column_statistics is None
+
 
 class TestTableValidation:
     """Tests for Table validation errors."""

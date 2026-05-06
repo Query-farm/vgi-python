@@ -378,6 +378,51 @@ class TestTableInfoSerialization:
         assert restored.delete_function is None
         assert restored.cardinality_estimate is None
         assert restored.cardinality_max is None
+        assert restored.column_statistics is None
+
+    def test_inlined_column_statistics_round_trip(self) -> None:
+        """``column_statistics`` IPC bytes round-trip through TableInfo.
+
+        The C++ extension reads this field (when populated) and skips the
+        per-scan ``table_function_statistics`` and per-table
+        ``catalog_table_column_statistics_get`` RPCs.
+        """
+        from vgi.catalog.catalog_interface import ColumnStatistics, serialize_column_statistics
+
+        columns_schema = schema(id=pa.int64())
+        columns_bytes = SerializedSchema(columns_schema.serialize().to_pybytes())
+        stats_blob = serialize_column_statistics(
+            [
+                ColumnStatistics(
+                    column_name="id",
+                    min=pa.scalar(0, pa.int64()),
+                    max=pa.scalar(999, pa.int64()),
+                    has_null=False,
+                    distinct_count=1000,
+                ),
+            ],
+            cache_max_age_seconds=3600,
+        )
+        original = TableInfo(
+            name="t",
+            schema_name="s",
+            columns=columns_bytes,
+            not_null_constraints=[],
+            unique_constraints=[],
+            check_constraints=[],
+            comment=None,
+            tags={},
+            supports_column_statistics=True,
+            column_statistics=stats_blob,
+        )
+        serialized = original.serialize_to_bytes()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = TableInfo.deserialize_from_batch(batch)
+        assert restored.column_statistics is not None
+        assert restored.column_statistics == stats_blob
+        # Other inline fields default to None.
+        assert restored.scan_function is None
+        assert restored.cardinality_estimate is None
 
 
 class TestViewInfoSerialization:
@@ -926,6 +971,13 @@ class TestArrowSchemaCorrectness:
         assert schema.field("not_null_constraints").type == pa.list_(pa.int32())
         assert schema.field("unique_constraints").type == pa.list_(pa.list_(pa.int32()))
         assert schema.field("check_constraints").type == pa.list_(pa.string())
+        # Inlined optional fields — populated to skip per-bind RPCs.
+        assert schema.field("scan_function").type == pa.binary()
+        assert schema.field("cardinality_estimate").type == pa.int64()
+        assert schema.field("column_statistics").type == pa.binary()
+        # column_statistics is the LAST field (positional schema compatibility:
+        # old C++ extensions ignore-by-position trailing fields).
+        assert schema.field(len(schema) - 1).name == "column_statistics"
 
     def test_view_info_schema(self) -> None:
         """Verify ViewInfo Arrow schema."""

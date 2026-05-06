@@ -268,6 +268,19 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     cardinality_estimate: Annotated[int | None, ArrowType(pa.int64())] = None
     cardinality_max: Annotated[int | None, ArrowType(pa.int64())] = None
 
+    # Optional inlined column statistics. When populated, the C++ extension
+    # uses the cached value and skips the per-bind / per-table
+    # ``catalog_table_column_statistics_get`` RPC and the per-scan
+    # ``table_function_statistics`` RPC. Bytes are the IPC payload from
+    # ``serialize_column_statistics(stats, cache_max_age_seconds)``.
+    #
+    # Populating this field freezes the resolved stats for the lifetime of
+    # the catalog cache (until ``catalog_version`` bumps). Workers whose
+    # statistics change faster than ``catalog_version`` (e.g. live counters,
+    # rapidly-mutating dimensions) MUST leave this null so the on-demand
+    # RPC continues to fire.
+    column_statistics: Annotated[bytes | None, ArrowType(pa.binary())] = None
+
 
 @dataclass(frozen=True)
 class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):

@@ -30,6 +30,7 @@ from vgi.catalog.catalog_interface import (
     TableColumnStatisticsResult,
     TableInfo,
     ViewInfo,
+    serialize_column_statistics,
 )
 from vgi.invocation import BindResponse, FunctionType
 from vgi.metadata import CatalogFunctionType
@@ -485,6 +486,21 @@ class Table:
         cols = self._apply_defaults_to_schema(self.resolved_columns)
         cols = self._apply_generated_columns_to_schema(cols)
         cols = self._apply_column_comments_to_schema(cols)
+        # Inline the resolved stats blob so the C++ extension can short-circuit
+        # the per-scan ``table_function_statistics`` and per-table
+        # ``catalog_table_column_statistics_get`` RPCs entirely. This freezes
+        # the resolved stats for the lifetime of the catalog cache; workers
+        # whose stats change faster than catalog_version must override
+        # ``to_table_info`` and leave column_statistics null.
+        resolved_stats = self.resolve_column_statistics()
+        column_statistics_blob = (
+            serialize_column_statistics(
+                resolved_stats.statistics,
+                resolved_stats.cache_max_age_seconds,
+            )
+            if resolved_stats is not None
+            else None
+        )
         return TableInfo(
             name=self.name,
             schema_name=schema_name,
@@ -506,6 +522,7 @@ class Table:
             delete_function=_inline_function_result(self.delete_function),
             cardinality_estimate=self.cardinality_estimate,
             cardinality_max=self.cardinality_max,
+            column_statistics=column_statistics_blob,
         )
 
     def resolve_column_statistics(self) -> TableColumnStatisticsResult | None:
