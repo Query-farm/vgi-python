@@ -313,14 +313,20 @@ class InMemoryCatalog(CatalogInterface):
         result = []
         for schema_data in catalog.schemas.values():
             # Populate estimated_object_count from the in-memory population so
-            # the C++ side's eager-load gate has a real signal to act on. We
-            # only know about tables/views/macros in the fixture; other kinds
-            # are omitted (the client treats absent keys as 1, biasing toward
-            # eager bulk-load).
+            # the C++ side's eager-load gate has a real signal to act on. The
+            # InMemoryCatalog only models tables/views/macros — for kinds it
+            # cannot model at all (functions, indexes), emit explicit ``0``
+            # so the client triggers the zero-count RPC bypass instead of
+            # paying empty round-trips for kinds that genuinely cannot exist
+            # here. This is load-bearing for the bypass integration test.
             estimated = {
                 "table": len(schema_data.tables),
                 "view": len(schema_data.views),
                 "macro": len(schema_data.macros),
+                "index": 0,
+                "scalar_function": 0,
+                "aggregate_function": 0,
+                "table_function": 0,
             }
             result.append(
                 SchemaInfo(

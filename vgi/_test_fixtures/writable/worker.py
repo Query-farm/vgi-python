@@ -539,6 +539,22 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     ) -> list[SchemaInfo]:
         """List schemas — merge static catalog schemas with transactor schemas."""
         static_schemas = super().schemas(attach_id=attach_id, transaction_id=transaction_id)
+        # Static ``Schema(tables=[])`` declaration would auto-populate
+        # ``estimated_object_count[table] = 0``, which the C++ client treats
+        # as a hard guarantee and skips the bulk RPC. But this catalog adds
+        # tables dynamically via the transactor, so the static zero is wrong.
+        # Strip estimated_object_count entirely — the client falls back to its
+        # default of 1 (unknown / eager-load), which restores correct lookups.
+        static_schemas = [
+            SchemaInfo(
+                attach_id=s.attach_id,
+                name=s.name,
+                comment=s.comment,
+                tags=s.tags,
+                estimated_object_count=None,
+            )
+            for s in static_schemas
+        ]
         static_names = {s.name.lower() for s in static_schemas}
 
         if not transaction_id:

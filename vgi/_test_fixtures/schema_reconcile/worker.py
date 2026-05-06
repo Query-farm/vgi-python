@@ -39,6 +39,7 @@ from vgi.catalog.catalog_interface import (
     AttachId,
     ReadOnlyCatalogInterface,
     ScanFunctionResult,
+    SchemaInfo,
     SchemaObjectType,
     SerializedSchema,
     TableInfo,
@@ -523,6 +524,28 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
             supports_update=True,
             supports_delete=True,
         )
+
+    def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> list[SchemaInfo]:
+        # The declarative ``Schema(tables=[])`` would auto-populate
+        # ``estimated_object_count[table] = 0``, which the C++ client treats
+        # as a hard guarantee and uses to skip the bulk RPC. But this catalog
+        # publishes tables via the ``schema_contents`` override below, not
+        # via the declarative ``tables=`` field — so the count is wrong.
+        # Override at the catalog level to report the real population.
+        infos = super().schemas(attach_id=attach_id, transaction_id=transaction_id)
+        for i, info in enumerate(infos):
+            if info.name == _SCHEMA_NAME:
+                infos[i] = SchemaInfo(
+                    attach_id=info.attach_id,
+                    name=info.name,
+                    comment=info.comment,
+                    tags=info.tags,
+                    estimated_object_count={
+                        **(info.estimated_object_count or {}),
+                        "table": len(TABLES),
+                    },
+                )
+        return infos
 
     def schema_contents(
         self,

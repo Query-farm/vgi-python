@@ -194,6 +194,20 @@ class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
     # ``LoadEntries`` and per-name single-entry RPCs. Workers may omit the
     # field entirely or any individual key — the client treats absent counts
     # as 1, so unspecified populations bias toward eager bulk-load.
+    #
+    # **The value 0 is a hard guarantee, not an estimate.** When a count is
+    # exactly 0 the client skips the corresponding ``catalog_schema_contents_*``
+    # bulk RPC entirely and short-circuits per-name lookups
+    # (``catalog_table_get`` / ``catalog_view_get`` / ``catalog_index_get``).
+    # If a worker reports 0 for a kind that actually has entries,
+    # ``SELECT … FROM s.x`` silently returns "not found" — only declare 0 for
+    # kinds the worker knows are empty in its current view of the schema.
+    # Cross-session DDL on the same catalog (another connection creating a
+    # view in a schema this connection has cached as zero-views) is handled
+    # the same way as any other stale catalog cache: ``vgi_clear_cache()`` or
+    # re-attach. Time-travel AT-clause queries do not honor the bypass — they
+    # always issue the per-name RPC because a historical version may have had
+    # entries the current view does not.
     estimated_object_count: dict[str, int] | None = None
 
 

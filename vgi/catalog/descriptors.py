@@ -665,6 +665,12 @@ class Schema:
         the ``scalar_function`` key and leave the others at the client-side
         default of 1 (i.e. eager-load) — workers wanting finer control can
         return their own SchemaInfo rather than calling this helper.
+
+        **Zero counts are load-bearing.** Empty declarative collections
+        (e.g. ``views=()``) emit ``0`` here, which the C++ client treats as
+        a hard guarantee and uses to skip the corresponding bulk + per-name
+        RPCs entirely. Do not "optimize" this into omitting empty keys —
+        absence reads as count=1 (unknown), suppressing the RPC bypass.
         """
         return SchemaInfo(
             attach_id=attach_id,

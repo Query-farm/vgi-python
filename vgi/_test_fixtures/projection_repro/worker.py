@@ -45,6 +45,7 @@ from vgi.catalog.catalog_interface import (
     AttachId,
     ReadOnlyCatalogInterface,
     ScanFunctionResult,
+    SchemaInfo,
     SchemaObjectType,
     SerializedSchema,
     TableInfo,
@@ -354,6 +355,27 @@ class ProjReproCatalog(ReadOnlyCatalogInterface):
             unique_constraints=[],
             check_constraints=[],
         )
+
+    def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> list[SchemaInfo]:
+        # Override the declarative ``Schema(tables=[])``-derived
+        # ``estimated_object_count[table] = 0`` with the real population.
+        # Without this, the C++ client treats the static zero as a hard
+        # guarantee and skips ``catalog_schema_contents_tables``, hiding
+        # every table this catalog publishes via the override below.
+        infos = super().schemas(attach_id=attach_id, transaction_id=transaction_id)
+        for i, info in enumerate(infos):
+            if info.name == "main":
+                infos[i] = SchemaInfo(
+                    attach_id=info.attach_id,
+                    name=info.name,
+                    comment=info.comment,
+                    tags=info.tags,
+                    estimated_object_count={
+                        **(info.estimated_object_count or {}),
+                        "table": len(_TABLE_NAMES),
+                    },
+                )
+        return infos
 
     def schema_contents(
         self,
