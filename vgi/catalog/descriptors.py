@@ -31,6 +31,7 @@ from vgi.catalog.catalog_interface import (
     ViewInfo,
 )
 from vgi.invocation import BindResponse, FunctionType
+from vgi.metadata import CatalogFunctionType
 
 if TYPE_CHECKING:
     from vgi.function import Function
@@ -660,11 +661,11 @@ class Schema:
         Populates ``estimated_object_count`` from the declared population so
         the C++ extension's eager-load gate can choose between bulk
         ``LoadEntries`` and per-name single-entry RPCs without an extra round
-        trip. Splitting functions into scalar / aggregate / table requires a
-        type discriminator we don't have here, so we report the total under
-        the ``scalar_function`` key and leave the others at the client-side
-        default of 1 (i.e. eager-load) — workers wanting finer control can
-        return their own SchemaInfo rather than calling this helper.
+        trip. Functions are partitioned by ``get_metadata().function_type``
+        into the three keys (``scalar_function``, ``aggregate_function``,
+        ``table_function``) so DuckDB's per-type catalog probes (a name
+        lookup walks scalar → aggregate → table) skip the bulk RPC for any
+        category the schema doesn't populate.
 
         **Zero counts are load-bearing.** Empty declarative collections
         (e.g. ``views=()``) emit ``0`` here, which the C++ client treats as
@@ -672,6 +673,13 @@ class Schema:
         RPCs entirely. Do not "optimize" this into omitting empty keys —
         absence reads as count=1 (unknown), suppressing the RPC bypass.
         """
+        function_counts = {
+            CatalogFunctionType.SCALAR: 0,
+            CatalogFunctionType.AGGREGATE: 0,
+            CatalogFunctionType.TABLE: 0,
+        }
+        for func in self.functions:
+            function_counts[func.get_metadata().function_type] += 1
         return SchemaInfo(
             attach_id=attach_id,
             name=self.name,
@@ -680,7 +688,9 @@ class Schema:
             estimated_object_count={
                 "table": len(self.tables),
                 "view": len(self.views),
-                "scalar_function": len(self.functions),
+                "scalar_function": function_counts[CatalogFunctionType.SCALAR],
+                "aggregate_function": function_counts[CatalogFunctionType.AGGREGATE],
+                "table_function": function_counts[CatalogFunctionType.TABLE],
                 "macro": len(self.macros),
                 "index": len(self.indexes),
             },

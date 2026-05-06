@@ -901,6 +901,58 @@ class TestSchemaDescriptor:
         assert info.comment == "Main schema"
         assert info.tags == {"type": "core"}
 
+    def test_estimated_object_count_partitions_functions_by_type(self) -> None:
+        """Functions are split into scalar/aggregate/table by metadata type.
+
+        DuckDB's name resolution probes each function category separately
+        (scalar → aggregate → table). Each category triggers its own
+        ``catalog_schema_contents_functions`` RPC the first time the C++
+        client hits a cold miss. Reporting an explicit ``0`` for empty
+        categories lets the client skip the bulk RPC entirely.
+        """
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+        from vgi.scalar_function import ScalarFunction
+
+        class _Upper(ScalarFunction):
+            class Meta:
+                name = "upper"
+
+            @classmethod
+            def compute(
+                cls, x: Annotated[pa.StringArray, Param(doc="x")]
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.compute.utf8_upper(x)
+
+        schema = Schema(
+            name="main",
+            functions=[UsersFunction, EventsFunction, _Upper],  # 2 table + 1 scalar
+        )
+        info = schema.to_schema_info(AttachId(b"x"))
+        assert info.estimated_object_count == {
+            "table": 0,
+            "view": 0,
+            "scalar_function": 1,
+            "aggregate_function": 0,
+            "table_function": 2,
+            "macro": 0,
+            "index": 0,
+        }
+
+    def test_estimated_object_count_zeros_empty_categories(self) -> None:
+        """Empty function categories emit 0 — load-bearing for the client.
+
+        The C++ extension treats explicit 0 as a hard guarantee and skips
+        both the bulk listing and per-name lookups; absence reads as
+        "unknown / eager-load" instead.
+        """
+        schema = Schema(name="main", functions=[UsersFunction])  # only table fn
+        info = schema.to_schema_info(AttachId(b"x"))
+        assert info.estimated_object_count["scalar_function"] == 0
+        assert info.estimated_object_count["aggregate_function"] == 0
+        assert info.estimated_object_count["table_function"] == 1
+
 
 # =============================================================================
 # Catalog Descriptor Tests
