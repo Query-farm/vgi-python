@@ -262,6 +262,123 @@ class TestTableInfoSerialization:
 
         assert restored.unique_constraints == [[0], [1, 2]]
 
+    def test_inlined_scan_function_round_trip(self) -> None:
+        """``scan_function`` IPC bytes round-trip through TableInfo serialize/deserialize.
+
+        The C++ extension reads this field (when populated) and skips the
+        per-bind ``catalog_table_scan_function_get`` RPC.
+        """
+        columns_schema = schema(id=pa.int64())
+        columns_bytes = SerializedSchema(columns_schema.serialize().to_pybytes())
+        sfr = ScanFunctionResult(
+            function_name="read_parquet",
+            positional_arguments=[pa.scalar("s3://bucket/x.parquet", pa.string())],
+            named_arguments={"hive_partitioning": pa.scalar(True, pa.bool_())},
+            required_extensions=["parquet"],
+        )
+        original = TableInfo(
+            name="t",
+            schema_name="s",
+            columns=columns_bytes,
+            not_null_constraints=[],
+            unique_constraints=[],
+            check_constraints=[],
+            comment=None,
+            tags={},
+            scan_function=sfr.serialize(),
+        )
+        serialized = original.serialize_to_bytes()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = TableInfo.deserialize_from_batch(batch)
+
+        assert restored.scan_function is not None
+        nested, _ = deserialize_record_batch(restored.scan_function)
+        restored_sfr = ScanFunctionResult.deserialize(nested)
+        assert restored_sfr.function_name == "read_parquet"
+        assert [s.as_py() for s in restored_sfr.positional_arguments] == ["s3://bucket/x.parquet"]
+        assert restored_sfr.named_arguments["hive_partitioning"].as_py() is True
+        assert restored_sfr.required_extensions == ["parquet"]
+        # Other inline fields default to None when not populated.
+        assert restored.insert_function is None
+        assert restored.update_function is None
+        assert restored.delete_function is None
+
+    def test_inlined_cardinality_round_trip(self) -> None:
+        """``cardinality_estimate`` and ``cardinality_max`` round-trip on TableInfo.
+
+        The C++ extension reads these (when populated) and skips the per-bind
+        ``table_function_cardinality`` RPC.
+        """
+        columns_schema = schema(id=pa.int64())
+        columns_bytes = SerializedSchema(columns_schema.serialize().to_pybytes())
+        original = TableInfo(
+            name="t",
+            schema_name="s",
+            columns=columns_bytes,
+            not_null_constraints=[],
+            unique_constraints=[],
+            check_constraints=[],
+            comment=None,
+            tags={},
+            cardinality_estimate=12345,
+            cardinality_max=99999,
+        )
+        serialized = original.serialize_to_bytes()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = TableInfo.deserialize_from_batch(batch)
+        assert restored.cardinality_estimate == 12345
+        assert restored.cardinality_max == 99999
+
+    def test_inlined_cardinality_partial(self) -> None:
+        """Partial population (estimate-only or max-only) round-trips correctly."""
+        columns_schema = schema(id=pa.int64())
+        columns_bytes = SerializedSchema(columns_schema.serialize().to_pybytes())
+        for estimate, max_ in [(1000, None), (None, 5000)]:
+            original = TableInfo(
+                name="t",
+                schema_name="s",
+                columns=columns_bytes,
+                not_null_constraints=[],
+                unique_constraints=[],
+                check_constraints=[],
+                comment=None,
+                tags={},
+                cardinality_estimate=estimate,
+                cardinality_max=max_,
+            )
+            data = original.serialize_to_bytes()
+            batch, _ = deserialize_record_batch(data)
+            restored = TableInfo.deserialize_from_batch(batch)
+            assert restored.cardinality_estimate == estimate
+            assert restored.cardinality_max == max_
+
+    def test_omitted_inline_fields_default_to_none(self) -> None:
+        """A TableInfo without inline fields round-trips with None values.
+
+        Models the backward-compat path: an old worker omits these fields,
+        the C++ extension sees None and falls back to the per-bind RPC.
+        """
+        columns_schema = schema(id=pa.int64())
+        original = TableInfo(
+            name="t",
+            schema_name="s",
+            columns=SerializedSchema(columns_schema.serialize().to_pybytes()),
+            not_null_constraints=[],
+            unique_constraints=[],
+            check_constraints=[],
+            comment=None,
+            tags={},
+        )
+        serialized = original.serialize_to_bytes()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = TableInfo.deserialize_from_batch(batch)
+        assert restored.scan_function is None
+        assert restored.insert_function is None
+        assert restored.update_function is None
+        assert restored.delete_function is None
+        assert restored.cardinality_estimate is None
+        assert restored.cardinality_max is None
+
 
 class TestViewInfoSerialization:
     """Test ViewInfo serialization round-trip."""
@@ -792,12 +909,13 @@ class TestArrowSchemaCorrectness:
     def test_schema_info_schema(self) -> None:
         """Verify SchemaInfo Arrow schema."""
         schema = SchemaInfo.ARROW_SCHEMA
-        assert len(schema) == 4
+        assert len(schema) == 5
         assert schema.field("attach_id").type == pa.binary()
         assert schema.field("name").type == pa.string()
         assert schema.field("comment").type == pa.string()
         assert schema.field("comment").nullable is True
         assert schema.field("tags").type == pa.map_(pa.string(), pa.string())
+        assert schema.field("estimated_object_count").type == pa.map_(pa.string(), pa.int64())
 
     def test_table_info_schema(self) -> None:
         """Verify TableInfo Arrow schema."""

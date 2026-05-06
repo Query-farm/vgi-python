@@ -424,6 +424,27 @@ _EXAMPLE_CATALOG = Catalog(
                     statistics_cache_max_age_seconds=3600,
                     comment="A large sequence of integers from 0 to 1,000,000",
                 ),
+                # Function-backed table with a no-arg function. Used by the
+                # ``inlined_scan_function.test`` integration test to verify
+                # the C++ extension reads the inlined ``scan_function`` from
+                # ``TableInfo`` and skips ``catalog_table_scan_function_get``.
+                Table(
+                    name="ten_thousand_table",
+                    function=TenThousandFunction,
+                    comment="Function-backed table over the no-arg ten_thousand function",
+                ),
+                # Function-backed table with inlined cardinality. Used by the
+                # ``inlined_cardinality.test`` integration test to verify the
+                # C++ extension uses ``Table.cardinality_estimate`` /
+                # ``cardinality_max`` from ``TableInfo`` and skips the per-bind
+                # ``table_function_cardinality`` RPC.
+                Table(
+                    name="cardinality_inlined_table",
+                    function=TenThousandFunction,
+                    cardinality_estimate=10000,
+                    cardinality_max=10000,
+                    comment="Function-backed table with inlined cardinality (10000 rows)",
+                ),
                 # Time-travel table: version-specific schema
                 Table(
                     name="versioned_data",

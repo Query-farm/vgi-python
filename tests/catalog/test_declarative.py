@@ -195,6 +195,81 @@ class TestTableWithFunction:
         assert table.not_null == ("id",)
         assert table.unique == (("id",),)
 
+    def test_function_backed_table_inlines_scan_function(self) -> None:
+        """Inline a serialized ScanFunctionResult on function-backed tables.
+
+        The C++ extension reads ``TableInfo.scan_function`` and skips the
+        per-bind ``catalog_table_scan_function_get`` RPC.
+        """
+        from vgi_rpc.utils import deserialize_record_batch
+
+        table = Table(name="users", function=UsersFunction)
+        info = table.to_table_info("main")
+        assert info.scan_function is not None
+        batch, _ = deserialize_record_batch(info.scan_function)
+        sfr = ScanFunctionResult.deserialize(batch)
+        # The inlined function name must match the function's metadata so
+        # the C++ extension can route the bind correctly.
+        assert sfr.function_name == UsersFunction.get_metadata().name
+        # Auto-impl mirrors ``ReadOnlyCatalogInterface.table_scan_function_get``:
+        # empty positional/named args, no required extensions.
+        assert sfr.positional_arguments == []
+        assert sfr.named_arguments == {}
+        assert sfr.required_extensions == []
+        # Write functions remain null because this Table has none.
+        assert info.insert_function is None
+        assert info.update_function is None
+        assert info.delete_function is None
+
+    def test_table_propagates_cardinality_to_table_info(self) -> None:
+        """``Table.cardinality_estimate`` / ``cardinality_max`` flow into TableInfo.
+
+        The C++ extension reads these and skips the per-bind
+        ``table_function_cardinality`` RPC for read-only / slow-changing tables.
+        """
+        table = Table(
+            name="users",
+            function=UsersFunction,
+            cardinality_estimate=42,
+            cardinality_max=100,
+        )
+        info = table.to_table_info("main")
+        assert info.cardinality_estimate == 42
+        assert info.cardinality_max == 100
+
+    def test_table_cardinality_defaults_to_none(self) -> None:
+        """Default to None so the per-bind RPC behavior is preserved.
+
+        Tables without explicit cardinality propagate None, which keeps the
+        existing per-bind ``table_function_cardinality`` RPC path.
+        """
+        table = Table(name="users", function=UsersFunction)
+        info = table.to_table_info("main")
+        assert info.cardinality_estimate is None
+        assert info.cardinality_max is None
+
+    def test_table_cardinality_estimate_only(self) -> None:
+        """Estimate-only is a valid configuration — DuckDB gets a point estimate."""
+        table = Table(name="users", function=UsersFunction, cardinality_estimate=500)
+        info = table.to_table_info("main")
+        assert info.cardinality_estimate == 500
+        assert info.cardinality_max is None
+
+    def test_explicit_columns_table_omits_scan_function(self) -> None:
+        """Leave scan_function null for explicit-columns tables.
+
+        These tables have no declarative ``function=...`` so the C++ extension
+        falls back to ``catalog_table_scan_function_get`` — which the worker
+        may resolve via custom logic (e.g. ``read_parquet`` against S3).
+        """
+        cols = pa.schema([pa.field("id", pa.int64())])
+        table = Table(name="t", columns=cols)
+        info = table.to_table_info("main")
+        assert info.scan_function is None
+        assert info.insert_function is None
+        assert info.update_function is None
+        assert info.delete_function is None
+
 
 class TestTableValidation:
     """Tests for Table validation errors."""

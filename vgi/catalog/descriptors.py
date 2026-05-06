@@ -24,6 +24,7 @@ from vgi.catalog.catalog_interface import (
     IndexInfo,
     MacroInfo,
     MacroType,
+    ScanFunctionResult,
     SchemaInfo,
     SerializedSchema,
     TableColumnStatisticsResult,
@@ -151,6 +152,28 @@ def _default_to_sql(value: DefaultValue) -> str:
     return f"'{escaped}'"
 
 
+def _inline_function_result(
+    func: type[Function] | None,
+) -> bytes | None:
+    """Build inlined ``ScanFunctionResult`` IPC bytes for a function-backed table.
+
+    Returns ``None`` when the table is not function-backed for that operation.
+    Mirrors ``ReadOnlyCatalogInterface._write_function_get`` /
+    ``table_scan_function_get`` auto-impl: empty positional/named arguments,
+    no required extensions. The C++ extension uses these bytes verbatim and
+    skips the corresponding ``catalog_table_*_function_get`` RPC.
+    """
+    if func is None:
+        return None
+    func_meta = func.get_metadata()
+    return ScanFunctionResult(
+        function_name=func_meta.name,
+        positional_arguments=[],
+        named_arguments={},
+        required_extensions=[],
+    ).serialize()
+
+
 @dataclass(frozen=True, slots=True)
 class ForeignKeyDef:
     """A foreign key constraint definition.
@@ -225,6 +248,12 @@ class Table:
     column_comments: dict[str, str] = field(default_factory=dict)
     statistics: dict[str, ColumnStatisticsInput] = field(default_factory=dict)
     statistics_cache_max_age_seconds: int | None = None
+    # Optional inlined cardinality. When set, the C++ extension uses these
+    # values directly and skips the per-bind ``table_function_cardinality``
+    # RPC. Use for read-only or slow-changing tables. Leave both as ``None``
+    # to keep the existing per-bind RPC behavior.
+    cardinality_estimate: int | None = None
+    cardinality_max: int | None = None
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
 
@@ -471,6 +500,12 @@ class Table:
             supports_column_statistics=bool(self.statistics),
             comment=self.comment,
             tags=dict(self.tags),
+            scan_function=_inline_function_result(self.function),
+            insert_function=_inline_function_result(self.insert_function),
+            update_function=_inline_function_result(self.update_function),
+            delete_function=_inline_function_result(self.delete_function),
+            cardinality_estimate=self.cardinality_estimate,
+            cardinality_max=self.cardinality_max,
         )
 
     def resolve_column_statistics(self) -> TableColumnStatisticsResult | None:

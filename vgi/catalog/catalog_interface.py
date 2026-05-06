@@ -241,6 +241,33 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     # Statistics capability flag — indicates this table can provide column statistics.
     supports_column_statistics: bool = False
 
+    # Optional inlined function-discovery results. When populated, the C++
+    # extension uses the cached value and skips the corresponding
+    # ``catalog_table_{scan,insert,update,delete}_function_get`` RPC. Bytes are
+    # the IPC payload from ``ScanFunctionResult.serialize()``.
+    #
+    # Populating these fields freezes the function args for the lifetime of the
+    # catalog cache (until ``catalog_version`` bumps). Workers whose function
+    # args change more frequently than ``catalog_version`` (rotating
+    # credentials, presigned URLs, per-transaction snapshots) MUST leave these
+    # null so the per-bind RPC continues to fire.
+    scan_function: Annotated[bytes | None, ArrowType(pa.binary())] = None
+    insert_function: Annotated[bytes | None, ArrowType(pa.binary())] = None
+    update_function: Annotated[bytes | None, ArrowType(pa.binary())] = None
+    delete_function: Annotated[bytes | None, ArrowType(pa.binary())] = None
+
+    # Optional inlined cardinality. When populated, the C++ extension uses
+    # these values directly and skips the ``table_function_cardinality`` RPC
+    # — saving one round-trip per bind. Use for read-only or slow-changing
+    # tables where cardinality is statically known.
+    #
+    # Populating these fields freezes the cardinality for the lifetime of
+    # the catalog cache (until ``catalog_version`` bumps). Workers whose
+    # cardinality changes faster (e.g. live counters) MUST leave them null
+    # so the per-bind RPC continues to fire.
+    cardinality_estimate: Annotated[int | None, ArrowType(pa.int64())] = None
+    cardinality_max: Annotated[int | None, ArrowType(pa.int64())] = None
+
 
 @dataclass(frozen=True)
 class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):
