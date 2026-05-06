@@ -4,6 +4,7 @@ This module provides the abstract base class and data types for implementing
 catalog interfaces in VGI workers, enabling DuckDB ATTACH support.
 """
 
+import dataclasses
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -280,6 +281,22 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     # rapidly-mutating dimensions) MUST leave this null so the on-demand
     # RPC continues to fire.
     column_statistics: Annotated[bytes | None, ArrowType(pa.binary())] = None
+
+    # Optional inlined bind result. Bytes are the IPC payload of
+    # ``BindResponse.serialize_to_bytes()``. When populated, the C++
+    # extension uses these bytes verbatim and skips the per-scan ``bind``
+    # RPC, threading the deserialized BindResult straight into bind_data.
+    #
+    # The catalog framework only populates this for tables marked
+    # ``Table(inline_bind=True)`` whose function class is
+    # ``@bind_fixed_schema``-decorated — the decorator's contract (output is
+    # exactly ``cls.FIXED_SCHEMA``, no per-call inputs, no opaque_data)
+    # matches what's safe to freeze for the catalog cache lifetime.
+    # Functions with custom ``on_bind`` are not eligible via the framework
+    # path; workers can still inline manually inside their own
+    # ``schema_contents`` override when the bind output is independently
+    # known to be stable.
+    bind_result: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
 
 @dataclass(frozen=True)
@@ -1533,6 +1550,41 @@ def _read_only(operation: str) -> Any:
     return method
 
 
+def _inline_bind_result_for(func_cls: type) -> bytes | None:
+    """Pre-built ``bind_result`` bytes for a ``@bind_fixed_schema`` function.
+
+    Returns the IPC-serialized ``BindResponse(output_schema=cls.FIXED_SCHEMA)``
+    that the worker would have produced from a regular bind RPC. Cached on a
+    private class attribute so subsequent ``schema_contents`` calls (per
+    attach, per cache invalidation) reuse the bytes instead of re-serializing.
+
+    Returns ``None`` if the class isn't safely pre-bind-able — either it
+    isn't ``@bind_fixed_schema``-decorated (no ``_inline_bind_safe`` marker),
+    or a subclass has overridden ``on_bind`` (escaping the decorator's
+    contract — see the eligibility comment on ``bind_fixed_schema``).
+    """
+    if not getattr(func_cls, "_inline_bind_safe", False):
+        return None
+    # If the class has its own on_bind in __dict__, it's either the decorator's
+    # injection (marked) or a subclass override (unmarked). Reject overrides.
+    on_bind_attr = func_cls.__dict__.get("on_bind")
+    if on_bind_attr is not None:
+        underlying = getattr(on_bind_attr, "__func__", on_bind_attr)
+        if not getattr(underlying, "_is_bind_fixed_schema", False):
+            return None
+    cached = func_cls.__dict__.get("_cached_inline_bind_result")
+    if cached is not None:
+        return cached  # type: ignore[no-any-return]
+    from vgi.invocation import BindResponse
+
+    response = BindResponse(output_schema=func_cls.FIXED_SCHEMA, opaque_data=None)
+    blob = response.serialize_to_bytes()
+    # Set on the class itself so subclasses don't pollute their parents'
+    # cache with each other's serialized blobs (FIXED_SCHEMA may differ).
+    func_cls._cached_inline_bind_result = blob  # type: ignore[attr-defined]
+    return blob
+
+
 class ReadOnlyCatalogInterface(CatalogInterface):
     """A read-only catalog interface that does not support DDL operations.
 
@@ -2096,7 +2148,17 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         if type_enum == SchemaObjectType.TABLE:
             for (sn, _), table in self._table_registry.items():
                 if sn == name_lower:
-                    results.append(table.to_table_info(schema_name))
+                    info = table.to_table_info(schema_name)
+                    # Inline-bind post-pass: descriptors with inline_bind=True
+                    # backed by @bind_fixed_schema-decorated functions get a
+                    # pre-built BindResponse inlined onto TableInfo.bind_result.
+                    # The C++ extension uses these bytes verbatim and skips
+                    # the per-scan bind RPC.
+                    if table.inline_bind and table.function is not None:
+                        bind_bytes = _inline_bind_result_for(table.function)
+                        if bind_bytes is not None:
+                            info = dataclasses.replace(info, bind_result=bind_bytes)
+                    results.append(info)
         elif type_enum == SchemaObjectType.VIEW:
             for (sn, _), view in self._view_registry.items():
                 if sn == name_lower:

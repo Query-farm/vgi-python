@@ -379,6 +379,42 @@ class TestTableInfoSerialization:
         assert restored.cardinality_estimate is None
         assert restored.cardinality_max is None
         assert restored.column_statistics is None
+        assert restored.bind_result is None
+
+    def test_inlined_bind_result_round_trip(self) -> None:
+        """``bind_result`` IPC bytes round-trip through TableInfo.
+
+        The C++ extension reads this field (when populated) and skips the
+        per-scan ``bind`` RPC.
+        """
+        from vgi.invocation import BindResponse
+
+        columns_schema = schema(id=pa.int64())
+        columns_bytes = SerializedSchema(columns_schema.serialize().to_pybytes())
+        # The inlined bytes are an actual BindResponse — not a synthetic blob —
+        # so we deserialize it back at the end to confirm shape.
+        output_schema = pa.schema([pa.field("x", pa.int32(), nullable=False)])
+        bind_blob = BindResponse(output_schema=output_schema, opaque_data=None).serialize_to_bytes()
+        original = TableInfo(
+            name="t",
+            schema_name="s",
+            columns=columns_bytes,
+            not_null_constraints=[],
+            unique_constraints=[],
+            check_constraints=[],
+            comment=None,
+            tags={},
+            bind_result=bind_blob,
+        )
+        serialized = original.serialize_to_bytes()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = TableInfo.deserialize_from_batch(batch)
+        assert restored.bind_result is not None
+        assert restored.bind_result == bind_blob
+        # Round-trip the inner BindResponse so we know the bytes are valid.
+        restored_bind = BindResponse.deserialize_from_bytes(restored.bind_result)
+        assert restored_bind.output_schema.equals(output_schema)
+        assert restored_bind.opaque_data is None
 
     def test_inlined_column_statistics_round_trip(self) -> None:
         """``column_statistics`` IPC bytes round-trip through TableInfo.
@@ -975,9 +1011,10 @@ class TestArrowSchemaCorrectness:
         assert schema.field("scan_function").type == pa.binary()
         assert schema.field("cardinality_estimate").type == pa.int64()
         assert schema.field("column_statistics").type == pa.binary()
-        # column_statistics is the LAST field (positional schema compatibility:
+        assert schema.field("bind_result").type == pa.binary()
+        # bind_result is the LAST field (positional schema compatibility:
         # old C++ extensions ignore-by-position trailing fields).
-        assert schema.field(len(schema) - 1).name == "column_statistics"
+        assert schema.field(len(schema) - 1).name == "bind_result"
 
     def test_view_info_schema(self) -> None:
         """Verify ViewInfo Arrow schema."""

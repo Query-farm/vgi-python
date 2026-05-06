@@ -308,6 +308,64 @@ class TestTableWithFunction:
         assert info.supports_column_statistics is False
         assert info.column_statistics is None
 
+    def test_table_inline_bind_default_false(self) -> None:
+        """``inline_bind`` defaults to False and stays out of TableInfo.
+
+        Pre-binding only fires through the catalog framework's schema_contents
+        post-pass for inline_bind=True tables.
+        """
+        table = Table(name="users", function=UsersFunction)
+        assert table.inline_bind is False
+        info = table.to_table_info("main")
+        assert info.bind_result is None
+
+    def test_table_inline_bind_requires_function(self) -> None:
+        """``inline_bind=True`` with no function raises at descriptor build."""
+        cols = pa.schema([pa.field("id", pa.int64())])
+        with pytest.raises(ValueError, match="requires function="):
+            Table(name="t", columns=cols, inline_bind=True)
+
+    def test_table_inline_bind_requires_bind_fixed_schema(self) -> None:
+        """``inline_bind=True`` with a non-decorated function raises.
+
+        UsersFunction uses ``@bind_fixed_schema`` already, so build a one-off
+        subclass with a manual on_bind to exercise the rejection path.
+        """
+        from typing import Any as _Any
+
+        from vgi.invocation import BindResponse
+        from vgi.table_function import BindParams
+
+        @init_single_worker
+        class _ManualBindFn(TableFunctionGenerator[EmptyArgs]):
+            class Meta:  # noqa: D106
+                name = "manual"
+
+            FIXED_SCHEMA = schema({"x": pa.int64()})
+
+            @classmethod
+            def on_bind(cls, params: BindParams[EmptyArgs]) -> BindResponse:  # noqa: D102
+                return BindResponse(output_schema=cls.FIXED_SCHEMA)
+
+            @classmethod
+            def process(cls, params: ProcessParams[EmptyArgs], state: None, out: _Any) -> None:  # noqa: D102
+                out.finish()
+
+        with pytest.raises(ValueError, match="@bind_fixed_schema"):
+            Table(name="t", function=_ManualBindFn, inline_bind=True)
+
+    def test_table_inline_bind_decorated_function_validates(self) -> None:
+        """``Table(inline_bind=True, function=DecoratedFn)`` builds cleanly.
+
+        The descriptor accepts the configuration but does not pre-bind in
+        ``to_table_info`` — that's the catalog framework's job. Verify
+        bind_result stays None at the descriptor level.
+        """
+        table = Table(name="users", function=UsersFunction, inline_bind=True)
+        assert table.inline_bind is True
+        info = table.to_table_info("main")
+        assert info.bind_result is None  # pre-bind is the framework's job
+
 
 class TestTableValidation:
     """Tests for Table validation errors."""
@@ -1376,6 +1434,48 @@ class TestSchemaContentsWithCatalog:
         assert len(contents) == 2
         names = {c.name for c in contents}
         assert names == {"users", "events"}
+
+    def test_schema_contents_inline_bind_post_pass(self) -> None:
+        """schema_contents post-pass populates bind_result for inline_bind=True tables.
+
+        The framework checks Table.inline_bind, walks to the function class
+        (UsersFunction is @bind_fixed_schema-decorated), and inlines a
+        serialized BindResponse(output_schema=cls.FIXED_SCHEMA) on TableInfo.
+        """
+        from vgi.invocation import BindResponse
+
+        class _InlineBindCatalog(ReadOnlyCatalogInterface):
+            catalog = Catalog(
+                name="ib",
+                default_schema="main",
+                schemas=[
+                    Schema(
+                        name="main",
+                        tables=[
+                            # Inline-bind opted in.
+                            Table(name="u_inline", function=UsersFunction, inline_bind=True),
+                            # No opt-in — bind_result stays null.
+                            Table(name="u_normal", function=UsersFunction),
+                        ],
+                        functions=[UsersFunction],
+                    ),
+                ],
+            )
+
+        contents = _InlineBindCatalog().schema_contents(
+            attach_id=AttachId(b"test"),
+            transaction_id=None,
+            name="main",
+            type=SchemaObjectType.TABLE,
+        )
+        by_name = {c.name: c for c in contents}
+        assert by_name["u_inline"].bind_result is not None
+        # The inlined bytes are a real BindResponse — round-trip and confirm.
+        bind_resp = BindResponse.deserialize_from_bytes(by_name["u_inline"].bind_result)
+        assert bind_resp.output_schema.equals(UsersFunction.FIXED_SCHEMA)
+        assert bind_resp.opaque_data is None
+        # Non-opted-in table stays null.
+        assert by_name["u_normal"].bind_result is None
 
     def test_schema_contents_views(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_contents returns views for VIEW type."""

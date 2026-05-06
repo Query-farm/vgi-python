@@ -255,6 +255,16 @@ class Table:
     # to keep the existing per-bind RPC behavior.
     cardinality_estimate: int | None = None
     cardinality_max: int | None = None
+    # Opt into pre-binding the function during ``schema_contents`` and
+    # inlining the result on ``TableInfo.bind_result``. The C++ extension
+    # then skips the per-scan ``bind`` RPC.
+    #
+    # Only valid when ``function`` is a ``@bind_fixed_schema``-decorated
+    # ``TableFunctionGenerator`` subclass — the decorator's contract (output
+    # is exactly ``cls.FIXED_SCHEMA``, no per-call inputs) matches what's
+    # safe to freeze for the catalog cache lifetime. Setting this on a
+    # descriptor whose function is not decorated raises at descriptor build.
+    inline_bind: bool = False
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
 
@@ -265,6 +275,39 @@ class Table:
             raise ValueError(f"Table '{self.name}': must specify either 'columns' or 'function'")
         if self.columns is not None and self.function is not None:
             raise ValueError(f"Table '{self.name}': cannot specify both 'columns' and 'function'")
+
+        # Validate inline_bind contract: only @bind_fixed_schema-decorated
+        # functions qualify for the catalog framework's pre-bind path. The
+        # decorator marks both the class (_inline_bind_safe=True) and the
+        # installed on_bind function (_is_bind_fixed_schema=True). The
+        # function-level marker lets us reject subclasses that overrode
+        # on_bind even though they inherit _inline_bind_safe via MRO.
+        if self.inline_bind:
+            if self.function is None:
+                raise ValueError(
+                    f"Table '{self.name}': inline_bind=True requires function= to be set"
+                )
+            if not getattr(self.function, "_inline_bind_safe", False):
+                raise ValueError(
+                    f"Table '{self.name}': inline_bind=True requires the function class "
+                    f"to be decorated with @bind_fixed_schema. Got {self.function.__name__}, "
+                    f"which has a custom on_bind. Either decorate it (deleting the manual "
+                    f"on_bind) or leave inline_bind=False."
+                )
+            on_bind_attr = self.function.__dict__.get("on_bind")
+            if on_bind_attr is not None:
+                # The class has its own on_bind in __dict__. Either the
+                # decorator installed it (good — has _is_bind_fixed_schema
+                # marker on the underlying function) or a subclass overrode
+                # it (bad — escapes the decorator's contract).
+                underlying = getattr(on_bind_attr, "__func__", on_bind_attr)
+                if not getattr(underlying, "_is_bind_fixed_schema", False):
+                    raise ValueError(
+                        f"Table '{self.name}': inline_bind=True is not safe for "
+                        f"{self.function.__name__} because it overrides on_bind, "
+                        f"escaping @bind_fixed_schema's contract. Either remove the "
+                        f"override or leave inline_bind=False."
+                    )
 
         # Resolve columns to validate constraints
         resolved = self._get_resolved_columns()

@@ -937,7 +937,22 @@ def init_single_worker[T: TableFunctionGenerator[Any, Any]](cls: type[T]) -> typ
 
 
 def bind_fixed_schema[T: TableFunctionGenerator[Any, Any]](cls: type[T]) -> type[T]:
-    """Class decorator to return FIXED_SCHEMA from on_bind for a TableFunctionGenerator subclass."""
+    """Class decorator to return FIXED_SCHEMA from on_bind for a TableFunctionGenerator subclass.
+
+    Sets ``cls._inline_bind_safe = True`` *only when* the decorator actually
+    installs its own ``on_bind``. The catalog framework reads this marker to
+    decide whether `Table(inline_bind=True)` is allowed — the contract is "the
+    decorator's bind is in control, output is exactly ``cls.FIXED_SCHEMA``,
+    no kwargs inspected." If the class already defined its own ``on_bind``,
+    the decorator silently leaves it alone and we *must not* set the marker;
+    otherwise the framework would inline a bind it doesn't actually control.
+
+    Subclasses inherit the marker via Python attribute lookup. A subclass
+    that overrides ``on_bind`` adds it to its own ``__dict__``; the catalog
+    framework's eligibility check is
+    ``getattr(cls, "_inline_bind_safe", False) and "on_bind" not in cls.__dict__``,
+    which correctly excludes such subclasses.
+    """
     if "on_bind" not in cls.__dict__:  # only inject if subclass hasn't overridden
         if not hasattr(cls, "FIXED_SCHEMA"):
             raise ValueError(f"Class {cls.__name__} must define FIXED_SCHEMA to use @bind_fixed_schema")
@@ -949,6 +964,12 @@ def bind_fixed_schema[T: TableFunctionGenerator[Any, Any]](cls: type[T]) -> type
                 raise TypeError(f"Class {cls_.__name__}.FIXED_SCHEMA must be a pyarrow.Schema")
             return BindResponse(output_schema=value)
 
+        # Mark the function itself so we can later distinguish "decorator
+        # installed this on_bind" from "user overrode on_bind" — useful for
+        # downstream callers (e.g. catalog inline-bind) that need to confirm
+        # the bind logic in effect is the decorator's, not a subclass override.
+        on_bind_impl._is_bind_fixed_schema = True  # type: ignore[attr-defined]
+
         # assign as classmethod
         cls.on_bind = classmethod(on_bind_impl)  # type: ignore[assignment]
 
@@ -956,5 +977,10 @@ def bind_fixed_schema[T: TableFunctionGenerator[Any, Any]](cls: type[T]) -> type
         # before decorators ran, so we must update it manually.
         if hasattr(cls, "__abstractmethods__") and "on_bind" in cls.__abstractmethods__:
             cls.__abstractmethods__ = cls.__abstractmethods__ - {"on_bind"}
+
+        # Mark the class as inline-bind-safe *only when* we actually installed
+        # the on_bind. If the class had a pre-existing custom on_bind, we left
+        # it alone and have no claim about its purity — the marker stays unset.
+        cls._inline_bind_safe = True  # type: ignore[attr-defined]
 
     return cls
