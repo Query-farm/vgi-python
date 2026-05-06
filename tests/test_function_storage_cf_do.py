@@ -189,6 +189,92 @@ class TestFunctionStorageCfDo:
         cleared = storage.queue_clear(b"\x02" * 16)
         assert cleared == 0
 
+    # --- Transaction State Tests ---
+
+    def test_transaction_state_put_and_get(
+        self, storage: FunctionStorageCfDo, mock_conn: _MockConnection
+    ) -> None:
+        """Round-trip: put two keys, get them back."""
+        txn_id = b"\xaa" * 16
+
+        mock_conn.queue_response(200, {})
+        storage.transaction_state_put(txn_id, [(b"k1", b"v1"), (b"k2", b"v2")])
+
+        # Wire format: items is a list of {key, value} objects, both base64.
+        body = json.loads(mock_conn.requests[0][2])
+        assert base64.b64decode(body["transaction_id"]) == txn_id
+        items = body["items"]
+        assert len(items) == 2
+        assert {(base64.b64decode(it["key"]), base64.b64decode(it["value"])) for it in items} == {
+            (b"k1", b"v1"),
+            (b"k2", b"v2"),
+        }
+
+        mock_conn.queue_response(
+            200,
+            {"values": [_b64(b"v1"), _b64(b"v2")]},
+        )
+        result = storage.transaction_state_get(txn_id, [b"k1", b"k2"])
+        assert result == [b"v1", b"v2"]
+
+    def test_transaction_state_get_misses_return_none(
+        self, storage: FunctionStorageCfDo, mock_conn: _MockConnection
+    ) -> None:
+        """Misses surface as None in the parallel result list."""
+        mock_conn.queue_response(200, {"values": [_b64(b"hit"), None, _b64(b"hit2")]})
+        result = storage.transaction_state_get(b"\xaa" * 16, [b"a", b"missing", b"c"])
+        assert result == [b"hit", None, b"hit2"]
+
+    def test_transaction_state_get_empty_keys_short_circuits(
+        self, storage: FunctionStorageCfDo, mock_conn: _MockConnection
+    ) -> None:
+        """No request should be issued for an empty key list."""
+        result = storage.transaction_state_get(b"\xaa" * 16, [])
+        assert result == []
+        assert len(mock_conn.requests) == 0
+
+    def test_transaction_state_put_empty_short_circuits(
+        self, storage: FunctionStorageCfDo, mock_conn: _MockConnection
+    ) -> None:
+        """No request should be issued for an empty item list."""
+        storage.transaction_state_put(b"\xaa" * 16, [])
+        assert len(mock_conn.requests) == 0
+
+    def test_transaction_state_clear(
+        self, storage: FunctionStorageCfDo, mock_conn: _MockConnection
+    ) -> None:
+        """Clear sends transaction_id and ignores response body."""
+        mock_conn.queue_response(200, {"cleared": 5})
+        storage.transaction_state_clear(b"\xbb" * 16)
+        assert len(mock_conn.requests) == 1
+        body = json.loads(mock_conn.requests[0][2])
+        assert base64.b64decode(body["transaction_id"]) == b"\xbb" * 16
+
+    # --- Worker Scan Tests ---
+
+    def test_worker_scan_returns_pairs(
+        self, storage: FunctionStorageCfDo, mock_conn: _MockConnection
+    ) -> None:
+        """Non-destructive scan returns (worker_id, state) tuples."""
+        mock_conn.queue_response(
+            200,
+            {
+                "rows": [
+                    {"worker_id": 11, "state": _b64(b"alpha")},
+                    {"worker_id": 22, "state": _b64(b"beta")},
+                ],
+            },
+        )
+        rows = storage.worker_scan(b"\x01" * 16)
+        assert rows == [(11, b"alpha"), (22, b"beta")]
+
+    def test_worker_scan_empty(
+        self, storage: FunctionStorageCfDo, mock_conn: _MockConnection
+    ) -> None:
+        """Empty scan returns an empty list, not None."""
+        mock_conn.queue_response(200, {"rows": []})
+        assert storage.worker_scan(b"\x01" * 16) == []
+
     # --- Auth Tests ---
 
     def test_auth_header_sent(self, storage: FunctionStorageCfDo, mock_conn: _MockConnection) -> None:

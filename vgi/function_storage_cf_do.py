@@ -280,21 +280,68 @@ class FunctionStorageCfDo:
     # --- Transaction State ---
 
     def transaction_state_get(self, transaction_id: bytes, keys: list[bytes]) -> list[bytes | None]:
-        """Not yet supported on Cloudflare DO."""
-        raise NotImplementedError(
-            "Transaction state is not yet supported with the Cloudflare Durable Object storage backend."
+        """Load transaction-scoped values for the given keys."""
+        if not keys:
+            return []
+        t0 = time.monotonic()
+        data = self._post(
+            "transaction_state_get",
+            {
+                "transaction_id": base64.b64encode(transaction_id).decode(),
+                "keys": [base64.b64encode(k).decode() for k in keys],
+            },
         )
+        # ``values`` is parallel to ``keys`` — null for misses, b64 for hits.
+        result: list[bytes | None] = [
+            base64.b64decode(v) if v is not None else None for v in data["values"]
+        ]
+        _logger.debug(
+            "transaction_state_get txn=%s keys=%d hits=%d elapsed_ms=%.1f",
+            transaction_id.hex()[:8],
+            len(keys),
+            sum(1 for v in result if v is not None),
+            (time.monotonic() - t0) * 1000,
+        )
+        return result
 
     def transaction_state_put(self, transaction_id: bytes, items: list[tuple[bytes, bytes]]) -> None:
-        """Not yet supported on Cloudflare DO."""
-        raise NotImplementedError(
-            "Transaction state is not yet supported with the Cloudflare Durable Object storage backend."
+        """Write transaction-scoped values."""
+        if not items:
+            return
+        t0 = time.monotonic()
+        self._post(
+            "transaction_state_put",
+            {
+                "transaction_id": base64.b64encode(transaction_id).decode(),
+                "items": [
+                    {
+                        "key": base64.b64encode(k).decode(),
+                        "value": base64.b64encode(v).decode(),
+                    }
+                    for k, v in items
+                ],
+            },
+        )
+        _logger.debug(
+            "transaction_state_put txn=%s items=%d elapsed_ms=%.1f",
+            transaction_id.hex()[:8],
+            len(items),
+            (time.monotonic() - t0) * 1000,
         )
 
     def transaction_state_clear(self, transaction_id: bytes) -> None:
-        """Not yet supported on Cloudflare DO."""
-        raise NotImplementedError(
-            "Transaction state is not yet supported with the Cloudflare Durable Object storage backend."
+        """Drop all state for a transaction."""
+        t0 = time.monotonic()
+        self._post(
+            "transaction_state_clear",
+            {
+                "transaction_id": base64.b64encode(transaction_id).decode(),
+            },
+        )
+        _logger.debug(
+            "transaction_state_clear txn=%s elapsed_ms=%.1f",
+            transaction_id.hex()[:8],
+            (time.monotonic() - t0) * 1000,
         )
 
     def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes) -> None:

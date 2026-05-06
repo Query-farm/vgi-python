@@ -79,6 +79,13 @@ export class VgiStorageDO implements DurableObject {
         execution_id BLOB PRIMARY KEY,
         created_at REAL DEFAULT (julianday('now'))
       );
+      CREATE TABLE IF NOT EXISTS transaction_state (
+        transaction_id BLOB NOT NULL,
+        key BLOB NOT NULL,
+        value BLOB NOT NULL,
+        created_at REAL DEFAULT (julianday('now')),
+        PRIMARY KEY (transaction_id, key)
+      );
     `);
     this.initialized = true;
   }
@@ -100,6 +107,10 @@ export class VgiStorageDO implements DurableObject {
     );
     this.sql.exec(
       `DELETE FROM invocation_registry WHERE julianday('now') - created_at > ?`,
+      threshold,
+    );
+    this.sql.exec(
+      `DELETE FROM transaction_state WHERE julianday('now') - created_at > ?`,
       threshold,
     );
     // Re-arm the alarm
@@ -125,12 +136,20 @@ export class VgiStorageDO implements DurableObject {
           return this.workerPut(body);
         case "worker_collect":
           return this.workerCollect(body);
+        case "worker_scan":
+          return this.workerScan(body);
         case "queue_push":
           return this.queuePush(body);
         case "queue_pop":
           return this.queuePop(body);
         case "queue_clear":
           return this.queueClear(body);
+        case "transaction_state_get":
+          return this.transactionStateGet(body);
+        case "transaction_state_put":
+          return this.transactionStatePut(body);
+        case "transaction_state_clear":
+          return this.transactionStateClear(body);
         default:
           return Response.json({ error: "not_found" }, { status: 404 });
       }
@@ -254,6 +273,77 @@ export class VgiStorageDO implements DurableObject {
       eid,
     );
 
+    return Response.json({ cleared: deleted.length });
+  }
+
+  // --- Worker State (non-destructive) ---
+
+  private workerScan(body: Record<string, unknown>): Response {
+    const eid = this.b64ToBytes(body.execution_id as string);
+    const rows = this.sql
+      .exec(
+        `SELECT process_id, state_data FROM worker_state WHERE execution_id = ?`,
+        eid,
+      )
+      .toArray();
+    const out = rows.map((row) => ({
+      worker_id: row.process_id as number,
+      state: this.bytesToB64(row.state_data as ArrayBuffer),
+    }));
+    return Response.json({ rows: out });
+  }
+
+  // --- Transaction State ---
+
+  private transactionStateGet(body: Record<string, unknown>): Response {
+    const txnId = this.b64ToBytes(body.transaction_id as string);
+    const keysB64 = body.keys as string[];
+    // Lookup is per-key so the response can return null for misses in
+    // the same order the client sent — mirrors FunctionStorageSqlite's
+    // contract where the result list is parallel to ``keys``.
+    const values: (string | null)[] = [];
+    for (const keyB64 of keysB64) {
+      const key = this.b64ToBytes(keyB64);
+      const rows = this.sql
+        .exec(
+          `SELECT value FROM transaction_state WHERE transaction_id = ? AND key = ?`,
+          txnId,
+          key,
+        )
+        .toArray();
+      values.push(
+        rows.length === 0
+          ? null
+          : this.bytesToB64(rows[0].value as ArrayBuffer),
+      );
+    }
+    return Response.json({ values });
+  }
+
+  private transactionStatePut(body: Record<string, unknown>): Response {
+    const txnId = this.b64ToBytes(body.transaction_id as string);
+    const items = body.items as Array<{ key: string; value: string }>;
+    for (const item of items) {
+      this.sql.exec(
+        `INSERT OR REPLACE INTO transaction_state
+         (transaction_id, key, value, created_at)
+         VALUES (?, ?, ?, julianday('now'))`,
+        txnId,
+        this.b64ToBytes(item.key),
+        this.b64ToBytes(item.value),
+      );
+    }
+    return Response.json({});
+  }
+
+  private transactionStateClear(body: Record<string, unknown>): Response {
+    const txnId = this.b64ToBytes(body.transaction_id as string);
+    const deleted = this.sql
+      .exec(
+        `DELETE FROM transaction_state WHERE transaction_id = ? RETURNING key`,
+        txnId,
+      )
+      .toArray();
     return Response.json({ cleared: deleted.length });
   }
 }
