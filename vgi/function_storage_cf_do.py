@@ -14,14 +14,13 @@ Usage:
 """
 
 import base64
-import contextlib
-import http.client
 import json
 import logging
 import os
 import time
 from typing import Any
-from urllib.parse import urlparse
+
+import httpx
 
 from vgi.function_storage import UnknownInvocationError
 
@@ -48,7 +47,18 @@ class FunctionStorageCfDo:
     Durable Object running SQLite. The DO is single-threaded, so all
     operations are inherently atomic — no locking needed.
 
+    Uses a single ``httpx.Client`` shared across threads. ``httpx.Client`` is
+    thread-safe by design (its connection pool serialises access per-conn),
+    so callers from concurrent producer turns can hit this storage instance
+    without coordination.
+
     """
+
+    # Connection-level retries (DNS / TCP / TLS handshake failures).
+    # Status- and read-level retries are layered on top in ``_post`` so
+    # 5xx responses and mid-response disconnects also recover.
+    _CONNECT_RETRIES = 2
+    _POST_ATTEMPTS = 3
 
     def __init__(self, *, url: str, token: str | None = None) -> None:
         """Initialize Cloudflare DO storage client.
@@ -59,82 +69,107 @@ class FunctionStorageCfDo:
             token: Optional bearer token for authentication.
 
         """
-        parsed = urlparse(url)
-        self._scheme = parsed.scheme
-        self._host = parsed.hostname or ""
-        self._port = parsed.port
-        self._path_prefix = (parsed.path or "").rstrip("/")
+        self._url = url.rstrip("/")
         self._token = token
-        self._conn: http.client.HTTPConnection | None = None
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        self._client = httpx.Client(
+            base_url=self._url,
+            headers=headers,
+            timeout=httpx.Timeout(30.0),
+            limits=httpx.Limits(
+                max_keepalive_connections=20,
+                max_connections=100,
+                keepalive_expiry=30.0,
+            ),
+            transport=httpx.HTTPTransport(retries=self._CONNECT_RETRIES),
+        )
 
-    def _new_connection(self) -> http.client.HTTPConnection:
-        """Create a new HTTP connection."""
-        t0 = time.monotonic()
-        conn: http.client.HTTPConnection
-        if self._scheme == "https":
-            conn = http.client.HTTPSConnection(self._host, self._port, timeout=30)
-        else:
-            conn = http.client.HTTPConnection(self._host, self._port or 80, timeout=30)
-        elapsed_ms = (time.monotonic() - t0) * 1000
-        _logger.debug("connect host=%s elapsed_ms=%.1f", self._host, elapsed_ms)
-        return conn
+    def close(self) -> None:
+        """Close the underlying HTTP client and its connection pool."""
+        self._client.close()
 
-    def _get_conn(self) -> http.client.HTTPConnection:
-        """Return a persistent connection, creating one if needed."""
-        if self._conn is None:
-            self._conn = self._new_connection()
-        return self._conn
+    def __enter__(self) -> "FunctionStorageCfDo":
+        return self
 
-    def _drop_conn(self) -> None:
-        """Close and discard the current connection."""
-        if self._conn is not None:
-            with contextlib.suppress(Exception):
-                self._conn.close()
-            self._conn = None
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+        self.close()
 
     def _post(self, endpoint: str, body: dict[str, object]) -> dict[str, Any]:
-        """POST JSON to the CF Worker, with retry on connection failure.
+        """POST JSON to the CF Worker, with retry on transient failure.
 
-        Returns the parsed JSON response. Raises UnknownInvocationError
-        on 404 with ``error: "unknown_invocation"``.
+        Returns the parsed JSON response. Raises:
+            UnknownInvocationError: on 404 with ``error: "unknown_invocation"``
+            PermissionError: on 401
+            RuntimeError: on other 4xx (non-retryable) and exhausted retries
+                          on 5xx (retryable but failed every time)
         """
-        path = f"{self._path_prefix}/{endpoint}"
-        payload = json.dumps(body).encode()
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
+        path = f"/{endpoint}"
+        last_exc: Exception | None = None
 
-        for attempt in range(2):
+        for attempt in range(self._POST_ATTEMPTS):
             try:
-                conn = self._get_conn()
-                conn.request("POST", path, body=payload, headers=headers)
-                resp = conn.getresponse()
-                resp_body = resp.read()
-                data = json.loads(resp_body)
+                resp = self._client.post(path, json=body)
+            except httpx.HTTPError as exc:
+                # Connection error, read error, timeout, etc. The transport
+                # layer already retried connect-level failures; if we're
+                # here it's something the higher-level retry may still help
+                # with (e.g. server closed an idle keep-alive between our
+                # last response and this request).
+                _logger.debug(
+                    "post %s attempt=%d transport error: %s: %s",
+                    endpoint, attempt, type(exc).__name__, exc,
+                )
+                last_exc = exc
+                continue
 
-                if resp.status == 404 and data.get("error") == "unknown_invocation":
-                    raise UnknownInvocationError(
-                        data.get(
-                            "message", "Invocation is not registered. Call queue_push first to register the invocation."
-                        )
+            try:
+                data: dict[str, Any] = resp.json()
+            except (json.JSONDecodeError, ValueError) as exc:
+                # Non-JSON response (HTML error page, empty body, etc.) —
+                # treat as a transient server problem rather than letting
+                # JSONDecodeError bubble up unhelpfully.
+                _logger.debug(
+                    "post %s attempt=%d non-json status=%d body=%r",
+                    endpoint, attempt, resp.status_code, resp.content[:200],
+                )
+                last_exc = RuntimeError(
+                    f"CF DO storage returned non-JSON response "
+                    f"(status={resp.status_code}): {resp.content[:200]!r}"
+                )
+                continue
+
+            if resp.status_code == 404 and data.get("error") == "unknown_invocation":
+                raise UnknownInvocationError(
+                    data.get(
+                        "message",
+                        "Invocation is not registered. Call queue_push first to register the invocation.",
                     )
-                if resp.status == 401:
-                    raise PermissionError(f"Authentication failed: {data.get('error', 'unauthorized')}")
-                if resp.status >= 400:
-                    raise RuntimeError(f"CF DO storage error {resp.status}: {data}")
-                return data  # type: ignore[no-any-return]
-            except UnknownInvocationError:
-                raise
-            except PermissionError:
-                raise
-            except (http.client.HTTPException, OSError, ConnectionError) as exc:
-                if attempt == 0:
-                    _logger.debug("retry after %s: %s", type(exc).__name__, exc)
-                    self._drop_conn()
-                else:
-                    raise
+                )
+            if resp.status_code == 401:
+                raise PermissionError(
+                    f"Authentication failed: {data.get('error', 'unauthorized')}"
+                )
+            if 500 <= resp.status_code < 600:
+                # Transient server error — retry.
+                _logger.debug(
+                    "post %s attempt=%d server error status=%d data=%r",
+                    endpoint, attempt, resp.status_code, data,
+                )
+                last_exc = RuntimeError(
+                    f"CF DO storage error {resp.status_code}: {data}"
+                )
+                continue
+            if resp.status_code >= 400:
+                # Other 4xx — don't retry, the request itself is bad.
+                raise RuntimeError(
+                    f"CF DO storage error {resp.status_code}: {data}"
+                )
+            return data
 
-        raise RuntimeError("unreachable")  # pragma: no cover
+        assert last_exc is not None
+        raise last_exc
 
     # --- Worker State ---
 

@@ -1592,6 +1592,7 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "duckdb" },
+    { name = "httpx" },
     { name = "platformdirs" },
     { name = "pyarrow" },
     { name = "typer" },
@@ -1653,6 +1654,7 @@ requires-dist = [
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.16.0" },
     { name = "click" },
     { name = "duckdb", specifier = ">=1.5.0" },
+    { name = "httpx", specifier = ">=0.24" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "numpy", marker = "extra == 'test-fixtures'", specifier = ">=2.4.1" },
     { name = "platformdirs" },
