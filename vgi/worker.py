@@ -894,6 +894,15 @@ class Worker:
                 "--idle-timeout",
                 help="Self-shutdown after N seconds idle when serving --unix.",
             ),
+            http_threads: int | None = typer.Option(  # noqa: B008
+                None,
+                "--http-threads",
+                help=(
+                    "waitress worker thread count (only when --http). Default None "
+                    "uses waitress's default (4). Raise this when many concurrent "
+                    "process() ticks would otherwise queue on the WSGI threadpool."
+                ),
+            ),
         ) -> None:
             env_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
             effective_debug = debug or env_debug
@@ -930,6 +939,7 @@ class Worker:
                     oauth_resource_metadata=oauth_metadata,
                     otel_config=otel_config,
                     port_file=port_file,
+                    http_threads=http_threads,
                 )
             elif unix is not None:
                 # AF_UNIX launcher path.  Bind to the requested socket,
@@ -1004,6 +1014,16 @@ class Worker:
             log_format: LogFormat = typer.Option(  # noqa: B008
                 LogFormat.text, "--log-format", help="Stderr log format"
             ),
+            http_threads: int | None = typer.Option(  # noqa: B008
+                None,
+                "--http-threads",
+                help=(
+                    "waitress worker thread count. Default None uses waitress's "
+                    "default (4). Raise this when many concurrent process() ticks "
+                    "would otherwise queue on the WSGI threadpool — typical sign "
+                    "is 'Task queue depth is N' messages from waitress."
+                ),
+            ),
         ) -> None:
             env_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
             effective_debug = debug or env_debug
@@ -1035,6 +1055,7 @@ class Worker:
                 authenticate=authenticate,
                 oauth_resource_metadata=oauth_metadata,
                 otel_config=otel_config,
+                http_threads=http_threads,
             )
 
         app()
@@ -1053,6 +1074,7 @@ class Worker:
         oauth_resource_metadata: Any = None,
         otel_config: Any = None,
         port_file: str | None = None,
+        http_threads: int | None = None,
     ) -> None:
         """Start the worker as an HTTP server (shared by ``main`` and ``main_http``)."""
         import socket
@@ -1111,7 +1133,22 @@ class Worker:
         # syscall path that's been around since the 1970s, but waitress
         # has supported the poll backend since its initial release and
         # it's how every other production-grade WSGI server runs.
-        waitress.serve(wsgi_app, host=host, port=port, _quiet=True, asyncore_use_poll=True)
+        # ``threads=N`` controls waitress's worker pool. Default is 4, which
+        # under-serves any caller that issues more concurrent HTTP requests
+        # than that — for kafka_consume with ``SET threads=8`` plus setup/
+        # teardown overlap, half the parallelism queues on the WSGI pool.
+        # Symptom: waitress logs ``Task queue depth is N`` at INFO when the
+        # accept queue grows past 0. Pass ``--http-threads`` to size for
+        # the workload's expected concurrency.
+        serve_kwargs: dict[str, Any] = {
+            "host": host,
+            "port": port,
+            "_quiet": True,
+            "asyncore_use_poll": True,
+        }
+        if http_threads is not None:
+            serve_kwargs["threads"] = http_threads
+        waitress.serve(wsgi_app, **serve_kwargs)
 
     @staticmethod
     def _match_function_arguments(
