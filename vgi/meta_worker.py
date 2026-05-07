@@ -392,8 +392,16 @@ class MetaWorker:
 
     @classmethod
     def serve(cls, *worker_classes: type[Worker]) -> None:
-        """Instantiate workers and serve via vgi_rpc on stdin/stdout."""
+        """Instantiate workers and serve via vgi_rpc.
+
+        Defaults to stdin/stdout for the subprocess transport; passes
+        argv through to ``run_server()`` so the worker also participates
+        in the AF_UNIX launcher path when launched with
+        ``--unix PATH --idle-timeout SEC`` (the vgi C++ extension uses
+        this to share warm workers across DuckDB processes).
+        """
         from vgi.protocol import VgiProtocol
+        from vgi_rpc.rpc import run_server
 
         # Log startup (some tests check that stderr has output)
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -401,8 +409,7 @@ class MetaWorker:
 
         workers = [wc() for wc in worker_classes]
         meta = cls(workers)
-        server = RpcServer(VgiProtocol, meta)
-        serve_stdio(server)
+        run_server(VgiProtocol, meta)
 
 
 # Register all attach_id-based delegate methods on MetaWorker

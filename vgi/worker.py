@@ -880,6 +880,20 @@ class Worker:
                     "without parsing stdout."
                 ),
             ),
+            # AF_UNIX launcher contract — mutually exclusive with --http.
+            # When --unix PATH is passed, the worker binds an AF_UNIX
+            # socket, prints UNIX:<abs-path> to stdout, and self-shuts-down
+            # after --idle-timeout seconds with zero connected clients.
+            unix: str | None = typer.Option(
+                None,
+                "--unix",
+                help="Bind to this AF_UNIX socket path instead of stdin/stdout (mutex with --http).",
+            ),
+            idle_timeout: float = typer.Option(
+                300.0,
+                "--idle-timeout",
+                help="Self-shutdown after N seconds idle when serving --unix.",
+            ),
         ) -> None:
             env_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
             effective_debug = debug or env_debug
@@ -889,6 +903,9 @@ class Worker:
                 log_loggers=log_logger,
                 log_format=log_format,
             )
+
+            if http and unix is not None:
+                raise typer.BadParameter("--http and --unix are mutually exclusive")
 
             if http:
                 from vgi.serve import (
@@ -913,6 +930,35 @@ class Worker:
                     oauth_resource_metadata=oauth_metadata,
                     otel_config=otel_config,
                     port_file=port_file,
+                )
+            elif unix is not None:
+                # AF_UNIX launcher path.  Bind to the requested socket,
+                # print UNIX:<abs_path> on stdout, idle-shutdown after
+                # idle_timeout seconds.
+                from vgi.serve import _maybe_init_sentry, _resolve_otel_config
+                from vgi_rpc.rpc import serve_unix
+
+                _maybe_init_sentry()
+                otel_config = _resolve_otel_config()
+                worker = cls(quiet=quiet, log_level=effective_level)
+                server = RpcServer(VgiProtocol, worker, server_version=_get_vgi_version())
+                if otel_config is not None:
+                    from vgi_rpc.otel import instrument_server
+
+                    instrument_server(server, otel_config)
+                    worker._vgi_tracer = VgiTracer.create(otel_config)
+                abs_path = os.path.abspath(unix)
+                effective_idle = idle_timeout if idle_timeout > 0 else None
+
+                def _emit(bound: str) -> None:
+                    print(f"UNIX:{bound}", flush=True)
+
+                serve_unix(
+                    server,
+                    abs_path,
+                    threaded=True,
+                    idle_timeout=effective_idle,
+                    on_bound=_emit,
                 )
             else:
                 from vgi.serve import _maybe_init_sentry, _resolve_otel_config
