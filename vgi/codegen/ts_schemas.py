@@ -1,9 +1,14 @@
-"""Emit arrow-js Schema literals for the VGI TypeScript worker.
+"""Emit facade-style Schema literals for the VGI TypeScript worker.
 
 Sister module to `vgi.codegen.cpp_schemas`. Same inputs (Protocol walk +
 explicit info-type list), different rendering — emits human-readable
-TypeScript that `import`s from `@query-farm/apache-arrow` and exports one
-`Schema` constant per unique dataclass or per-method.
+TypeScript that imports from the vgi-typescript Arrow facade
+(`../arrow/index.js`) and exports one `VgiSchema` constant per unique
+dataclass or per-method.
+
+The facade re-exports either arrow-js or flechette per build target, so
+the generated file is backend-agnostic — the same source compiles for the
+Bun subprocess worker AND the Cloudflare Workers HTTP entrypoint.
 
 ### Multirepo workflow
 
@@ -20,13 +25,13 @@ TypeScript that `import`s from `@query-farm/apache-arrow` and exports one
 `tests/test_generated_ts_schemas.py` in vgi-python enforces that the
 checked-in `.ts` matches what the generator would emit right now.
 
-### Arrow-JS quirks
+### Facade quirks
 
-- `new Dictionary(valueType, indexType, ordered, ...)` — value first, opposite
+- `dictionary(valueType, indexType, ordered?, id?)` — value first, opposite
   of pyarrow's `pa.dictionary(index_type, value_type)`. Emitter flips.
-- `new Map_(new Field("entries", new Struct([key, value]), false), keysSorted)`
-  — structural form; arrow-js doesn't expose a convenience overload.
-- `new Field(name, type, nullable, metadata?)` — 3rd positional is nullable.
+- `map(keyField, valueField, keysSorted)` — flat signature; the facade
+  builds the Struct{key,value} entries Field internally.
+- `field(name, type, nullable, metadata?)` — 3rd positional is nullable.
 """
 
 from __future__ import annotations
@@ -49,27 +54,28 @@ if TYPE_CHECKING:
 
 
 # --------------------------------------------------------------------------- #
-# Type emitter: pyarrow DataType -> TS expression (new Utf8() / new Field(...))
+# Type emitter: pyarrow DataType -> facade factory call (utf8() / field(...))
 # --------------------------------------------------------------------------- #
 
-_SCALAR_MAP: dict[Any, str] = {
-    pa.null(): "new Null()",
-    pa.bool_(): "new Bool()",
-    pa.int8(): "new Int8()",
-    pa.int16(): "new Int16()",
-    pa.int32(): "new Int32()",
-    pa.int64(): "new Int64()",
-    pa.uint8(): "new Uint8()",
-    pa.uint16(): "new Uint16()",
-    pa.uint32(): "new Uint32()",
-    pa.uint64(): "new Uint64()",
-    pa.float32(): "new Float32()",
-    pa.float64(): "new Float64()",
-    pa.string(): "new Utf8()",
-    pa.binary(): "new Binary()",
+# pyarrow proto -> (factory expression, facade symbol to import)
+_SCALAR_MAP: dict[Any, tuple[str, str]] = {
+    pa.null(): ("nullType()", "nullType"),
+    pa.bool_(): ("bool()", "bool"),
+    pa.int8(): ("int8()", "int8"),
+    pa.int16(): ("int16()", "int16"),
+    pa.int32(): ("int32()", "int32"),
+    pa.int64(): ("int64()", "int64"),
+    pa.uint8(): ("uint8()", "uint8"),
+    pa.uint16(): ("uint16()", "uint16"),
+    pa.uint32(): ("uint32()", "uint32"),
+    pa.uint64(): ("uint64()", "uint64"),
+    pa.float32(): ("float32()", "float32"),
+    pa.float64(): ("float64()", "float64"),
+    pa.string(): ("utf8()", "utf8"),
+    pa.binary(): ("binary()", "binary"),
 }
 
-# Track which arrow-js symbols the emitter used, so the output's import
+# Track which facade symbols the emitter used, so the output's import
 # statement only pulls in what's actually referenced.
 _IMPORTS_IN_USE: set[str] = set()
 
@@ -78,37 +84,19 @@ def _use(name: str) -> None:
     _IMPORTS_IN_USE.add(name)
 
 
-_SCALAR_IMPORT: dict[str, str] = {
-    "new Null()": "Null",
-    "new Bool()": "Bool",
-    "new Int8()": "Int8",
-    "new Int16()": "Int16",
-    "new Int32()": "Int32",
-    "new Int64()": "Int64",
-    "new Uint8()": "Uint8",
-    "new Uint16()": "Uint16",
-    "new Uint32()": "Uint32",
-    "new Uint64()": "Uint64",
-    "new Float32()": "Float32",
-    "new Float64()": "Float64",
-    "new Utf8()": "Utf8",
-    "new Binary()": "Binary",
-}
-
-
 def _emit_type(dtype: pa.DataType, *, origin: str) -> str:
-    for proto, expr in _SCALAR_MAP.items():
+    for proto, (expr, sym) in _SCALAR_MAP.items():
         if dtype.equals(proto):
-            _use(_SCALAR_IMPORT[expr])
+            _use(sym)
             return expr
 
     if pa.types.is_list(dtype):
-        _use("List")
-        _use("Field")
+        _use("list")
+        _use("field")
         value_field = dtype.value_field
         inner_type = _emit_type(value_field.type, origin=f"{origin}[list item]")
         nullable = "true" if value_field.nullable else "false"
-        return f'new List(new Field("{value_field.name}", {inner_type}, {nullable}))'
+        return f'list(field("{value_field.name}", {inner_type}, {nullable}))'
 
     if pa.types.is_map(dtype):
         key_field = dtype.key_field
@@ -126,40 +114,34 @@ def _emit_type(dtype: pa.DataType, *, origin: str) -> str:
                 f"item='{item_field.name}' nullable={item_field.nullable}). "
                 "Add explicit MapType construction to ts_schemas._emit_type() if needed.",
             )
-        _use("Map_")
-        _use("Field")
-        _use("Struct")
+        _use("map")
+        _use("field")
         key_type = _emit_type(dtype.key_type, origin=f"{origin}[map key]")
         item_type = _emit_type(dtype.item_type, origin=f"{origin}[map value]")
         # pyarrow's pa.map_ defaults keys_sorted=False.
-        keys_sorted = "false"
-        # Cast children to `any` to bypass arrow-js's Field<T> generic
-        # inference, matching the pattern already used in dispatch.ts:354-357.
         return (
-            'new Map_(new Field("entries", new Struct([\n'
-            f'      new Field("key", {key_type} as any, false),\n'
-            f'      new Field("value", {item_type} as any, true),\n'
-            f"    ] as any), false), {keys_sorted})"
+            f'map(field("key", {key_type}, false), '
+            f'field("value", {item_type}, true), false)'
         )
 
     if pa.types.is_dictionary(dtype):
-        _use("Dictionary")
+        _use("dictionary")
         value_type = _emit_type(dtype.value_type, origin=f"{origin}[dict value]")
         index_type = _emit_type(dtype.index_type, origin=f"{origin}[dict index]")
-        # arrow-js: `new Dictionary(valueType, indexType, id?, isOrdered?)`.
-        # Value comes first — opposite of pyarrow's (index, value). Omit `id` so
-        # arrow-js auto-assigns; pass `null` positional when `ordered` is true.
+        # facade: `dictionary(valueType, indexType, ordered?, id?)`.
+        # Value comes first — opposite of pyarrow's (index, value).
         if dtype.ordered:
-            return f"new Dictionary({value_type}, {index_type}, null, true)"
-        return f"new Dictionary({value_type}, {index_type})"
+            return f"dictionary({value_type}, {index_type}, true)"
+        return f"dictionary({value_type}, {index_type})"
 
     if pa.types.is_struct(dtype):
-        _use("Struct")
-        _use("Field")
+        _use("struct")
+        _use("field")
         child_exprs = [
-            _emit_field(dtype.field(i), origin=f"{origin}[struct child {i}]") for i in range(dtype.num_fields)
+            _emit_field(dtype.field(i), origin=f"{origin}[struct child {i}]")
+            for i in range(dtype.num_fields)
         ]
-        return "new Struct([" + ", ".join(child_exprs) + "])"
+        return "struct([" + ", ".join(child_exprs) + "])"
 
     raise GeneratorError(
         f"vgi.codegen.ts_schemas: unsupported Arrow type {type(dtype).__name__!r} at {origin} "
@@ -173,17 +155,17 @@ def _uses_default_map_field_name(dtype: pa.MapType[Any, Any, Any]) -> bool:
     return canonical.equals(dtype)
 
 
-def _emit_field(field: pa.Field[Any], *, origin: str) -> str:
-    _use("Field")
-    type_expr = _emit_type(field.type, origin=f"{origin}[{field.name}]")
-    nullable = "true" if field.nullable else "false"
-    return f'new Field("{field.name}", {type_expr}, {nullable})'
+def _emit_field(field_obj: pa.Field[Any], *, origin: str) -> str:
+    _use("field")
+    type_expr = _emit_type(field_obj.type, origin=f"{origin}[{field_obj.name}]")
+    nullable = "true" if field_obj.nullable else "false"
+    return f'field("{field_obj.name}", {type_expr}, {nullable})'
 
 
 def _emit_const(es: EmittedSchema) -> str:
-    _use("Schema")
+    _use("schema")
     body = f"// Origin: {es.origin}\n"
-    body += f"export const {es.name}Schema = new Schema("
+    body += f"export const {es.name}Schema = schema("
     if len(es.schema) == 0:
         body += "[]);\n"
     else:
@@ -194,25 +176,28 @@ def _emit_const(es: EmittedSchema) -> str:
     return body
 
 
-GENERATOR_VERSION = "1"
+# Bumped to v2 to mark the arrow-js -> facade transition. The generated
+# file's `Generator: vgi-gen-ts-schemas v2` header lets the conformance test
+# detect stale checkouts that need a regen.
+GENERATOR_VERSION = "2"
 
 
 def emit(out: TextIO) -> None:
     """Emit the generated TypeScript schemas module to *out*."""
     schemas = collect_schemas()
 
-    # Render all schemas FIRST to capture which arrow-js symbols were used.
+    # Render all schemas FIRST to capture which facade symbols were used.
     _IMPORTS_IN_USE.clear()
     body_blocks = [_emit_const(es) for es in schemas]
-    # Schema is always used in the import because every factory returns one.
-    _use("Schema")
+    # `schema` is always used in the import because every factory returns one.
+    _use("schema")
     imports = sorted(_IMPORTS_IN_USE)
 
     body = io.StringIO()
     body.write("import {\n")
     for sym in imports:
         body.write(f"  {sym},\n")
-    body.write('} from "@query-farm/apache-arrow";\n\n')
+    body.write('} from "../arrow/index.js";\n\n')
 
     for block in body_blocks:
         body.write(block)
