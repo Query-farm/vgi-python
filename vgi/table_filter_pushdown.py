@@ -53,6 +53,50 @@ def _log_debug(event: str, **kwargs: Any) -> None:
 _SUPPORTED_VERSION = "1"
 
 
+def _strip_extension(x: Any) -> Any:
+    """Unwrap a canonical Arrow extension wrapper, returning the storage form.
+
+    Filter literals serialised by the DuckDB VGI extension carry their
+    canonical Arrow extension type (e.g. ``arrow.bool8`` for BOOLEAN, see
+    ``vgi/duckdb/src/common/arrow/arrow_type_extension.cpp``). PyArrow's
+    binary compute kernels are type-pair-keyed and have no entry for
+    ``equal(bool, extension<arrow.bool8>)`` — so we must strip the wrapper
+    before comparing. Pass the result of this helper to ``pc.equal`` and
+    friends.
+
+    For Arrays / ChunkedArrays, returns the ``.storage`` array. For
+    Scalars, returns the ``.value`` storage scalar. Plain (non-extension)
+    inputs are returned unchanged.
+
+    Note: the type-check uses ``pa.BaseExtensionType`` rather than
+    ``pa.ExtensionType`` because canonical Arrow extension types like
+    ``Bool8Type`` and ``UuidType`` inherit from ``BaseExtensionType``
+    directly without going through the user-extension class.
+    """
+    if isinstance(x.type, pa.BaseExtensionType):
+        if isinstance(x, (pa.Array, pa.ChunkedArray)):
+            return x.storage
+        return x.value
+    return x
+
+
+def _normalize_for_compare(col: Any, val: Any) -> tuple[Any, Any]:
+    """Bring a (column, scalar) pair into a shape pyarrow.compute can compare.
+
+    Two transforms in order:
+      1. Strip canonical Arrow extension wrappers from both sides.
+      2. If the resulting types still differ (e.g. column is plain
+         ``bool_`` while the literal came over the wire as
+         ``arrow.bool8`` and stripped to ``int8``), cast the literal to
+         the column's type so the kernel resolves.
+    """
+    col = _strip_extension(col)
+    val = _strip_extension(val)
+    if val.type != col.type:
+        val = val.cast(col.type)
+    return col, val
+
+
 def _make_bool_array(value: bool, length: int) -> pa.BooleanArray:
     """Create a boolean array of constant value.
 
@@ -213,20 +257,20 @@ class ConstantFilter(Filter):
 
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
         """Evaluate comparison against batch column."""
-        col = batch.column(self.column_index)
+        col, val = _normalize_for_compare(batch.column(self.column_index), self.value)
         match self.op:
             case ComparisonOp.EQ:
-                return pc.equal(col, self.value)
+                return pc.equal(col, val)
             case ComparisonOp.NE:
-                return pc.not_equal(col, self.value)
+                return pc.not_equal(col, val)
             case ComparisonOp.GT:
-                return pc.greater(col, self.value)
+                return pc.greater(col, val)
             case ComparisonOp.GE:
-                return pc.greater_equal(col, self.value)
+                return pc.greater_equal(col, val)
             case ComparisonOp.LT:
-                return pc.less(col, self.value)
+                return pc.less(col, val)
             case ComparisonOp.LE:
-                return pc.less_equal(col, self.value)
+                return pc.less_equal(col, val)
             case _:
                 raise ValueError(f"Unknown comparison operator: {self.op}")
 
@@ -272,8 +316,8 @@ class InFilter(Filter):
 
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
         """Evaluate IN membership against batch column."""
-        col = batch.column(self.column_index)
-        return pc.is_in(col, self.values)
+        col, vals = _normalize_for_compare(batch.column(self.column_index), self.values)
+        return pc.is_in(col, vals)
 
     def __repr__(self) -> str:
         """Return string representation for debugging."""
