@@ -314,6 +314,27 @@ class FunctionStorageAzureSql:
 
         return self._execute_with_retry(_do)
 
+    # --- Scan Worker State ---
+
+    def scan_worker_put(self, execution_id: bytes, stream_id: bytes, state: bytes) -> None:
+        """Store per-(execution_id, stream_id) state.
+
+        Not yet implemented for Azure SQL — raises so callers can detect
+        the missing capability rather than silently dropping diagnostic
+        rows. Add the ``scan_worker_state`` table to the Azure schema
+        and an INSERT/UPSERT body here when this backend is brought back
+        into the matrix.
+        """
+        raise NotImplementedError(
+            "scan_worker_state is not yet implemented for the Azure SQL backend."
+        )
+
+    def scan_worker_scan(self, execution_id: bytes) -> list[tuple[bytes, bytes]]:
+        """Non-destructive read of (stream_id, state_data) for execution_id."""
+        raise NotImplementedError(
+            "scan_worker_state is not yet implemented for the Azure SQL backend."
+        )
+
     # --- Work Queue ---
 
     def queue_push(self, execution_id: bytes, items: list[bytes]) -> int:

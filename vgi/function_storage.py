@@ -39,6 +39,40 @@ class UnknownInvocationError(Exception):
     """
 
 
+def _scan_worker_stream_id() -> bytes:
+    """Return raw stream-id bytes for the current scan worker.
+
+    HTTP transport: pulls the per-stream UUID from
+    ``vgi_rpc.rpc._common._current_stream_id`` and returns its raw 16-byte
+    form. The framework sets this once per ``_serve_stream`` call and
+    preserves it across HTTP turns via the state token, so every tick of
+    one scan worker yields the same bytes regardless of which machine
+    or thread serves it.
+
+    Stdio transport / any non-stream path: returns
+    ``struct.pack("<Q", os.getpid())`` so we still have a stable
+    per-pid identifier and the storage row doesn't collide. Distinct
+    pids → distinct keys; same pid across queries → overwrite (same
+    semantics as the old per-pid ``BoundStorage.put``).
+    """
+    import struct
+    try:
+        from vgi_rpc.rpc._common import _current_stream_id
+    except ImportError:
+        return struct.pack("<Q", os.getpid())
+    sid = _current_stream_id.get()
+    if not sid:
+        return struct.pack("<Q", os.getpid())
+    # Stream ids are hex-encoded 128-bit UUIDs. Decode to the canonical
+    # 16-byte form so the storage column doesn't carry the encoding tax.
+    try:
+        return bytes.fromhex(sid)
+    except ValueError:
+        # Defensively fall back to UTF-8 bytes — preserves uniqueness
+        # even if a future framework version uses a non-hex stream id.
+        return sid.encode("utf-8")
+
+
 def _get_default_db_path() -> str:
     """Return the default SQLite database path for VGI storage."""
     from pathlib import Path
@@ -115,6 +149,49 @@ class FunctionStorage(Protocol):
 
         Returns:
             List of ``(worker_id, state_bytes)`` pairs. Order is
+            implementation-defined.
+
+        """
+        ...
+
+    # --- Scan Worker State (per-stream-id, distinct from worker_state) ---
+    #
+    # ``worker_state`` above is keyed by ``os.getpid()`` and conflates threads
+    # in one process — under HTTP transport (waitress thread pool) every scan
+    # worker landing in the same Python process collides on a single row.
+    # ``scan_worker_state`` keys by the framework's per-scan-worker UUID
+    # (``vgi_rpc.rpc._common._current_stream_id``), giving each scan worker
+    # its own row regardless of pid/thread/machine.
+
+    def scan_worker_put(self, execution_id: bytes, stream_id: bytes, state: bytes) -> None:
+        """Store per-scan-worker state for an execution.
+
+        Replaces any prior state for the same ``(execution_id, stream_id)``
+        pair — successive ticks of one scan worker overwrite each other.
+
+        Args:
+            execution_id: Unique identifier for the function invocation.
+            stream_id: The framework's per-scan-worker stream UUID
+                (raw bytes; typically the 16-byte form of the hex
+                ``_current_stream_id`` ContextVar).
+            state: Serialized state bytes.
+
+        """
+        ...
+
+    def scan_worker_scan(self, execution_id: bytes) -> list[tuple[bytes, bytes]]:
+        """Non-destructive read of all per-scan-worker states for an execution.
+
+        The intended consumer is the table-function ``dynamic_to_string``
+        hook. Each scan worker writes one row keyed by its stream_id;
+        ``dynamic_to_string`` reads all of them to build the EXPLAIN ANALYZE
+        Extra Info block.
+
+        Args:
+            execution_id: Unique identifier for the function invocation.
+
+        Returns:
+            List of ``(stream_id, state_bytes)`` pairs. Order is
             implementation-defined.
 
         """
@@ -367,6 +444,25 @@ class BoundStorage:
         """Non-destructive read of (worker_id, state) pairs for this execution."""
         return self._base.worker_scan(self._execution_id)
 
+    # --- Scan Worker State (per-stream-id) ---
+
+    def scan_worker_put(self, state: bytes) -> None:
+        """Store state for the current scan worker.
+
+        Keyed by the framework's per-stream UUID (``_current_stream_id``
+        ContextVar) so each scan worker has its own row regardless of
+        pid/thread/machine — distinct from ``put()`` which conflates
+        multiple threads in one Python process. Falls back to a
+        pid-derived key when no stream is active (stdio transport, or
+        any code path called outside an HTTP scan request).
+        """
+        sid = _scan_worker_stream_id()
+        self._base.scan_worker_put(self._execution_id, sid, state)
+
+    def scan_worker_scan(self) -> list[tuple[bytes, bytes]]:
+        """Non-destructive read of (stream_id, state) pairs for this execution."""
+        return self._base.scan_worker_scan(self._execution_id)
+
     def queue_push(self, items: list[bytes]) -> int:
         """Add work items to the queue and register the invocation."""
         return self._base.queue_push(self._execution_id, items)
@@ -607,6 +703,19 @@ class FunctionStorageSqlite:
                     PRIMARY KEY (transaction_id, key)
                 )
             """)
+            # Scan worker state - per-(execution_id, stream_id) storage for
+            # diagnostic blobs that must be scoped to the exact scan worker
+            # that produced them. Distinct from worker_state above (which is
+            # keyed by os.getpid() and conflates threads of one process).
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS scan_worker_state (
+                    execution_id BLOB NOT NULL,
+                    stream_id BLOB NOT NULL,
+                    state_data BLOB NOT NULL,
+                    created_at REAL DEFAULT (julianday('now')),
+                    PRIMARY KEY (execution_id, stream_id)
+                )
+            """)
             # Aggregate window partitions - per-partition cached input for windowed aggregates
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS aggregate_window_partitions (
@@ -667,6 +776,34 @@ class FunctionStorageSqlite:
             (execution_id,),
         )
         return [(int(row[0]), row[1]) for row in cursor.fetchall()]
+
+    # --- Scan Worker State ---
+
+    def scan_worker_put(self, execution_id: bytes, stream_id: bytes, state: bytes) -> None:
+        """Store per-(execution_id, stream_id) state."""
+        conn = self._conn()
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO scan_worker_state
+            (execution_id, stream_id, state_data, created_at)
+            VALUES (?, ?, ?, julianday('now'))
+            """,
+            (execution_id, stream_id, state),
+        )
+        conn.commit()
+
+    def scan_worker_scan(self, execution_id: bytes) -> list[tuple[bytes, bytes]]:
+        """Non-destructive read of (stream_id, state_data) for execution_id."""
+        conn = self._conn()
+        cursor = conn.execute(
+            """
+            SELECT stream_id, state_data
+            FROM scan_worker_state
+            WHERE execution_id = ?
+            """,
+            (execution_id,),
+        )
+        return [(row[0], row[1]) for row in cursor.fetchall()]
 
     # --- Work Queue ---
 
@@ -952,6 +1089,13 @@ class FunctionStorageSqlite:
             """,
             (max_age_days,),
         )
+        cursor8 = conn.execute(
+            """
+            DELETE FROM scan_worker_state
+            WHERE julianday('now') - created_at > ?
+            """,
+            (max_age_days,),
+        )
         conn.commit()
         return (
             int(cursor1.rowcount)
@@ -961,4 +1105,5 @@ class FunctionStorageSqlite:
             + int(cursor5.rowcount)
             + int(cursor6.rowcount)
             + int(cursor7.rowcount)
+            + int(cursor8.rowcount)
         )

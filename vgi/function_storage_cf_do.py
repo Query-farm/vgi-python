@@ -228,6 +228,48 @@ class FunctionStorageCfDo:
         )
         return rows
 
+    # --- Scan Worker State ---
+
+    def scan_worker_put(self, execution_id: bytes, stream_id: bytes, state: bytes) -> None:
+        """Store per-(execution_id, stream_id) state."""
+        t0 = time.monotonic()
+        self._post(
+            "scan_worker_put",
+            {
+                "execution_id": base64.b64encode(execution_id).decode(),
+                "stream_id": base64.b64encode(stream_id).decode(),
+                "state": base64.b64encode(state).decode(),
+            },
+        )
+        _logger.debug(
+            "scan_worker_put eid=%s stream=%s state_bytes=%d elapsed_ms=%.1f",
+            execution_id.hex()[:8],
+            stream_id.hex()[:8],
+            len(state),
+            (time.monotonic() - t0) * 1000,
+        )
+
+    def scan_worker_scan(self, execution_id: bytes) -> list[tuple[bytes, bytes]]:
+        """Non-destructive read of (stream_id, state) pairs for execution_id."""
+        t0 = time.monotonic()
+        data = self._post(
+            "scan_worker_scan",
+            {
+                "execution_id": base64.b64encode(execution_id).decode(),
+            },
+        )
+        rows = [
+            (base64.b64decode(r["stream_id"]), base64.b64decode(r["state"]))
+            for r in data["rows"]
+        ]
+        _logger.debug(
+            "scan_worker_scan eid=%s rows=%d elapsed_ms=%.1f",
+            execution_id.hex()[:8],
+            len(rows),
+            (time.monotonic() - t0) * 1000,
+        )
+        return rows
+
     # --- Work Queue ---
 
     def queue_push(self, execution_id: bytes, items: list[bytes]) -> int:
