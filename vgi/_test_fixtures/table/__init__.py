@@ -48,6 +48,11 @@ from vgi._test_fixtures.table.misc import (
     ProjectedDataFunction,
     SampleEchoFunction,
 )
+from vgi._test_fixtures.table.order_modes import (
+    PartitionedFixedOrderFunction,
+    PartitionedNoOrderGuaranteeFunction,
+    PartitionedPreservesOrderFunction,
+)
 from vgi._test_fixtures.table.pairs import (
     ConstantColumnsFunction,
     MakePairsIntFunction,
@@ -116,6 +121,9 @@ __all__ = [
     "NamedParamsEchoFunction",
     "NestedSequenceFunction",
     "OrderEchoFunction",
+    "PartitionedFixedOrderFunction",
+    "PartitionedNoOrderGuaranteeFunction",
+    "PartitionedPreservesOrderFunction",
     "PartitionedSequenceFunction",
     "ProductsScanFunction",
     "ProfilingDemoFunction",

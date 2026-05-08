@@ -135,14 +135,26 @@ class NullHandling(Enum):
 class OrderPreservation(Enum):
     """Row order preservation behavior.
 
-    Maps to DuckDB's OrderPreservationType enum.
+    Maps to DuckDB's ``OrderPreservationType`` enum:
+
+    * ``PRESERVES_ORDER`` → ``OrderPreservationType::INSERTION_ORDER``
+      (DuckDB default — operator maintains child operator order).
+    * ``NO_ORDER_GUARANTEE`` → ``OrderPreservationType::NO_ORDER``
+      (operator may freely reorder its input/output).
+    * ``FIXED_ORDER`` → ``OrderPreservationType::FIXED_ORDER``
+      (operator outputs rows in a fixed, mandatory order — DuckDB
+      serializes the pipeline so a single worker produces all rows).
     """
 
     PRESERVES_ORDER = auto()
-    """Output rows are in same order as input rows."""
+    """Output rows are in same order as input rows (DuckDB INSERTION_ORDER)."""
 
     NO_ORDER_GUARANTEE = auto()
-    """Output order is undefined (may be reordered)."""
+    """Output order is undefined; may be reordered (DuckDB NO_ORDER)."""
+
+    FIXED_ORDER = auto()
+    """Output is in a fixed mandatory order; DuckDB serializes the pipeline
+    (single worker) to preserve it (DuckDB FIXED_ORDER)."""
 
 
 class OrderDependence(Enum):
