@@ -80,7 +80,7 @@ def resolve_version(at_unit: str | None, at_value: str | None) -> int:
 class VersionedDataFunctionArgs:
     """Arguments for VersionedDataFunction."""
 
-    version: Annotated[int, Arg(0, doc="Data version to return", default=_CURRENT_VERSION)]
+    version: Annotated[int, Arg(0, doc="Data version to return")]
 
 
 @dataclass(kw_only=True)
@@ -183,7 +183,7 @@ def resolve_versioned_constraints_version(at_unit: str | None, at_value: str | N
 class _VersionedConstraintsArgs:
     """Arguments for VersionedConstraintsScanFunction."""
 
-    version: Annotated[int, Arg(0, doc="Data version", default=_VERSIONED_CONSTRAINTS_CURRENT)]
+    version: Annotated[int, Arg(0, doc="Data version")]
 
 
 @init_single_worker

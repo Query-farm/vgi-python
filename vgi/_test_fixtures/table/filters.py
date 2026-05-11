@@ -72,7 +72,7 @@ def _format_pushed_filters(filters: PushdownFilters | None) -> str:
 class FilterEchoFunctionArgs:
     """Arguments for FilterEchoFunction."""
 
-    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0, default=10)]
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
     batch_size: Annotated[int, Arg("batch_size", default=2048, doc="Batch size for output", ge=1)]
 
 

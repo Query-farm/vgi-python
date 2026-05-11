@@ -533,7 +533,7 @@ class TestExtractArgumentSpecsValidation:
 
         class FunctionWithAnnotated(TableInOutFunction):  # type: ignore[type-arg]
             count: Annotated[int, Arg(0, doc="Count")]
-            name: Annotated[str, Arg(1, default="default")]
+            name: Annotated[str, Arg("name", default="default")]
 
         specs = extract_argument_specs(FunctionWithAnnotated)
 

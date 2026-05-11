@@ -792,6 +792,17 @@ class _ArgFactory:
             if default is not _MISSING:
                 raise ValueError("varargs=True cannot have a default value (requires at least 1 value)")
 
+        # Positional args cannot have defaults — DuckDB's binder always
+        # requires the positional argument, so the default would never fire.
+        # To make an argument optional, use a named argument (string position).
+        if isinstance(position, int) and default is not _MISSING:
+            raise ValueError(
+                f"Arg(position={position}, default=...): positional arguments cannot "
+                f"have a default value. DuckDB's binder always requires the positional "
+                f"argument, so the default would never fire. To make this argument "
+                f"optional, use a named argument: Arg(\"{{name}}\", default=...)."
+            )
+
         # Warn if type_bound is used with non-AnyArrow type
         # Check both _type_param (legacy API) and is_any (new Param API)
         if type_bound is not None and self._type_param is not AnyArrow and not is_any:
@@ -906,8 +917,12 @@ class Arg[ArgT]:
         """Initialize an Arg descriptor with optional validation.
 
         Args:
-            position: Positional index (int) or named key (str).
-            default: Default value if argument not provided. Omit for required.
+            position: Positional index (int) or named key (str). Positional
+                arguments are always required (DuckDB's binder always supplies
+                them); to make an argument optional, pass a string key instead.
+            default: Default value if argument not provided. Only valid for
+                named (string-position) arguments — passing a default with an
+                integer position raises ValueError. Omit for required.
             doc: Documentation string for this argument.
             ge: Minimum value (inclusive). Value must be >= this.
             le: Maximum value (inclusive). Value must be <= this.
@@ -930,7 +945,9 @@ class Arg[ArgT]:
                 Used for tracking when AnyArrow was specified in the type hint.
 
         Raises:
-            ValueError: If conflicting constraints are specified (e.g., ge and gt).
+            ValueError: If conflicting constraints are specified (e.g., ge and gt),
+                or if a default value is supplied with an integer (positional)
+                position.
 
         """
         # Validate constraint combinations
@@ -945,6 +962,18 @@ class Arg[ArgT]:
                 raise ValueError("varargs=True requires a positional argument (int), not named")
             if default is not _MISSING:
                 raise ValueError("varargs=True cannot have a default value (requires at least 1 value)")
+
+        # Positional args cannot have defaults. DuckDB's binder always requires
+        # a positional argument to be supplied; the default is never consulted
+        # through the SQL path. To make an argument optional, declare it as a
+        # named argument by passing a string position (e.g. Arg("count", default=10)).
+        if isinstance(position, int) and default is not _MISSING:
+            raise ValueError(
+                f"Arg(position={position}, default=...): positional arguments cannot "
+                f"have a default value. DuckDB's binder always requires the positional "
+                f"argument, so the default would never fire. To make this argument "
+                f"optional, use a named argument: Arg(\"{{name}}\", default=...)."
+            )
 
         self.position = position
         self.default = default

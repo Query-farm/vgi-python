@@ -268,7 +268,7 @@ class ProjectedDataFunction(TableFunctionGenerator[ProjectedDataFunctionArgument
 class _OrderEchoArgs:
     """Arguments for OrderEchoFunction."""
 
-    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0, default=10)]
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
     batch_size: Annotated[int, Arg("batch_size", default=2048, doc="Batch size for output", ge=1)]
 
 
@@ -391,7 +391,7 @@ class OrderEchoFunction(TableFunctionGenerator[_OrderEchoArgs, _OrderEchoState])
 class _SampleEchoArgs:
     """Arguments for SampleEchoFunction."""
 
-    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0, default=10)]
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
     batch_size: Annotated[int, Arg("batch_size", default=2048, doc="Batch size for output", ge=1)]
 
 

@@ -328,12 +328,12 @@ class TestArg:
         obj = MyClass()
         assert obj.value == 42
 
-    def test_positional_with_default(self) -> None:
-        """Arg should use default when positional argument is missing."""
+    def test_named_with_default_missing(self) -> None:
+        """Arg should use default when a named argument is missing."""
 
         class MyClass:
-            invocation = _MockInvocation(Arguments(positional=()))
-            value = Arg[int](0, default=99)
+            invocation = _MockInvocation(Arguments(named={}))
+            value = Arg[int]("value", default=99)
 
         obj = MyClass()
         assert obj.value == 99
@@ -430,11 +430,29 @@ class TestArg:
         arg1 = Arg[int](0)
         assert repr(arg1) == "Arg(0)"
 
-        arg2 = Arg[int](1, default=10)
-        assert repr(arg2) == "Arg(1, default=10)"
+        arg2 = Arg[int]("count", default=10)
+        assert repr(arg2) == "Arg('count', default=10)"
 
         arg3 = Arg[str]("name", default="test", doc="A name")
         assert repr(arg3) == "Arg('name', default='test', doc='A name')"
+
+    def test_positional_with_default_rejected(self) -> None:
+        """Positional Arg cannot carry a default.
+
+        DuckDB's binder always requires the positional value, so a default
+        would never fire. Both Arg(...) and Arg[T](...) must reject it.
+        """
+        # Both construction paths (Arg(...) and Arg[T](...)) must reject it.
+        with pytest.raises(ValueError, match="positional arguments cannot have a default"):
+            Arg(0, default=10)
+        with pytest.raises(ValueError, match="positional arguments cannot have a default"):
+            Arg[int](0, default=10)
+        # Named with default still works.
+        Arg("count", default=10)
+        Arg[int]("count", default=10)
+        # Positional without default still works.
+        Arg(0)
+        Arg[int](0)
 
     def test_with_none_arguments(self) -> None:
         """Arg should handle None named arguments dict."""
@@ -446,28 +464,31 @@ class TestArg:
         obj = MyClass()
         assert obj.value == "default"
 
-    def test_absent_positional_slot_uses_default(self) -> None:
-        """A None slot indicates an absent argument, so default is used.
+    def test_absent_named_slot_uses_default(self) -> None:
+        """An absent key in the named dict means the arg wasn't supplied.
 
-        Distinct from an explicit SQL NULL, which is a real value.
+        The default is used. Distinct from an explicit SQL NULL, which is a
+        real value (covered by test_explicit_null_through_arg_returns_none).
         """
 
         class MyClass:
-            invocation = _MockInvocation(Arguments(positional=(None,)))
-            value = Arg[int](0, default=99)
+            invocation = _MockInvocation(Arguments(named={}))
+            value = Arg[int]("value", default=99)
 
         obj = MyClass()
         assert obj.value == 99
 
     def test_explicit_null_through_arg_returns_none(self) -> None:
-        """Arg returns None for an explicit SQL NULL.
+        """Arg returns None for an explicit SQL NULL on a named arg.
 
         Default is only consulted when the argument was not supplied.
         """
 
         class MyClass:
-            invocation = _MockInvocation(Arguments(positional=(pa.scalar(None, type=pa.int64()),)))
-            value = Arg[int](0, default=99)
+            invocation = _MockInvocation(
+                Arguments(named={"value": pa.scalar(None, type=pa.int64())})
+            )
+            value = Arg[int]("value", default=99)
 
         obj = MyClass()
         assert obj.value is None
@@ -652,8 +673,8 @@ class TestArgValidation:
         """Default values should also be validated."""
 
         class MyClass:
-            invocation = _MockInvocation(Arguments(positional=()))
-            value = Arg[int](0, default=50, ge=1, le=100)
+            invocation = _MockInvocation(Arguments(named={}))
+            value = Arg[int]("value", default=50, ge=1, le=100)
 
         obj = MyClass()
         assert obj.value == 50
@@ -719,8 +740,8 @@ class TestArgumentValidationErrorMessages:
         """Error should suggest using default value if available."""
 
         class MyClass:
-            invocation = _MockInvocation(Arguments(positional=(pa.scalar(-5),)))
-            count = Arg[int](0, ge=0, default=10)
+            invocation = _MockInvocation(Arguments(named={"count": pa.scalar(-5)}))
+            count = Arg[int]("count", ge=0, default=10)
 
         obj = MyClass()
         with pytest.raises(ArgumentValidationError) as exc_info:
@@ -1108,8 +1129,8 @@ class TestAnyArrow:
         from vgi.arguments import AnyArrow, AnyArrowValue
 
         class MyClass:
-            invocation = _MockInvocation(Arguments(positional=()))
-            value: AnyArrow = Arg[AnyArrow](0, default="default")  # type: ignore[assignment]
+            invocation = _MockInvocation(Arguments(named={}))
+            value: AnyArrow = Arg[AnyArrow]("value", default="default")  # type: ignore[assignment]
 
         obj = MyClass()
         assert isinstance(obj.value, AnyArrowValue)
