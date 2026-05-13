@@ -713,6 +713,16 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         meta = getattr(cls, "Meta", None)
         return bool(getattr(meta, "auto_apply_filters", False))
 
+    @classmethod
+    def _supports_batch_index(cls) -> bool:
+        """True if Meta.supports_batch_index = True.
+
+        Drives the ``batch_index=`` kwarg validation on ``out.emit()`` in the
+        table-producer harness (see vgi.protocol._TrackingOutputCollector).
+        """
+        meta = getattr(cls, "Meta", None)
+        return bool(getattr(meta, "supports_batch_index", False))
+
     @staticmethod
     def _apply_pushdown_filter(batch: pa.RecordBatch, pushdown_filters: PushdownFilters | None) -> pa.RecordBatch:
         """Apply pushdown filters to a batch if present.

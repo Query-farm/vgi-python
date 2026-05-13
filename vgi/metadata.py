@@ -335,6 +335,7 @@ class ResolvedMetadata:
     supported_expression_filters: list[str] = field(default_factory=list)
     preserves_order: OrderPreservation = OrderPreservation.PRESERVES_ORDER
     max_workers: int | None = None
+    supports_batch_index: bool = False
 
     # Aggregate function specific
     order_dependent: OrderDependence = OrderDependence.NOT_ORDER_DEPENDENT
@@ -369,6 +370,7 @@ class ResolvedMetadata:
             "supported_expression_filters": self.supported_expression_filters,
             "preserves_order": self.preserves_order.name,
             "max_workers": self.max_workers,
+            "supports_batch_index": self.supports_batch_index,
             "order_dependent": self.order_dependent.name,
             "distinct_dependent": self.distinct_dependent.name,
             "supports_window": self.supports_window,
@@ -398,6 +400,7 @@ class ResolvedMetadata:
             supported_expression_filters=d.get("supported_expression_filters", []),
             preserves_order=OrderPreservation[d.get("preserves_order", "PRESERVES_ORDER")],
             max_workers=d.get("max_workers"),
+            supports_batch_index=d.get("supports_batch_index", False),
             order_dependent=OrderDependence[d.get("order_dependent", "NOT_ORDER_DEPENDENT")],
             distinct_dependent=DistinctDependence[d.get("distinct_dependent", "NOT_DISTINCT_DEPENDENT")],
             supports_window=d.get("supports_window", False),
@@ -784,6 +787,7 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         "auto_apply_filters",  # Auto-apply pushdown filters to output batches
         "preserves_order",
         "max_workers",
+        "supports_batch_index",  # opt-in to per-batch batch_index tagging (parallel + ordered sink)
         # Table-in-out specific: explicit override for the has_finalize auto-detection.
         # Set to True or False to force the emitted ``in_out_function_final``
         # registration bit; leave unset (None) to auto-detect from finish/finalize.
@@ -954,6 +958,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         supported_expression_filters=attrs.get("supported_expression_filters", []),
         preserves_order=attrs.get("preserves_order", OrderPreservation.PRESERVES_ORDER),
         max_workers=attrs.get("max_workers"),
+        supports_batch_index=bool(attrs.get("supports_batch_index", False)),
         order_dependent=attrs.get("order_dependent", OrderDependence.NOT_ORDER_DEPENDENT),
         distinct_dependent=attrs.get("distinct_dependent", DistinctDependence.NOT_DISTINCT_DEPENDENT),
         supports_window=bool(attrs.get("supports_window", False)),
@@ -1042,6 +1047,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("supported_expression_filters", pa.list_(pa.string())),
         pa.field("preserves_order", pa.string()),
         pa.field("max_workers", pa.int32(), nullable=True),
+        pa.field("supports_batch_index", pa.bool_()),
         pa.field("order_dependent", pa.string()),
         pa.field("distinct_dependent", pa.string()),
         pa.field("supports_window", pa.bool_()),

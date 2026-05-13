@@ -440,6 +440,14 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     order_preservation: OrderPreservation | None = None
     # Use ArrowType to specify int32 instead of default int64
     max_workers: Annotated[int | None, ArrowType(pa.int32())] = None
+    # True if the function opts in to per-batch ``vgi_batch_index`` tagging:
+    # the worker emits an integer partition id in each Arrow batch's
+    # KeyValueMetadata; the DuckDB extension threads it through
+    # ``TableFunction::get_partition_data`` so ordered sinks (BatchCollector,
+    # BatchInsert, BatchCopyToFile, Limit) can reassemble parallel output in
+    # partition-id order. Opting in also skips the FIXED_ORDER MaxThreads=1
+    # clamp; the source stays parallel and the sink does the ordering.
+    supports_batch_index: bool = False
 
     # Aggregate function fields (future)
     order_dependent: OrderDependence = OrderDependence.NOT_ORDER_DEPENDENT
@@ -2258,6 +2266,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             supported_expression_filters=[] if is_scalar else meta.supported_expression_filters,
             order_preservation=None if is_scalar else meta.preserves_order,
             max_workers=None if is_scalar else meta.max_workers,
+            supports_batch_index=False if is_scalar else meta.supports_batch_index,
             # Aggregate function fields
             order_dependent=meta.order_dependent,
             distinct_dependent=meta.distinct_dependent,

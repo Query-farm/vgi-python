@@ -118,7 +118,12 @@ from vgi._test_fixtures.table import (
     MakeSeriesStepFunction,
     NamedParamsEchoFunction,
     NestedSequenceFunction,
+    BatchIndexOverflowFunction,
+    MissingBatchIndexTagFunction,
+    NonMonotoneBatchIndexFunction,
     OrderEchoFunction,
+    PartitionedBatchIndexFunction,
+    PartitionedBatchIndexMarkedFunction,
     PartitionedFixedOrderFunction,
     PartitionedNoOrderGuaranteeFunction,
     PartitionedPreservesOrderFunction,
@@ -296,10 +301,20 @@ _EXAMPLE_CATALOG = Catalog(
                 NestedSequenceFunction,
                 ProfilingDemoFunction,
                 OrderEchoFunction,
+                PartitionedBatchIndexFunction,
+                PartitionedBatchIndexMarkedFunction,
                 PartitionedFixedOrderFunction,
                 PartitionedNoOrderGuaranteeFunction,
                 PartitionedPreservesOrderFunction,
                 PartitionedSequenceFunction,
+                # Deliberately-broken batch_index fixtures (see
+                # vgi/_test_fixtures/table/batch_index_broken.py). Registered
+                # so SQL integration tests in batch_index_contract.test can
+                # call them and assert the C++ extension's contract checks
+                # fire as typed IOExceptions.
+                BatchIndexOverflowFunction,
+                MissingBatchIndexTagFunction,
+                NonMonotoneBatchIndexFunction,
                 ProjectedDataFunction,
                 SampleEchoFunction,
                 RowIdSequenceFunction,

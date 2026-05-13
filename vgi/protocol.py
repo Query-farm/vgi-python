@@ -540,11 +540,53 @@ def _resolve_state_type(func_cls: type) -> type[ArrowSerializableDataclass] | No
     return None
 
 
+def _merge_batch_index(
+    *,
+    supports_batch_index: bool,
+    batch_index: int | None,
+    metadata: dict[str, str] | None,
+) -> dict[str, str] | None:
+    """Validate the batch_index kwarg and fold it into the emit metadata dict.
+
+    Contract:
+      * If ``supports_batch_index`` is True, ``batch_index`` MUST be supplied.
+        Forgetting the kwarg on an opted-in function is a programming error
+        that would otherwise produce a data batch with no
+        ``vgi_batch_index`` metadata — the C++ extension would raise an
+        IOException at scan time; raising here gives the worker author a
+        clearer line number.
+      * If ``supports_batch_index`` is False, ``batch_index`` MUST NOT be
+        supplied — catches "I forgot to set the Meta flag" bugs.
+      * The merged value is a decimal-string of the int (matches the wire
+        convention used by ``vgi_filter_version`` / ``vgi_join_keys_version``
+        elsewhere in the codebase).
+    """
+    if supports_batch_index:
+        if batch_index is None:
+            raise RuntimeError(
+                "out.emit() requires batch_index= on a function with "
+                "Meta.supports_batch_index = True"
+            )
+    else:
+        if batch_index is not None:
+            raise RuntimeError(
+                "out.emit(batch_index=...) requires Meta.supports_batch_index = True"
+            )
+    if batch_index is None:
+        return metadata
+    merged: dict[str, str] = dict(metadata) if metadata else {}
+    merged["vgi_batch_index"] = str(batch_index)
+    return merged
+
+
 class _FilteringOutputCollector:
     """Wrapper that applies pushdown filters to emitted data batches.
 
     Intercepts emit() calls and applies the pushdown filter before
-    delegating to the real OutputCollector.
+    delegating to the real OutputCollector. Threads ``batch_index=`` and
+    ``metadata=`` kwargs through unchanged — validation lives on the
+    innermost wrapper (``_TrackingOutputCollector``) so it happens exactly
+    once regardless of which wrappers are stacked.
     """
 
     __slots__ = ("_inner", "_func_cls", "_filters")
@@ -554,9 +596,14 @@ class _FilteringOutputCollector:
         self._func_cls = func_cls
         self._filters = filters
 
-    def emit(self, batch: pa.RecordBatch) -> None:
+    def emit(
+        self,
+        batch: pa.RecordBatch,
+        batch_index: int | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> None:
         filtered = self._func_cls._apply_pushdown_filter(batch, self._filters)
-        self._inner.emit(filtered)
+        self._inner.emit(filtered, batch_index=batch_index, metadata=metadata)
 
     def emit_pydict(self, data: dict[str, Any], schema: pa.Schema | None = None) -> None:
         batch = pa.RecordBatch.from_pydict(data, schema=schema or self._inner.output_schema)
@@ -581,19 +628,40 @@ class _FilteringOutputCollector:
 
 
 class _TrackingOutputCollector:
-    """Wrapper that tracks total rows and bytes emitted, delegating all else."""
+    """Wrapper that tracks total rows and bytes emitted, delegating all else.
 
-    __slots__ = ("_inner", "total_rows", "total_bytes")
+    Also the validation point for the ``batch_index=`` kwarg on
+    ``out.emit()`` (see ``_merge_batch_index``). This wrapper is always the
+    innermost wrapper in the table-function emit path, so validating here
+    happens exactly once per emit regardless of whether
+    ``_FilteringOutputCollector`` is also in the stack.
+    """
 
-    def __init__(self, inner: OutputCollector) -> None:
+    __slots__ = ("_inner", "_supports_batch_index", "total_rows", "total_bytes")
+
+    def __init__(self, inner: OutputCollector, supports_batch_index: bool = False) -> None:
         self._inner = inner
+        self._supports_batch_index = supports_batch_index
         self.total_rows = 0
         self.total_bytes = 0
 
-    def emit(self, batch: pa.RecordBatch) -> None:
+    def emit(
+        self,
+        batch: pa.RecordBatch,
+        batch_index: int | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> None:
+        merged_metadata = _merge_batch_index(
+            supports_batch_index=self._supports_batch_index,
+            batch_index=batch_index,
+            metadata=metadata,
+        )
         self.total_rows += batch.num_rows
         self.total_bytes += _batch_bytes(batch)
-        self._inner.emit(batch)
+        if merged_metadata is None:
+            self._inner.emit(batch)
+        else:
+            self._inner.emit(batch, metadata=merged_metadata)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -726,7 +794,7 @@ class TableProducerState(ProducerState):
             self._init_response.execution_id,
         )
         with timer:
-            tracking_out = _TrackingOutputCollector(out)
+            tracking_out = _TrackingOutputCollector(out, supports_batch_index=self._func_cls._supports_batch_index())
             if self._auto_apply and self._pushdown_filters is not None:
                 filtered_out = _FilteringOutputCollector(tracking_out, self._func_cls, self._pushdown_filters)
                 self._func_cls.process(params, self._user_state, filtered_out)  # type: ignore[arg-type]
@@ -843,7 +911,7 @@ class TableInOutExchangeState(ExchangeState):
             self._init_response.execution_id,
         )
         with timer:
-            tracking_out = _TrackingOutputCollector(out)
+            tracking_out = _TrackingOutputCollector(out, supports_batch_index=self._func_cls._supports_batch_index())
             if self._auto_apply and self._pushdown_filters is not None:
                 filtered_out = _FilteringOutputCollector(tracking_out, self._func_cls, self._pushdown_filters)
                 self._func_cls.process(params, self._user_state, input.batch, filtered_out)  # type: ignore[arg-type]

@@ -20,6 +20,15 @@ point you at the right file:
                             logging_generator, order_echo, sample_echo
 """
 
+from vgi._test_fixtures.table.batch_index import (
+    PartitionedBatchIndexFunction,
+    PartitionedBatchIndexMarkedFunction,
+)
+from vgi._test_fixtures.table.batch_index_broken import (
+    BatchIndexOverflowFunction,
+    MissingBatchIndexTagFunction,
+    NonMonotoneBatchIndexFunction,
+)
 from vgi._test_fixtures.table.catalog_scans import (
     ColorsScanFunction,
     DepartmentsScanFunction,
@@ -100,6 +109,7 @@ __all__ = [
     "_VERSIONED_CONSTRAINTS_SCHEMAS",
     "_VERSIONED_DATA",
     "_VERSIONED_SCHEMAS",
+    "BatchIndexOverflowFunction",
     "ColorsScanFunction",
     "ConstantColumnsFunction",
     "DepartmentsScanFunction",
@@ -119,9 +129,13 @@ __all__ = [
     "MakeSeriesFloatFunction",
     "MakeSeriesRangeFunction",
     "MakeSeriesStepFunction",
+    "MissingBatchIndexTagFunction",
     "NamedParamsEchoFunction",
     "NestedSequenceFunction",
+    "NonMonotoneBatchIndexFunction",
     "OrderEchoFunction",
+    "PartitionedBatchIndexFunction",
+    "PartitionedBatchIndexMarkedFunction",
     "PartitionedFixedOrderFunction",
     "PartitionedNoOrderGuaranteeFunction",
     "PartitionedPreservesOrderFunction",
