@@ -383,40 +383,50 @@ _ABSENT_SENTINEL: Any = object()
 
 
 class _AggregateConstArgsCache:
-    """Process-local LRU of aggregate const_args, keyed by execution_id.
+    """Process-local LRU of aggregate const_args, keyed by (shard_key, execution_id).
 
     Const args are written once at aggregate_bind (under group_id=-2) and
     never change. Every aggregate_update / aggregate_window / aggregate_finalize
     needs them, and ``_load_aggregate_const_args`` would otherwise issue one
     storage read per call — pathological under remote storage backends.
 
+    Scoping by ``(shard_key, execution_id)`` mirrors the storage row key:
+    const args live under ``(shard_key) -> aggregate_state(execution_id,
+    group_id=-2)``. Including shard_key in the cache key prevents a stale
+    hit if two different attaches in the same worker process ever produce
+    colliding execution_id bytes (UUIDs make this vanishingly rare, but the
+    bound is free and matches storage semantics).
+
     Cache holds either ``Arguments`` (positive hit), ``_ABSENT_SENTINEL``
     (the worker has no const params; remember the negative result to skip
-    future reads), or absent (not yet looked up).
+    future reads), or absent (not yet looked up). Bounded LRU eviction caps
+    memory; aggregate_destructor proactively evicts.
     """
 
-    def __init__(self, max_size: int = 1024) -> None:
-        self._entries: OrderedDict[bytes, Any] = OrderedDict()
+    def __init__(self, max_size: int = 256) -> None:
+        self._entries: OrderedDict[tuple[str, bytes], Any] = OrderedDict()
         self._lock = Lock()
         self._max_size = max_size
 
-    def get(self, execution_id: bytes) -> Any:
+    def get(self, shard_key: str, execution_id: bytes) -> Any:
+        key = (shard_key, execution_id)
         with self._lock:
-            entry = self._entries.get(execution_id)
+            entry = self._entries.get(key)
             if entry is not None:
-                self._entries.move_to_end(execution_id)
+                self._entries.move_to_end(key)
             return entry
 
-    def put(self, execution_id: bytes, value: Any) -> None:
+    def put(self, shard_key: str, execution_id: bytes, value: Any) -> None:
+        key = (shard_key, execution_id)
         with self._lock:
-            self._entries[execution_id] = value
-            self._entries.move_to_end(execution_id)
+            self._entries[key] = value
+            self._entries.move_to_end(key)
             while len(self._entries) > self._max_size:
                 self._entries.popitem(last=False)
 
-    def clear_execution(self, execution_id: bytes) -> None:
+    def clear_execution(self, shard_key: str, execution_id: bytes) -> None:
         with self._lock:
-            self._entries.pop(execution_id, None)
+            self._entries.pop((shard_key, execution_id), None)
 
 
 _aggregate_const_args_cache = _AggregateConstArgsCache()
@@ -1781,7 +1791,9 @@ class Worker:
         """
         from vgi.arguments import Arguments
 
-        cached = _aggregate_const_args_cache.get(storage._execution_id)
+        shard_key = storage._shard_key
+        execution_id = storage._execution_id
+        cached = _aggregate_const_args_cache.get(shard_key, execution_id)
         if cached is _ABSENT_SENTINEL:
             return None
         if cached is not None:
@@ -1792,10 +1804,10 @@ class Worker:
             # Most aggregates have no const params; cache the negative result
             # so we don't re-hit storage on every aggregate_window /
             # aggregate_update / etc.
-            _aggregate_const_args_cache.put(storage._execution_id, _ABSENT_SENTINEL)
+            _aggregate_const_args_cache.put(shard_key, execution_id, _ABSENT_SENTINEL)
             return None
         parsed = Arguments.deserialize_from_bytes(result[0][1])
-        _aggregate_const_args_cache.put(storage._execution_id, parsed)
+        _aggregate_const_args_cache.put(shard_key, execution_id, parsed)
         return parsed
 
     def aggregate_bind(
@@ -2116,7 +2128,7 @@ class Worker:
         # RPC was dropped mid-query.
         storage.aggregate_window_partition_clear()
         _window_partition_cache.clear_execution(request.execution_id)
-        _aggregate_const_args_cache.clear_execution(request.execution_id)
+        _aggregate_const_args_cache.clear_execution(storage._shard_key, request.execution_id)
 
         return AggregateDestructorResponse()
 
