@@ -157,7 +157,7 @@ class ProfilingDemoFunction(TableFunctionGenerator[ProfilingDemoArgs, ProfilingS
     ) -> Mapping[str, str]:
         # BindParams doesn't carry a BoundStorage (no execution_id at bind
         # time). Construct one with the execution_id we received.
-        storage = BoundStorage(cls.storage, execution_id)
+        storage = BoundStorage(cls.storage, execution_id, request=params.bind_call, auth=params.auth_context)
         try:
             snapshots = storage.collect()
         except Exception:

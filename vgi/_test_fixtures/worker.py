@@ -30,6 +30,7 @@ except ImportError:
 
     _sys.exit("vgi-fixture-worker requires the test-fixtures extra. Install with: pip install 'vgi[test-fixtures]'")
 
+import uuid
 from typing import Annotated
 
 import pyarrow as pa
@@ -137,6 +138,7 @@ from vgi._test_fixtures.table import (
     SpatialFilterExampleFunction,
     StructSettingsFunction,
     TenThousandFunction,
+    TxCachedValueFunction,
     VersionedConstraintsScanFunction,
     VersionedDataFunction,
     resolve_version,
@@ -309,6 +311,7 @@ _EXAMPLE_CATALOG = Catalog(
                 SpatialFilterExampleFunction,
                 StructSettingsFunction,
                 TenThousandFunction,
+                TxCachedValueFunction,
                 VersionedDataFunction,
                 # Static data scan functions for constraint-backed tables
                 ColorsScanFunction,
@@ -908,6 +911,33 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             at_unit=at_unit,
             at_value=at_value,
         )
+
+    # --------- Transaction lifecycle ---------
+    #
+    # The example catalog has no transactional state of its own — these
+    # methods exist solely so the C++ extension populates
+    # ``BindRequest.transaction_id`` when SQL is wrapped in
+    # ``BEGIN`` / ``COMMIT``. That id is what makes
+    # ``BindParams.transaction_storage`` non-None, which lets
+    # ``TxCachedValueFunction`` (and any user-written function) cache
+    # per-transaction values via ``FunctionStorage.transaction_state_*``.
+
+    supports_transactions = True
+
+    def catalog_transaction_begin(self, *, attach_id: AttachId) -> TransactionId | None:
+        """Allocate a fresh transaction_id; no catalog-side state to track."""
+        del attach_id
+        return TransactionId(uuid.uuid4().bytes)
+
+    def catalog_transaction_commit(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
+        """Clear per-transaction storage on commit (best-effort hygiene)."""
+        del attach_id
+        TxCachedValueFunction.storage.transaction_state_clear(bytes(transaction_id))
+
+    def catalog_transaction_rollback(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
+        """Mirror of commit — same cleanup path."""
+        del attach_id
+        TxCachedValueFunction.storage.transaction_state_clear(bytes(transaction_id))
 
 
 class ExampleWorker(Worker):

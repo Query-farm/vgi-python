@@ -598,8 +598,8 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             bind_call=input,
             settings=_batch_to_scalar_dict(input.settings),
             secrets=SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided),
-            transaction_storage=TransactionBoundStorage(cls.storage, txn_id) if txn_id else None,
-            storage=BoundStorage(cls.storage, execution_id) if execution_id else None,
+            transaction_storage=TransactionBoundStorage(cls.storage, txn_id, request=input, auth=auth_context) if txn_id else None,
+            storage=BoundStorage(cls.storage, execution_id, request=input, auth=auth_context) if execution_id else None,
             auth_context=auth_context if auth_context is not None else AuthContext.anonymous(),
         )
 
@@ -841,7 +841,7 @@ class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
             settings=_batch_to_scalar_dict(input.bind_call.settings),
             secrets=SecretsAccessor(input.bind_call.secrets).to_dict(),
             execution_id=execution_id,
-            storage=BoundStorage(cls.storage, execution_id),
+            storage=BoundStorage(cls.storage, execution_id, request=input, auth=auth),
             auth_context=auth,
         )
 

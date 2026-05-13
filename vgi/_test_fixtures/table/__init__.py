@@ -79,6 +79,7 @@ from vgi._test_fixtures.table.settings import (
     SettingsAwareFunction,
     StructSettingsFunction,
 )
+from vgi._test_fixtures.table.transaction_storage import TxCachedValueFunction
 from vgi._test_fixtures.table.versioned import (
     _CURRENT_VERSION,
     _VERSIONED_CONSTRAINTS_CURRENT,
@@ -140,6 +141,7 @@ __all__ = [
     "SpatialFilterExampleFunction",
     "StructSettingsFunction",
     "TenThousandFunction",
+    "TxCachedValueFunction",
     "VersionedConstraintsScanFunction",
     "VersionedDataFunction",
     "resolve_version",

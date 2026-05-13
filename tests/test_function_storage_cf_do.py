@@ -11,7 +11,6 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from vgi.function_storage import UnknownInvocationError
 from vgi.function_storage_cf_do import FunctionStorageCfDo
 
 
@@ -162,14 +161,6 @@ class TestFunctionStorageCfDo:
         result = storage.queue_pop(b"\x02" * 16)
         assert result is None
 
-    def test_queue_pop_unknown_invocation_raises(
-        self, storage: FunctionStorageCfDo, mock_transport: _MockTransport
-    ) -> None:
-        """Test popping from unknown invocation raises error."""
-        mock_transport.queue_response(404, {"error": "unknown_invocation"})
-        with pytest.raises(UnknownInvocationError):
-            storage.queue_pop(b"\xff" * 16)
-
     def test_queue_push_empty_list(self, storage: FunctionStorageCfDo, mock_transport: _MockTransport) -> None:
         """Test pushing empty list returns 0."""
         mock_transport.queue_response(200, {"count": 0})
@@ -191,17 +182,6 @@ class TestFunctionStorageCfDo:
         mock_transport.queue_response(200, {"cleared": 3})
         cleared = storage.queue_clear(b"\x02" * 16)
         assert cleared == 3
-
-    def test_queue_clear_unregisters_invocation(
-        self, storage: FunctionStorageCfDo, mock_transport: _MockTransport
-    ) -> None:
-        """Test that queue_clear causes subsequent pop to raise."""
-        mock_transport.queue_response(200, {"cleared": 0})
-        storage.queue_clear(b"\x02" * 16)
-
-        mock_transport.queue_response(404, {"error": "unknown_invocation"})
-        with pytest.raises(UnknownInvocationError):
-            storage.queue_pop(b"\x02" * 16)
 
     def test_queue_clear_empty_queue(self, storage: FunctionStorageCfDo, mock_transport: _MockTransport) -> None:
         """Test clearing an empty queue returns 0."""
@@ -423,7 +403,7 @@ class TestFunctionStorageCfDo:
         return [
             ("worker_put", "worker_put"),
             ("worker_collect", "worker_collect"),
-            ("scan_worker_put", "scan_worker_put"),
+            ("stream_state_put", "stream_state_put"),
             ("queue_push", "queue_push"),
             ("queue_pop", "queue_pop"),
             ("queue_clear", "queue_clear"),
@@ -449,8 +429,8 @@ class TestFunctionStorageCfDo:
             storage.worker_put(eid, worker_id=1, state=b"x")
         elif method_name == "worker_collect":
             storage.worker_collect(eid)
-        elif method_name == "scan_worker_put":
-            storage.scan_worker_put(eid, sid, b"x")
+        elif method_name == "stream_state_put":
+            storage.stream_state_put(eid, sid, b"x")
         elif method_name == "queue_push":
             storage.queue_push(eid, [b"a", b"b"])
         elif method_name == "queue_pop":
@@ -507,7 +487,7 @@ class TestFunctionStorageCfDo:
         mock_transport.queue_response(200, {"rows": []})
         storage.worker_scan(b"\x01" * 16)
         mock_transport.queue_response(200, {"rows": []})
-        storage.scan_worker_scan(b"\x01" * 16)
+        storage.stream_state_scan(b"\x01" * 16)
         mock_transport.queue_response(200, {"values": [None]})
         storage.transaction_state_get(b"\xaa" * 16, [b"k"])
         mock_transport.queue_response(200, {"rows": [None]})
@@ -561,20 +541,22 @@ class TestFunctionStorageCfDo:
 
     # --- Scan Worker State Tests ---
 
-    def test_scan_worker_put_round_trip(self, storage: FunctionStorageCfDo, mock_transport: _MockTransport) -> None:
-        """scan_worker_put sends execution_id/stream_id/state and an attempt_id."""
+    def test_stream_state_put_round_trip(self, storage: FunctionStorageCfDo, mock_transport: _MockTransport) -> None:
+        """stream_state_put sends execution_id/stream_id/state and an attempt_id."""
         eid = b"\x01" * 16
         sid = b"\xde" * 16
         mock_transport.queue_response(200, {})
-        storage.scan_worker_put(eid, sid, b"payload")
+        storage.stream_state_put(eid, sid, b"payload")
         body = _body(mock_transport.requests[0])
         assert base64.b64decode(body["execution_id"]) == eid
         assert base64.b64decode(body["stream_id"]) == sid
         assert base64.b64decode(body["state"]) == b"payload"
         assert self._ATTEMPT_RE.match(body["attempt_id"])
 
-    def test_scan_worker_scan_returns_pairs(self, storage: FunctionStorageCfDo, mock_transport: _MockTransport) -> None:
-        """scan_worker_scan returns (stream_id, state) tuples and carries no attempt_id."""
+    def test_stream_state_scan_returns_pairs(
+        self, storage: FunctionStorageCfDo, mock_transport: _MockTransport
+    ) -> None:
+        """stream_state_scan returns (stream_id, state) tuples and carries no attempt_id."""
         sid_a = b"\xde" * 16
         sid_b = b"\xad" * 16
         mock_transport.queue_response(
@@ -586,7 +568,7 @@ class TestFunctionStorageCfDo:
                 ],
             },
         )
-        rows = storage.scan_worker_scan(b"\x01" * 16)
+        rows = storage.stream_state_scan(b"\x01" * 16)
         assert rows == [(sid_a, b"alpha"), (sid_b, b"beta")]
 
     # --- Aggregate State Tests ---

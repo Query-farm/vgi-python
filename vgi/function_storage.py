@@ -15,28 +15,47 @@ Implementations:
 
 """
 
+import hashlib
 import os
 import random
 import sqlite3
 import threading
-from typing import Protocol
+from typing import Any, Protocol
 
 import pyarrow as pa
 
 __all__ = [
     "FunctionStorage",
     "FunctionStorageSqlite",
-    "UnknownInvocationError",
 ]
 
 
-class UnknownInvocationError(Exception):
-    """Raised when a queue operation references an unknown invocation ID.
+def _derive_shard_key(*, attach_id: bytes | None, auth: Any) -> str:
+    """Return the routing key for the ``FunctionStorageCfDo`` Durable Object.
 
-    This error indicates that a client is attempting to interact with a queue
-    for an invocation that was never registered (via queue_push) or has already
-    been cleared (via queue_clear).
+    Server-derived inside the trusted worker process. The CF DO routes by
+    this key (``idFromName(shard_key)``), so one DO instance hosts every
+    storage op carrying the same shard_key. Precedence:
+
+      1. ``attach_id`` (UUID4 minted by ``catalog_attach``) — one DO per
+         ATTACH window. Best amortization for ATTACH-ed catalogs.
+      2. Hash of ``(auth.domain, auth.principal)`` — HTTP transport,
+         authenticated, no ATTACH. One DO per (user, deployment).
+      3. ``"loc-anon"`` — anonymous, no-ATTACH callers. Single shared DO
+         for this entire class of traffic. Reintroduces a per-class
+         single-DO bottleneck, accepted because anonymous workloads
+         (subprocess transport, local CLIs) are typically dev/test.
+
+    No-op for non-CfDo backends — they ignore the value.
     """
+    if attach_id is not None:
+        return "att-" + attach_id.hex()
+    if auth is not None and getattr(auth, "authenticated", False):
+        domain = getattr(auth, "domain", "")
+        principal = getattr(auth, "principal", "")
+        digest = hashlib.sha256(f"{domain}\0{principal}".encode()).hexdigest()
+        return "prn-" + digest[:32]
+    return "loc-anon"
 
 
 def _scan_worker_stream_id() -> bytes:
@@ -104,7 +123,14 @@ class FunctionStorage(Protocol):
 
     """
 
-    def worker_put(self, execution_id: bytes, worker_id: int, state: bytes) -> None:
+    def worker_put(
+        self,
+        execution_id: bytes,
+        worker_id: int,
+        state: bytes,
+        *,
+        shard_key: str = "",
+    ) -> None:
         """Store state for a specific worker.
 
         If state already exists for this (execution_id, worker_id) pair,
@@ -114,11 +140,16 @@ class FunctionStorage(Protocol):
             execution_id: Unique identifier for the function invocation.
             worker_id: Process ID of the worker storing the state.
             state: Serialized state bytes.
+            shard_key: Routing key for the CF DO backend. Ignored by
+                SQLite / Azure backends. Set automatically by
+                BoundStorage from the caller's attach_id / auth context;
+                manual callers can leave it empty for the default
+                ``"loc-anon"`` shard.
 
         """
         ...
 
-    def worker_collect(self, execution_id: bytes) -> list[bytes]:
+    def worker_collect(self, execution_id: bytes, *, shard_key: str = "") -> list[bytes]:
         """Atomically collect and delete all worker states.
 
         This is typically called by the primary worker during finalization
@@ -133,7 +164,7 @@ class FunctionStorage(Protocol):
         """
         ...
 
-    def worker_scan(self, execution_id: bytes) -> list[tuple[int, bytes]]:
+    def worker_scan(self, execution_id: bytes, *, shard_key: str = "") -> list[tuple[int, bytes]]:
         """Non-destructive read of all worker states for an execution.
 
         Companion to ``worker_collect`` for use cases where multiple
@@ -163,7 +194,7 @@ class FunctionStorage(Protocol):
     # (``vgi_rpc.rpc._common._current_stream_id``), giving each scan worker
     # its own row regardless of pid/thread/machine.
 
-    def scan_worker_put(self, execution_id: bytes, stream_id: bytes, state: bytes) -> None:
+    def stream_state_put(self, execution_id: bytes, stream_id: bytes, state: bytes, *, shard_key: str = "") -> None:
         """Store per-scan-worker state for an execution.
 
         Replaces any prior state for the same ``(execution_id, stream_id)``
@@ -179,7 +210,7 @@ class FunctionStorage(Protocol):
         """
         ...
 
-    def scan_worker_scan(self, execution_id: bytes) -> list[tuple[bytes, bytes]]:
+    def stream_state_scan(self, execution_id: bytes, *, shard_key: str = "") -> list[tuple[bytes, bytes]]:
         """Non-destructive read of all per-scan-worker states for an execution.
 
         The intended consumer is the table-function ``dynamic_to_string``
@@ -199,7 +230,7 @@ class FunctionStorage(Protocol):
 
     # --- Work Queue (distributed work items) ---
 
-    def queue_push(self, execution_id: bytes, items: list[bytes]) -> int:
+    def queue_push(self, execution_id: bytes, items: list[bytes], *, shard_key: str = "") -> int:
         """Add work items to the queue and register the invocation.
 
         This method registers the execution_id as valid, allowing subsequent
@@ -215,31 +246,25 @@ class FunctionStorage(Protocol):
         """
         ...
 
-    def queue_pop(self, execution_id: bytes) -> bytes | None:
+    def queue_pop(self, execution_id: bytes, *, shard_key: str = "") -> bytes | None:
         """Atomically claim one work item from the queue.
-
-        The execution_id must have been previously registered via queue_push.
-        This allows detection of badly coded clients or clients attempting to
-        interact after their executions have been completed.
 
         Args:
             execution_id: Unique identifier for the function invocation.
 
         Returns:
-            Serialized work item bytes, or None if queue is empty.
-
-        Raises:
-            UnknownInvocationError: If the execution_id was never registered
-                via queue_push or has been cleared via queue_clear.
+            Serialized work item bytes, or None if the queue is empty or
+            the execution_id was never registered. The protocol contract
+            says ids are never reused and clients always push before pop,
+            so a None result on a never-registered id indicates a buggy
+            client; the backend does not distinguish that case from a
+            drained queue.
 
         """
         ...
 
-    def queue_clear(self, execution_id: bytes) -> int:
+    def queue_clear(self, execution_id: bytes, *, shard_key: str = "") -> int:
         """Clear all remaining work items and unregister the invocation.
-
-        After calling this method, subsequent queue_pop calls for this
-        execution_id will raise UnknownInvocationError.
 
         Args:
             execution_id: Unique identifier for the function invocation.
@@ -252,7 +277,7 @@ class FunctionStorage(Protocol):
 
     # --- Aggregate State (per-group-id storage for aggregate functions) ---
 
-    def aggregate_state_get(self, execution_id: bytes, group_ids: list[int]) -> list[tuple[int, bytes] | None]:
+    def aggregate_state_get(self, execution_id: bytes, group_ids: list[int], *, shard_key: str = "") -> list[tuple[int, bytes] | None]:
         """Load aggregate states for specific group_ids.
 
         Non-destructive read. Returns a list parallel to the input
@@ -269,7 +294,7 @@ class FunctionStorage(Protocol):
         """
         ...
 
-    def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]]) -> None:
+    def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]], *, shard_key: str = "") -> None:
         """Unconditionally write aggregate states for the given group_ids.
 
         Uses INSERT OR REPLACE semantics — existing states are overwritten.
@@ -284,7 +309,7 @@ class FunctionStorage(Protocol):
         """
         ...
 
-    def aggregate_state_clear(self, execution_id: bytes) -> None:
+    def aggregate_state_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
         """Remove all aggregate states for an execution_id.
 
         Called after all FINALIZE exchanges complete to clean up storage.
@@ -311,7 +336,7 @@ class FunctionStorage(Protocol):
     # (transaction_id never reused after rollback/commit, but we don't
     # always get a callback).
 
-    def transaction_state_get(self, transaction_id: bytes, keys: list[bytes]) -> list[bytes | None]:
+    def transaction_state_get(self, transaction_id: bytes, keys: list[bytes], *, shard_key: str = "") -> list[bytes | None]:
         """Load transaction-scoped state values for the given keys.
 
         Returns a list parallel to ``keys``: each element is the stored
@@ -329,7 +354,7 @@ class FunctionStorage(Protocol):
         """
         ...
 
-    def transaction_state_put(self, transaction_id: bytes, items: list[tuple[bytes, bytes]]) -> None:
+    def transaction_state_put(self, transaction_id: bytes, items: list[tuple[bytes, bytes]], *, shard_key: str = "") -> None:
         """Unconditionally write transaction-scoped state values.
 
         ``INSERT OR REPLACE`` semantics — existing values for the same
@@ -343,7 +368,7 @@ class FunctionStorage(Protocol):
         """
         ...
 
-    def transaction_state_clear(self, transaction_id: bytes) -> None:
+    def transaction_state_clear(self, transaction_id: bytes, *, shard_key: str = "") -> None:
         """Drop all state for a transaction.
 
         Called by the catalog implementation when it observes a commit
@@ -359,7 +384,7 @@ class FunctionStorage(Protocol):
 
     # --- Aggregate Window Partition (per-partition cached input for windowed aggregates) ---
 
-    def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes) -> None:
+    def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes, *, shard_key: str = "") -> None:
         """Write a cached partition payload for a windowed aggregate.
 
         The payload is typically an Arrow IPC stream carrying the full
@@ -368,15 +393,15 @@ class FunctionStorage(Protocol):
         """
         ...
 
-    def aggregate_window_partition_get(self, execution_id: bytes, partition_id: int) -> bytes | None:
+    def aggregate_window_partition_get(self, execution_id: bytes, partition_id: int, *, shard_key: str = "") -> bytes | None:
         """Load the cached partition payload for a windowed aggregate."""
         ...
 
-    def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int) -> None:
+    def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int, *, shard_key: str = "") -> None:
         """Delete one cached partition. No-op if not present."""
         ...
 
-    def aggregate_window_partition_clear(self, execution_id: bytes) -> None:
+    def aggregate_window_partition_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
         """Remove all cached partitions for an execution_id.
 
         Safety-sweep called from ``aggregate_destructor`` to catch any
@@ -393,13 +418,36 @@ class TransactionBoundStorage:
     ``BoundStorage.transaction(transaction_id)``.
     """
 
-    def __init__(self, storage: "FunctionStorage", transaction_id: bytes) -> None:
+    def __init__(
+        self,
+        storage: "FunctionStorage",
+        transaction_id: bytes,
+        *,
+        request: Any = None,
+        attach_id: bytes | None = None,
+        auth: Any = None,
+        shard_key: str | None = None,
+    ) -> None:
         self._base = storage
         self._transaction_id = transaction_id
+        # Caller may pass shard_key directly (e.g. inherited from a parent
+        # BoundStorage), or pass request= / attach_id= / auth= and let us
+        # derive. See BoundStorage for the request= polymorphism.
+        if shard_key is None:
+            if attach_id is None and request is not None:
+                attach_id = getattr(request, "attach_id", None)
+                if attach_id is None:
+                    bind_call = getattr(request, "bind_call", None)
+                    if bind_call is not None:
+                        attach_id = getattr(bind_call, "attach_id", None)
+            shard_key = _derive_shard_key(attach_id=attach_id, auth=auth)
+        self._shard_key = shard_key
 
     def get(self, keys: list[bytes]) -> list[bytes | None]:
         """Load values for a list of keys; parallel return list."""
-        return self._base.transaction_state_get(self._transaction_id, keys)
+        return self._base.transaction_state_get(
+            self._transaction_id, keys, shard_key=self._shard_key,
+        )
 
     def get_one(self, key: bytes) -> bytes | None:
         """Load a single value, or None if missing."""
@@ -407,7 +455,9 @@ class TransactionBoundStorage:
 
     def put(self, items: list[tuple[bytes, bytes]]) -> None:
         """Write a batch of (key, value) pairs."""
-        self._base.transaction_state_put(self._transaction_id, items)
+        self._base.transaction_state_put(
+            self._transaction_id, items, shard_key=self._shard_key,
+        )
 
     def put_one(self, key: bytes, value: bytes) -> None:
         """Write a single (key, value) pair."""
@@ -415,13 +465,36 @@ class TransactionBoundStorage:
 
     def clear(self) -> None:
         """Drop every value for this transaction."""
-        self._base.transaction_state_clear(self._transaction_id)
+        self._base.transaction_state_clear(
+            self._transaction_id, shard_key=self._shard_key,
+        )
 
 
 class BoundStorage:
-    def __init__(self, storage: FunctionStorage, execution_id: bytes):
+    def __init__(
+        self,
+        storage: FunctionStorage,
+        execution_id: bytes,
+        *,
+        request: Any = None,
+        attach_id: bytes | None = None,
+        auth: Any = None,
+    ):
         self._base = storage
         self._execution_id = execution_id
+        # ``request=`` is a convenience for the worker sites that already
+        # have a BindRequest / InitRequest / AggregateBindRequest in scope:
+        # we pull attach_id off either ``request.attach_id`` (Bind variants)
+        # or ``request.bind_call.attach_id`` (InitRequest). Callers may
+        # alternatively pass ``attach_id=`` directly; anonymous callers
+        # fall through to "loc-anon".
+        if attach_id is None and request is not None:
+            attach_id = getattr(request, "attach_id", None)
+            if attach_id is None:
+                bind_call = getattr(request, "bind_call", None)
+                if bind_call is not None:
+                    attach_id = getattr(bind_call, "attach_id", None)
+        self._shard_key = _derive_shard_key(attach_id=attach_id, auth=auth)
 
     def transaction(self, transaction_id: bytes) -> TransactionBoundStorage:
         """Return a transaction-scoped storage view.
@@ -430,23 +503,33 @@ class BoundStorage:
         multiple statements in one SQL transaction (e.g. Kafka topic
         watermarks, for snapshot-isolation reads).
         """
-        return TransactionBoundStorage(self._base, transaction_id)
+        # Inherit our shard_key directly — both views are part of the
+        # same logical attach.
+        return TransactionBoundStorage(
+            self._base, transaction_id, shard_key=self._shard_key,
+        )
 
     def put(self, state: bytes) -> None:
         """Store state for a specific worker."""
-        self._base.worker_put(self._execution_id, os.getpid(), state)
+        self._base.worker_put(
+            self._execution_id, os.getpid(), state, shard_key=self._shard_key,
+        )
 
     def collect(self) -> list[bytes]:
         """Atomically collect and delete all worker states."""
-        return self._base.worker_collect(self._execution_id)
+        return self._base.worker_collect(
+            self._execution_id, shard_key=self._shard_key,
+        )
 
     def worker_scan(self) -> list[tuple[int, bytes]]:
         """Non-destructive read of (worker_id, state) pairs for this execution."""
-        return self._base.worker_scan(self._execution_id)
+        return self._base.worker_scan(
+            self._execution_id, shard_key=self._shard_key,
+        )
 
     # --- Scan Worker State (per-stream-id) ---
 
-    def scan_worker_put(self, state: bytes) -> None:
+    def stream_state_put(self, state: bytes) -> None:
         """Store state for the current scan worker.
 
         Keyed by the framework's per-stream UUID (``_current_stream_id``
@@ -457,15 +540,21 @@ class BoundStorage:
         any code path called outside an HTTP scan request).
         """
         sid = _scan_worker_stream_id()
-        self._base.scan_worker_put(self._execution_id, sid, state)
+        self._base.stream_state_put(
+            self._execution_id, sid, state, shard_key=self._shard_key,
+        )
 
-    def scan_worker_scan(self) -> list[tuple[bytes, bytes]]:
+    def stream_state_scan(self) -> list[tuple[bytes, bytes]]:
         """Non-destructive read of (stream_id, state) pairs for this execution."""
-        return self._base.scan_worker_scan(self._execution_id)
+        return self._base.stream_state_scan(
+            self._execution_id, shard_key=self._shard_key,
+        )
 
     def queue_push(self, items: list[bytes]) -> int:
         """Add work items to the queue and register the invocation."""
-        return self._base.queue_push(self._execution_id, items)
+        return self._base.queue_push(
+            self._execution_id, items, shard_key=self._shard_key,
+        )
 
     def queue_push_batches(self, batches: list[pa.RecordBatch]) -> int:
         """Serialize and push RecordBatches as work items."""
@@ -473,7 +562,9 @@ class BoundStorage:
 
     def queue_pop(self) -> bytes | None:
         """Atomically claim one work item from the queue."""
-        return self._base.queue_pop(self._execution_id)
+        return self._base.queue_pop(
+            self._execution_id, shard_key=self._shard_key,
+        )
 
     def queue_pop_batch(self) -> pa.RecordBatch | None:
         """Pop and deserialize one work item as a RecordBatch."""
@@ -484,39 +575,55 @@ class BoundStorage:
 
     def queue_clear(self) -> int:
         """Clear all remaining work items and unregister the invocation."""
-        return self._base.queue_clear(self._execution_id)
+        return self._base.queue_clear(
+            self._execution_id, shard_key=self._shard_key,
+        )
 
     # --- Aggregate State ---
 
     def aggregate_get(self, group_ids: list[int]) -> list[tuple[int, bytes] | None]:
         """Load aggregate states for specific group_ids."""
-        return self._base.aggregate_state_get(self._execution_id, group_ids)
+        return self._base.aggregate_state_get(
+            self._execution_id, group_ids, shard_key=self._shard_key,
+        )
 
     def aggregate_put(self, data: list[tuple[int, bytes]]) -> None:
         """Unconditionally write aggregate states."""
-        self._base.aggregate_state_put(self._execution_id, data)
+        self._base.aggregate_state_put(
+            self._execution_id, data, shard_key=self._shard_key,
+        )
 
     def aggregate_clear(self) -> None:
         """Remove all aggregate states for this execution."""
-        self._base.aggregate_state_clear(self._execution_id)
+        self._base.aggregate_state_clear(
+            self._execution_id, shard_key=self._shard_key,
+        )
 
     # --- Aggregate Window Partition ---
 
     def aggregate_window_partition_put(self, partition_id: int, data: bytes) -> None:
         """Write a cached partition payload for a windowed aggregate."""
-        self._base.aggregate_window_partition_put(self._execution_id, partition_id, data)
+        self._base.aggregate_window_partition_put(
+            self._execution_id, partition_id, data, shard_key=self._shard_key,
+        )
 
     def aggregate_window_partition_get(self, partition_id: int) -> bytes | None:
         """Load the cached partition payload."""
-        return self._base.aggregate_window_partition_get(self._execution_id, partition_id)
+        return self._base.aggregate_window_partition_get(
+            self._execution_id, partition_id, shard_key=self._shard_key,
+        )
 
     def aggregate_window_partition_delete(self, partition_id: int) -> None:
         """Delete one cached partition."""
-        self._base.aggregate_window_partition_delete(self._execution_id, partition_id)
+        self._base.aggregate_window_partition_delete(
+            self._execution_id, partition_id, shard_key=self._shard_key,
+        )
 
     def aggregate_window_partition_clear(self) -> None:
         """Remove all cached partitions for this execution."""
-        self._base.aggregate_window_partition_clear(self._execution_id)
+        self._base.aggregate_window_partition_clear(
+            self._execution_id, shard_key=self._shard_key,
+        )
 
     @staticmethod
     def serialize_record_batch(batch: pa.RecordBatch) -> bytes:
@@ -732,8 +839,9 @@ class FunctionStorageSqlite:
 
     # --- Worker State ---
 
-    def worker_put(self, execution_id: bytes, worker_id: int, state: bytes) -> None:
-        """Store state for a specific worker."""
+    def worker_put(self, execution_id: bytes, worker_id: int, state: bytes, *, shard_key: str = "") -> None:
+        """Store state for a specific worker. ``shard_key`` is ignored (no sharding in SQLite)."""
+        del shard_key
         # Opportunistically clean old entries (1% of calls)
         if random.random() < 0.01:
             self.cleanup_old_entries(max_age_days=1.0)
@@ -749,8 +857,9 @@ class FunctionStorageSqlite:
         )
         conn.commit()
 
-    def worker_collect(self, execution_id: bytes) -> list[bytes]:
-        """Atomically collect and delete all worker states."""
+    def worker_collect(self, execution_id: bytes, *, shard_key: str = "") -> list[bytes]:
+        """Atomically collect and delete all worker states. ``shard_key`` is ignored (no sharding in SQLite)."""
+        del shard_key
         conn = self._conn()
         cursor = conn.execute(
             """
@@ -764,7 +873,7 @@ class FunctionStorageSqlite:
         conn.commit()
         return states
 
-    def worker_scan(self, execution_id: bytes) -> list[tuple[int, bytes]]:
+    def worker_scan(self, execution_id: bytes, *, shard_key: str = "") -> list[tuple[int, bytes]]:
         """Non-destructive read of (process_id, state_data) for execution_id."""
         conn = self._conn()
         cursor = conn.execute(
@@ -779,7 +888,7 @@ class FunctionStorageSqlite:
 
     # --- Scan Worker State ---
 
-    def scan_worker_put(self, execution_id: bytes, stream_id: bytes, state: bytes) -> None:
+    def stream_state_put(self, execution_id: bytes, stream_id: bytes, state: bytes, *, shard_key: str = "") -> None:
         """Store per-(execution_id, stream_id) state."""
         conn = self._conn()
         conn.execute(
@@ -792,7 +901,7 @@ class FunctionStorageSqlite:
         )
         conn.commit()
 
-    def scan_worker_scan(self, execution_id: bytes) -> list[tuple[bytes, bytes]]:
+    def stream_state_scan(self, execution_id: bytes, *, shard_key: str = "") -> list[tuple[bytes, bytes]]:
         """Non-destructive read of (stream_id, state_data) for execution_id."""
         conn = self._conn()
         cursor = conn.execute(
@@ -807,7 +916,7 @@ class FunctionStorageSqlite:
 
     # --- Work Queue ---
 
-    def queue_push(self, execution_id: bytes, items: list[bytes]) -> int:
+    def queue_push(self, execution_id: bytes, items: list[bytes], *, shard_key: str = "") -> int:
         """Add work items to the queue and register the invocation."""
         conn = self._conn()
         # Register the execution_id (idempotent)
@@ -827,25 +936,13 @@ class FunctionStorageSqlite:
         conn.commit()
         return len(items)
 
-    def queue_pop(self, execution_id: bytes) -> bytes | None:
+    def queue_pop(self, execution_id: bytes, *, shard_key: str = "") -> bytes | None:
         """Atomically claim one work item from the queue.
 
-        Raises:
-            UnknownInvocationError: If execution_id was never registered via
-                queue_push or has been cleared via queue_clear.
-
+        Returns None when the queue is empty *or* the execution_id was
+        never pushed — see the base-class docstring.
         """
         conn = self._conn()
-        # Check if invocation is registered
-        reg_cursor = conn.execute(
-            "SELECT 1 FROM invocation_registry WHERE execution_id = ?",
-            (execution_id,),
-        )
-        if reg_cursor.fetchone() is None:
-            raise UnknownInvocationError(
-                f"Invocation {execution_id.hex()} is not registered. Call queue_push first to register the invocation."
-            )
-
         cursor = conn.execute(
             """
             DELETE FROM work_queue
@@ -863,7 +960,7 @@ class FunctionStorageSqlite:
         conn.commit()
         return row[0] if row else None
 
-    def queue_clear(self, execution_id: bytes) -> int:
+    def queue_clear(self, execution_id: bytes, *, shard_key: str = "") -> int:
         """Clear all remaining work items and unregister the invocation."""
         conn = self._conn()
         cursor = conn.execute(
@@ -880,7 +977,7 @@ class FunctionStorageSqlite:
 
     # --- Aggregate State ---
 
-    def aggregate_state_get(self, execution_id: bytes, group_ids: list[int]) -> list[tuple[int, bytes] | None]:
+    def aggregate_state_get(self, execution_id: bytes, group_ids: list[int], *, shard_key: str = "") -> list[tuple[int, bytes] | None]:
         """Load aggregate states for specific group_ids.
 
         Batches queries in chunks of 500 to stay under SQLite's default
@@ -903,7 +1000,7 @@ class FunctionStorageSqlite:
                 found[row[0]] = row[1]
         return [(gid, found[gid]) if gid in found else None for gid in group_ids]
 
-    def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]]) -> None:
+    def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]], *, shard_key: str = "") -> None:
         """Unconditionally write aggregate states."""
         if not data:
             return
@@ -922,7 +1019,7 @@ class FunctionStorageSqlite:
         )
         conn.commit()
 
-    def aggregate_state_clear(self, execution_id: bytes) -> None:
+    def aggregate_state_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
         """Remove all aggregate states for an execution_id."""
         conn = self._conn()
         conn.execute(
@@ -933,7 +1030,7 @@ class FunctionStorageSqlite:
 
     # --- Transaction State ---
 
-    def transaction_state_get(self, transaction_id: bytes, keys: list[bytes]) -> list[bytes | None]:
+    def transaction_state_get(self, transaction_id: bytes, keys: list[bytes], *, shard_key: str = "") -> list[bytes | None]:
         """Load transaction-scoped values for the given keys."""
         if not keys:
             return []
@@ -952,7 +1049,7 @@ class FunctionStorageSqlite:
                 found[row[0]] = row[1]
         return [found.get(k) for k in keys]
 
-    def transaction_state_put(self, transaction_id: bytes, items: list[tuple[bytes, bytes]]) -> None:
+    def transaction_state_put(self, transaction_id: bytes, items: list[tuple[bytes, bytes]], *, shard_key: str = "") -> None:
         """Write transaction-scoped values."""
         if not items:
             return
@@ -973,7 +1070,7 @@ class FunctionStorageSqlite:
         )
         conn.commit()
 
-    def transaction_state_clear(self, transaction_id: bytes) -> None:
+    def transaction_state_clear(self, transaction_id: bytes, *, shard_key: str = "") -> None:
         """Drop all state for a transaction."""
         conn = self._conn()
         conn.execute(
@@ -984,7 +1081,7 @@ class FunctionStorageSqlite:
 
     # --- Aggregate Window Partition ---
 
-    def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes) -> None:
+    def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes, *, shard_key: str = "") -> None:
         """Store a cached windowed-aggregate partition payload."""
         if random.random() < 0.01:
             self.cleanup_old_entries(max_age_days=1.0)
@@ -999,7 +1096,7 @@ class FunctionStorageSqlite:
         )
         conn.commit()
 
-    def aggregate_window_partition_get(self, execution_id: bytes, partition_id: int) -> bytes | None:
+    def aggregate_window_partition_get(self, execution_id: bytes, partition_id: int, *, shard_key: str = "") -> bytes | None:
         """Load a cached windowed-aggregate partition payload."""
         conn = self._conn()
         cursor = conn.execute(
@@ -1009,7 +1106,7 @@ class FunctionStorageSqlite:
         row = cursor.fetchone()
         return row[0] if row else None
 
-    def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int) -> None:
+    def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int, *, shard_key: str = "") -> None:
         """Delete a single cached windowed-aggregate partition."""
         conn = self._conn()
         conn.execute(
@@ -1018,7 +1115,7 @@ class FunctionStorageSqlite:
         )
         conn.commit()
 
-    def aggregate_window_partition_clear(self, execution_id: bytes) -> None:
+    def aggregate_window_partition_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
         """Remove all cached windowed-aggregate partitions for an execution_id."""
         conn = self._conn()
         conn.execute(

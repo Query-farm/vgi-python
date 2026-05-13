@@ -27,7 +27,8 @@ Workflow contract:
     replay model sound. If you change this client to break lockstep
     (async fire-and-forget retries, multi-coordinator writes to one
     execution_id, etc.) you also need to revisit the server's replay
-    semantics in ``cloudflare/vgi-storage/src/index.ts``.
+    semantics in the ``vgi-cloudflare-durable-object-storage`` repo
+    (``src/index.ts``).
 
 """
 
@@ -40,8 +41,6 @@ import uuid
 from typing import Any
 
 import httpx
-
-from vgi.function_storage import UnknownInvocationError
 
 __all__ = [
     "FunctionStorageCfDo",
@@ -93,6 +92,12 @@ class FunctionStorageCfDo:
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
+        # HTTP/1.1 with keep-alive. HTTP/2 was tested (May 2026) and turned out
+        # to regress the cold-DO path 2.5× while only marginally helping warm
+        # reads (~20% on transaction_state_get/put). The bottleneck is
+        # geographic RTT + DO instantiation, not TLS handshake overhead, so
+        # HTTP/2 multiplexing brings little upside and Cloudflare's h2 frontend
+        # appears to add latency to cold-path calls.
         self._client = httpx.Client(
             base_url=self._url,
             headers=headers,
@@ -123,6 +128,7 @@ class FunctionStorageCfDo:
         body: dict[str, object],
         *,
         attempt_id: str | None = None,
+        shard_key: str = "",
     ) -> dict[str, Any]:
         """POST JSON to the CF Worker, with retry on transient failure.
 
@@ -133,8 +139,12 @@ class FunctionStorageCfDo:
         find the prior attempt's tombstone/row and replay the original
         response instead of re-executing the operation.
 
+        ``shard_key`` selects the Durable Object instance via
+        ``idFromName(shard_key)`` on the Worker side. Empty/missing falls
+        back to ``"loc-anon"`` (single shared DO for anonymous, no-attach
+        callers) — see ``_derive_shard_key`` in function_storage.py.
+
         Returns the parsed JSON response. Raises:
-            UnknownInvocationError: on 404 with ``error: "unknown_invocation"``
             PermissionError: on 401
             ValueError: on 400 (contract violation — usually a bug)
             RuntimeError: on other 4xx (non-retryable) and exhausted retries
@@ -143,6 +153,10 @@ class FunctionStorageCfDo:
         path = f"/{endpoint}"
         last_exc: Exception | None = None
 
+        # Always send shard_key — the Worker's router rejects requests
+        # without one with 400. Default to "loc-anon" so direct CfDo
+        # callers (outside BoundStorage) still work.
+        body = {**body, "shard_key": shard_key or "loc-anon"}
         if attempt_id is not None:
             body = {**body, "attempt_id": attempt_id}
 
@@ -186,13 +200,6 @@ class FunctionStorageCfDo:
                 )
                 continue
 
-            if resp.status_code == 404 and data.get("error") == "unknown_invocation":
-                raise UnknownInvocationError(
-                    data.get(
-                        "message",
-                        "Invocation is not registered. Call queue_push first to register the invocation.",
-                    )
-                )
             if resp.status_code == 401:
                 raise PermissionError(f"Authentication failed: {data.get('error', 'unauthorized')}")
             if resp.status_code == 400:
@@ -220,7 +227,7 @@ class FunctionStorageCfDo:
 
     # --- Worker State ---
 
-    def worker_put(self, execution_id: bytes, worker_id: int, state: bytes) -> None:
+    def worker_put(self, execution_id: bytes, worker_id: int, state: bytes, *, shard_key: str = "") -> None:
         """Store state for a specific worker."""
         t0 = time.monotonic()
         self._post(
@@ -231,6 +238,7 @@ class FunctionStorageCfDo:
                 "state": base64.b64encode(state).decode(),
             },
             attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
         )
         _logger.debug(
             "worker_put eid=%s worker_id=%d state_bytes=%d elapsed_ms=%.1f",
@@ -240,7 +248,7 @@ class FunctionStorageCfDo:
             (time.monotonic() - t0) * 1000,
         )
 
-    def worker_collect(self, execution_id: bytes) -> list[bytes]:
+    def worker_collect(self, execution_id: bytes, *, shard_key: str = "") -> list[bytes]:
         """Atomically collect and delete all worker states."""
         t0 = time.monotonic()
         data = self._post(
@@ -249,6 +257,7 @@ class FunctionStorageCfDo:
                 "execution_id": base64.b64encode(execution_id).decode(),
             },
             attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
         )
         states = [base64.b64decode(s) for s in data["states"]]
         _logger.debug(
@@ -259,7 +268,7 @@ class FunctionStorageCfDo:
         )
         return states
 
-    def worker_scan(self, execution_id: bytes) -> list[tuple[int, bytes]]:
+    def worker_scan(self, execution_id: bytes, *, shard_key: str = "") -> list[tuple[int, bytes]]:
         """Non-destructive read of (worker_id, state) pairs for execution_id."""
         t0 = time.monotonic()
         data = self._post(
@@ -267,6 +276,7 @@ class FunctionStorageCfDo:
             {
                 "execution_id": base64.b64encode(execution_id).decode(),
             },
+            shard_key=shard_key,
         )
         rows = [(int(r["worker_id"]), base64.b64decode(r["state"])) for r in data["rows"]]
         _logger.debug(
@@ -279,38 +289,40 @@ class FunctionStorageCfDo:
 
     # --- Scan Worker State ---
 
-    def scan_worker_put(self, execution_id: bytes, stream_id: bytes, state: bytes) -> None:
+    def stream_state_put(self, execution_id: bytes, stream_id: bytes, state: bytes, *, shard_key: str = "") -> None:
         """Store per-(execution_id, stream_id) state."""
         t0 = time.monotonic()
         self._post(
-            "scan_worker_put",
+            "stream_state_put",
             {
                 "execution_id": base64.b64encode(execution_id).decode(),
                 "stream_id": base64.b64encode(stream_id).decode(),
                 "state": base64.b64encode(state).decode(),
             },
             attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
         )
         _logger.debug(
-            "scan_worker_put eid=%s stream=%s state_bytes=%d elapsed_ms=%.1f",
+            "stream_state_put eid=%s stream=%s state_bytes=%d elapsed_ms=%.1f",
             execution_id.hex()[:8],
             stream_id.hex()[:8],
             len(state),
             (time.monotonic() - t0) * 1000,
         )
 
-    def scan_worker_scan(self, execution_id: bytes) -> list[tuple[bytes, bytes]]:
+    def stream_state_scan(self, execution_id: bytes, *, shard_key: str = "") -> list[tuple[bytes, bytes]]:
         """Non-destructive read of (stream_id, state) pairs for execution_id."""
         t0 = time.monotonic()
         data = self._post(
-            "scan_worker_scan",
+            "stream_state_scan",
             {
                 "execution_id": base64.b64encode(execution_id).decode(),
             },
+            shard_key=shard_key,
         )
         rows = [(base64.b64decode(r["stream_id"]), base64.b64decode(r["state"])) for r in data["rows"]]
         _logger.debug(
-            "scan_worker_scan eid=%s rows=%d elapsed_ms=%.1f",
+            "stream_state_scan eid=%s rows=%d elapsed_ms=%.1f",
             execution_id.hex()[:8],
             len(rows),
             (time.monotonic() - t0) * 1000,
@@ -319,7 +331,7 @@ class FunctionStorageCfDo:
 
     # --- Work Queue ---
 
-    def queue_push(self, execution_id: bytes, items: list[bytes]) -> int:
+    def queue_push(self, execution_id: bytes, items: list[bytes], *, shard_key: str = "") -> int:
         """Add work items to the queue and register the invocation."""
         t0 = time.monotonic()
         data = self._post(
@@ -329,6 +341,7 @@ class FunctionStorageCfDo:
                 "items": [base64.b64encode(item).decode() for item in items],
             },
             attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
         )
         count = int(data["count"])
         _logger.debug(
@@ -339,13 +352,11 @@ class FunctionStorageCfDo:
         )
         return count
 
-    def queue_pop(self, execution_id: bytes) -> bytes | None:
+    def queue_pop(self, execution_id: bytes, *, shard_key: str = "") -> bytes | None:
         """Atomically claim one work item from the queue.
 
-        Raises:
-            UnknownInvocationError: If execution_id was never registered via
-                queue_push or has been cleared via queue_clear.
-
+        Returns None when the queue is empty *or* the execution_id was
+        never pushed — see the base-class docstring.
         """
         t0 = time.monotonic()
         data = self._post(
@@ -354,6 +365,7 @@ class FunctionStorageCfDo:
                 "execution_id": base64.b64encode(execution_id).decode(),
             },
             attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
         )
         result = base64.b64decode(data["item"]) if data["item"] else None
         got_item = result is not None
@@ -365,7 +377,7 @@ class FunctionStorageCfDo:
         )
         return result
 
-    def queue_clear(self, execution_id: bytes) -> int:
+    def queue_clear(self, execution_id: bytes, *, shard_key: str = "") -> int:
         """Clear all remaining work items and unregister the invocation."""
         t0 = time.monotonic()
         data = self._post(
@@ -374,6 +386,7 @@ class FunctionStorageCfDo:
                 "execution_id": base64.b64encode(execution_id).decode(),
             },
             attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
         )
         cleared = int(data["cleared"])
         _logger.debug(
@@ -386,7 +399,7 @@ class FunctionStorageCfDo:
 
     # --- Aggregate State ---
 
-    def aggregate_state_get(self, execution_id: bytes, group_ids: list[int]) -> list[tuple[int, bytes] | None]:
+    def aggregate_state_get(self, execution_id: bytes, group_ids: list[int], *, shard_key: str = "") -> list[tuple[int, bytes] | None]:
         """Load aggregate states for specific group_ids.
 
         Returns a list parallel to ``group_ids`` with ``(group_id, state)``
@@ -401,6 +414,7 @@ class FunctionStorageCfDo:
                 "execution_id": base64.b64encode(execution_id).decode(),
                 "group_ids": list(group_ids),
             },
+            shard_key=shard_key,
         )
         rows = data["rows"]
         result: list[tuple[int, bytes] | None] = [
@@ -415,7 +429,7 @@ class FunctionStorageCfDo:
         )
         return result
 
-    def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]]) -> None:
+    def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]], *, shard_key: str = "") -> None:
         """Unconditionally write aggregate states for given group_ids."""
         if not data:
             return
@@ -427,6 +441,7 @@ class FunctionStorageCfDo:
                 "items": [{"group_id": gid, "state": base64.b64encode(state).decode()} for gid, state in data],
             },
             attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
         )
         _logger.debug(
             "aggregate_state_put eid=%s n_groups=%d elapsed_ms=%.1f",
@@ -435,13 +450,14 @@ class FunctionStorageCfDo:
             (time.monotonic() - t0) * 1000,
         )
 
-    def aggregate_state_clear(self, execution_id: bytes) -> None:
+    def aggregate_state_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
         """Remove all aggregate states for an execution_id."""
         t0 = time.monotonic()
         self._post(
             "aggregate_state_clear",
             {"execution_id": base64.b64encode(execution_id).decode()},
             attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
         )
         _logger.debug(
             "aggregate_state_clear eid=%s elapsed_ms=%.1f",
@@ -451,7 +467,7 @@ class FunctionStorageCfDo:
 
     # --- Transaction State ---
 
-    def transaction_state_get(self, transaction_id: bytes, keys: list[bytes]) -> list[bytes | None]:
+    def transaction_state_get(self, transaction_id: bytes, keys: list[bytes], *, shard_key: str = "") -> list[bytes | None]:
         """Load transaction-scoped values for the given keys."""
         if not keys:
             return []
@@ -462,6 +478,7 @@ class FunctionStorageCfDo:
                 "transaction_id": base64.b64encode(transaction_id).decode(),
                 "keys": [base64.b64encode(k).decode() for k in keys],
             },
+            shard_key=shard_key,
         )
         # ``values`` is parallel to ``keys`` — null for misses, b64 for hits.
         result: list[bytes | None] = [base64.b64decode(v) if v is not None else None for v in data["values"]]
@@ -474,7 +491,7 @@ class FunctionStorageCfDo:
         )
         return result
 
-    def transaction_state_put(self, transaction_id: bytes, items: list[tuple[bytes, bytes]]) -> None:
+    def transaction_state_put(self, transaction_id: bytes, items: list[tuple[bytes, bytes]], *, shard_key: str = "") -> None:
         """Write transaction-scoped values."""
         if not items:
             return
@@ -492,6 +509,7 @@ class FunctionStorageCfDo:
                 ],
             },
             attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
         )
         _logger.debug(
             "transaction_state_put txn=%s items=%d elapsed_ms=%.1f",
@@ -500,7 +518,7 @@ class FunctionStorageCfDo:
             (time.monotonic() - t0) * 1000,
         )
 
-    def transaction_state_clear(self, transaction_id: bytes) -> None:
+    def transaction_state_clear(self, transaction_id: bytes, *, shard_key: str = "") -> None:
         """Drop all state for a transaction."""
         t0 = time.monotonic()
         self._post(
@@ -509,6 +527,7 @@ class FunctionStorageCfDo:
                 "transaction_id": base64.b64encode(transaction_id).decode(),
             },
             attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
         )
         _logger.debug(
             "transaction_state_clear txn=%s elapsed_ms=%.1f",
@@ -518,7 +537,7 @@ class FunctionStorageCfDo:
 
     # --- Aggregate Window Partition ---
 
-    def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes) -> None:
+    def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes, *, shard_key: str = "") -> None:
         """Store a cached windowed-aggregate partition payload."""
         t0 = time.monotonic()
         self._post(
@@ -529,6 +548,7 @@ class FunctionStorageCfDo:
                 "data": base64.b64encode(data).decode(),
             },
             attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
         )
         _logger.debug(
             "aggregate_window_partition_put eid=%s partition=%d bytes=%d elapsed_ms=%.1f",
@@ -538,7 +558,7 @@ class FunctionStorageCfDo:
             (time.monotonic() - t0) * 1000,
         )
 
-    def aggregate_window_partition_get(self, execution_id: bytes, partition_id: int) -> bytes | None:
+    def aggregate_window_partition_get(self, execution_id: bytes, partition_id: int, *, shard_key: str = "") -> bytes | None:
         """Load a cached windowed-aggregate partition payload."""
         t0 = time.monotonic()
         resp = self._post(
@@ -547,6 +567,7 @@ class FunctionStorageCfDo:
                 "execution_id": base64.b64encode(execution_id).decode(),
                 "partition_id": partition_id,
             },
+            shard_key=shard_key,
         )
         payload = resp["data"]
         result = base64.b64decode(payload) if payload is not None else None
@@ -559,7 +580,7 @@ class FunctionStorageCfDo:
         )
         return result
 
-    def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int) -> None:
+    def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int, *, shard_key: str = "") -> None:
         """Delete one cached partition. No-op if not present."""
         t0 = time.monotonic()
         self._post(
@@ -569,6 +590,7 @@ class FunctionStorageCfDo:
                 "partition_id": partition_id,
             },
             attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
         )
         _logger.debug(
             "aggregate_window_partition_delete eid=%s partition=%d elapsed_ms=%.1f",
@@ -577,13 +599,14 @@ class FunctionStorageCfDo:
             (time.monotonic() - t0) * 1000,
         )
 
-    def aggregate_window_partition_clear(self, execution_id: bytes) -> None:
+    def aggregate_window_partition_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
         """Remove all cached partitions for an execution_id."""
         t0 = time.monotonic()
         self._post(
             "aggregate_window_partition_clear",
             {"execution_id": base64.b64encode(execution_id).decode()},
             attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
         )
         _logger.debug(
             "aggregate_window_partition_clear eid=%s elapsed_ms=%.1f",

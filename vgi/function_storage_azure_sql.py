@@ -25,8 +25,6 @@ from collections.abc import Callable
 
 import pymssql
 
-from vgi.function_storage import UnknownInvocationError
-
 __all__ = [
     "FunctionStorageAzureSql",
     "MissingTablesError",
@@ -230,7 +228,7 @@ class FunctionStorageAzureSql:
 
     # --- Worker State ---
 
-    def worker_put(self, execution_id: bytes, worker_id: int, state: bytes) -> None:
+    def worker_put(self, execution_id: bytes, worker_id: int, state: bytes, *, shard_key: str = "") -> None:
         """Store state for a specific worker."""
         if random.random() < 0.01:
             self.cleanup_old_entries(max_age_days=1.0)
@@ -263,7 +261,7 @@ class FunctionStorageAzureSql:
 
         self._execute_with_retry(_do)
 
-    def worker_collect(self, execution_id: bytes) -> list[bytes]:
+    def worker_collect(self, execution_id: bytes, *, shard_key: str = "") -> list[bytes]:
         """Atomically collect and delete all worker states."""
 
         def _do(conn: pymssql.Connection) -> list[bytes]:
@@ -289,7 +287,7 @@ class FunctionStorageAzureSql:
 
         return self._execute_with_retry(_do)
 
-    def worker_scan(self, execution_id: bytes) -> list[tuple[int, bytes]]:
+    def worker_scan(self, execution_id: bytes, *, shard_key: str = "") -> list[tuple[int, bytes]]:
         """Non-destructive read of (process_id, state_data) for execution_id."""
 
         def _do(conn: pymssql.Connection) -> list[tuple[int, bytes]]:
@@ -316,28 +314,28 @@ class FunctionStorageAzureSql:
 
     # --- Scan Worker State ---
 
-    def scan_worker_put(self, execution_id: bytes, stream_id: bytes, state: bytes) -> None:
+    def stream_state_put(self, execution_id: bytes, stream_id: bytes, state: bytes, *, shard_key: str = "") -> None:
         """Store per-(execution_id, stream_id) state.
 
         Not yet implemented for Azure SQL — raises so callers can detect
         the missing capability rather than silently dropping diagnostic
-        rows. Add the ``scan_worker_state`` table to the Azure schema
-        and an INSERT/UPSERT body here when this backend is brought back
-        into the matrix.
+        rows. Add a ``stream_state`` table to the Azure schema and an
+        INSERT/UPSERT body here when this backend is brought back into
+        the matrix.
         """
         raise NotImplementedError(
-            "scan_worker_state is not yet implemented for the Azure SQL backend."
+            "stream_state is not yet implemented for the Azure SQL backend."
         )
 
-    def scan_worker_scan(self, execution_id: bytes) -> list[tuple[bytes, bytes]]:
+    def stream_state_scan(self, execution_id: bytes, *, shard_key: str = "") -> list[tuple[bytes, bytes]]:
         """Non-destructive read of (stream_id, state_data) for execution_id."""
         raise NotImplementedError(
-            "scan_worker_state is not yet implemented for the Azure SQL backend."
+            "stream_state is not yet implemented for the Azure SQL backend."
         )
 
     # --- Work Queue ---
 
-    def queue_push(self, execution_id: bytes, items: list[bytes]) -> int:
+    def queue_push(self, execution_id: bytes, items: list[bytes], *, shard_key: str = "") -> int:
         """Add work items to the queue and register the invocation."""
 
         def _do(conn: pymssql.Connection) -> int:
@@ -372,75 +370,52 @@ class FunctionStorageAzureSql:
 
         return self._execute_with_retry(_do)
 
-    def queue_pop(self, execution_id: bytes) -> bytes | None:
+    def queue_pop(self, execution_id: bytes, *, shard_key: str = "") -> bytes | None:
         """Atomically claim one work item from the queue.
 
-        Raises:
-            UnknownInvocationError: If execution_id was never registered via
-                queue_push or has been cleared via queue_clear.
-
+        Returns None when the queue is empty *or* the execution_id was
+        never pushed — see the base-class docstring.
         """
 
         def _do(conn: pymssql.Connection) -> bytes | None:
             t0 = time.monotonic()
             cursor = conn.cursor()
-            # Combined registry check + atomic claim in a single round-trip.
-            # Uses OUTPUT INTO a table variable to avoid multiple result sets.
-            # Returns exactly one row:
-            #   (0, NULL)     → invocation not registered
-            #   (1, NULL)     → queue empty but registered
-            #   (1, <bytes>)  → item popped
+            # Atomic claim of the oldest work_queue row for this eid.
+            # OUTPUT deleted.work_item returns the claimed item (or no row
+            # when the queue is empty / unregistered — both surface as
+            # None to the caller).
             cursor.execute(
                 """
                 DECLARE @eid VARBINARY(16) = CAST(%s AS VARBINARY(16));
-                DECLARE @registered BIT = 0;
-                DECLARE @result TABLE (work_item VARBINARY(MAX));
-
-                IF EXISTS (SELECT 1 FROM invocation_registry WHERE execution_id = @eid)
-                BEGIN
-                    SET @registered = 1;
-                    ;WITH cte AS (
-                        SELECT TOP (1) *
-                        FROM work_queue WITH (ROWLOCK, UPDLOCK, READPAST)
-                        WHERE execution_id = @eid
-                        ORDER BY id ASC
-                    )
-                    DELETE FROM cte
-                    OUTPUT deleted.work_item INTO @result;
-                END
-
-                SELECT @registered AS registered, r.work_item
-                FROM (SELECT 1 AS x) AS dummy
-                LEFT JOIN @result AS r ON 1=1;
+                ;WITH cte AS (
+                    SELECT TOP (1) *
+                    FROM work_queue WITH (ROWLOCK, UPDLOCK, READPAST)
+                    WHERE execution_id = @eid
+                    ORDER BY id ASC
+                )
+                DELETE FROM cte
+                OUTPUT deleted.work_item;
                 """,
                 (execution_id,),
             )
             row = cursor.fetchone()
             conn.commit()
             elapsed_ms = (time.monotonic() - t0) * 1000
-            if row is None or not row[0]:
-                _logger.debug(
-                    "queue_pop eid=%s result=unregistered elapsed_ms=%.1f",
-                    execution_id.hex()[:8],
-                    elapsed_ms,
-                )
-                raise UnknownInvocationError(
-                    f"Invocation {execution_id.hex()} is not registered. "
-                    "Call queue_push first to register the invocation."
-                )
-            got_item = row[1] is not None
+            got_item = row is not None and row[0] is not None
             _logger.debug(
                 "queue_pop eid=%s result=%s elapsed_ms=%.1f",
                 execution_id.hex()[:8],
                 "item" if got_item else "empty",
                 elapsed_ms,
             )
-            result: bytes | None = row[1]  # type: ignore[assignment]
+            if not got_item:
+                return None
+            result: bytes = row[0]  # type: ignore[index]
             return result
 
         return self._execute_with_retry(_do)
 
-    def queue_clear(self, execution_id: bytes) -> int:
+    def queue_clear(self, execution_id: bytes, *, shard_key: str = "") -> int:
         """Clear all remaining work items and unregister the invocation."""
 
         def _do(conn: pymssql.Connection) -> int:
@@ -495,51 +470,51 @@ class FunctionStorageAzureSql:
 
     # --- Aggregate State ---
 
-    def aggregate_state_get(self, execution_id: bytes, group_ids: list[int]) -> list[tuple[int, bytes] | None]:
+    def aggregate_state_get(self, execution_id: bytes, group_ids: list[int], *, shard_key: str = "") -> list[tuple[int, bytes] | None]:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError("Aggregate functions are not yet supported with the Azure SQL storage backend.")
 
-    def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]]) -> None:
+    def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]], *, shard_key: str = "") -> None:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError("Aggregate functions are not yet supported with the Azure SQL storage backend.")
 
-    def aggregate_state_clear(self, execution_id: bytes) -> None:
+    def aggregate_state_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError("Aggregate functions are not yet supported with the Azure SQL storage backend.")
 
     # --- Transaction State ---
 
-    def transaction_state_get(self, transaction_id: bytes, keys: list[bytes]) -> list[bytes | None]:
+    def transaction_state_get(self, transaction_id: bytes, keys: list[bytes], *, shard_key: str = "") -> list[bytes | None]:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError("Transaction state is not yet supported with the Azure SQL storage backend.")
 
-    def transaction_state_put(self, transaction_id: bytes, items: list[tuple[bytes, bytes]]) -> None:
+    def transaction_state_put(self, transaction_id: bytes, items: list[tuple[bytes, bytes]], *, shard_key: str = "") -> None:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError("Transaction state is not yet supported with the Azure SQL storage backend.")
 
-    def transaction_state_clear(self, transaction_id: bytes) -> None:
+    def transaction_state_clear(self, transaction_id: bytes, *, shard_key: str = "") -> None:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError("Transaction state is not yet supported with the Azure SQL storage backend.")
 
-    def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes) -> None:
+    def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes, *, shard_key: str = "") -> None:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError(
             "Aggregate window functions are not yet supported with the Azure SQL storage backend."
         )
 
-    def aggregate_window_partition_get(self, execution_id: bytes, partition_id: int) -> bytes | None:
+    def aggregate_window_partition_get(self, execution_id: bytes, partition_id: int, *, shard_key: str = "") -> bytes | None:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError(
             "Aggregate window functions are not yet supported with the Azure SQL storage backend."
         )
 
-    def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int) -> None:
+    def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int, *, shard_key: str = "") -> None:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError(
             "Aggregate window functions are not yet supported with the Azure SQL storage backend."
         )
 
-    def aggregate_window_partition_clear(self, execution_id: bytes) -> None:
+    def aggregate_window_partition_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError(
             "Aggregate window functions are not yet supported with the Azure SQL storage backend."

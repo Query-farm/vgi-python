@@ -8,7 +8,6 @@ import pytest
 
 pymssql = pytest.importorskip("pymssql")
 
-from vgi.function_storage import UnknownInvocationError  # noqa: E402
 from vgi.function_storage_azure_sql import FunctionStorageAzureSql  # noqa: E402
 
 
@@ -155,8 +154,8 @@ class TestFunctionStorageAzureSql:
         """Test that queue_pop returns an item when available."""
         execution_id = b"\x02" * 16
 
-        # Combined SQL returns (registered, work_item)
-        mock_cursor.set_results([(1, b"item1")])
+        # OUTPUT deleted.work_item returns one row with the item bytes.
+        mock_cursor.set_results([(b"item1",)])
 
         result = storage.queue_pop(execution_id)
         assert result == b"item1"
@@ -169,20 +168,22 @@ class TestFunctionStorageAzureSql:
         """Test popping from registered but empty queue returns None."""
         execution_id = b"\x02" * 16
 
-        # Combined SQL returns (registered=1, work_item=NULL) for empty queue
-        mock_cursor.set_results([(1, None)])
+        # No row deleted → no OUTPUT row.
+        mock_cursor.set_results([])
 
         result = storage.queue_pop(execution_id)
         assert result is None
 
-    def test_queue_pop_unknown_invocation_raises(
+    def test_queue_pop_never_pushed_returns_none(
         self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor
     ) -> None:
-        """Test popping from unknown invocation raises error."""
-        # Combined SQL returns (registered=0, NULL) for unregistered invocation
-        mock_cursor.set_results([(0, None)])
-        with pytest.raises(UnknownInvocationError):
-            storage.queue_pop(b"\xff" * 16)
+        """Popping an id that was never pushed returns None.
+
+        No distinction from drained queue per the contract.
+        """
+        # Same wire shape as empty queue — no OUTPUT row.
+        mock_cursor.set_results([])
+        assert storage.queue_pop(b"\xff" * 16) is None
 
     def test_queue_push_empty_list(self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor) -> None:
         """Test pushing empty list returns 0."""

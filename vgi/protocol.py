@@ -487,7 +487,7 @@ class ScalarExchangeState(ExchangeState):
                 batch=batch,
                 init_call=self._init_call,
                 init_response=self._init_response,
-                storage=BoundStorage(cls.storage, self._init_response.execution_id),
+                storage=BoundStorage(cls.storage, self._init_response.execution_id, request=self._init_call, auth=ctx.auth),
                 auth_context=ctx.auth,
             )
             if inject_row:
@@ -665,7 +665,7 @@ class TableProducerState(ProducerState):
             output_schema=output_schema,
             settings=_batch_to_scalar_dict(self._init_call.bind_call.settings),
             secrets=SecretsAccessor(self._init_call.bind_call.secrets).to_dict(),
-            storage=BoundStorage(func_cls.storage, self._init_response.execution_id),
+            storage=BoundStorage(func_cls.storage, self._init_response.execution_id, request=self._init_call, auth=None),
         )
         # Restore _user_state from serialized bytes if available
         if self._user_state_bytes is not None:
@@ -813,7 +813,7 @@ class TableInOutExchangeState(ExchangeState):
             output_schema=output_schema,
             settings=_batch_to_scalar_dict(self._init_call.bind_call.settings),
             secrets=SecretsAccessor(self._init_call.bind_call.secrets).to_dict(),
-            storage=BoundStorage(func_cls.storage, self._init_response.execution_id),
+            storage=BoundStorage(func_cls.storage, self._init_response.execution_id, request=self._init_call, auth=None),
         )
         # Restore _user_state from serialized bytes if available
         if self._user_state_bytes is not None:

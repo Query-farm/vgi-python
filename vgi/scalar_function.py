@@ -678,7 +678,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
         result = cls.on_init(
             bind_call=input.bind_call,
             opaque_data=input.bind_opaque_data,
-            storage=BoundStorage(cls.storage, execution_id),
+            storage=BoundStorage(cls.storage, execution_id, request=input, auth=None),
         )
 
         return GlobalInitResponse(

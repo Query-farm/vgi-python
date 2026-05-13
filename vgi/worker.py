@@ -1786,7 +1786,7 @@ class Worker:
 
         # Store const arguments in FunctionStorage for later callbacks (group_id=-2).
         if request.arguments and request.arguments.positional:
-            storage = BoundStorage(func_cls.storage, execution_id)
+            storage = BoundStorage(func_cls.storage, execution_id, request=request, auth=ctx.auth)
             storage.aggregate_put([(-2, request.arguments.serialize_to_bytes())])
 
         return AggregateBindResponse(
@@ -1810,7 +1810,7 @@ class Worker:
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
         batch = pa.ipc.open_stream(request.input_batch).read_next_batch()
-        storage = BoundStorage(func_cls.storage, request.execution_id)
+        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
 
         # Strip __vgi_group_id and extract group_ids
         gid_col_idx = batch.schema.get_field_index(GROUP_COLUMN_NAME)
@@ -1917,7 +1917,7 @@ class Worker:
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
         merge_batch = pa.ipc.open_stream(request.merge_batch).read_next_batch()
-        storage = BoundStorage(func_cls.storage, request.execution_id)
+        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
 
         if merge_batch.num_rows == 0:
             return AggregateCombineResponse()
@@ -1987,7 +1987,7 @@ class Worker:
         group_ids: pa.Int64Array = group_ids_batch.column("group_id").cast(pa.int64())  # type: ignore[assignment]
         gid_list: list[int] = group_ids.to_pylist()  # type: ignore[assignment]
 
-        storage = BoundStorage(func_cls.storage, request.execution_id)
+        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
 
         if func_cls.state_class is None:
             raise ValueError(f"Aggregate function '{request.function_name}' has no state_class defined")
@@ -2045,7 +2045,7 @@ class Worker:
 
         # Called once when all states have been destroyed (C++ tracks with
         # destroy_counter == group_id_counter). Clear all FunctionStorage state.
-        storage = BoundStorage(func_cls.storage, request.execution_id)
+        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
         storage.aggregate_clear()
         # Safety sweep for windowed aggregates — in case a window_destructor
         # RPC was dropped mid-query.
@@ -2071,7 +2071,7 @@ class Worker:
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
-        storage = BoundStorage(func_cls.storage, request.execution_id)
+        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
         const_args = self._load_aggregate_const_args(func_cls, storage)
         params = ProcessParams(
             args=const_args,
@@ -2162,7 +2162,7 @@ class Worker:
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
-        storage = BoundStorage(func_cls.storage, request.execution_id)
+        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
         cached = self._load_cached_window_partition(
             func_cls, request.execution_id, request.partition_id, storage, request.function_name
         )
@@ -2281,7 +2281,7 @@ class Worker:
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
-        storage = BoundStorage(func_cls.storage, request.execution_id)
+        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
         cached = self._load_cached_window_partition(
             func_cls, request.execution_id, request.partition_id, storage, request.function_name
         )
@@ -2359,7 +2359,7 @@ class Worker:
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
-        storage = BoundStorage(func_cls.storage, request.execution_id)
+        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
         storage.aggregate_window_partition_delete(request.partition_id)
         _window_partition_cache.delete(request.execution_id, request.partition_id)
         return AggregateWindowDestructorResponse()
@@ -2384,10 +2384,10 @@ class Worker:
         # can rehydrate them via _load_aggregate_const_args if the function
         # declares const params.
         if request.arguments and request.arguments.positional:
-            storage = BoundStorage(func_cls.storage, execution_id)
+            storage = BoundStorage(func_cls.storage, execution_id, request=request, auth=ctx.auth)
             storage.aggregate_put([(-2, request.arguments.serialize_to_bytes())])
 
-        storage = BoundStorage(func_cls.storage, execution_id)
+        storage = BoundStorage(func_cls.storage, execution_id, request=request, auth=ctx.auth)
         const_args = self._load_aggregate_const_args(func_cls, storage)
         params = ProcessParams(
             args=const_args,
@@ -2434,7 +2434,7 @@ class Worker:
                 raise TypeError(
                     f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})"
                 )
-            cold_storage = BoundStorage(func_cls.storage, request.execution_id)
+            cold_storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
             import time as _t
 
             t_get_start = _t.perf_counter()
@@ -2452,7 +2452,7 @@ class Worker:
 
         chunk = pa.ipc.open_stream(request.input_batch).read_next_batch()
 
-        storage = BoundStorage(session.func_cls.storage, request.execution_id)
+        storage = BoundStorage(session.func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
         const_args = self._load_aggregate_const_args(session.func_cls, storage)
         params = ProcessParams(
             args=const_args,
@@ -2524,7 +2524,7 @@ class Worker:
             except Exception:  # noqa: BLE001
                 func_cls = None
             if func_cls is not None and issubclass(func_cls, AggregateFunction):
-                cold_storage = BoundStorage(func_cls.storage, request.execution_id)
+                cold_storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
                 payload = cold_storage.aggregate_window_partition_get(_STREAMING_SESSION_STORAGE_KEY)
                 if payload is not None:
                     session = _decode_streaming_session(payload, func_cls)
@@ -2533,7 +2533,7 @@ class Worker:
                 # Idempotent: nothing to clean up.
                 return AggregateStreamingCloseResponse()
 
-        storage = BoundStorage(session.func_cls.storage, request.execution_id)
+        storage = BoundStorage(session.func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
         const_args = self._load_aggregate_const_args(session.func_cls, storage)
         params = ProcessParams(
             args=const_args,

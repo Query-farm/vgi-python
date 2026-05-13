@@ -110,10 +110,12 @@ all operations are inherently atomic without locking.
 
 ### Setup
 
-1. Deploy the Cloudflare Worker (from `cloudflare/vgi-storage/`):
+1. Deploy the Cloudflare Worker. The Worker source lives in a separate
+   repository: [`vgi-cloudflare-durable-object-storage`](https://github.com/query-farm/vgi-cloudflare-durable-object-storage).
 
 ```bash
-cd cloudflare/vgi-storage
+git clone https://github.com/query-farm/vgi-cloudflare-durable-object-storage
+cd vgi-cloudflare-durable-object-storage
 npm install
 npx wrangler deploy
 ```

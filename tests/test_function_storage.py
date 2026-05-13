@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from vgi.function_storage import FunctionStorageSqlite, UnknownInvocationError
+from vgi.function_storage import FunctionStorageSqlite
 
 
 class TestFunctionStorageSqlite:
@@ -106,11 +106,13 @@ class TestFunctionStorageSqlite:
         result = storage.queue_pop(invocation_id)
         assert result is None
 
-    def test_queue_pop_unknown_invocation_raises(self, storage: FunctionStorageSqlite) -> None:
-        """Test popping from unknown invocation raises error."""
+    def test_queue_pop_never_pushed_returns_none(self, storage: FunctionStorageSqlite) -> None:
+        """Test popping an id that was never pushed returns None.
+
+        No distinction from drained queue per the contract.
+        """
         unknown_id = b"never_seen_before"
-        with pytest.raises(UnknownInvocationError):
-            storage.queue_pop(unknown_id)
+        assert storage.queue_pop(unknown_id) is None
 
     def test_queue_clear(self, storage: FunctionStorageSqlite) -> None:
         """Test clearing the work queue."""
@@ -123,26 +125,8 @@ class TestFunctionStorageSqlite:
         cleared = storage.queue_clear(invocation_id)
         assert cleared == 3
 
-        # After clear, invocation is unregistered so pop should raise
-        with pytest.raises(UnknownInvocationError):
-            storage.queue_pop(invocation_id)
-
-    def test_queue_clear_unregisters_invocation(self, storage: FunctionStorageSqlite) -> None:
-        """Test that queue_clear unregisters the invocation_id."""
-        invocation_id = b"inv123"
-
-        # Register by pushing
-        storage.queue_push(invocation_id, [b"item1"])
-
-        # Pop should work (known invocation)
-        storage.queue_pop(invocation_id)
-
-        # Clear unregisters
-        storage.queue_clear(invocation_id)
-
-        # Now pop should raise (unknown after clear)
-        with pytest.raises(UnknownInvocationError):
-            storage.queue_pop(invocation_id)
+        # After clear, pop returns None (queue is empty/unknown)
+        assert storage.queue_pop(invocation_id) is None
 
     def test_queue_push_empty_still_registers(self, storage: FunctionStorageSqlite) -> None:
         """Test that pushing empty list still registers invocation_id."""

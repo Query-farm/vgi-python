@@ -189,7 +189,7 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
             settings=_batch_to_scalar_dict(input.bind_call.settings),
             secrets=SecretsAccessor(input.bind_call.secrets).to_dict(),
             execution_id=execution_id,
-            storage=BoundStorage(cls.storage, execution_id),
+            storage=BoundStorage(cls.storage, execution_id, request=input, auth=auth),
             auth_context=auth,
         )
 

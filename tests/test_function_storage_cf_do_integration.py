@@ -22,7 +22,6 @@ import uuid
 import httpx
 import pytest
 
-from vgi.function_storage import UnknownInvocationError
 from vgi.function_storage_cf_do import FunctionStorageCfDo
 
 # Skip the entire module unless explicitly enabled.
@@ -193,21 +192,22 @@ def test_queue_pop_replay_returns_same_item(storage: FunctionStorageCfDo) -> Non
     assert storage.queue_pop(eid) == b"b"
 
 
-def test_queue_pop_unknown_invocation(storage: FunctionStorageCfDo) -> None:
-    """Verify pop against a never-pushed execution_id raises UnknownInvocationError."""
-    with pytest.raises(UnknownInvocationError):
-        storage.queue_pop(_eid())
+def test_queue_pop_never_pushed_returns_none(storage: FunctionStorageCfDo) -> None:
+    """Pop against a never-pushed execution_id returns None.
+
+    No distinction from drained queue per the contract.
+    """
+    assert storage.queue_pop(_eid()) is None
 
 
-def test_queue_clear_unregisters(storage: FunctionStorageCfDo) -> None:
-    """Clear must remove queue rows and unregister the invocation."""
+def test_queue_clear_then_pop_returns_none(storage: FunctionStorageCfDo) -> None:
+    """Clear removes queue rows; subsequent pop returns None (queue empty)."""
     eid = _eid()
     storage.queue_push(eid, [b"a", b"b"])
     cleared = storage.queue_clear(eid)
     assert cleared == 2
 
-    with pytest.raises(UnknownInvocationError):
-        storage.queue_pop(eid)
+    assert storage.queue_pop(eid) is None
 
 
 # ---------------------------------------------------------------------------
@@ -215,15 +215,15 @@ def test_queue_clear_unregisters(storage: FunctionStorageCfDo) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_scan_worker_put_and_scan_round_trip(storage: FunctionStorageCfDo) -> None:
+def test_stream_state_put_and_scan_round_trip(storage: FunctionStorageCfDo) -> None:
     """Round-trip scan worker state for two distinct stream_ids."""
     eid = _eid()
     sid_a = secrets.token_bytes(16)
     sid_b = secrets.token_bytes(16)
-    storage.scan_worker_put(eid, sid_a, b"alpha")
-    storage.scan_worker_put(eid, sid_b, b"beta")
+    storage.stream_state_put(eid, sid_a, b"alpha")
+    storage.stream_state_put(eid, sid_b, b"beta")
 
-    rows = dict(storage.scan_worker_scan(eid))
+    rows = dict(storage.stream_state_scan(eid))
     assert rows == {sid_a: b"alpha", sid_b: b"beta"}
 
 
@@ -289,7 +289,13 @@ def test_invalid_attempt_id_format_returns_400(storage: FunctionStorageCfDo) -> 
     import base64
 
     eid = _eid()
-    body = {"execution_id": base64.b64encode(eid).decode(), "attempt_id": "not-hex"}
+    body = {
+        "execution_id": base64.b64encode(eid).decode(),
+        "attempt_id": "not-hex",
+        # Worker rejects missing shard_key first; supply a placeholder so
+        # the attempt_id validation downstream is what we actually exercise.
+        "shard_key": "loc-anon",
+    }
     # Drive raw httpx so we can ship an arbitrary attempt_id string.
     resp = storage._client.post("/queue_pop", json=body)
     assert resp.status_code == 400
@@ -312,10 +318,7 @@ def test_concurrent_pops_no_dupes(storage: FunctionStorageCfDo) -> None:
     lock = threading.Lock()
 
     def pop() -> None:
-        try:
-            r = storage.queue_pop(eid)
-        except UnknownInvocationError:
-            r = None
+        r = storage.queue_pop(eid)
         with lock:
             results.append(r)
 
@@ -330,10 +333,14 @@ def test_concurrent_pops_no_dupes(storage: FunctionStorageCfDo) -> None:
     assert len(set(items)) == n_items, "no item must be popped twice"
 
 
-def test_health_check_get_returns_405(storage: FunctionStorageCfDo) -> None:
-    """Sanity: GET is rejected at the router."""
+def test_health_check_get_is_rejected(storage: FunctionStorageCfDo) -> None:
+    """Sanity: GET is rejected at the router.
+
+    Accept either 405 (when no auth token is configured) or 401 (when one
+    is — the router validates the bearer token before method).
+    """
     resp = httpx.get(_URL or "")
-    assert resp.status_code == 405
+    assert resp.status_code in (401, 405)
 
 
 # ---------------------------------------------------------------------------
