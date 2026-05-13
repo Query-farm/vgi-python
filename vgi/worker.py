@@ -377,6 +377,51 @@ class _WindowPartitionCache:
 _window_partition_cache = _WindowPartitionCache()
 
 
+# Sentinel for "we already looked this execution_id up and the worker has no
+# const args" — distinguishable from None (= "not yet looked up").
+_ABSENT_SENTINEL: Any = object()
+
+
+class _AggregateConstArgsCache:
+    """Process-local LRU of aggregate const_args, keyed by execution_id.
+
+    Const args are written once at aggregate_bind (under group_id=-2) and
+    never change. Every aggregate_update / aggregate_window / aggregate_finalize
+    needs them, and ``_load_aggregate_const_args`` would otherwise issue one
+    storage read per call — pathological under remote storage backends.
+
+    Cache holds either ``Arguments`` (positive hit), ``_ABSENT_SENTINEL``
+    (the worker has no const params; remember the negative result to skip
+    future reads), or absent (not yet looked up).
+    """
+
+    def __init__(self, max_size: int = 1024) -> None:
+        self._entries: OrderedDict[bytes, Any] = OrderedDict()
+        self._lock = Lock()
+        self._max_size = max_size
+
+    def get(self, execution_id: bytes) -> Any:
+        with self._lock:
+            entry = self._entries.get(execution_id)
+            if entry is not None:
+                self._entries.move_to_end(execution_id)
+            return entry
+
+    def put(self, execution_id: bytes, value: Any) -> None:
+        with self._lock:
+            self._entries[execution_id] = value
+            self._entries.move_to_end(execution_id)
+            while len(self._entries) > self._max_size:
+                self._entries.popitem(last=False)
+
+    def clear_execution(self, execution_id: bytes) -> None:
+        with self._lock:
+            self._entries.pop(execution_id, None)
+
+
+_aggregate_const_args_cache = _AggregateConstArgsCache()
+
+
 # Streaming-partitioned aggregate sessions: session state is held in an
 # in-process LRU cache for the fast path, and persisted to FunctionStorage
 # (under partition_id=0) so chunk RPCs that land on a different pool worker
@@ -1725,13 +1770,33 @@ class Worker:
         func_cls: type[AggregateFunction],  # type: ignore[type-arg]
         storage: BoundStorage,
     ) -> Arguments | None:
-        """Load const arguments stored during aggregate_bind (group_id=-2)."""
+        """Load const arguments stored during aggregate_bind (group_id=-2).
+
+        Cached in-process per execution_id. The const args are written once
+        at aggregate_bind time and never change, so a single ``aggregate_get``
+        is enough for the whole execution. Without the cache, windowed
+        aggregates would issue one storage read per output row — devastating
+        under remote storage backends like the CF Durable Object (~60 ms RTT
+        × N output rows).
+        """
         from vgi.arguments import Arguments
 
+        cached = _aggregate_const_args_cache.get(storage._execution_id)
+        if cached is _ABSENT_SENTINEL:
+            return None
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+
         result = storage.aggregate_get([-2])
-        if result[0] is not None:
-            return Arguments.deserialize_from_bytes(result[0][1])
-        return None
+        if result[0] is None:
+            # Most aggregates have no const params; cache the negative result
+            # so we don't re-hit storage on every aggregate_window /
+            # aggregate_update / etc.
+            _aggregate_const_args_cache.put(storage._execution_id, _ABSENT_SENTINEL)
+            return None
+        parsed = Arguments.deserialize_from_bytes(result[0][1])
+        _aggregate_const_args_cache.put(storage._execution_id, parsed)
+        return parsed
 
     def aggregate_bind(
         self,
@@ -2051,6 +2116,7 @@ class Worker:
         # RPC was dropped mid-query.
         storage.aggregate_window_partition_clear()
         _window_partition_cache.clear_execution(request.execution_id)
+        _aggregate_const_args_cache.clear_execution(request.execution_id)
 
         return AggregateDestructorResponse()
 
