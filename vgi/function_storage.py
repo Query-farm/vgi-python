@@ -16,6 +16,7 @@ Implementations:
 """
 
 import hashlib
+import logging
 import os
 import random
 import sqlite3
@@ -24,21 +25,31 @@ from typing import Any, Protocol
 
 import pyarrow as pa
 
+
+# When the parent vgi.* logger is configured at DEBUG, this emits one line
+# per BoundStorage construction with the resolved shard_key — handy for
+# cross-referencing storage-routing bugs with MetaWorker dispatch logs.
+_shard_logger = logging.getLogger("vgi.storage.shard")
+
 __all__ = [
     "FunctionStorage",
     "FunctionStorageSqlite",
 ]
 
 
-def _derive_shard_key(*, attach_id: bytes | None, auth: Any) -> str:
+def _derive_shard_key(*, attach_id: bytes | None, auth: Any, _origin: str = "?") -> str:
     """Return the routing key for the ``FunctionStorageCfDo`` Durable Object.
 
     Server-derived inside the trusted worker process. The CF DO routes by
     this key (``idFromName(shard_key)``), so one DO instance hosts every
     storage op carrying the same shard_key. Precedence:
 
-      1. ``attach_id`` (UUID4 minted by ``catalog_attach``) — one DO per
-         ATTACH window. Best amortization for ATTACH-ed catalogs.
+      1. ``attach_id`` (worker-vended bytes from ``catalog_attach``) — one
+         DO per logical ATTACH. Best amortization for ATTACH-ed catalogs.
+         Note: workers are NOT required to make attach_ids globally unique,
+         so collisions across processes are possible. MetaWorker prepends
+         a 1-byte sub-worker index, which keeps shards distinct *within*
+         one DuckDB session.
       2. Hash of ``(auth.domain, auth.principal)`` — HTTP transport,
          authenticated, no ATTACH. One DO per (user, deployment).
       3. ``"loc-anon"`` — anonymous, no-ATTACH callers. Single shared DO
@@ -47,15 +58,29 @@ def _derive_shard_key(*, attach_id: bytes | None, auth: Any) -> str:
          (subprocess transport, local CLIs) are typically dev/test.
 
     No-op for non-CfDo backends — they ignore the value.
+
+    ``_origin`` labels the call site (e.g. ``"BoundStorage(InitRequest)"``).
+    Emitted as a ``vgi.storage.shard`` debug log for cross-referencing
+    storage-routing bugs with MetaWorker dispatch logs.
     """
     if attach_id is not None:
-        return "att-" + attach_id.hex()
-    if auth is not None and getattr(auth, "authenticated", False):
+        key = "att-" + attach_id.hex()
+    elif auth is not None and getattr(auth, "authenticated", False):
         domain = getattr(auth, "domain", "")
         principal = getattr(auth, "principal", "")
         digest = hashlib.sha256(f"{domain}\0{principal}".encode()).hexdigest()
-        return "prn-" + digest[:32]
-    return "loc-anon"
+        key = "prn-" + digest[:32]
+    else:
+        key = "loc-anon"
+    if _shard_logger.isEnabledFor(logging.DEBUG):
+        _shard_logger.debug(
+            "shard derived origin=%s attach_id=%s authed=%d key=%s",
+            _origin,
+            attach_id.hex()[:16] if attach_id else "-",
+            int(bool(auth is not None and getattr(auth, "authenticated", False))),
+            key,
+        )
+    return key
 
 
 def _scan_worker_stream_id() -> bytes:
@@ -434,13 +459,15 @@ class TransactionBoundStorage:
         # BoundStorage), or pass request= / attach_id= / auth= and let us
         # derive. See BoundStorage for the request= polymorphism.
         if shard_key is None:
+            origin = "TransactionBoundStorage"
             if attach_id is None and request is not None:
                 attach_id = getattr(request, "attach_id", None)
                 if attach_id is None:
                     bind_call = getattr(request, "bind_call", None)
                     if bind_call is not None:
                         attach_id = getattr(bind_call, "attach_id", None)
-            shard_key = _derive_shard_key(attach_id=attach_id, auth=auth)
+                origin = f"TransactionBoundStorage({type(request).__name__})"
+            shard_key = _derive_shard_key(attach_id=attach_id, auth=auth, _origin=origin)
         self._shard_key = shard_key
 
     def get(self, keys: list[bytes]) -> list[bytes | None]:
@@ -488,13 +515,15 @@ class BoundStorage:
         # or ``request.bind_call.attach_id`` (InitRequest). Callers may
         # alternatively pass ``attach_id=`` directly; anonymous callers
         # fall through to "loc-anon".
+        origin = "BoundStorage"
         if attach_id is None and request is not None:
             attach_id = getattr(request, "attach_id", None)
             if attach_id is None:
                 bind_call = getattr(request, "bind_call", None)
                 if bind_call is not None:
                     attach_id = getattr(bind_call, "attach_id", None)
-        self._shard_key = _derive_shard_key(attach_id=attach_id, auth=auth)
+            origin = f"BoundStorage({type(request).__name__})"
+        self._shard_key = _derive_shard_key(attach_id=attach_id, auth=auth, _origin=origin)
 
     def transaction(self, transaction_id: bytes) -> TransactionBoundStorage:
         """Return a transaction-scoped storage view.

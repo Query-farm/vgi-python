@@ -2666,7 +2666,7 @@ class Worker:
                 output_schema=output_schema,
                 settings=_batch_to_scalar_dict(request.bind_call.settings),
                 secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
-                storage=BoundStorage(type(instance).storage, init_response.execution_id),
+                storage=BoundStorage(type(instance).storage, init_response.execution_id, request=request, auth=ctx.auth),
                 auth_context=ctx.auth,
             )
 
@@ -2700,7 +2700,7 @@ class Worker:
                 output_schema=output_schema,
                 settings=_batch_to_scalar_dict(request.bind_call.settings),
                 secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
-                storage=BoundStorage(type(instance).storage, init_response.execution_id),
+                storage=BoundStorage(type(instance).storage, init_response.execution_id, request=request, auth=ctx.auth),
                 auth_context=ctx.auth,
             )
             user_state = type(instance).initial_state(params)
