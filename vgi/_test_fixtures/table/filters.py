@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Annotated, ClassVar
 
 import pyarrow as pa
-from vgi_rpc import ArrowSerializableDataclass, Transient
+from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import OutputCollector
 
 from vgi._test_fixtures.table._common import (
@@ -78,11 +78,17 @@ class FilterEchoFunctionArgs:
 
 @dataclass(kw_only=True)
 class FilterEchoState(ArrowSerializableDataclass):
-    """Mutable state tracking remaining rows, position, and cached filter string."""
+    """Mutable state tracking remaining rows, position, and cached filter string.
+
+    ``filter_str`` is serialized (not Transient): the framework's HTTP
+    rehydrate path deserializes user state but does not re-invoke
+    ``initial_state``, so a Transient filter string would silently revert
+    to ``"(none)"`` after the first state-token round-trip.
+    """
 
     remaining: int
     current_index: int = 0
-    filter_str: Annotated[str, Transient()] = "(none)"
+    filter_str: str = "(none)"
 
 
 @init_single_worker
@@ -539,12 +545,19 @@ class _FilterEchoPartitionedArgs:
 
 @dataclass(kw_only=True)
 class _FilterEchoPartitionedState(ArrowSerializableDataclass):
-    """Per-worker state. Re-derives filter_str from init_call after rehydrate."""
+    """Per-worker state.
+
+    ``filter_str`` is serialized (not Transient): the framework's HTTP
+    rehydrate path deserializes user state but does not re-invoke
+    ``initial_state``, so a Transient filter string would silently revert
+    to ``"(none)"`` after the first state-token round-trip — losing the
+    pushed-filter echo on every batch produced after a resume.
+    """
 
     current_start: int | None = None
     current_end: int | None = None
     current_idx: int = 0
-    filter_str: Annotated[str, Transient()] = "(none)"
+    filter_str: str = "(none)"
 
 
 @bind_fixed_schema
