@@ -25,9 +25,61 @@ FieldSpec = pa.DataType | tuple[pa.DataType, dict[bytes | str, bytes | str]]
 
 __all__ = [
     "FieldSpec",
+    "VGI_PARTITION_COLUMN_KEY",
+    "partition_field",
     "schema",
     "schema_like",
 ]
+
+#: KeyValueMetadata key that marks an Arrow field as a partition column
+#: for VGI's Hive-style partitioning (PartitionColumns mode). Workers
+#: opt in by setting ``Meta.partition_kind`` to a non-default
+#: :class:`vgi.metadata.PartitionKind` AND annotating at least one
+#: field of their bind schema with this key.
+VGI_PARTITION_COLUMN_KEY: bytes = b"vgi.partition_column"
+
+
+def partition_field(
+    name: str,
+    type: pa.DataType,
+    *,
+    nullable: bool = True,
+    metadata: dict[bytes | str, bytes | str] | None = None,
+) -> pa.Field:
+    """Build a ``pa.Field`` marked as a VGI partition column.
+
+    Equivalent to::
+
+        pa.field(name, type, nullable=nullable,
+                 metadata={VGI_PARTITION_COLUMN_KEY: b"true",
+                           **(metadata or {})})
+
+    Use in a bind schema when the function opts into PartitionColumns
+    mode by setting ``Meta.partition_kind`` to a non-default
+    :class:`vgi.metadata.PartitionKind`. Per-field metadata round-trips
+    through Arrow IPC, so the C++ extension can identify partition
+    columns from ``bind_result.output_schema`` without a parallel
+    list-of-names.
+
+    Args:
+        name: Column name.
+        type: Arrow data type.
+        nullable: Whether the column can contain nulls.
+        metadata: Extra field-level metadata to merge with the
+            partition-column marker. Useful for extension types
+            (e.g. geoarrow.wkb's ``ARROW:extension:name`` key).
+
+    Returns:
+        A ``pa.Field`` carrying ``{VGI_PARTITION_COLUMN_KEY: b"true"}``
+        in its metadata.
+    """
+    merged: dict[bytes, bytes] = {VGI_PARTITION_COLUMN_KEY: b"true"}
+    if metadata:
+        for k, v in metadata.items():
+            key = k if isinstance(k, bytes) else k.encode()
+            val = v if isinstance(v, bytes) else v.encode()
+            merged[key] = val
+    return pa.field(name, type, nullable=nullable, metadata=merged)
 
 
 def schema(

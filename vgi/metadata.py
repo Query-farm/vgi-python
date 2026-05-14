@@ -157,6 +157,46 @@ class OrderPreservation(Enum):
     (single worker) to preserve it (DuckDB FIXED_ORDER)."""
 
 
+class PartitionKind(Enum):
+    """Partition shape declared by a table function over its
+    ``vgi.partition_column``-annotated bind-schema fields.
+
+    Mirrors DuckDB's ``TablePartitionInfo`` at
+    ``duckdb/src/include/duckdb/function/partition_stats.hpp:20``.
+
+    The C++ extension returns this from ``TableFunction::get_partition_info``;
+    DuckDB's planner currently consumes only ``SINGLE_VALUE_PARTITIONS``
+    (to plan ``PhysicalPartitionedAggregate`` over ``PhysicalHashAggregate``;
+    see ``plan_aggregate.cpp:109``). The other values are declarable
+    so the protocol is future-proof; today they fall back to
+    ``HASH_GROUP_BY``.
+
+    Only set this to a non-default value when at least one field in
+    the bind schema is annotated with
+    ``{b"vgi.partition_column": b"true"}`` (use
+    :func:`vgi.schema_utils.partition_field` to construct such fields).
+    The reverse is also required — annotated fields without a
+    matching ``partition_kind`` raise at worker startup.
+    """
+
+    NOT_PARTITIONED = auto()
+    """Function does not declare partitioning over the annotated columns
+    (default; same effect as leaving fields un-annotated)."""
+
+    SINGLE_VALUE_PARTITIONS = auto()
+    """Each emitted chunk has exactly one distinct value per partition
+    column. Unlocks ``PhysicalPartitionedAggregate`` for ``GROUP BY``
+    over those columns."""
+
+    OVERLAPPING_PARTITIONS = auto()
+    """Partitions overlap only at boundaries (bounds = [1,2][2,3][3,4]).
+    Wire-level declarable; DuckDB has no consumer today."""
+
+    DISJOINT_PARTITIONS = auto()
+    """Partitions are pairwise disjoint (bounds = [1,2][3,4][5,6]).
+    Wire-level declarable; DuckDB has no consumer today."""
+
+
 class OrderDependence(Enum):
     """Aggregate order sensitivity.
 
@@ -336,6 +376,7 @@ class ResolvedMetadata:
     preserves_order: OrderPreservation = OrderPreservation.PRESERVES_ORDER
     max_workers: int | None = None
     supports_batch_index: bool = False
+    partition_kind: PartitionKind = PartitionKind.NOT_PARTITIONED
 
     # Aggregate function specific
     order_dependent: OrderDependence = OrderDependence.NOT_ORDER_DEPENDENT
@@ -371,6 +412,7 @@ class ResolvedMetadata:
             "preserves_order": self.preserves_order.name,
             "max_workers": self.max_workers,
             "supports_batch_index": self.supports_batch_index,
+            "partition_kind": self.partition_kind.name,
             "order_dependent": self.order_dependent.name,
             "distinct_dependent": self.distinct_dependent.name,
             "supports_window": self.supports_window,
@@ -401,6 +443,7 @@ class ResolvedMetadata:
             preserves_order=OrderPreservation[d.get("preserves_order", "PRESERVES_ORDER")],
             max_workers=d.get("max_workers"),
             supports_batch_index=d.get("supports_batch_index", False),
+            partition_kind=PartitionKind[d.get("partition_kind", "NOT_PARTITIONED")],
             order_dependent=OrderDependence[d.get("order_dependent", "NOT_ORDER_DEPENDENT")],
             distinct_dependent=DistinctDependence[d.get("distinct_dependent", "NOT_DISTINCT_DEPENDENT")],
             supports_window=d.get("supports_window", False),
@@ -788,6 +831,7 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         "preserves_order",
         "max_workers",
         "supports_batch_index",  # opt-in to per-batch batch_index tagging (parallel + ordered sink)
+        "partition_kind",  # opt-in to PartitionColumns mode for Hive-style partitioning
         # Table-in-out specific: explicit override for the has_finalize auto-detection.
         # Set to True or False to force the emitted ``in_out_function_final``
         # registration bit; leave unset (None) to auto-detect from finish/finalize.
@@ -959,12 +1003,70 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         preserves_order=attrs.get("preserves_order", OrderPreservation.PRESERVES_ORDER),
         max_workers=attrs.get("max_workers"),
         supports_batch_index=bool(attrs.get("supports_batch_index", False)),
+        partition_kind=_validate_partition_kind(
+            cls, attrs.get("partition_kind", PartitionKind.NOT_PARTITIONED)
+        ),
         order_dependent=attrs.get("order_dependent", OrderDependence.NOT_ORDER_DEPENDENT),
         distinct_dependent=attrs.get("distinct_dependent", DistinctDependence.NOT_DISTINCT_DEPENDENT),
         supports_window=bool(attrs.get("supports_window", False)),
         streaming_partitioned=bool(attrs.get("streaming_partitioned", False)),
         has_finalize=_detect_has_finalize(cls, function_type),
     )
+
+
+def _validate_partition_kind(cls: type, kind: PartitionKind) -> PartitionKind:
+    """Cross-check ``Meta.partition_kind`` against the bind schema.
+
+    When the class exposes a static ``FIXED_SCHEMA`` ``ClassVar``
+    (the common pattern in test fixtures), we can verify at
+    registration time that:
+
+    * ``kind != NOT_PARTITIONED`` ⇒ at least one field carries the
+      ``vgi.partition_column`` metadata key (via
+      :func:`vgi.schema_utils.partition_field`).
+    * The reverse: any field annotated as a partition column ⇒
+      ``kind != NOT_PARTITIONED``.
+
+    For functions that compute their bind schema dynamically (no
+    ``FIXED_SCHEMA`` available at class-resolution time), the check
+    is deferred to the framework's bind path — the C++ extension's
+    bind-time walk also raises ``BinderException`` on mismatch.
+
+    Returns the validated kind unchanged.
+    """
+    # Static-schema fast path. ``FIXED_SCHEMA`` is the established
+    # pattern for fixed-output table functions (see e.g.
+    # ``PartitionedBatchIndexFunction.FIXED_SCHEMA``).
+    fixed_schema = getattr(cls, "FIXED_SCHEMA", None)
+    if not isinstance(fixed_schema, pa.Schema):
+        # Dynamic schema or not a table function — defer to bind-time
+        # validation in the C++ extension.
+        return kind
+
+    from vgi.schema_utils import VGI_PARTITION_COLUMN_KEY
+    annotated_fields: list[str] = []
+    for field in fixed_schema:
+        md = field.metadata
+        if md is not None and md.get(VGI_PARTITION_COLUMN_KEY) == b"true":
+            annotated_fields.append(field.name)
+
+    if kind == PartitionKind.NOT_PARTITIONED and annotated_fields:
+        raise ValueError(
+            f"{cls.__name__}: bind schema has partition-annotated field(s) "
+            f"{annotated_fields!r} but Meta.partition_kind is NOT_PARTITIONED. "
+            f"Set Meta.partition_kind to a non-default PartitionKind, or "
+            f"remove the partition_field() annotations."
+        )
+    if kind != PartitionKind.NOT_PARTITIONED and not annotated_fields:
+        raise ValueError(
+            f"{cls.__name__}: Meta.partition_kind is {kind.name} but no bind "
+            f"schema field is annotated with vgi.partition_column. Use "
+            f"vgi.schema_utils.partition_field(name, type) to mark the "
+            f"column(s) that satisfy the partition contract, or set "
+            f"Meta.partition_kind back to NOT_PARTITIONED."
+        )
+
+    return kind
 
 
 def _detect_has_finalize(cls: type, function_type: CatalogFunctionType) -> bool:
@@ -1048,6 +1150,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("preserves_order", pa.string()),
         pa.field("max_workers", pa.int32(), nullable=True),
         pa.field("supports_batch_index", pa.bool_()),
+        pa.field("partition_kind", pa.string()),
         pa.field("order_dependent", pa.string()),
         pa.field("distinct_dependent", pa.string()),
         pa.field("supports_window", pa.bool_()),

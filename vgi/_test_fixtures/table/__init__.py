@@ -29,6 +29,18 @@ from vgi._test_fixtures.table.batch_index_broken import (
     MissingBatchIndexTagFunction,
     NonMonotoneBatchIndexFunction,
 )
+from vgi._test_fixtures.table.partition_columns import (
+    CountryPartitionedSalesFunction,
+    DisjointRangePartitionedFunction,
+    PartitionedWithExplicitOverrideFunction,
+    RegionYearPartitionedFunction,
+)
+from vgi._test_fixtures.table.partition_columns_broken import (
+    BrokenMissingPartitionValuesFunction,
+    BrokenPartitionColumnAbsentFromBatchFunction,
+    BrokenPartitionMinNeqMaxFunction,
+    BrokenPartitionValuesNoAnnotationFunction,
+)
 from vgi._test_fixtures.table.catalog_scans import (
     ColorsScanFunction,
     DepartmentsScanFunction,
@@ -110,8 +122,14 @@ __all__ = [
     "_VERSIONED_DATA",
     "_VERSIONED_SCHEMAS",
     "BatchIndexOverflowFunction",
+    "BrokenMissingPartitionValuesFunction",
+    "BrokenPartitionColumnAbsentFromBatchFunction",
+    "BrokenPartitionMinNeqMaxFunction",
+    "BrokenPartitionValuesNoAnnotationFunction",
     "ColorsScanFunction",
     "ConstantColumnsFunction",
+    "CountryPartitionedSalesFunction",
+    "DisjointRangePartitionedFunction",
     "DepartmentsScanFunction",
     "DoubleSequenceFunction",
     "DynamicFilterEchoFunction",
@@ -140,10 +158,12 @@ __all__ = [
     "PartitionedNoOrderGuaranteeFunction",
     "PartitionedPreservesOrderFunction",
     "PartitionedSequenceFunction",
+    "PartitionedWithExplicitOverrideFunction",
     "ProductsScanFunction",
     "ProfilingDemoFunction",
     "ProjectedDataFunction",
     "ProjectsScanFunction",
+    "RegionYearPartitionedFunction",
     "RepeatValueIntFunction",
     "RepeatValueStrFunction",
     "RowIdSequenceFunction",

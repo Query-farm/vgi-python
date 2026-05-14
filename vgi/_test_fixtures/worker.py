@@ -119,6 +119,12 @@ from vgi._test_fixtures.table import (
     NamedParamsEchoFunction,
     NestedSequenceFunction,
     BatchIndexOverflowFunction,
+    BrokenMissingPartitionValuesFunction,
+    BrokenPartitionColumnAbsentFromBatchFunction,
+    BrokenPartitionMinNeqMaxFunction,
+    BrokenPartitionValuesNoAnnotationFunction,
+    CountryPartitionedSalesFunction,
+    DisjointRangePartitionedFunction,
     MissingBatchIndexTagFunction,
     NonMonotoneBatchIndexFunction,
     OrderEchoFunction,
@@ -128,10 +134,12 @@ from vgi._test_fixtures.table import (
     PartitionedNoOrderGuaranteeFunction,
     PartitionedPreservesOrderFunction,
     PartitionedSequenceFunction,
+    PartitionedWithExplicitOverrideFunction,
     ProductsScanFunction,
     ProfilingDemoFunction,
     ProjectedDataFunction,
     ProjectsScanFunction,
+    RegionYearPartitionedFunction,
     RepeatValueIntFunction,
     RepeatValueStrFunction,
     RowIdSequenceFunction,
@@ -307,6 +315,12 @@ _EXAMPLE_CATALOG = Catalog(
                 PartitionedNoOrderGuaranteeFunction,
                 PartitionedPreservesOrderFunction,
                 PartitionedSequenceFunction,
+                # PartitionColumns (Hive-style partitioning) reference fixtures
+                # — see vgi/_test_fixtures/table/partition_columns.py.
+                CountryPartitionedSalesFunction,
+                DisjointRangePartitionedFunction,
+                PartitionedWithExplicitOverrideFunction,
+                RegionYearPartitionedFunction,
                 # Deliberately-broken batch_index fixtures (see
                 # vgi/_test_fixtures/table/batch_index_broken.py). Registered
                 # so SQL integration tests in batch_index_contract.test can
@@ -315,6 +329,12 @@ _EXAMPLE_CATALOG = Catalog(
                 BatchIndexOverflowFunction,
                 MissingBatchIndexTagFunction,
                 NonMonotoneBatchIndexFunction,
+                # Deliberately-broken PartitionColumns fixtures (see
+                # vgi/_test_fixtures/table/partition_columns_broken.py).
+                BrokenMissingPartitionValuesFunction,
+                BrokenPartitionColumnAbsentFromBatchFunction,
+                BrokenPartitionMinNeqMaxFunction,
+                BrokenPartitionValuesNoAnnotationFunction,
                 ProjectedDataFunction,
                 SampleEchoFunction,
                 RowIdSequenceFunction,

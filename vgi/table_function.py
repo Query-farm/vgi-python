@@ -723,6 +723,19 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         meta = getattr(cls, "Meta", None)
         return bool(getattr(meta, "supports_batch_index", False))
 
+    @classmethod
+    def _partition_kind(cls) -> Any:
+        """Return Meta.partition_kind, defaulting to ``NOT_PARTITIONED``.
+
+        Drives the ``partition_values=`` kwarg validation on ``out.emit()``
+        in the table-producer harness. Imported lazily so the base class
+        doesn't pull in ``vgi.metadata`` at module load time.
+        """
+        from vgi.metadata import PartitionKind
+
+        meta = getattr(cls, "Meta", None)
+        return getattr(meta, "partition_kind", PartitionKind.NOT_PARTITIONED)
+
     @staticmethod
     def _apply_pushdown_filter(batch: pa.RecordBatch, pushdown_filters: PushdownFilters | None) -> pa.RecordBatch:
         """Apply pushdown filters to a batch if present.

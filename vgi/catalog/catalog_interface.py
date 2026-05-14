@@ -41,6 +41,7 @@ from vgi.metadata import (
     NullHandling,
     OrderDependence,
     OrderPreservation,
+    PartitionKind,
 )
 
 __all__ = [
@@ -50,6 +51,7 @@ __all__ = [
     "NullHandling",
     "OrderDependence",
     "OrderPreservation",
+    "PartitionKind",
     # Catalog-specific
     "CatalogExample",
     "CatalogInfo",
@@ -448,6 +450,16 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     # partition-id order. Opting in also skips the FIXED_ORDER MaxThreads=1
     # clamp; the source stays parallel and the sink does the ordering.
     supports_batch_index: bool = False
+    # Partition shape declared by the function over its
+    # ``vgi.partition_column``-annotated bind-schema fields. When non-
+    # ``NOT_PARTITIONED``, the DuckDB extension installs
+    # ``TableFunction::get_partition_info`` returning the corresponding
+    # ``TablePartitionInfo`` value so the planner can pick
+    # ``PhysicalPartitionedAggregate`` for ``GROUP BY`` queries (today,
+    # only ``SINGLE_VALUE_PARTITIONS`` materially changes planner
+    # behavior). Per-column annotation lives in the bind schema's
+    # field-level metadata — see ``vgi.schema_utils.partition_field``.
+    partition_kind: PartitionKind = PartitionKind.NOT_PARTITIONED
 
     # Aggregate function fields (future)
     order_dependent: OrderDependence = OrderDependence.NOT_ORDER_DEPENDENT
@@ -2267,6 +2279,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             order_preservation=None if is_scalar else meta.preserves_order,
             max_workers=None if is_scalar else meta.max_workers,
             supports_batch_index=False if is_scalar else meta.supports_batch_index,
+            partition_kind=PartitionKind.NOT_PARTITIONED if is_scalar else meta.partition_kind,
             # Aggregate function fields
             order_dependent=meta.order_dependent,
             distinct_dependent=meta.distinct_dependent,

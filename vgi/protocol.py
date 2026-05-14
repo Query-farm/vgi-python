@@ -20,12 +20,14 @@ StreamState Implementations
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, Protocol, get_args, get_origin
 
 import pyarrow as pa
+import pyarrow.compute as pc
 from vgi_rpc import ArrowSerializableDataclass, ArrowType, Transient
 from vgi_rpc.rpc import (
     AnnotatedBatch,
@@ -46,6 +48,7 @@ from vgi.catalog.catalog_interface import (
     MacroInfo,
     MacroType,
     OnConflict,
+    PartitionKind,
     SchemaInfo,
     SchemaObjectType,
     TableInfo,
@@ -540,6 +543,175 @@ def _resolve_state_type(func_cls: type) -> type[ArrowSerializableDataclass] | No
     return None
 
 
+def _partition_fields_from_schema(bind_schema: pa.Schema) -> list[pa.Field]:
+    """Walk a bind schema and return fields annotated as partition columns.
+
+    Recognises the ``vgi.partition_column = b"true"`` field metadata
+    set by :func:`vgi.schema_utils.partition_field`. Used by the
+    table-producer harness to precompute the list of partition fields
+    once at wrapper construction, so per-emit validation only does an
+    O(P) walk where P is the partition column count.
+    """
+    from vgi.schema_utils import VGI_PARTITION_COLUMN_KEY
+
+    result: list[pa.Field] = []
+    for f in bind_schema:
+        md = f.metadata
+        if md is not None and md.get(VGI_PARTITION_COLUMN_KEY) == b"true":
+            result.append(f)
+    return result
+
+
+def _resolve_partition_min_max(
+    field: pa.Field,
+    partition_kind: PartitionKind,
+    batch: pa.RecordBatch,
+    explicit: dict[str, tuple[pa.Scalar, pa.Scalar]] | None,
+) -> tuple[pa.Scalar, pa.Scalar]:
+    """Resolve ``(min, max)`` for one partition column.
+
+    Two paths:
+    * Explicit: ``explicit[field.name]`` is a ``(pa.Scalar, pa.Scalar)``
+      tuple with both elements typed to ``field.type``.
+    * Auto-extract: read the column from the batch, derive
+      ``(min, max)``. For SINGLE_VALUE, also validate single distinct
+      non-null value.
+    """
+    if explicit is not None and field.name in explicit:
+        pair = explicit[field.name]
+        if not isinstance(pair, tuple) or len(pair) != 2:
+            raise RuntimeError(
+                f"partition_values[{field.name!r}] must be (min, max) tuple; got {pair!r}"
+            )
+        min_s, max_s = pair
+        if not isinstance(min_s, pa.Scalar) or not isinstance(max_s, pa.Scalar):
+            raise RuntimeError(
+                f"partition_values[{field.name!r}] elements must be pa.Scalar; "
+                f"got ({type(min_s).__name__}, {type(max_s).__name__})"
+            )
+        if min_s.type != field.type:
+            raise RuntimeError(
+                f"partition_values[{field.name!r}] min type mismatch: "
+                f"declared {field.type}, got {min_s.type}"
+            )
+        if max_s.type != field.type:
+            raise RuntimeError(
+                f"partition_values[{field.name!r}] max type mismatch: "
+                f"declared {field.type}, got {max_s.type}"
+            )
+        return min_s, max_s
+
+    # Auto-extract path.
+    try:
+        column = batch.column(field.name)
+    except KeyError as exc:
+        raise RuntimeError(
+            f"column {field.name!r} is partition-annotated but absent from emitted batch; "
+            f"pass partition_values={{{field.name!r}: (pa.scalar(...), pa.scalar(...))}}"
+        ) from exc
+
+    if partition_kind == PartitionKind.SINGLE_VALUE_PARTITIONS:
+        # Count distinct non-null values; SINGLE_VALUE requires <= 1.
+        # All-NULL columns are accepted: DuckDB routes NULL as its own
+        # partition (Value::NotDistinctFrom(NULL, NULL) is true).
+        non_null = pc.drop_null(column)
+        if len(non_null) > 0:
+            unique = pc.unique(non_null)
+            if len(unique) > 1:
+                raise RuntimeError(
+                    f"column {field.name!r} has {len(unique)} distinct values; "
+                    f"partition_kind=SINGLE_VALUE_PARTITIONS requires 1"
+                )
+
+    # ``pa.compute.min_max`` returns a scalar struct with min/max fields.
+    # For all-null columns it returns null/null of the column's type,
+    # which is exactly what we want.
+    mm_struct = pc.min_max(column)
+    return mm_struct["min"], mm_struct["max"]
+
+
+def _build_partition_values_batch(
+    partition_fields: list[pa.Field],
+    resolved: dict[str, tuple[pa.Scalar, pa.Scalar]],
+) -> pa.RecordBatch:
+    """Build the 2-row ``(min, max)`` RecordBatch from resolved scalars."""
+    arrays: list[pa.Array] = []
+    fields: list[pa.Field] = []
+    for field in partition_fields:
+        min_s, max_s = resolved[field.name]
+        # pa.array([scalar, scalar]) infers the same type as the scalars;
+        # the resolve step already validated those match field.type, so a
+        # direct cast is a no-op except for any storage-layout normalisation.
+        arr = pa.array([min_s, max_s], type=field.type)
+        arrays.append(arr)
+        fields.append(field)
+    return pa.RecordBatch.from_arrays(arrays, schema=pa.schema(fields))
+
+
+def _serialize_partition_values_batch(batch: pa.RecordBatch) -> str:
+    """Serialize via Arrow IPC stream + base64 (matches the
+    ``vgi_rpc.stream_state#b64`` convention used elsewhere).
+    """
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, batch.schema) as writer:
+        writer.write_batch(batch)
+    return base64.b64encode(sink.getvalue().to_pybytes()).decode("ascii")
+
+
+def _merge_partition_values(
+    *,
+    partition_fields: list[pa.Field],
+    partition_kind: PartitionKind,
+    batch: pa.RecordBatch,
+    partition_values: dict[str, tuple[pa.Scalar, pa.Scalar]] | None,
+    metadata: dict[str, str] | None,
+) -> dict[str, str] | None:
+    """Validate the partition_values kwarg and fold the resulting Arrow
+    IPC bytes into the emit metadata dict under ``vgi_partition_values#b64``.
+
+    Contract:
+
+    * If ``partition_fields`` is empty (function did not annotate any
+      partition column), then ``partition_values`` MUST be None —
+      catches "I forgot to mark fields" bugs that would otherwise
+      silently drop the kwarg.
+    * If ``partition_fields`` is non-empty AND ``batch.num_rows == 0``:
+      no metadata is emitted (empty-batch exemption — the C++ extension
+      skips its requirement check on 0-row batches).
+    * Otherwise: for each partition field, resolve ``(min, max)`` via
+      :func:`_resolve_partition_min_max`. Build a 2-row IPC batch,
+      serialize, base64-encode, set
+      ``metadata["vgi_partition_values#b64"]``.
+    """
+    if not partition_fields:
+        if partition_values is not None:
+            raise RuntimeError(
+                "out.emit(partition_values=...) requires partition-annotated fields "
+                "in the bind schema. Use vgi.schema_utils.partition_field() to mark "
+                "the column(s) and set Meta.partition_kind to a non-default value."
+            )
+        return metadata
+
+    if batch.num_rows == 0:
+        # Empty batches are exempt from partition-values; the C++ side
+        # skips its requirement check for 0-row batches. Leave metadata
+        # untouched so callers don't pay base64+IPC overhead for nothing.
+        return metadata
+
+    resolved: dict[str, tuple[pa.Scalar, pa.Scalar]] = {}
+    for field in partition_fields:
+        resolved[field.name] = _resolve_partition_min_max(
+            field, partition_kind, batch, partition_values,
+        )
+
+    values_batch = _build_partition_values_batch(partition_fields, resolved)
+    b64 = _serialize_partition_values_batch(values_batch)
+
+    merged: dict[str, str] = dict(metadata) if metadata else {}
+    merged["vgi_partition_values#b64"] = b64
+    return merged
+
+
 def _merge_batch_index(
     *,
     supports_batch_index: bool,
@@ -600,10 +772,16 @@ class _FilteringOutputCollector:
         self,
         batch: pa.RecordBatch,
         batch_index: int | None = None,
+        partition_values: dict[str, tuple[pa.Scalar, pa.Scalar]] | None = None,
         metadata: dict[str, str] | None = None,
     ) -> None:
         filtered = self._func_cls._apply_pushdown_filter(batch, self._filters)
-        self._inner.emit(filtered, batch_index=batch_index, metadata=metadata)
+        self._inner.emit(
+            filtered,
+            batch_index=batch_index,
+            partition_values=partition_values,
+            metadata=metadata,
+        )
 
     def emit_pydict(self, data: dict[str, Any], schema: pa.Schema | None = None) -> None:
         batch = pa.RecordBatch.from_pydict(data, schema=schema or self._inner.output_schema)
@@ -630,18 +808,33 @@ class _FilteringOutputCollector:
 class _TrackingOutputCollector:
     """Wrapper that tracks total rows and bytes emitted, delegating all else.
 
-    Also the validation point for the ``batch_index=`` kwarg on
-    ``out.emit()`` (see ``_merge_batch_index``). This wrapper is always the
-    innermost wrapper in the table-function emit path, so validating here
-    happens exactly once per emit regardless of whether
-    ``_FilteringOutputCollector`` is also in the stack.
+    Also the validation point for the ``batch_index=`` and
+    ``partition_values=`` kwargs on ``out.emit()`` (see
+    :func:`_merge_batch_index` and :func:`_merge_partition_values`). This
+    wrapper is always the innermost wrapper in the table-function emit
+    path, so validating here happens exactly once per emit regardless of
+    whether :class:`_FilteringOutputCollector` is also in the stack.
     """
 
-    __slots__ = ("_inner", "_supports_batch_index", "total_rows", "total_bytes")
+    __slots__ = (
+        "_inner", "_supports_batch_index",
+        "_partition_fields", "_partition_kind",
+        "total_rows", "total_bytes",
+    )
 
-    def __init__(self, inner: OutputCollector, supports_batch_index: bool = False) -> None:
+    def __init__(
+        self,
+        inner: OutputCollector,
+        supports_batch_index: bool = False,
+        partition_fields: list[pa.Field] | None = None,
+        partition_kind: PartitionKind = PartitionKind.NOT_PARTITIONED,
+    ) -> None:
         self._inner = inner
         self._supports_batch_index = supports_batch_index
+        # Pre-computed list of partition-annotated fields from the bind
+        # schema; empty when the function did not opt in to PartitionColumns.
+        self._partition_fields = partition_fields or []
+        self._partition_kind = partition_kind
         self.total_rows = 0
         self.total_bytes = 0
 
@@ -649,12 +842,20 @@ class _TrackingOutputCollector:
         self,
         batch: pa.RecordBatch,
         batch_index: int | None = None,
+        partition_values: dict[str, tuple[pa.Scalar, pa.Scalar]] | None = None,
         metadata: dict[str, str] | None = None,
     ) -> None:
         merged_metadata = _merge_batch_index(
             supports_batch_index=self._supports_batch_index,
             batch_index=batch_index,
             metadata=metadata,
+        )
+        merged_metadata = _merge_partition_values(
+            partition_fields=self._partition_fields,
+            partition_kind=self._partition_kind,
+            batch=batch,
+            partition_values=partition_values,
+            metadata=merged_metadata,
         )
         self.total_rows += batch.num_rows
         self.total_bytes += _batch_bytes(batch)
@@ -794,7 +995,12 @@ class TableProducerState(ProducerState):
             self._init_response.execution_id,
         )
         with timer:
-            tracking_out = _TrackingOutputCollector(out, supports_batch_index=self._func_cls._supports_batch_index())
+            tracking_out = _TrackingOutputCollector(
+                out,
+                supports_batch_index=self._func_cls._supports_batch_index(),
+                partition_fields=_partition_fields_from_schema(self._init_call.output_schema),
+                partition_kind=self._func_cls._partition_kind(),
+            )
             if self._auto_apply and self._pushdown_filters is not None:
                 filtered_out = _FilteringOutputCollector(tracking_out, self._func_cls, self._pushdown_filters)
                 self._func_cls.process(params, self._user_state, filtered_out)  # type: ignore[arg-type]
@@ -911,7 +1117,12 @@ class TableInOutExchangeState(ExchangeState):
             self._init_response.execution_id,
         )
         with timer:
-            tracking_out = _TrackingOutputCollector(out, supports_batch_index=self._func_cls._supports_batch_index())
+            tracking_out = _TrackingOutputCollector(
+                out,
+                supports_batch_index=self._func_cls._supports_batch_index(),
+                partition_fields=_partition_fields_from_schema(self._init_call.output_schema),
+                partition_kind=self._func_cls._partition_kind(),
+            )
             if self._auto_apply and self._pushdown_filters is not None:
                 filtered_out = _FilteringOutputCollector(tracking_out, self._func_cls, self._pushdown_filters)
                 self._func_cls.process(params, self._user_state, input.batch, filtered_out)  # type: ignore[arg-type]
