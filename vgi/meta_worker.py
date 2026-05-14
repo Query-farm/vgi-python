@@ -572,6 +572,23 @@ class MetaWorker:
         """Dispatch aggregate_streaming_close to the right worker."""
         return self._dispatch_aggregate(request, "aggregate_streaming_close", ctx)
 
+    # ========== Buffered table function dispatch ==========
+    # Routing key is function_name (same as aggregate). The underlying
+    # _dispatch_aggregate helper isn't aggregate-specific — it just looks up
+    # the function by name in each worker's registry.
+
+    def buffered_table_process(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch buffered_table_process to the right worker."""
+        return self._dispatch_aggregate(request, "buffered_table_process", ctx)
+
+    def buffered_table_combine(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch buffered_table_combine to the right worker."""
+        return self._dispatch_aggregate(request, "buffered_table_combine", ctx)
+
+    def buffered_table_finalize(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch buffered_table_finalize to the right worker."""
+        return self._dispatch_aggregate(request, "buffered_table_finalize", ctx)
+
     # ========== Serve entry point ==========
 
     @classmethod

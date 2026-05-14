@@ -29,7 +29,8 @@ SumAllColumnsSimpleDistributed - Distributed aggregation via callback API
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from collections.abc import Iterator
 from typing import Annotated, Any
 
 import pyarrow as pa
@@ -117,37 +118,38 @@ class EchoFunction(TableInOutGenerator[SingleTableArguments]):
         return BindResponse(output_schema=params.bind_call.input_schema)
 
 
-class BufferInputFunction(TableInOutGenerator[SingleTableArguments]):
-    """Buffering function that collects all input and emits during finalization.
+@dataclass(kw_only=True)
+class BufferInputState(ArrowSerializableDataclass):
+    """Per-state_id buffer of IPC-encoded record batches.
 
-    USE CASE
-    --------
-    When you need to see all data before producing output, or when you want to
-    delay output until the stream is complete. Useful for sorting, deduplication,
-    or operations that need the full dataset.
-
-    BEHAVIOR
-    --------
-    - output_schema: Returns input schema unchanged (default)
-    - process(): Stores batches in buffer and emits empty results
-    - finalize(): Returns buffered batches
-
-    SCHEMA TRANSFORMATION
-    ---------------------
-    Input:  any schema
-    Output: same schema (passthrough)
-
-    Note:
-    ----
-    This is a test/example function for protocol validation.
-
-    Example:
-    -------
-    Input stream:  batch1, batch2, batch3
-    During processing: (empty), (empty), (empty)
-    On finalize: batch1, batch2, batch3
-
+    Each entry is one input batch serialized as IPC stream bytes — bytes
+    rather than ``pa.RecordBatch`` objects so the state round-trips cleanly
+    through ``ArrowSerializableDataclass.serialize_to_bytes``.
     """
+
+    batches: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
+
+
+class BufferInputFunction(TableInOutGenerator[SingleTableArguments, BufferInputState]):
+    """Buffering function — collects all input, emits during finalize.
+
+    Uses the buffered table function path (``Meta.buffered_table = True``):
+    each parallel Sink thread accumulates into its own ``state_id``,
+    ``combine`` returns those state_ids as-is (pass-through partitioning),
+    and ``finalize`` yields the buffered batches for one state_id per RPC.
+    Under UNION ALL the inputs are distributed across Sink threads and the
+    combined output is the union of every buffer.
+
+    Schema:
+        Input:  any schema
+        Output: same schema (passthrough)
+    """
+
+    # Explicit state_class — TableInOutGenerator's generic param isn't auto-
+    # reflected onto the class today (only TableInOutFunction has that
+    # __init_subclass__ hook). The buffered_table_process worker handler
+    # uses this to deserialize the per-state_id state.
+    state_class = BufferInputState
 
     class Meta:
         """Metadata for BufferInputFunction."""
@@ -155,6 +157,7 @@ class BufferInputFunction(TableInOutGenerator[SingleTableArguments]):
         name = "buffer_input"
         description = "Collects all input batches and emits during finalization"
         categories = ["utility", "buffer"]
+        buffered_table = True
         examples = [
             FunctionExample(
                 sql="SELECT * FROM buffer_input((SELECT * FROM input_table))",
@@ -163,29 +166,58 @@ class BufferInputFunction(TableInOutGenerator[SingleTableArguments]):
         ]
 
     @classmethod
-    def on_init(cls, params: InitParams[SingleTableArguments]) -> GlobalInitResponse:
-        """Enforce single-worker execution."""
-        return GlobalInitResponse(max_workers=1)
+    def initial_state(cls, params: ProcessParams[SingleTableArguments]) -> BufferInputState:
+        return BufferInputState()
 
     @classmethod
     def process(
         cls,
         params: ProcessParams[SingleTableArguments],
-        state: None,
+        state: BufferInputState,
         batch: pa.RecordBatch,
         out: OutputCollector,
     ) -> None:
-        """Buffer each input batch in storage queue and emit empty."""
-        params.storage.queue_push_batches([batch])
+        """Serialize the batch and append to this state_id's buffer.
+
+        Under the buffered_table path ``out`` is a NoOpCollector that
+        silently accepts the trailing zero-row emit but would raise on any
+        non-empty emit — process() is sink-only.
+        """
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, batch.schema) as writer:
+            writer.write_batch(batch)
+        state.batches.append(sink.getvalue().to_pybytes())
         out.emit(empty_batch(params.output_schema))
 
     @classmethod
-    def finalize(cls, params: ProcessParams[SingleTableArguments]) -> list[pa.RecordBatch]:
-        """Return all buffered batches."""
-        batches: list[pa.RecordBatch] = []
-        while batch := params.storage.queue_pop_batch():
-            batches.append(batch)
-        return batches
+    def combine(
+        cls, state_ids: list[int], params: ProcessParams[SingleTableArguments]
+    ) -> list[int]:
+        """Pass-through partitioning: each state_id is its own finalize key.
+
+        No cross-state merging is needed — each thread's buffer is already a
+        complete, ordered slice of the rows that landed on that thread.
+        Returning ``state_ids`` lets DuckDB's parallel Source phase drain all
+        buffers concurrently.
+        """
+        return state_ids
+
+    @classmethod
+    def finalize(
+        cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments]
+    ) -> Iterator[pa.RecordBatch]:
+        """Yield the buffered batches for one finalize_state_id, one per RPC.
+
+        The framework wraps this generator at the worker side: each
+        ``buffered_table_finalize`` RPC consumes one ``yield`` and reports
+        ``has_more`` based on whether the iterator is exhausted.
+        """
+        stored = params.storage.aggregate_get([finalize_state_id])
+        if not stored or stored[0] is None:
+            return
+        state = BufferInputState.deserialize_from_bytes(stored[0][1])
+        for batch_bytes in state.batches:
+            yield pa.ipc.open_stream(batch_bytes).read_next_batch()
 
 
 class FilterBySettingFunction(TableInOutGenerator[SingleTableArguments]):
@@ -391,6 +423,10 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
         name = "sum_all_columns"
         description = "Computes column-wise sums across all batches"
         categories = ["aggregation", "numeric"]
+        # Uses the buffered table function path: each parallel Sink thread
+        # accumulates per-thread sums, combine reduces them to a single
+        # partition, finalize yields one row with the total.
+        buffered_table = True
         examples = [
             FunctionExample(
                 sql="SELECT * FROM sum_all_columns((SELECT * FROM input_table))",
@@ -434,6 +470,12 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
             )
         )
 
+    # The state class must be a dataclass-style class for the framework's
+    # auto-detection from TableInOutGenerator[..., TState], but the
+    # generic-param plumbing on TableInOutGenerator doesn't auto-populate
+    # state_class (only TableInOutFunction does). Set it explicitly.
+    state_class = SumAllColumnsState
+
     @classmethod
     def process(
         cls,
@@ -442,7 +484,7 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
         batch: pa.RecordBatch,
         out: OutputCollector,
     ) -> None:
-        """Accumulate column sums across all batches."""
+        """Accumulate this batch into the per-state_id partial_sums."""
         if params.args.logging:
             out.client_log(
                 Level.INFO,
@@ -459,40 +501,56 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
                 sums[name] = prev
 
         state.partial_sums = cls._scalars_to_single_row_batch(sums)
-
-        # Save running sums to storage for finalize (upsert per worker)
-        params.storage.put(params.storage.serialize_record_batch(state.partial_sums))
-
-        out.emit(empty_batch(params.output_schema))
+        # No out.emit needed — the buffered NoOpCollector swallows zero-row
+        # emits but emitting nothing is the cleanest signal that process is
+        # sink-only here.
 
     @classmethod
-    def finalize(cls, params: ProcessParams[SumAllColumnsFunctionArguments]) -> list[pa.RecordBatch]:
-        """Return single row containing the column sums."""
-        sums: dict[str, pa.Scalar[Any]] = {}
+    def combine(
+        cls, state_ids: list[int], params: ProcessParams[SumAllColumnsFunctionArguments]
+    ) -> list[int]:
+        """Merge every per-thread state into a single coordinator state.
 
-        # Initialize sums to zero in case no data was processed
-        for field in params.output_schema:
-            sums[field.name] = pa.scalar(0, type=field.type)
+        Reads each per-state_id ``partial_sums`` from shared BoundStorage,
+        column-sums them across states, writes the merged result back to
+        slot 0, and returns ``[0]`` as the only finalize partition. The
+        finalize phase will yield one row total.
+        """
+        if not state_ids:
+            return []
+        stored = params.storage.aggregate_get(state_ids)
+        merged: dict[str, pa.Scalar[Any]] = {name: pa.scalar(0, type=field.type)
+                                             for name, field in zip(params.output_schema.names,
+                                                                     params.output_schema)}
+        for entry in stored:
+            if entry is None:
+                continue
+            partial = SumAllColumnsState.deserialize_from_bytes(entry[1]).partial_sums
+            for name in params.output_schema.names:
+                merged[name] = pc.add(merged[name], partial.column(name)[0])
+        merged_state = SumAllColumnsState(partial_sums=cls._scalars_to_single_row_batch(merged))
+        params.storage.aggregate_put([(0, merged_state.serialize_to_bytes())])
+        return [0]
 
-        # Retrieve the accumulated sums from function storage and merge.
-        # When process() never stored anything (empty input, or a subclass
-        # like ExceptionProcessFunction that doesn't call super().process()),
-        # storage.collect() returns []. pa.Table.from_batches([]) requires a
-        # schema, so pass it explicitly to avoid a confusing ValueError.
-        batches = [params.storage.deserialize_record_batch(item) for item in params.storage.collect()]
-        all_tables = pa.Table.from_batches(batches, schema=params.output_schema)
-
-        for field in params.output_schema:
-            col_sum = pc.sum(all_tables.column(field.name))
-            if col_sum.is_valid:
-                sums[field.name] = col_sum
-
-        return [
-            pa.RecordBatch.from_pydict(
-                {name: [val] for name, val in sums.items()},
-                schema=params.output_schema,
-            )
-        ]
+    @classmethod
+    def finalize(
+        cls, finalize_state_id: int, params: ProcessParams[SumAllColumnsFunctionArguments]
+    ) -> Iterator[pa.RecordBatch]:
+        """Yield one row carrying the merged column sums."""
+        stored = params.storage.aggregate_get([finalize_state_id])
+        if not stored or stored[0] is None:
+            # No data at all — emit zeros so SQL like
+            # `SELECT * FROM sum_all_columns((SELECT 1 WHERE 1=0))` still
+            # produces a row with the expected shape.
+            sums = {name: pa.scalar(0, type=field.type)
+                    for name, field in zip(params.output_schema.names, params.output_schema)}
+            yield pa.RecordBatch.from_pydict({name: [val] for name, val in sums.items()},
+                                              schema=params.output_schema)
+            return
+        partial = SumAllColumnsState.deserialize_from_bytes(stored[0][1]).partial_sums
+        sums = {name: partial.column(name)[0] for name in params.output_schema.names}
+        yield pa.RecordBatch.from_pydict({name: [val] for name, val in sums.items()},
+                                          schema=params.output_schema)
 
 
 @dataclass(kw_only=True)
@@ -505,7 +563,10 @@ class ExceptionProcessState(ArrowSerializableDataclass):
 class ExceptionProcessFunction(
     SumAllColumnsFunction, TableInOutGenerator[SumAllColumnsFunctionArguments, ExceptionProcessState]
 ):
-    """A function that raises an exception on the second batch."""
+    """Buffered table function that raises an exception on the second batch."""
+
+    # Use our own state class, overriding SumAllColumnsFunction.state_class.
+    state_class = ExceptionProcessState
 
     class Meta(SumAllColumnsFunction.Meta):
         """Metadata for ExceptionProcessFunction."""
@@ -513,6 +574,7 @@ class ExceptionProcessFunction(
         name = "exception_process"
         description = "Test function that raises exception during process"
         categories = ["test", "error"]
+        # buffered_table inherited from SumAllColumnsFunction.Meta
 
     @classmethod
     def initial_state(cls, params: ProcessParams[SumAllColumnsFunctionArguments]) -> ExceptionProcessState:  # type: ignore[override]
@@ -531,11 +593,29 @@ class ExceptionProcessFunction(
         state.batch_count += 1
         if state.batch_count % 2 == 0:
             raise ValueError(f"Intentional exception on batch {state.batch_count}")
-        out.emit(empty_batch(params.output_schema))
+        # Sink-only — no emit needed.
+
+    @classmethod
+    def combine(  # type: ignore[override]
+        cls, state_ids: list[int], params: ProcessParams[SumAllColumnsFunctionArguments]
+    ) -> list[int]:
+        # Pass-through partitioning: no aggregation across states needed.
+        return state_ids
+
+    @classmethod
+    def finalize(  # type: ignore[override]
+        cls, finalize_state_id: int, params: ProcessParams[SumAllColumnsFunctionArguments]
+    ) -> Iterator[pa.RecordBatch]:
+        # If we ever reach finalize, emit a zero-sum row (the only behavior
+        # the existing test asserts is the *exception* path from process).
+        sums = {name: pa.scalar(0, type=field.type)
+                for name, field in zip(params.output_schema.names, params.output_schema)}
+        yield pa.RecordBatch.from_pydict({name: [val] for name, val in sums.items()},
+                                          schema=params.output_schema)
 
 
 class ExceptionFinalizeFunction(SumAllColumnsFunction):
-    """Test function that raises an exception during finalize()."""
+    """Buffered table function that raises an exception during finalize()."""
 
     class Meta(SumAllColumnsFunction.Meta):
         """Metadata for ExceptionFinalizeFunction."""
@@ -543,11 +623,15 @@ class ExceptionFinalizeFunction(SumAllColumnsFunction):
         name = "exception_finalize"
         description = "Test function that raises exception during finalize"
         categories = ["test", "error"]
+        # buffered_table inherited from SumAllColumnsFunction.Meta
 
     @classmethod
-    def finalize(cls, params: ProcessParams[SumAllColumnsFunctionArguments]) -> list[pa.RecordBatch]:
-        """Raise an intentional exception during finalize."""
+    def finalize(  # type: ignore[override]
+        cls, finalize_state_id: int, params: ProcessParams[SumAllColumnsFunctionArguments]
+    ) -> Iterator[pa.RecordBatch]:
+        """Raise an intentional exception when the C++ side pulls a batch."""
         raise ValueError("Intentional exception during finalize()")
+        yield  # type: ignore[unreachable]  # make this a generator function
 
 
 @dataclass(slots=True, kw_only=True)

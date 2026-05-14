@@ -1312,6 +1312,93 @@ class AggregateDestructorResponse(ArrowSerializableDataclass):
 
 
 # ---------------------------------------------------------------------------
+# Buffered Table Function RPC Types
+# ---------------------------------------------------------------------------
+# Sink+Source PhysicalOperator path. Bind and init reuse the existing bind +
+# PerformInit(phase="BUFFERED_TABLE") RPCs; per-thread secondary workers
+# attach to the coordinator's execution_id via FunctionConnectionParams.
+# After bind+init, traffic uses the three RPCs below.
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BufferedTableProcessRequest(ArrowSerializableDataclass):
+    """Request for buffered_table_process — sink one batch into state_id.
+
+    The C++ side serializes Sink chunks for this thread's worker. The worker
+    loads state for ``(execution_id, state_id)``, calls
+    ``cls.process(params, state, batch, NoOpCollector())``, persists. process
+    must not emit non-empty batches — the source phase owns output.
+    """
+
+    function_name: str
+    execution_id: bytes
+    state_id: int  # int64; assigned by C++ atomic counter per Sink thread
+    input_batch: bytes  # Full IPC stream bytes
+    attach_opaque_data: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BufferedTableProcessResponse(ArrowSerializableDataclass):
+    """Response from buffered_table_process — empty ack.
+
+    Note: in-band ``OutputCollector.client_log`` calls inside the user's
+    process() route to the worker's local logger only (stderr) — they do
+    not currently surface in DuckDB's ``duckdb_logs()`` view. To forward
+    logs through, a future revision will carry log messages on the response
+    schema. v1 known limitation.
+    """
+
+    pass
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BufferedTableCombineRequest(ArrowSerializableDataclass):
+    """Request for buffered_table_combine — once-per-query end-of-input.
+
+    Carries every state_id observed across all Sink threads. The worker
+    runs ``cls.combine(state_ids, params)`` and returns the
+    ``finalize_state_ids`` partition keys that the source phase will iterate.
+    Workers may coordinate with peers here (e.g. via shared BoundStorage).
+    """
+
+    function_name: str
+    execution_id: bytes
+    state_ids: Annotated[list[int], ArrowType(pa.list_(pa.int64()))]
+    attach_opaque_data: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BufferedTableCombineResponse(ArrowSerializableDataclass):
+    """Response from buffered_table_combine — opaque partition keys."""
+
+    finalize_state_ids: Annotated[list[int], ArrowType(pa.list_(pa.int64()))]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BufferedTableFinalizeRequest(ArrowSerializableDataclass):
+    """Request for buffered_table_finalize — pull one batch for a partition.
+
+    The C++ source phase calls this repeatedly with the same
+    ``finalize_state_id`` while the response's ``has_more`` is True; when
+    has_more is False, the partition is exhausted and the source phase moves
+    to the next ``finalize_state_id`` from the queue.
+    """
+
+    function_name: str
+    execution_id: bytes
+    finalize_state_id: int
+    attach_opaque_data: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BufferedTableFinalizeResponse(ArrowSerializableDataclass):
+    """Response from buffered_table_finalize — one IPC batch + has_more."""
+
+    output_batch: bytes  # Full IPC stream bytes — one batch
+    has_more: bool
+
+
+# ---------------------------------------------------------------------------
 # Aggregate Window Function RPC Types
 # ---------------------------------------------------------------------------
 # Optional windowed-aggregate protocol: ``aggregate_window_init`` ships the
@@ -1571,6 +1658,20 @@ class VgiProtocol(Protocol):
 
     def aggregate_destructor(self, request: AggregateDestructorRequest) -> AggregateDestructorResponse:
         """Best-effort cleanup of aggregate states. Must not raise."""
+        ...
+
+    # ========== Buffered Table Function Methods (Sink+Source path) ==========
+
+    def buffered_table_process(self, request: BufferedTableProcessRequest) -> BufferedTableProcessResponse:
+        """Sink one input batch into per-(execution_id, state_id) state."""
+        ...
+
+    def buffered_table_combine(self, request: BufferedTableCombineRequest) -> BufferedTableCombineResponse:
+        """Once-per-query end-of-input signal. Returns finalize_state_ids."""
+        ...
+
+    def buffered_table_finalize(self, request: BufferedTableFinalizeRequest) -> BufferedTableFinalizeResponse:
+        """Pull one batch from a finalize_state_id's generator."""
         ...
 
     # ========== Aggregate Window Function Methods (optional, all unary) ==========

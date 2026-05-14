@@ -434,6 +434,52 @@ class _AggregateConstArgsCache:
 _aggregate_const_args_cache = _AggregateConstArgsCache()
 
 
+# Process-local cache for the buffered-table-function path. Keyed by
+# execution_id (raw bytes). Maps to (func_cls, ProcessParams). The init
+# handler populates this on phase=BUFFERED_TABLE; the
+# buffered_table_{process,combine,finalize} handlers read it instead of
+# re-shipping the bind context on every RPC.
+#
+# Lifetime: until the C++ side tears down the execution. We could plumb a
+# destructor RPC to evict eagerly; for now the entry survives until the
+# worker process exits. The map is process-local, so each worker instance
+# only sees its own executions (primary or per-thread secondary).
+_buffered_table_exec_cache: dict[bytes, tuple[type, Any]] = {}
+
+# Process-local cache for in-flight finalize generators. Keyed by
+# (execution_id, finalize_state_id). Each entry is the iterator returned
+# by ``cls.finalize(finalize_state_id, params)``. Populated lazily on the
+# first ``buffered_table_finalize`` RPC for a given key; advanced one
+# batch per subsequent call; evicted when the iterator is exhausted.
+_buffered_table_finalize_iters: dict[tuple[bytes, int], Any] = {}
+
+
+class _ChainIter:
+    """Iterator that yields one prefix item then chains to a tail iterator.
+
+    Used by buffered_table_finalize to peek one batch ahead so the
+    response's has_more flag is accurate. We can't unread a value from an
+    arbitrary iterator (some are generators), so we stash the peeked value
+    here for the next RPC to consume.
+    """
+
+    __slots__ = ("_first", "_tail", "_emitted")
+
+    def __init__(self, first: Any, tail: Any) -> None:
+        self._first = first
+        self._tail = tail
+        self._emitted = False
+
+    def __iter__(self) -> "_ChainIter":
+        return self
+
+    def __next__(self) -> Any:
+        if not self._emitted:
+            self._emitted = True
+            return self._first
+        return next(self._tail)
+
+
 # Streaming-partitioned aggregate sessions: session state is held in an
 # in-process LRU cache for the fast path, and persisted to FunctionStorage
 # (under partition_id=0) so chunk RPCs that land on a different pool worker
@@ -2330,6 +2376,173 @@ class Worker:
 
         return AggregateDestructorResponse()
 
+    # ========== Buffered Table Function Methods (Sink+Source path) ==========
+
+    def buffered_table_process(
+        self,
+        request: Any,  # BufferedTableProcessRequest — lazy import below
+        ctx: CallContext,
+    ) -> Any:  # BufferedTableProcessResponse
+        """Sink one input batch into per-(execution_id, state_id) state.
+
+        The C++ Sink phase ships one chunk at a time. We load the per-state
+        accumulator from BoundStorage (lazily creating via initial_state),
+        call the user's ``process(params, state, batch, NoOpCollector())``,
+        and persist. The collector silently swallows zero-row emits (so
+        existing fixtures' ``out.emit(empty_batch(...))`` calls still work)
+        and raises on non-zero-row emits — output is finalize-only.
+        """
+        from vgi.protocol import BufferedTableProcessResponse
+
+        cached = _buffered_table_exec_cache.get(request.execution_id)
+        if cached is None:
+            raise RuntimeError(
+                f"buffered_table_process: execution {request.execution_id.hex()} "
+                f"not initialized — was init phase=BUFFERED_TABLE called first?"
+            )
+        func_cls, params = cached
+        # Rebuild storage with this request's auth context so the storage
+        # layer's request-scoped fields stay consistent.
+        params = _dataclass_replace(
+            params,
+            storage=BoundStorage(
+                func_cls.storage, request.execution_id, request=request, auth=ctx.auth
+            ),
+            auth_context=ctx.auth,
+        )
+
+        batch = pa.ipc.open_stream(request.input_batch).read_next_batch()
+
+        # Load existing state for this state_id; create initial if absent.
+        stored = params.storage.aggregate_get([request.state_id])
+        if stored[0] is not None and func_cls.state_class is not None:
+            state = func_cls.state_class.deserialize_from_bytes(stored[0][1])
+        else:
+            state = func_cls.initial_state(params)
+
+        # NoOpCollector mirrors the streaming OutputCollector interface.
+        # emit() must not carry rows — buffered process is sink-only; output
+        # is deferred to finalize(). client_log() routes through the
+        # CallContext's emit_client_log sink so the messages reach the C++
+        # side as zero-row batches with vgi_rpc.log_level metadata in the
+        # response stream — exactly the same channel the streaming path
+        # uses. ReadUnaryResponse on the C++ side picks them up via
+        # DispatchBatch → HandleBatchLogMessage → duckdb_logs.
+        from vgi_rpc.log import Level as _Level, Message as _Message
+
+        emit_log = ctx.emit_client_log
+
+        class _NoOpCollector:
+            def emit(self, batch: pa.RecordBatch) -> None:
+                if batch.num_rows != 0:
+                    raise ValueError(
+                        f"buffered_table_process: {func_cls.__name__}.process() "
+                        f"emitted {batch.num_rows} rows — buffered functions must "
+                        f"defer all output to finalize()"
+                    )
+
+            def finish(self) -> None:
+                pass
+
+            def client_log(self, level: "_Level", message: str, **extra: str) -> None:
+                emit_log(_Message(level, message, **extra))
+
+        func_cls.process(params, state, batch, _NoOpCollector())
+
+        # Persist the updated state.
+        params.storage.aggregate_put([(request.state_id, state.serialize_to_bytes())])
+        return BufferedTableProcessResponse()
+
+    def buffered_table_combine(
+        self,
+        request: Any,  # BufferedTableCombineRequest
+        ctx: CallContext,
+    ) -> Any:  # BufferedTableCombineResponse
+        """End-of-input signal. Delegate to the user's combine() and return
+        the partition keys the source phase will iterate over."""
+        from vgi.protocol import BufferedTableCombineResponse
+
+        cached = _buffered_table_exec_cache.get(request.execution_id)
+        if cached is None:
+            raise RuntimeError(
+                f"buffered_table_combine: execution {request.execution_id.hex()} "
+                f"not initialized"
+            )
+        func_cls, params = cached
+        params = _dataclass_replace(
+            params,
+            storage=BoundStorage(
+                func_cls.storage, request.execution_id, request=request, auth=ctx.auth
+            ),
+            auth_context=ctx.auth,
+        )
+        finalize_state_ids = list(func_cls.combine(list(request.state_ids), params))
+        return BufferedTableCombineResponse(finalize_state_ids=finalize_state_ids)
+
+    def buffered_table_finalize(
+        self,
+        request: Any,  # BufferedTableFinalizeRequest
+        ctx: CallContext,
+    ) -> Any:  # BufferedTableFinalizeResponse
+        """Pull one batch from a finalize_state_id's iterator.
+
+        Lazy-init: on first call for a given (execution_id, finalize_state_id),
+        invoke ``cls.finalize(finalize_state_id, params)`` and stash the
+        returned iterator. Each subsequent call advances by one batch and
+        reports ``has_more`` based on iterator exhaustion.
+        """
+        from vgi.protocol import BufferedTableFinalizeResponse
+
+        cached = _buffered_table_exec_cache.get(request.execution_id)
+        if cached is None:
+            raise RuntimeError(
+                f"buffered_table_finalize: execution {request.execution_id.hex()} "
+                f"not initialized"
+            )
+        func_cls, params = cached
+        params = _dataclass_replace(
+            params,
+            storage=BoundStorage(
+                func_cls.storage, request.execution_id, request=request, auth=ctx.auth
+            ),
+            auth_context=ctx.auth,
+        )
+
+        key = (request.execution_id, request.finalize_state_id)
+        iter_ = _buffered_table_finalize_iters.get(key)
+        if iter_ is None:
+            result = func_cls.finalize(request.finalize_state_id, params)
+            # Accept either a generator/iterator or a concrete list of batches.
+            iter_ = iter(result)
+            _buffered_table_finalize_iters[key] = iter_
+
+        try:
+            batch = next(iter_)
+        except StopIteration:
+            _buffered_table_finalize_iters.pop(key, None)
+            # Emit an empty batch with the output schema so the C++ side
+            # has something to type-check against.
+            sink = pa.BufferOutputStream()
+            with pa.ipc.new_stream(sink, params.output_schema) as writer:
+                writer.write_batch(pa.RecordBatch.from_pylist([], schema=params.output_schema))
+            return BufferedTableFinalizeResponse(output_batch=sink.getvalue().to_pybytes(), has_more=False)
+
+        # Peek for end-of-stream so the response's has_more flag is correct.
+        try:
+            next_batch = next(iter_)
+            has_more = True
+            # Stash the peeked batch so the next RPC gets it. Use a tiny
+            # shim iterator that yields the peeked batch first.
+            _buffered_table_finalize_iters[key] = _ChainIter(next_batch, iter_)
+        except StopIteration:
+            has_more = False
+            _buffered_table_finalize_iters.pop(key, None)
+
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, batch.schema) as writer:
+            writer.write_batch(batch)
+        return BufferedTableFinalizeResponse(output_batch=sink.getvalue().to_pybytes(), has_more=has_more)
+
     # ========== Windowed Aggregate Methods ==========
 
     def aggregate_window_init(
@@ -2971,6 +3184,19 @@ class Worker:
                     _batches=finalize_batches,
                 )
                 input_schema = None  # Producer — no input
+            elif request.phase == TableInOutFunctionInitPhase.BUFFERED_TABLE:
+                # Sink+Source path. The init RPC itself carries no data
+                # exchange — all subsequent traffic uses the dedicated
+                # buffered_table_{process,combine,finalize} RPCs. We just
+                # cache the function class + params keyed by execution_id
+                # so those handlers can rebuild ProcessParams without
+                # re-shipping the bind context on every call.
+                _buffered_table_exec_cache[init_response.execution_id] = (type(instance), params)
+                # An empty-batches TableInOutFinalizeState produces nothing
+                # and immediately calls out.finish() — exactly the right
+                # behavior for a stream we won't use.
+                state = TableInOutFinalizeState(_batches=[])
+                input_schema = None
             else:
                 raise ValueError(f"Unknown init phase for table-in-out function: {request.phase}")
 

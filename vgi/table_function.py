@@ -265,11 +265,14 @@ def _effective_projection_ids(func_cls: Any, projection_ids: list[int] | None) -
 class TableInOutFunctionInitPhase(Enum):
     """Indicate the phase of the init call for TableInOutFunction.
 
-    There are two phases input and finalize.
+    INPUT/FINALIZE drive the streaming in_out_function path.
+    BUFFERED_TABLE is the Sink+Source path — after init, traffic moves to
+    the ``buffered_table_process``/``_combine``/``_finalize`` RPCs.
     """
 
     INPUT = auto()
     FINALIZE = auto()
+    BUFFERED_TABLE = auto()
 
 
 class OrderByDirection(Enum):

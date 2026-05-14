@@ -478,6 +478,18 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     # on functions that register a finalize callback.
     has_finalize: bool = False
 
+    # True if the function opts into the buffered table function path —
+    # a custom Sink+Source PhysicalOperator (see DuckDB issue #18222). The
+    # C++ OptimizerExtension rewrites the LogicalGet of such functions; the
+    # streaming ``in_out_function`` / ``in_out_function_final`` callbacks
+    # are deliberately *not* wired when this is true.
+    buffered_table: bool = False
+
+    # Only meaningful when ``buffered_table`` is true. When true, the source
+    # phase is single-threaded and ``finalize_state_id``s drain in
+    # combine-returned order. Default false enables parallel finalize.
+    source_order_dependent: bool = False
+
     # Settings required by the function
     required_settings: list[str] = field(default_factory=list)
 
@@ -2294,6 +2306,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             supports_window=meta.supports_window,
             streaming_partitioned=meta.streaming_partitioned,
             has_finalize=meta.has_finalize,
+            buffered_table=meta.buffered_table,
+            source_order_dependent=meta.source_order_dependent,
             # Settings
             required_settings=meta.required_settings,
             # Secrets
