@@ -1603,7 +1603,7 @@ def _inline_bind_result_for(func_cls: type) -> bytes | None:
         return cached  # type: ignore[no-any-return]
     from vgi.invocation import BindResponse
 
-    response = BindResponse(output_schema=func_cls.FIXED_SCHEMA, opaque_data=None)
+    response = BindResponse(output_schema=func_cls.FIXED_SCHEMA, opaque_data=None)  # type: ignore[attr-defined]
     blob = response.serialize_to_bytes()
     # Set on the class itself so subclasses don't pollute their parents'
     # cache with each other's serialized blobs (FIXED_SCHEMA may differ).

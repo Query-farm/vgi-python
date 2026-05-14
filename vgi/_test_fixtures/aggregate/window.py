@@ -348,7 +348,7 @@ class WindowSumBatchFunction(AggregateFunction[SumState]):
         partition: WindowPartition,
         window_state: Any,
         params: ProcessParams[None],
-    ) -> pa.Array:
+    ) -> pa.Array[Any]:
         out = [cls._sum_one(frames, partition) for frames in subframes]
         return pa.array(out, type=pa.int64())
 

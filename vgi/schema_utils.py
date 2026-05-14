@@ -45,7 +45,7 @@ def partition_field(
     *,
     nullable: bool = True,
     metadata: dict[bytes | str, bytes | str] | None = None,
-) -> pa.Field:
+) -> pa.Field[Any]:
     """Build a ``pa.Field`` marked as a VGI partition column.
 
     Equivalent to::

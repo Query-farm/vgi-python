@@ -545,7 +545,7 @@ def _resolve_state_type(func_cls: type) -> type[ArrowSerializableDataclass] | No
     return None
 
 
-def _partition_fields_from_schema(bind_schema: pa.Schema) -> list[pa.Field]:
+def _partition_fields_from_schema(bind_schema: pa.Schema) -> list[pa.Field[Any]]:
     """Walk a bind schema and return fields annotated as partition columns.
 
     Recognises the ``vgi.partition_column = b"true"`` field metadata
@@ -556,7 +556,7 @@ def _partition_fields_from_schema(bind_schema: pa.Schema) -> list[pa.Field]:
     """
     from vgi.schema_utils import VGI_PARTITION_COLUMN_KEY
 
-    result: list[pa.Field] = []
+    result: list[pa.Field[Any]] = []
     for f in bind_schema:
         md = f.metadata
         if md is not None and md.get(VGI_PARTITION_COLUMN_KEY) == b"true":
@@ -565,11 +565,11 @@ def _partition_fields_from_schema(bind_schema: pa.Schema) -> list[pa.Field]:
 
 
 def _resolve_partition_min_max(
-    field: pa.Field,
+    field: pa.Field[Any],
     partition_kind: PartitionKind,
     batch: pa.RecordBatch,
-    explicit: dict[str, tuple[pa.Scalar, pa.Scalar]] | None,
-) -> tuple[pa.Scalar, pa.Scalar]:
+    explicit: dict[str, tuple[pa.Scalar[Any], pa.Scalar[Any]]] | None,
+) -> tuple[pa.Scalar[Any], pa.Scalar[Any]]:
     """Resolve ``(min, max)`` for one partition column.
 
     Two paths:
@@ -629,20 +629,20 @@ def _resolve_partition_min_max(
 
 
 def _build_partition_values_batch(
-    partition_fields: list[pa.Field],
-    resolved: dict[str, tuple[pa.Scalar, pa.Scalar]],
+    partition_fields: list[pa.Field[Any]],
+    resolved: dict[str, tuple[pa.Scalar[Any], pa.Scalar[Any]]],
 ) -> pa.RecordBatch:
     """Build the 2-row ``(min, max)`` RecordBatch from resolved scalars."""
-    arrays: list[pa.Array] = []
-    fields: list[pa.Field] = []
-    for field in partition_fields:
-        min_s, max_s = resolved[field.name]
+    arrays: list[pa.Array[Any]] = []
+    fields: list[pa.Field[Any]] = []
+    for pf in partition_fields:
+        min_s, max_s = resolved[pf.name]
         # pa.array([scalar, scalar]) infers the same type as the scalars;
         # the resolve step already validated those match field.type, so a
         # direct cast is a no-op except for any storage-layout normalisation.
-        arr = pa.array([min_s, max_s], type=field.type)
+        arr = pa.array([min_s, max_s], type=pf.type)
         arrays.append(arr)
-        fields.append(field)
+        fields.append(pf)
     return pa.RecordBatch.from_arrays(arrays, schema=pa.schema(fields))
 
 
@@ -658,10 +658,10 @@ def _serialize_partition_values_batch(batch: pa.RecordBatch) -> str:
 
 def _merge_partition_values(
     *,
-    partition_fields: list[pa.Field],
+    partition_fields: list[pa.Field[Any]],
     partition_kind: PartitionKind,
     batch: pa.RecordBatch,
-    partition_values: dict[str, tuple[pa.Scalar, pa.Scalar]] | None,
+    partition_values: dict[str, tuple[pa.Scalar[Any], pa.Scalar[Any]]] | None,
     metadata: dict[str, str] | None,
 ) -> dict[str, str] | None:
     """Validate the partition_values kwarg and fold the resulting Arrow
@@ -696,10 +696,10 @@ def _merge_partition_values(
         # untouched so callers don't pay base64+IPC overhead for nothing.
         return metadata
 
-    resolved: dict[str, tuple[pa.Scalar, pa.Scalar]] = {}
-    for field in partition_fields:
-        resolved[field.name] = _resolve_partition_min_max(
-            field,
+    resolved: dict[str, tuple[pa.Scalar[Any], pa.Scalar[Any]]] = {}
+    for pf in partition_fields:
+        resolved[pf.name] = _resolve_partition_min_max(
+            pf,
             partition_kind,
             batch,
             partition_values,
@@ -747,6 +747,32 @@ def _merge_batch_index(
     return merged
 
 
+class VgiOutputCollector(Protocol):
+    """Structural type for the ``out`` handed to a table function's body.
+
+    VGI's emit-path wrappers (:class:`_TrackingOutputCollector`,
+    :class:`_FilteringOutputCollector`) extend vgi-rpc's
+    ``OutputCollector.emit`` with ``batch_index=`` and ``partition_values=``
+    kwargs. Function bodies that opt into those features ``cast`` the
+    framework-supplied ``out`` to this protocol before calling ``emit``:
+    the base ``OutputCollector`` type cannot carry the wider signature
+    without breaking ``process()`` override compatibility across every
+    fixture.
+    """
+
+    def emit(
+        self,
+        batch: pa.RecordBatch,
+        batch_index: int | None = None,
+        partition_values: dict[str, tuple[pa.Scalar[Any], pa.Scalar[Any]]] | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> None: ...
+
+    def finish(self) -> None: ...
+
+    def client_log(self, level: Any, message: str, **extra: str) -> None: ...
+
+
 class _FilteringOutputCollector:
     """Wrapper that applies pushdown filters to emitted data batches.
 
@@ -759,7 +785,7 @@ class _FilteringOutputCollector:
 
     __slots__ = ("_inner", "_func_cls", "_filters")
 
-    def __init__(self, inner: OutputCollector | Any, func_cls: type[TableFunctionBase[Any]], filters: Any) -> None:
+    def __init__(self, inner: _TrackingOutputCollector, func_cls: type[TableFunctionBase[Any]], filters: Any) -> None:
         self._inner = inner
         self._func_cls = func_cls
         self._filters = filters
@@ -768,7 +794,7 @@ class _FilteringOutputCollector:
         self,
         batch: pa.RecordBatch,
         batch_index: int | None = None,
-        partition_values: dict[str, tuple[pa.Scalar, pa.Scalar]] | None = None,
+        partition_values: dict[str, tuple[pa.Scalar[Any], pa.Scalar[Any]]] | None = None,
         metadata: dict[str, str] | None = None,
     ) -> None:
         filtered = self._func_cls._apply_pushdown_filter(batch, self._filters)
@@ -792,6 +818,9 @@ class _FilteringOutputCollector:
 
     def emit_client_log_message(self, msg: Any) -> None:
         self._inner.emit_client_log_message(msg)
+
+    def client_log(self, level: Any, message: str, **extra: str) -> None:
+        self._inner.client_log(level, message, **extra)
 
     def propagate(self) -> None:
         """No-op: state already propagated to inner collector."""
@@ -825,7 +854,7 @@ class _TrackingOutputCollector:
         self,
         inner: OutputCollector,
         supports_batch_index: bool = False,
-        partition_fields: list[pa.Field] | None = None,
+        partition_fields: list[pa.Field[Any]] | None = None,
         partition_kind: PartitionKind = PartitionKind.NOT_PARTITIONED,
     ) -> None:
         self._inner = inner
@@ -841,7 +870,7 @@ class _TrackingOutputCollector:
         self,
         batch: pa.RecordBatch,
         batch_index: int | None = None,
-        partition_values: dict[str, tuple[pa.Scalar, pa.Scalar]] | None = None,
+        partition_values: dict[str, tuple[pa.Scalar[Any], pa.Scalar[Any]]] | None = None,
         metadata: dict[str, str] | None = None,
     ) -> None:
         merged_metadata = _merge_batch_index(
@@ -862,6 +891,14 @@ class _TrackingOutputCollector:
             self._inner.emit(batch)
         else:
             self._inner.emit(batch, metadata=merged_metadata)
+
+    @property
+    def finished(self) -> bool:
+        return self._inner.finished
+
+    @property
+    def output_schema(self) -> pa.Schema:
+        return self._inner.output_schema
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)

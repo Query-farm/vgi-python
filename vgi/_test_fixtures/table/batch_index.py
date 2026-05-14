@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
-from typing import Annotated, ClassVar
+from typing import Annotated, ClassVar, cast
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
@@ -41,6 +41,7 @@ from vgi._test_fixtures.table._common import _cardinality_from_count
 from vgi.arguments import Arg
 from vgi.invocation import GlobalInitResponse
 from vgi.metadata import FunctionExample, OrderPreservation
+from vgi.protocol import VgiOutputCollector
 from vgi.schema_utils import schema
 from vgi.table_function import (
     InitParams,
@@ -155,7 +156,7 @@ class PartitionedBatchIndexFunction(TableFunctionGenerator[_BatchIndexArgs, _Bat
 
         batch_end_idx = min(state.current_idx + cls.BATCH_SIZE, state.current_end or 0)
         values = list(range(state.current_idx, batch_end_idx))
-        out.emit(
+        cast(VgiOutputCollector, out).emit(
             pa.RecordBatch.from_pydict({"n": values}, schema=params.output_schema),
             batch_index=state.partition_id,
         )
@@ -261,7 +262,7 @@ class PartitionedBatchIndexMarkedFunction(TableFunctionGenerator[_BatchIndexMark
         rows = batch_end_idx - state.current_idx
         partition_ids = [state.partition_id] * rows
         seqs = list(range(state.current_idx - (state.current_start or 0), batch_end_idx - (state.current_start or 0)))
-        out.emit(
+        cast(VgiOutputCollector, out).emit(
             pa.RecordBatch.from_pydict(
                 {"partition_id": partition_ids, "seq": seqs},
                 schema=params.output_schema,

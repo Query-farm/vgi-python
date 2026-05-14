@@ -484,7 +484,7 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
         partition: WindowPartition,
         window_state: Any,
         params: ProcessParams[Any],
-    ) -> pa.Array | list[Any]:
+    ) -> pa.Array[Any] | list[Any]:
         """Compute the aggregate value for ``count`` consecutive output rows.
 
         Default implementation calls :meth:`window` once per row. Override
@@ -559,7 +559,7 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
         partition_key_count: int,
         order_key_count: int,
         params: ProcessParams[Any],
-    ) -> pa.Array | list[Any]:
+    ) -> pa.Array[Any] | list[Any]:
         """Process one chunk of streaming input.
 
         Args:

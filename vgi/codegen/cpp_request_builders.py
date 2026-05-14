@@ -92,7 +92,7 @@ def _is_simple_list(dtype: pa.DataType) -> bool:
     if not pa.types.is_list(dtype):
         return False
     inner = dtype.value_type
-    return (
+    return bool(
         inner.equals(pa.binary()) or inner.equals(pa.string()) or inner.equals(pa.int32()) or inner.equals(pa.int64())
     )
 

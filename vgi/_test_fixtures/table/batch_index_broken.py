@@ -32,7 +32,7 @@ The shape of the contract is documented at
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, ClassVar
+from typing import Annotated, ClassVar, cast
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
@@ -41,6 +41,7 @@ from vgi_rpc.rpc import OutputCollector
 from vgi._test_fixtures.table._common import _cardinality_from_count
 from vgi.arguments import Arg
 from vgi.metadata import OrderPreservation
+from vgi.protocol import VgiOutputCollector
 from vgi.schema_utils import schema
 from vgi.table_function import (
     ProcessParams,
@@ -145,14 +146,14 @@ class NonMonotoneBatchIndexFunction(TableFunctionGenerator[_BrokenArgs, _BrokenS
                 {"n": [42]},
                 schema=params.output_schema,
             )
-            out.emit(batch, batch_index=3)
+            cast(VgiOutputCollector, out).emit(batch, batch_index=3)
             out.finish()
             return
         batch = pa.RecordBatch.from_pydict(
             {"n": list(range(params.args.count))},
             schema=params.output_schema,
         )
-        out.emit(batch, batch_index=10)
+        cast(VgiOutputCollector, out).emit(batch, batch_index=10)
         state.emitted = True
 
 
@@ -193,5 +194,5 @@ class BatchIndexOverflowFunction(TableFunctionGenerator[_BrokenArgs, _BrokenStat
             schema=params.output_schema,
         )
         # 2^60 — far above the 10^13 cap.
-        out.emit(batch, batch_index=1 << 60)
+        cast(VgiOutputCollector, out).emit(batch, batch_index=1 << 60)
         state.emitted = True

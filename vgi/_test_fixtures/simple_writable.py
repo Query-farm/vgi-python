@@ -194,7 +194,7 @@ def _get_user_schema(qualified: str) -> pa.Schema:
 
 def _qualified_from_bind(params: BindParams[None]) -> str:
     args = params.bind_call.arguments
-    if not args.positional:
+    if not args.positional or args.positional[0] is None:
         raise ValueError("table_name positional argument is required")
     return str(args.positional[0].as_py())
 
@@ -202,7 +202,7 @@ def _qualified_from_bind(params: BindParams[None]) -> str:
 def _qualified_from_process(params: ProcessParams[None]) -> str:
     assert params.init_call is not None
     args = params.init_call.bind_call.arguments
-    if not args.positional:
+    if not args.positional or args.positional[0] is None:
         raise ValueError("table_name positional argument is required")
     return str(args.positional[0].as_py())
 
@@ -290,6 +290,7 @@ class SimpleScan(TableFunctionGenerator[None, "_ScanState"]):
 
     @classmethod
     def process(cls, params: ProcessParams[None], state: _ScanState, out: OutputCollector) -> None:
+        assert state.rows is not None and state.schema is not None
         if state.cursor >= len(state.rows):
             out.finish()
             return
@@ -307,7 +308,7 @@ class SimpleScan(TableFunctionGenerator[None, "_ScanState"]):
 
 @dataclass(kw_only=True)
 class _ScanState(ArrowSerializableDataclass):
-    rows: Annotated[list[tuple] | None, Transient()] = None
+    rows: Annotated[list[tuple[Any, ...]] | None, Transient()] = None
     schema: Annotated[pa.Schema | None, Transient()] = None
     cursor: int = 0
 
@@ -347,7 +348,7 @@ class SimpleInsert(TableInOutGenerator[None, None]):
         col_names = [f.name for f in user_schema]
         cols_sql = ", ".join(f'"{c}"' for c in col_names)
         placeholders = ", ".join("?" for _ in col_names)
-        rows_to_insert: list[tuple] = []
+        rows_to_insert: list[tuple[Any, ...]] = []
         for i in range(batch.num_rows):
             rows_to_insert.append(tuple(batch.column(c)[i].as_py() for c in col_names))
 
@@ -402,7 +403,7 @@ class SimpleUpdate(TableInOutGenerator[None, None]):
         select_list = ", ".join(f'"{c}"' for c in user_col_names)
 
         rowid_col = batch.column("rowid")
-        updated: list[tuple] = []
+        updated: list[tuple[Any, ...]] = []
         with _connect(attach_opaque_data) as conn:
             conn.execute("BEGIN")
             for i in range(batch.num_rows):
@@ -454,7 +455,7 @@ class SimpleDelete(TableInOutGenerator[None, None]):
         select_list = ", ".join(f'"{c}"' for c in user_col_names)
         rowid_col = batch.column("rowid")
 
-        deleted: list[tuple] = []
+        deleted: list[tuple[Any, ...]] = []
         with _connect(attach_opaque_data) as conn:
             conn.execute("BEGIN")
             for i in range(batch.num_rows):
@@ -509,7 +510,7 @@ class BrokenReturningInsert(TableInOutGenerator[None, None]):
         col_names = [f.name for f in user_schema]
         cols_sql = ", ".join(f'"{c}"' for c in col_names)
         placeholders = ", ".join("?" for _ in col_names)
-        rows_to_insert: list[tuple] = []
+        rows_to_insert: list[tuple[Any, ...]] = []
         for i in range(batch.num_rows):
             rows_to_insert.append(tuple(batch.column(c)[i].as_py() for c in col_names))
 

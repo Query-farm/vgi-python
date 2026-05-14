@@ -38,7 +38,7 @@ documented at ``vgi/_test_fixtures/table/partition_columns.py`` /
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, ClassVar
+from typing import Annotated, Any, ClassVar, cast
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
@@ -47,6 +47,7 @@ from vgi_rpc.rpc import OutputCollector
 from vgi._test_fixtures.table._common import _cardinality_from_count
 from vgi.arguments import Arg
 from vgi.metadata import PartitionKind
+from vgi.protocol import VgiOutputCollector
 from vgi.schema_utils import partition_field
 from vgi.table_function import (
     ProcessParams,
@@ -174,7 +175,7 @@ class BrokenPartitionMinNeqMaxFunction(TableFunctionGenerator[_BrokenArgs, _Brok
             {"country": ["US"] * params.args.count, "sales": list(range(params.args.count))},
             schema=cls.FIXED_SCHEMA,
         )
-        out.emit(
+        cast(VgiOutputCollector, out).emit(
             batch,
             partition_values={
                 "country": (
@@ -197,11 +198,13 @@ class BrokenPartitionValuesNoAnnotationFunction(TableFunctionGenerator[_BrokenAr
     """No partition annotation, but worker passes partition_values=."""
 
     # No partition_field() — bind schema has no partition columns.
+    # cast: mypy joins Field[StringType] + Field[Int64Type] to Field[object];
+    # the runtime list is a plain list of pa.Field.
     FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema(
-        [
-            pa.field("country", pa.string()),
-            pa.field("sales", pa.int64()),
-        ]
+        cast(
+            "list[pa.Field[Any]]",
+            [pa.field("country", pa.string()), pa.field("sales", pa.int64())],
+        )
     )
 
     class Meta:
@@ -233,7 +236,7 @@ class BrokenPartitionValuesNoAnnotationFunction(TableFunctionGenerator[_BrokenAr
             {"country": ["US"] * params.args.count, "sales": list(range(params.args.count))},
             schema=cls.FIXED_SCHEMA,
         )
-        out.emit(
+        cast(VgiOutputCollector, out).emit(
             batch,
             partition_values={
                 "country": (

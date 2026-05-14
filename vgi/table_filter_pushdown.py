@@ -25,7 +25,7 @@ import os
 import threading
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -75,7 +75,9 @@ def _strip_extension(x: Any) -> Any:
     """
     if isinstance(x.type, pa.BaseExtensionType):
         if isinstance(x, (pa.Array, pa.ChunkedArray)):
-            return x.storage
+            # Narrowed to Array/ChunkedArray, but an extension-typed one —
+            # ``.storage`` exists at runtime; re-widen so mypy allows it.
+            return cast(Any, x).storage
         return x.value
     return x
 
@@ -258,21 +260,25 @@ class ConstantFilter(Filter):
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
         """Evaluate comparison against batch column."""
         col, val = _normalize_for_compare(batch.column(self.column_index), self.value)
+        # _normalize_for_compare returns (Any, Any) — the compute kernels
+        # below resolve to BooleanArray at runtime; cast once on the way out.
+        result: Any
         match self.op:
             case ComparisonOp.EQ:
-                return pc.equal(col, val)
+                result = pc.equal(col, val)
             case ComparisonOp.NE:
-                return pc.not_equal(col, val)
+                result = pc.not_equal(col, val)
             case ComparisonOp.GT:
-                return pc.greater(col, val)
+                result = pc.greater(col, val)
             case ComparisonOp.GE:
-                return pc.greater_equal(col, val)
+                result = pc.greater_equal(col, val)
             case ComparisonOp.LT:
-                return pc.less(col, val)
+                result = pc.less(col, val)
             case ComparisonOp.LE:
-                return pc.less_equal(col, val)
+                result = pc.less_equal(col, val)
             case _:
                 raise ValueError(f"Unknown comparison operator: {self.op}")
+        return cast("pa.BooleanArray", result)
 
     def __repr__(self) -> str:
         """Return string representation for debugging."""
@@ -317,7 +323,7 @@ class InFilter(Filter):
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
         """Evaluate IN membership against batch column."""
         col, vals = _normalize_for_compare(batch.column(self.column_index), self.values)
-        return pc.is_in(col, vals)
+        return cast("pa.BooleanArray", pc.is_in(col, vals))
 
     def __repr__(self) -> str:
         """Return string representation for debugging."""

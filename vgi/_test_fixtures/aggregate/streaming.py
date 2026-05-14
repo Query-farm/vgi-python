@@ -138,7 +138,7 @@ class StreamingSumFunction(AggregateFunction[SumState]):
         partition_key_count: int,
         order_key_count: int,
         params: ProcessParams[None],
-    ) -> pa.Array:
+    ) -> pa.Array[Any]:
         # Column layout from the operator:
         #   [partition_key_cols..., order_key_cols..., value_cols...]
         # We don't actually need the order keys at runtime here — the

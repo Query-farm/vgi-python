@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
-from typing import Annotated, ClassVar
+from typing import Annotated, ClassVar, cast
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
@@ -52,6 +52,7 @@ from vgi._test_fixtures.table._common import _cardinality_from_count
 from vgi.arguments import Arg
 from vgi.invocation import GlobalInitResponse
 from vgi.metadata import FunctionExample, PartitionKind
+from vgi.protocol import VgiOutputCollector
 from vgi.schema_utils import partition_field
 from vgi.table_function import (
     InitParams,
@@ -364,7 +365,7 @@ class PartitionedWithExplicitOverrideFunction(TableFunctionGenerator[_ProjectedO
             {"category": [category] * rpc, "revenue": revenue},
             schema=cls.FIXED_SCHEMA,
         )
-        out.emit(
+        cast(VgiOutputCollector, out).emit(
             batch,
             partition_values={
                 "category": (

@@ -301,7 +301,7 @@ class FunctionStorageAzureSql:
                 """,
                 (execution_id,),
             )
-            rows: list[tuple[int, bytes]] = [(int(r[0]), r[1]) for r in cursor.fetchall()]  # type: ignore[misc]
+            rows: list[tuple[int, bytes]] = [(int(r[0]), r[1]) for r in cursor.fetchall()]  # type: ignore[misc, arg-type]
             _logger.debug(
                 "worker_scan eid=%s rows=%d elapsed_ms=%.1f",
                 execution_id.hex()[:8],
@@ -406,7 +406,7 @@ class FunctionStorageAzureSql:
             )
             if not got_item:
                 return None
-            result: bytes = row[0]  # type: ignore[index]
+            result: bytes = row[0]  # type: ignore[index, assignment]
             return result
 
         return self._execute_with_retry(_do)

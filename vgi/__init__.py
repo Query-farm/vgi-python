@@ -54,6 +54,7 @@ from vgi.metadata import (
 from vgi.protocol import (
     BindRequest,
     InitRequest,
+    VgiOutputCollector,
 )
 from vgi.scalar_function import (
     RowCountMismatchError,
@@ -128,6 +129,7 @@ __all__ = [
     "CatalogFunctionType",
     "InitRequest",
     "Level",
+    "VgiOutputCollector",
     "Message",
     "OrderPreservation",
     "ParameterInfo",

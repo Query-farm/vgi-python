@@ -449,7 +449,7 @@ _STREAMING_SESSION_STORAGE_KEY = 0
 class _StreamingSession:
     """Per-execution_id state for a streaming-partitioned aggregate session."""
 
-    func_cls: type
+    func_cls: type[AggregateFunction[Any]]
     streaming_state: Any
     output_schema: pa.Schema
     partition_key_count: int
@@ -474,7 +474,7 @@ def _encode_streaming_session(session: _StreamingSession) -> bytes:
     )
 
 
-def _decode_streaming_session(payload: bytes, func_cls: type) -> _StreamingSession:
+def _decode_streaming_session(payload: bytes, func_cls: type[AggregateFunction[Any]]) -> _StreamingSession:
     d = pickle.loads(payload)
     return _StreamingSession(
         func_cls=func_cls,
@@ -666,7 +666,7 @@ def _build_scalar_result_batch(result_value: Any, output_schema: pa.Schema) -> p
 
 
 def _build_batch_result(
-    results: list[Any] | pa.Array,
+    results: list[Any] | pa.Array[Any],
     output_schema: pa.Schema,
     expected_count: int | None = None,
 ) -> pa.RecordBatch:
@@ -684,7 +684,7 @@ def _build_batch_result(
     if isinstance(results, pa.Array):
         if not results.type.equals(output_type):
             raise TypeError(f"window_batch returned pa.Array of type {results.type}, expected {output_type}")
-        arr: pa.Array = results
+        arr: pa.Array[Any] = results
     else:
         arr = pa.array(results, type=output_type)
     if expected_count is not None and len(arr) != expected_count:
@@ -1976,7 +1976,7 @@ class Worker:
         if cached is _ABSENT_SENTINEL:
             return None
         if cached is not None:
-            return cached  # type: ignore[return-value]
+            return cast(Arguments, cached)
 
         result = storage.aggregate_get([-2])
         if result[0] is None:
