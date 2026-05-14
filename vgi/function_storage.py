@@ -182,6 +182,9 @@ class FunctionStorage(Protocol):
 
         Args:
             execution_id: Unique identifier for the function invocation.
+            shard_key: Routing key for the CF DO backend; ignored by
+                SQLite / Azure backends. Set automatically by BoundStorage
+                from the caller's attach_opaque_data / auth context.
 
         Returns:
             List of serialized state bytes from all workers.
@@ -202,6 +205,9 @@ class FunctionStorage(Protocol):
 
         Args:
             execution_id: Unique identifier for the function invocation.
+            shard_key: Routing key for the CF DO backend; ignored by
+                SQLite / Azure backends. Set automatically by BoundStorage
+                from the caller's attach_opaque_data / auth context.
 
         Returns:
             List of ``(worker_id, state_bytes)`` pairs. Order is
@@ -231,6 +237,9 @@ class FunctionStorage(Protocol):
                 (raw bytes; typically the 16-byte form of the hex
                 ``_current_stream_id`` ContextVar).
             state: Serialized state bytes.
+            shard_key: Routing key for the CF DO backend; ignored by
+                SQLite / Azure backends. Set automatically by BoundStorage
+                from the caller's attach_opaque_data / auth context.
 
         """
         ...
@@ -245,6 +254,9 @@ class FunctionStorage(Protocol):
 
         Args:
             execution_id: Unique identifier for the function invocation.
+            shard_key: Routing key for the CF DO backend; ignored by
+                SQLite / Azure backends. Set automatically by BoundStorage
+                from the caller's attach_opaque_data / auth context.
 
         Returns:
             List of ``(stream_id, state_bytes)`` pairs. Order is
@@ -264,6 +276,9 @@ class FunctionStorage(Protocol):
         Args:
             execution_id: Unique identifier for the function invocation.
             items: List of serialized work item bytes.
+            shard_key: Routing key for the CF DO backend; ignored by
+                SQLite / Azure backends. Set automatically by BoundStorage
+                from the caller's attach_opaque_data / auth context.
 
         Returns:
             Number of items added.
@@ -276,6 +291,9 @@ class FunctionStorage(Protocol):
 
         Args:
             execution_id: Unique identifier for the function invocation.
+            shard_key: Routing key for the CF DO backend; ignored by
+                SQLite / Azure backends. Set automatically by BoundStorage
+                from the caller's attach_opaque_data / auth context.
 
         Returns:
             Serialized work item bytes, or None if the queue is empty or
@@ -293,6 +311,9 @@ class FunctionStorage(Protocol):
 
         Args:
             execution_id: Unique identifier for the function invocation.
+            shard_key: Routing key for the CF DO backend; ignored by
+                SQLite / Azure backends. Set automatically by BoundStorage
+                from the caller's attach_opaque_data / auth context.
 
         Returns:
             Number of items deleted.
@@ -314,6 +335,9 @@ class FunctionStorage(Protocol):
         Args:
             execution_id: Unique identifier for the function invocation.
             group_ids: List of group_ids to look up.
+            shard_key: Routing key for the CF DO backend; ignored by
+                SQLite / Azure backends. Set automatically by BoundStorage
+                from the caller's attach_opaque_data / auth context.
 
         Returns:
             List parallel to ``group_ids`` with found states or None.
@@ -332,6 +356,9 @@ class FunctionStorage(Protocol):
         Args:
             execution_id: Unique identifier for the function invocation.
             data: List of ``(group_id, state_bytes)`` pairs to store.
+            shard_key: Routing key for the CF DO backend; ignored by
+                SQLite / Azure backends. Set automatically by BoundStorage
+                from the caller's attach_opaque_data / auth context.
 
         """
         ...
@@ -343,6 +370,9 @@ class FunctionStorage(Protocol):
 
         Args:
             execution_id: Unique identifier for the function invocation.
+            shard_key: Routing key for the CF DO backend; ignored by
+                SQLite / Azure backends. Set automatically by BoundStorage
+                from the caller's attach_opaque_data / auth context.
 
         """
         ...
@@ -376,6 +406,9 @@ class FunctionStorage(Protocol):
             transaction_opaque_data: Caller-supplied transaction identifier
                 (typically the framework's catalog ``transaction_opaque_data``).
             keys: List of binary keys to look up.
+            shard_key: Routing key for the CF DO backend; ignored by
+                SQLite / Azure backends. Set automatically by BoundStorage
+                from the caller's attach_opaque_data / auth context.
 
         Returns:
             List parallel to ``keys`` with found values or ``None``.
@@ -395,6 +428,9 @@ class FunctionStorage(Protocol):
         Args:
             transaction_opaque_data: Caller-supplied transaction identifier.
             items: List of ``(key, value)`` byte tuples.
+            shard_key: Routing key for the CF DO backend; ignored by
+                SQLite / Azure backends. Set automatically by BoundStorage
+                from the caller's attach_opaque_data / auth context.
 
         """
         ...
@@ -409,6 +445,9 @@ class FunctionStorage(Protocol):
 
         Args:
             transaction_opaque_data: Caller-supplied transaction identifier.
+            shard_key: Routing key for the CF DO backend; ignored by
+                SQLite / Azure backends. Set automatically by BoundStorage
+                from the caller's attach_opaque_data / auth context.
 
         """
         ...

@@ -51,6 +51,7 @@ class TestBoolColumnBool8Literal:
     """
 
     def test_eq_true(self) -> None:
+        """EQ against a bool8 literal matches the plain-bool column."""
         batch = _batch_with_bool("flag", [True, False, None, True])
         f = ConstantFilter(
             column_name="flag",
@@ -62,6 +63,7 @@ class TestBoolColumnBool8Literal:
         assert result.to_pylist() == [True, False, None, True]
 
     def test_eq_false(self) -> None:
+        """EQ against a false bool8 literal."""
         batch = _batch_with_bool("flag", [True, False, None, True])
         f = ConstantFilter(
             column_name="flag",
@@ -72,6 +74,7 @@ class TestBoolColumnBool8Literal:
         assert f.evaluate(batch).to_pylist() == [False, True, None, False]
 
     def test_ne_true(self) -> None:
+        """NE against a bool8 literal."""
         batch = _batch_with_bool("flag", [True, False, None, True])
         f = ConstantFilter(
             column_name="flag",
@@ -95,6 +98,7 @@ class TestBool8ColumnBool8Literal:
     """
 
     def test_eq_true(self) -> None:
+        """EQ with bool8 on both sides of the kernel."""
         batch = _batch_with_bool8("flag", [True, False, None, True])
         f = ConstantFilter(
             column_name="flag",
@@ -105,6 +109,7 @@ class TestBool8ColumnBool8Literal:
         assert f.evaluate(batch).to_pylist() == [True, False, None, True]
 
     def test_eq_false(self) -> None:
+        """EQ against a false literal with bool8 on both sides."""
         batch = _batch_with_bool8("flag", [True, False, None, True])
         f = ConstantFilter(
             column_name="flag",
@@ -128,11 +133,13 @@ class TestPlainTypesUnchanged:
     """
 
     def test_int32_eq(self) -> None:
+        """Plain int32 EQ flows through normalisation unchanged."""
         batch = pa.RecordBatch.from_pydict({"n": pa.array([1, 2, 3, 4], type=pa.int32())})
         f = ConstantFilter(column_name="n", column_index=0, op=ComparisonOp.EQ, value=pa.scalar(2, type=pa.int32()))
         assert f.evaluate(batch).to_pylist() == [False, True, False, False]
 
     def test_string_eq(self) -> None:
+        """Plain string EQ flows through normalisation unchanged."""
         batch = pa.RecordBatch.from_pydict({"s": ["a", "b", "c"]})
         f = ConstantFilter(column_name="s", column_index=0, op=ComparisonOp.EQ, value=pa.scalar("b"))
         assert f.evaluate(batch).to_pylist() == [False, True, False]
@@ -158,6 +165,7 @@ class TestInFilterExtension:
     """
 
     def test_in_bool_with_bool8_values(self) -> None:
+        """IN with bool8 values against a plain-bool column."""
         batch = _batch_with_bool("flag", [True, False, None, True])
         # Build the values array as a bool8 extension array
         storage = pa.array([1], type=pa.int8())
@@ -173,11 +181,14 @@ class TestInFilterExtension:
 
 
 class TestPlainLiteralBool8Column:
-    """Defensive: if some future code path emits a plain bool literal but
-    the column happens to be bool8, normalisation should still align them.
+    """Defensive symmetry check: plain bool literal against a bool8 column.
+
+    If some future code path emits a plain bool literal but the column
+    happens to be bool8, normalisation should still align them.
     """
 
     def test_plain_bool_literal_bool8_column(self) -> None:
+        """Plain bool literal against a bool8 column."""
         batch = _batch_with_bool8("flag", [True, False, None, True])
         f = ConstantFilter(
             column_name="flag",
@@ -197,8 +208,10 @@ class TestPlainLiteralBool8Column:
 
 
 def test_pyarrow_kernel_gap_still_present() -> None:
-    """Documents the underlying PyArrow gap. If this passes in a future
-    PyArrow release the normalisation helper is over-defensive but harmless.
+    """Document the underlying PyArrow gap.
+
+    If this passes in a future PyArrow release the normalisation helper
+    is over-defensive but harmless.
     """
     import pyarrow.compute as pc
 
@@ -245,6 +258,7 @@ class TestUuidExtension:
     ]
 
     def test_eq(self) -> None:
+        """EQ with arrow.uuid on both sides."""
         batch = pa.RecordBatch.from_arrays([_uuid_array(self.UUIDS)], names=["id"])
         f = ConstantFilter(
             column_name="id",
@@ -255,6 +269,7 @@ class TestUuidExtension:
         assert f.evaluate(batch).to_pylist() == [False, True, None, False]
 
     def test_ne(self) -> None:
+        """NE with arrow.uuid on both sides."""
         batch = pa.RecordBatch.from_arrays([_uuid_array(self.UUIDS)], names=["id"])
         f = ConstantFilter(
             column_name="id",
@@ -265,6 +280,7 @@ class TestUuidExtension:
         assert f.evaluate(batch).to_pylist() == [True, False, None, True]
 
     def test_in(self) -> None:
+        """IN with an arrow.uuid values array."""
         batch = pa.RecordBatch.from_arrays([_uuid_array(self.UUIDS)], names=["id"])
         values = _uuid_array(
             [
@@ -282,8 +298,10 @@ class TestUuidExtension:
 
 
 def test_pyarrow_interval_kernel_gap() -> None:
-    """PyArrow has no ``equal`` kernel for any of the interval types
-    (``month_day_nano_interval``, ``day_time_interval``, ``month_interval``).
+    """PyArrow has no ``equal`` kernel for any interval type.
+
+    The affected types are ``month_day_nano_interval``,
+    ``day_time_interval``, and ``month_interval``.
 
     This means a filter pushdown like ``WHERE col = INTERVAL '1 day'``
     cannot be evaluated on the worker side regardless of whether we strip

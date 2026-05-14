@@ -420,7 +420,7 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
         window_state: Any,
         params: ProcessParams[Any],
     ) -> Any:
-        """Optional hook: derive per-partition state for the window() loop.
+        """Derive per-partition state for the window() loop (optional hook).
 
         Called once per partition, after ``window_init`` (or after the state
         is rehydrated from storage on a cold reload), before any

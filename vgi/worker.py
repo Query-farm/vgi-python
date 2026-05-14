@@ -457,11 +457,13 @@ class _StreamingSession:
 
 
 def _encode_streaming_session(session: _StreamingSession) -> bytes:
-    """Pickle a session for FunctionStorage. ``func_cls`` is *not* pickled —
-    it's resolved on the fly from the function name on cold reload.
+    """Pickle a session for FunctionStorage.
+
+    ``func_cls`` is *not* pickled — it's resolved on the fly from the
+    function name on cold reload.
     """
     sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, session.output_schema) as writer:
+    with pa.ipc.new_stream(sink, session.output_schema):
         pass  # schema-only stream is enough to round-trip the schema
     output_schema_bytes = sink.getvalue().to_pybytes()
     return pickle.dumps(
@@ -1825,6 +1827,18 @@ class Worker:
             raise self._opaque_data_rejected("transaction_opaque_data") from exc
         return TransactionOpaqueData(plaintext)
 
+    def _unwrap_bind_call(self, bc: Any) -> Any:
+        """Return a copy of a ``BindRequest`` / ``BindCall`` with unwrapped ``attach_opaque_data``.
+
+        Function bodies read ``attach_opaque_data`` straight off the bind call
+        — e.g. a catalog that packs attach-time options into it — so the
+        worker must hand them the plaintext, not the sealed envelope. A no-op
+        when there is no signing key or the field is unset.
+        """
+        if bc is None or bc.attach_opaque_data is None:
+            return bc
+        return _dataclass_replace(bc, attach_opaque_data=self._unwrap_attach(bc.attach_opaque_data))
+
     def _get_catalog(self) -> CatalogInterface:
         """Get the CatalogInterface instance for this worker.
 
@@ -1879,6 +1893,8 @@ class Worker:
         # vgi.attach_opaque_data / vgi.transaction_opaque_data are auto-tagged by vgi-rpc's
         # Sentry dispatch hook (short-hash form) on every method that
         # carries them.
+        # Unwrap the sealed attach envelope so the function body sees plaintext.
+        request = self._unwrap_bind_call(request)
         func_cls = self._resolve_function(request)
         self._validate_required_settings(func_cls, request)
 
@@ -1892,6 +1908,7 @@ class Worker:
 
         Implements VgiProtocol.table_function_cardinality().
         """
+        request = _dataclass_replace(request, bind_call=self._unwrap_bind_call(request.bind_call))
         func_cls = self._resolve_function(request.bind_call)
         if not issubclass(func_cls, TableFunctionGenerator):
             raise ValueError(
@@ -1907,6 +1924,7 @@ class Worker:
         of the serialized ColumnStatistics batch (same wire shape as
         catalog_table_column_statistics_get), or None when stats are unknown.
         """
+        request = _dataclass_replace(request, bind_call=self._unwrap_bind_call(request.bind_call))
         func_cls = self._resolve_function(request.bind_call)
         if not issubclass(func_cls, TableFunctionGenerator):
             return None
@@ -1927,6 +1945,7 @@ class Worker:
         """
         empty = TableFunctionDynamicToStringResponse(keys=[], values=[])
         try:
+            request = _dataclass_replace(request, bind_call=self._unwrap_bind_call(request.bind_call))
             func_cls = self._resolve_function(request.bind_call)
         except Exception:
             _logger.exception("dynamic_to_string: failed to resolve function class")
@@ -2870,6 +2889,9 @@ class Worker:
         # vgi.attach_opaque_data / vgi.transaction_opaque_data are auto-tagged by vgi-rpc's
         # Sentry dispatch hook (short-hash form) on every method that
         # carries them — including this one (descends bind_call).
+        # Unwrap the sealed attach envelope so the function body (and the
+        # init_call carried into per-turn ProcessParams) sees plaintext.
+        request = _dataclass_replace(request, bind_call=self._unwrap_bind_call(request.bind_call))
         func_cls = self._resolve_function(request.bind_call)
         instance = func_cls(logger=_logger)
 

@@ -316,8 +316,16 @@ def _render_dataclass(cls: type, ctx: _Ctx) -> str:
             continue
 
         t = hints.get(f.name, f.type)
-        has_default = f.default is not dataclasses.MISSING or f.default_factory is not dataclasses.MISSING
-        optional = "?" if has_default else ""
+        # A TS property is optional (`?`) iff the field is *nullable on the
+        # wire* — i.e. the (Annotated-unwrapped) dataclass type is `T | None`,
+        # which is exactly how the Arrow schema decides nullability. A Python
+        # default does NOT make a field optional: e.g.
+        # `supports_batch_index: bool = False` has a default for ergonomic
+        # construction but is a required, non-nullable wire field. Conflating
+        # the two let hand-written builders silently omit required fields
+        # without `tsc` complaining.
+        unwrapped, _ = _unwrap(t)
+        optional = "?" if _is_optional(unwrapped) else ""
         ts = _emit_type(t, ctx)
         tag = _inner_opaque_semantic(t)
         tag_comment = f" /** {tag} */" if tag else ""

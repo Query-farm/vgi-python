@@ -647,8 +647,9 @@ def _build_partition_values_batch(
 
 
 def _serialize_partition_values_batch(batch: pa.RecordBatch) -> str:
-    """Serialize via Arrow IPC stream + base64 (matches the
-    ``vgi_rpc.stream_state#b64`` convention used elsewhere).
+    """Serialize via Arrow IPC stream + base64.
+
+    Matches the ``vgi_rpc.stream_state#b64`` convention used elsewhere.
     """
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, batch.schema) as writer:
@@ -664,8 +665,10 @@ def _merge_partition_values(
     partition_values: dict[str, tuple[pa.Scalar[Any], pa.Scalar[Any]]] | None,
     metadata: dict[str, str] | None,
 ) -> dict[str, str] | None:
-    """Validate the partition_values kwarg and fold the resulting Arrow
-    IPC bytes into the emit metadata dict under ``vgi_partition_values#b64``.
+    """Validate the partition_values kwarg and fold it into the emit metadata.
+
+    Folds the resulting Arrow IPC bytes into the emit metadata dict under
+    ``vgi_partition_values#b64``.
 
     Contract:
 

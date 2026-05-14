@@ -732,7 +732,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
     @classmethod
     def _supports_batch_index(cls) -> bool:
-        """True if Meta.supports_batch_index = True.
+        """Return True if Meta.supports_batch_index is set.
 
         Drives the ``batch_index=`` kwarg validation on ``out.emit()`` in the
         table-producer harness (see vgi.protocol._TrackingOutputCollector).

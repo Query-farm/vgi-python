@@ -160,7 +160,8 @@ def catalog_version(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     version = client.catalog_version(

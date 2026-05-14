@@ -63,7 +63,8 @@ def table_get(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     table_info = client.table_get(
@@ -138,7 +139,8 @@ def table_create(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
 
@@ -199,7 +201,8 @@ def table_drop(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     client.table_drop(
@@ -249,7 +252,8 @@ def table_rename(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     client.table_rename(
@@ -315,7 +319,8 @@ def table_comment(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     client.table_comment_set(
@@ -366,7 +371,8 @@ def table_scan_function(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     result = client.table_scan_function_get(
@@ -429,7 +435,8 @@ def column_add(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
 
@@ -496,7 +503,8 @@ def column_drop(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     client.table_column_drop(
@@ -559,7 +567,8 @@ def column_rename(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     client.table_column_rename(
@@ -622,7 +631,8 @@ def column_set_default(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     client.table_column_default_set(
@@ -681,7 +691,8 @@ def column_drop_default(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     client.table_column_default_drop(
@@ -747,7 +758,8 @@ def column_set_type(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
 
@@ -810,7 +822,8 @@ def column_set_not_null(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     client.table_not_null_set(
@@ -868,7 +881,8 @@ def column_drop_not_null(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     client.table_not_null_drop(

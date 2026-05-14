@@ -59,7 +59,8 @@ def view_get(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     view_info = client.view_get(
@@ -115,7 +116,8 @@ def view_create(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     client.view_create(
@@ -163,7 +165,8 @@ def view_drop(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     client.view_drop(
@@ -213,7 +216,8 @@ def view_rename(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     client.view_rename(
@@ -279,7 +283,8 @@ def view_comment(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     client.view_comment_set(

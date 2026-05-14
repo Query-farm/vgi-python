@@ -476,11 +476,12 @@ class SimpleDelete(TableInOutGenerator[None, None]):
 
 
 class BrokenReturningInsert(TableInOutGenerator[None, None]):
-    """Misbehaving INSERT handler: claims RETURNING support but always emits a
-    (count BIGINT) batch — same shape that triggered the original SIGSEGV in
-    the kafka worker. Used to verify the C++ extension's runtime schema
-    validator throws a clean IOException instead of crashing inside
-    ArrowToDuckDB.
+    """Misbehaving INSERT handler that lies about its RETURNING support.
+
+    Claims RETURNING support but always emits a (count BIGINT) batch —
+    same shape that triggered the original SIGSEGV in the kafka worker.
+    Used to verify the C++ extension's runtime schema validator throws a
+    clean IOException instead of crashing inside ArrowToDuckDB.
     """
 
     class Meta:

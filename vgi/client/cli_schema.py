@@ -53,7 +53,8 @@ def schema_list(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     for schema_info in client.schemas(
@@ -92,7 +93,8 @@ def schema_get(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     schema_info = client.schema_get(
@@ -139,7 +141,8 @@ def schema_create(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     tags_dict = parse_json_option(tags, "--tags")
@@ -186,7 +189,8 @@ def schema_drop(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     client.schema_drop(
@@ -238,7 +242,8 @@ def schema_contents(
     )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
 

@@ -273,8 +273,10 @@ class WindowListAggFunction(AggregateFunction[ListAggState]):
 
 
 class WindowSumBatchFunction(AggregateFunction[SumState]):
-    """Windowed running-sum that overrides ``window_batch`` to return a
-    pre-built ``pa.Array`` rather than a Python list.
+    """Windowed running-sum returning a pre-built ``pa.Array``.
+
+    Overrides ``window_batch`` to return a pre-built ``pa.Array`` rather
+    than a Python list.
 
     Functionally equivalent to :class:`WindowSumFunction`. The point of this
     fixture is to exercise the framework's polymorphic batch return: when

@@ -158,8 +158,9 @@ class OrderPreservation(Enum):
 
 
 class PartitionKind(Enum):
-    """Partition shape declared by a table function over its
-    ``vgi.partition_column``-annotated bind-schema fields.
+    """Partition shape declared by a table function.
+
+    Declared over its ``vgi.partition_column``-annotated bind-schema fields.
 
     Mirrors DuckDB's ``TablePartitionInfo`` at
     ``duckdb/src/include/duckdb/function/partition_stats.hpp:20``.
@@ -1044,10 +1045,10 @@ def _validate_partition_kind(cls: type, kind: PartitionKind) -> PartitionKind:
     from vgi.schema_utils import VGI_PARTITION_COLUMN_KEY
 
     annotated_fields: list[str] = []
-    for field in fixed_schema:
-        md = field.metadata
+    for fld in fixed_schema:
+        md = fld.metadata
         if md is not None and md.get(VGI_PARTITION_COLUMN_KEY) == b"true":
-            annotated_fields.append(field.name)
+            annotated_fields.append(fld.name)
 
     if kind == PartitionKind.NOT_PARTITIONED and annotated_fields:
         raise ValueError(

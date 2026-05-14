@@ -206,7 +206,7 @@ class MetaWorker:
         return self._WRAP_MAGIC + bytes([worker_index]) + attach_opaque_data
 
     def _is_wrapped(self, attach_opaque_data: bytes) -> bool:
-        """Quick predicate — does ``attach_opaque_data`` start with the MetaWorker magic?"""
+        """Return whether ``attach_opaque_data`` starts with the MetaWorker magic."""
         return (
             len(attach_opaque_data) >= self._WRAP_OVERHEAD
             and attach_opaque_data[: len(self._WRAP_MAGIC)] == self._WRAP_MAGIC

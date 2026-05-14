@@ -75,9 +75,11 @@ class _CountryPartitionedArgs:
 
 @dataclass(kw_only=True)
 class _CountryPartitionedState(ArrowSerializableDataclass):
-    """Per-worker cursor. ``current_country`` is set after the worker
-    pops a queue item; ``current_idx`` advances through emitted rows
-    until the per-country quota is reached, then it pops the next item.
+    """Per-worker cursor over countries.
+
+    ``current_country`` is set after the worker pops a queue item;
+    ``current_idx`` advances through emitted rows until the per-country
+    quota is reached, then it pops the next item.
     """
 
     current_country: str | None = None
