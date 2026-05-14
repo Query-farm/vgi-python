@@ -405,6 +405,23 @@ class ResolvedMetadata:
     # combine() returned them. The default (False) enables parallel finalize.
     source_order_dependent: bool = False
 
+    # When True (only meaningful with buffered_table=True), the SINK phase
+    # runs single-threaded — every process() call arrives in source order on
+    # one worker. The default (False) parallelizes ingest. Mutually
+    # exclusive with requires_input_batch_index (single-thread already
+    # orders; no batch_index needed).
+    sink_order_dependent: bool = False
+
+    # When True (only meaningful with buffered_table=True), the C++ Sink
+    # operator declares RequiredPartitionInfo()=BatchIndex(), causing DuckDB
+    # to thread a globally-unique monotonic batch_index from the source
+    # into every process() call. Workers can accumulate (batch_index,
+    # payload) tuples and sort in combine() to reconstruct source order
+    # under parallel ingest. Requires the source to support batch_index
+    # (parquet/csv/temp-table-scan do; range() does not — bind fails).
+    # Mutually exclusive with sink_order_dependent.
+    requires_input_batch_index: bool = False
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -435,6 +452,8 @@ class ResolvedMetadata:
             "has_finalize": self.has_finalize,
             "buffered_table": self.buffered_table,
             "source_order_dependent": self.source_order_dependent,
+            "sink_order_dependent": self.sink_order_dependent,
+            "requires_input_batch_index": self.requires_input_batch_index,
         }
 
     @staticmethod
@@ -468,6 +487,8 @@ class ResolvedMetadata:
             has_finalize=d.get("has_finalize", False),
             buffered_table=d.get("buffered_table", False),
             source_order_dependent=d.get("source_order_dependent", False),
+            sink_order_dependent=d.get("sink_order_dependent", False),
+            requires_input_batch_index=d.get("requires_input_batch_index", False),
         )
 
 
@@ -860,6 +881,14 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         # When True (only with buffered_table), source phase is single-threaded
         # and finalize_state_ids drain in combine-returned order.
         "source_order_dependent",
+        # When True (only with buffered_table), the SINK phase runs single-
+        # threaded — process() calls arrive in source order on one worker.
+        "sink_order_dependent",
+        # When True (only with buffered_table), DuckDB threads a globally-
+        # unique monotonic batch_index from the source into every process()
+        # call. Worker can reconstruct source order in combine() by sorting
+        # accumulated (batch_index, payload) tuples.
+        "requires_input_batch_index",
         # Aggregate function specific
         "order_dependent",
         "distinct_dependent",
@@ -950,6 +979,23 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         raise TypeError(
             f"{cls.__name__}: Meta.source_order_dependent is only meaningful when "
             f"Meta.buffered_table = True"
+        )
+    if attrs.get("sink_order_dependent") and not attrs.get("buffered_table"):
+        raise TypeError(
+            f"{cls.__name__}: Meta.sink_order_dependent is only meaningful when "
+            f"Meta.buffered_table = True"
+        )
+    if attrs.get("requires_input_batch_index") and not attrs.get("buffered_table"):
+        raise TypeError(
+            f"{cls.__name__}: Meta.requires_input_batch_index is only meaningful when "
+            f"Meta.buffered_table = True"
+        )
+    if attrs.get("sink_order_dependent") and attrs.get("requires_input_batch_index"):
+        raise TypeError(
+            f"{cls.__name__}: Meta.sink_order_dependent and "
+            f"Meta.requires_input_batch_index are mutually exclusive — "
+            f"single-threaded sink already orders process() calls; "
+            f"batch_index is only useful under parallel ingest"
         )
 
     # Use class name as default name, converting to snake_case
@@ -1045,6 +1091,8 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
                       or bool(attrs.get("buffered_table", False))),
         buffered_table=bool(attrs.get("buffered_table", False)),
         source_order_dependent=bool(attrs.get("source_order_dependent", False)),
+        sink_order_dependent=bool(attrs.get("sink_order_dependent", False)),
+        requires_input_batch_index=bool(attrs.get("requires_input_batch_index", False)),
     )
 
 
@@ -1193,6 +1241,8 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("has_finalize", pa.bool_()),
         pa.field("buffered_table", pa.bool_()),
         pa.field("source_order_dependent", pa.bool_()),
+        pa.field("sink_order_dependent", pa.bool_()),
+        pa.field("requires_input_batch_index", pa.bool_()),
     ]
 )
 

@@ -72,6 +72,8 @@ __all__ = [
     "CrashOnFinalizeFunction",
     "HangOnProcessFunction",
     "LargeStateFunction",
+    "OrderedBufferInputFunction",
+    "BatchIndexBufferInputFunction",
 ]
 
 
@@ -961,3 +963,135 @@ class LargeStateFunction(TableInOutGenerator[SingleTableArguments, LargeStateSta
             {name: [len(state.payload)] for name in params.output_schema.names},
             schema=params.output_schema,
         )
+
+
+# ============================================================================
+# Ordering knobs (sink_order_dependent, requires_input_batch_index)
+# ============================================================================
+
+
+class OrderedBufferInputFunction(BufferInputFunction):
+    """Buffered table function with single-threaded ingest.
+
+    Uses ``Meta.sink_order_dependent=True`` to force ``ParallelSink=false`` on
+    the C++ operator. Every ``process()`` call arrives on the same worker in
+    source order — verifying this works correctly is the integration test's
+    job (assert distinct ``conn=`` count is exactly 1).
+
+    Output is identical to ``BufferInputFunction``: passthrough of all
+    buffered rows. Because there's only one Sink thread there's only one
+    state_id; combine returns ``[0]`` and finalize yields the buffer.
+    """
+
+    class Meta(BufferInputFunction.Meta):
+        name = "ordered_buffer_input"
+        description = "buffer_input variant with sink_order_dependent=True"
+        categories = ["test", "ordering"]
+        sink_order_dependent = True
+
+
+@dataclass(kw_only=True)
+class IndexedBatch(ArrowSerializableDataclass):
+    """One (batch_index, batch_bytes) pair stored per process() call.
+
+    The Arrow schema generator can't infer a heterogeneous tuple type, so
+    pairs are wrapped in a named dataclass with explicit fields.
+    """
+
+    batch_index: int
+    batch_bytes: bytes
+
+
+@dataclass(kw_only=True)
+class BatchIndexBufferInputState(ArrowSerializableDataclass):
+    """Accumulates IndexedBatch entries for later ordering.
+
+    Each Sink thread keeps its own slice keyed by batch_index. combine()
+    merges all slices, sorts by batch_index globally, and writes the
+    ordered buffer to slot 0 for finalize() to yield in source order.
+    """
+
+    pairs: list[IndexedBatch] = field(default_factory=list)
+
+
+class BatchIndexBufferInputFunction(TableInOutGenerator[SingleTableArguments, BatchIndexBufferInputState]):
+    """Buffered table function that demands ``batch_index`` per ``process()``.
+
+    Uses ``Meta.requires_input_batch_index=True`` so the C++ operator
+    declares ``RequiredPartitionInfo()=BatchIndex()`` and threads DuckDB's
+    per-chunk batch_index into every ``process()`` call. The worker stores
+    ``(batch_index, ipc_bytes)`` per Sink thread; combine() merges and
+    sorts globally; finalize() yields in source order under parallel ingest.
+    """
+
+    state_class = BatchIndexBufferInputState
+
+    class Meta:
+        # Declared standalone (not inheriting from BufferInputFunction.Meta)
+        # because resolve_metadata's vars(meta_class) only sees directly-set
+        # attributes — Python class attribute inheritance on Meta doesn't
+        # carry through. Explicit beats implicit here.
+        name = "batch_index_buffer_input"
+        description = "buffer_input variant using batch_index to reconstruct order"
+        categories = ["test", "ordering"]
+        buffered_table = True
+        requires_input_batch_index = True
+
+    @classmethod
+    def initial_state(
+        cls, params: ProcessParams[SingleTableArguments]
+    ) -> BatchIndexBufferInputState:
+        return BatchIndexBufferInputState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[SingleTableArguments],
+        state: BatchIndexBufferInputState,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        # batch_index must be present when Meta.requires_input_batch_index=True;
+        # if it's None the C++ side failed to thread it through.
+        if params.batch_index is None:
+            raise RuntimeError(
+                "batch_index_buffer_input.process() received batch_index=None "
+                "— Meta.requires_input_batch_index plumbing is broken"
+            )
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, batch.schema) as writer:
+            writer.write_batch(batch)
+        state.pairs.append(
+            IndexedBatch(batch_index=params.batch_index, batch_bytes=sink.getvalue().to_pybytes())
+        )
+        out.emit(empty_batch(params.output_schema))
+
+    @classmethod
+    def combine(
+        cls, state_ids: list[int], params: ProcessParams[SingleTableArguments]
+    ) -> list[int]:
+        """Merge per-state buffers, sort by batch_index, write to slot 0."""
+        if not state_ids:
+            return []
+        stored = params.storage.aggregate_get(state_ids)
+        all_pairs: list[IndexedBatch] = []
+        for entry in stored:
+            if entry is None:
+                continue
+            partial = BatchIndexBufferInputState.deserialize_from_bytes(entry[1])
+            all_pairs.extend(partial.pairs)
+        all_pairs.sort(key=lambda p: p.batch_index)
+        merged = BatchIndexBufferInputState(pairs=all_pairs)
+        params.storage.aggregate_put([(0, merged.serialize_to_bytes())])
+        return [0]
+
+    @classmethod
+    def finalize(
+        cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments]
+    ) -> Iterator[pa.RecordBatch]:
+        stored = params.storage.aggregate_get([finalize_state_id])
+        if not stored or stored[0] is None:
+            return
+        state = BatchIndexBufferInputState.deserialize_from_bytes(stored[0][1])
+        for entry in state.pairs:
+            yield pa.ipc.open_stream(entry.batch_bytes).read_next_batch()

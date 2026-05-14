@@ -358,6 +358,14 @@ class ProcessParams[TArgs]:
     # None if no filters have been received. Updated before each process() call.
     current_pushdown_filters: Any = None  # PushdownFilters | None
 
+    # Globally-unique monotonic batch index for this process() call. Populated
+    # ONLY for buffered_table functions with Meta.requires_input_batch_index=True
+    # — the C++ Sink reads it from DuckDB's per-chunk OperatorPartitionInfo
+    # and forwards it. Workers can accumulate (batch_index, payload) tuples
+    # and sort in combine() to reconstruct source order under parallel ingest.
+    # None for every other call path.
+    batch_index: int | None = None
+
 
 class TableFunctionBase[TArgs](vgi.function.Function):
     """Base class for table functions with cardinality and schema validation.

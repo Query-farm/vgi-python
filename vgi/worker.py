@@ -2402,13 +2402,17 @@ class Worker:
             )
         func_cls, params = cached
         # Rebuild storage with this request's auth context so the storage
-        # layer's request-scoped fields stay consistent.
+        # layer's request-scoped fields stay consistent. Forward the
+        # per-call batch_index (only set when Meta.requires_input_batch_index
+        # = True; otherwise None). ProcessParams is otherwise immutable
+        # across process() calls within one execution.
         params = _dataclass_replace(
             params,
             storage=BoundStorage(
                 func_cls.storage, request.execution_id, request=request, auth=ctx.auth
             ),
             auth_context=ctx.auth,
+            batch_index=request.batch_index,
         )
 
         batch = pa.ipc.open_stream(request.input_batch).read_next_batch()

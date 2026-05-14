@@ -490,6 +490,19 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     # combine-returned order. Default false enables parallel finalize.
     source_order_dependent: bool = False
 
+    # Only meaningful when ``buffered_table`` is true. When true, the SINK
+    # phase runs single-threaded — every process() call arrives in source
+    # order on one worker. Mutually exclusive with requires_input_batch_index.
+    sink_order_dependent: bool = False
+
+    # Only meaningful when ``buffered_table`` is true. When true, the C++
+    # Sink operator declares RequiredPartitionInfo()=BatchIndex(); each
+    # process() RPC carries a globally-unique monotonic batch_index from
+    # DuckDB's source. Workers can sort by it in combine() to reconstruct
+    # source order under parallel ingest. Mutually exclusive with
+    # sink_order_dependent.
+    requires_input_batch_index: bool = False
+
     # Settings required by the function
     required_settings: list[str] = field(default_factory=list)
 
@@ -2308,6 +2321,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             has_finalize=meta.has_finalize,
             buffered_table=meta.buffered_table,
             source_order_dependent=meta.source_order_dependent,
+            sink_order_dependent=meta.sink_order_dependent,
+            requires_input_batch_index=meta.requires_input_batch_index,
             # Settings
             required_settings=meta.required_settings,
             # Secrets

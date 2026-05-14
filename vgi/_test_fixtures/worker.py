@@ -158,6 +158,7 @@ from vgi._test_fixtures.table import (
     resolve_versioned_constraints_version,
 )
 from vgi._test_fixtures.table_in_out import (
+    BatchIndexBufferInputFunction,
     BufferInputFunction,
     CrashOnCombineFunction,
     CrashOnFinalizeFunction,
@@ -168,6 +169,7 @@ from vgi._test_fixtures.table_in_out import (
     FilterBySettingFunction,
     HangOnProcessFunction,
     LargeStateFunction,
+    OrderedBufferInputFunction,
     RepeatInputsFunction,
     SumAllColumnsFunction,
     SumAllColumnsSimpleDistributed,
@@ -296,6 +298,8 @@ _EXAMPLE_CATALOG = Catalog(
                 CrashOnFinalizeFunction,
                 HangOnProcessFunction,
                 LargeStateFunction,
+                OrderedBufferInputFunction,
+                BatchIndexBufferInputFunction,
                 # TableFunctionGenerator - generate output without input
                 ConstantColumnsFunction,
                 SlowCancellableFunction,

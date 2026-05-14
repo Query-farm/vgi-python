@@ -1335,6 +1335,12 @@ class BufferedTableProcessRequest(ArrowSerializableDataclass):
     state_id: int  # int64; assigned by C++ atomic counter per Sink thread
     input_batch: bytes  # Full IPC stream bytes
     attach_opaque_data: bytes | None = None
+    # Globally-unique monotonic position from DuckDB's source-side batch
+    # tagging, populated only when Meta.requires_input_batch_index=True
+    # (operator advertises RequiredPartitionInfo()=BatchIndex()). Workers
+    # that need source-order ordering accumulate (batch_index, payload)
+    # tuples and sort in combine().
+    batch_index: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
