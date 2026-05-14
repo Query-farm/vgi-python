@@ -456,11 +456,14 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
     def on_bind(cls, params: BindParams[SumAllColumnsFunctionArguments]) -> BindResponse:
         """Produce the output schema with only numeric columns.
 
-        Raises ValueError if the input has zero numeric (integer or float)
-        columns. The function has nothing to sum in that case and would
-        otherwise produce an empty output schema, which crashes downstream
-        operators with an internal assertion. Reject loudly at bind time
-        instead so the user sees a clear "no numeric columns" error.
+        Numeric here means integer, floating-point, or fixed-precision
+        decimal. DECIMAL inputs are promoted to float64 in the output
+        (matching the float path) — DuckDB users routinely expect a sum
+        of DECIMAL values to be summable, so silently dropping them would
+        be surprising. Non-numeric inputs (strings, lists, timestamps,
+        booleans) are filtered out; if NO numeric columns remain we raise
+        ValueError at bind time rather than producing an empty output
+        schema (which would crash downstream with an internal assertion).
         """
         assert params.bind_call.input_schema is not None
         output_fields: dict[str, pa.DataType] = {}
@@ -469,6 +472,12 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
             if pa.types.is_integer(field.type):
                 out_type = pa.int64()
             elif pa.types.is_floating(field.type):
+                out_type = pa.float64()
+            elif pa.types.is_decimal(field.type):
+                # Promote DECIMAL to float64 for the summed output.
+                # (A more precise implementation would widen the decimal
+                # type to absorb sum overflow, but for a test fixture
+                # this is sufficient.)
                 out_type = pa.float64()
             else:
                 continue
@@ -479,8 +488,8 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
                 f"{f.name}: {f.type}" for f in params.bind_call.input_schema
             )
             raise ValueError(
-                "sum_all_columns requires at least one numeric (integer or "
-                "float) input column, got [" + input_summary + "]"
+                "sum_all_columns requires at least one numeric (integer, "
+                "floating-point, or decimal) input column, got [" + input_summary + "]"
             )
 
         return BindResponse(output_schema=schema(output_fields))
