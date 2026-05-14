@@ -381,6 +381,37 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         """Validate FunctionArguments, auto-extracting from generic parameter if needed."""
         super().__init_subclass__()
 
+        # Validate TState (second generic type parameter) is serializable.
+        #
+        # This runs unconditionally — independently of the FunctionArguments
+        # auto-extraction below. The check used to be nested inside the
+        # ``not hasattr(cls, "FunctionArguments")`` branch, so any class that
+        # set ``FunctionArguments`` explicitly in its body silently skipped
+        # TState validation. That let non-serializable state slip through: it
+        # appears to work on subprocess transport (the worker process is
+        # long-lived, so the live state object survives between ``process()``
+        # ticks) but breaks on HTTP, where each tick is an independent request
+        # and state must round-trip through the stream-state token.
+        for base in cls.__dict__.get("__orig_bases__", ()):
+            origin = get_origin(base)
+            if origin is not None and issubclass(origin, TableFunctionBase):
+                type_args = get_args(base)
+                if len(type_args) >= 2:
+                    state_type = type_args[1]
+                    if (
+                        state_type is not None
+                        and state_type is not type(None)
+                        and not isinstance(state_type, TypeVar)
+                        and isinstance(state_type, type)
+                        and not issubclass(state_type, ArrowSerializableDataclass)
+                    ):
+                        raise TypeError(
+                            f"{cls.__name__}: TState type {state_type.__name__} must extend "
+                            f"ArrowSerializableDataclass for HTTP state serialization. "
+                            f"Use @dataclass(kw_only=True) and inherit from ArrowSerializableDataclass."
+                        )
+                break
+
         # Auto-extract FunctionArguments from generic type parameter if not explicitly set.
         # e.g., class MyFunc(TableFunctionGenerator[MyArgs]) -> cls.FunctionArguments = MyArgs
         if not hasattr(cls, "FunctionArguments"):
@@ -396,22 +427,6 @@ class TableFunctionBase[TArgs](vgi.function.Function):
                             cls.FunctionArguments = make_dataclass(f"_{cls.__name__}Args", [])
                         else:
                             cls.FunctionArguments = type_args[0]
-
-                        # Validate TState (second type parameter) is serializable
-                        if len(type_args) >= 2:
-                            state_type = type_args[1]
-                            if (
-                                state_type is not None
-                                and state_type is not type(None)
-                                and not isinstance(state_type, TypeVar)
-                                and isinstance(state_type, type)
-                                and not issubclass(state_type, ArrowSerializableDataclass)
-                            ):
-                                raise TypeError(
-                                    f"{cls.__name__}: TState type {state_type.__name__} must extend "
-                                    f"ArrowSerializableDataclass for HTTP state serialization. "
-                                    f"Use @dataclass(kw_only=True) and inherit from ArrowSerializableDataclass."
-                                )
                         break
 
         # Skip validation for abstract base classes

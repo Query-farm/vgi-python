@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar
 
 import pyarrow as pa
+from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import OutputCollector
 
 from vgi import Worker
@@ -202,8 +203,18 @@ class ProjReproFullSchema(TableFunctionGenerator[_Args, None]):
 # ---------------------------------------------------------------------------
 
 
-@dataclass(slots=True)
-class _ChunkedState:
+@dataclass(kw_only=True)
+class _ChunkedState(ArrowSerializableDataclass):
+    """Cross-tick progress for the multi-tick reproducer functions.
+
+    Must extend ``ArrowSerializableDataclass`` so the framework can
+    serialize it into the stream-state token — without that, HTTP
+    transport (where each ``process()`` tick is an independent request)
+    restarts from ``initial_state()`` every exchange and the producer
+    loop never terminates. Subprocess transport happens to keep the live
+    object around between ticks, which masked the missing contract.
+    """
+
     emitted: int = 0
 
 
