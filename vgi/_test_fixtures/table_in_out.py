@@ -454,7 +454,14 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
 
     @classmethod
     def on_bind(cls, params: BindParams[SumAllColumnsFunctionArguments]) -> BindResponse:
-        """Produce the output schema with only numeric columns."""
+        """Produce the output schema with only numeric columns.
+
+        Raises ValueError if the input has zero numeric (integer or float)
+        columns. The function has nothing to sum in that case and would
+        otherwise produce an empty output schema, which crashes downstream
+        operators with an internal assertion. Reject loudly at bind time
+        instead so the user sees a clear "no numeric columns" error.
+        """
         assert params.bind_call.input_schema is not None
         output_fields: dict[str, pa.DataType] = {}
         for field in params.bind_call.input_schema:
@@ -466,6 +473,15 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
             else:
                 continue
             output_fields[field.name] = out_type
+
+        if not output_fields:
+            input_summary = ", ".join(
+                f"{f.name}: {f.type}" for f in params.bind_call.input_schema
+            )
+            raise ValueError(
+                "sum_all_columns requires at least one numeric (integer or "
+                "float) input column, got [" + input_summary + "]"
+            )
 
         return BindResponse(output_schema=schema(output_fields))
 
