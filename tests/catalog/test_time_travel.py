@@ -13,7 +13,7 @@ from vgi._test_fixtures.table import (
 )
 from vgi._test_fixtures.worker import ExampleWorker
 from vgi.catalog.catalog_interface import (
-    AttachId,
+    AttachOpaqueData,
 )
 from vgi.catalog.descriptors import Catalog, Schema, Table
 
@@ -103,8 +103,8 @@ class TestAtParamValidation:
         cat = worker._get_catalog()
         with pytest.raises(ValueError, match="at_unit and at_value must both be provided"):
             cat.table_get(
-                attach_id=AttachId(b"test"),
-                transaction_id=None,
+                attach_opaque_data=AttachOpaqueData(b"test"),
+                transaction_opaque_data=None,
                 schema_name="data",
                 name="versioned_data",
                 at_unit="VERSION",
@@ -117,8 +117,8 @@ class TestAtParamValidation:
         cat = worker._get_catalog()
         with pytest.raises(ValueError, match="at_unit and at_value must both be provided"):
             cat.table_get(
-                attach_id=AttachId(b"test"),
-                transaction_id=None,
+                attach_opaque_data=AttachOpaqueData(b"test"),
+                transaction_opaque_data=None,
                 schema_name="data",
                 name="versioned_data",
                 at_unit=None,
@@ -131,8 +131,8 @@ class TestAtParamValidation:
         cat = worker._get_catalog()
         with pytest.raises(ValueError, match="at_unit and at_value must both be provided"):
             cat.table_scan_function_get(
-                attach_id=AttachId(b"test"),
-                transaction_id=None,
+                attach_opaque_data=AttachOpaqueData(b"test"),
+                transaction_opaque_data=None,
                 schema_name="data",
                 name="versioned_data",
                 at_unit="VERSION",
@@ -232,8 +232,8 @@ class TestTableGetTimeTravel:
         worker = ExampleWorker()
         cat = worker._get_catalog()
         result = cat.table_get(
-            attach_id=AttachId(b"test"),
-            transaction_id=None,
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
             schema_name="data",
             name="versioned_data",
             at_unit="VERSION",
@@ -248,8 +248,8 @@ class TestTableGetTimeTravel:
         worker = ExampleWorker()
         cat = worker._get_catalog()
         result = cat.table_get(
-            attach_id=AttachId(b"test"),
-            transaction_id=None,
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
             schema_name="data",
             name="versioned_data",
             at_unit="VERSION",
@@ -264,8 +264,8 @@ class TestTableGetTimeTravel:
         worker = ExampleWorker()
         cat = worker._get_catalog()
         result = cat.table_get(
-            attach_id=AttachId(b"test"),
-            transaction_id=None,
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
             schema_name="data",
             name="versioned_data",
             at_unit="VERSION",
@@ -280,8 +280,8 @@ class TestTableGetTimeTravel:
         worker = ExampleWorker()
         cat = worker._get_catalog()
         result = cat.table_get(
-            attach_id=AttachId(b"test"),
-            transaction_id=None,
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
             schema_name="data",
             name="versioned_data",
         )
@@ -295,8 +295,8 @@ class TestTableGetTimeTravel:
         cat = worker._get_catalog()
         with pytest.raises(ValueError, match="does not support time travel"):
             cat.table_get(
-                attach_id=AttachId(b"test"),
-                transaction_id=None,
+                attach_opaque_data=AttachOpaqueData(b"test"),
+                transaction_opaque_data=None,
                 schema_name="data",
                 name="numbers",
                 at_unit="VERSION",
@@ -309,8 +309,8 @@ class TestTableGetTimeTravel:
         cat = worker._get_catalog()
         with pytest.raises(ValueError, match="Unknown version"):
             cat.table_get(
-                attach_id=AttachId(b"test"),
-                transaction_id=None,
+                attach_opaque_data=AttachOpaqueData(b"test"),
+                transaction_opaque_data=None,
                 schema_name="data",
                 name="versioned_data",
                 at_unit="VERSION",
@@ -323,8 +323,8 @@ class TestTableGetTimeTravel:
         cat = worker._get_catalog()
         with pytest.raises(ValueError, match="Unknown version"):
             cat.table_get(
-                attach_id=AttachId(b"test"),
-                transaction_id=None,
+                attach_opaque_data=AttachOpaqueData(b"test"),
+                transaction_opaque_data=None,
                 schema_name="data",
                 name="versioned_data",
                 at_unit="VERSION",
@@ -337,8 +337,8 @@ class TestTableGetTimeTravel:
         cat = worker._get_catalog()
         with pytest.raises(ValueError, match="Unknown version"):
             cat.table_get(
-                attach_id=AttachId(b"test"),
-                transaction_id=None,
+                attach_opaque_data=AttachOpaqueData(b"test"),
+                transaction_opaque_data=None,
                 schema_name="data",
                 name="versioned_data",
                 at_unit="VERSION",
@@ -351,8 +351,8 @@ class TestTableGetTimeTravel:
         cat = worker._get_catalog()
         with pytest.raises(ValueError, match="table did not exist before 2020"):
             cat.table_get(
-                attach_id=AttachId(b"test"),
-                transaction_id=None,
+                attach_opaque_data=AttachOpaqueData(b"test"),
+                transaction_opaque_data=None,
                 schema_name="data",
                 name="versioned_data",
                 at_unit="TIMESTAMP",
@@ -364,8 +364,8 @@ class TestTableGetTimeTravel:
         worker = ExampleWorker()
         cat = worker._get_catalog()
         result = cat.table_get(
-            attach_id=AttachId(b"test"),
-            transaction_id=None,
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
             schema_name="data",
             name="versioned_data",
             at_unit="TIMESTAMP",
@@ -389,8 +389,8 @@ class TestTableScanFunctionGetTimeTravel:
         worker = ExampleWorker()
         cat = worker._get_catalog()
         result = cat.table_scan_function_get(
-            attach_id=AttachId(b"test"),
-            transaction_id=None,
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
             schema_name="data",
             name="versioned_data",
             at_unit="VERSION",
@@ -405,8 +405,8 @@ class TestTableScanFunctionGetTimeTravel:
         worker = ExampleWorker()
         cat = worker._get_catalog()
         result = cat.table_scan_function_get(
-            attach_id=AttachId(b"test"),
-            transaction_id=None,
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
             schema_name="data",
             name="versioned_data",
             at_unit="TIMESTAMP",
@@ -420,8 +420,8 @@ class TestTableScanFunctionGetTimeTravel:
         worker = ExampleWorker()
         cat = worker._get_catalog()
         result = cat.table_scan_function_get(
-            attach_id=AttachId(b"test"),
-            transaction_id=None,
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
             schema_name="data",
             name="versioned_data",
             at_unit=None,
@@ -436,8 +436,8 @@ class TestTableScanFunctionGetTimeTravel:
         cat = worker._get_catalog()
         with pytest.raises(ValueError, match="does not support time travel"):
             cat.table_scan_function_get(
-                attach_id=AttachId(b"test"),
-                transaction_id=None,
+                attach_opaque_data=AttachOpaqueData(b"test"),
+                transaction_opaque_data=None,
                 schema_name="data",
                 name="numbers",
                 at_unit="VERSION",

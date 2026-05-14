@@ -199,7 +199,7 @@ class TestFunctionStorageCfDo:
         storage.transaction_state_put(txn_id, [(b"k1", b"v1"), (b"k2", b"v2")])
 
         body = _body(mock_transport.requests[0])
-        assert base64.b64decode(body["transaction_id"]) == txn_id
+        assert base64.b64decode(body["transaction_opaque_data"]) == txn_id
         items = body["items"]
         assert len(items) == 2
         assert {(base64.b64decode(it["key"]), base64.b64decode(it["value"])) for it in items} == {
@@ -238,12 +238,12 @@ class TestFunctionStorageCfDo:
         assert len(mock_transport.requests) == 0
 
     def test_transaction_state_clear(self, storage: FunctionStorageCfDo, mock_transport: _MockTransport) -> None:
-        """Clear sends transaction_id and ignores response body."""
+        """Clear sends transaction_opaque_data and ignores response body."""
         mock_transport.queue_response(200, {"cleared": 5})
         storage.transaction_state_clear(b"\xbb" * 16)
         assert len(mock_transport.requests) == 1
         body = _body(mock_transport.requests[0])
-        assert base64.b64decode(body["transaction_id"]) == b"\xbb" * 16
+        assert base64.b64decode(body["transaction_opaque_data"]) == b"\xbb" * 16
 
     # --- Worker Scan Tests ---
 

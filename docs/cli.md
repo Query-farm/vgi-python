@@ -88,10 +88,10 @@ Most catalog operations require an attach ID. Two workflows are supported:
 
 ```bash
 # Attach and capture the attach ID
-ATTACH_ID=$(vgi-client catalog attach mydb --worker ./worker.py | jq -r '.attach_id')
+ATTACH_ID=$(vgi-client catalog attach mydb --worker ./worker.py | jq -r '.attach_opaque_data')
 
 # Use attach ID for subsequent operations
-vgi-client catalog schema list --attach-id $ATTACH_ID --worker ./worker.py
+vgi-client catalog schema list --attach-opaque-data $ATTACH_ID --worker ./worker.py
 
 # Detach when done
 vgi-client catalog detach $ATTACH_ID --worker ./worker.py
@@ -124,7 +124,7 @@ vgi-client catalog attach <name> --worker <worker> [--options '{}']
 
 ```json
 {
-  "attach_id": "a1b2c3d4",
+  "attach_opaque_data": "a1b2c3d4",
   "supports_transactions": true,
   "catalog_version": 1
 }
@@ -135,7 +135,7 @@ vgi-client catalog attach <name> --worker <worker> [--options '{}']
 Detach from a catalog.
 
 ```bash
-vgi-client catalog detach <attach_id> --worker <worker>
+vgi-client catalog detach <attach_opaque_data> --worker <worker>
 ```
 
 ### catalog create
@@ -443,7 +443,7 @@ Begin a new transaction.
 
 ```bash
 TX_ID=$(vgi-client catalog transaction begin \
-    --attach-id $ATTACH_ID --worker <worker> | jq -r '.transaction_id')
+    --attach-opaque-data $ATTACH_ID --worker <worker> | jq -r '.transaction_opaque_data')
 ```
 
 ### transaction commit
@@ -452,7 +452,7 @@ Commit a transaction.
 
 ```bash
 vgi-client catalog transaction commit $TX_ID \
-    --attach-id $ATTACH_ID --worker <worker>
+    --attach-opaque-data $ATTACH_ID --worker <worker>
 ```
 
 ### transaction rollback
@@ -461,27 +461,27 @@ Rollback a transaction.
 
 ```bash
 vgi-client catalog transaction rollback $TX_ID \
-    --attach-id $ATTACH_ID --worker <worker>
+    --attach-opaque-data $ATTACH_ID --worker <worker>
 ```
 
 ### Transaction Example
 
 ```bash
 # Attach to catalog
-ATTACH_ID=$(vgi-client catalog attach mydb --worker ./worker.py | jq -r '.attach_id')
+ATTACH_ID=$(vgi-client catalog attach mydb --worker ./worker.py | jq -r '.attach_opaque_data')
 
 # Begin transaction
 TX_ID=$(vgi-client catalog transaction begin \
-    --attach-id $ATTACH_ID --worker ./worker.py | jq -r '.transaction_id')
+    --attach-opaque-data $ATTACH_ID --worker ./worker.py | jq -r '.transaction_opaque_data')
 
 # Make changes within transaction
 vgi-client catalog table create main users \
-    --attach-id $ATTACH_ID --transaction-id $TX_ID --worker ./worker.py \
+    --attach-opaque-data $ATTACH_ID --transaction-opaque-data $TX_ID --worker ./worker.py \
     --columns '[{"name":"id","type":"int64"}]'
 
 # Commit or rollback
 vgi-client catalog transaction commit $TX_ID \
-    --attach-id $ATTACH_ID --worker ./worker.py
+    --attach-opaque-data $ATTACH_ID --worker ./worker.py
 
 # Detach
 vgi-client catalog detach $ATTACH_ID --worker ./worker.py
@@ -693,7 +693,7 @@ vgi-client --input /tmp/data.parquet --function sum_all_columns
 
 ```bash
 # Extract specific fields
-vgi-client catalog attach mydb --worker ./worker.py | jq -r '.attach_id'
+vgi-client catalog attach mydb --worker ./worker.py | jq -r '.attach_opaque_data'
 
 # Pretty print
 vgi-client --function sequence --args '[3]' | jq .
@@ -706,10 +706,10 @@ vgi-client --function sequence --args '[3]' | jq .
 WORKER="./my_worker.py"
 
 # Attach
-ATTACH_ID=$(vgi-client catalog attach mydb --worker $WORKER | jq -r '.attach_id')
+ATTACH_ID=$(vgi-client catalog attach mydb --worker $WORKER | jq -r '.attach_opaque_data')
 
 # List schemas
-vgi-client catalog schema list --attach-id $ATTACH_ID --worker $WORKER
+vgi-client catalog schema list --attach-opaque-data $ATTACH_ID --worker $WORKER
 
 # Cleanup
 vgi-client catalog detach $ATTACH_ID --worker $WORKER

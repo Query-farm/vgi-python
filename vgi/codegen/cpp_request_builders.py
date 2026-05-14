@@ -93,10 +93,7 @@ def _is_simple_list(dtype: pa.DataType) -> bool:
         return False
     inner = dtype.value_type
     return (
-        inner.equals(pa.binary())
-        or inner.equals(pa.string())
-        or inner.equals(pa.int32())
-        or inner.equals(pa.int64())
+        inner.equals(pa.binary()) or inner.equals(pa.string()) or inner.equals(pa.int32()) or inner.equals(pa.int64())
     )
 
 
@@ -297,15 +294,15 @@ def _emit_builder(es: EmittedSchema, *, method_name: str) -> str:
     out.write(params_str)
     out.write(") {\n")
     out.write(f"\tconst auto &schema = {name}Schema();\n")
-    out.write("\tstatic_assert(true, \"compile-time anchor — runtime field-count assert below\");\n")
+    out.write('\tstatic_assert(true, "compile-time anchor — runtime field-count assert below");\n')
     out.write("\tstd::vector<std::shared_ptr<arrow::Array>> arrays;\n")
     out.write(f"\tarrays.reserve({len(schema)});\n")
     out.write(body + "\n")
     out.write("\tif (arrays.size() != static_cast<size_t>(schema->num_fields())) {\n")
     out.write(
-        f"\t\tthrow IOException(\"vgi codegen drift: {func_name} produced \" "
-        f"+ std::to_string(arrays.size()) + \" arrays but schema has \" "
-        f"+ std::to_string(schema->num_fields()) + \" fields\");\n"
+        f'\t\tthrow IOException("vgi codegen drift: {func_name} produced " '
+        f'+ std::to_string(arrays.size()) + " arrays but schema has " '
+        f'+ std::to_string(schema->num_fields()) + " fields");\n'
     )
     out.write("\t}\n")
     out.write("\treturn arrow::RecordBatch::Make(schema, 1, arrays);\n")
@@ -326,7 +323,7 @@ def _params_method_name(es: EmittedSchema) -> str | None:
     prefix = "method '"
     if not es.origin.startswith(prefix):
         return None
-    rest = es.origin[len(prefix):]
+    rest = es.origin[len(prefix) :]
     if not rest.endswith("' params"):
         return None
     return rest[: -len("' params")]
@@ -343,15 +340,15 @@ def emit(out: TextIO) -> None:
     body.write("// vgi_rpc_types.hpp goes through src/include; vgi_protocol_schemas.hpp is\n")
     body.write("// a sibling in src/generated/ and resolves via this quoted include's\n")
     body.write("// relative-path search.\n")
-    body.write("#include \"vgi_rpc_types.hpp\"\n")
-    body.write("#include \"vgi_protocol_schemas.hpp\"\n\n")
+    body.write('#include "vgi_rpc_types.hpp"\n')
+    body.write('#include "vgi_protocol_schemas.hpp"\n\n')
     body.write("#include <cstdint>\n")
     body.write("#include <optional>\n")
     body.write("#include <string>\n")
     body.write("#include <utility>\n")
     body.write("#include <vector>\n\n")
     body.write("#include <arrow/api.h>\n\n")
-    body.write("#include \"duckdb/common/exception.hpp\"\n\n")
+    body.write('#include "duckdb/common/exception.hpp"\n\n')
     body.write("namespace duckdb {\n")
     body.write("namespace vgi {\n")
     body.write("namespace generated {\n\n")

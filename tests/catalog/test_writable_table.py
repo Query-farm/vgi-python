@@ -7,7 +7,7 @@ import pytest
 
 from vgi.catalog import Catalog, ReadOnlyCatalogInterface, Schema, Table
 from vgi.catalog.catalog_interface import (
-    AttachId,
+    AttachOpaqueData,
     ScanFunctionResult,
     TableInfo,
     WriteFunctionResult,
@@ -20,7 +20,7 @@ from vgi.table_in_out_function import TableInOutGenerator
 
 # Minimal stub functions: just enough for the Table descriptor's bind() probe.
 # We keep them here (instead of importing the real Generic* writable functions)
-# because those require a live transactor/attach_id to bind successfully.
+# because those require a live transactor/attach_opaque_data to bind successfully.
 class WritableTableScan(TableFunctionGenerator[None, None]):
     """Stub scan for descriptor tests."""
 
@@ -221,8 +221,8 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
     def test_insert_function_get(self, catalog_with_writable_table: ReadOnlyCatalogInterface) -> None:
         """Returns the insert function name for a writable table."""
         result = catalog_with_writable_table.table_insert_function_get(
-            attach_id=AttachId(b"test"),
-            transaction_id=None,
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
             schema_name="main",
             name="writable",
         )
@@ -231,8 +231,8 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
     def test_update_function_get(self, catalog_with_writable_table: ReadOnlyCatalogInterface) -> None:
         """Returns the update function name for a writable table."""
         result = catalog_with_writable_table.table_update_function_get(
-            attach_id=AttachId(b"test"),
-            transaction_id=None,
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
             schema_name="main",
             name="writable",
         )
@@ -241,8 +241,8 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
     def test_delete_function_get(self, catalog_with_writable_table: ReadOnlyCatalogInterface) -> None:
         """Returns the delete function name for a writable table."""
         result = catalog_with_writable_table.table_delete_function_get(
-            attach_id=AttachId(b"test"),
-            transaction_id=None,
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
             schema_name="main",
             name="writable",
         )
@@ -252,8 +252,8 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
         """Read-only tables raise CatalogReadOnlyError on insert."""
         with pytest.raises(CatalogReadOnlyError, match="does not support INSERT"):
             catalog_with_writable_table.table_insert_function_get(
-                attach_id=AttachId(b"test"),
-                transaction_id=None,
+                attach_opaque_data=AttachOpaqueData(b"test"),
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="readonly",
             )
@@ -262,8 +262,8 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
         """Read-only tables raise CatalogReadOnlyError on update."""
         with pytest.raises(CatalogReadOnlyError, match="does not support UPDATE"):
             catalog_with_writable_table.table_update_function_get(
-                attach_id=AttachId(b"test"),
-                transaction_id=None,
+                attach_opaque_data=AttachOpaqueData(b"test"),
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="readonly",
             )
@@ -272,8 +272,8 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
         """Read-only tables raise CatalogReadOnlyError on delete."""
         with pytest.raises(CatalogReadOnlyError, match="does not support DELETE"):
             catalog_with_writable_table.table_delete_function_get(
-                attach_id=AttachId(b"test"),
-                transaction_id=None,
+                attach_opaque_data=AttachOpaqueData(b"test"),
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="readonly",
             )
@@ -282,8 +282,8 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
         """Non-existent tables raise NotImplementedError."""
         with pytest.raises(NotImplementedError, match="not found"):
             catalog_with_writable_table.table_insert_function_get(
-                attach_id=AttachId(b"test"),
-                transaction_id=None,
+                attach_opaque_data=AttachOpaqueData(b"test"),
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="no_such_table",
             )
@@ -291,8 +291,8 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
     def test_case_insensitive_lookup(self, catalog_with_writable_table: ReadOnlyCatalogInterface) -> None:
         """Write function lookup is case-insensitive."""
         result = catalog_with_writable_table.table_insert_function_get(
-            attach_id=AttachId(b"test"),
-            transaction_id=None,
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
             schema_name="MAIN",
             name="WRITABLE",
         )

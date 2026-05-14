@@ -135,7 +135,7 @@ for the describe page to render "View source / docs →".
 `catalog_data_versions` joins the existing `_ATTACH_ID_METHODS`-style
 tables in `vgi/protocol.py` and `vgi/worker.py` so it dispatches over
 both subprocess and HTTP transports. The shape mirrors `catalog_catalogs`
-(no attach_id; just a name). Subclassing `MetaWorker` correctly forwards
+(no attach_opaque_data; just a name). Subclassing `MetaWorker` correctly forwards
 the call to the right child worker by catalog name.
 
 ## Worker-side adoption

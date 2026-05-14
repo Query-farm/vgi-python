@@ -2,12 +2,12 @@
 
 Each Worker manages its own catalog interface. The MetaWorker dispatches
 VgiProtocol calls to the right Worker based on catalog name (for attach)
-and wrapped attach_id (for everything else).
+and wrapped attach_opaque_data (for everything else).
 
-attach_id wrapping:
-    Each sub-worker may use the same underlying attach_id. The MetaWorker
+attach_opaque_data wrapping:
+    Each sub-worker may use the same underlying attach_opaque_data. The MetaWorker
     prepends a 1-byte worker index to distinguish them:
-        wrapped = bytes([worker_index]) + original_attach_id
+        wrapped = bytes([worker_index]) + original_attach_opaque_data
 
 Usage::
 
@@ -20,10 +20,9 @@ import dataclasses
 import logging
 from typing import Any
 
-from vgi_rpc import RpcServer
-from vgi_rpc.rpc import CallContext, Stream, serve_stdio
+from vgi_rpc.rpc import CallContext, Stream
 
-from vgi.catalog.catalog_interface import AttachId, CatalogAttachResult
+from vgi.catalog.catalog_interface import AttachOpaqueData, CatalogAttachResult
 from vgi.invocation import GlobalInitResponse
 from vgi.protocol import (
     BindRequest,
@@ -37,15 +36,15 @@ from vgi.worker import Worker
 logger = logging.getLogger("vgi.meta_worker")
 
 
-def _attach_id_short(attach_id: bytes | None) -> str:
-    """Stable, low-cardinality identifier for an attach_id, suitable for logs."""
-    if not attach_id:
+def _attach_opaque_data_short(attach_opaque_data: bytes | None) -> str:
+    """Stable, low-cardinality identifier for an attach_opaque_data, suitable for logs."""
+    if not attach_opaque_data:
         return "-"
-    return attach_id.hex()[:16]
+    return attach_opaque_data.hex()[:16]
 
 
 def _make_attach_delegate(name: str) -> Any:
-    """Create a method that unwraps attach_id and delegates to the right worker.
+    """Create a method that unwraps attach_opaque_data and delegates to the right worker.
 
     Copies the signature from Worker so vgi_rpc's validation passes.
     """
@@ -56,17 +55,17 @@ def _make_attach_delegate(name: str) -> Any:
     sig = inspect.signature(worker_method)
 
     def method(self: MetaWorker, **kwargs: Any) -> Any:
-        attach_id = kwargs.pop("attach_id")
-        worker, original_id = self._unwrap_attach_id(attach_id)
+        attach_opaque_data = kwargs.pop("attach_opaque_data")
+        worker, original_id = self._unwrap_attach_opaque_data(attach_opaque_data)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "dispatch method=%s sub_worker_index=%d wrapped_aid=%s unwrapped_aid=%s",
                 name,
-                self._wrapped_index(attach_id),
-                _attach_id_short(attach_id),
-                _attach_id_short(original_id),
+                self._wrapped_index(attach_opaque_data),
+                _attach_opaque_data_short(attach_opaque_data),
+                _attach_opaque_data_short(original_id),
             )
-        return getattr(worker, name)(attach_id=original_id, **kwargs)
+        return getattr(worker, name)(attach_opaque_data=original_id, **kwargs)
 
     # Copy the signature from the Worker method so vgi_rpc validation passes
     method.__name__ = name
@@ -75,7 +74,7 @@ def _make_attach_delegate(name: str) -> Any:
     return method
 
 
-# Methods where attach_id is the first parameter (most catalog methods)
+# Methods where attach_opaque_data is the first parameter (most catalog methods)
 _ATTACH_ID_METHODS = [
     "catalog_detach",
     "catalog_version",
@@ -125,7 +124,7 @@ class MetaWorker:
     """Composes multiple Worker instances, dispatching VgiProtocol calls.
 
     Each Worker has its own catalog interface and function registry.
-    The MetaWorker wraps/unwraps attach_ids to route calls to the right worker.
+    The MetaWorker wraps/unwraps attach_opaque_data values to route calls to the right worker.
     """
 
     def __init__(self, workers: list[Worker]) -> None:
@@ -147,7 +146,7 @@ class MetaWorker:
                 pass
 
         # Detailed startup record — each sub-worker's index → catalog mapping.
-        # The 1-byte index is the prefix MetaWorker prepends to attach_ids;
+        # The 1-byte index is the prefix MetaWorker prepends to attach_opaque_data values;
         # making it explicit here means a stray ``wrapped_aid=…`` in a dispatch
         # log can be cross-referenced without source diving.
         if logger.isEnabledFor(logging.INFO):
@@ -155,21 +154,21 @@ class MetaWorker:
                 {
                     "index": i,
                     "worker_class": type(w).__name__,
-                    "catalogs": [
-                        name for name, idx in self._name_to_index.items() if idx == i
-                    ],
+                    "catalogs": [name for name, idx in self._name_to_index.items() if idx == i],
                 }
                 for i, w in enumerate(workers)
             ]
             logger.info(
-                "MetaWorker initialized: %d workers, mapping=%s", len(workers), mapping,
+                "MetaWorker initialized: %d workers, mapping=%s",
+                len(workers),
+                mapping,
             )
 
     def _resolve_function(self, request: BindRequest) -> Any:
         """Dispatch function-class resolution to the worker that hosts it.
 
         The HTTP state-rehydration path calls this on the implementation
-        without any attach_id, so route by function name across all
+        without any attach_opaque_data, so route by function name across all
         sub-workers.
         """
         for w in self._workers:
@@ -179,19 +178,19 @@ class MetaWorker:
         msg = f"Unknown function: '{request.function_name}'"
         raise ValueError(msg)
 
-    # ========== attach_id wrapping ==========
+    # ========== attach_opaque_data wrapping ==========
     #
-    # Wire format of a MetaWorker-wrapped attach_id:
+    # Wire format of a MetaWorker-wrapped attach_opaque_data:
     #
-    #   [ 'M' 'W' 0x00 ][ <index byte> ][ <original attach_id bytes> ]
+    #   [ 'M' 'W' 0x00 ][ <index byte> ][ <original attach_opaque_data bytes> ]
     #     ^^^^^^^^^^^^^   ^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^^^^^^^^
-    #     magic prefix    sub-worker      original attach_id as
+    #     magic prefix    sub-worker      original attach_opaque_data as
     #     (3 bytes)       index (1B)      vended by the sub-worker
     #
-    # The magic prefix means a wrapped attach_id is self-identifying: a
+    # The magic prefix means a wrapped attach_opaque_data is self-identifying: a
     # 4-byte ``MW\0<idx>`` prefix is unmistakable in logs and storage shard
     # ids (shows as ``att-4d570000...`` in hex). Without it, a bare 17-byte
-    # attach_id whose first byte happened to be ``\x00`` was indistinguishable
+    # attach_opaque_data whose first byte happened to be ``\x00`` was indistinguishable
     # from a wrapped ``[0][16 bytes]`` — making MetaWorker routing bugs
     # silently mis-route (see the dynamic_to_string failure that motivated
     # this marker).
@@ -202,19 +201,19 @@ class MetaWorker:
     _WRAP_MAGIC = b"MW\x00"
     _WRAP_OVERHEAD = len(_WRAP_MAGIC) + 1  # magic + index byte
 
-    def _wrap_attach_id(self, worker_index: int, attach_id: bytes) -> bytes:
-        """Prepend MetaWorker magic + sub-worker index to a sub-worker's attach_id."""
-        return self._WRAP_MAGIC + bytes([worker_index]) + attach_id
+    def _wrap_attach_opaque_data(self, worker_index: int, attach_opaque_data: bytes) -> bytes:
+        """Prepend MetaWorker magic + sub-worker index to a sub-worker's attach_opaque_data."""
+        return self._WRAP_MAGIC + bytes([worker_index]) + attach_opaque_data
 
-    def _is_wrapped(self, attach_id: bytes) -> bool:
-        """Quick predicate — does ``attach_id`` start with the MetaWorker magic?"""
+    def _is_wrapped(self, attach_opaque_data: bytes) -> bool:
+        """Quick predicate — does ``attach_opaque_data`` start with the MetaWorker magic?"""
         return (
-            len(attach_id) >= self._WRAP_OVERHEAD
-            and attach_id[: len(self._WRAP_MAGIC)] == self._WRAP_MAGIC
+            len(attach_opaque_data) >= self._WRAP_OVERHEAD
+            and attach_opaque_data[: len(self._WRAP_MAGIC)] == self._WRAP_MAGIC
         )
 
     def _wrapped_index(self, wrapped_id: bytes) -> int:
-        """Return the sub-worker index encoded in a wrapped attach_id.
+        """Return the sub-worker index encoded in a wrapped attach_opaque_data.
 
         Assumes ``_is_wrapped(wrapped_id)`` already returned True. Returns
         -1 for shapes that don't match (defensive — callers use this only
@@ -224,8 +223,8 @@ class MetaWorker:
             return -1
         return wrapped_id[len(self._WRAP_MAGIC)]
 
-    def _unwrap_attach_id(self, wrapped_id: bytes) -> tuple[Worker, bytes]:
-        """Verify the magic, then split into (sub-worker, original attach_id).
+    def _unwrap_attach_opaque_data(self, wrapped_id: bytes) -> tuple[Worker, bytes]:
+        """Verify the magic, then split into (sub-worker, original attach_opaque_data).
 
         Raises ``KeyError`` when the magic is missing or the index byte is
         out of range. Callers in this module catch and fall back to a
@@ -234,16 +233,13 @@ class MetaWorker:
         """
         if not self._is_wrapped(wrapped_id):
             raise KeyError(
-                f"attach_id is not MetaWorker-wrapped (missing magic): "
+                f"attach_opaque_data is not MetaWorker-wrapped (missing magic): "
                 f"first8={wrapped_id[:8].hex() if wrapped_id else '-'}"
             )
         idx = wrapped_id[len(self._WRAP_MAGIC)]
-        original = wrapped_id[self._WRAP_OVERHEAD:]
+        original = wrapped_id[self._WRAP_OVERHEAD :]
         if idx >= len(self._workers):
-            raise KeyError(
-                f"MetaWorker sub-worker index {idx} out of range "
-                f"(have {len(self._workers)} workers)"
-            )
+            raise KeyError(f"MetaWorker sub-worker index {idx} out of range (have {len(self._workers)} workers)")
         return self._workers[idx], original
 
     # ========== Catalog listing ==========
@@ -285,18 +281,18 @@ class MetaWorker:
                 msg = f"No worker handles catalog '{request.name}'"
                 raise ValueError(msg)
 
-        wrapped = self._wrap_attach_id(idx, result.attach_id)
+        wrapped = self._wrap_attach_opaque_data(idx, result.attach_opaque_data)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "catalog_attach catalog=%r sub_worker_index=%d original_aid=%s wrapped_aid=%s",
                 request.name,
                 idx,
-                _attach_id_short(result.attach_id),
-                _attach_id_short(wrapped),
+                _attach_opaque_data_short(result.attach_opaque_data),
+                _attach_opaque_data_short(wrapped),
             )
-        return dataclasses.replace(result, attach_id=AttachId(wrapped))
+        return dataclasses.replace(result, attach_opaque_data=AttachOpaqueData(wrapped))
 
-    # ========== Name-based dispatch (no attach_id) ==========
+    # ========== Name-based dispatch (no attach_opaque_data) ==========
 
     def catalog_create(self, request: Any) -> None:
         """Create a catalog — dispatch to first worker that handles it."""
@@ -318,43 +314,42 @@ class MetaWorker:
             msg = f"No worker owns catalog '{name}'"
             raise ValueError(msg)
 
-    # ========== Request-object methods (attach_id inside request) ==========
+    # ========== Request-object methods (attach_opaque_data inside request) ==========
 
     def catalog_table_create(self, request: Any) -> None:
-        """Create a table — dispatch via attach_id in request."""
-        worker, original_id = self._unwrap_attach_id(request.attach_id)
-        patched = dataclasses.replace(request, attach_id=original_id)
+        """Create a table — dispatch via attach_opaque_data in request."""
+        worker, original_id = self._unwrap_attach_opaque_data(request.attach_opaque_data)
+        patched = dataclasses.replace(request, attach_opaque_data=original_id)
         worker.catalog_table_create(patched)
 
     def catalog_macro_create(self, request: Any) -> None:
-        """Create a macro — dispatch via attach_id in request."""
-        worker, original_id = self._unwrap_attach_id(request.attach_id)
-        patched = dataclasses.replace(request, attach_id=original_id)
+        """Create a macro — dispatch via attach_opaque_data in request."""
+        worker, original_id = self._unwrap_attach_opaque_data(request.attach_opaque_data)
+        patched = dataclasses.replace(request, attach_opaque_data=original_id)
         worker.catalog_macro_create(patched)
 
     def catalog_index_create(self, request: Any) -> None:
-        """Create an index — dispatch via attach_id in request."""
-        worker, original_id = self._unwrap_attach_id(request.attach_id)
-        patched = dataclasses.replace(request, attach_id=original_id)
+        """Create an index — dispatch via attach_opaque_data in request."""
+        worker, original_id = self._unwrap_attach_opaque_data(request.attach_opaque_data)
+        patched = dataclasses.replace(request, attach_opaque_data=original_id)
         worker.catalog_index_create(patched)
 
-    # ========== bind / init (unwrap attach_id from request) ==========
+    # ========== bind / init (unwrap attach_opaque_data from request) ==========
 
     def bind(self, request: BindRequest, ctx: CallContext) -> Any:
         """Dispatch bind to the right worker."""
-        if request.attach_id:
+        if request.attach_opaque_data:
             try:
-                worker, original_id = self._unwrap_attach_id(request.attach_id)
+                worker, original_id = self._unwrap_attach_opaque_data(request.attach_opaque_data)
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
-                        "dispatch method=bind function=%r sub_worker_index=%d "
-                        "wrapped_aid=%s unwrapped_aid=%s",
+                        "dispatch method=bind function=%r sub_worker_index=%d wrapped_aid=%s unwrapped_aid=%s",
                         request.function_name,
-                        self._wrapped_index(request.attach_id),
-                        _attach_id_short(request.attach_id),
-                        _attach_id_short(original_id),
+                        self._wrapped_index(request.attach_opaque_data),
+                        _attach_opaque_data_short(request.attach_opaque_data),
+                        _attach_opaque_data_short(original_id),
                     )
-                request = dataclasses.replace(request, attach_id=original_id)
+                request = dataclasses.replace(request, attach_opaque_data=original_id)
                 return worker.bind(request, ctx=ctx)
             except (IndexError, KeyError):
                 pass  # Invalid wrapped id — fall through to registry search
@@ -373,19 +368,18 @@ class MetaWorker:
 
     def init(self, request: InitRequest, ctx: CallContext) -> Stream[ProcessState, GlobalInitResponse]:
         """Dispatch init to the right worker."""
-        if request.bind_call and request.bind_call.attach_id:
+        if request.bind_call and request.bind_call.attach_opaque_data:
             try:
-                worker, original_id = self._unwrap_attach_id(request.bind_call.attach_id)
+                worker, original_id = self._unwrap_attach_opaque_data(request.bind_call.attach_opaque_data)
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
-                        "dispatch method=init function=%r sub_worker_index=%d "
-                        "wrapped_aid=%s unwrapped_aid=%s",
+                        "dispatch method=init function=%r sub_worker_index=%d wrapped_aid=%s unwrapped_aid=%s",
                         request.bind_call.function_name,
-                        self._wrapped_index(request.bind_call.attach_id),
-                        _attach_id_short(request.bind_call.attach_id),
-                        _attach_id_short(original_id),
+                        self._wrapped_index(request.bind_call.attach_opaque_data),
+                        _attach_opaque_data_short(request.bind_call.attach_opaque_data),
+                        _attach_opaque_data_short(original_id),
                     )
-                bind_call = dataclasses.replace(request.bind_call, attach_id=original_id)
+                bind_call = dataclasses.replace(request.bind_call, attach_opaque_data=original_id)
                 request = dataclasses.replace(request, bind_call=bind_call)
                 return worker.init(request, ctx=ctx)
             except (IndexError, KeyError):
@@ -396,26 +390,30 @@ class MetaWorker:
             registry = type(w)._build_registry()
             if fn_name in registry:
                 logger.debug(
-                    "dispatch method=init function=%r fallback=registry_scan", fn_name,
+                    "dispatch method=init function=%r fallback=registry_scan",
+                    fn_name,
                 )
                 return w.init(request, ctx=ctx)
 
         msg = f"Unknown function '{fn_name}'"
         raise ValueError(msg)
 
-    def _unwrap_bind_call_attach_id(
-        self, request: Any, *, method_name: str = "?",
+    def _unwrap_bind_call_attach_opaque_data(
+        self,
+        request: Any,
+        *,
+        method_name: str = "?",
     ) -> tuple[Any, Any | None]:
-        """Resolve the target sub-worker by unwrapping ``request.bind_call.attach_id``.
+        """Resolve the target sub-worker by unwrapping ``request.bind_call.attach_opaque_data``.
 
         Returns ``(patched_request, worker)`` where ``patched_request`` has the
-        unwrapped (sub-worker-relative) attach_id and ``worker`` is the matching
-        sub-worker. Returns ``(request, None)`` when the attach_id is missing or
+        unwrapped (sub-worker-relative) attach_opaque_data and ``worker`` is the matching
+        sub-worker. Returns ``(request, None)`` when the attach_opaque_data is missing or
         unwrapping fails — caller falls back to a registry scan by function name.
 
         Mirrors the unwrap that ``init``/``bind`` already perform for the
-        wrapped attach_id MetaWorker prepends. Without this, sibling RPCs that
-        carry ``bind_call.attach_id`` (cardinality, statistics, dynamic_to_string)
+        wrapped attach_opaque_data MetaWorker prepends. Without this, sibling RPCs that
+        carry ``bind_call.attach_opaque_data`` (cardinality, statistics, dynamic_to_string)
         would deliver the wrapped 18-byte id to the sub-worker — which then
         derives a different shard_key than ``init``/``process`` use for the
         same logical attach, so storage reads land on the wrong DO.
@@ -423,31 +421,31 @@ class MetaWorker:
         bind_call = getattr(request, "bind_call", None)
         if bind_call is None:
             return request, None
-        wrapped_aid = getattr(bind_call, "attach_id", None)
+        wrapped_aid = getattr(bind_call, "attach_opaque_data", None)
         if not wrapped_aid:
             return request, None
         try:
-            worker, original_id = self._unwrap_attach_id(wrapped_aid)
+            worker, original_id = self._unwrap_attach_opaque_data(wrapped_aid)
         except (IndexError, KeyError):
             return request, None
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "dispatch method=%s function=%r sub_worker_index=%d "
-                "wrapped_aid=%s unwrapped_aid=%s",
+                "dispatch method=%s function=%r sub_worker_index=%d wrapped_aid=%s unwrapped_aid=%s",
                 method_name,
                 getattr(bind_call, "function_name", "?"),
                 self._wrapped_index(wrapped_aid),
-                _attach_id_short(wrapped_aid),
-                _attach_id_short(original_id),
+                _attach_opaque_data_short(wrapped_aid),
+                _attach_opaque_data_short(original_id),
             )
-        patched_bind_call = dataclasses.replace(bind_call, attach_id=original_id)
+        patched_bind_call = dataclasses.replace(bind_call, attach_opaque_data=original_id)
         patched_request = dataclasses.replace(request, bind_call=patched_bind_call)
         return patched_request, worker
 
     def table_function_cardinality(self, request: Any, ctx: CallContext) -> Any:
         """Dispatch cardinality estimation to the right worker."""
-        patched, worker = self._unwrap_bind_call_attach_id(
-            request, method_name="table_function_cardinality",
+        patched, worker = self._unwrap_bind_call_attach_opaque_data(
+            request,
+            method_name="table_function_cardinality",
         )
         if worker is not None:
             return worker.table_function_cardinality(patched, ctx=ctx)
@@ -461,8 +459,9 @@ class MetaWorker:
 
     def table_function_statistics(self, request: Any, ctx: CallContext) -> Any:
         """Dispatch per-column statistics lookup to the right worker."""
-        patched, worker = self._unwrap_bind_call_attach_id(
-            request, method_name="table_function_statistics",
+        patched, worker = self._unwrap_bind_call_attach_opaque_data(
+            request,
+            method_name="table_function_statistics",
         )
         if worker is not None:
             return worker.table_function_statistics(patched, ctx=ctx)
@@ -476,8 +475,9 @@ class MetaWorker:
 
     def table_function_dynamic_to_string(self, request: Any, ctx: CallContext) -> Any:
         """Dispatch the dynamic_to_string profiler hook to the right worker."""
-        patched, worker = self._unwrap_bind_call_attach_id(
-            request, method_name="table_function_dynamic_to_string",
+        patched, worker = self._unwrap_bind_call_attach_opaque_data(
+            request,
+            method_name="table_function_dynamic_to_string",
         )
         if worker is not None:
             return worker.table_function_dynamic_to_string(patched, ctx=ctx)
@@ -497,20 +497,19 @@ class MetaWorker:
     def _dispatch_aggregate(self, request: Any, method_name: str, ctx: CallContext) -> Any:
         """Dispatch an aggregate RPC to the right worker by function_name."""
         fn_name = getattr(request, "function_name", "")
-        if hasattr(request, "attach_id") and request.attach_id:
+        if hasattr(request, "attach_opaque_data") and request.attach_opaque_data:
             try:
-                worker, original_id = self._unwrap_attach_id(request.attach_id)
+                worker, original_id = self._unwrap_attach_opaque_data(request.attach_opaque_data)
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
-                        "dispatch method=%s function=%r sub_worker_index=%d "
-                        "wrapped_aid=%s unwrapped_aid=%s",
+                        "dispatch method=%s function=%r sub_worker_index=%d wrapped_aid=%s unwrapped_aid=%s",
                         method_name,
                         fn_name,
-                        self._wrapped_index(request.attach_id),
-                        _attach_id_short(request.attach_id),
-                        _attach_id_short(original_id),
+                        self._wrapped_index(request.attach_opaque_data),
+                        _attach_opaque_data_short(request.attach_opaque_data),
+                        _attach_opaque_data_short(original_id),
                     )
-                request = dataclasses.replace(request, attach_id=original_id)
+                request = dataclasses.replace(request, attach_opaque_data=original_id)
                 return getattr(worker, method_name)(request, ctx=ctx)
             except (IndexError, KeyError):
                 pass
@@ -519,7 +518,8 @@ class MetaWorker:
             if fn_name in registry:
                 logger.debug(
                     "dispatch method=%s function=%r fallback=registry_scan",
-                    method_name, fn_name,
+                    method_name,
+                    fn_name,
                 )
                 return getattr(w, method_name)(request, ctx=ctx)
         raise ValueError(f"Unknown aggregate function '{fn_name}'")
@@ -584,8 +584,9 @@ class MetaWorker:
         ``--unix PATH --idle-timeout SEC`` (the vgi C++ extension uses
         this to share warm workers across DuckDB processes).
         """
-        from vgi.protocol import VgiProtocol
         from vgi_rpc.rpc import run_server
+
+        from vgi.protocol import VgiProtocol
 
         # Log startup (some tests check that stderr has output)
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -596,6 +597,6 @@ class MetaWorker:
         run_server(VgiProtocol, meta)
 
 
-# Register all attach_id-based delegate methods on MetaWorker
+# Register all attach_opaque_data-based delegate methods on MetaWorker
 for _method_name in _ATTACH_ID_METHODS:
     setattr(MetaWorker, _method_name, _make_attach_delegate(_method_name))

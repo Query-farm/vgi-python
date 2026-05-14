@@ -37,7 +37,6 @@ documented at ``vgi/_test_fixtures/table/partition_columns.py`` /
 
 from __future__ import annotations
 
-import struct
 from dataclasses import dataclass
 from typing import Annotated, ClassVar
 
@@ -47,11 +46,9 @@ from vgi_rpc.rpc import OutputCollector
 
 from vgi._test_fixtures.table._common import _cardinality_from_count
 from vgi.arguments import Arg
-from vgi.invocation import GlobalInitResponse
 from vgi.metadata import PartitionKind
 from vgi.schema_utils import partition_field
 from vgi.table_function import (
-    InitParams,
     ProcessParams,
     TableFunctionGenerator,
     bind_fixed_schema,
@@ -75,9 +72,7 @@ class _BrokenState(ArrowSerializableDataclass):
 
 @bind_fixed_schema
 @_cardinality_from_count
-class BrokenMissingPartitionValuesFunction(
-    TableFunctionGenerator[_BrokenArgs, _BrokenState]
-):
+class BrokenMissingPartitionValuesFunction(TableFunctionGenerator[_BrokenArgs, _BrokenState]):
     """Opt-in declared, but worker bypasses framework metadata merge."""
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema(
@@ -112,8 +107,7 @@ class BrokenMissingPartitionValuesFunction(
             out.finish()
             return
         batch = pa.RecordBatch.from_pydict(
-            {"country": ["US"] * params.args.count,
-             "sales": list(range(params.args.count))},
+            {"country": ["US"] * params.args.count, "sales": list(range(params.args.count))},
             schema=cls.FIXED_SCHEMA,
         )
         # Reach into the wrapper stack and call the innermost inner
@@ -136,9 +130,7 @@ class BrokenMissingPartitionValuesFunction(
 
 @bind_fixed_schema
 @_cardinality_from_count
-class BrokenPartitionMinNeqMaxFunction(
-    TableFunctionGenerator[_BrokenArgs, _BrokenState]
-):
+class BrokenPartitionMinNeqMaxFunction(TableFunctionGenerator[_BrokenArgs, _BrokenState]):
     """SINGLE_VALUE_PARTITIONS but emit min != max via explicit override."""
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema(
@@ -179,8 +171,7 @@ class BrokenPartitionMinNeqMaxFunction(
         # override forces min != max — defeats the framework check
         # and reaches C++ defense-in-depth.
         batch = pa.RecordBatch.from_pydict(
-            {"country": ["US"] * params.args.count,
-             "sales": list(range(params.args.count))},
+            {"country": ["US"] * params.args.count, "sales": list(range(params.args.count))},
             schema=cls.FIXED_SCHEMA,
         )
         out.emit(
@@ -202,9 +193,7 @@ class BrokenPartitionMinNeqMaxFunction(
 
 @bind_fixed_schema
 @_cardinality_from_count
-class BrokenPartitionValuesNoAnnotationFunction(
-    TableFunctionGenerator[_BrokenArgs, _BrokenState]
-):
+class BrokenPartitionValuesNoAnnotationFunction(TableFunctionGenerator[_BrokenArgs, _BrokenState]):
     """No partition annotation, but worker passes partition_values=."""
 
     # No partition_field() — bind schema has no partition columns.
@@ -241,8 +230,7 @@ class BrokenPartitionValuesNoAnnotationFunction(
             out.finish()
             return
         batch = pa.RecordBatch.from_pydict(
-            {"country": ["US"] * params.args.count,
-             "sales": list(range(params.args.count))},
+            {"country": ["US"] * params.args.count, "sales": list(range(params.args.count))},
             schema=cls.FIXED_SCHEMA,
         )
         out.emit(
@@ -264,9 +252,7 @@ class BrokenPartitionValuesNoAnnotationFunction(
 
 @bind_fixed_schema
 @_cardinality_from_count
-class BrokenPartitionColumnAbsentFromBatchFunction(
-    TableFunctionGenerator[_BrokenArgs, _BrokenState]
-):
+class BrokenPartitionColumnAbsentFromBatchFunction(TableFunctionGenerator[_BrokenArgs, _BrokenState]):
     """Annotated partition column not in emitted batch, no override."""
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema(

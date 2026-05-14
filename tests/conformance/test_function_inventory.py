@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from vgi.catalog.catalog_interface import AttachId, SchemaObjectType
+from vgi.catalog.catalog_interface import AttachOpaqueData, SchemaObjectType
 from vgi.client.client import Client
 
 # The catalog the example worker exposes. Hardcoded to match
@@ -75,8 +75,8 @@ _COVERAGE_MAP: dict[SchemaObjectType, TypeCoverage] = {
 
 
 @pytest.fixture(scope="module")
-def attached_example() -> tuple[str, AttachId]:
-    """Attach to the ``example`` catalog once per module and yield ``(worker, attach_id)``."""
+def attached_example() -> tuple[str, AttachOpaqueData]:
+    """Attach to the ``example`` catalog once per module and yield ``(worker, attach_opaque_data)``."""
     worker = "vgi-fixture-worker"
     client = Client(worker)
     result = client.catalog_attach(
@@ -85,7 +85,7 @@ def attached_example() -> tuple[str, AttachId]:
         data_version_spec=None,
         implementation_version=None,
     )
-    return worker, AttachId(result.attach_id)
+    return worker, AttachOpaqueData(result.attach_opaque_data)
 
 
 def test_example_catalog_is_attachable() -> None:
@@ -137,7 +137,7 @@ def test_coverage_gaps_are_documented() -> None:
     ],
 )
 def test_fixture_worker_registers_at_least_one_per_category(
-    attached_example: tuple[str, AttachId],
+    attached_example: tuple[str, AttachOpaqueData],
     schema_type: SchemaObjectType,
 ) -> None:
     """The example worker should register >= 1 function of each invocable category.
@@ -146,10 +146,10 @@ def test_fixture_worker_registers_at_least_one_per_category(
     removed from ``_EXAMPLE_CATALOG`` or the worker's catalog listing is
     broken — both are drift we want to catch.
     """
-    _worker, attach_id = attached_example
+    _worker, attach_opaque_data = attached_example
     client = Client("vgi-fixture-worker")
     infos = client.schema_contents(
-        attach_id=attach_id,
+        attach_opaque_data=attach_opaque_data,
         name=EXAMPLE_SCHEMA_NAME,
         type=schema_type,
     )
@@ -168,7 +168,7 @@ def test_scalar_function_end_to_end(attached_example: tuple[str, bytes]) -> None
 
     from vgi.arguments import Arguments
 
-    worker, _attach_id = attached_example
+    worker, _attach_opaque_data = attached_example
     input_schema = pa.schema([("x", pa.int64())])
     input_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=input_schema)
 
@@ -191,7 +191,7 @@ def test_table_function_end_to_end(attached_example: tuple[str, bytes]) -> None:
 
     from vgi.arguments import Arguments
 
-    worker, _attach_id = attached_example
+    worker, _attach_opaque_data = attached_example
 
     with Client(worker) as client:
         out_batches = list(

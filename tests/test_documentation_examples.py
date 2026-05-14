@@ -106,7 +106,7 @@ def _should_skip(example: CodeExample) -> bool:
     source = example.source
     invalid_syntax_markers = [
         '"settings": (',  # Dict entry without dict context
-        "attach_id=...,",  # Placeholder arguments with trailing comma
+        "attach_opaque_data=...,",  # Placeholder arguments with trailing comma
         "# ... implement",  # Placeholder comment instead of implementation
         "...,",  # Ellipsis with comma (placeholder in arg list)
         ") -> ...:",  # Ellipsis as return type placeholder
@@ -170,7 +170,7 @@ def _is_lint_only(example: CodeExample) -> bool:
         "Function",  # Generic function references
         "specs",  # Schema specs variable
         "schema_bytes",  # Serialized schema variable
-        "AttachId",  # Catalog attach ID
+        "AttachOpaqueData",  # Catalog attach ID
     ]
     if any(ref in source for ref in partial_refs):
         return True

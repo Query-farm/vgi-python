@@ -49,8 +49,8 @@ class TestCLICatalogList:
 class TestCLICatalogAttach:
     """Tests for attaching to catalogs via CLI."""
 
-    def test_catalog_attach_returns_attach_id(self, fixture_worker: str) -> None:
-        """Catalog attach returns attach_id and capabilities."""
+    def test_catalog_attach_returns_attach_opaque_data(self, fixture_worker: str) -> None:
+        """Catalog attach returns attach_opaque_data and capabilities."""
         runner = CliRunner()
         result = runner.invoke(
             cli,
@@ -58,12 +58,12 @@ class TestCLICatalogAttach:
         )
         assert result.exit_code == 0
         attach_result = json.loads(result.output)
-        assert "attach_id" in attach_result
-        assert len(attach_result["attach_id"]) > 0
+        assert "attach_opaque_data" in attach_result
+        assert len(attach_result["attach_opaque_data"]) > 0
         assert attach_result["supports_transactions"] is False
         assert attach_result["catalog_version_frozen"] is True
-        # ReadOnlyCatalogInterface returns attach_id_required=False
-        assert attach_result["attach_id_required"] is False
+        # ReadOnlyCatalogInterface returns attach_opaque_data_required=False
+        assert attach_result["attach_opaque_data_required"] is False
 
 
 class TestCLISchemaContents:
@@ -73,16 +73,16 @@ class TestCLISchemaContents:
         """Schema contents lists table functions in main schema."""
         runner = CliRunner()
 
-        # First attach to get attach_id
+        # First attach to get attach_opaque_data
         attach_result = runner.invoke(
             cli,
             ["catalog", "attach", "example", "--worker", fixture_worker],
         )
         assert attach_result.exit_code == 0
         attach_data = json.loads(attach_result.output)
-        attach_id = attach_data["attach_id"]
+        attach_opaque_data = attach_data["attach_opaque_data"]
 
-        # List schema contents using --attach-id option with --type
+        # List schema contents using --attach-opaque-data option with --type
         contents_result = runner.invoke(
             cli,
             [
@@ -90,8 +90,8 @@ class TestCLISchemaContents:
                 "schema",
                 "contents",
                 "main",
-                "--attach-id",
-                attach_id,
+                "--attach-opaque-data",
+                attach_opaque_data,
                 "--worker",
                 fixture_worker,
                 "--type",
@@ -115,12 +115,12 @@ class TestCLISchemaContents:
         """Schema contents requires --type parameter."""
         runner = CliRunner()
 
-        # Attach to get attach_id
+        # Attach to get attach_opaque_data
         attach_result = runner.invoke(
             cli,
             ["catalog", "attach", "example", "--worker", fixture_worker],
         )
-        attach_id = json.loads(attach_result.output)["attach_id"]
+        attach_opaque_data = json.loads(attach_result.output)["attach_opaque_data"]
 
         # List schema contents without --type should fail
         contents_result = runner.invoke(
@@ -130,8 +130,8 @@ class TestCLISchemaContents:
                 "schema",
                 "contents",
                 "main",
-                "--attach-id",
-                attach_id,
+                "--attach-opaque-data",
+                attach_opaque_data,
                 "--worker",
                 fixture_worker,
             ],
@@ -182,7 +182,7 @@ class TestCLISchemaContents:
             ["catalog", "attach", "example", "--worker", fixture_worker],
         )
         assert attach_result.exit_code == 0
-        attach_id = json.loads(attach_result.output)["attach_id"]
+        attach_opaque_data = json.loads(attach_result.output)["attach_opaque_data"]
 
         # Get table functions
         table_result = runner.invoke(
@@ -192,8 +192,8 @@ class TestCLISchemaContents:
                 "schema",
                 "contents",
                 "main",
-                "--attach-id",
-                attach_id,
+                "--attach-opaque-data",
+                attach_opaque_data,
                 "--worker",
                 fixture_worker,
                 "--type",
@@ -210,8 +210,8 @@ class TestCLISchemaContents:
                 "schema",
                 "contents",
                 "main",
-                "--attach-id",
-                attach_id,
+                "--attach-opaque-data",
+                attach_opaque_data,
                 "--worker",
                 fixture_worker,
                 "--type",
@@ -228,8 +228,8 @@ class TestCLISchemaContents:
                 "schema",
                 "contents",
                 "main",
-                "--attach-id",
-                attach_id,
+                "--attach-opaque-data",
+                attach_opaque_data,
                 "--worker",
                 fixture_worker,
                 "--type",
@@ -265,7 +265,7 @@ class TestCLISchemaContents:
             cli,
             ["catalog", "attach", "example", "--worker", fixture_worker],
         )
-        attach_id = json.loads(attach_result.output)["attach_id"]
+        attach_opaque_data = json.loads(attach_result.output)["attach_opaque_data"]
 
         contents_result = runner.invoke(
             cli,
@@ -274,8 +274,8 @@ class TestCLISchemaContents:
                 "schema",
                 "contents",
                 "main",
-                "--attach-id",
-                attach_id,
+                "--attach-opaque-data",
+                attach_opaque_data,
                 "--worker",
                 fixture_worker,
                 "--type",
@@ -305,7 +305,7 @@ class TestCLISchemaContents:
             cli,
             ["catalog", "attach", "example", "--worker", fixture_worker],
         )
-        attach_id = json.loads(attach_result.output)["attach_id"]
+        attach_opaque_data = json.loads(attach_result.output)["attach_opaque_data"]
 
         contents_result = runner.invoke(
             cli,
@@ -314,8 +314,8 @@ class TestCLISchemaContents:
                 "schema",
                 "contents",
                 "main",
-                "--attach-id",
-                attach_id,
+                "--attach-opaque-data",
+                attach_opaque_data,
                 "--worker",
                 fixture_worker,
                 "--type",
@@ -343,7 +343,7 @@ class TestCLISchemaContents:
             cli,
             ["catalog", "attach", "example", "--worker", fixture_worker],
         )
-        attach_id = json.loads(attach_result.output)["attach_id"]
+        attach_opaque_data = json.loads(attach_result.output)["attach_opaque_data"]
 
         contents_result = runner.invoke(
             cli,
@@ -352,8 +352,8 @@ class TestCLISchemaContents:
                 "schema",
                 "contents",
                 "main",
-                "--attach-id",
-                attach_id,
+                "--attach-opaque-data",
+                attach_opaque_data,
                 "--worker",
                 fixture_worker,
                 "--type",
@@ -381,7 +381,7 @@ class TestCLISchemaContents:
             cli,
             ["catalog", "attach", "example", "--worker", fixture_worker],
         )
-        attach_id = json.loads(attach_result.output)["attach_id"]
+        attach_opaque_data = json.loads(attach_result.output)["attach_opaque_data"]
 
         # sum_values is a scalar function
         contents_result = runner.invoke(
@@ -391,8 +391,8 @@ class TestCLISchemaContents:
                 "schema",
                 "contents",
                 "main",
-                "--attach-id",
-                attach_id,
+                "--attach-opaque-data",
+                attach_opaque_data,
                 "--worker",
                 fixture_worker,
                 "--type",
@@ -433,17 +433,17 @@ class TestCLISchemaList:
             cli,
             ["catalog", "attach", "example", "--worker", fixture_worker],
         )
-        attach_id = json.loads(attach_result.output)["attach_id"]
+        attach_opaque_data = json.loads(attach_result.output)["attach_opaque_data"]
 
-        # List schemas using --attach-id option
+        # List schemas using --attach-opaque-data option
         list_result = runner.invoke(
             cli,
             [
                 "catalog",
                 "schema",
                 "list",
-                "--attach-id",
-                attach_id,
+                "--attach-opaque-data",
+                attach_opaque_data,
                 "--worker",
                 fixture_worker,
             ],
@@ -482,19 +482,19 @@ class TestCLISchemaList:
         assert schema_info["name"] == "main"
 
 
-class TestCLIAttachIdCatalogOptions:
-    """Tests for --attach-id and --catalog option validation."""
+class TestCLIAttachOpaqueDataCatalogOptions:
+    """Tests for --attach-opaque-data and --catalog option validation."""
 
     def test_mutual_exclusivity(self, fixture_worker: str) -> None:
-        """Error when both --attach-id and --catalog are specified."""
+        """Error when both --attach-opaque-data and --catalog are specified."""
         runner = CliRunner()
 
-        # First get an attach_id
+        # First get an attach_opaque_data
         attach_result = runner.invoke(
             cli,
             ["catalog", "attach", "example", "--worker", fixture_worker],
         )
-        attach_id = json.loads(attach_result.output)["attach_id"]
+        attach_opaque_data = json.loads(attach_result.output)["attach_opaque_data"]
 
         # Try to use both options
         result = runner.invoke(
@@ -503,8 +503,8 @@ class TestCLIAttachIdCatalogOptions:
                 "catalog",
                 "schema",
                 "list",
-                "--attach-id",
-                attach_id,
+                "--attach-opaque-data",
+                attach_opaque_data,
                 "--catalog",
                 "example",
                 "--worker",
@@ -514,8 +514,8 @@ class TestCLIAttachIdCatalogOptions:
         assert result.exit_code != 0
         assert "Cannot specify both" in result.output
 
-    def test_requires_attach_id_or_catalog(self, fixture_worker: str) -> None:
-        """Error when neither --attach-id nor --catalog is specified."""
+    def test_requires_attach_opaque_data_or_catalog(self, fixture_worker: str) -> None:
+        """Error when neither --attach-opaque-data nor --catalog is specified."""
         runner = CliRunner()
 
         result = runner.invoke(

@@ -5,7 +5,7 @@ catalog interfaces in VGI workers, enabling DuckDB ATTACH support.
 """
 
 from vgi.catalog.catalog_interface import (
-    AttachId,
+    AttachOpaqueData,
     CatalogAttachResult,
     CatalogExample,
     CatalogInfo,
@@ -26,7 +26,7 @@ from vgi.catalog.catalog_interface import (
     SerializedSchema,
     SqlExpression,
     TableInfo,
-    TransactionId,
+    TransactionOpaqueData,
     ViewInfo,
 )
 from vgi.catalog.descriptors import Catalog, ForeignKeyDef, Index, Macro, Schema, Sql, Table, View
@@ -36,8 +36,8 @@ from vgi.catalog.storage import CatalogStorage, CatalogStorageSqlite
 
 __all__ = [
     # Type aliases
-    "AttachId",
-    "TransactionId",
+    "AttachOpaqueData",
+    "TransactionOpaqueData",
     "SerializedSchema",
     "SqlExpression",
     # Enums

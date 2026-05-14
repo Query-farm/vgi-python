@@ -31,7 +31,7 @@ from vgi.metadata import (
 if TYPE_CHECKING:
     from vgi.catalog.attach_option import AttachOptionSpec
     from vgi.catalog.catalog_interface import (
-        AttachId,
+        AttachOpaqueData,
         CatalogInterface,
         FunctionInfo,
         SchemaInfo,
@@ -313,14 +313,14 @@ def _attach_for_describe(
     worker_cls: type[Worker],
     catalog_name: str,
     requested_data_version: str | None,
-) -> tuple[CatalogInterface | None, AttachId | None, str | None]:
-    """Pre-attach to validate the requested version and capture an attach_id.
+) -> tuple[CatalogInterface | None, AttachOpaqueData | None, str | None]:
+    """Pre-attach to validate the requested version and capture an attach_opaque_data.
 
-    Returns ``(iface, attach_id, error)``:
+    Returns ``(iface, attach_opaque_data, error)``:
 
     * ``iface`` is the instantiated catalog interface (or ``None`` if the
       worker has none).
-    * ``attach_id`` is non-``None`` when the attach succeeded; the page uses
+    * ``attach_opaque_data`` is non-``None`` when the attach succeeded; the page uses
       it to dynamically enumerate schemas/tables/views/functions for the
       resolved data version.
     * ``error`` is non-``None`` when the worker rejected the requested
@@ -350,7 +350,7 @@ def _attach_for_describe(
         )
     except Exception as exc:  # noqa: BLE001 — surface whatever the worker raises
         return iface, None, str(exc) or exc.__class__.__name__
-    return iface, result.attach_id, None
+    return iface, result.attach_opaque_data, None
 
 
 def _build_dynamic_table_card(t: TableInfo) -> str:
@@ -471,7 +471,7 @@ def _build_dynamic_function_card(fn: FunctionInfo) -> str:
     return "\n".join(parts)
 
 
-def _render_dynamic_schemas(iface: CatalogInterface, attach_id: AttachId) -> list[str]:
+def _render_dynamic_schemas(iface: CatalogInterface, attach_opaque_data: AttachOpaqueData) -> list[str]:
     """Enumerate schemas/tables/views/functions from the attached catalog.
 
     Returns a flat list of HTML fragments (matching the static path's
@@ -481,7 +481,9 @@ def _render_dynamic_schemas(iface: CatalogInterface, attach_id: AttachId) -> lis
     from vgi.catalog.catalog_interface import SchemaObjectType
 
     try:
-        schemas: Sequence[SchemaInfo] = iface.schemas(attach_id=attach_id, transaction_id=None)
+        schemas: Sequence[SchemaInfo] = iface.schemas(
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None
+        )
     except Exception:  # noqa: BLE001
         _logger.debug("iface.schemas() failed", exc_info=True)
         return []
@@ -492,7 +494,7 @@ def _render_dynamic_schemas(iface: CatalogInterface, attach_id: AttachId) -> lis
         # Any to fall through to the implementation method.
         contents: Any = iface.schema_contents
         try:
-            result = contents(attach_id=attach_id, transaction_id=None, name=name, type=kind)
+            result = contents(attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, name=name, type=kind)
         except Exception:  # noqa: BLE001
             _logger.debug("schema_contents(%s) failed for %s", kind, name, exc_info=True)
             return []
@@ -792,10 +794,12 @@ def build_worker_page(
     target_catalog = active_catalog or (panels[0].name if panels else None)
 
     attach_iface: CatalogInterface | None = None
-    attach_id: AttachId | None = None
+    attach_opaque_data: AttachOpaqueData | None = None
     attach_error: str | None = None
     if target_catalog is not None:
-        attach_iface, attach_id, raw_error = _attach_for_describe(worker_cls, target_catalog, requested_data_version)
+        attach_iface, attach_opaque_data, raw_error = _attach_for_describe(
+            worker_cls, target_catalog, requested_data_version
+        )
         # Only surface the error in the UI if the user explicitly requested a
         # version. A failure with no version requested is silent (defaults
         # might just be unsupported under unusual configurations).
@@ -866,8 +870,8 @@ def build_worker_page(
     # that's the only way version-dependent tables (e.g. versioned_tables)
     # show up. Fall back to the static descriptor when the worker has no
     # catalog interface at all (legacy ``Worker.functions`` pattern).
-    if attach_iface is not None and attach_id is not None:
-        body_parts.extend(_render_dynamic_schemas(attach_iface, attach_id))
+    if attach_iface is not None and attach_opaque_data is not None:
+        body_parts.extend(_render_dynamic_schemas(attach_iface, attach_opaque_data))
     elif (catalog := getattr(worker_cls, "catalog", None)) is not None:
         for schema in catalog.schemas:
             body_parts.append(f'<h2 class="schema-heading">{_esc(schema.name)}</h2>')

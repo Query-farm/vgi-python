@@ -110,8 +110,8 @@ class BindParameters:
         settings: DuckDB settings as a single-row RecordBatch, or None.
         secrets: SecretsAccessor for accessing resolved and dynamic secrets.
         auth_context: Authentication context for the current request.
-        attach_id: Catalog attach ID, if the function was invoked through an ATTACHed catalog.
-        transaction_id: Catalog transaction ID, if invoked inside a catalog transaction.
+        attach_opaque_data: Catalog attach ID, if the function was invoked through an ATTACHed catalog.
+        transaction_opaque_data: Catalog transaction ID, if invoked inside a catalog transaction.
 
     """
 
@@ -120,8 +120,8 @@ class BindParameters:
     settings: pa.RecordBatch | None
     secrets: SecretsAccessor
     auth_context: AuthContext = AuthContext.anonymous()
-    attach_id: bytes | None = None
-    transaction_id: bytes | None = None
+    attach_opaque_data: bytes | None = None
+    transaction_opaque_data: bytes | None = None
 
 
 def _resolve_explicit_arrow_type(arrow_type: pa.DataType | type) -> pa.DataType:
@@ -610,8 +610,8 @@ class ScalarFunctionGenerator(vgi.function.Function):
             input.settings,
             secrets_accessor,
             auth,
-            input.attach_id,
-            input.transaction_id,
+            input.attach_opaque_data,
+            input.transaction_opaque_data,
         )
         result = cls.on_bind(bind_params)
 

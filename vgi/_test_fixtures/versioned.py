@@ -25,11 +25,11 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from vgi.catalog import (
-    AttachId,
+    AttachOpaqueData,
     CatalogAttachResult,
     CatalogInfo,
     ReadOnlyCatalogInterface,
-    TransactionId,
+    TransactionOpaqueData,
 )
 from vgi.catalog.descriptors import Catalog, Schema
 from vgi.worker import Worker
@@ -106,12 +106,12 @@ class VersionedCatalog(ReadOnlyCatalogInterface):
                 ctx.set_cookie(STICKY_COOKIE_NAME, uuid.uuid4().hex)
 
         return CatalogAttachResult(
-            attach_id=AttachId(uuid.uuid4().bytes),
+            attach_opaque_data=AttachOpaqueData(uuid.uuid4().bytes),
             supports_transactions=False,
             supports_time_travel=False,
             catalog_version_frozen=True,
             catalog_version=1,
-            attach_id_required=False,
+            attach_opaque_data_required=False,
             default_schema=_VERSIONED_CATALOG.default_schema,
             comment=_VERSIONED_CATALOG.comment,
             tags=dict(_VERSIONED_CATALOG.tags),
@@ -122,12 +122,12 @@ class VersionedCatalog(ReadOnlyCatalogInterface):
     def catalog_version(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         ctx: CallContext | None = None,
     ) -> int:
         """Assert that the routing cookie we set at ATTACH is echoed back."""
-        del attach_id, transaction_id
+        del attach_opaque_data, transaction_opaque_data
         if ctx is not None and ctx.cookies and STICKY_COOKIE_NAME not in ctx.cookies:
             # Over HTTP, missing the sticky cookie means the client's cookie jar
             # is broken. Bail loudly so the test catches the regression.

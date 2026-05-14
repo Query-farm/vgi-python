@@ -156,9 +156,7 @@ class TestTableFunctionDynamicToString:
             FIXED_SCHEMA = pa.schema([pa.field("n", pa.int64())])
 
             @classmethod
-            def dynamic_to_string(
-                cls, params: BindParams[_Args], execution_id: bytes
-            ) -> Mapping[str, str]:
+            def dynamic_to_string(cls, params: BindParams[_Args], execution_id: bytes) -> Mapping[str, str]:
                 assert params.storage is not None
                 pairs = params.storage.worker_scan()
                 return {f"pid_{wid}": state.decode() for wid, state in sorted(pairs)}

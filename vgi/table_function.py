@@ -300,7 +300,7 @@ class BindParams[TArgs]:
     # in the same store ``on_init`` reads/writes for snapshot isolation
     # — so a topic's row count is fetched once per SQL transaction
     # rather than once per bind/cardinality/statistics/init phase.
-    # ``None`` when ``bind_call.transaction_id`` is unset.
+    # ``None`` when ``bind_call.transaction_opaque_data`` is unset.
     transaction_storage: TransactionBoundStorage | None = None
     # Execution-scoped storage view. Populated only on call paths that
     # carry a ``global_execution_id`` — currently just
@@ -592,13 +592,15 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         ``dynamic_to_string``); when provided, ``BindParams.storage`` is
         a ``BoundStorage`` view keyed by it.
         """
-        txn_id = input.transaction_id
+        txn_id = input.transaction_opaque_data
         return BindParams[TArgs](
             args=cls._parse_arguments(cls.FunctionArguments, input.arguments),
             bind_call=input,
             settings=_batch_to_scalar_dict(input.settings),
             secrets=SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided),
-            transaction_storage=TransactionBoundStorage(cls.storage, txn_id, request=input, auth=auth_context) if txn_id else None,
+            transaction_storage=TransactionBoundStorage(cls.storage, txn_id, request=input, auth=auth_context)
+            if txn_id
+            else None,
             storage=BoundStorage(cls.storage, execution_id, request=input, auth=auth_context) if execution_id else None,
             auth_context=auth_context if auth_context is not None else AuthContext.anonymous(),
         )

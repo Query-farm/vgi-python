@@ -97,9 +97,16 @@ from vgi._test_fixtures.scalar import (
 from vgi._test_fixtures.table import (
     _VERSIONED_CONSTRAINTS_SCHEMAS,
     _VERSIONED_SCHEMAS,
+    BatchIndexOverflowFunction,
+    BrokenMissingPartitionValuesFunction,
+    BrokenPartitionColumnAbsentFromBatchFunction,
+    BrokenPartitionMinNeqMaxFunction,
+    BrokenPartitionValuesNoAnnotationFunction,
     ColorsScanFunction,
     ConstantColumnsFunction,
+    CountryPartitionedSalesFunction,
     DepartmentsScanFunction,
+    DisjointRangePartitionedFunction,
     DoubleSequenceFunction,
     DynamicFilterEchoFunction,
     EmployeesScanFunction,
@@ -116,16 +123,9 @@ from vgi._test_fixtures.table import (
     MakeSeriesFloatFunction,
     MakeSeriesRangeFunction,
     MakeSeriesStepFunction,
+    MissingBatchIndexTagFunction,
     NamedParamsEchoFunction,
     NestedSequenceFunction,
-    BatchIndexOverflowFunction,
-    BrokenMissingPartitionValuesFunction,
-    BrokenPartitionColumnAbsentFromBatchFunction,
-    BrokenPartitionMinNeqMaxFunction,
-    BrokenPartitionValuesNoAnnotationFunction,
-    CountryPartitionedSalesFunction,
-    DisjointRangePartitionedFunction,
-    MissingBatchIndexTagFunction,
     NonMonotoneBatchIndexFunction,
     OrderEchoFunction,
     PartitionedBatchIndexFunction,
@@ -169,7 +169,7 @@ from vgi._test_fixtures.table_in_out import (
 )
 from vgi.arguments import Arguments
 from vgi.catalog import (
-    AttachId,
+    AttachOpaqueData,
     Catalog,
     ForeignKeyDef,
     Index,
@@ -184,7 +184,7 @@ from vgi.catalog import (
     Setting,
     Table,
     TableInfo,
-    TransactionId,
+    TransactionOpaqueData,
     View,
 )
 from vgi.catalog.catalog_interface import _validate_at_params
@@ -759,8 +759,8 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
     def table_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
@@ -832,8 +832,8 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 tags={},
             )
         return super().table_get(
-            attach_id=attach_id,
-            transaction_id=transaction_id,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=transaction_opaque_data,
             schema_name=schema_name,
             name=name,
             at_unit=at_unit,
@@ -847,8 +847,8 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
     def table_scan_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None,
@@ -939,8 +939,8 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             )
 
         return super().table_scan_function_get(
-            attach_id=attach_id,
-            transaction_id=transaction_id,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=transaction_opaque_data,
             schema_name=schema_name,
             name=name,
             at_unit=at_unit,
@@ -951,7 +951,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
     #
     # The example catalog has no transactional state of its own — these
     # methods exist solely so the C++ extension populates
-    # ``BindRequest.transaction_id`` when SQL is wrapped in
+    # ``BindRequest.transaction_opaque_data`` when SQL is wrapped in
     # ``BEGIN`` / ``COMMIT``. That id is what makes
     # ``BindParams.transaction_storage`` non-None, which lets
     # ``TxCachedValueFunction`` (and any user-written function) cache
@@ -959,20 +959,24 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
 
     supports_transactions = True
 
-    def catalog_transaction_begin(self, *, attach_id: AttachId) -> TransactionId | None:
-        """Allocate a fresh transaction_id; no catalog-side state to track."""
-        del attach_id
-        return TransactionId(uuid.uuid4().bytes)
+    def catalog_transaction_begin(self, *, attach_opaque_data: AttachOpaqueData) -> TransactionOpaqueData | None:
+        """Allocate a fresh transaction_opaque_data; no catalog-side state to track."""
+        del attach_opaque_data
+        return TransactionOpaqueData(uuid.uuid4().bytes)
 
-    def catalog_transaction_commit(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
+    def catalog_transaction_commit(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData
+    ) -> None:
         """Clear per-transaction storage on commit (best-effort hygiene)."""
-        del attach_id
-        TxCachedValueFunction.storage.transaction_state_clear(bytes(transaction_id))
+        del attach_opaque_data
+        TxCachedValueFunction.storage.transaction_state_clear(bytes(transaction_opaque_data))
 
-    def catalog_transaction_rollback(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
+    def catalog_transaction_rollback(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData
+    ) -> None:
         """Mirror of commit — same cleanup path."""
-        del attach_id
-        TxCachedValueFunction.storage.transaction_state_clear(bytes(transaction_id))
+        del attach_opaque_data
+        TxCachedValueFunction.storage.transaction_state_clear(bytes(transaction_opaque_data))
 
 
 class ExampleWorker(Worker):

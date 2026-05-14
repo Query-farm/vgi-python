@@ -36,7 +36,7 @@ from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import OutputCollector
 
 from vgi.catalog import (
-    AttachId,
+    AttachOpaqueData,
     CatalogAttachResult,
     CatalogInfo,
     ReadOnlyCatalogInterface,
@@ -45,7 +45,7 @@ from vgi.catalog import (
     SchemaObjectType,
     SerializedSchema,
     TableInfo,
-    TransactionId,
+    TransactionOpaqueData,
 )
 from vgi.invocation import BindResponse
 from vgi.schema_utils import schema
@@ -334,14 +334,14 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
     # interface is harmless and keeps the class self-describing.
     functions = [AnimalsScanFunction, AnimalsWithColorScanFunction, PlantsScanFunction]
 
-    # The resolved data version is encoded directly into the attach_id rather
+    # The resolved data version is encoded directly into the attach_opaque_data rather
     # than kept in per-instance state. The worker pool can dispatch RPCs for
     # a single catalog across multiple subprocesses, so any state kept on
     # `self` would be invisible to sibling workers. Embedding the version in
-    # the attach_id sidesteps that entirely.
+    # the attach_opaque_data sidesteps that entirely.
     #
     # Wire format: ``<resolved_version>\x00<uuid16>`` — the null byte splits
-    # the decodable version prefix from uuid entropy that keeps attach_ids
+    # the decodable version prefix from uuid entropy that keeps attach_opaque_data values
     # unique per call.
     _ATTACH_ID_SEP = b"\x00"
 
@@ -379,7 +379,7 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
         resolved_impl = _resolve_impl_version(implementation_version)
         resolved = _resolve_data_version(data_version_spec)
 
-        attach_id = AttachId(resolved.encode("utf-8") + self._ATTACH_ID_SEP + uuid.uuid4().bytes)
+        attach_opaque_data = AttachOpaqueData(resolved.encode("utf-8") + self._ATTACH_ID_SEP + uuid.uuid4().bytes)
 
         # Pin HTTP sessions. Ignored by subprocess transport.
         if ctx is not None:
@@ -387,12 +387,12 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
                 ctx.set_cookie(STICKY_COOKIE_NAME, uuid.uuid4().hex)
 
         return CatalogAttachResult(
-            attach_id=attach_id,
+            attach_opaque_data=attach_opaque_data,
             supports_transactions=False,
             supports_time_travel=False,
             catalog_version_frozen=True,
             catalog_version=1,
-            attach_id_required=True,
+            attach_opaque_data_required=True,
             default_schema="main",
             resolved_data_version=resolved,
             resolved_implementation_version=resolved_impl,
@@ -400,8 +400,8 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
 
     # ------------------------------------------------------------------ helpers
 
-    def _tables_for(self, attach_id: AttachId) -> dict[str, _VersionedTable]:
-        raw = bytes(attach_id)
+    def _tables_for(self, attach_opaque_data: AttachOpaqueData) -> dict[str, _VersionedTable]:
+        raw = bytes(attach_opaque_data)
         sep = raw.find(self._ATTACH_ID_SEP)
         if sep <= 0:
             return {}
@@ -423,55 +423,57 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
 
     # ------------------------------------------------------------------ schemas / tables
 
-    def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> list[SchemaInfo]:
+    def schemas(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None
+    ) -> list[SchemaInfo]:
         """Single ``main`` schema, regardless of version."""
-        del transaction_id
-        return [SchemaInfo(attach_id=attach_id, name="main", comment=None, tags={})]
+        del transaction_opaque_data
+        return [SchemaInfo(attach_opaque_data=attach_opaque_data, name="main", comment=None, tags={})]
 
     def schema_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
     ) -> SchemaInfo | None:
         """Return the ``main`` schema only."""
-        del transaction_id
+        del transaction_opaque_data
         if name.lower() != "main":
             return None
-        return SchemaInfo(attach_id=attach_id, name="main", comment=None, tags={})
+        return SchemaInfo(attach_opaque_data=attach_opaque_data, name="main", comment=None, tags={})
 
     def schema_contents(  # type: ignore[override]
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
         """List objects in the schema — tables filtered by attach's resolved version."""
-        del transaction_id
+        del transaction_opaque_data
         if name.lower() != "main":
             return []
         if type == SchemaObjectType.TABLE:
-            return [self._make_table_info(n, t) for n, t in sorted(self._tables_for(attach_id).items())]
+            return [self._make_table_info(n, t) for n, t in sorted(self._tables_for(attach_opaque_data).items())]
         return []
 
     def table_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
     ) -> TableInfo | None:
         """Return table info only if it exists at this attach's resolved version."""
-        del transaction_id, at_unit, at_value
+        del transaction_opaque_data, at_unit, at_value
         if schema_name.lower() != "main":
             return None
-        table = self._tables_for(attach_id).get(name.lower())
+        table = self._tables_for(attach_opaque_data).get(name.lower())
         if table is None:
             return None
         return self._make_table_info(name.lower(), table)
@@ -479,30 +481,30 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
     def view_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> None:
         """No views exposed."""
-        del attach_id, transaction_id, schema_name, name
+        del attach_opaque_data, transaction_opaque_data, schema_name, name
         return None
 
     def table_scan_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None,
         at_value: str | None,
     ) -> ScanFunctionResult:
         """Dispatch to the function backing this table at the attach's version."""
-        del transaction_id, at_unit, at_value
+        del transaction_opaque_data, at_unit, at_value
         if schema_name.lower() != "main":
             raise ValueError(f"Unknown schema: {schema_name}")
-        table = self._tables_for(attach_id).get(name.lower())
+        table = self._tables_for(attach_opaque_data).get(name.lower())
         if table is None:
             raise ValueError(f"Table {schema_name}.{name} not visible at this data version")
         return ScanFunctionResult(
@@ -515,12 +517,12 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
     def catalog_version(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         ctx: CallContext | None = None,
     ) -> int:
         """Assert cookie stickiness on HTTP and return a constant version."""
-        del transaction_id
+        del transaction_opaque_data
         if ctx is not None and ctx.cookies and STICKY_COOKIE_NAME not in ctx.cookies:
             raise ValueError(
                 f"expected cookie {STICKY_COOKIE_NAME!r} on follow-up request; got {sorted(ctx.cookies)}",

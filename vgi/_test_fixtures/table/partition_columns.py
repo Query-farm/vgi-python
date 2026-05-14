@@ -60,7 +60,6 @@ from vgi.table_function import (
     bind_fixed_schema,
 )
 
-
 # =============================================================================
 # Single-column SINGLE_VALUE_PARTITIONS — core fixture
 # =============================================================================
@@ -70,9 +69,7 @@ from vgi.table_function import (
 class _CountryPartitionedArgs:
     """Arguments for ``country_partitioned_sales``."""
 
-    rows_per_country: Annotated[
-        int, Arg(0, doc="Rows to emit per country partition", ge=1)
-    ]
+    rows_per_country: Annotated[int, Arg(0, doc="Rows to emit per country partition", ge=1)]
 
 
 @dataclass(kw_only=True)
@@ -93,15 +90,13 @@ _COUNTRIES: list[str] = ["AU", "BR", "CA", "FR", "US"]
 # Queue items are ``(country_idx, country_name_bytes)``. The framework
 # emits one Arrow batch per pop.
 _QUEUE_ITEM_FMT = ">i"  # int32 country_idx; country name lives in
-                       # ``_COUNTRIES[idx]`` (avoids variable-length
-                       # encoding for what's already a stable index).
+# ``_COUNTRIES[idx]`` (avoids variable-length
+# encoding for what's already a stable index).
 
 
 @bind_fixed_schema
 @_cardinality_from_count
-class CountryPartitionedSalesFunction(
-    TableFunctionGenerator[_CountryPartitionedArgs, _CountryPartitionedState]
-):
+class CountryPartitionedSalesFunction(TableFunctionGenerator[_CountryPartitionedArgs, _CountryPartitionedState]):
     """One Arrow batch per ``country``; ``country`` is single-valued per chunk.
 
     Demonstrates the SINGLE_VALUE_PARTITIONS contract. The C++ extension
@@ -124,8 +119,7 @@ class CountryPartitionedSalesFunction(
     class Meta:
         name = "country_partitioned_sales"
         description = (
-            "Per-country sales rows, one Arrow batch per country. "
-            "Declares country as a SINGLE_VALUE partition column."
+            "Per-country sales rows, one Arrow batch per country. Declares country as a SINGLE_VALUE partition column."
         )
         categories = ["generator", "partitioning"]
         partition_kind = PartitionKind.SINGLE_VALUE_PARTITIONS
@@ -143,9 +137,7 @@ class CountryPartitionedSalesFunction(
         return GlobalInitResponse()
 
     @classmethod
-    def initial_state(
-        cls, params: ProcessParams[_CountryPartitionedArgs]
-    ) -> _CountryPartitionedState:
+    def initial_state(cls, params: ProcessParams[_CountryPartitionedArgs]) -> _CountryPartitionedState:
         return _CountryPartitionedState()
 
     @classmethod
@@ -187,9 +179,7 @@ class CountryPartitionedSalesFunction(
 class _RegionYearArgs:
     """Arguments for ``region_year_partitioned``."""
 
-    rows_per_partition: Annotated[
-        int, Arg(0, doc="Rows per (region, year) partition", ge=1)
-    ]
+    rows_per_partition: Annotated[int, Arg(0, doc="Rows per (region, year) partition", ge=1)]
 
 
 @dataclass(kw_only=True)
@@ -201,17 +191,18 @@ class _RegionYearState(ArrowSerializableDataclass):
 
 # (region, year) tuples — 6 partitions total
 _REGIONS_YEARS: list[tuple[str, int]] = [
-    ("AMER", 2023), ("AMER", 2024),
-    ("EMEA", 2023), ("EMEA", 2024),
-    ("APAC", 2023), ("APAC", 2024),
+    ("AMER", 2023),
+    ("AMER", 2024),
+    ("EMEA", 2023),
+    ("EMEA", 2024),
+    ("APAC", 2023),
+    ("APAC", 2024),
 ]
 
 
 @bind_fixed_schema
 @_cardinality_from_count
-class RegionYearPartitionedFunction(
-    TableFunctionGenerator[_RegionYearArgs, _RegionYearState]
-):
+class RegionYearPartitionedFunction(TableFunctionGenerator[_RegionYearArgs, _RegionYearState]):
     """Per-(region, year) chunks with both columns single-valued.
 
     Uses the work-queue pattern so multi-worker scan distributes
@@ -293,9 +284,7 @@ class RegionYearPartitionedFunction(
 class _ProjectedOutArgs:
     """Arguments for ``partitioned_with_explicit_override``."""
 
-    rows_per_category: Annotated[
-        int, Arg(0, doc="Rows per category partition", ge=1)
-    ]
+    rows_per_category: Annotated[int, Arg(0, doc="Rows per category partition", ge=1)]
 
 
 @dataclass(kw_only=True)
@@ -310,9 +299,7 @@ _CATEGORIES: list[str] = ["books", "music", "video"]
 
 @bind_fixed_schema
 @_cardinality_from_count
-class PartitionedWithExplicitOverrideFunction(
-    TableFunctionGenerator[_ProjectedOutArgs, _ProjectedOutState]
-):
+class PartitionedWithExplicitOverrideFunction(TableFunctionGenerator[_ProjectedOutArgs, _ProjectedOutState]):
     """Uses the explicit ``partition_values=`` override on ``out.emit``.
 
     Emits batches that DO include the partition column (so auto-extract
@@ -399,9 +386,7 @@ class _DisjointArgs:
     """Arguments for ``disjoint_range_partitioned``."""
 
     partitions: Annotated[int, Arg(0, doc="Number of disjoint partitions", ge=1)]
-    rows_per_partition: Annotated[
-        int, Arg("rows_per_partition", default=10, doc="Rows per partition", ge=1)
-    ]
+    rows_per_partition: Annotated[int, Arg("rows_per_partition", default=10, doc="Rows per partition", ge=1)]
 
 
 @dataclass(kw_only=True)
@@ -413,9 +398,7 @@ class _DisjointState(ArrowSerializableDataclass):
 
 @bind_fixed_schema
 @_cardinality_from_count
-class DisjointRangePartitionedFunction(
-    TableFunctionGenerator[_DisjointArgs, _DisjointState]
-):
+class DisjointRangePartitionedFunction(TableFunctionGenerator[_DisjointArgs, _DisjointState]):
     """Per-chunk disjoint integer ranges on ``key``.
 
     Each chunk N emits ``key`` values in ``[N*1000, N*1000 + rows)``

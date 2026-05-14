@@ -2,7 +2,7 @@
 
 Backs the ``example.main.tx_cached_value(key, seed)`` function exposed by
 ``vgi-fixture-worker``. The function uses ``BindParams.transaction_storage``
-to cache its ``seed`` argument per ``(transaction_id, key)``:
+to cache its ``seed`` argument per ``(transaction_opaque_data, key)``:
 
 * First call within a transaction for a given ``key``: stores ``seed`` and
   emits it.
@@ -82,7 +82,7 @@ class TxCachedValueFunction(TableFunctionGenerator[TxCachedValueArgs, _TxCachedV
         """Metadata for tx_cached_value."""
 
         name = "tx_cached_value"
-        description = "Return a value cached per (transaction_id, key) via transaction_storage."
+        description = "Return a value cached per (transaction_opaque_data, key) via transaction_storage."
         categories = ["test", "transaction-storage"]
         tags = {"category": "test"}
 

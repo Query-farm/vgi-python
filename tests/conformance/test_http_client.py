@@ -62,7 +62,7 @@ def test_attach_and_list_schemas_over_http(http_example_base_url: str) -> None:
             data_version_spec=None,
             implementation_version=None,
         )
-        schema_names = [s.name for s in client.schemas(attach_id=attach.attach_id)]
+        schema_names = [s.name for s in client.schemas(attach_opaque_data=attach.attach_opaque_data)]
 
     assert "main" in schema_names
 
@@ -79,7 +79,7 @@ def test_schema_contents_functions_over_http(http_example_base_url: str) -> None
             implementation_version=None,
         )
         scalars = client.schema_contents(
-            attach_id=attach.attach_id,
+            attach_opaque_data=attach.attach_opaque_data,
             name="main",
             type=SchemaObjectType.SCALAR_FUNCTION,
         )

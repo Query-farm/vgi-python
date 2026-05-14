@@ -292,6 +292,11 @@ def main() -> None:
         else:
             worker_classes.append(WritableWorker)
         workers = [wc(quiet=True, log_level=effective_level) for wc in worker_classes]
+        # One signing key shared by every sub-worker (which seal catalog
+        # opaque-data envelopes) and the HTTP state-token machinery.
+        signing_key = os.environ.get("VGI_SIGNING_KEY", "").encode() or os.urandom(32)
+        for w in workers:
+            w._signing_key = signing_key
         worker: Any = workers[0] if len(workers) == 1 else MetaWorker(workers)
         server = RpcServer(
             VgiProtocol,
@@ -304,6 +309,7 @@ def main() -> None:
             server,
             prefix=prefix,
             cors_origins=cors_origins,
+            token_key=signing_key,
             upload_url_provider=upload_url_provider,
             max_upload_bytes=max_upload_bytes if upload_url_provider is not None else None,
             max_request_bytes=max_request_bytes,

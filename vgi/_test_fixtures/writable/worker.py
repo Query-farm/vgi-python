@@ -29,7 +29,7 @@ from vgi._test_fixtures.writable.generic import (
 )
 from vgi._test_fixtures.writable.table import transactor_proxy
 from vgi.catalog import (
-    AttachId,
+    AttachOpaqueData,
     Catalog,
     CatalogAttachResult,
     FunctionInfo,
@@ -43,7 +43,7 @@ from vgi.catalog import (
     SchemaObjectType,
     SerializedSchema,
     TableInfo,
-    TransactionId,
+    TransactionOpaqueData,
     ViewInfo,
 )
 from vgi.worker import Worker
@@ -205,19 +205,19 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         implementation_version: str | None,
         ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
-        """Attach: generate unique attach_id and register a fresh database in the transactor."""
+        """Attach: generate unique attach_opaque_data and register a fresh database in the transactor."""
         del data_version_spec, implementation_version, ctx
         if name != _WRITABLE_CATALOG.name:
             raise ValueError(f"Unknown catalog: {name!r}. Available: {_WRITABLE_CATALOG.name}")
-        attach_id = AttachId(uuid.uuid4().bytes)
-        transactor_proxy.register(attach_id=attach_id, catalog_name=name)
+        attach_opaque_data = AttachOpaqueData(uuid.uuid4().bytes)
+        transactor_proxy.register(attach_opaque_data=attach_opaque_data, catalog_name=name)
         return CatalogAttachResult(
-            attach_id=attach_id,
+            attach_opaque_data=attach_opaque_data,
             supports_transactions=True,
             supports_time_travel=False,
             catalog_version_frozen=False,
             catalog_version=1,
-            attach_id_required=True,
+            attach_opaque_data_required=True,
             default_schema="main",
             settings=[],
             secret_types=[],
@@ -228,49 +228,55 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def catalog_version(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         ctx: CallContext | None = None,
     ) -> int:
         """Return the current catalog version from the transactor."""
         del ctx
         proxy = transactor_proxy._get_proxy()
-        return proxy.catalog_version(attach_id=attach_id)
+        return proxy.catalog_version(attach_opaque_data=attach_opaque_data)
 
     # ========== Transaction lifecycle ==========
 
-    def catalog_transaction_begin(self, *, attach_id: AttachId) -> TransactionId | None:
+    def catalog_transaction_begin(self, *, attach_opaque_data: AttachOpaqueData) -> TransactionOpaqueData | None:
         """Begin a transaction — transactor generates the tx_id."""
         proxy = transactor_proxy._get_proxy()
-        tx_id = proxy.begin(attach_id=attach_id)
-        return TransactionId(tx_id)
+        tx_id = proxy.begin(attach_opaque_data=attach_opaque_data)
+        return TransactionOpaqueData(tx_id)
 
-    def catalog_transaction_commit(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
+    def catalog_transaction_commit(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData
+    ) -> None:
         """Commit a transaction in the transactor."""
         proxy = transactor_proxy._get_proxy()
-        proxy.commit(attach_id=attach_id, tx_id=transaction_id)
+        proxy.commit(attach_opaque_data=attach_opaque_data, tx_id=transaction_opaque_data)
 
-    def catalog_transaction_rollback(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
+    def catalog_transaction_rollback(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData
+    ) -> None:
         """Roll back a transaction in the transactor."""
         proxy = transactor_proxy._get_proxy()
-        proxy.rollback(attach_id=attach_id, tx_id=transaction_id)
+        proxy.rollback(attach_opaque_data=attach_opaque_data, tx_id=transaction_opaque_data)
 
     # ========== DDL helpers ==========
 
-    def _execute_ddl(self, attach_id: AttachId, transaction_id: TransactionId | None, sql: str) -> None:
+    def _execute_ddl(
+        self, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, sql: str
+    ) -> None:
         """Validate transaction and execute DDL. Version is tracked by the transactor."""
-        if not transaction_id:
-            raise ValueError("transaction_id is required for DDL operations")
+        if not transaction_opaque_data:
+            raise ValueError("transaction_opaque_data is required for DDL operations")
         proxy = transactor_proxy._get_proxy()
-        proxy.execute_ddl_tx(attach_id=attach_id, tx_id=transaction_id, sql=sql)
+        proxy.execute_ddl_tx(attach_opaque_data=attach_opaque_data, tx_id=transaction_opaque_data, sql=sql)
 
     # ========== DDL: Table operations ==========
 
     def table_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         columns: SerializedSchema,
@@ -335,14 +341,14 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         all_parts = col_defs + constraints
         columns_sql = ",\n  ".join(all_parts)
         ddl = f"CREATE TABLE{if_not_exists} {_qn(schema_name, name)} (\n  {columns_sql}\n);"
-        self._execute_ddl(attach_id, transaction_id, ddl)
+        self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_create: %s (on_conflict=%s)", name, on_conflict.value)
 
     def table_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         ignore_not_found: bool,
@@ -351,28 +357,34 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         """Drop a table."""
         if_exists = " IF EXISTS" if ignore_not_found else ""
         cascade_sql = " CASCADE" if cascade else ""
-        self._execute_ddl(attach_id, transaction_id, f"DROP TABLE{if_exists} {_qn(schema_name, name)}{cascade_sql};")
+        self._execute_ddl(
+            attach_opaque_data, transaction_opaque_data, f"DROP TABLE{if_exists} {_qn(schema_name, name)}{cascade_sql};"
+        )
         logger.info("table_drop: %s", name)
 
     def table_rename(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         new_name: str,
         ignore_not_found: bool,
     ) -> None:
         """Rename a table."""
-        self._execute_ddl(attach_id, transaction_id, f"ALTER TABLE {_qn(schema_name, name)} RENAME TO {_qi(new_name)};")
+        self._execute_ddl(
+            attach_opaque_data,
+            transaction_opaque_data,
+            f"ALTER TABLE {_qn(schema_name, name)} RENAME TO {_qi(new_name)};",
+        )
         logger.info("table_rename: %s -> %s", name, new_name)
 
     def table_column_add(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_definition: SerializedSchema,
@@ -385,14 +397,14 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         if_not_exists = " IF NOT EXISTS" if if_column_not_exists else ""
         col_sql = f"{_qi(field.name)} {_arrow_type_to_sql(field.type)}"
         ddl = f"ALTER TABLE {_qn(schema_name, name)} ADD COLUMN{if_not_exists} {col_sql};"
-        self._execute_ddl(attach_id, transaction_id, ddl)
+        self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_column_add: %s.%s", name, field.name)
 
     def table_column_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -404,14 +416,14 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         if_exists = " IF EXISTS" if if_column_exists else ""
         cascade_sql = " CASCADE" if cascade else ""
         ddl = f"ALTER TABLE {_qn(schema_name, name)} DROP COLUMN{if_exists} {_qi(column_name)}{cascade_sql};"
-        self._execute_ddl(attach_id, transaction_id, ddl)
+        self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_column_drop: %s.%s", name, column_name)
 
     def table_column_rename(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -420,27 +432,29 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     ) -> None:
         """Rename a column in a table."""
         ddl = f"ALTER TABLE {_qn(schema_name, name)} RENAME COLUMN {_qi(column_name)} TO {_qi(new_column_name)};"
-        self._execute_ddl(attach_id, transaction_id, ddl)
+        self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_column_rename: %s.%s -> %s", name, column_name, new_column_name)
 
     def table_comment_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         comment: str | None,
         ignore_not_found: bool,
     ) -> None:
         """Set or clear the comment on a table."""
-        self._execute_ddl(attach_id, transaction_id, _comment_sql(f"TABLE {_qn(schema_name, name)}", comment))
+        self._execute_ddl(
+            attach_opaque_data, transaction_opaque_data, _comment_sql(f"TABLE {_qn(schema_name, name)}", comment)
+        )
 
     def table_column_comment_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -449,13 +463,13 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     ) -> None:
         """Set or clear the comment on a table column."""
         target = f"COLUMN {_qn(schema_name, name)}.{_qi(column_name)}"
-        self._execute_ddl(attach_id, transaction_id, _comment_sql(target, comment))
+        self._execute_ddl(attach_opaque_data, transaction_opaque_data, _comment_sql(target, comment))
 
     def table_column_type_change(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_definition: SerializedSchema,
@@ -470,13 +484,13 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         if expression:
             # expression comes from DuckDB's binder (serialized AST), not raw user input
             sql += f" USING {expression}"
-        self._execute_ddl(attach_id, transaction_id, sql + ";")
+        self._execute_ddl(attach_opaque_data, transaction_opaque_data, sql + ";")
 
     def table_column_default_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -485,13 +499,13 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     ) -> None:
         """Set the default expression for a column."""
         ddl = f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} SET DEFAULT {expression};"
-        self._execute_ddl(attach_id, transaction_id, ddl)
+        self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
 
     def table_column_default_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -499,13 +513,13 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     ) -> None:
         """Drop the default expression for a column."""
         ddl = f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} DROP DEFAULT;"
-        self._execute_ddl(attach_id, transaction_id, ddl)
+        self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
 
     def table_not_null_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -513,13 +527,13 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     ) -> None:
         """Set NOT NULL constraint on a column."""
         ddl = f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} SET NOT NULL;"
-        self._execute_ddl(attach_id, transaction_id, ddl)
+        self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
 
     def table_not_null_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -527,18 +541,20 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     ) -> None:
         """Drop NOT NULL constraint from a column."""
         ddl = f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} DROP NOT NULL;"
-        self._execute_ddl(attach_id, transaction_id, ddl)
+        self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
 
     # ========== Schema discovery (merge static + dynamic) ==========
 
     def schemas(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
     ) -> list[SchemaInfo]:
         """List schemas — merge static catalog schemas with transactor schemas."""
-        static_schemas = super().schemas(attach_id=attach_id, transaction_id=transaction_id)
+        static_schemas = super().schemas(
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data
+        )
         # Static ``Schema(tables=[])`` declaration would auto-populate
         # ``estimated_object_count[table] = 0``, which the C++ client treats
         # as a hard guarantee and skips the bulk RPC. But this catalog adds
@@ -547,7 +563,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         # default of 1 (unknown / eager-load), which restores correct lookups.
         static_schemas = [
             SchemaInfo(
-                attach_id=s.attach_id,
+                attach_opaque_data=s.attach_opaque_data,
                 name=s.name,
                 comment=s.comment,
                 tags=s.tags,
@@ -557,12 +573,12 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ]
         static_names = {s.name.lower() for s in static_schemas}
 
-        if not transaction_id:
+        if not transaction_opaque_data:
             return static_schemas
 
         try:
             proxy = transactor_proxy._get_proxy()
-            dynamic_names = proxy.list_schemas(attach_id=attach_id, tx_id=transaction_id)
+            dynamic_names = proxy.list_schemas(attach_opaque_data=attach_opaque_data, tx_id=transaction_opaque_data)
         except Exception:
             logger.debug("schemas: failed to list schemas from transactor")
             return static_schemas
@@ -572,7 +588,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             if name.lower() not in static_names:
                 result.append(
                     SchemaInfo(
-                        attach_id=attach_id,
+                        attach_opaque_data=attach_opaque_data,
                         name=name,
                         comment=None,
                         tags={},
@@ -583,27 +599,29 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def schema_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
     ) -> SchemaInfo | None:
         """Get schema info — check static first, then transactor."""
-        result = super().schema_get(attach_id=attach_id, transaction_id=transaction_id, name=name)
+        result = super().schema_get(
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data, name=name
+        )
         if result is not None:
             return result
 
-        if not transaction_id:
+        if not transaction_opaque_data:
             return None
 
         try:
             proxy = transactor_proxy._get_proxy()
-            schema_names = proxy.list_schemas(attach_id=attach_id, tx_id=transaction_id)
+            schema_names = proxy.list_schemas(attach_opaque_data=attach_opaque_data, tx_id=transaction_opaque_data)
         except Exception:
             return None
 
         if name.lower() in {n.lower() for n in schema_names}:
             return SchemaInfo(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 name=name,
                 comment=None,
                 tags={},
@@ -615,8 +633,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def schema_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None,
@@ -624,13 +642,13 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     ) -> None:
         """Create a new schema in the transactor's DuckDB database."""
         if_not_exists = " IF NOT EXISTS" if on_conflict == OnConflict.IGNORE else ""
-        self._execute_ddl(attach_id, transaction_id, f"CREATE SCHEMA{if_not_exists} {_qi(name)};")
+        self._execute_ddl(attach_opaque_data, transaction_opaque_data, f"CREATE SCHEMA{if_not_exists} {_qi(name)};")
 
     def schema_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         ignore_not_found: bool,
         cascade: bool,
@@ -638,15 +656,17 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         """Drop a schema from the transactor's DuckDB database."""
         if_exists = " IF EXISTS" if ignore_not_found else ""
         cascade_sql = " CASCADE" if cascade else ""
-        self._execute_ddl(attach_id, transaction_id, f"DROP SCHEMA{if_exists} {_qi(name)}{cascade_sql};")
+        self._execute_ddl(
+            attach_opaque_data, transaction_opaque_data, f"DROP SCHEMA{if_exists} {_qi(name)}{cascade_sql};"
+        )
 
     # ========== DDL: View operations ==========
 
     def view_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         definition: str,
@@ -656,13 +676,13 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         if_replace = " OR REPLACE" if on_conflict == OnConflict.REPLACE else ""
         if_not_exists = " IF NOT EXISTS" if on_conflict == OnConflict.IGNORE else ""
         sql = f"CREATE{if_replace} VIEW{if_not_exists} {_qn(schema_name, name)} AS {definition};"
-        self._execute_ddl(attach_id, transaction_id, sql)
+        self._execute_ddl(attach_opaque_data, transaction_opaque_data, sql)
 
     def view_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         ignore_not_found: bool,
@@ -671,62 +691,72 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         """Drop a view."""
         if_exists = " IF EXISTS" if ignore_not_found else ""
         cascade_sql = " CASCADE" if cascade else ""
-        self._execute_ddl(attach_id, transaction_id, f"DROP VIEW{if_exists} {_qn(schema_name, name)}{cascade_sql};")
+        self._execute_ddl(
+            attach_opaque_data, transaction_opaque_data, f"DROP VIEW{if_exists} {_qn(schema_name, name)}{cascade_sql};"
+        )
 
     def view_rename(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         new_name: str,
         ignore_not_found: bool,
     ) -> None:
         """Rename a view."""
-        self._execute_ddl(attach_id, transaction_id, f"ALTER VIEW {_qn(schema_name, name)} RENAME TO {_qi(new_name)};")
+        self._execute_ddl(
+            attach_opaque_data,
+            transaction_opaque_data,
+            f"ALTER VIEW {_qn(schema_name, name)} RENAME TO {_qi(new_name)};",
+        )
 
     def view_comment_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         comment: str | None,
         ignore_not_found: bool,
     ) -> None:
         """Set or clear the comment on a view."""
-        self._execute_ddl(attach_id, transaction_id, _comment_sql(f"VIEW {_qn(schema_name, name)}", comment))
+        self._execute_ddl(
+            attach_opaque_data, transaction_opaque_data, _comment_sql(f"VIEW {_qn(schema_name, name)}", comment)
+        )
 
     # ========== Dynamic view discovery ==========
 
     def view_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ViewInfo | None:
         """Get view info — check static catalog first, then transactor."""
         result = super().view_get(
-            attach_id=attach_id,
-            transaction_id=transaction_id,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=transaction_opaque_data,
             schema_name=schema_name,
             name=name,
         )
         if result is not None:
             return result
 
-        if not transaction_id:
+        if not transaction_opaque_data:
             return None
 
         try:
             proxy = transactor_proxy._get_proxy()
             import json
 
-            info_json = proxy.view_info(attach_id=attach_id, view_name=name, tx_id=transaction_id)
+            info_json = proxy.view_info(
+                attach_opaque_data=attach_opaque_data, view_name=name, tx_id=transaction_opaque_data
+            )
             info = json.loads(info_json)
         except ValueError:
             logger.debug("view_get: dynamic view '%s' not found in transactor", name)
@@ -748,8 +778,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def table_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
@@ -758,8 +788,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         """Get table info — check static catalog first, then transactor."""
         # Try static catalog first
         result = super().table_get(
-            attach_id=attach_id,
-            transaction_id=transaction_id,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=transaction_opaque_data,
             schema_name=schema_name,
             name=name,
             at_unit=at_unit,
@@ -769,7 +799,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             return result
 
         # Query transactor for dynamic table (requires transaction context)
-        if not transaction_id:
+        if not transaction_opaque_data:
             return None
         try:
             proxy = transactor_proxy._get_proxy()
@@ -777,9 +807,9 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             # Don't quote — the transactor handles its own quoting internally
             tx_table_name = f"{schema_name}.{name}" if schema_name else name
             schema_bytes = proxy.table_schema(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 table_name=tx_table_name,
-                tx_id=transaction_id,
+                tx_id=transaction_opaque_data,
             )
             table_schema = pa.ipc.read_schema(pa.BufferReader(schema_bytes))  # type: ignore[arg-type]
         except ValueError:
@@ -854,7 +884,9 @@ class WritableCatalog(ReadOnlyCatalogInterface):
 
         # Also fetch the table comment
         try:
-            table_comment = proxy.table_comment(attach_id=attach_id, table_name=name, tx_id=transaction_id)
+            table_comment = proxy.table_comment(
+                attach_opaque_data=attach_opaque_data, table_name=name, tx_id=transaction_opaque_data
+            )
         except Exception:
             table_comment = None
 
@@ -878,8 +910,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def _merge_dynamic_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         type: SchemaObjectType,
         info_type: type,
@@ -889,8 +921,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         """Merge static catalog contents with dynamic entries from the transactor."""
         static_results: list[Any] = list(
             super().schema_contents(  # type: ignore[call-overload]
-                attach_id=attach_id,
-                transaction_id=transaction_id,
+                attach_opaque_data=attach_opaque_data,
+                transaction_opaque_data=transaction_opaque_data,
                 name=schema_name,
                 type=type,
             )
@@ -902,10 +934,10 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         }
         try:
             proxy = transactor_proxy._get_proxy()
-            if transaction_id:
+            if transaction_opaque_data:
                 dynamic_names = getattr(proxy, list_method)(
-                    attach_id=attach_id,
-                    tx_id=transaction_id,
+                    attach_opaque_data=attach_opaque_data,
+                    tx_id=transaction_opaque_data,
                     schema_name=schema_name,
                 )
             else:
@@ -918,8 +950,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         for item_name in dynamic_names:
             if item_name.lower() not in static_names:
                 item = getattr(self, get_method)(
-                    attach_id=attach_id,
-                    transaction_id=transaction_id,
+                    attach_opaque_data=attach_opaque_data,
+                    transaction_opaque_data=transaction_opaque_data,
                     schema_name=schema_name,
                     name=item_name,
                 )
@@ -931,8 +963,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.TABLE],
     ) -> Sequence[TableInfo]: ...
@@ -941,8 +973,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.VIEW],
     ) -> Sequence[ViewInfo]: ...
@@ -951,8 +983,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[
             SchemaObjectType.SCALAR_FUNCTION,
@@ -965,8 +997,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
@@ -975,8 +1007,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.INDEX],
     ) -> Sequence[IndexInfo]: ...
@@ -984,8 +1016,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
@@ -994,8 +1026,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
 
         if type_enum == SchemaObjectType.TABLE:
             return self._merge_dynamic_contents(
-                attach_id=attach_id,
-                transaction_id=transaction_id,
+                attach_opaque_data=attach_opaque_data,
+                transaction_opaque_data=transaction_opaque_data,
                 schema_name=name,
                 type=type,
                 info_type=TableInfo,
@@ -1004,8 +1036,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             )
         if type_enum == SchemaObjectType.VIEW:
             return self._merge_dynamic_contents(
-                attach_id=attach_id,
-                transaction_id=transaction_id,
+                attach_opaque_data=attach_opaque_data,
+                transaction_opaque_data=transaction_opaque_data,
                 schema_name=name,
                 type=type,
                 info_type=ViewInfo,
@@ -1013,8 +1045,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
                 get_method="view_get",
             )
         return super().schema_contents(  # type: ignore[call-overload, no-any-return]
-            attach_id=attach_id,
-            transaction_id=transaction_id,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=transaction_opaque_data,
             name=name,
             type=type,
         )
@@ -1033,8 +1065,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def table_scan_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None,
@@ -1046,8 +1078,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def table_insert_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ScanFunctionResult:
@@ -1057,8 +1089,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def table_update_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ScanFunctionResult:
@@ -1068,8 +1100,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
     def table_delete_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ScanFunctionResult:

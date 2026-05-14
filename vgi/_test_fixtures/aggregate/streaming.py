@@ -97,9 +97,7 @@ class StreamingSumFunction(AggregateFunction[SumState]):
                 states[gid] = SumState(total=states[gid].total + v)
 
     @classmethod
-    def combine(
-        cls, source: SumState, target: SumState, params: ProcessParams[None]
-    ) -> SumState:
+    def combine(cls, source: SumState, target: SumState, params: ProcessParams[None]) -> SumState:
         return SumState(total=source.total + target.total)
 
     @classmethod
@@ -109,10 +107,7 @@ class StreamingSumFunction(AggregateFunction[SumState]):
         states: dict[int, SumState],
         params: ProcessParams[None],
     ) -> Annotated[pa.RecordBatch, Returns(pa.int64())]:
-        results = [
-            (s.total if (s := states.get(gid.as_py())) is not None else None)
-            for gid in group_ids
-        ]
+        results = [(s.total if (s := states.get(gid.as_py())) is not None else None) for gid in group_ids]
         return pa.record_batch({"result": pa.array(results, type=pa.int64())})
 
     # ------------------------------------------------------------------

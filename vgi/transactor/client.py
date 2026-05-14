@@ -3,17 +3,17 @@
 Handles auto-spawning the transactor process if one isn't running,
 and provides a typed ``vgi_rpc`` proxy for RPC calls.
 
-The transactor manages multiple databases internally (one per attach_id),
+The transactor manages multiple databases internally (one per attach_opaque_data),
 so a single transactor process serves all catalog attachments.
 
 Usage::
 
     client = TransactorClient()
     proxy = client.get_proxy()
-    proxy.register(attach_id)
-    tx_id = proxy.begin(attach_id)
+    proxy.register(attach_opaque_data)
+    tx_id = proxy.begin(attach_opaque_data)
     # ... use proxy.insert(), proxy.scan(), etc.
-    proxy.commit(attach_id, tx_id)
+    proxy.commit(attach_opaque_data, tx_id)
     client.close()
 
 """

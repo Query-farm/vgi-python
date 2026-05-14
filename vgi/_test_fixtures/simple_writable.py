@@ -14,7 +14,7 @@ Three pre-defined tables are exposed under the ``main`` schema:
   Used to exercise the supports_returning=False rejection path.
 * ``items_insert_only`` — supports INSERT only (no UPDATE/DELETE/RETURNING).
 
-State is held module-global, keyed by ``attach_id``. Per the
+State is held module-global, keyed by ``attach_opaque_data``. Per the
 "pooled workers don't share per-attach state" gotcha this means the fixture
 only behaves consistently when a single subprocess serves all queries for an
 attach. The default pool (max=256, idle=5s) reuses the same subprocess for
@@ -42,7 +42,7 @@ from vgi_rpc import ArrowSerializableDataclass, Transient
 from vgi_rpc.rpc import OutputCollector
 
 from vgi.catalog import (
-    AttachId,
+    AttachOpaqueData,
     CatalogAttachResult,
     ReadOnlyCatalogInterface,
     ScanFunctionResult,
@@ -50,7 +50,7 @@ from vgi.catalog import (
     SchemaObjectType,
     SerializedSchema,
     TableInfo,
-    TransactionId,
+    TransactionOpaqueData,
 )
 from vgi.catalog.descriptors import Catalog, Schema
 from vgi.invocation import BindResponse, GlobalInitResponse
@@ -84,11 +84,11 @@ _COUNT_SCHEMA = build_schema(count=pa.int64())
 
 
 # ============================================================================
-# Storage — SQLite file per attach_id under TMPDIR.
+# Storage — SQLite file per attach_opaque_data under TMPDIR.
 #
 # Pooled-worker subprocesses don't share Python state (see CLAUDE.md gotcha),
 # so module-globals would lose rows whenever the pool routed a query to a
-# fresh process. We persist into a SQLite file keyed by attach_id hex so the
+# fresh process. We persist into a SQLite file keyed by attach_opaque_data hex so the
 # data survives subprocess churn for the lifetime of an ATTACH.
 # ============================================================================
 
@@ -136,20 +136,20 @@ _INIT_LOCK = threading.Lock()
 _INITIALIZED: set[bytes] = set()
 
 
-def _db_path(attach_id: bytes) -> str:
-    return os.path.join(_DB_DIR, f"{attach_id.hex()}.sqlite")
+def _db_path(attach_opaque_data: bytes) -> str:
+    return os.path.join(_DB_DIR, f"{attach_opaque_data.hex()}.sqlite")
 
 
-def _ensure_init(attach_id: bytes) -> None:
+def _ensure_init(attach_opaque_data: bytes) -> None:
     """Create per-attach SQLite file + tables if not yet seen by this process.
 
     Idempotent and process-local: pooled-worker subprocesses each cache once.
     """
     with _INIT_LOCK:
-        if attach_id in _INITIALIZED:
+        if attach_opaque_data in _INITIALIZED:
             return
         os.makedirs(_DB_DIR, exist_ok=True)
-        conn = sqlite3.connect(_db_path(attach_id), isolation_level=None)
+        conn = sqlite3.connect(_db_path(attach_opaque_data), isolation_level=None)
         try:
             conn.execute("PRAGMA journal_mode=WAL;")
             for tname, tschema in _table_specs().items():
@@ -157,13 +157,13 @@ def _ensure_init(attach_id: bytes) -> None:
                 conn.execute(f'CREATE TABLE IF NOT EXISTS "{tname}" ({cols})')
         finally:
             conn.close()
-        _INITIALIZED.add(attach_id)
+        _INITIALIZED.add(attach_opaque_data)
 
 
 @contextlib.contextmanager
-def _connect(attach_id: bytes) -> Iterator[sqlite3.Connection]:
-    _ensure_init(attach_id)
-    conn = sqlite3.connect(_db_path(attach_id), isolation_level=None)
+def _connect(attach_opaque_data: bytes) -> Iterator[sqlite3.Connection]:
+    _ensure_init(attach_opaque_data)
+    conn = sqlite3.connect(_db_path(attach_opaque_data), isolation_level=None)
     try:
         conn.execute("PRAGMA journal_mode=WAL;")
         yield conn
@@ -171,9 +171,9 @@ def _connect(attach_id: bytes) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
-def _init_db(attach_id: bytes) -> None:
+def _init_db(attach_opaque_data: bytes) -> None:
     """Eagerly initialize the per-attach store (called at catalog_attach)."""
-    _ensure_init(attach_id)
+    _ensure_init(attach_opaque_data)
 
 
 def _bare_name(qualified: str) -> str:
@@ -207,18 +207,18 @@ def _qualified_from_process(params: ProcessParams[None]) -> str:
     return str(args.positional[0].as_py())
 
 
-def _attach_id_from_bind(params: BindParams[None]) -> bytes:
-    aid = params.bind_call.attach_id
+def _attach_opaque_data_from_bind(params: BindParams[None]) -> bytes:
+    aid = params.bind_call.attach_opaque_data
     if aid is None:
-        raise ValueError("attach_id missing")
+        raise ValueError("attach_opaque_data missing")
     return bytes(aid)
 
 
-def _attach_id_from_process(params: ProcessParams[None]) -> bytes:
+def _attach_opaque_data_from_process(params: ProcessParams[None]) -> bytes:
     assert params.init_call is not None
-    aid = params.init_call.bind_call.attach_id
+    aid = params.init_call.bind_call.attach_opaque_data
     if aid is None:
-        raise ValueError("attach_id missing")
+        raise ValueError("attach_opaque_data missing")
     return bytes(aid)
 
 
@@ -276,14 +276,14 @@ class SimpleScan(TableFunctionGenerator[None, "_ScanState"]):
     @classmethod
     def initial_state(cls, params: ProcessParams[None]) -> _ScanState:
         qualified = _qualified_from_process(params)
-        attach_id = _attach_id_from_process(params)
+        attach_opaque_data = _attach_opaque_data_from_process(params)
         bare = _bare_name(qualified)
         # Build SELECT list positionally — DuckDB's planner can request the
         # same column twice (e.g. "id, qty, name, id" for UPDATE...RETURNING),
         # so build one SELECT entry per output_schema field, including `rowid`.
         select_cols = [f.name for f in params.output_schema]
         select_list = ", ".join(f'"{c}"' for c in select_cols) if select_cols else "1"
-        with _connect(attach_id) as conn:
+        with _connect(attach_opaque_data) as conn:
             cur = conn.execute(f'SELECT {select_list} FROM "{bare}" ORDER BY rowid')
             rows = cur.fetchall()
         return _ScanState(rows=rows, schema=params.output_schema)
@@ -339,7 +339,7 @@ class SimpleInsert(TableInOutGenerator[None, None]):
         out: OutputCollector,
     ) -> None:
         qualified = _qualified_from_process(params)
-        attach_id = _attach_id_from_process(params)
+        attach_opaque_data = _attach_opaque_data_from_process(params)
         bare = _bare_name(qualified)
         user_schema = _get_user_schema(qualified)
         return_chunks = params.output_schema != _COUNT_SCHEMA
@@ -351,7 +351,7 @@ class SimpleInsert(TableInOutGenerator[None, None]):
         for i in range(batch.num_rows):
             rows_to_insert.append(tuple(batch.column(c)[i].as_py() for c in col_names))
 
-        with _connect(attach_id) as conn:
+        with _connect(attach_opaque_data) as conn:
             conn.execute("BEGIN")
             conn.executemany(
                 f'INSERT INTO "{bare}" ({cols_sql}) VALUES ({placeholders})',
@@ -391,7 +391,7 @@ class SimpleUpdate(TableInOutGenerator[None, None]):
         out: OutputCollector,
     ) -> None:
         qualified = _qualified_from_process(params)
-        attach_id = _attach_id_from_process(params)
+        attach_opaque_data = _attach_opaque_data_from_process(params)
         bare = _bare_name(qualified)
         user_schema = _get_user_schema(qualified)
         return_chunks = params.output_schema != _COUNT_SCHEMA
@@ -403,7 +403,7 @@ class SimpleUpdate(TableInOutGenerator[None, None]):
 
         rowid_col = batch.column("rowid")
         updated: list[tuple] = []
-        with _connect(attach_id) as conn:
+        with _connect(attach_opaque_data) as conn:
             conn.execute("BEGIN")
             for i in range(batch.num_rows):
                 rowid = rowid_col[i].as_py()
@@ -445,7 +445,7 @@ class SimpleDelete(TableInOutGenerator[None, None]):
         out: OutputCollector,
     ) -> None:
         qualified = _qualified_from_process(params)
-        attach_id = _attach_id_from_process(params)
+        attach_opaque_data = _attach_opaque_data_from_process(params)
         bare = _bare_name(qualified)
         user_schema = _get_user_schema(qualified)
         return_chunks = params.output_schema != _COUNT_SCHEMA
@@ -455,7 +455,7 @@ class SimpleDelete(TableInOutGenerator[None, None]):
         rowid_col = batch.column("rowid")
 
         deleted: list[tuple] = []
-        with _connect(attach_id) as conn:
+        with _connect(attach_opaque_data) as conn:
             conn.execute("BEGIN")
             for i in range(batch.num_rows):
                 rowid = rowid_col[i].as_py()
@@ -502,7 +502,7 @@ class BrokenReturningInsert(TableInOutGenerator[None, None]):
         out: OutputCollector,
     ) -> None:
         qualified = _qualified_from_process(params)
-        attach_id = _attach_id_from_process(params)
+        attach_opaque_data = _attach_opaque_data_from_process(params)
         bare = _bare_name(qualified)
         user_schema = _get_user_schema(qualified)
 
@@ -513,7 +513,7 @@ class BrokenReturningInsert(TableInOutGenerator[None, None]):
         for i in range(batch.num_rows):
             rows_to_insert.append(tuple(batch.column(c)[i].as_py() for c in col_names))
 
-        with _connect(attach_id) as conn:
+        with _connect(attach_opaque_data) as conn:
             conn.execute("BEGIN")
             conn.executemany(
                 f'INSERT INTO "{bare}" ({cols_sql}) VALUES ({placeholders})',
@@ -561,17 +561,17 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         del options, data_version_spec, implementation_version, ctx
         if name != CATALOG_NAME:
             raise ValueError(f"Unknown catalog: {name!r}")
-        attach_id = AttachId(uuid.uuid4().bytes)
+        attach_opaque_data = AttachOpaqueData(uuid.uuid4().bytes)
         # Ensure the SQLite file and schema exist before any worker tries to
         # read/write — otherwise a SELECT before the first INSERT would 500.
-        _init_db(bytes(attach_id))
+        _init_db(bytes(attach_opaque_data))
         return CatalogAttachResult(
-            attach_id=attach_id,
+            attach_opaque_data=attach_opaque_data,
             supports_transactions=False,
             supports_time_travel=False,
             catalog_version_frozen=True,
             catalog_version=1,
-            attach_id_required=True,
+            attach_opaque_data_required=True,
             default_schema="main",
             settings=[],
             secret_types=[],
@@ -581,15 +581,19 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
 
     # --------- schema / table discovery ---------
 
-    def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> list[SchemaInfo]:
-        del transaction_id
-        return [SchemaInfo(attach_id=attach_id, name="main", comment=None, tags={})]
+    def schemas(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None
+    ) -> list[SchemaInfo]:
+        del transaction_opaque_data
+        return [SchemaInfo(attach_opaque_data=attach_opaque_data, name="main", comment=None, tags={})]
 
-    def schema_get(self, *, attach_id: AttachId, transaction_id: TransactionId | None, name: str) -> SchemaInfo | None:
-        del transaction_id
+    def schema_get(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, name: str
+    ) -> SchemaInfo | None:
+        del transaction_opaque_data
         if name.lower() != "main":
             return None
-        return SchemaInfo(attach_id=attach_id, name="main", comment=None, tags={})
+        return SchemaInfo(attach_opaque_data=attach_opaque_data, name="main", comment=None, tags={})
 
     def _build_table_info(self, *, name: str, schema_name: str) -> TableInfo:
         user_schema = _table_specs()[name]
@@ -616,14 +620,14 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
     def table_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
     ) -> TableInfo | None:
-        del attach_id, transaction_id, at_unit, at_value
+        del attach_opaque_data, transaction_opaque_data, at_unit, at_value
         if schema_name.lower() != "main":
             return None
         if name.lower() not in _table_specs():
@@ -637,8 +641,8 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.TABLE],
     ) -> Sequence[TableInfo]: ...
@@ -646,8 +650,8 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.VIEW],
     ) -> Sequence[ViewInfo]: ...
@@ -655,8 +659,8 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[
             SchemaObjectType.SCALAR_FUNCTION,
@@ -668,8 +672,8 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
@@ -677,8 +681,8 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.INDEX],
     ) -> Sequence[IndexInfo]: ...
@@ -686,8 +690,8 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: SchemaObjectType,
     ) -> Sequence[Any]:
@@ -698,7 +702,7 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
             return [self._build_table_info(name=tn, schema_name="main") for tn in sorted(_table_specs())]
         # Functions, views, etc. — fall through to base which uses the static catalog.
         return super().schema_contents(  # type: ignore[call-overload, no-any-return]
-            attach_id=attach_id, transaction_id=transaction_id, name=name, type=type
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data, name=name, type=type
         )
 
     # --------- function dispatch ---------
@@ -714,25 +718,25 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
     def table_scan_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None,
         at_value: str | None,
     ) -> ScanFunctionResult:
-        del attach_id, transaction_id, at_unit, at_value
+        del attach_opaque_data, transaction_opaque_data, at_unit, at_value
         return self._function_get("scan", schema_name=schema_name, name=name)
 
     def table_insert_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ScanFunctionResult:
-        del attach_id, transaction_id
+        del attach_opaque_data, transaction_opaque_data
         # Route the broken table to the misbehaving insert function. Tests rely
         # on this lying about RETURNING shape so the C++ runtime validator
         # gets exercised.
@@ -748,23 +752,23 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
     def table_update_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ScanFunctionResult:
-        del attach_id, transaction_id
+        del attach_opaque_data, transaction_opaque_data
         return self._function_get("update", schema_name=schema_name, name=name)
 
     def table_delete_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ScanFunctionResult:
-        del attach_id, transaction_id
+        del attach_opaque_data, transaction_opaque_data
         return self._function_get("delete", schema_name=schema_name, name=name)
 
 

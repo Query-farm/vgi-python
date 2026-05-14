@@ -90,8 +90,8 @@ class CatalogExample(ArrowSerializableDataclass):
 
 # Type aliases for improved code clarity and type checking.
 # At runtime, these are equivalent to their underlying types.
-AttachId = NewType("AttachId", bytes)
-TransactionId = NewType("TransactionId", bytes)
+AttachOpaqueData = NewType("AttachOpaqueData", bytes)
+TransactionOpaqueData = NewType("TransactionOpaqueData", bytes)
 SerializedSchema = NewType("SerializedSchema", bytes)
 SqlExpression = NewType("SqlExpression", str)
 
@@ -123,10 +123,10 @@ class CatalogAttachResult(ArrowSerializableDataclass):
     """Result from attaching to a catalog."""
 
     # The unique id for the attached catalog.
-    attach_id: AttachId
+    attach_opaque_data: AttachOpaqueData
     # Indicate if the worker supports transactions or not.
     # If false, all transaction related methods will not be called and all
-    # transaction_id parameters will be None.
+    # transaction_opaque_data parameters will be None.
     supports_transactions: bool
     # Indicate if tables support time travel
     supports_time_travel: bool
@@ -136,10 +136,10 @@ class CatalogAttachResult(ArrowSerializableDataclass):
     # The initial catalog version, it increments when schemas, tables
     # or other objects change.
     catalog_version: int
-    # Indicate if the attach_id must be persisted across commands.
-    # True: Catalog is stateful; attach_id represents a session
+    # Indicate if the attach_opaque_data must be persisted across commands.
+    # True: Catalog is stateful; attach_opaque_data represents a session
     # False: Catalog is stateless; CLI can auto-attach on each command
-    attach_id_required: bool = True
+    attach_opaque_data_required: bool = True
     # The name of the default schema for this catalog.
     default_schema: str = "main"
     # Extension options (settings) exposed by this catalog/worker.
@@ -188,7 +188,7 @@ class CatalogSchemaObject(CatalogObject):
 class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
     """Information about a schema in a catalog."""
 
-    attach_id: AttachId
+    attach_opaque_data: AttachOpaqueData
     name: str
     # Approximate population per object kind, keyed by the same names the C++
     # extension uses for its set-cache instrumentation: ``"table"``, ``"view"``,
@@ -880,24 +880,28 @@ class CatalogInterface(ABC):
     #
     # Transaction Guarantees
     # - Transactions MAY span multiple worker processes
-    # - Workers MUST treat transaction_id as opaque
+    # - Workers MUST treat transaction_opaque_data as opaque
     # - Workers MUST ensure idempotency of commit/rollback
 
-    def catalog_transaction_begin(self, *, attach_id: AttachId) -> TransactionId | None:
-        """Begin a new transaction for the given attach_id.
+    def catalog_transaction_begin(self, *, attach_opaque_data: AttachOpaqueData) -> TransactionOpaqueData | None:
+        """Begin a new transaction for the given attach_opaque_data.
 
         If the implementation does not support transactions, it can return None.
         """
         raise NotImplementedError("Catalog transactions not implemented.")
 
-    def catalog_transaction_commit(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
+    def catalog_transaction_commit(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData
+    ) -> None:
         """Commit the transaction for the given attachment.
 
         If the transaction cannot be committed, an exception should be raised.
         """
         raise NotImplementedError("Catalog transactions not implemented.")
 
-    def catalog_transaction_rollback(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
+    def catalog_transaction_rollback(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData
+    ) -> None:
         """Rollback the transaction for the given attachment.
 
         If the transaction cannot be rolled back, an exception should be raised.
@@ -932,8 +936,8 @@ class CatalogInterface(ABC):
         metadata, and the resolved concrete versions chosen by the worker.
         """
 
-    def catalog_detach(self, *, attach_id: AttachId) -> None:
-        """Detach from the catalog with the given attach_id.
+    def catalog_detach(self, *, attach_opaque_data: AttachOpaqueData) -> None:
+        """Detach from the catalog with the given attach_opaque_data.
 
         Any open transactions should be rolled back.
         The default implementation does nothing.
@@ -943,11 +947,11 @@ class CatalogInterface(ABC):
     def catalog_version(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         ctx: "CallContext | None" = None,
     ) -> int:
-        """Get the current catalog version for the given attach_id and transaction_id.
+        """Get the current catalog version for the given attach_opaque_data and transaction_opaque_data.
 
         Returns an integer representing the current catalog version.
 
@@ -963,14 +967,16 @@ class CatalogInterface(ABC):
         del ctx
         return 0
 
-    def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> list[SchemaInfo]:
-        """Get a list of schemas for the given attach_id and transaction_id.
+    def schemas(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None
+    ) -> list[SchemaInfo]:
+        """Get a list of schemas for the given attach_opaque_data and transaction_opaque_data.
 
         The default returns a schema called "main" with no comment or tags.
         """
         return [
             SchemaInfo(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 name="main",
                 comment=None,
                 tags={},
@@ -980,8 +986,8 @@ class CatalogInterface(ABC):
     def schema_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None,
@@ -993,8 +999,8 @@ class CatalogInterface(ABC):
     def schema_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         ignore_not_found: bool,
         cascade: bool,
@@ -1006,8 +1012,8 @@ class CatalogInterface(ABC):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.TABLE],
     ) -> Sequence[TableInfo]: ...
@@ -1016,8 +1022,8 @@ class CatalogInterface(ABC):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.VIEW],
     ) -> Sequence[ViewInfo]: ...
@@ -1026,8 +1032,8 @@ class CatalogInterface(ABC):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[
             SchemaObjectType.SCALAR_FUNCTION,
@@ -1040,8 +1046,8 @@ class CatalogInterface(ABC):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
@@ -1050,8 +1056,8 @@ class CatalogInterface(ABC):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.INDEX],
     ) -> Sequence[IndexInfo]: ...
@@ -1059,8 +1065,8 @@ class CatalogInterface(ABC):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
@@ -1069,8 +1075,8 @@ class CatalogInterface(ABC):
         Schemas can contain tables, views, functions, macros, and indexes.
 
         Args:
-            attach_id: The attachment identifier.
-            transaction_id: The transaction identifier, if any.
+            attach_opaque_data: The attachment identifier.
+            transaction_opaque_data: The transaction identifier, if any.
             name: The name of the schema.
             type: The type of objects to return. Must be a SchemaObjectType enum:
                 - SchemaObjectType.TABLE: Return only tables
@@ -1092,8 +1098,8 @@ class CatalogInterface(ABC):
     def schema_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
     ) -> SchemaInfo | None:
         """Get information about the schema with the given name.
@@ -1105,8 +1111,8 @@ class CatalogInterface(ABC):
     def table_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
@@ -1123,8 +1129,8 @@ class CatalogInterface(ABC):
     def table_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         # The contents of the table is a serialized PyArrow schema
@@ -1151,8 +1157,8 @@ class CatalogInterface(ABC):
     def table_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         ignore_not_found: bool,
@@ -1164,8 +1170,8 @@ class CatalogInterface(ABC):
     def table_comment_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         comment: str | None,
@@ -1177,8 +1183,8 @@ class CatalogInterface(ABC):
     def table_column_comment_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -1191,8 +1197,8 @@ class CatalogInterface(ABC):
     def table_rename(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         new_name: str,
@@ -1204,8 +1210,8 @@ class CatalogInterface(ABC):
     def table_column_add(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         # Arrow schema with single field for column to add.
@@ -1220,8 +1226,8 @@ class CatalogInterface(ABC):
     def table_column_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -1235,8 +1241,8 @@ class CatalogInterface(ABC):
     def table_column_rename(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -1249,8 +1255,8 @@ class CatalogInterface(ABC):
     def table_column_default_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -1263,8 +1269,8 @@ class CatalogInterface(ABC):
     def table_column_default_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -1276,8 +1282,8 @@ class CatalogInterface(ABC):
     def table_column_type_change(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         # Arrow schema with single field for the new column type.
@@ -1295,8 +1301,8 @@ class CatalogInterface(ABC):
     def table_not_null_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -1308,8 +1314,8 @@ class CatalogInterface(ABC):
     def table_not_null_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -1321,8 +1327,8 @@ class CatalogInterface(ABC):
     def table_scan_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         # Time travel fields (iceberg style)
@@ -1339,8 +1345,8 @@ class CatalogInterface(ABC):
     def table_column_statistics_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> TableColumnStatisticsResult | None:
@@ -1358,8 +1364,8 @@ class CatalogInterface(ABC):
     def table_insert_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ScanFunctionResult:
@@ -1373,8 +1379,8 @@ class CatalogInterface(ABC):
     def table_update_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ScanFunctionResult:
@@ -1389,8 +1395,8 @@ class CatalogInterface(ABC):
     def table_delete_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ScanFunctionResult:
@@ -1405,8 +1411,8 @@ class CatalogInterface(ABC):
     def view_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         definition: str,
@@ -1418,8 +1424,8 @@ class CatalogInterface(ABC):
     def view_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         ignore_not_found: bool,
@@ -1431,8 +1437,8 @@ class CatalogInterface(ABC):
     def view_rename(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         new_name: str,
@@ -1445,8 +1451,8 @@ class CatalogInterface(ABC):
     def view_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ViewInfo | None:
@@ -1458,8 +1464,8 @@ class CatalogInterface(ABC):
     def view_comment_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         comment: str | None,
@@ -1474,8 +1480,8 @@ class CatalogInterface(ABC):
     def macro_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> MacroInfo | None:
@@ -1487,8 +1493,8 @@ class CatalogInterface(ABC):
     def macro_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         macro_type: "MacroType",
@@ -1503,8 +1509,8 @@ class CatalogInterface(ABC):
     def macro_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         ignore_not_found: bool,
@@ -1517,8 +1523,8 @@ class CatalogInterface(ABC):
     def index_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> IndexInfo | None:
@@ -1532,8 +1538,8 @@ class CatalogInterface(ABC):
     def index_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         table_name: str,
@@ -1549,8 +1555,8 @@ class CatalogInterface(ABC):
     def index_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         ignore_not_found: bool,
@@ -1652,8 +1658,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     # NEW: Optional Catalog object for declarative definition
     catalog: "Catalog | None" = None
 
-    # Fixed attach_id for read-only catalogs (no need for unique IDs)
-    _FIXED_ATTACH_ID: AttachId = AttachId(b"readonly-catalog-")
+    # Fixed attach_opaque_data for read-only catalogs (no need for unique IDs)
+    _FIXED_ATTACH_ID: AttachOpaqueData = AttachOpaqueData(b"readonly-catalog-")
 
     # Instance-level registry caches (built lazily)
     # Keys are LOWERCASE for case-insensitive lookup
@@ -1793,12 +1799,12 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         has_column_statistics = any(bool(t.statistics) for t in self._table_registry.values())
 
         return CatalogAttachResult(
-            attach_id=self._FIXED_ATTACH_ID,
+            attach_opaque_data=self._FIXED_ATTACH_ID,
             supports_transactions=getattr(self, "supports_transactions", False),
             supports_time_travel=has_time_travel,
             catalog_version_frozen=True,
             catalog_version=1,
-            attach_id_required=False,
+            attach_opaque_data_required=False,
             default_schema=self._default_schema_name,
             settings=serialized_settings,
             secret_types=serialized_secret_types,
@@ -1809,30 +1815,32 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             resolved_implementation_version=None,
         )
 
-    def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> list[SchemaInfo]:
-        """Get a list of schemas for the given attach_id."""
+    def schemas(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None
+    ) -> list[SchemaInfo]:
+        """Get a list of schemas for the given attach_opaque_data."""
         self._build_registries()
         assert self._schema_registry is not None
-        return [s.to_schema_info(attach_id) for s in self._schema_registry.values()]
+        return [s.to_schema_info(attach_opaque_data) for s in self._schema_registry.values()]
 
     def schema_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
     ) -> SchemaInfo | None:
         """Get information about a schema (case-insensitive lookup)."""
         self._build_registries()
         assert self._schema_registry is not None
         schema = self._schema_registry.get(name.lower())
-        return schema.to_schema_info(attach_id) if schema else None
+        return schema.to_schema_info(attach_opaque_data) if schema else None
 
     def table_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
@@ -1863,8 +1871,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def view_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ViewInfo | None:
@@ -1881,8 +1889,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def macro_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> MacroInfo | None:
@@ -1899,8 +1907,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def index_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> IndexInfo | None:
@@ -1917,8 +1925,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def table_column_statistics_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> TableColumnStatisticsResult | None:
@@ -1938,8 +1946,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def table_scan_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None,
@@ -2022,8 +2030,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def table_insert_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ScanFunctionResult:
@@ -2038,8 +2046,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def table_update_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ScanFunctionResult:
@@ -2054,8 +2062,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def table_delete_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ScanFunctionResult:
@@ -2071,8 +2079,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.TABLE],
     ) -> Sequence[TableInfo]: ...
@@ -2081,8 +2089,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.VIEW],
     ) -> Sequence[ViewInfo]: ...
@@ -2091,8 +2099,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[
             SchemaObjectType.SCALAR_FUNCTION,
@@ -2105,8 +2113,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
@@ -2115,8 +2123,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.INDEX],
     ) -> Sequence[IndexInfo]: ...
@@ -2124,8 +2132,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
@@ -2135,8 +2143,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         Uses case-insensitive schema name lookup.
 
         Args:
-            attach_id: The attachment identifier.
-            transaction_id: The transaction identifier, if any.
+            attach_opaque_data: The attachment identifier.
+            transaction_opaque_data: The transaction identifier, if any.
             name: The name of the schema.
             type: The type of objects to return. Must be a SchemaObjectType enum.
 

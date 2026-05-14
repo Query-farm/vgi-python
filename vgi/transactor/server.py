@@ -2,7 +2,7 @@
 
 Runs as a long-lived subprocess, accepting ``vgi_rpc`` connections over a
 Unix domain socket. Manages multiple DuckDB databases, one per catalog
-attachment (identified by ``attach_id``).
+attachment (identified by ``attach_opaque_data``).
 
 Usage::
 
@@ -37,7 +37,7 @@ _COUNT_SCHEMA = schema(count=pa.int64())
 class TransactorImpl:
     """Implementation of the TransactorProtocol backed by DuckDB.
 
-    Manages multiple databases (one per attach_id). Each transaction gets
+    Manages multiple databases (one per attach_opaque_data). Each transaction gets
     its own DuckDB cursor, allowing multiple concurrent transactions per
     database.
     """
@@ -48,46 +48,46 @@ class TransactorImpl:
         os.makedirs(db_dir, exist_ok=True)
         self._lock = threading.Lock()
         self._databases: dict[bytes, duckdb.DuckDBPyConnection] = {}
-        self._catalog_names: dict[bytes, str] = {}  # attach_id → catalog name (for view SQL stripping)
-        self._catalog_versions: dict[bytes, int] = {}  # attach_id → version (incremented on DDL)
-        # Transactions nested by attach_id: {attach_id: {tx_id: cursor}}
+        self._catalog_names: dict[bytes, str] = {}  # attach_opaque_data → catalog name (for view SQL stripping)
+        self._catalog_versions: dict[bytes, int] = {}  # attach_opaque_data → version (incremented on DDL)
+        # Transactions nested by attach_opaque_data: {attach_opaque_data: {tx_id: cursor}}
         self._transactions: dict[bytes, dict[bytes, duckdb.DuckDBPyConnection]] = {}
         self._tx_locks: dict[bytes, dict[bytes, threading.Lock]] = {}
         logger.info("Transactor started: db_dir=%s", db_dir)
 
     # ========== Helpers ==========
 
-    def _get_db_conn(self, attach_id: bytes) -> duckdb.DuckDBPyConnection:
+    def _get_db_conn(self, attach_opaque_data: bytes) -> duckdb.DuckDBPyConnection:
         """Get the main connection for a database, raising if not registered."""
         with self._lock:
-            conn = self._databases.get(attach_id)
+            conn = self._databases.get(attach_opaque_data)
         if conn is None:
-            msg = f"No registered database: {attach_id.hex()}"
+            msg = f"No registered database: {attach_opaque_data.hex()}"
             raise ValueError(msg)
         return conn
 
-    def _get_tx_conn(self, attach_id: bytes, tx_id: bytes) -> duckdb.DuckDBPyConnection:
+    def _get_tx_conn(self, attach_opaque_data: bytes, tx_id: bytes) -> duckdb.DuckDBPyConnection:
         """Get the cursor for a transaction within a database."""
         with self._lock:
-            db_txns = self._transactions.get(attach_id, {})
+            db_txns = self._transactions.get(attach_opaque_data, {})
             conn = db_txns.get(tx_id)
         if conn is None:
-            msg = f"No active transaction: {tx_id.hex()} in db {attach_id.hex()}"
+            msg = f"No active transaction: {tx_id.hex()} in db {attach_opaque_data.hex()}"
             raise ValueError(msg)
         return conn
 
-    def _get_tx_lock(self, attach_id: bytes, tx_id: bytes) -> threading.Lock:
+    def _get_tx_lock(self, attach_opaque_data: bytes, tx_id: bytes) -> threading.Lock:
         """Get the per-transaction lock."""
         with self._lock:
-            db_locks = self._tx_locks.setdefault(attach_id, {})
+            db_locks = self._tx_locks.setdefault(attach_opaque_data, {})
             if tx_id not in db_locks:
                 db_locks[tx_id] = threading.Lock()
             return db_locks[tx_id]
 
-    def _table_schema(self, qualified_name: str, attach_id: bytes, tx_id: bytes) -> pa.Schema:
+    def _table_schema(self, qualified_name: str, attach_opaque_data: bytes, tx_id: bytes) -> pa.Schema:
         """Get the Arrow schema for a table using a subcursor."""
-        conn = self._get_tx_conn(attach_id, tx_id)
-        tx_lock = self._get_tx_lock(attach_id, tx_id)
+        conn = self._get_tx_conn(attach_opaque_data, tx_id)
+        tx_lock = self._get_tx_lock(attach_opaque_data, tx_id)
         with tx_lock:
             sub = subcursor(conn)
             sql = f"SELECT * FROM {qualified_name} LIMIT 0"  # noqa: S608
@@ -98,74 +98,76 @@ class TransactorImpl:
 
     # ========== Database lifecycle ==========
 
-    def register(self, attach_id: bytes, catalog_name: str = "", ddl_statements: list[str] | None = None) -> None:
-        """Create a new database for this attach_id and run initial DDL."""
-        db_path = os.path.join(self._db_dir, f"{attach_id.hex()}.duckdb")
+    def register(
+        self, attach_opaque_data: bytes, catalog_name: str = "", ddl_statements: list[str] | None = None
+    ) -> None:
+        """Create a new database for this attach_opaque_data and run initial DDL."""
+        db_path = os.path.join(self._db_dir, f"{attach_opaque_data.hex()}.duckdb")
         conn = duckdb.connect(db_path)
         with self._lock:
-            self._databases[attach_id] = conn
-            self._catalog_names[attach_id] = catalog_name
-            self._catalog_versions[attach_id] = 1
+            self._databases[attach_opaque_data] = conn
+            self._catalog_names[attach_opaque_data] = catalog_name
+            self._catalog_versions[attach_opaque_data] = 1
         if ddl_statements:
             for sql in ddl_statements:
                 conn.execute(sql)
-        logger.info("Database registered: %s (catalog=%s) -> %s", attach_id.hex()[:8], catalog_name, db_path)
+        logger.info("Database registered: %s (catalog=%s) -> %s", attach_opaque_data.hex()[:8], catalog_name, db_path)
 
-    def catalog_version(self, attach_id: bytes) -> int:
+    def catalog_version(self, attach_opaque_data: bytes) -> int:
         """Return the catalog version for the database."""
         with self._lock:
-            return self._catalog_versions.get(attach_id, 1)
+            return self._catalog_versions.get(attach_opaque_data, 1)
 
     # ========== Transaction lifecycle ==========
 
-    def begin(self, attach_id: bytes) -> bytes:
+    def begin(self, attach_opaque_data: bytes) -> bytes:
         """Begin a transaction on the database. Returns the tx_id."""
-        db_conn = self._get_db_conn(attach_id)
+        db_conn = self._get_db_conn(attach_opaque_data)
         tx_id = uuid.uuid4().bytes
         cursor = db_conn.cursor()
         cursor.execute("SET enable_suspended_queries = true")
         cursor.begin()
         with self._lock:
-            self._transactions.setdefault(attach_id, {})[tx_id] = cursor
-            self._tx_locks.setdefault(attach_id, {})[tx_id] = threading.Lock()
-        logger.info("Transaction begun: %s (db %s)", tx_id.hex()[:8], attach_id.hex()[:8])
+            self._transactions.setdefault(attach_opaque_data, {})[tx_id] = cursor
+            self._tx_locks.setdefault(attach_opaque_data, {})[tx_id] = threading.Lock()
+        logger.info("Transaction begun: %s (db %s)", tx_id.hex()[:8], attach_opaque_data.hex()[:8])
         return tx_id
 
-    def commit(self, attach_id: bytes, tx_id: bytes) -> None:
+    def commit(self, attach_opaque_data: bytes, tx_id: bytes) -> None:
         """Commit a transaction."""
-        conn = self._get_tx_conn(attach_id, tx_id)
+        conn = self._get_tx_conn(attach_opaque_data, tx_id)
         conn.commit()
         conn.close()
         with self._lock:
-            self._transactions.get(attach_id, {}).pop(tx_id, None)
-            self._tx_locks.get(attach_id, {}).pop(tx_id, None)
+            self._transactions.get(attach_opaque_data, {}).pop(tx_id, None)
+            self._tx_locks.get(attach_opaque_data, {}).pop(tx_id, None)
         logger.info("Transaction committed: %s", tx_id.hex()[:8])
 
-    def rollback(self, attach_id: bytes, tx_id: bytes) -> None:
+    def rollback(self, attach_opaque_data: bytes, tx_id: bytes) -> None:
         """Rollback a transaction."""
-        conn = self._get_tx_conn(attach_id, tx_id)
+        conn = self._get_tx_conn(attach_opaque_data, tx_id)
         conn.rollback()
         conn.close()
         with self._lock:
-            self._transactions.get(attach_id, {}).pop(tx_id, None)
-            self._tx_locks.get(attach_id, {}).pop(tx_id, None)
+            self._transactions.get(attach_opaque_data, {}).pop(tx_id, None)
+            self._tx_locks.get(attach_opaque_data, {}).pop(tx_id, None)
         logger.info("Transaction rolled back: %s", tx_id.hex()[:8])
 
     # ========== Write operations (streaming exchange) ==========
 
     def insert(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         tx_id: bytes,
         table_name: str,
         schema_name: str = "",
         returning: bool = False,
     ) -> Stream[StreamState]:
         """Create an insert exchange stream."""
-        conn = self._get_tx_conn(attach_id, tx_id)
-        tx_lock = self._get_tx_lock(attach_id, tx_id)
+        conn = self._get_tx_conn(attach_opaque_data, tx_id)
+        tx_lock = self._get_tx_lock(attach_opaque_data, tx_id)
         qualified = f"{schema_name}.{table_name}" if schema_name else table_name
-        table_schema = self._table_schema(qualified, attach_id, tx_id)
+        table_schema = self._table_schema(qualified, attach_opaque_data, tx_id)
 
         input_fields = [f for f in table_schema if f.name != "rowid"]
         input_schema = pa.schema(input_fields)
@@ -182,13 +184,13 @@ class TransactorImpl:
         return Stream(output_schema=output_schema, state=state, input_schema=input_schema)
 
     def delete(
-        self, attach_id: bytes, tx_id: bytes, table_name: str, schema_name: str = "", returning: bool = False
+        self, attach_opaque_data: bytes, tx_id: bytes, table_name: str, schema_name: str = "", returning: bool = False
     ) -> Stream[StreamState]:
         """Create a delete exchange stream."""
-        conn = self._get_tx_conn(attach_id, tx_id)
-        tx_lock = self._get_tx_lock(attach_id, tx_id)
+        conn = self._get_tx_conn(attach_opaque_data, tx_id)
+        tx_lock = self._get_tx_lock(attach_opaque_data, tx_id)
         qualified = f"{schema_name}.{table_name}" if schema_name else table_name
-        table_schema = self._table_schema(qualified, attach_id, tx_id)
+        table_schema = self._table_schema(qualified, attach_opaque_data, tx_id)
 
         input_schema = schema(rowid=pa.int64())
         ret_fields = [f for f in table_schema if f.name != "rowid"]
@@ -203,7 +205,7 @@ class TransactorImpl:
 
     def update(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         tx_id: bytes,
         table_name: str,
         schema_name: str = "",
@@ -211,10 +213,10 @@ class TransactorImpl:
         returning: bool = False,
     ) -> Stream[StreamState]:
         """Create an update exchange stream."""
-        conn = self._get_tx_conn(attach_id, tx_id)
-        tx_lock = self._get_tx_lock(attach_id, tx_id)
+        conn = self._get_tx_conn(attach_opaque_data, tx_id)
+        tx_lock = self._get_tx_lock(attach_opaque_data, tx_id)
         qualified = f"{schema_name}.{table_name}" if schema_name else table_name
-        table_schema = self._table_schema(qualified, attach_id, tx_id)
+        table_schema = self._table_schema(qualified, attach_opaque_data, tx_id)
 
         if columns:
             fields = [table_schema.field(c) for c in columns if table_schema.get_field_index(c) >= 0]
@@ -237,7 +239,7 @@ class TransactorImpl:
 
     def scan(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         tx_id: bytes,
         table_name: str,
         columns: list[str],
@@ -245,8 +247,8 @@ class TransactorImpl:
         pushdown_filters: bytes | None = None,
     ) -> Stream[StreamState]:
         """Create a scan producer stream within the transaction."""
-        conn = self._get_tx_conn(attach_id, tx_id)
-        tx_lock = self._get_tx_lock(attach_id, tx_id)
+        conn = self._get_tx_conn(attach_opaque_data, tx_id)
+        tx_lock = self._get_tx_lock(attach_opaque_data, tx_id)
         qualified = f"{schema_name}.{table_name}" if schema_name else table_name
         col_list = ", ".join(columns) if columns else "*"
 
@@ -277,15 +279,17 @@ class TransactorImpl:
 
     # ========== DDL ==========
 
-    def execute_ddl(self, attach_id: bytes, sql: str) -> None:
+    def execute_ddl(self, attach_opaque_data: bytes, sql: str) -> None:
         """Execute DDL statement on the database (non-transactional)."""
-        conn = self._get_db_conn(attach_id)
+        conn = self._get_db_conn(attach_opaque_data)
         with self._lock:
             conn.execute(sql)
-            self._catalog_versions[attach_id] = self._catalog_versions.get(attach_id, 1) + 1
+            self._catalog_versions[attach_opaque_data] = self._catalog_versions.get(attach_opaque_data, 1) + 1
             logger.debug("DDL executed: %s", sql[:100])
 
-    def execute_ddl_tx(self, attach_id: bytes, tx_id: bytes, sql: str, strip_catalog: str | None = None) -> None:
+    def execute_ddl_tx(
+        self, attach_opaque_data: bytes, tx_id: bytes, sql: str, strip_catalog: str | None = None
+    ) -> None:
         """Execute DDL within a transaction.
 
         If strip_catalog is provided it overrides the registered catalog name.
@@ -294,15 +298,15 @@ class TransactorImpl:
         catalog_name = strip_catalog
         if catalog_name is None:
             with self._lock:
-                catalog_name = self._catalog_names.get(attach_id, "")
+                catalog_name = self._catalog_names.get(attach_opaque_data, "")
         if catalog_name:
             sql = self.strip_catalog_refs(sql, catalog_name)
-        conn = self._get_tx_conn(attach_id, tx_id)
-        tx_lock = self._get_tx_lock(attach_id, tx_id)
+        conn = self._get_tx_conn(attach_opaque_data, tx_id)
+        tx_lock = self._get_tx_lock(attach_opaque_data, tx_id)
         with tx_lock:
             conn.execute(sql)
         with self._lock:
-            self._catalog_versions[attach_id] = self._catalog_versions.get(attach_id, 1) + 1
+            self._catalog_versions[attach_opaque_data] = self._catalog_versions.get(attach_opaque_data, 1) + 1
         logger.debug("DDL (tx) executed: %s", sql[:100])
 
     def strip_catalog_refs(self, sql: str, catalog_name: str) -> str:
@@ -326,31 +330,35 @@ class TransactorImpl:
 
     # ========== Metadata ==========
 
-    def _query_list(self, attach_id: bytes, tx_id: bytes, sql: str, params: list[object] | None = None) -> list[str]:
+    def _query_list(
+        self, attach_opaque_data: bytes, tx_id: bytes, sql: str, params: list[object] | None = None
+    ) -> list[str]:
         """Execute a query within a transaction and return the first column as a list."""
-        conn = self._get_tx_conn(attach_id, tx_id)
-        tx_lock = self._get_tx_lock(attach_id, tx_id)
+        conn = self._get_tx_conn(attach_opaque_data, tx_id)
+        tx_lock = self._get_tx_lock(attach_opaque_data, tx_id)
         with tx_lock:
             result = conn.execute(sql, params or [])
             return [row[0] for row in result.fetchall()]
 
-    def list_schemas(self, attach_id: bytes, tx_id: bytes) -> list[str]:
+    def list_schemas(self, attach_opaque_data: bytes, tx_id: bytes) -> list[str]:
         """List schema names within a transaction."""
-        return self._query_list(attach_id, tx_id, "SELECT schema_name FROM duckdb_schemas() WHERE NOT internal")
+        return self._query_list(
+            attach_opaque_data, tx_id, "SELECT schema_name FROM duckdb_schemas() WHERE NOT internal"
+        )
 
-    def list_user_tables(self, attach_id: bytes, tx_id: bytes, schema_name: str = "main") -> list[str]:
+    def list_user_tables(self, attach_opaque_data: bytes, tx_id: bytes, schema_name: str = "main") -> list[str]:
         """List user tables in the given schema within a transaction."""
         return self._query_list(
-            attach_id,
+            attach_opaque_data,
             tx_id,
             "SELECT table_name FROM information_schema.tables WHERE table_schema=? AND table_type='BASE TABLE'",
             [schema_name],
         )
 
-    def table_schema(self, attach_id: bytes, table_name: str, tx_id: bytes) -> bytes:
+    def table_schema(self, attach_opaque_data: bytes, table_name: str, tx_id: bytes) -> bytes:
         """Get Arrow schema for a table as serialized IPC bytes within a transaction."""
-        conn = self._get_tx_conn(attach_id, tx_id)
-        tx_lock = self._get_tx_lock(attach_id, tx_id)
+        conn = self._get_tx_conn(attach_opaque_data, tx_id)
+        tx_lock = self._get_tx_lock(attach_opaque_data, tx_id)
         bare_name = table_name.rsplit(".", 1)[-1] if "." in table_name else table_name
         with tx_lock:
             sub = subcursor(conn)
@@ -428,10 +436,10 @@ class TransactorImpl:
         result_schema = pa.schema([rowid_field, *schema], metadata=schema_meta)
         return result_schema.serialize().to_pybytes()
 
-    def table_comment(self, attach_id: bytes, table_name: str, tx_id: bytes) -> str | None:
+    def table_comment(self, attach_opaque_data: bytes, table_name: str, tx_id: bytes) -> str | None:
         """Get the comment on a table within a transaction."""
-        conn = self._get_tx_conn(attach_id, tx_id)
-        tx_lock = self._get_tx_lock(attach_id, tx_id)
+        conn = self._get_tx_conn(attach_opaque_data, tx_id)
+        tx_lock = self._get_tx_lock(attach_opaque_data, tx_id)
         bare_name = table_name.rsplit(".", 1)[-1] if "." in table_name else table_name
         with tx_lock:
             result = conn.execute(
@@ -442,19 +450,19 @@ class TransactorImpl:
             return str(result[0])
         return None
 
-    def list_user_views(self, attach_id: bytes, tx_id: bytes, schema_name: str = "main") -> list[str]:
+    def list_user_views(self, attach_opaque_data: bytes, tx_id: bytes, schema_name: str = "main") -> list[str]:
         """List user-created view names in the given schema within a transaction."""
         return self._query_list(
-            attach_id,
+            attach_opaque_data,
             tx_id,
             "SELECT view_name FROM duckdb_views() WHERE schema_name = ? AND NOT internal",
             [schema_name],
         )
 
-    def view_info(self, attach_id: bytes, view_name: str, tx_id: bytes) -> str:
+    def view_info(self, attach_opaque_data: bytes, view_name: str, tx_id: bytes) -> str:
         """Return view info as JSON (definition, comment)."""
-        conn = self._get_tx_conn(attach_id, tx_id)
-        tx_lock = self._get_tx_lock(attach_id, tx_id)
+        conn = self._get_tx_conn(attach_opaque_data, tx_id)
+        tx_lock = self._get_tx_lock(attach_opaque_data, tx_id)
         with tx_lock:
             sub = subcursor(conn)
             result = sub.execute(
@@ -483,21 +491,21 @@ class TransactorImpl:
         """Graceful shutdown — rollback active transactions and close all databases."""
         logger.info("Shutdown requested")
         with self._lock:
-            for attach_id, db_txns in list(self._transactions.items()):
+            for attach_opaque_data, db_txns in list(self._transactions.items()):
                 for tx_id, conn in list(db_txns.items()):
                     try:
                         conn.rollback()
                         conn.close()
-                        logger.info("Rolled back orphan tx: %s (db %s)", tx_id.hex()[:8], attach_id.hex()[:8])
+                        logger.info("Rolled back orphan tx: %s (db %s)", tx_id.hex()[:8], attach_opaque_data.hex()[:8])
                     except Exception:
                         logger.exception("Failed to rollback tx: %s", tx_id.hex()[:8])
             self._transactions.clear()
             self._tx_locks.clear()
-            for attach_id, conn in list(self._databases.items()):
+            for attach_opaque_data, conn in list(self._databases.items()):
                 try:
                     conn.close()
                 except Exception:
-                    logger.exception("Failed to close database: %s", attach_id.hex()[:8])
+                    logger.exception("Failed to close database: %s", attach_opaque_data.hex()[:8])
             self._databases.clear()
         sys.exit(0)
 

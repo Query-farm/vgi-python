@@ -121,8 +121,8 @@ class BindRequest(ArrowSerializableDataclass):
     input_schema: Annotated[pa.Schema | None, ArrowType(pa.binary())] = None
     settings: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     secrets: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
-    attach_id: bytes | None = None
-    transaction_id: bytes | None = None
+    attach_opaque_data: bytes | None = None
+    transaction_opaque_data: bytes | None = None
     resolved_secrets_provided: bool = False
 
 
@@ -263,7 +263,7 @@ class CatalogCreateRequest(ArrowSerializableDataclass):
 class TableCreateRequest(ArrowSerializableDataclass):
     """Request for catalog_table_create with complex constraint types."""
 
-    attach_id: bytes
+    attach_opaque_data: bytes
     schema_name: str
     name: str
     columns: bytes  # SerializedSchema
@@ -277,7 +277,7 @@ class TableCreateRequest(ArrowSerializableDataclass):
         default_factory=list
     )
     foreign_key_constraints: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
-    transaction_id: bytes | None = None
+    transaction_opaque_data: bytes | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -299,9 +299,9 @@ class CatalogVersionResponse(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TransactionBeginResponse(ArrowSerializableDataclass):
-    """Response wrapping optional TransactionId for catalog_transaction_begin()."""
+    """Response wrapping optional TransactionOpaqueData for catalog_transaction_begin()."""
 
-    transaction_id: bytes | None = None
+    transaction_opaque_data: bytes | None = None
 
 
 def _catalog_items_response(item_type: type) -> type:
@@ -397,7 +397,7 @@ else:
 class MacroCreateRequest(ArrowSerializableDataclass):
     """Request for catalog_macro_create with RecordBatch for parameter defaults."""
 
-    attach_id: bytes
+    attach_opaque_data: bytes
     schema_name: str
     name: str
     macro_type: MacroType
@@ -405,7 +405,7 @@ class MacroCreateRequest(ArrowSerializableDataclass):
     definition: str
     on_conflict: OnConflict
     parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
-    transaction_id: bytes | None = None
+    transaction_opaque_data: bytes | None = None
 
 
 if TYPE_CHECKING:
@@ -420,7 +420,7 @@ else:
 class IndexCreateRequest(ArrowSerializableDataclass):
     """Request for catalog_index_create."""
 
-    attach_id: bytes
+    attach_opaque_data: bytes
     schema_name: str
     name: str
     table_name: str
@@ -429,7 +429,7 @@ class IndexCreateRequest(ArrowSerializableDataclass):
     expressions: list[str] = field(default_factory=list)
     on_conflict: OnConflict = OnConflict.ERROR
     options: dict[str, str] = field(default_factory=dict)
-    transaction_id: bytes | None = None
+    transaction_opaque_data: bytes | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +490,9 @@ class ScalarExchangeState(ExchangeState):
                 batch=batch,
                 init_call=self._init_call,
                 init_response=self._init_response,
-                storage=BoundStorage(cls.storage, self._init_response.execution_id, request=self._init_call, auth=ctx.auth),
+                storage=BoundStorage(
+                    cls.storage, self._init_response.execution_id, request=self._init_call, auth=ctx.auth
+                ),
                 auth_context=ctx.auth,
             )
             if inject_row:
@@ -580,9 +582,7 @@ def _resolve_partition_min_max(
     if explicit is not None and field.name in explicit:
         pair = explicit[field.name]
         if not isinstance(pair, tuple) or len(pair) != 2:
-            raise RuntimeError(
-                f"partition_values[{field.name!r}] must be (min, max) tuple; got {pair!r}"
-            )
+            raise RuntimeError(f"partition_values[{field.name!r}] must be (min, max) tuple; got {pair!r}")
         min_s, max_s = pair
         if not isinstance(min_s, pa.Scalar) or not isinstance(max_s, pa.Scalar):
             raise RuntimeError(
@@ -591,13 +591,11 @@ def _resolve_partition_min_max(
             )
         if min_s.type != field.type:
             raise RuntimeError(
-                f"partition_values[{field.name!r}] min type mismatch: "
-                f"declared {field.type}, got {min_s.type}"
+                f"partition_values[{field.name!r}] min type mismatch: declared {field.type}, got {min_s.type}"
             )
         if max_s.type != field.type:
             raise RuntimeError(
-                f"partition_values[{field.name!r}] max type mismatch: "
-                f"declared {field.type}, got {max_s.type}"
+                f"partition_values[{field.name!r}] max type mismatch: declared {field.type}, got {max_s.type}"
             )
         return min_s, max_s
 
@@ -701,7 +699,10 @@ def _merge_partition_values(
     resolved: dict[str, tuple[pa.Scalar, pa.Scalar]] = {}
     for field in partition_fields:
         resolved[field.name] = _resolve_partition_min_max(
-            field, partition_kind, batch, partition_values,
+            field,
+            partition_kind,
+            batch,
+            partition_values,
         )
 
     values_batch = _build_partition_values_batch(partition_fields, resolved)
@@ -735,15 +736,10 @@ def _merge_batch_index(
     """
     if supports_batch_index:
         if batch_index is None:
-            raise RuntimeError(
-                "out.emit() requires batch_index= on a function with "
-                "Meta.supports_batch_index = True"
-            )
+            raise RuntimeError("out.emit() requires batch_index= on a function with Meta.supports_batch_index = True")
     else:
         if batch_index is not None:
-            raise RuntimeError(
-                "out.emit(batch_index=...) requires Meta.supports_batch_index = True"
-            )
+            raise RuntimeError("out.emit(batch_index=...) requires Meta.supports_batch_index = True")
     if batch_index is None:
         return metadata
     merged: dict[str, str] = dict(metadata) if metadata else {}
@@ -817,9 +813,12 @@ class _TrackingOutputCollector:
     """
 
     __slots__ = (
-        "_inner", "_supports_batch_index",
-        "_partition_fields", "_partition_kind",
-        "total_rows", "total_bytes",
+        "_inner",
+        "_supports_batch_index",
+        "_partition_fields",
+        "_partition_kind",
+        "total_rows",
+        "total_bytes",
     )
 
     def __init__(
@@ -934,7 +933,9 @@ class TableProducerState(ProducerState):
             output_schema=output_schema,
             settings=_batch_to_scalar_dict(self._init_call.bind_call.settings),
             secrets=SecretsAccessor(self._init_call.bind_call.secrets).to_dict(),
-            storage=BoundStorage(func_cls.storage, self._init_response.execution_id, request=self._init_call, auth=None),
+            storage=BoundStorage(
+                func_cls.storage, self._init_response.execution_id, request=self._init_call, auth=None
+            ),
         )
         # Restore _user_state from serialized bytes if available
         if self._user_state_bytes is not None:
@@ -1087,7 +1088,9 @@ class TableInOutExchangeState(ExchangeState):
             output_schema=output_schema,
             settings=_batch_to_scalar_dict(self._init_call.bind_call.settings),
             secrets=SecretsAccessor(self._init_call.bind_call.secrets).to_dict(),
-            storage=BoundStorage(func_cls.storage, self._init_response.execution_id, request=self._init_call, auth=None),
+            storage=BoundStorage(
+                func_cls.storage, self._init_response.execution_id, request=self._init_call, auth=None
+            ),
         )
         # Restore _user_state from serialized bytes if available
         if self._user_state_bytes is not None:
@@ -1188,7 +1191,7 @@ class AggregateBindRequest(ArrowSerializableDataclass):
     input_schema: Annotated[pa.Schema | None, ArrowType(pa.binary())] = None
     settings: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     secrets: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
-    attach_id: bytes | None = None
+    attach_opaque_data: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1206,7 +1209,7 @@ class AggregateUpdateRequest(ArrowSerializableDataclass):
     function_name: str
     execution_id: bytes
     input_batch: bytes  # Full IPC stream bytes (schema + data + EOS)
-    attach_id: bytes | None = None
+    attach_opaque_data: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1223,7 +1226,7 @@ class AggregateCombineRequest(ArrowSerializableDataclass):
     function_name: str
     execution_id: bytes
     merge_batch: bytes  # Full IPC stream bytes
-    attach_id: bytes | None = None
+    attach_opaque_data: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1241,7 +1244,7 @@ class AggregateFinalizeRequest(ArrowSerializableDataclass):
     execution_id: bytes
     group_ids_batch: bytes  # Full IPC stream bytes
     output_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
-    attach_id: bytes | None = None
+    attach_opaque_data: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1258,7 +1261,7 @@ class AggregateDestructorRequest(ArrowSerializableDataclass):
     function_name: str
     execution_id: bytes
     group_ids_batch: bytes  # Full IPC stream bytes
-    attach_id: bytes | None = None
+    attach_opaque_data: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1290,7 +1293,7 @@ class AggregateWindowInitRequest(ArrowSerializableDataclass):
     filter_mask: bytes  # Packed-bit bool array, length == row_count
     frame_stats: bytes  # 4× int64: ((begin_delta,end_delta),(begin_delta,end_delta))
     all_valid: bytes  # 1 byte per input column
-    attach_id: bytes | None = None
+    attach_opaque_data: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1314,7 +1317,7 @@ class AggregateWindowRequest(ArrowSerializableDataclass):
     rid: int
     frame_starts: list[int]
     frame_ends: list[int]
-    attach_id: bytes | None = None
+    attach_opaque_data: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1331,7 +1334,7 @@ class AggregateWindowDestructorRequest(ArrowSerializableDataclass):
     function_name: str
     execution_id: bytes
     partition_id: int
-    attach_id: bytes | None = None
+    attach_opaque_data: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1358,7 +1361,7 @@ class AggregateWindowBatchRequest(ArrowSerializableDataclass):
     frames_per_row: list[int]
     frame_starts: list[int]
     frame_ends: list[int]
-    attach_id: bytes | None = None
+    attach_opaque_data: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1406,7 +1409,7 @@ class AggregateStreamingOpenRequest(ArrowSerializableDataclass):
     output_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
     settings: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     secrets: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
-    attach_id: bytes | None = None
+    attach_opaque_data: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1429,7 +1432,7 @@ class AggregateStreamingChunkRequest(ArrowSerializableDataclass):
     function_name: str
     execution_id: bytes
     input_batch: bytes  # Full IPC stream bytes
-    attach_id: bytes | None = None
+    attach_opaque_data: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1445,7 +1448,7 @@ class AggregateStreamingCloseRequest(ArrowSerializableDataclass):
 
     function_name: str
     execution_id: bytes
-    attach_id: bytes | None = None
+    attach_opaque_data: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1576,7 +1579,7 @@ class VgiProtocol(Protocol):
         """Attach to a catalog with options."""
         ...
 
-    def catalog_detach(self, attach_id: bytes) -> None:
+    def catalog_detach(self, attach_opaque_data: bytes) -> None:
         """Detach from a catalog."""
         ...
 
@@ -1588,81 +1591,87 @@ class VgiProtocol(Protocol):
         """Drop a catalog."""
         ...
 
-    def catalog_version(self, attach_id: bytes, transaction_id: bytes | None = None) -> CatalogVersionResponse:
+    def catalog_version(
+        self, attach_opaque_data: bytes, transaction_opaque_data: bytes | None = None
+    ) -> CatalogVersionResponse:
         """Get the current catalog version."""
         ...
 
     # ========== Catalog - Transactions ==========
 
-    def catalog_transaction_begin(self, attach_id: bytes) -> TransactionBeginResponse:
+    def catalog_transaction_begin(self, attach_opaque_data: bytes) -> TransactionBeginResponse:
         """Begin a new transaction."""
         ...
 
-    def catalog_transaction_commit(self, attach_id: bytes, transaction_id: bytes) -> None:
+    def catalog_transaction_commit(self, attach_opaque_data: bytes, transaction_opaque_data: bytes) -> None:
         """Commit a transaction."""
         ...
 
-    def catalog_transaction_rollback(self, attach_id: bytes, transaction_id: bytes) -> None:
+    def catalog_transaction_rollback(self, attach_opaque_data: bytes, transaction_opaque_data: bytes) -> None:
         """Rollback a transaction."""
         ...
 
     # ========== Catalog - Schemas ==========
 
-    def catalog_schemas(self, attach_id: bytes, transaction_id: bytes | None = None) -> SchemasResponse:
+    def catalog_schemas(
+        self, attach_opaque_data: bytes, transaction_opaque_data: bytes | None = None
+    ) -> SchemasResponse:
         """List schemas in the catalog."""
         ...
 
-    def catalog_schema_get(self, attach_id: bytes, name: str, transaction_id: bytes | None = None) -> SchemasResponse:
+    def catalog_schema_get(
+        self, attach_opaque_data: bytes, name: str, transaction_opaque_data: bytes | None = None
+    ) -> SchemasResponse:
         """Get information about a schema. Returns 0 or 1 items."""
         ...
 
     def catalog_schema_create(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         name: str,
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None = None,
         tags: dict[str, str] | None = None,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Create a new schema."""
         ...
 
     def catalog_schema_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a schema."""
         ...
 
     def catalog_schema_contents_tables(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> TablesResponse:
         """List tables in a schema."""
         ...
 
     def catalog_schema_contents_views(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> ViewsResponse:
         """List views in a schema."""
         ...
 
     def catalog_schema_contents_functions(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         name: str,
         type: SchemaObjectType,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> FunctionsResponse:
         """List functions in a schema (scalar or table)."""
         ...
@@ -1671,12 +1680,12 @@ class VgiProtocol(Protocol):
 
     def catalog_table_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> TablesResponse:
         """Get information about a table. Returns 0 or 1 items."""
         ...
@@ -1687,34 +1696,34 @@ class VgiProtocol(Protocol):
 
     def catalog_table_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a table."""
         ...
 
     def catalog_table_scan_function_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> bytes:
         """Get the scan function for a table. Returns ScanFunctionResult as IPC bytes."""
         ...
 
     def catalog_table_column_statistics_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> bytes | None:
         """Get column statistics for a table.
 
@@ -1725,169 +1734,169 @@ class VgiProtocol(Protocol):
 
     def catalog_table_insert_function_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> bytes:
         """Get the insert function for a table. Returns WriteFunctionResult as IPC bytes."""
         ...
 
     def catalog_table_update_function_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> bytes:
         """Get the update function for a table. Returns WriteFunctionResult as IPC bytes."""
         ...
 
     def catalog_table_delete_function_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> bytes:
         """Get the delete function for a table. Returns WriteFunctionResult as IPC bytes."""
         ...
 
     def catalog_table_comment_set(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         comment: str | None = None,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a table."""
         ...
 
     def catalog_table_column_comment_set(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_name: str,
         comment: str | None = None,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a table column."""
         ...
 
     def catalog_table_rename(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         new_name: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a table."""
         ...
 
     def catalog_table_column_add(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_definition: bytes,
         ignore_not_found: bool = False,
         if_column_not_exists: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Add a new column to a table."""
         ...
 
     def catalog_table_column_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
         if_column_exists: bool = False,
         cascade: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a column from a table."""
         ...
 
     def catalog_table_column_rename(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_name: str,
         new_column_name: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a column."""
         ...
 
     def catalog_table_column_default_set(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_name: str,
         expression: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set the default value expression for a column."""
         ...
 
     def catalog_table_column_default_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Remove the default value from a column."""
         ...
 
     def catalog_table_column_type_change(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_definition: bytes,
         expression: str | None = None,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Change the type of a column."""
         ...
 
     def catalog_table_not_null_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Remove NOT NULL constraint from a column."""
         ...
 
     def catalog_table_not_null_set(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Add NOT NULL constraint to a column."""
         ...
@@ -1896,58 +1905,58 @@ class VgiProtocol(Protocol):
 
     def catalog_view_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> ViewsResponse:
         """Get information about a view. Returns 0 or 1 items."""
         ...
 
     def catalog_view_create(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         definition: str,
         on_conflict: OnConflict,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Create a new view."""
         ...
 
     def catalog_view_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a view."""
         ...
 
     def catalog_view_rename(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         new_name: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a view."""
         ...
 
     def catalog_view_comment_set(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         comment: str | None = None,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a view."""
         ...
@@ -1956,10 +1965,10 @@ class VgiProtocol(Protocol):
 
     def catalog_macro_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> MacrosResponse:
         """Get information about a macro. Returns 0 or 1 items."""
         ...
@@ -1970,21 +1979,21 @@ class VgiProtocol(Protocol):
 
     def catalog_macro_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a macro."""
         ...
 
     def catalog_schema_contents_macros(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         name: str,
         type: SchemaObjectType,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> MacrosResponse:
         """List macros in a schema (scalar or table)."""
         ...
@@ -1993,10 +2002,10 @@ class VgiProtocol(Protocol):
 
     def catalog_index_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> IndexesResponse:
         """Get information about an index. Returns 0 or 1 items."""
         ...
@@ -2007,21 +2016,21 @@ class VgiProtocol(Protocol):
 
     def catalog_index_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop an index."""
         ...
 
     def catalog_schema_contents_indexes(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> IndexesResponse:
         """List indexes in a schema."""
         ...

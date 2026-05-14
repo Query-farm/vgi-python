@@ -8,7 +8,7 @@ import pytest
 from vgi_rpc.utils import deserialize_record_batch
 
 from vgi.catalog import (
-    AttachId,
+    AttachOpaqueData,
     CatalogAttachResult,
     CatalogExample,
     CatalogInfo,
@@ -21,7 +21,7 @@ from vgi.catalog import (
     SchemaObjectType,
     SerializedSchema,
     TableInfo,
-    TransactionId,
+    TransactionOpaqueData,
     ViewInfo,
 )
 from vgi.catalog.catalog_interface import (
@@ -36,8 +36,8 @@ from vgi.catalog.catalog_interface import (
 from vgi.exceptions import CatalogReadOnlyError
 
 # Common test data
-TEST_ATTACH_ID = AttachId(b"test")
-TEST_TRANSACTION_ID = TransactionId(b"tx")
+TEST_ATTACH_ID = AttachOpaqueData(b"test")
+TEST_TRANSACTION_ID = TransactionOpaqueData(b"tx")
 
 
 def empty_schema_bytes() -> SerializedSchema:
@@ -82,7 +82,7 @@ class MinimalCatalog(CatalogInterface):
         """Attach to catalog."""
         del data_version_spec, implementation_version, ctx
         return CatalogAttachResult(
-            attach_id=AttachId(b"test"),
+            attach_opaque_data=AttachOpaqueData(b"test"),
             supports_transactions=False,
             supports_time_travel=False,
             catalog_version_frozen=False,
@@ -94,14 +94,14 @@ class MinimalCatalog(CatalogInterface):
     def schema_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
     ) -> SchemaInfo | None:
         """Get schema info."""
         if name == "main":
             return SchemaInfo(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 name="main",
                 comment=None,
                 tags={},
@@ -111,8 +111,8 @@ class MinimalCatalog(CatalogInterface):
     def table_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
@@ -124,8 +124,8 @@ class MinimalCatalog(CatalogInterface):
     def view_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ViewInfo | None:
@@ -135,8 +135,8 @@ class MinimalCatalog(CatalogInterface):
     def macro_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> MacroInfo | None:
@@ -164,8 +164,8 @@ class TestCatalogInterfaceDefaults:
     def test_schemas_returns_main(self) -> None:
         """Default schemas() returns single 'main' schema."""
         catalog = MinimalCatalog()
-        attach_id = AttachId(b"test")
-        schemas = list(catalog.schemas(attach_id=attach_id, transaction_id=None))
+        attach_opaque_data = AttachOpaqueData(b"test")
+        schemas = list(catalog.schemas(attach_opaque_data=attach_opaque_data, transaction_opaque_data=None))
 
         assert len(schemas) == 1
         assert schemas[0].name == "main"
@@ -175,14 +175,14 @@ class TestCatalogInterfaceDefaults:
     def test_catalog_version_returns_zero(self) -> None:
         """Default catalog_version() returns 0."""
         catalog = MinimalCatalog()
-        version = catalog.catalog_version(attach_id=AttachId(b"test"), transaction_id=None)
+        version = catalog.catalog_version(attach_opaque_data=AttachOpaqueData(b"test"), transaction_opaque_data=None)
         assert version == 0
 
     def test_catalog_detach_does_nothing(self) -> None:
         """Default catalog_detach() does nothing (no exception)."""
         catalog = MinimalCatalog()
         # Should not raise
-        catalog.catalog_detach(attach_id=AttachId(b"test"))
+        catalog.catalog_detach(attach_opaque_data=AttachOpaqueData(b"test"))
 
     def test_interface_feature_flags_empty(self) -> None:
         """Default interface_feature_flags returns empty set."""
@@ -206,24 +206,28 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
         (
             "transaction_begin",
             "Catalog transactions not implemented",
-            lambda c: c.catalog_transaction_begin(attach_id=TEST_ATTACH_ID),
+            lambda c: c.catalog_transaction_begin(attach_opaque_data=TEST_ATTACH_ID),
         ),
         (
             "transaction_commit",
             "Catalog transactions not implemented",
-            lambda c: c.catalog_transaction_commit(attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID),
+            lambda c: c.catalog_transaction_commit(
+                attach_opaque_data=TEST_ATTACH_ID, transaction_opaque_data=TEST_TRANSACTION_ID
+            ),
         ),
         (
             "transaction_rollback",
             "Catalog transactions not implemented",
-            lambda c: c.catalog_transaction_rollback(attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID),
+            lambda c: c.catalog_transaction_rollback(
+                attach_opaque_data=TEST_ATTACH_ID, transaction_opaque_data=TEST_TRANSACTION_ID
+            ),
         ),
         (
             "schema_create",
             "Schema create not implemented",
             lambda c: c.schema_create(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 name="new_schema",
                 comment=None,
                 tags={},
@@ -233,8 +237,8 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
             "schema_drop",
             "Schema drop not implemented",
             lambda c: c.schema_drop(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 name="schema",
                 ignore_not_found=False,
                 cascade=False,
@@ -244,8 +248,8 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
             "schema_contents",
             "Schema contents not implemented",
             lambda c: c.schema_contents(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 name="main",
                 type=SchemaObjectType.TABLE,
             ),
@@ -254,8 +258,8 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
             "table_create",
             "Table create not implemented",
             lambda c: c.table_create(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="table",
                 columns=SerializedSchema(b""),
@@ -269,8 +273,8 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
             "view_create",
             "View create not implemented",
             lambda c: c.view_create(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="view",
                 definition="SELECT 1",
@@ -281,8 +285,8 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
             "macro_create",
             "Macro create not implemented",
             lambda c: c.macro_create(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="my_macro",
                 macro_type=MacroType.SCALAR,
@@ -295,8 +299,8 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
             "macro_drop",
             "Macro drop not implemented",
             lambda c: c.macro_drop(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="my_macro",
                 ignore_not_found=False,
@@ -344,7 +348,7 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
         """Attach to catalog."""
         del data_version_spec, implementation_version, ctx
         return CatalogAttachResult(
-            attach_id=AttachId(b"readonly"),
+            attach_opaque_data=AttachOpaqueData(b"readonly"),
             supports_transactions=False,
             supports_time_travel=False,
             catalog_version_frozen=True,
@@ -356,8 +360,8 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
     def schema_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
     ) -> SchemaInfo | None:
         """Get schema info."""
@@ -366,8 +370,8 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
     def table_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
@@ -379,8 +383,8 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
     def view_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ViewInfo | None:
@@ -390,8 +394,8 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
     def macro_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> MacroInfo | None:
@@ -409,21 +413,25 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
         ("catalog_drop", lambda c: c.catalog_drop(name="test")),
         (
             "transaction_begin",
-            lambda c: c.catalog_transaction_begin(attach_id=TEST_ATTACH_ID),
+            lambda c: c.catalog_transaction_begin(attach_opaque_data=TEST_ATTACH_ID),
         ),
         (
             "transaction_commit",
-            lambda c: c.catalog_transaction_commit(attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID),
+            lambda c: c.catalog_transaction_commit(
+                attach_opaque_data=TEST_ATTACH_ID, transaction_opaque_data=TEST_TRANSACTION_ID
+            ),
         ),
         (
             "transaction_rollback",
-            lambda c: c.catalog_transaction_rollback(attach_id=TEST_ATTACH_ID, transaction_id=TEST_TRANSACTION_ID),
+            lambda c: c.catalog_transaction_rollback(
+                attach_opaque_data=TEST_ATTACH_ID, transaction_opaque_data=TEST_TRANSACTION_ID
+            ),
         ),
         (
             "schema_create",
             lambda c: c.schema_create(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 name="new",
                 comment=None,
                 tags={},
@@ -432,8 +440,8 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
         (
             "schema_drop",
             lambda c: c.schema_drop(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 name="main",
                 ignore_not_found=False,
                 cascade=False,
@@ -442,8 +450,8 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
         (
             "table_create",
             lambda c: c.table_create(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="table",
                 columns=SerializedSchema(b""),
@@ -456,8 +464,8 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
         (
             "table_drop",
             lambda c: c.table_drop(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="table",
                 ignore_not_found=False,
@@ -466,8 +474,8 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
         (
             "table_rename",
             lambda c: c.table_rename(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="old",
                 new_name="new",
@@ -477,8 +485,8 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
         (
             "view_create",
             lambda c: c.view_create(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="view",
                 definition="SELECT 1",
@@ -488,8 +496,8 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
         (
             "view_drop",
             lambda c: c.view_drop(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="view",
                 ignore_not_found=False,
@@ -498,8 +506,8 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
         (
             "macro_create",
             lambda c: c.macro_create(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="my_macro",
                 macro_type=MacroType.SCALAR,
@@ -511,8 +519,8 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
         (
             "macro_drop",
             lambda c: c.macro_drop(
-                attach_id=TEST_ATTACH_ID,
-                transaction_id=None,
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="my_macro",
                 ignore_not_found=False,
@@ -887,8 +895,8 @@ class TestSchemaContentsTypeFilter:
         # Get scalar functions
         scalar_contents = list(
             catalog_with_functions.schema_contents(
-                attach_id=attach_result.attach_id,
-                transaction_id=None,
+                attach_opaque_data=attach_result.attach_opaque_data,
+                transaction_opaque_data=None,
                 name="main",
                 type=SchemaObjectType.SCALAR_FUNCTION,
             )
@@ -897,8 +905,8 @@ class TestSchemaContentsTypeFilter:
         # Get table functions
         table_contents = list(
             catalog_with_functions.schema_contents(
-                attach_id=attach_result.attach_id,
-                transaction_id=None,
+                attach_opaque_data=attach_result.attach_opaque_data,
+                transaction_opaque_data=None,
                 name="main",
                 type=SchemaObjectType.TABLE_FUNCTION,
             )
@@ -919,8 +927,8 @@ class TestSchemaContentsTypeFilter:
         )
         contents = list(
             catalog_with_functions.schema_contents(
-                attach_id=attach_result.attach_id,
-                transaction_id=None,
+                attach_opaque_data=attach_result.attach_opaque_data,
+                transaction_opaque_data=None,
                 name="main",
                 type=SchemaObjectType.SCALAR_FUNCTION,
             )
@@ -938,8 +946,8 @@ class TestSchemaContentsTypeFilter:
         )
         contents = list(
             catalog_with_functions.schema_contents(
-                attach_id=attach_result.attach_id,
-                transaction_id=None,
+                attach_opaque_data=attach_result.attach_opaque_data,
+                transaction_opaque_data=None,
                 name="main",
                 type=SchemaObjectType.TABLE_FUNCTION,
             )
@@ -957,8 +965,8 @@ class TestSchemaContentsTypeFilter:
         )
         contents = list(
             catalog_with_functions.schema_contents(
-                attach_id=attach_result.attach_id,
-                transaction_id=None,
+                attach_opaque_data=attach_result.attach_opaque_data,
+                transaction_opaque_data=None,
                 name="main",
                 type=SchemaObjectType.TABLE,
             )
@@ -972,8 +980,8 @@ class TestSchemaContentsTypeFilter:
         )
         contents = list(
             catalog_with_functions.schema_contents(
-                attach_id=attach_result.attach_id,
-                transaction_id=None,
+                attach_opaque_data=attach_result.attach_opaque_data,
+                transaction_opaque_data=None,
                 name="main",
                 type=SchemaObjectType.VIEW,
             )
@@ -987,8 +995,8 @@ class TestSchemaContentsTypeFilter:
         )
         contents = list(
             catalog_with_functions.schema_contents(
-                attach_id=attach_result.attach_id,
-                transaction_id=None,
+                attach_opaque_data=attach_result.attach_opaque_data,
+                transaction_opaque_data=None,
                 name="nonexistent",
                 type=SchemaObjectType.TABLE_FUNCTION,
             )

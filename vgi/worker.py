@@ -62,6 +62,7 @@ vgi._test_fixtures.worker : Example worker with built-in functions
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.metadata
 import logging
 import os
@@ -71,11 +72,12 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import replace as _dataclass_replace
 from threading import Lock
-from typing import TYPE_CHECKING, Any, cast, final
+from typing import TYPE_CHECKING, Any, cast, final, overload
 
 import pyarrow as pa
-from vgi_rpc.rpc import CallContext, RpcServer, Stream, serve_stdio
+from vgi_rpc.rpc import AuthContext, CallContext, RpcServer, Stream, current_auth, serve_stdio
 
 from vgi.aggregate_function import AggregateBindParams, AggregateFunction
 from vgi.argument_spec import ArgumentSpec, extract_argument_specs
@@ -83,13 +85,13 @@ from vgi.arguments import Arguments
 from vgi.catalog import CatalogInterface
 from vgi.catalog.attach_option import AttachOptionSpec, extract_attach_option_specs
 from vgi.catalog.catalog_interface import (
-    AttachId,
+    AttachOpaqueData,
     CatalogAttachResult,
     OnConflict,
     SchemaObjectType,
     SerializedSchema,
     SqlExpression,
-    TransactionId,
+    TransactionOpaqueData,
     _validate_at_params,
     serialize_column_statistics,
 )
@@ -462,12 +464,14 @@ def _encode_streaming_session(session: _StreamingSession) -> bytes:
     with pa.ipc.new_stream(sink, session.output_schema) as writer:
         pass  # schema-only stream is enough to round-trip the schema
     output_schema_bytes = sink.getvalue().to_pybytes()
-    return pickle.dumps({
-        "streaming_state": session.streaming_state,
-        "output_schema_bytes": output_schema_bytes,
-        "partition_key_count": session.partition_key_count,
-        "order_key_count": session.order_key_count,
-    })
+    return pickle.dumps(
+        {
+            "streaming_state": session.streaming_state,
+            "output_schema_bytes": output_schema_bytes,
+            "partition_key_count": session.partition_key_count,
+            "order_key_count": session.order_key_count,
+        }
+    )
 
 
 def _decode_streaming_session(payload: bytes, func_cls: type) -> _StreamingSession:
@@ -679,18 +683,82 @@ def _build_batch_result(
     col_name = output_schema.field(0).name
     if isinstance(results, pa.Array):
         if not results.type.equals(output_type):
-            raise TypeError(
-                f"window_batch returned pa.Array of type {results.type}, "
-                f"expected {output_type}"
-            )
+            raise TypeError(f"window_batch returned pa.Array of type {results.type}, expected {output_type}")
         arr: pa.Array = results
     else:
         arr = pa.array(results, type=output_type)
     if expected_count is not None and len(arr) != expected_count:
-        raise ValueError(
-            f"window_batch returned {len(arr)} rows, expected {expected_count}"
-        )
+        raise ValueError(f"window_batch returned {len(arr)} rows, expected {expected_count}")
     return pa.record_batch({col_name: arr}, schema=output_schema)
+
+
+# ---------------------------------------------------------------------------
+# Catalog opaque-data AEAD envelopes
+# ---------------------------------------------------------------------------
+#
+# ``attach_opaque_data`` and ``transaction_opaque_data`` are implementation-
+# chosen byte strings the catalog round-trips through the client. They may
+# carry credentials, and nothing stops principal A from presenting principal
+# B's value. On HTTP transport (where one worker authenticates many
+# principals) the worker therefore seals each value in an authenticated-
+# encrypted envelope whose AAD binds the caller's ``(domain, principal)``;
+# a request from a different principal produces different AAD and fails the
+# tag check. The transaction envelope additionally binds its parent attach
+# envelope, so a transaction value cannot be lifted onto a different attach.
+#
+# Subprocess / unix-socket transports have no signing key (``_signing_key``
+# is ``None``): the helpers pass values through unchanged, since OS process
+# ownership already enforces identity there.
+
+_ATTACH_AAD_PREFIX = b"vgi.attach_opaque_data.v1\x00"
+_TRANSACTION_AAD_PREFIX = b"vgi.transaction_opaque_data.v1\x00"
+_ATTACH_ENVELOPE_VERSION = 1
+_TRANSACTION_ENVELOPE_VERSION = 2
+
+
+def _identity_tail(auth: AuthContext | None) -> bytes:
+    """Build the identity portion of an opaque-data AAD from an auth context.
+
+    Mirrors the ``(domain, principal)`` convention vgi-rpc uses for HTTP
+    state tokens: unauthenticated requests get a fixed anonymous tail, so an
+    anonymous caller cannot open an envelope sealed for a real principal.
+    """
+    if auth is None or not auth.authenticated:
+        return b"\x00anonymous"
+    domain = (auth.domain or "").encode()
+    principal = (auth.principal or "").encode()
+    return b"\x01" + domain + b"\x00" + principal
+
+
+def _short_hash(value: bytes | str | None, *, length: int = 12) -> str | None:
+    """Return a stable hex prefix of ``sha256(value)`` — never the value itself.
+
+    Matches ``vgi_rpc.sentry.short_hash`` so a value redacted here hashes to
+    the same token vgi-rpc's dispatch hook uses for Sentry tags. Defined
+    locally (rather than imported) because ``vgi_rpc.sentry`` pulls in
+    ``sentry_sdk``, which is an optional extra; opaque-data redaction must
+    work whether or not Sentry is installed.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.hex()
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
+
+
+def _attach_aad(auth: AuthContext | None) -> bytes:
+    """AAD for an ``attach_opaque_data`` envelope: prefix + caller identity."""
+    return _ATTACH_AAD_PREFIX + _identity_tail(auth)
+
+
+def _transaction_aad(auth: AuthContext | None, attach_envelope: bytes) -> bytes:
+    """AAD for a ``transaction_opaque_data`` envelope.
+
+    Binds both the caller identity *and* the parent attach envelope, so a
+    transaction value minted under one attach cannot be replayed against a
+    different attach even by the same principal.
+    """
+    return _TRANSACTION_AAD_PREFIX + _identity_tail(auth) + b"\x00" + attach_envelope
 
 
 class Worker:
@@ -725,6 +793,13 @@ class Worker:
     _setting_specs: list[SettingSpec] = []  # Extracted from Settings inner class
     _secret_type_specs: list[SecretTypeSpec] = []  # Secret types to register
     _attach_option_specs: list[AttachOptionSpec] = []  # Extracted from AttachOptions inner class
+
+    # AEAD key for sealing catalog opaque-data envelopes. Set per-instance by
+    # the HTTP serving path (``vgi.serve.create_app`` / the test HTTP server);
+    # stays ``None`` for subprocess / unix-socket workers, where the helpers
+    # pass opaque values through unchanged. See the module-level
+    # "Catalog opaque-data AEAD envelopes" section.
+    _signing_key: bytes | None = None
 
     @final
     @staticmethod
@@ -1000,8 +1075,9 @@ class Worker:
                 # AF_UNIX launcher path.  Bind to the requested socket,
                 # print UNIX:<abs_path> on stdout, idle-shutdown after
                 # idle_timeout seconds.
-                from vgi.serve import _maybe_init_sentry, _resolve_otel_config
                 from vgi_rpc.rpc import serve_unix
+
+                from vgi.serve import _maybe_init_sentry, _resolve_otel_config
 
                 _maybe_init_sentry()
                 otel_config = _resolve_otel_config()
@@ -1611,14 +1687,14 @@ class Worker:
     def _resolve_function_by_name(
         self,
         function_name: str,
-        attach_id: bytes | None = None,
+        attach_opaque_data: bytes | None = None,
         function_type: type[Function] | None = None,
     ) -> type[Function]:
         """Look up a function by name only (no argument disambiguation).
 
         Args:
             function_name: The name of the function to look up.
-            attach_id: Optional attach ID (reserved for future catalog use).
+            attach_opaque_data: Optional attach ID (reserved for future catalog use).
             function_type: Optional base class to filter candidates by type.
 
         """
@@ -1645,6 +1721,109 @@ class Worker:
     # ---------------------------------------------------------------------------
 
     _catalog_instance: CatalogInterface | None = None
+
+    # --- Catalog opaque-data AEAD envelopes -----------------------------------
+    #
+    # The catalog implementation always sees plaintext; the client (and C++)
+    # only ever see sealed envelopes. ``seal_*`` runs on the way out of
+    # ``catalog_attach`` / ``catalog_transaction_begin``; ``unwrap_*`` runs at
+    # the top of every other catalog / function-dispatch path that carries an
+    # opaque value. When ``_signing_key`` is ``None`` (subprocess / unix
+    # transports) every helper is a transparent pass-through.
+
+    @staticmethod
+    def _opaque_data_rejected(field: str) -> ValueError:
+        """Build the uniform error for an opaque value that fails to open.
+
+        Every failure mode — wrong principal, wrong parent attach, tampered,
+        malformed, or simply unknown — maps to this single message so a
+        probing caller cannot distinguish them.
+        """
+        return ValueError(f"{field} not recognized")
+
+    def _seal_attach(self, plaintext: bytes) -> AttachOpaqueData:
+        """Seal a plaintext ``attach_opaque_data`` value into an AEAD envelope."""
+        key = self._signing_key
+        if key is None:
+            return AttachOpaqueData(plaintext)
+        from vgi_rpc import crypto
+
+        return AttachOpaqueData(
+            crypto.seal_bytes(plaintext, key, aad=_attach_aad(current_auth()), version=_ATTACH_ENVELOPE_VERSION)
+        )
+
+    @overload
+    def _unwrap_attach(self, envelope: bytes) -> AttachOpaqueData: ...
+    @overload
+    def _unwrap_attach(self, envelope: None) -> None: ...
+    def _unwrap_attach(self, envelope: bytes | None) -> AttachOpaqueData | None:
+        """Open an ``attach_opaque_data`` envelope, returning the plaintext.
+
+        Pass-through when there is no signing key. Raises the uniform
+        :meth:`_opaque_data_rejected` error on any open failure.
+        """
+        if envelope is None:
+            return None
+        key = self._signing_key
+        if key is None:
+            return AttachOpaqueData(envelope)
+        from vgi_rpc import crypto
+
+        try:
+            plaintext = crypto.open_bytes(
+                envelope, key, aad=_attach_aad(current_auth()), version=_ATTACH_ENVELOPE_VERSION
+            )
+        except crypto.SealError as exc:
+            raise self._opaque_data_rejected("attach_opaque_data") from exc
+        return AttachOpaqueData(plaintext)
+
+    def _seal_transaction(self, plaintext: bytes, attach_envelope: bytes) -> bytes:
+        """Seal a plaintext ``transaction_opaque_data`` value into an AEAD envelope.
+
+        ``attach_envelope`` is the (sealed) ``attach_opaque_data`` the call
+        carried; binding it into the AAD ties the transaction to its parent
+        attach.
+        """
+        key = self._signing_key
+        if key is None:
+            return plaintext
+        from vgi_rpc import crypto
+
+        return crypto.seal_bytes(
+            plaintext,
+            key,
+            aad=_transaction_aad(current_auth(), attach_envelope),
+            version=_TRANSACTION_ENVELOPE_VERSION,
+        )
+
+    @overload
+    def _unwrap_transaction(self, envelope: bytes, attach_envelope: bytes) -> TransactionOpaqueData: ...
+    @overload
+    def _unwrap_transaction(self, envelope: None, attach_envelope: bytes) -> None: ...
+    def _unwrap_transaction(self, envelope: bytes | None, attach_envelope: bytes) -> TransactionOpaqueData | None:
+        """Open a ``transaction_opaque_data`` envelope, returning the plaintext.
+
+        ``attach_envelope`` is the (sealed) ``attach_opaque_data`` the same
+        call carries — it must match the attach the transaction was minted
+        under, or the open fails. Pass-through when there is no signing key.
+        """
+        if envelope is None:
+            return None
+        key = self._signing_key
+        if key is None:
+            return TransactionOpaqueData(envelope)
+        from vgi_rpc import crypto
+
+        try:
+            plaintext = crypto.open_bytes(
+                envelope,
+                key,
+                aad=_transaction_aad(current_auth(), attach_envelope),
+                version=_TRANSACTION_ENVELOPE_VERSION,
+            )
+        except crypto.SealError as exc:
+            raise self._opaque_data_rejected("transaction_opaque_data") from exc
+        return TransactionOpaqueData(plaintext)
 
     def _get_catalog(self) -> CatalogInterface:
         """Get the CatalogInterface instance for this worker.
@@ -1697,7 +1876,7 @@ class Worker:
                 "vgi.authenticated": ctx.auth.authenticated,
             }
         )
-        # vgi.attach_id / vgi.transaction_id are auto-tagged by vgi-rpc's
+        # vgi.attach_opaque_data / vgi.transaction_opaque_data are auto-tagged by vgi-rpc's
         # Sentry dispatch hook (short-hash form) on every method that
         # carries them.
         func_cls = self._resolve_function(request)
@@ -1819,7 +1998,7 @@ class Worker:
         from vgi.protocol import AggregateBindResponse
 
         func_cls = self._resolve_function_by_name(
-            request.function_name, request.attach_id, function_type=AggregateFunction
+            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
         )
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
@@ -1881,7 +2060,7 @@ class Worker:
         from vgi.protocol import AggregateUpdateResponse
 
         func_cls = self._resolve_function_by_name(
-            request.function_name, request.attach_id, function_type=AggregateFunction
+            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
         )
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
@@ -1989,7 +2168,7 @@ class Worker:
         from vgi.protocol import AggregateCombineResponse
 
         func_cls = self._resolve_function_by_name(
-            request.function_name, request.attach_id, function_type=AggregateFunction
+            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
         )
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
@@ -2056,7 +2235,7 @@ class Worker:
         from vgi.protocol import AggregateFinalizeResponse
 
         func_cls = self._resolve_function_by_name(
-            request.function_name, request.attach_id, function_type=AggregateFunction
+            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
         )
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
@@ -2115,7 +2294,7 @@ class Worker:
         from vgi.protocol import AggregateDestructorResponse
 
         func_cls = self._resolve_function_by_name(
-            request.function_name, request.attach_id, function_type=AggregateFunction
+            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
         )
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
@@ -2144,7 +2323,7 @@ class Worker:
         from vgi.protocol import AggregateWindowInitResponse
 
         func_cls = self._resolve_function_by_name(
-            request.function_name, request.attach_id, function_type=AggregateFunction
+            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
         )
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
@@ -2235,7 +2414,7 @@ class Worker:
         from vgi.protocol import AggregateWindowResponse
 
         func_cls = self._resolve_function_by_name(
-            request.function_name, request.attach_id, function_type=AggregateFunction
+            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
         )
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
@@ -2354,7 +2533,7 @@ class Worker:
         from vgi.protocol import AggregateWindowBatchResponse
 
         func_cls = self._resolve_function_by_name(
-            request.function_name, request.attach_id, function_type=AggregateFunction
+            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
         )
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
@@ -2432,7 +2611,7 @@ class Worker:
         from vgi.protocol import AggregateWindowDestructorResponse
 
         func_cls = self._resolve_function_by_name(
-            request.function_name, request.attach_id, function_type=AggregateFunction
+            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
         )
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
@@ -2451,7 +2630,7 @@ class Worker:
         from vgi.protocol import AggregateStreamingOpenResponse
 
         func_cls = self._resolve_function_by_name(
-            request.function_name, request.attach_id, function_type=AggregateFunction
+            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
         )
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
@@ -2506,7 +2685,7 @@ class Worker:
             # Cold reload — the session may have been opened on a different
             # pool worker. Look it up in FunctionStorage.
             func_cls = self._resolve_function_by_name(
-                request.function_name, request.attach_id, function_type=AggregateFunction
+                request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
             )
             if not issubclass(func_cls, AggregateFunction):
                 raise TypeError(
@@ -2597,7 +2776,9 @@ class Worker:
             # delete from storage. If load fails too, just drop.
             try:
                 func_cls = self._resolve_function_by_name(
-                    request.function_name, request.attach_id, function_type=AggregateFunction
+                    request.function_name,
+                    self._unwrap_attach(request.attach_opaque_data),
+                    function_type=AggregateFunction,
                 )
             except Exception:  # noqa: BLE001
                 func_cls = None
@@ -2686,7 +2867,7 @@ class Worker:
                 "vgi.authenticated": ctx.auth.authenticated,
             }
         )
-        # vgi.attach_id / vgi.transaction_id are auto-tagged by vgi-rpc's
+        # vgi.attach_opaque_data / vgi.transaction_opaque_data are auto-tagged by vgi-rpc's
         # Sentry dispatch hook (short-hash form) on every method that
         # carries them — including this one (descends bind_call).
         func_cls = self._resolve_function(request.bind_call)
@@ -2744,7 +2925,9 @@ class Worker:
                 output_schema=output_schema,
                 settings=_batch_to_scalar_dict(request.bind_call.settings),
                 secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
-                storage=BoundStorage(type(instance).storage, init_response.execution_id, request=request, auth=ctx.auth),
+                storage=BoundStorage(
+                    type(instance).storage, init_response.execution_id, request=request, auth=ctx.auth
+                ),
                 auth_context=ctx.auth,
             )
 
@@ -2778,7 +2961,9 @@ class Worker:
                 output_schema=output_schema,
                 settings=_batch_to_scalar_dict(request.bind_call.settings),
                 secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
-                storage=BoundStorage(type(instance).storage, init_response.execution_id, request=request, auth=ctx.auth),
+                storage=BoundStorage(
+                    type(instance).storage, init_response.execution_id, request=request, auth=ctx.auth
+                ),
                 auth_context=ctx.auth,
             )
             user_state = type(instance).initial_state(params)
@@ -2820,32 +3005,36 @@ class Worker:
         :meth:`CatalogInterface.loggable_attach_options` for the
         opt-in option-redaction hook.
 
-        Also short-hashes ``attach_id`` / ``transaction_id`` (when present
-        in *fields*) into Sentry scope tags on the current transaction so
-        catalog operations share the same queryable tag form that vgi-rpc's
-        dispatch hook sets on every other method.
+        ``attach_opaque_data`` / ``transaction_opaque_data`` are
+        implementation-chosen byte strings that may carry credentials. This
+        method is the single chokepoint that short-hashes them before they
+        reach *any* sink — the log record, the Sentry breadcrumb data, and
+        the Sentry scope tags — so no caller can leak a raw value.
         """
         # Drop None values so logs and breadcrumbs stay tidy.
         clean = {k: v for k, v in fields.items() if v is not None}
-        _logger.info(event, extra=clean)
+        # Redact the opaque-data fields once, here, before they reach the
+        # logger or any Sentry sink.
+        redacted = dict(clean)
+        for fld in ("attach_opaque_data", "transaction_opaque_data"):
+            raw = redacted.get(fld)
+            if raw:
+                redacted[fld] = _short_hash(raw)
+        _logger.info(event, extra=redacted)
         if "sentry_sdk" in sys.modules:
             import sentry_sdk
 
             if sentry_sdk.is_initialized():
-                from vgi_rpc.sentry import short_hash
-
                 scope = sentry_sdk.get_current_scope()
-                for fld in ("attach_id", "transaction_id"):
-                    raw = clean.get(fld)
-                    if raw:
-                        hashed = short_hash(raw)
-                        if hashed is not None:
-                            scope.set_tag(f"vgi.{fld}", hashed)
+                for fld in ("attach_opaque_data", "transaction_opaque_data"):
+                    hashed = redacted.get(fld)
+                    if hashed:
+                        scope.set_tag(f"vgi.{fld}", hashed)
                 sentry_sdk.add_breadcrumb(
                     category=event,
                     message=event,
                     level="info",
-                    data=clean,
+                    data=redacted,
                 )
 
     def catalog_catalogs(self) -> CatalogsResponse:
@@ -2881,22 +3070,26 @@ class Worker:
             implementation_version=request.implementation_version,
             ctx=ctx,
         )
+        # Seal the implementation's plaintext attach value into an AEAD
+        # envelope bound to the caller's identity before it leaves the worker.
+        if result.attach_opaque_data is not None:
+            result = _dataclass_replace(result, attach_opaque_data=self._seal_attach(result.attach_opaque_data))
         loggable = dict(cat.loggable_attach_options(options))
         self._log_catalog_lifecycle(
             "catalog.attach",
             catalog_name=request.name,
-            attach_id=result.attach_id.hex() if result.attach_id else None,
+            attach_opaque_data=result.attach_opaque_data.hex() if result.attach_opaque_data else None,
             data_version_spec=request.data_version_spec,
             implementation_version=request.implementation_version,
             options=loggable or None,
         )
         return result
 
-    def catalog_detach(self, attach_id: bytes) -> None:
+    def catalog_detach(self, attach_opaque_data: bytes) -> None:
         """Detach from a catalog."""
         cat = self._get_catalog()
-        cat.catalog_detach(attach_id=AttachId(attach_id))
-        self._log_catalog_lifecycle("catalog.detach", attach_id=attach_id.hex())
+        cat.catalog_detach(attach_opaque_data=self._unwrap_attach(attach_opaque_data))
+        self._log_catalog_lifecycle("catalog.detach", attach_opaque_data=attach_opaque_data.hex())
 
     def catalog_create(self, request: CatalogCreateRequest) -> None:
         """Create a new catalog."""
@@ -2920,16 +3113,18 @@ class Worker:
 
     def catalog_version(
         self,
-        attach_id: bytes,
-        transaction_id: bytes | None = None,
+        attach_opaque_data: bytes,
+        transaction_opaque_data: bytes | None = None,
         *,
         ctx: CallContext | None = None,
     ) -> CatalogVersionResponse:
         """Get the current catalog version."""
         cat = self._get_catalog()
         version = cat.catalog_version(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             ctx=ctx,
         )
         return CatalogVersionResponse(version=version)
@@ -2938,82 +3133,96 @@ class Worker:
     # VgiProtocol implementation - Catalog Transactions
     # ---------------------------------------------------------------------------
 
-    def catalog_transaction_begin(self, attach_id: bytes) -> TransactionBeginResponse:
+    def catalog_transaction_begin(self, attach_opaque_data: bytes) -> TransactionBeginResponse:
         """Begin a new transaction."""
         cat = self._get_catalog()
-        tx_id = cat.catalog_transaction_begin(attach_id=AttachId(attach_id))
+        tx_id = cat.catalog_transaction_begin(attach_opaque_data=self._unwrap_attach(attach_opaque_data))
+        # Seal the implementation's plaintext transaction value, binding it to
+        # the caller's identity *and* the parent attach envelope it was minted
+        # under, before it leaves the worker.
+        sealed_tx = self._seal_transaction(bytes(tx_id), attach_opaque_data) if tx_id else None
         self._log_catalog_lifecycle(
             "catalog.transaction.begin",
-            attach_id=attach_id.hex(),
-            transaction_id=bytes(tx_id).hex() if tx_id else None,
+            attach_opaque_data=attach_opaque_data.hex(),
+            transaction_opaque_data=sealed_tx.hex() if sealed_tx else None,
         )
-        return TransactionBeginResponse(transaction_id=bytes(tx_id) if tx_id else None)
+        return TransactionBeginResponse(transaction_opaque_data=sealed_tx)
 
-    def catalog_transaction_commit(self, attach_id: bytes, transaction_id: bytes) -> None:
+    def catalog_transaction_commit(self, attach_opaque_data: bytes, transaction_opaque_data: bytes) -> None:
         """Commit a transaction."""
         cat = self._get_catalog()
         cat.catalog_transaction_commit(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id),
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data),
         )
         self._log_catalog_lifecycle(
             "catalog.transaction.commit",
-            attach_id=attach_id.hex(),
-            transaction_id=transaction_id.hex(),
+            attach_opaque_data=attach_opaque_data.hex(),
+            transaction_opaque_data=transaction_opaque_data.hex(),
         )
 
-    def catalog_transaction_rollback(self, attach_id: bytes, transaction_id: bytes) -> None:
+    def catalog_transaction_rollback(self, attach_opaque_data: bytes, transaction_opaque_data: bytes) -> None:
         """Rollback a transaction."""
         cat = self._get_catalog()
         cat.catalog_transaction_rollback(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id),
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data),
         )
         self._log_catalog_lifecycle(
             "catalog.transaction.rollback",
-            attach_id=attach_id.hex(),
-            transaction_id=transaction_id.hex(),
+            attach_opaque_data=attach_opaque_data.hex(),
+            transaction_opaque_data=transaction_opaque_data.hex(),
         )
 
     # ---------------------------------------------------------------------------
     # VgiProtocol implementation - Catalog Schemas
     # ---------------------------------------------------------------------------
 
-    def catalog_schemas(self, attach_id: bytes, transaction_id: bytes | None = None) -> SchemasResponse:
+    def catalog_schemas(
+        self, attach_opaque_data: bytes, transaction_opaque_data: bytes | None = None
+    ) -> SchemasResponse:
         """List schemas in the catalog."""
         cat = self._get_catalog()
         infos = cat.schemas(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
         )
         return SchemasResponse.from_infos(list(infos))
 
-    def catalog_schema_get(self, attach_id: bytes, name: str, transaction_id: bytes | None = None) -> SchemasResponse:
+    def catalog_schema_get(
+        self, attach_opaque_data: bytes, name: str, transaction_opaque_data: bytes | None = None
+    ) -> SchemasResponse:
         """Get information about a schema. Returns 0 or 1 items."""
         self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
         info = cat.schema_get(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             name=name,
         )
         return SchemasResponse.from_optional(info)
 
     def catalog_schema_create(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         name: str,
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None = None,
         tags: dict[str, str] | None = None,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Create a new schema."""
         self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
         cat.schema_create(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             name=name,
             on_conflict=on_conflict,
             comment=comment,
@@ -3022,18 +3231,20 @@ class Worker:
 
     def catalog_schema_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a schema."""
         self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
         cat.schema_drop(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             name=name,
             ignore_not_found=ignore_not_found,
             cascade=cascade,
@@ -3041,16 +3252,18 @@ class Worker:
 
     def catalog_schema_contents_tables(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> TablesResponse:
         """List tables in a schema."""
         self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
         infos = cat.schema_contents(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             name=name,
             type=SchemaObjectType.TABLE,
         )
@@ -3058,16 +3271,18 @@ class Worker:
 
     def catalog_schema_contents_views(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> ViewsResponse:
         """List views in a schema."""
         self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
         infos = cat.schema_contents(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             name=name,
             type=SchemaObjectType.VIEW,
         )
@@ -3075,17 +3290,19 @@ class Worker:
 
     def catalog_schema_contents_functions(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         name: str,
         type: SchemaObjectType,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> FunctionsResponse:
         """List functions in a schema (scalar or table)."""
         self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
         infos = cat.schema_contents(  # type: ignore[call-overload]
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             name=name,
             type=type,
         )
@@ -3097,20 +3314,22 @@ class Worker:
 
     def catalog_table_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> TablesResponse:
         """Get information about a table. Returns 0 or 1 items."""
         _validate_at_params(at_unit, at_value)
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         info = cat.table_get(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             at_unit=at_unit,
@@ -3123,8 +3342,12 @@ class Worker:
         self._enrich_catalog_span(vgi_schema_name=request.schema_name, vgi_table_name=request.name)
         cat = self._get_catalog()
         cat.table_create(
-            attach_id=AttachId(request.attach_id),
-            transaction_id=TransactionId(request.transaction_id) if request.transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(
+                request.transaction_opaque_data, request.attach_opaque_data
+            )
+            if request.transaction_opaque_data
+            else None,
             schema_name=request.schema_name,
             name=request.name,
             columns=SerializedSchema(request.columns),
@@ -3142,19 +3365,21 @@ class Worker:
 
     def catalog_table_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a table."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_drop(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             ignore_not_found=ignore_not_found,
@@ -3163,20 +3388,22 @@ class Worker:
 
     def catalog_table_scan_function_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> bytes:
         """Get the scan function for a table. Returns ScanFunctionResult as IPC bytes."""
         _validate_at_params(at_unit, at_value)
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_scan_function_get(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             at_unit=at_unit,
@@ -3186,17 +3413,19 @@ class Worker:
 
     def catalog_table_column_statistics_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> bytes | None:
         """Get column statistics for a table. Returns IPC bytes or None."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_column_statistics_get(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
         )
@@ -3206,17 +3435,19 @@ class Worker:
 
     def catalog_table_insert_function_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> bytes:
         """Get the insert function for a table. Returns WriteFunctionResult as IPC bytes."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_insert_function_get(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
         )
@@ -3224,17 +3455,19 @@ class Worker:
 
     def catalog_table_update_function_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> bytes:
         """Get the update function for a table. Returns WriteFunctionResult as IPC bytes."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_update_function_get(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
         )
@@ -3242,17 +3475,19 @@ class Worker:
 
     def catalog_table_delete_function_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> bytes:
         """Get the delete function for a table. Returns WriteFunctionResult as IPC bytes."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_delete_function_get(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
         )
@@ -3260,19 +3495,21 @@ class Worker:
 
     def catalog_table_comment_set(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         comment: str | None = None,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a table."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_comment_set(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             comment=comment,
@@ -3281,20 +3518,22 @@ class Worker:
 
     def catalog_table_column_comment_set(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_name: str,
         comment: str | None = None,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a table column."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_comment_set(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             column_name=column_name,
@@ -3304,19 +3543,21 @@ class Worker:
 
     def catalog_table_rename(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         new_name: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a table."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_rename(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             new_name=new_name,
@@ -3325,20 +3566,22 @@ class Worker:
 
     def catalog_table_column_add(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_definition: bytes,
         ignore_not_found: bool = False,
         if_column_not_exists: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Add a new column to a table."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_add(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             column_definition=SerializedSchema(column_definition),
@@ -3348,21 +3591,23 @@ class Worker:
 
     def catalog_table_column_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
         if_column_exists: bool = False,
         cascade: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a column from a table."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_drop(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             column_name=column_name,
@@ -3373,20 +3618,22 @@ class Worker:
 
     def catalog_table_column_rename(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_name: str,
         new_column_name: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a column."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_rename(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             column_name=column_name,
@@ -3396,20 +3643,22 @@ class Worker:
 
     def catalog_table_column_default_set(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_name: str,
         expression: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set the default value expression for a column."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_default_set(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             column_name=column_name,
@@ -3419,19 +3668,21 @@ class Worker:
 
     def catalog_table_column_default_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Remove the default value from a column."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_default_drop(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             column_name=column_name,
@@ -3440,20 +3691,22 @@ class Worker:
 
     def catalog_table_column_type_change(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_definition: bytes,
         expression: str | None = None,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Change the type of a column."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_type_change(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             column_definition=SerializedSchema(column_definition),
@@ -3463,19 +3716,21 @@ class Worker:
 
     def catalog_table_not_null_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Remove NOT NULL constraint from a column."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_not_null_drop(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             column_name=column_name,
@@ -3484,19 +3739,21 @@ class Worker:
 
     def catalog_table_not_null_set(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Add NOT NULL constraint to a column."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_not_null_set(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             column_name=column_name,
@@ -3509,17 +3766,19 @@ class Worker:
 
     def catalog_view_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> ViewsResponse:
         """Get information about a view. Returns 0 or 1 items."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_view_name=name)
         cat = self._get_catalog()
         info = cat.view_get(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
         )
@@ -3527,19 +3786,21 @@ class Worker:
 
     def catalog_view_create(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         definition: str,
         on_conflict: OnConflict,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Create a new view."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_view_name=name)
         cat = self._get_catalog()
         cat.view_create(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             definition=definition,
@@ -3548,19 +3809,21 @@ class Worker:
 
     def catalog_view_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a view."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_view_name=name)
         cat = self._get_catalog()
         cat.view_drop(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             ignore_not_found=ignore_not_found,
@@ -3569,19 +3832,21 @@ class Worker:
 
     def catalog_view_rename(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         new_name: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a view."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_view_name=name)
         cat = self._get_catalog()
         cat.view_rename(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             new_name=new_name,
@@ -3590,19 +3855,21 @@ class Worker:
 
     def catalog_view_comment_set(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         comment: str | None = None,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a view."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_view_name=name)
         cat = self._get_catalog()
         cat.view_comment_set(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             comment=comment,
@@ -3615,17 +3882,19 @@ class Worker:
 
     def catalog_macro_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> MacrosResponse:
         """Get information about a macro. Returns 0 or 1 items."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_macro_name=name)
         cat = self._get_catalog()
         info = cat.macro_get(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
         )
@@ -3636,8 +3905,12 @@ class Worker:
         self._enrich_catalog_span(vgi_schema_name=request.schema_name, vgi_macro_name=request.name)
         cat = self._get_catalog()
         cat.macro_create(
-            attach_id=AttachId(request.attach_id),
-            transaction_id=TransactionId(request.transaction_id) if request.transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(
+                request.transaction_opaque_data, request.attach_opaque_data
+            )
+            if request.transaction_opaque_data
+            else None,
             schema_name=request.schema_name,
             name=request.name,
             macro_type=request.macro_type,
@@ -3649,18 +3922,20 @@ class Worker:
 
     def catalog_macro_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a macro."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_macro_name=name)
         cat = self._get_catalog()
         cat.macro_drop(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             ignore_not_found=ignore_not_found,
@@ -3668,17 +3943,19 @@ class Worker:
 
     def catalog_schema_contents_macros(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         name: str,
         type: SchemaObjectType,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> MacrosResponse:
         """List macros in a schema (scalar or table)."""
         self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
         infos = cat.schema_contents(  # type: ignore[call-overload]
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             name=name,
             type=type,
         )
@@ -3690,17 +3967,19 @@ class Worker:
 
     def catalog_index_get(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> IndexesResponse:
         """Get information about an index. Returns 0 or 1 items."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_index_name=name)
         cat = self._get_catalog()
         info = cat.index_get(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
         )
@@ -3711,8 +3990,12 @@ class Worker:
         self._enrich_catalog_span(vgi_schema_name=request.schema_name, vgi_index_name=request.name)
         cat = self._get_catalog()
         cat.index_create(
-            attach_id=AttachId(request.attach_id),
-            transaction_id=TransactionId(request.transaction_id) if request.transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(
+                request.transaction_opaque_data, request.attach_opaque_data
+            )
+            if request.transaction_opaque_data
+            else None,
             schema_name=request.schema_name,
             name=request.name,
             table_name=request.table_name,
@@ -3725,19 +4008,21 @@ class Worker:
 
     def catalog_index_drop(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop an index."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_index_name=name)
         cat = self._get_catalog()
         cat.index_drop(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             schema_name=schema_name,
             name=name,
             ignore_not_found=ignore_not_found,
@@ -3746,16 +4031,18 @@ class Worker:
 
     def catalog_schema_contents_indexes(
         self,
-        attach_id: bytes,
+        attach_opaque_data: bytes,
         name: str,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> IndexesResponse:
         """List indexes in a schema."""
         self._enrich_catalog_span(vgi_schema_name=name)
         cat = self._get_catalog()
         infos = cat.schema_contents(
-            attach_id=AttachId(attach_id),
-            transaction_id=TransactionId(transaction_id) if transaction_id else None,
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
             name=name,
             type=SchemaObjectType.INDEX,
         )

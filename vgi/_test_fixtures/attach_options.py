@@ -4,9 +4,9 @@ This worker exists to exercise the attach-time options pipeline end-to-end:
 - Declared options (``AttachOptions`` inner class) advertised via the ``catalogs()``
   RPC for pre-attach discovery.
 - Values received at ``catalog_attach`` are serialized into the returned
-  ``attach_id`` so they survive pooled-worker reuse (subprocess) and stateless
+  ``attach_opaque_data`` so they survive pooled-worker reuse (subprocess) and stateless
   transports (HTTP). Nothing is stored on ``self``.
-- The ``echo_attach_options`` table function decodes ``attach_id`` on every
+- The ``echo_attach_options`` table function decodes ``attach_opaque_data`` on every
   invocation and returns a one-row batch containing every declared option.
 
 Run directly as a worker::
@@ -31,11 +31,11 @@ from vgi_rpc.utils import deserialize_record_batch, serialize_record_batch_bytes
 
 from vgi.catalog.attach_option import AttachOption, AttachOptionSpec, extract_attach_option_specs
 from vgi.catalog.catalog_interface import (
-    AttachId,
+    AttachOpaqueData,
     CatalogAttachResult,
     CatalogInfo,
     ReadOnlyCatalogInterface,
-    TransactionId,
+    TransactionOpaqueData,
 )
 from vgi.catalog.descriptors import Catalog, Schema
 from vgi.invocation import BindResponse
@@ -115,7 +115,7 @@ _ECHO_SCHEMA: pa.Schema = schema({spec.name: spec.type for spec in _ATTACH_OPTIO
 
 
 # ---------------------------------------------------------------------------
-# attach_id encoding / decoding
+# attach_opaque_data encoding / decoding
 # ---------------------------------------------------------------------------
 
 
@@ -128,16 +128,16 @@ def _build_echo_batch(received: dict[str, Any]) -> pa.RecordBatch:
     return pa.RecordBatch.from_pylist([row], schema=_ECHO_SCHEMA)
 
 
-def _encode_attach_id(received: dict[str, Any]) -> AttachId:
+def _encode_attach_opaque_data(received: dict[str, Any]) -> AttachOpaqueData:
     batch = _build_echo_batch(received)
     ipc_bytes = serialize_record_batch_bytes(batch)
-    return AttachId(uuid.uuid4().bytes + _ATTACH_ID_SEP + ipc_bytes)
+    return AttachOpaqueData(uuid.uuid4().bytes + _ATTACH_ID_SEP + ipc_bytes)
 
 
-def _decode_attach_id(attach_id: bytes) -> pa.RecordBatch:
-    raw = bytes(attach_id)
+def _decode_attach_opaque_data(attach_opaque_data: bytes) -> pa.RecordBatch:
+    raw = bytes(attach_opaque_data)
     if len(raw) <= _UUID_BYTES + 1 or raw[_UUID_BYTES : _UUID_BYTES + 1] != _ATTACH_ID_SEP:
-        raise ValueError("attach_id does not carry an options payload")
+        raise ValueError("attach_opaque_data does not carry an options payload")
     ipc_bytes = raw[_UUID_BYTES + 1 :]
     batch, _ = deserialize_record_batch(ipc_bytes)
     return batch
@@ -150,7 +150,7 @@ def _decode_attach_id(attach_id: bytes) -> pa.RecordBatch:
 
 @dataclass(slots=True, frozen=True)
 class _EchoArgs:
-    """No arguments — the echo function reads state from ``attach_id``."""
+    """No arguments — the echo function reads state from ``attach_opaque_data``."""
 
 
 @dataclass(kw_only=True)
@@ -162,7 +162,7 @@ class _EchoState(ArrowSerializableDataclass):
 class EchoAttachOptionsFunction(TableFunctionGenerator[_EchoArgs, _EchoState]):
     """Return the attach-time option values that were passed at ATTACH.
 
-    One row, one column per declared option. The values come from ``attach_id``
+    One row, one column per declared option. The values come from ``attach_opaque_data``
     so the function is safe under pool reuse (subprocess) and stateless
     dispatch (HTTP): no per-attach state lives on ``self``.
     """
@@ -171,7 +171,7 @@ class EchoAttachOptionsFunction(TableFunctionGenerator[_EchoArgs, _EchoState]):
 
     class Meta:
         name = "echo_attach_options"
-        description = "Echo the attach-time option values carried in attach_id"
+        description = "Echo the attach-time option values carried in attach_opaque_data"
         categories = ["generator", "testing"]
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = _ECHO_SCHEMA
@@ -196,11 +196,11 @@ class EchoAttachOptionsFunction(TableFunctionGenerator[_EchoArgs, _EchoState]):
             return
 
         assert params.init_call is not None
-        attach_id = params.init_call.bind_call.attach_id
-        if attach_id is None:
-            raise ValueError("echo_attach_options requires an attach_id")
+        attach_opaque_data = params.init_call.bind_call.attach_opaque_data
+        if attach_opaque_data is None:
+            raise ValueError("echo_attach_options requires an attach_opaque_data")
 
-        batch = _decode_attach_id(attach_id)
+        batch = _decode_attach_opaque_data(attach_opaque_data)
         # Re-cast to the declared schema so column order matches what bind promised.
         batch = batch.select(_ECHO_SCHEMA.names)
         out.emit(batch)
@@ -226,7 +226,7 @@ _CATALOG_DESCRIPTOR = Catalog(
 
 
 class AttachOptionsCatalog(ReadOnlyCatalogInterface):
-    """Catalog that advertises AttachOptions and echoes values via attach_id."""
+    """Catalog that advertises AttachOptions and echoes values via attach_opaque_data."""
 
     catalog = _CATALOG_DESCRIPTOR
     catalog_name = CATALOG_NAME
@@ -244,15 +244,15 @@ class AttachOptionsCatalog(ReadOnlyCatalogInterface):
         if name != CATALOG_NAME:
             raise ValueError(f"Unknown catalog: {name!r}. Available: {CATALOG_NAME}")
 
-        attach_id = _encode_attach_id(options)
+        attach_opaque_data = _encode_attach_opaque_data(options)
 
         return CatalogAttachResult(
-            attach_id=attach_id,
+            attach_opaque_data=attach_opaque_data,
             supports_transactions=False,
             supports_time_travel=False,
             catalog_version_frozen=True,
             catalog_version=1,
-            attach_id_required=True,
+            attach_opaque_data_required=True,
             default_schema="main",
             settings=[],
             resolved_data_version=None,
@@ -272,11 +272,11 @@ class AttachOptionsCatalog(ReadOnlyCatalogInterface):
     def catalog_version(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         ctx: CallContext | None = None,
     ) -> int:
-        del attach_id, transaction_id, ctx
+        del attach_opaque_data, transaction_opaque_data, ctx
         return 1
 
 

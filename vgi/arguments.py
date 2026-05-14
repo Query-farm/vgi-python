@@ -800,7 +800,7 @@ class _ArgFactory:
                 f"Arg(position={position}, default=...): positional arguments cannot "
                 f"have a default value. DuckDB's binder always requires the positional "
                 f"argument, so the default would never fire. To make this argument "
-                f"optional, use a named argument: Arg(\"{{name}}\", default=...)."
+                f'optional, use a named argument: Arg("{{name}}", default=...).'
             )
 
         # Warn if type_bound is used with non-AnyArrow type
@@ -972,7 +972,7 @@ class Arg[ArgT]:
                 f"Arg(position={position}, default=...): positional arguments cannot "
                 f"have a default value. DuckDB's binder always requires the positional "
                 f"argument, so the default would never fire. To make this argument "
-                f"optional, use a named argument: Arg(\"{{name}}\", default=...)."
+                f'optional, use a named argument: Arg("{{name}}", default=...).'
             )
 
         self.position = position

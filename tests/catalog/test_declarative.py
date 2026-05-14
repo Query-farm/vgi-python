@@ -20,7 +20,7 @@ from vgi_rpc.rpc import OutputCollector
 
 from vgi import Worker
 from vgi.catalog import (
-    AttachId,
+    AttachOpaqueData,
     Catalog,
     CatalogAttachResult,
     ForeignKeyDef,
@@ -35,7 +35,7 @@ from vgi.catalog import (
     Sql,
     Table,
     TableInfo,
-    TransactionId,
+    TransactionOpaqueData,
     View,
     ViewInfo,
 )
@@ -1064,11 +1064,11 @@ class TestSchemaDescriptor:
             comment="Main schema",
             tags={"type": "core"},
         )
-        attach_id = AttachId(b"test-attach-id")
-        info = schema.to_schema_info(attach_id)
+        attach_opaque_data = AttachOpaqueData(b"test-attach-opaque-data")
+        info = schema.to_schema_info(attach_opaque_data)
         assert isinstance(info, SchemaInfo)
         assert info.name == "main"
-        assert info.attach_id == attach_id
+        assert info.attach_opaque_data == attach_opaque_data
         assert info.comment == "Main schema"
         assert info.tags == {"type": "core"}
 
@@ -1091,16 +1091,14 @@ class TestSchemaDescriptor:
                 name = "upper"
 
             @classmethod
-            def compute(
-                cls, x: Annotated[pa.StringArray, Param(doc="x")]
-            ) -> Annotated[pa.StringArray, Returns()]:
+            def compute(cls, x: Annotated[pa.StringArray, Param(doc="x")]) -> Annotated[pa.StringArray, Returns()]:
                 return pa.compute.utf8_upper(x)
 
         schema = Schema(
             name="main",
             functions=[UsersFunction, EventsFunction, _Upper],  # 2 table + 1 scalar
         )
-        info = schema.to_schema_info(AttachId(b"x"))
+        info = schema.to_schema_info(AttachOpaqueData(b"x"))
         assert info.estimated_object_count == {
             "table": 0,
             "view": 0,
@@ -1119,7 +1117,7 @@ class TestSchemaDescriptor:
         "unknown / eager-load" instead.
         """
         schema = Schema(name="main", functions=[UsersFunction])  # only table fn
-        info = schema.to_schema_info(AttachId(b"x"))
+        info = schema.to_schema_info(AttachOpaqueData(b"x"))
         assert info.estimated_object_count["scalar_function"] == 0
         assert info.estimated_object_count["aggregate_function"] == 0
         assert info.estimated_object_count["table_function"] == 1
@@ -1268,59 +1266,71 @@ class TestReadOnlyCatalogWithCatalog:
 
     def test_schemas_returns_all(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schemas() returns all schemas from Catalog."""
-        attach_id = AttachId(b"test")
-        schemas = catalog_interface.schemas(attach_id=attach_id, transaction_id=None)
+        attach_opaque_data = AttachOpaqueData(b"test")
+        schemas = catalog_interface.schemas(attach_opaque_data=attach_opaque_data, transaction_opaque_data=None)
         assert len(schemas) == 1
         assert schemas[0].name == "main"
 
     def test_schema_get_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_get() finds schema by name."""
-        attach_id = AttachId(b"test")
-        info = catalog_interface.schema_get(attach_id=attach_id, transaction_id=None, name="main")
+        attach_opaque_data = AttachOpaqueData(b"test")
+        info = catalog_interface.schema_get(
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, name="main"
+        )
         assert info is not None
         assert info.name == "main"
         assert info.comment == "Main schema"
 
     def test_schema_get_case_insensitive(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_get() is case-insensitive."""
-        attach_id = AttachId(b"test")
-        info = catalog_interface.schema_get(attach_id=attach_id, transaction_id=None, name="MAIN")
+        attach_opaque_data = AttachOpaqueData(b"test")
+        info = catalog_interface.schema_get(
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, name="MAIN"
+        )
         assert info is not None
         assert info.name == "main"  # Original case preserved
 
     def test_schema_get_not_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_get() returns None for unknown schema."""
-        attach_id = AttachId(b"test")
-        info = catalog_interface.schema_get(attach_id=attach_id, transaction_id=None, name="unknown")
+        attach_opaque_data = AttachOpaqueData(b"test")
+        info = catalog_interface.schema_get(
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, name="unknown"
+        )
         assert info is None
 
     def test_table_get_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """table_get() finds table by schema and name."""
-        attach_id = AttachId(b"test")
-        info = catalog_interface.table_get(attach_id=attach_id, transaction_id=None, schema_name="main", name="users")
+        attach_opaque_data = AttachOpaqueData(b"test")
+        info = catalog_interface.table_get(
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, schema_name="main", name="users"
+        )
         assert info is not None
         assert info.name == "users"
         assert info.comment == "User accounts"
 
     def test_table_get_case_insensitive(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """table_get() is case-insensitive for both schema and table."""
-        attach_id = AttachId(b"test")
-        info = catalog_interface.table_get(attach_id=attach_id, transaction_id=None, schema_name="MAIN", name="USERS")
+        attach_opaque_data = AttachOpaqueData(b"test")
+        info = catalog_interface.table_get(
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, schema_name="MAIN", name="USERS"
+        )
         assert info is not None
         assert info.name == "users"
 
     def test_table_get_not_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """table_get() returns None for unknown table."""
-        attach_id = AttachId(b"test")
-        info = catalog_interface.table_get(attach_id=attach_id, transaction_id=None, schema_name="main", name="unknown")
+        attach_opaque_data = AttachOpaqueData(b"test")
+        info = catalog_interface.table_get(
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, schema_name="main", name="unknown"
+        )
         assert info is None
 
     def test_view_get_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """view_get() finds view by schema and name."""
-        attach_id = AttachId(b"test")
+        attach_opaque_data = AttachOpaqueData(b"test")
         info = catalog_interface.view_get(
-            attach_id=attach_id,
-            transaction_id=None,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=None,
             schema_name="main",
             name="active_users",
         )
@@ -1330,10 +1340,10 @@ class TestReadOnlyCatalogWithCatalog:
 
     def test_view_get_case_insensitive(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """view_get() is case-insensitive."""
-        attach_id = AttachId(b"test")
+        attach_opaque_data = AttachOpaqueData(b"test")
         info = catalog_interface.view_get(
-            attach_id=attach_id,
-            transaction_id=None,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=None,
             schema_name="MAIN",
             name="ACTIVE_USERS",
         )
@@ -1342,16 +1352,18 @@ class TestReadOnlyCatalogWithCatalog:
 
     def test_view_get_not_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """view_get() returns None for unknown view."""
-        attach_id = AttachId(b"test")
-        info = catalog_interface.view_get(attach_id=attach_id, transaction_id=None, schema_name="main", name="unknown")
+        attach_opaque_data = AttachOpaqueData(b"test")
+        info = catalog_interface.view_get(
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, schema_name="main", name="unknown"
+        )
         assert info is None
 
     def test_macro_get_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """macro_get() finds macro by schema and name."""
-        attach_id = AttachId(b"test")
+        attach_opaque_data = AttachOpaqueData(b"test")
         info = catalog_interface.macro_get(
-            attach_id=attach_id,
-            transaction_id=None,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=None,
             schema_name="main",
             name="multiply",
         )
@@ -1362,10 +1374,10 @@ class TestReadOnlyCatalogWithCatalog:
 
     def test_macro_get_case_insensitive(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """macro_get() is case-insensitive."""
-        attach_id = AttachId(b"test")
+        attach_opaque_data = AttachOpaqueData(b"test")
         info = catalog_interface.macro_get(
-            attach_id=attach_id,
-            transaction_id=None,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=None,
             schema_name="MAIN",
             name="MULTIPLY",
         )
@@ -1374,10 +1386,10 @@ class TestReadOnlyCatalogWithCatalog:
 
     def test_macro_get_not_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """macro_get() returns None for unknown macro."""
-        attach_id = AttachId(b"test")
+        attach_opaque_data = AttachOpaqueData(b"test")
         info = catalog_interface.macro_get(
-            attach_id=attach_id,
-            transaction_id=None,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=None,
             schema_name="main",
             name="unknown",
         )
@@ -1424,10 +1436,10 @@ class TestSchemaContentsWithCatalog:
 
     def test_schema_contents_tables(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_contents returns tables for TABLE type."""
-        attach_id = AttachId(b"test")
+        attach_opaque_data = AttachOpaqueData(b"test")
         contents = catalog_interface.schema_contents(
-            attach_id=attach_id,
-            transaction_id=None,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=None,
             name="main",
             type=SchemaObjectType.TABLE,
         )
@@ -1463,8 +1475,8 @@ class TestSchemaContentsWithCatalog:
             )
 
         contents = _InlineBindCatalog().schema_contents(
-            attach_id=AttachId(b"test"),
-            transaction_id=None,
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
             name="main",
             type=SchemaObjectType.TABLE,
         )
@@ -1479,10 +1491,10 @@ class TestSchemaContentsWithCatalog:
 
     def test_schema_contents_views(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_contents returns views for VIEW type."""
-        attach_id = AttachId(b"test")
+        attach_opaque_data = AttachOpaqueData(b"test")
         contents = catalog_interface.schema_contents(
-            attach_id=attach_id,
-            transaction_id=None,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=None,
             name="main",
             type=SchemaObjectType.VIEW,
         )
@@ -1491,10 +1503,10 @@ class TestSchemaContentsWithCatalog:
 
     def test_schema_contents_unknown_schema(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_contents returns empty for unknown schema."""
-        attach_id = AttachId(b"test")
+        attach_opaque_data = AttachOpaqueData(b"test")
         contents = catalog_interface.schema_contents(
-            attach_id=attach_id,
-            transaction_id=None,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=None,
             name="unknown",
             type=SchemaObjectType.TABLE,
         )
@@ -1502,10 +1514,10 @@ class TestSchemaContentsWithCatalog:
 
     def test_schema_contents_scalar_macros(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_contents returns scalar macros for SCALAR_MACRO type."""
-        attach_id = AttachId(b"test")
+        attach_opaque_data = AttachOpaqueData(b"test")
         contents = catalog_interface.schema_contents(
-            attach_id=attach_id,
-            transaction_id=None,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=None,
             name="main",
             type=SchemaObjectType.SCALAR_MACRO,
         )
@@ -1515,10 +1527,10 @@ class TestSchemaContentsWithCatalog:
 
     def test_schema_contents_table_macros(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_contents returns table macros for TABLE_MACRO type."""
-        attach_id = AttachId(b"test")
+        attach_opaque_data = AttachOpaqueData(b"test")
         contents = catalog_interface.schema_contents(
-            attach_id=attach_id,
-            transaction_id=None,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=None,
             name="main",
             type=SchemaObjectType.TABLE_MACRO,
         )
@@ -1545,10 +1557,10 @@ class TestTableScanFunctionGet:
 
     def test_function_backed_table_auto_scan(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """Function-backed tables return auto-implemented scan result."""
-        attach_id = AttachId(b"test")
+        attach_opaque_data = AttachOpaqueData(b"test")
         result = catalog_interface.table_scan_function_get(
-            attach_id=attach_id,
-            transaction_id=None,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=None,
             schema_name="main",
             name="users",
             at_unit=None,
@@ -1568,11 +1580,11 @@ class TestTableScanFunctionGet:
             )
 
         interface = TestCatalog()
-        attach_id = AttachId(b"test")
+        attach_opaque_data = AttachOpaqueData(b"test")
         with pytest.raises(NotImplementedError, match="table_scan_function_get not implemented"):
             interface.table_scan_function_get(
-                attach_id=attach_id,
-                transaction_id=None,
+                attach_opaque_data=attach_opaque_data,
+                transaction_opaque_data=None,
                 schema_name="main",
                 name="orders",
                 at_unit=None,
@@ -1630,8 +1642,8 @@ class TestWorkerWithCatalog:
             def table_scan_function_get(
                 self,
                 *,
-                attach_id: AttachId,
-                transaction_id: TransactionId | None,
+                attach_opaque_data: AttachOpaqueData,
+                transaction_opaque_data: TransactionOpaqueData | None,
                 schema_name: str,
                 name: str,
                 at_unit: str | None,
@@ -1651,8 +1663,8 @@ class TestWorkerWithCatalog:
         interface = interface_cls()
 
         result = interface.table_scan_function_get(
-            attach_id=AttachId(b"test"),
-            transaction_id=None,
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
             schema_name="main",
             name="orders",
             at_unit=None,
@@ -1722,19 +1734,19 @@ class TestMultiSchemaCatalog:
 
     def test_schemas_returns_all(self, multi_schema_interface: ReadOnlyCatalogInterface) -> None:
         """schemas() returns all schemas."""
-        attach_id = AttachId(b"test")
-        schemas = multi_schema_interface.schemas(attach_id=attach_id, transaction_id=None)
+        attach_opaque_data = AttachOpaqueData(b"test")
+        schemas = multi_schema_interface.schemas(attach_opaque_data=attach_opaque_data, transaction_opaque_data=None)
         names = {s.name for s in schemas}
         assert names == {"analytics", "raw"}
 
     def test_table_in_correct_schema(self, multi_schema_interface: ReadOnlyCatalogInterface) -> None:
         """Tables are found in their correct schemas."""
-        attach_id = AttachId(b"test")
+        attach_opaque_data = AttachOpaqueData(b"test")
 
         # users in analytics
         users = multi_schema_interface.table_get(
-            attach_id=attach_id,
-            transaction_id=None,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=None,
             schema_name="analytics",
             name="users",
         )
@@ -1742,8 +1754,8 @@ class TestMultiSchemaCatalog:
 
         # users not in raw
         users_raw = multi_schema_interface.table_get(
-            attach_id=attach_id,
-            transaction_id=None,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=None,
             schema_name="raw",
             name="users",
         )
@@ -1751,8 +1763,8 @@ class TestMultiSchemaCatalog:
 
         # events in raw
         events = multi_schema_interface.table_get(
-            attach_id=attach_id,
-            transaction_id=None,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=None,
             schema_name="raw",
             name="events",
         )

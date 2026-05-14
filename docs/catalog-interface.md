@@ -38,10 +38,10 @@ Catalog methods are dispatched via `vgi_rpc` typed protocol methods. Each method
 ### Type Aliases
 
 ```python
-from vgi.catalog import AttachId, TransactionId, SerializedSchema, SqlExpression
+from vgi.catalog import AttachOpaqueData, TransactionOpaqueData, SerializedSchema, SqlExpression
 
-AttachId = NewType("AttachId", bytes)           # Unique attachment identifier
-TransactionId = NewType("TransactionId", bytes)  # Transaction identifier
+AttachOpaqueData = NewType("AttachOpaqueData", bytes)           # Unique attachment identifier
+TransactionOpaqueData = NewType("TransactionOpaqueData", bytes)  # Transaction identifier
 SerializedSchema = NewType("SerializedSchema", bytes)  # Arrow schema bytes
 SqlExpression = NewType("SqlExpression", str)   # SQL expression string
 ```
@@ -52,13 +52,23 @@ Returned by `catalog_attach()` with attachment metadata:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `attach_id` | `AttachId` | Unique identifier for this attachment |
+| `attach_opaque_data` | `AttachOpaqueData` | Opaque per-attachment state the implementation owns (see note below) |
 | `supports_transactions` | `bool` | Whether transactions are supported |
 | `supports_time_travel` | `bool` | Whether time travel queries work |
 | `catalog_version_frozen` | `bool` | Whether metadata will change |
 | `catalog_version` | `int` | Current version (increments on changes) |
-| `attach_id_required` | `bool` | Whether attach_id must be persisted |
+| `attach_opaque_data_required` | `bool` | Whether attach_opaque_data must be persisted |
 | `default_schema` | `str` | Name of the default schema (usually "main") |
+
+> **`attach_opaque_data` / `transaction_opaque_data` are opaque, implementation-owned, and may carry secrets.**
+> They are *not* framework identifiers — they are arbitrary `bytes` your implementation returns from
+> `catalog_attach()` / `catalog_transaction_begin()`, and the client round-trips them back verbatim on
+> every subsequent call. An implementation may pack connection handles, credentials, or any state into
+> them. **Never log either value raw** — treat them like the `options` dict. The worker already enforces
+> this for its own catalog-lifecycle logs (it short-hashes both fields at a single chokepoint), and on
+> HTTP transport it additionally seals each value in an AEAD envelope bound to the caller's identity, so
+> a value minted for one principal cannot be replayed by another. Your implementation only ever sees the
+> plaintext; the sealing and unsealing happen transparently in the worker.
 
 ### SchemaInfo
 
@@ -66,7 +76,7 @@ Information about a schema in a catalog:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `attach_id` | `AttachId` | Parent attachment |
+| `attach_opaque_data` | `AttachOpaqueData` | Parent attachment |
 | `name` | `str` | Schema name |
 | `comment` | `str \| None` | Optional description |
 | `tags` | `dict[str, str]` | Key-value metadata |
@@ -140,8 +150,8 @@ Result from `table_scan_function_get()` that tells the VGI DuckDB extension whic
 def table_scan_function_get(
     self,
     *,
-    attach_id: AttachId,
-    transaction_id: TransactionId | None,
+    attach_opaque_data: AttachOpaqueData,
+    transaction_opaque_data: TransactionOpaqueData | None,
     schema_name: str,
     name: str,
     at_unit: str | None,
@@ -178,15 +188,15 @@ class MyCatalog(CatalogInterface):
         """Attach to a catalog, returning attachment metadata."""
 
     @abstractmethod
-    def schema_get(self, *, attach_id: AttachId, transaction_id: TransactionId | None, name: str) -> SchemaInfo | None:
+    def schema_get(self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, name: str) -> SchemaInfo | None:
         """Get schema info, or None if not found."""
 
     @abstractmethod
-    def table_get(self, *, attach_id: AttachId, transaction_id: TransactionId | None, schema_name: str, name: str) -> TableInfo | None:
+    def table_get(self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, schema_name: str, name: str) -> TableInfo | None:
         """Get table info, or None if not found."""
 
     @abstractmethod
-    def view_get(self, *, attach_id: AttachId, transaction_id: TransactionId | None, schema_name: str, name: str) -> ViewInfo | None:
+    def view_get(self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, schema_name: str, name: str) -> ViewInfo | None:
         """Get view info, or None if not found."""
 ```
 
@@ -228,7 +238,7 @@ class MyCatalog(CatalogInterface):
 
 ## Logging Attach Options Safely
 
-The worker emits structured `_logger.info` records and Sentry breadcrumbs for catalog lifecycle events (`catalog.attach`, `catalog.detach`, `catalog.create`, `catalog.transaction.begin`, `catalog.transaction.commit`, `catalog.transaction.rollback`). These let an operator correlate an opaque `attach_id` (a hex-encoded random byte string used in error scope tags) back to the catalog it represents.
+The worker emits structured `_logger.info` records and Sentry breadcrumbs for catalog lifecycle events (`catalog.attach`, `catalog.detach`, `catalog.create`, `catalog.transaction.begin`, `catalog.transaction.commit`, `catalog.transaction.rollback`). `attach_opaque_data` and `transaction_opaque_data` are short-hashed (12-char SHA-256 prefixes) before they reach the log record, the breadcrumb data, or the Sentry scope tags — the raw values never appear in observability output, since they may carry secrets. An operator correlates the short hash back to the catalog via these breadcrumbs.
 
 The `options` dict passed to `catalog_attach()` and `catalog_create()` routinely carries credentials — passwords, tokens, OAuth secrets, connection strings. To avoid leaking these to logs and Sentry, the worker **does not** log option fields by default. Implementers opt in by overriding `loggable_attach_options()`:
 
@@ -279,17 +289,17 @@ class MyReadOnlyCatalog(ReadOnlyCatalogInterface):
 
     def catalog_attach(self, *, name: str, options: dict[str, Any]) -> CatalogAttachResult:
         return CatalogAttachResult(
-            attach_id=AttachId(b"fixed-id"),
+            attach_opaque_data=AttachOpaqueData(b"fixed-id"),
             supports_transactions=False,
             supports_time_travel=False,
             catalog_version_frozen=True,
             catalog_version=1,
-            attach_id_required=False,
+            attach_opaque_data_required=False,
         )
 
-    def schema_get(self, *, attach_id, transaction_id, name) -> SchemaInfo | None:
+    def schema_get(self, *, attach_opaque_data, transaction_opaque_data, name) -> SchemaInfo | None:
         if name == "main":
-            return SchemaInfo(attach_id=attach_id, name="main", comment=None, tags={})
+            return SchemaInfo(attach_opaque_data=attach_opaque_data, name="main", comment=None, tags={})
         return None
 
     # table_get, view_get return None by default
@@ -501,14 +511,14 @@ catalogs = client.catalogs()  # ["my_catalog"]
 
 # Attach to a catalog
 result = client.catalog_attach(name="my_catalog", options={})
-attach_id = result.attach_id
+attach_opaque_data = result.attach_opaque_data
 
 # List schemas
-for schema in client.schemas(attach_id=attach_id):
+for schema in client.schemas(attach_opaque_data=attach_opaque_data):
     print(f"Schema: {schema.name}")
 
 # Get schema contents (tables, views, functions)
-for obj in client.schema_contents(attach_id=attach_id, name="main"):
+for obj in client.schema_contents(attach_opaque_data=attach_opaque_data, name="main"):
     if isinstance(obj, TableInfo):
         print(f"Table: {obj.name}")
     elif isinstance(obj, ViewInfo):
@@ -519,12 +529,12 @@ for obj in client.schema_contents(attach_id=attach_id, name="main"):
 # Get only scalar functions using type filter
 from vgi.catalog import SchemaObjectType
 for obj in client.schema_contents(
-    attach_id=attach_id, name="main", type=SchemaObjectType.SCALAR_FUNCTION
+    attach_opaque_data=attach_opaque_data, name="main", type=SchemaObjectType.SCALAR_FUNCTION
 ):
     print(f"Scalar Function: {obj.name}")
 
 # Detach when done
-client.catalog_detach(attach_id=attach_id)
+client.catalog_detach(attach_opaque_data=attach_opaque_data)
 ```
 
 ### Available Client Methods
@@ -571,7 +581,7 @@ For stateful catalogs, VGI provides `CatalogStorage` for persisting attachment a
 SQLite-backed storage with WAL mode for concurrent access:
 
 ```python
-from vgi.catalog import CatalogStorageSqlite, AttachId
+from vgi.catalog import CatalogStorageSqlite, AttachOpaqueData
 
 # Use default location (~/.local/state/vgi/vgi_catalog.db)
 storage = CatalogStorageSqlite()
@@ -580,36 +590,36 @@ storage = CatalogStorageSqlite()
 storage = CatalogStorageSqlite("/path/to/catalog.db")
 
 # Store attachment
-attach_id = storage.generate_attach_id()
-storage.attach_put(attach_id, catalog_name="mydb", options={"key": "value"})
+attach_opaque_data = storage.generate_attach_opaque_data()
+storage.attach_put(attach_opaque_data, catalog_name="mydb", options={"key": "value"})
 
 # Retrieve attachment
-result = storage.attach_get(attach_id)  # ("mydb", {"key": "value"})
+result = storage.attach_get(attach_opaque_data)  # ("mydb", {"key": "value"})
 
 # List all attachments
 all_ids = storage.attach_list()
 
 # Delete attachment
-storage.attach_delete(attach_id)
+storage.attach_delete(attach_opaque_data)
 ```
 
 ### Storage Protocol
 
 ```python
 from typing import Protocol
-from vgi.catalog import AttachId, TransactionId
+from vgi.catalog import AttachOpaqueData, TransactionOpaqueData
 
 class CatalogStorage(Protocol):
     # Attachment state
-    def attach_put(self, attach_id: AttachId, catalog_name: str, options: dict) -> None: ...
-    def attach_get(self, attach_id: AttachId) -> tuple[str, dict] | None: ...
-    def attach_delete(self, attach_id: AttachId) -> None: ...
-    def attach_list(self) -> list[AttachId]: ...
+    def attach_put(self, attach_opaque_data: AttachOpaqueData, catalog_name: str, options: dict) -> None: ...
+    def attach_get(self, attach_opaque_data: AttachOpaqueData) -> tuple[str, dict] | None: ...
+    def attach_delete(self, attach_opaque_data: AttachOpaqueData) -> None: ...
+    def attach_list(self) -> list[AttachOpaqueData]: ...
 
     # Transaction state
-    def transaction_put(self, transaction_id: TransactionId, attach_id: AttachId, state: bytes) -> None: ...
-    def transaction_get(self, transaction_id: TransactionId) -> tuple[AttachId, bytes] | None: ...
-    def transaction_delete(self, transaction_id: TransactionId) -> None: ...
+    def transaction_put(self, transaction_opaque_data: TransactionOpaqueData, attach_opaque_data: AttachOpaqueData, state: bytes) -> None: ...
+    def transaction_get(self, transaction_opaque_data: TransactionOpaqueData) -> tuple[AttachOpaqueData, bytes] | None: ...
+    def transaction_delete(self, transaction_opaque_data: TransactionOpaqueData) -> None: ...
 ```
 
 ---
@@ -622,26 +632,26 @@ Catalogs can optionally support transactions:
 class TransactionalCatalog(CatalogInterface):
     def catalog_attach(self, *, name, options) -> CatalogAttachResult:
         return CatalogAttachResult(
-            attach_id=...,
+            attach_opaque_data=...,
             supports_transactions=True,  # Enable transactions
             ...
         )
 
-    def catalog_transaction_begin(self, *, attach_id) -> TransactionId:
-        txn_id = self._create_transaction(attach_id)
+    def catalog_transaction_begin(self, *, attach_opaque_data) -> TransactionOpaqueData:
+        txn_id = self._create_transaction(attach_opaque_data)
         return txn_id
 
-    def catalog_transaction_commit(self, *, attach_id, transaction_id) -> None:
-        self._commit_transaction(transaction_id)
+    def catalog_transaction_commit(self, *, attach_opaque_data, transaction_opaque_data) -> None:
+        self._commit_transaction(transaction_opaque_data)
 
-    def catalog_transaction_rollback(self, *, attach_id, transaction_id) -> None:
-        self._rollback_transaction(transaction_id)
+    def catalog_transaction_rollback(self, *, attach_opaque_data, transaction_opaque_data) -> None:
+        self._rollback_transaction(transaction_opaque_data)
 ```
 
 **Transaction Guarantees:**
 
 - Transactions MAY span multiple worker processes
-- Workers MUST treat `transaction_id` as opaque bytes
+- Workers MUST treat `transaction_opaque_data` as opaque bytes
 - Workers MUST ensure idempotency of commit/rollback
 - If `supports_transactions=False`, transaction methods won't be called
 
@@ -679,12 +689,12 @@ import uuid
 
 from vgi import Worker
 from vgi.catalog import (
-    AttachId,
+    AttachOpaqueData,
     CatalogAttachResult,
     CatalogInterface,
     SchemaInfo,
     TableInfo,
-    TransactionId,
+    TransactionOpaqueData,
     ViewInfo,
 )
 
@@ -693,7 +703,7 @@ class SimpleCatalog(CatalogInterface):
     """A minimal catalog with a single schema."""
 
     def __init__(self):
-        self._attachments: dict[AttachId, str] = {}
+        self._attachments: dict[AttachOpaqueData, str] = {}
 
     def catalogs(self) -> Iterable[str]:
         return ["simple_db"]
@@ -702,27 +712,27 @@ class SimpleCatalog(CatalogInterface):
         if name != "simple_db":
             raise ValueError(f"Unknown catalog: {name}")
 
-        attach_id = AttachId(uuid.uuid4().bytes)
-        self._attachments[attach_id] = name
+        attach_opaque_data = AttachOpaqueData(uuid.uuid4().bytes)
+        self._attachments[attach_opaque_data] = name
 
         return CatalogAttachResult(
-            attach_id=attach_id,
+            attach_opaque_data=attach_opaque_data,
             supports_transactions=False,
             supports_time_travel=False,
             catalog_version_frozen=True,
             catalog_version=1,
-            attach_id_required=False,
+            attach_opaque_data_required=False,
         )
 
-    def catalog_detach(self, *, attach_id: AttachId) -> None:
-        self._attachments.pop(attach_id, None)
+    def catalog_detach(self, *, attach_opaque_data: AttachOpaqueData) -> None:
+        self._attachments.pop(attach_opaque_data, None)
 
     def schema_get(
-        self, *, attach_id: AttachId, transaction_id: TransactionId | None, name: str
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, name: str
     ) -> SchemaInfo | None:
         if name == "main":
             return SchemaInfo(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 name="main",
                 comment="Default schema",
                 tags={},
@@ -730,13 +740,13 @@ class SimpleCatalog(CatalogInterface):
         return None
 
     def table_get(
-        self, *, attach_id: AttachId, transaction_id: TransactionId | None,
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str, name: str
     ) -> TableInfo | None:
         return None  # No tables
 
     def view_get(
-        self, *, attach_id: AttachId, transaction_id: TransactionId | None,
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str, name: str
     ) -> ViewInfo | None:
         return None  # No views

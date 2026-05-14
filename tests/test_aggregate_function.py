@@ -756,7 +756,11 @@ class TestWindowBatchDefault:
         result = WindowSumFunction.window_batch(
             row_ids=[0, 1, 2, 3, 4],
             subframes=[
-                [(0, 1)], [(0, 2)], [(0, 3)], [(0, 4)], [(0, 5)],
+                [(0, 1)],
+                [(0, 2)],
+                [(0, 3)],
+                [(0, 4)],
+                [(0, 5)],
             ],
             partition=partition,
             window_state=None,
@@ -773,10 +777,7 @@ class TestWindowBatchDefault:
         partition = _make_window_partition([10, 20, 30])
         params = _make_dummy_params(pa.int64())
 
-        per_row = [
-            WindowSumFunction.window(rid, [(0, rid + 1)], partition, None, params)
-            for rid in range(3)
-        ]
+        per_row = [WindowSumFunction.window(rid, [(0, rid + 1)], partition, None, params) for rid in range(3)]
         batched = WindowSumFunction.window_batch(
             row_ids=[0, 1, 2],
             subframes=[[(0, 1)], [(0, 2)], [(0, 3)]],
@@ -797,7 +798,11 @@ class TestWindowBatchOverride:
         result = WindowSumBatchFunction.window_batch(
             row_ids=[0, 1, 2, 3, 4],
             subframes=[
-                [(0, 1)], [(0, 2)], [(0, 3)], [(0, 4)], [(0, 5)],
+                [(0, 1)],
+                [(0, 2)],
+                [(0, 3)],
+                [(0, 4)],
+                [(0, 5)],
             ],
             partition=partition,
             window_state=None,

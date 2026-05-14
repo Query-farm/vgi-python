@@ -335,15 +335,15 @@ def _create_cli() -> Any:
         ),
     )
     @click.option(
-        "--attach-id",
-        "attach_id",
+        "--attach-opaque-data",
+        "attach_opaque_data",
         type=str,
         default=None,
         help="DuckDB attachment ID (hex string) for catalog context.",
     )
     @click.option(
-        "--transaction-id",
-        "transaction_id",
+        "--transaction-opaque-data",
+        "transaction_opaque_data",
         type=str,
         default=None,
         help="DuckDB transaction ID (hex string) for transactional operations.",
@@ -377,9 +377,9 @@ def _create_cli() -> Any:
         pushdown_filters: str | None,
         max_workers: int | None,
         table_input_position: int | None,
-        attach_id: str | None,
+        attach_opaque_data: str | None,
         function_type: str,
-        transaction_id: str | None,
+        transaction_opaque_data: str | None,
         named_arg_list: tuple[str, ...],
         setting_list: tuple[str, ...],
     ) -> None:
@@ -444,21 +444,21 @@ def _create_cli() -> Any:
                 key, value_str = setting.split("=", 1)
                 settings[key] = value_str
 
-        # Parse attach_id from hex string if provided
-        attach_id_bytes: bytes | None = None
-        if attach_id is not None:
+        # Parse attach_opaque_data from hex string if provided
+        attach_opaque_data_bytes: bytes | None = None
+        if attach_opaque_data is not None:
             try:
-                attach_id_bytes = bytes.fromhex(attach_id)
+                attach_opaque_data_bytes = bytes.fromhex(attach_opaque_data)
             except ValueError as e:
-                raise click.ClickException(f"Invalid --attach-id: must be a valid hex string: {e}") from e
+                raise click.ClickException(f"Invalid --attach-opaque-data: must be a valid hex string: {e}") from e
 
-        # Parse transaction_id from hex string if provided
-        transaction_id_bytes: bytes | None = None
-        if transaction_id is not None:
+        # Parse transaction_opaque_data from hex string if provided
+        transaction_opaque_data_bytes: bytes | None = None
+        if transaction_opaque_data is not None:
             try:
-                transaction_id_bytes = bytes.fromhex(transaction_id)
+                transaction_opaque_data_bytes = bytes.fromhex(transaction_opaque_data)
             except ValueError as e:
-                raise click.ClickException(f"Invalid --transaction-id: must be a valid hex string: {e}") from e
+                raise click.ClickException(f"Invalid --transaction-opaque-data: must be a valid hex string: {e}") from e
 
         # Parse pushdown_filters from hex string if provided
         pushdown_filters_bytes: bytes | None = None
@@ -484,7 +484,7 @@ def _create_cli() -> Any:
                 worker_path,
                 passthrough_stderr=worker_stderr,
                 worker_limit=max_workers,
-                attach_id=attach_id_bytes,
+                attach_opaque_data=attach_opaque_data_bytes,
             ) as client:
                 # Determine effective function type
                 if function_type == "auto":
@@ -503,7 +503,7 @@ def _create_cli() -> Any:
                         arguments=func_args,
                         projection_ids=list(projection_ids) if projection_ids else None,
                         pushdown_filters=pushdown_filters_bytes,
-                        transaction_id=transaction_id_bytes,
+                        transaction_opaque_data=transaction_opaque_data_bytes,
                         settings=settings,
                     )
                 elif effective_type == "scalar":
@@ -517,7 +517,7 @@ def _create_cli() -> Any:
                         function_name=function_name,
                         arguments=func_args,
                         input=pf.iter_batches(),
-                        transaction_id=transaction_id_bytes,
+                        transaction_opaque_data=transaction_opaque_data_bytes,
                         settings=settings,
                     )
                 else:
@@ -545,7 +545,7 @@ def _create_cli() -> Any:
                         input=pf.iter_batches(),
                         projection_ids=list(projection_ids) if projection_ids else None,
                         pushdown_filters=pushdown_filters_bytes,
-                        transaction_id=transaction_id_bytes,
+                        transaction_opaque_data=transaction_opaque_data_bytes,
                         settings=settings,
                     )
 

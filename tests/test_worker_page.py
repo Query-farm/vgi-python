@@ -10,7 +10,7 @@ import pyarrow as pa
 from vgi._test_fixtures.attach_options import AttachOptionsWorker
 from vgi._test_fixtures.worker import ExampleWorker
 from vgi.catalog import (
-    AttachId,
+    AttachOpaqueData,
     Catalog,
     CatalogAttachResult,
     CatalogInfo,
@@ -439,12 +439,12 @@ class _TestMultiCatalogInterface(ReadOnlyCatalogInterface):
         """Stub — describe-page tests don't actually attach."""
         del options, data_version_spec, implementation_version, ctx, name
         return CatalogAttachResult(
-            attach_id=AttachId(b"\x00" * 16),
+            attach_opaque_data=AttachOpaqueData(b"\x00" * 16),
             supports_transactions=False,
             supports_time_travel=False,
             catalog_version_frozen=True,
             catalog_version=1,
-            attach_id_required=False,
+            attach_opaque_data_required=False,
             default_schema="main",
             settings=[],
             secret_types=[],

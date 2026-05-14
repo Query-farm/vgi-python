@@ -8,7 +8,7 @@ import pyarrow as pa
 
 from vgi._test_fixtures.worker import ExampleWorker
 from vgi.catalog import (
-    AttachId,
+    AttachOpaqueData,
     FunctionInfo,
     FunctionType,
     MacroInfo,
@@ -47,18 +47,18 @@ def _get_functions(
     return [item for item in contents if isinstance(item, FunctionInfo)]
 
 
-def _get_all_functions(client: Client, attach_id: AttachId) -> list[FunctionInfo]:
+def _get_all_functions(client: Client, attach_opaque_data: AttachOpaqueData) -> list[FunctionInfo]:
     """Get both table and scalar functions from the catalog."""
     table_funcs = list(
         client.schema_contents(
-            attach_id=attach_id,
+            attach_opaque_data=attach_opaque_data,
             name="main",
             type=SchemaObjectType.TABLE_FUNCTION,
         )
     )
     scalar_funcs = list(
         client.schema_contents(
-            attach_id=attach_id,
+            attach_opaque_data=attach_opaque_data,
             name="main",
             type=SchemaObjectType.SCALAR_FUNCTION,
         )
@@ -81,7 +81,7 @@ class TestExampleWorkerCatalog:
         client = Client(EXAMPLE_WORKER)
         result = client.catalog_attach(name="example", options={}, data_version_spec=None, implementation_version=None)
 
-        assert result.attach_id is not None
+        assert result.attach_opaque_data is not None
         assert result.supports_transactions is False
         assert result.catalog_version_frozen is True
 
@@ -93,10 +93,14 @@ class TestExampleWorkerCatalog:
         attach_result = client.catalog_attach(
             name="example", options={}, data_version_spec=None, implementation_version=None
         )
-        attach_id = attach_result.attach_id
+        attach_opaque_data = attach_result.attach_opaque_data
 
         # Get table functions
-        contents = list(client.schema_contents(attach_id=attach_id, name="main", type=SchemaObjectType.TABLE_FUNCTION))
+        contents = list(
+            client.schema_contents(
+                attach_opaque_data=attach_opaque_data, name="main", type=SchemaObjectType.TABLE_FUNCTION
+            )
+        )
 
         # Should have functions
         assert len(contents) > 0
@@ -117,7 +121,7 @@ class TestExampleWorkerCatalog:
         # Get table functions
         table_funcs = list(
             client.schema_contents(
-                attach_id=attach_result.attach_id,
+                attach_opaque_data=attach_result.attach_opaque_data,
                 name="main",
                 type=SchemaObjectType.TABLE_FUNCTION,
             )
@@ -126,7 +130,7 @@ class TestExampleWorkerCatalog:
         # Get scalar functions
         scalar_funcs = list(
             client.schema_contents(
-                attach_id=attach_result.attach_id,
+                attach_opaque_data=attach_result.attach_opaque_data,
                 name="main",
                 type=SchemaObjectType.SCALAR_FUNCTION,
             )
@@ -135,7 +139,7 @@ class TestExampleWorkerCatalog:
         # Get aggregate functions
         aggregate_funcs = list(
             client.schema_contents(
-                attach_id=attach_result.attach_id,
+                attach_opaque_data=attach_result.attach_opaque_data,
                 name="main",
                 type=SchemaObjectType.AGGREGATE_FUNCTION,
             )
@@ -165,7 +169,7 @@ class TestExampleWorkerCatalog:
         attach_result = client.catalog_attach(
             name="example", options={}, data_version_spec=None, implementation_version=None
         )
-        functions = _get_all_functions(client, attach_result.attach_id)
+        functions = _get_all_functions(client, attach_result.attach_opaque_data)
 
         # Create lookup by name
         by_name = {fn.name: fn for fn in functions}
@@ -186,7 +190,7 @@ class TestExampleWorkerCatalog:
         attach_result = client.catalog_attach(
             name="example", options={}, data_version_spec=None, implementation_version=None
         )
-        functions = _get_all_functions(client, attach_result.attach_id)
+        functions = _get_all_functions(client, attach_result.attach_opaque_data)
 
         # Create lookup by name
         by_name = {fn.name: fn for fn in functions}
@@ -212,7 +216,7 @@ class TestExampleWorkerCatalog:
         )
         functions = list(
             client.schema_contents(
-                attach_id=attach_result.attach_id,
+                attach_opaque_data=attach_result.attach_opaque_data,
                 name="main",
                 type=SchemaObjectType.TABLE_FUNCTION,
             )
@@ -233,7 +237,7 @@ class TestExampleWorkerCatalog:
         attach_result = client.catalog_attach(
             name="example", options={}, data_version_spec=None, implementation_version=None
         )
-        functions = _get_all_functions(client, attach_result.attach_id)
+        functions = _get_all_functions(client, attach_result.attach_opaque_data)
 
         # All functions should be in 'main' schema
         for item in functions:
@@ -248,7 +252,7 @@ class TestExampleWorkerCatalog:
         )
         functions = list(
             client.schema_contents(
-                attach_id=attach_result.attach_id,
+                attach_opaque_data=attach_result.attach_opaque_data,
                 name="main",
                 type=SchemaObjectType.SCALAR_FUNCTION,
             )
@@ -275,7 +279,7 @@ class TestExampleWorkerCatalog:
         )
         functions = list(
             client.schema_contents(
-                attach_id=attach_result.attach_id,
+                attach_opaque_data=attach_result.attach_opaque_data,
                 name="main",
                 type=SchemaObjectType.SCALAR_FUNCTION,
             )
@@ -303,7 +307,7 @@ class TestExampleWorkerCatalog:
         )
         functions = list(
             client.schema_contents(
-                attach_id=attach_result.attach_id,
+                attach_opaque_data=attach_result.attach_opaque_data,
                 name="main",
                 type=SchemaObjectType.TABLE_FUNCTION,
             )
@@ -332,7 +336,7 @@ class TestExampleWorkerViews:
 
         views = list(
             client.schema_contents(
-                attach_id=attach_result.attach_id,
+                attach_opaque_data=attach_result.attach_opaque_data,
                 name="main",
                 type=SchemaObjectType.VIEW,
             )
@@ -352,7 +356,7 @@ class TestExampleWorkerViews:
 
         views = list(
             client.schema_contents(
-                attach_id=attach_result.attach_id,
+                attach_opaque_data=attach_result.attach_opaque_data,
                 name="data",
                 type=SchemaObjectType.VIEW,
             )
@@ -369,7 +373,7 @@ class TestExampleWorkerViews:
         )
 
         view = client.view_get(
-            attach_id=attach_result.attach_id,
+            attach_opaque_data=attach_result.attach_opaque_data,
             schema_name="main",
             name="first_ten",
         )
@@ -393,14 +397,14 @@ class TestExampleWorkerMacros:
 
         scalar_macros = list(
             client.schema_contents(
-                attach_id=attach_result.attach_id,
+                attach_opaque_data=attach_result.attach_opaque_data,
                 name="main",
                 type=SchemaObjectType.SCALAR_MACRO,
             )
         )
         table_macros = list(
             client.schema_contents(
-                attach_id=attach_result.attach_id,
+                attach_opaque_data=attach_result.attach_opaque_data,
                 name="main",
                 type=SchemaObjectType.TABLE_MACRO,
             )
@@ -418,7 +422,7 @@ class TestExampleWorkerMacros:
         )
 
         info = client.macro_get(
-            attach_id=attach_result.attach_id,
+            attach_opaque_data=attach_result.attach_opaque_data,
             schema_name="main",
             name="vgi_multiply",
         )
@@ -438,12 +442,12 @@ class TestExampleWorkerMacros:
         )
 
         multiply = client.macro_get(
-            attach_id=attach_result.attach_id,
+            attach_opaque_data=attach_result.attach_opaque_data,
             schema_name="main",
             name="vgi_multiply",
         )
         range_table = client.macro_get(
-            attach_id=attach_result.attach_id,
+            attach_opaque_data=attach_result.attach_opaque_data,
             schema_name="main",
             name="vgi_range_table",
         )
@@ -462,7 +466,7 @@ class TestExampleWorkerMacros:
         )
 
         info = client.macro_get(
-            attach_id=attach_result.attach_id,
+            attach_opaque_data=attach_result.attach_opaque_data,
             schema_name="main",
             name="vgi_multiply",
         )
@@ -478,7 +482,7 @@ class TestExampleWorkerMacros:
         )
 
         info = client.macro_get(
-            attach_id=attach_result.attach_id,
+            attach_opaque_data=attach_result.attach_opaque_data,
             schema_name="main",
             name="vgi_clamp",
         )

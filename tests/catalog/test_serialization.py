@@ -6,7 +6,7 @@ from vgi_rpc.utils import deserialize_record_batch
 
 from vgi import schema
 from vgi.catalog import (
-    AttachId,
+    AttachOpaqueData,
     CatalogAttachResult,
     FunctionInfo,
     FunctionType,
@@ -27,7 +27,7 @@ class TestCatalogAttachResultSerialization:
     def test_basic_round_trip(self) -> None:
         """Test basic serialization and deserialization."""
         original = CatalogAttachResult(
-            attach_id=AttachId(b"\x01\x02\x03\x04"),
+            attach_opaque_data=AttachOpaqueData(b"\x01\x02\x03\x04"),
             supports_transactions=True,
             supports_time_travel=False,
             catalog_version_frozen=False,
@@ -39,16 +39,16 @@ class TestCatalogAttachResultSerialization:
         batch, _ = deserialize_record_batch(serialized)
         restored = CatalogAttachResult.deserialize_from_batch(batch)
 
-        assert restored.attach_id == original.attach_id
+        assert restored.attach_opaque_data == original.attach_opaque_data
         assert restored.supports_transactions == original.supports_transactions
         assert restored.supports_time_travel == original.supports_time_travel
         assert restored.catalog_version_frozen == original.catalog_version_frozen
         assert restored.catalog_version == original.catalog_version
 
-    def test_empty_attach_id(self) -> None:
-        """Test with empty attach_id bytes."""
+    def test_empty_attach_opaque_data(self) -> None:
+        """Test with empty attach_opaque_data bytes."""
         original = CatalogAttachResult(
-            attach_id=AttachId(b""),
+            attach_opaque_data=AttachOpaqueData(b""),
             supports_transactions=False,
             supports_time_travel=False,
             catalog_version_frozen=True,
@@ -60,12 +60,12 @@ class TestCatalogAttachResultSerialization:
         batch, _ = deserialize_record_batch(serialized)
         restored = CatalogAttachResult.deserialize_from_batch(batch)
 
-        assert restored.attach_id == b""
+        assert restored.attach_opaque_data == b""
 
     def test_all_flags_true(self) -> None:
         """Test with all boolean flags set to true."""
         original = CatalogAttachResult(
-            attach_id=AttachId(b"test"),
+            attach_opaque_data=AttachOpaqueData(b"test"),
             supports_transactions=True,
             supports_time_travel=True,
             catalog_version_frozen=True,
@@ -88,7 +88,7 @@ class TestCatalogAttachResultSerialization:
         option_bytes_2 = b"serialized_option_2"
 
         original = CatalogAttachResult(
-            attach_id=AttachId(b"\x01\x02"),
+            attach_opaque_data=AttachOpaqueData(b"\x01\x02"),
             supports_transactions=True,
             supports_time_travel=False,
             catalog_version_frozen=False,
@@ -108,7 +108,7 @@ class TestCatalogAttachResultSerialization:
     def test_with_empty_settings(self) -> None:
         """Test with empty settings list."""
         original = CatalogAttachResult(
-            attach_id=AttachId(b"\x01\x02"),
+            attach_opaque_data=AttachOpaqueData(b"\x01\x02"),
             supports_transactions=True,
             supports_time_travel=False,
             catalog_version_frozen=False,
@@ -130,7 +130,7 @@ class TestSchemaInfoSerialization:
     def test_basic_round_trip(self) -> None:
         """Test basic serialization and deserialization."""
         original = SchemaInfo(
-            attach_id=AttachId(b"\x01\x02\x03\x04"),
+            attach_opaque_data=AttachOpaqueData(b"\x01\x02\x03\x04"),
             name="main",
             comment="Test schema",
             tags={"env": "test", "owner": "alice"},
@@ -139,7 +139,7 @@ class TestSchemaInfoSerialization:
         batch, _ = deserialize_record_batch(serialized)
         restored = SchemaInfo.deserialize_from_batch(batch)
 
-        assert restored.attach_id == original.attach_id
+        assert restored.attach_opaque_data == original.attach_opaque_data
         assert restored.name == original.name
         assert restored.comment == original.comment
         assert restored.tags == original.tags
@@ -147,7 +147,7 @@ class TestSchemaInfoSerialization:
     def test_none_comment(self) -> None:
         """Test with None comment."""
         original = SchemaInfo(
-            attach_id=AttachId(b"test"),
+            attach_opaque_data=AttachOpaqueData(b"test"),
             name="schema1",
             comment=None,
             tags={},
@@ -161,7 +161,7 @@ class TestSchemaInfoSerialization:
     def test_empty_tags(self) -> None:
         """Test with empty tags dictionary."""
         original = SchemaInfo(
-            attach_id=AttachId(b"test"),
+            attach_opaque_data=AttachOpaqueData(b"test"),
             name="schema1",
             comment="Comment",
             tags={},
@@ -175,7 +175,7 @@ class TestSchemaInfoSerialization:
     def test_empty_string_name(self) -> None:
         """Test with empty string name."""
         original = SchemaInfo(
-            attach_id=AttachId(b"test"),
+            attach_opaque_data=AttachOpaqueData(b"test"),
             name="",
             comment=None,
             tags={},
@@ -975,12 +975,12 @@ class TestArrowSchemaCorrectness:
         """Verify CatalogAttachResult Arrow schema."""
         schema = CatalogAttachResult.ARROW_SCHEMA
         assert len(schema) == 14
-        assert schema.field("attach_id").type == pa.binary()
+        assert schema.field("attach_opaque_data").type == pa.binary()
         assert schema.field("supports_transactions").type == pa.bool_()
         assert schema.field("supports_time_travel").type == pa.bool_()
         assert schema.field("catalog_version_frozen").type == pa.bool_()
         assert schema.field("catalog_version").type == pa.int64()
-        assert schema.field("attach_id_required").type == pa.bool_()
+        assert schema.field("attach_opaque_data_required").type == pa.bool_()
         assert schema.field("default_schema").type == pa.string()
         assert schema.field("settings").type == pa.list_(pa.binary())
         assert schema.field("secret_types").type == pa.list_(pa.binary())
@@ -991,7 +991,7 @@ class TestArrowSchemaCorrectness:
         """Verify SchemaInfo Arrow schema."""
         schema = SchemaInfo.ARROW_SCHEMA
         assert len(schema) == 5
-        assert schema.field("attach_id").type == pa.binary()
+        assert schema.field("attach_opaque_data").type == pa.binary()
         assert schema.field("name").type == pa.string()
         assert schema.field("comment").type == pa.string()
         assert schema.field("comment").nullable is True

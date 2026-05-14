@@ -129,24 +129,18 @@ class TestPlainTypesUnchanged:
 
     def test_int32_eq(self) -> None:
         batch = pa.RecordBatch.from_pydict({"n": pa.array([1, 2, 3, 4], type=pa.int32())})
-        f = ConstantFilter(
-            column_name="n", column_index=0, op=ComparisonOp.EQ, value=pa.scalar(2, type=pa.int32())
-        )
+        f = ConstantFilter(column_name="n", column_index=0, op=ComparisonOp.EQ, value=pa.scalar(2, type=pa.int32()))
         assert f.evaluate(batch).to_pylist() == [False, True, False, False]
 
     def test_string_eq(self) -> None:
         batch = pa.RecordBatch.from_pydict({"s": ["a", "b", "c"]})
-        f = ConstantFilter(
-            column_name="s", column_index=0, op=ComparisonOp.EQ, value=pa.scalar("b")
-        )
+        f = ConstantFilter(column_name="s", column_index=0, op=ComparisonOp.EQ, value=pa.scalar("b"))
         assert f.evaluate(batch).to_pylist() == [False, True, False]
 
     def test_plain_bool_eq(self) -> None:
         """No extension on either side — must still work after the fix."""
         batch = _batch_with_bool("flag", [True, False, None, True])
-        f = ConstantFilter(
-            column_name="flag", column_index=0, op=ComparisonOp.EQ, value=pa.scalar(True)
-        )
+        f = ConstantFilter(column_name="flag", column_index=0, op=ComparisonOp.EQ, value=pa.scalar(True))
         assert f.evaluate(batch).to_pylist() == [True, False, None, True]
 
 
@@ -180,7 +174,8 @@ class TestInFilterExtension:
 
 class TestPlainLiteralBool8Column:
     """Defensive: if some future code path emits a plain bool literal but
-    the column happens to be bool8, normalisation should still align them."""
+    the column happens to be bool8, normalisation should still align them.
+    """
 
     def test_plain_bool_literal_bool8_column(self) -> None:
         batch = _batch_with_bool8("flag", [True, False, None, True])
@@ -203,7 +198,8 @@ class TestPlainLiteralBool8Column:
 
 def test_pyarrow_kernel_gap_still_present() -> None:
     """Documents the underlying PyArrow gap. If this passes in a future
-    PyArrow release the normalisation helper is over-defensive but harmless."""
+    PyArrow release the normalisation helper is over-defensive but harmless.
+    """
     import pyarrow.compute as pc
 
     col = pa.array([True, False], type=pa.bool_())
@@ -251,7 +247,9 @@ class TestUuidExtension:
     def test_eq(self) -> None:
         batch = pa.RecordBatch.from_arrays([_uuid_array(self.UUIDS)], names=["id"])
         f = ConstantFilter(
-            column_name="id", column_index=0, op=ComparisonOp.EQ,
+            column_name="id",
+            column_index=0,
+            op=ComparisonOp.EQ,
             value=_uuid_scalar("00000000000000000000000000000002"),
         )
         assert f.evaluate(batch).to_pylist() == [False, True, None, False]
@@ -259,17 +257,21 @@ class TestUuidExtension:
     def test_ne(self) -> None:
         batch = pa.RecordBatch.from_arrays([_uuid_array(self.UUIDS)], names=["id"])
         f = ConstantFilter(
-            column_name="id", column_index=0, op=ComparisonOp.NE,
+            column_name="id",
+            column_index=0,
+            op=ComparisonOp.NE,
             value=_uuid_scalar("00000000000000000000000000000002"),
         )
         assert f.evaluate(batch).to_pylist() == [True, False, None, True]
 
     def test_in(self) -> None:
         batch = pa.RecordBatch.from_arrays([_uuid_array(self.UUIDS)], names=["id"])
-        values = _uuid_array([
-            "00000000000000000000000000000001",
-            "ffffffffffffffffffffffffffffffff",
-        ])
+        values = _uuid_array(
+            [
+                "00000000000000000000000000000001",
+                "ffffffffffffffffffffffffffffffff",
+            ]
+        )
         f = InFilter(column_name="id", column_index=0, values=values)
         assert f.evaluate(batch).to_pylist() == [True, False, False, True]
 
@@ -290,7 +292,8 @@ def test_pyarrow_interval_kernel_gap() -> None:
     serialisation (DuckDB extension side) or to implement a custom
     field-by-field comparison in ``ConstantFilter.evaluate``.
 
-    This test documents the gap so we notice if PyArrow ever fills it."""
+    This test documents the gap so we notice if PyArrow ever fills it.
+    """
     import pyarrow.compute as pc
 
     arr = pa.array([(1, 1, 1000), (2, 2, 2000)], type=pa.month_day_nano_interval())

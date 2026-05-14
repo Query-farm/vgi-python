@@ -245,8 +245,17 @@ def create_app(
     from vgi.otel import VgiTracer
     from vgi.protocol import VgiProtocol
 
+    # Resolve the signing key once, here, so the worker (which seals catalog
+    # opaque-data envelopes) and the HTTP state-token machinery share the same
+    # key. When the operator did not configure VGI_SIGNING_KEY, generate an
+    # ephemeral per-process key: sealed values are then valid for the life of
+    # this process and clients re-ATTACH after a restart.
+    if signing_key is None:
+        signing_key = os.urandom(32)
+
     worker = worker_cls(quiet=True, log_level=log_level)
     worker._vgi_tracer = VgiTracer.create(otel_config)
+    worker._signing_key = signing_key
     from vgi.worker import _get_vgi_version
 
     server = RpcServer(VgiProtocol, worker, enable_describe=describe, server_version=_get_vgi_version())
@@ -254,7 +263,7 @@ def create_app(
         server,
         prefix=prefix,
         cors_origins=cors_origins,
-        signing_key=signing_key,
+        token_key=signing_key,
         authenticate=authenticate,
         oauth_resource_metadata=oauth_resource_metadata,
         otel_config=otel_config,

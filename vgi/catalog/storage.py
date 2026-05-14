@@ -1,7 +1,7 @@
 """Storage for VGI catalog state.
 
 This module provides a storage protocol and implementation for persisting
-catalog attach_id and transaction_id state across worker processes.
+catalog attach_opaque_data and transaction_opaque_data state across worker processes.
 
 Protocol:
     CatalogStorage: Protocol for catalog state persistence.
@@ -16,7 +16,7 @@ import sqlite3
 import uuid
 from typing import Any, Protocol
 
-from vgi.catalog.catalog_interface import AttachId, TransactionId
+from vgi.catalog.catalog_interface import AttachOpaqueData, TransactionOpaqueData
 
 __all__ = [
     "CatalogStorage",
@@ -41,7 +41,7 @@ class CatalogStorage(Protocol):
     Provides two access patterns for catalog state:
 
     **Attachments** - Track catalog attachments with their options.
-    Stores the mapping from attach_id to catalog name and options.
+    Stores the mapping from attach_opaque_data to catalog name and options.
 
     **Transactions** - Track active transactions.
     Stores transaction state for catalogs that support transactions.
@@ -50,22 +50,22 @@ class CatalogStorage(Protocol):
 
     # --- Attachment State ---
 
-    def attach_put(self, attach_id: AttachId, catalog_name: str, options: dict[str, Any]) -> None:
+    def attach_put(self, attach_opaque_data: AttachOpaqueData, catalog_name: str, options: dict[str, Any]) -> None:
         """Store attachment state.
 
         Args:
-            attach_id: Unique identifier for the attachment.
+            attach_opaque_data: Unique identifier for the attachment.
             catalog_name: Name of the attached catalog.
             options: Options passed during attachment.
 
         """
         ...
 
-    def attach_get(self, attach_id: AttachId) -> tuple[str, dict[str, Any]] | None:
-        """Retrieve attachment state by attach_id.
+    def attach_get(self, attach_opaque_data: AttachOpaqueData) -> tuple[str, dict[str, Any]] | None:
+        """Retrieve attachment state by attach_opaque_data.
 
         Args:
-            attach_id: Unique identifier for the attachment.
+            attach_opaque_data: Unique identifier for the attachment.
 
         Returns:
             Tuple of (catalog_name, options), or None if not found.
@@ -73,54 +73,56 @@ class CatalogStorage(Protocol):
         """
         ...
 
-    def attach_delete(self, attach_id: AttachId) -> None:
+    def attach_delete(self, attach_opaque_data: AttachOpaqueData) -> None:
         """Delete attachment state.
 
         Args:
-            attach_id: Unique identifier for the attachment.
+            attach_opaque_data: Unique identifier for the attachment.
 
         """
         ...
 
-    def attach_list(self) -> list[AttachId]:
-        """List all active attachment IDs.
+    def attach_list(self) -> list[AttachOpaqueData]:
+        """List all active attachments.
 
         Returns:
-            List of all attach_ids in storage.
+            List of all attach opaque data values in storage.
 
         """
         ...
 
     # --- Transaction State ---
 
-    def transaction_put(self, transaction_id: TransactionId, attach_id: AttachId, state: bytes) -> None:
+    def transaction_put(
+        self, transaction_opaque_data: TransactionOpaqueData, attach_opaque_data: AttachOpaqueData, state: bytes
+    ) -> None:
         """Store transaction state.
 
         Args:
-            transaction_id: Unique identifier for the transaction.
-            attach_id: Attachment the transaction belongs to.
+            transaction_opaque_data: Unique identifier for the transaction.
+            attach_opaque_data: Attachment the transaction belongs to.
             state: Serialized transaction state.
 
         """
         ...
 
-    def transaction_get(self, transaction_id: TransactionId) -> tuple[AttachId, bytes] | None:
+    def transaction_get(self, transaction_opaque_data: TransactionOpaqueData) -> tuple[AttachOpaqueData, bytes] | None:
         """Retrieve transaction state.
 
         Args:
-            transaction_id: Unique identifier for the transaction.
+            transaction_opaque_data: Unique identifier for the transaction.
 
         Returns:
-            Tuple of (attach_id, state bytes), or None if not found.
+            Tuple of (attach_opaque_data, state bytes), or None if not found.
 
         """
         ...
 
-    def transaction_delete(self, transaction_id: TransactionId) -> None:
+    def transaction_delete(self, transaction_opaque_data: TransactionOpaqueData) -> None:
         """Delete transaction state.
 
         Args:
-            transaction_id: Unique identifier for the transaction.
+            transaction_opaque_data: Unique identifier for the transaction.
 
         """
         ...
@@ -132,7 +134,7 @@ class CatalogStorageSqlite:
     This implementation uses SQLite with WAL mode to allow multiple worker
     processes to share catalog state. It manages two tables:
 
-    - catalog_attachments: Maps attach_id to catalog name and options
+    - catalog_attachments: Maps attach_opaque_data to catalog name and options
     - catalog_transactions: Tracks active transactions
 
     """
@@ -161,7 +163,7 @@ class CatalogStorageSqlite:
             # Attachment table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS catalog_attachments (
-                    attach_id BLOB PRIMARY KEY,
+                    attach_opaque_data BLOB PRIMARY KEY,
                     catalog_name TEXT NOT NULL,
                     options_json TEXT NOT NULL,
                     created_at REAL DEFAULT (julianday('now'))
@@ -170,16 +172,16 @@ class CatalogStorageSqlite:
             # Transaction table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS catalog_transactions (
-                    transaction_id BLOB PRIMARY KEY,
-                    attach_id BLOB NOT NULL,
+                    transaction_opaque_data BLOB PRIMARY KEY,
+                    attach_opaque_data BLOB NOT NULL,
                     state_data BLOB NOT NULL,
                     created_at REAL DEFAULT (julianday('now')),
-                    FOREIGN KEY (attach_id) REFERENCES catalog_attachments(attach_id)
+                    FOREIGN KEY (attach_opaque_data) REFERENCES catalog_attachments(attach_opaque_data)
                 )
             """)
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_transactions_attach
-                ON catalog_transactions(attach_id)
+                ON catalog_transactions(attach_opaque_data)
             """)
             conn.commit()
         finally:
@@ -187,7 +189,7 @@ class CatalogStorageSqlite:
 
     # --- Attachment State ---
 
-    def attach_put(self, attach_id: AttachId, catalog_name: str, options: dict[str, Any]) -> None:
+    def attach_put(self, attach_opaque_data: AttachOpaqueData, catalog_name: str, options: dict[str, Any]) -> None:
         """Store attachment state."""
         import json
 
@@ -202,25 +204,25 @@ class CatalogStorageSqlite:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO catalog_attachments
-                (attach_id, catalog_name, options_json, created_at)
+                (attach_opaque_data, catalog_name, options_json, created_at)
                 VALUES (?, ?, ?, julianday('now'))
                 """,
-                (attach_id, catalog_name, options_json),
+                (attach_opaque_data, catalog_name, options_json),
             )
             conn.commit()
         finally:
             conn.close()
 
-    def attach_get(self, attach_id: AttachId) -> tuple[str, dict[str, Any]] | None:
-        """Retrieve attachment state by attach_id."""
+    def attach_get(self, attach_opaque_data: AttachOpaqueData) -> tuple[str, dict[str, Any]] | None:
+        """Retrieve attachment state by attach_opaque_data."""
         import json
 
         conn = self._connect()
         try:
             cursor = conn.execute(
                 """SELECT catalog_name, options_json
-                FROM catalog_attachments WHERE attach_id = ?""",
-                (attach_id,),
+                FROM catalog_attachments WHERE attach_opaque_data = ?""",
+                (attach_opaque_data,),
             )
             row = cursor.fetchone()
         finally:
@@ -233,35 +235,37 @@ class CatalogStorageSqlite:
         options: dict[str, Any] = json.loads(row[1])
         return (catalog_name, options)
 
-    def attach_delete(self, attach_id: AttachId) -> None:
+    def attach_delete(self, attach_opaque_data: AttachOpaqueData) -> None:
         """Delete attachment state."""
         conn = self._connect()
         try:
             # Delete associated transactions first
             conn.execute(
-                "DELETE FROM catalog_transactions WHERE attach_id = ?",
-                (attach_id,),
+                "DELETE FROM catalog_transactions WHERE attach_opaque_data = ?",
+                (attach_opaque_data,),
             )
             conn.execute(
-                "DELETE FROM catalog_attachments WHERE attach_id = ?",
-                (attach_id,),
+                "DELETE FROM catalog_attachments WHERE attach_opaque_data = ?",
+                (attach_opaque_data,),
             )
             conn.commit()
         finally:
             conn.close()
 
-    def attach_list(self) -> list[AttachId]:
+    def attach_list(self) -> list[AttachOpaqueData]:
         """List all active attachment IDs."""
         conn = self._connect()
         try:
-            cursor = conn.execute("SELECT attach_id FROM catalog_attachments")
-            return [AttachId(row[0]) for row in cursor.fetchall()]
+            cursor = conn.execute("SELECT attach_opaque_data FROM catalog_attachments")
+            return [AttachOpaqueData(row[0]) for row in cursor.fetchall()]
         finally:
             conn.close()
 
     # --- Transaction State ---
 
-    def transaction_put(self, transaction_id: TransactionId, attach_id: AttachId, state: bytes) -> None:
+    def transaction_put(
+        self, transaction_opaque_data: TransactionOpaqueData, attach_opaque_data: AttachOpaqueData, state: bytes
+    ) -> None:
         """Store transaction state."""
         # Opportunistically clean old entries (1% of calls)
         if random.random() < 0.01:
@@ -272,23 +276,23 @@ class CatalogStorageSqlite:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO catalog_transactions
-                (transaction_id, attach_id, state_data, created_at)
+                (transaction_opaque_data, attach_opaque_data, state_data, created_at)
                 VALUES (?, ?, ?, julianday('now'))
                 """,
-                (transaction_id, attach_id, state),
+                (transaction_opaque_data, attach_opaque_data, state),
             )
             conn.commit()
         finally:
             conn.close()
 
-    def transaction_get(self, transaction_id: TransactionId) -> tuple[AttachId, bytes] | None:
+    def transaction_get(self, transaction_opaque_data: TransactionOpaqueData) -> tuple[AttachOpaqueData, bytes] | None:
         """Retrieve transaction state."""
         conn = self._connect()
         try:
             cursor = conn.execute(
-                """SELECT attach_id, state_data
-                FROM catalog_transactions WHERE transaction_id = ?""",
-                (transaction_id,),
+                """SELECT attach_opaque_data, state_data
+                FROM catalog_transactions WHERE transaction_opaque_data = ?""",
+                (transaction_opaque_data,),
             )
             row = cursor.fetchone()
         finally:
@@ -297,15 +301,15 @@ class CatalogStorageSqlite:
         if row is None:
             return None
 
-        return (AttachId(row[0]), row[1])
+        return (AttachOpaqueData(row[0]), row[1])
 
-    def transaction_delete(self, transaction_id: TransactionId) -> None:
+    def transaction_delete(self, transaction_opaque_data: TransactionOpaqueData) -> None:
         """Delete transaction state."""
         conn = self._connect()
         try:
             conn.execute(
-                "DELETE FROM catalog_transactions WHERE transaction_id = ?",
-                (transaction_id,),
+                "DELETE FROM catalog_transactions WHERE transaction_opaque_data = ?",
+                (transaction_opaque_data,),
             )
             conn.commit()
         finally:
@@ -313,23 +317,23 @@ class CatalogStorageSqlite:
 
     # --- Utility Methods ---
 
-    def generate_attach_id(self) -> AttachId:
-        """Generate a new unique attach_id.
+    def generate_attach_opaque_data(self) -> AttachOpaqueData:
+        """Generate a new unique attach_opaque_data.
 
         Returns:
-            A new AttachId based on UUID4.
+            A new AttachOpaqueData based on UUID4.
 
         """
-        return AttachId(uuid.uuid4().bytes)
+        return AttachOpaqueData(uuid.uuid4().bytes)
 
-    def generate_transaction_id(self) -> TransactionId:
-        """Generate a new unique transaction_id.
+    def generate_transaction_opaque_data(self) -> TransactionOpaqueData:
+        """Generate a new unique transaction_opaque_data.
 
         Returns:
-            A new TransactionId based on UUID4.
+            A new TransactionOpaqueData based on UUID4.
 
         """
-        return TransactionId(uuid.uuid4().bytes)
+        return TransactionOpaqueData(uuid.uuid4().bytes)
 
     # --- Maintenance ---
 

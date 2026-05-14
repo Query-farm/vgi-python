@@ -3,7 +3,7 @@
 import tempfile
 from pathlib import Path
 
-from vgi.catalog import AttachId, CatalogStorageSqlite, TransactionId
+from vgi.catalog import AttachOpaqueData, CatalogStorageSqlite, TransactionOpaqueData
 
 
 class TestCatalogStorageSqliteAttachments:
@@ -15,10 +15,10 @@ class TestCatalogStorageSqliteAttachments:
             db_path = str(Path(tmpdir) / "test.db")
             storage = CatalogStorageSqlite(db_path)
 
-            attach_id = storage.generate_attach_id()
-            storage.attach_put(attach_id, "my_catalog", {"key": "value"})
+            attach_opaque_data = storage.generate_attach_opaque_data()
+            storage.attach_put(attach_opaque_data, "my_catalog", {"key": "value"})
 
-            result = storage.attach_get(attach_id)
+            result = storage.attach_get(attach_opaque_data)
             assert result is not None
             catalog_name, options = result
             assert catalog_name == "my_catalog"
@@ -30,7 +30,7 @@ class TestCatalogStorageSqliteAttachments:
             db_path = str(Path(tmpdir) / "test.db")
             storage = CatalogStorageSqlite(db_path)
 
-            result = storage.attach_get(AttachId(b"nonexistent"))
+            result = storage.attach_get(AttachOpaqueData(b"nonexistent"))
             assert result is None
 
     def test_attach_delete(self) -> None:
@@ -39,11 +39,11 @@ class TestCatalogStorageSqliteAttachments:
             db_path = str(Path(tmpdir) / "test.db")
             storage = CatalogStorageSqlite(db_path)
 
-            attach_id = storage.generate_attach_id()
-            storage.attach_put(attach_id, "catalog", {})
-            storage.attach_delete(attach_id)
+            attach_opaque_data = storage.generate_attach_opaque_data()
+            storage.attach_put(attach_opaque_data, "catalog", {})
+            storage.attach_delete(attach_opaque_data)
 
-            result = storage.attach_get(attach_id)
+            result = storage.attach_get(attach_opaque_data)
             assert result is None
 
     def test_attach_list(self) -> None:
@@ -52,8 +52,8 @@ class TestCatalogStorageSqliteAttachments:
             db_path = str(Path(tmpdir) / "test.db")
             storage = CatalogStorageSqlite(db_path)
 
-            id1 = storage.generate_attach_id()
-            id2 = storage.generate_attach_id()
+            id1 = storage.generate_attach_opaque_data()
+            id2 = storage.generate_attach_opaque_data()
             storage.attach_put(id1, "catalog1", {})
             storage.attach_put(id2, "catalog2", {})
 
@@ -63,16 +63,16 @@ class TestCatalogStorageSqliteAttachments:
             assert id2 in ids
 
     def test_attach_put_replaces_existing(self) -> None:
-        """Putting same attach_id replaces the existing entry."""
+        """Putting same attach_opaque_data replaces the existing entry."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
             storage = CatalogStorageSqlite(db_path)
 
-            attach_id = storage.generate_attach_id()
-            storage.attach_put(attach_id, "old_catalog", {"old": True})
-            storage.attach_put(attach_id, "new_catalog", {"new": True})
+            attach_opaque_data = storage.generate_attach_opaque_data()
+            storage.attach_put(attach_opaque_data, "old_catalog", {"old": True})
+            storage.attach_put(attach_opaque_data, "new_catalog", {"new": True})
 
-            result = storage.attach_get(attach_id)
+            result = storage.attach_get(attach_opaque_data)
             assert result is not None
             catalog_name, options = result
             assert catalog_name == "new_catalog"
@@ -84,7 +84,7 @@ class TestCatalogStorageSqliteAttachments:
             db_path = str(Path(tmpdir) / "test.db")
             storage = CatalogStorageSqlite(db_path)
 
-            attach_id = storage.generate_attach_id()
+            attach_opaque_data = storage.generate_attach_opaque_data()
             options = {
                 "string": "value",
                 "number": 42,
@@ -94,9 +94,9 @@ class TestCatalogStorageSqliteAttachments:
                 "list": [1, 2, 3],
                 "nested": {"a": {"b": "c"}},
             }
-            storage.attach_put(attach_id, "catalog", options)
+            storage.attach_put(attach_opaque_data, "catalog", options)
 
-            result = storage.attach_get(attach_id)
+            result = storage.attach_get(attach_opaque_data)
             assert result is not None
             _, retrieved_options = result
             assert retrieved_options == options
@@ -111,17 +111,17 @@ class TestCatalogStorageSqliteTransactions:
             db_path = str(Path(tmpdir) / "test.db")
             storage = CatalogStorageSqlite(db_path)
 
-            attach_id = storage.generate_attach_id()
-            storage.attach_put(attach_id, "catalog", {})
+            attach_opaque_data = storage.generate_attach_opaque_data()
+            storage.attach_put(attach_opaque_data, "catalog", {})
 
-            tx_id = storage.generate_transaction_id()
+            tx_id = storage.generate_transaction_opaque_data()
             state = b"transaction state data"
-            storage.transaction_put(tx_id, attach_id, state)
+            storage.transaction_put(tx_id, attach_opaque_data, state)
 
             result = storage.transaction_get(tx_id)
             assert result is not None
-            retrieved_attach_id, retrieved_state = result
-            assert retrieved_attach_id == attach_id
+            retrieved_attach_opaque_data, retrieved_state = result
+            assert retrieved_attach_opaque_data == attach_opaque_data
             assert retrieved_state == state
 
     def test_transaction_get_nonexistent(self) -> None:
@@ -130,7 +130,7 @@ class TestCatalogStorageSqliteTransactions:
             db_path = str(Path(tmpdir) / "test.db")
             storage = CatalogStorageSqlite(db_path)
 
-            result = storage.transaction_get(TransactionId(b"nonexistent"))
+            result = storage.transaction_get(TransactionOpaqueData(b"nonexistent"))
             assert result is None
 
     def test_transaction_delete(self) -> None:
@@ -139,11 +139,11 @@ class TestCatalogStorageSqliteTransactions:
             db_path = str(Path(tmpdir) / "test.db")
             storage = CatalogStorageSqlite(db_path)
 
-            attach_id = storage.generate_attach_id()
-            storage.attach_put(attach_id, "catalog", {})
+            attach_opaque_data = storage.generate_attach_opaque_data()
+            storage.attach_put(attach_opaque_data, "catalog", {})
 
-            tx_id = storage.generate_transaction_id()
-            storage.transaction_put(tx_id, attach_id, b"state")
+            tx_id = storage.generate_transaction_opaque_data()
+            storage.transaction_put(tx_id, attach_opaque_data, b"state")
             storage.transaction_delete(tx_id)
 
             result = storage.transaction_get(tx_id)
@@ -155,14 +155,14 @@ class TestCatalogStorageSqliteTransactions:
             db_path = str(Path(tmpdir) / "test.db")
             storage = CatalogStorageSqlite(db_path)
 
-            attach_id = storage.generate_attach_id()
-            storage.attach_put(attach_id, "catalog", {})
+            attach_opaque_data = storage.generate_attach_opaque_data()
+            storage.attach_put(attach_opaque_data, "catalog", {})
 
-            tx_id = storage.generate_transaction_id()
-            storage.transaction_put(tx_id, attach_id, b"state")
+            tx_id = storage.generate_transaction_opaque_data()
+            storage.transaction_put(tx_id, attach_opaque_data, b"state")
 
             # Delete the attachment
-            storage.attach_delete(attach_id)
+            storage.attach_delete(attach_opaque_data)
 
             # Transaction should also be deleted
             result = storage.transaction_get(tx_id)
@@ -172,32 +172,32 @@ class TestCatalogStorageSqliteTransactions:
 class TestCatalogStorageSqliteIdGeneration:
     """Test ID generation methods."""
 
-    def test_generate_attach_id_unique(self) -> None:
-        """Generated attach_ids are unique."""
+    def test_generate_attach_opaque_data_unique(self) -> None:
+        """Generated attach_opaque_data values are unique."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
             storage = CatalogStorageSqlite(db_path)
 
-            ids = {storage.generate_attach_id() for _ in range(100)}
+            ids = {storage.generate_attach_opaque_data() for _ in range(100)}
             assert len(ids) == 100  # All unique
 
-    def test_generate_transaction_id_unique(self) -> None:
-        """Generated transaction_ids are unique."""
+    def test_generate_transaction_opaque_data_unique(self) -> None:
+        """Generated transaction_opaque_data values are unique."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
             storage = CatalogStorageSqlite(db_path)
 
-            ids = {storage.generate_transaction_id() for _ in range(100)}
+            ids = {storage.generate_transaction_opaque_data() for _ in range(100)}
             assert len(ids) == 100  # All unique
 
-    def test_attach_id_is_16_bytes(self) -> None:
-        """Generated attach_ids are 16 bytes (UUID)."""
+    def test_attach_opaque_data_is_16_bytes(self) -> None:
+        """Generated attach_opaque_data values are 16 bytes (UUID)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
             storage = CatalogStorageSqlite(db_path)
 
-            attach_id = storage.generate_attach_id()
-            assert len(attach_id) == 16
+            attach_opaque_data = storage.generate_attach_opaque_data()
+            assert len(attach_opaque_data) == 16
 
 
 class TestCatalogStorageSqliteCleanup:
@@ -219,13 +219,13 @@ class TestCatalogStorageSqliteCleanup:
             db_path = str(Path(tmpdir) / "test.db")
             storage = CatalogStorageSqlite(db_path)
 
-            attach_id = storage.generate_attach_id()
-            storage.attach_put(attach_id, "catalog", {})
+            attach_opaque_data = storage.generate_attach_opaque_data()
+            storage.attach_put(attach_opaque_data, "catalog", {})
 
             # Cleanup with 365 days should not remove recent entry
             storage.cleanup_old_entries(max_age_days=365.0)
 
-            result = storage.attach_get(attach_id)
+            result = storage.attach_get(attach_opaque_data)
             assert result is not None
 
 
@@ -239,12 +239,12 @@ class TestCatalogStorageSqlitePersistence:
 
             # Create and store with first instance
             storage1 = CatalogStorageSqlite(db_path)
-            attach_id = storage1.generate_attach_id()
-            storage1.attach_put(attach_id, "persistent_catalog", {"key": "value"})
+            attach_opaque_data = storage1.generate_attach_opaque_data()
+            storage1.attach_put(attach_opaque_data, "persistent_catalog", {"key": "value"})
 
             # Create second instance and retrieve
             storage2 = CatalogStorageSqlite(db_path)
-            result = storage2.attach_get(attach_id)
+            result = storage2.attach_get(attach_opaque_data)
 
             assert result is not None
             catalog_name, options = result

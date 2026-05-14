@@ -258,7 +258,7 @@ def test_transaction_state_put_replay_idempotent(storage: FunctionStorageCfDo) -
     txn = secrets.token_bytes(16)
     attempt = uuid.uuid4().hex
     body = {
-        "transaction_id": base64.b64encode(txn).decode(),
+        "transaction_opaque_data": base64.b64encode(txn).decode(),
         "items": [
             {"key": base64.b64encode(b"k").decode(), "value": base64.b64encode(b"v1").decode()},
         ],

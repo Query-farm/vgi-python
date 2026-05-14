@@ -353,8 +353,8 @@ def column_statistics_from_duckdb(
 
     Example usage in a dynamic catalog::
 
-        def table_column_statistics_get(self, *, attach_id, transaction_id, schema_name, name):
-            conn = self._get_connection(attach_id)
+        def table_column_statistics_get(self, *, attach_opaque_data, transaction_opaque_data, schema_name, name):
+            conn = self._get_connection(attach_opaque_data)
             return TableColumnStatisticsResult(
                 statistics=column_statistics_from_duckdb(conn, name, schema_name=schema_name),
                 cache_max_age_seconds=60,

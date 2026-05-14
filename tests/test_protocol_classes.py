@@ -485,9 +485,7 @@ class TestArg:
         """
 
         class MyClass:
-            invocation = _MockInvocation(
-                Arguments(named={"value": pa.scalar(None, type=pa.int64())})
-            )
+            invocation = _MockInvocation(Arguments(named={"value": pa.scalar(None, type=pa.int64())}))
             value = Arg[int]("value", default=99)
 
         obj = MyClass()

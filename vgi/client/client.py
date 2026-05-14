@@ -22,7 +22,7 @@ Protocol sequence (HTTP)::
     exchange loop  → stream.exchange(AnnotatedBatch)
                      • oversize input  → request_upload_urls + PUT + pointer batch
                      • pointer output  → auto-resolve via external_location config
-    detach         → proxy.catalog_detach(attach_id)
+    detach         → proxy.catalog_detach(attach_opaque_data)
 
 The subprocess transport (``_spawn_subprocess_connection``, ``WorkerPool``,
 ``shell=True``) is a Python-only convenience for running tests against a
@@ -315,7 +315,7 @@ class Client(CatalogClientMixin):
         server_path: str | None = None,
         passthrough_stderr: bool = False,
         worker_limit: int | None = None,
-        attach_id: bytes | None = None,
+        attach_opaque_data: bytes | None = None,
         pool: WorkerPool | None = _default_pool,
         *,
         transport: Literal["subprocess", "http"] = "subprocess",
@@ -342,7 +342,7 @@ class Client(CatalogClientMixin):
             passthrough_stderr: Subprocess-only. If True, worker stderr is
                 passed through to the parent process's stderr in real-time.
             worker_limit: Maximum number of parallel worker processes.
-            attach_id: Optional unique identifier for the DuckDB database
+            attach_opaque_data: Optional unique identifier for the DuckDB database
                 attachment. When VGI is used from an attached database, this
                 allows tracing calls back to that specific attachment.
             pool: Subprocess-only. Optional WorkerPool for subprocess reuse.
@@ -409,7 +409,7 @@ class Client(CatalogClientMixin):
         _worker_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
         self.passthrough_stderr = passthrough_stderr or _worker_debug
         self._worker_limit = worker_limit
-        self._attach_id = attach_id
+        self._attach_opaque_data = attach_opaque_data
         self._pool = pool
         self._primary: WorkerConnection | None = None
         # For multi-worker support
@@ -427,7 +427,7 @@ class Client(CatalogClientMixin):
         httpx_client: Any | None = None,
         external_location: Any | None = None,
         worker_limit: int | None = None,
-        attach_id: bytes | None = None,
+        attach_opaque_data: bytes | None = None,
     ) -> Client:
         """Create a ``Client`` bound to a remote HTTP VGI worker.
 
@@ -442,7 +442,7 @@ class Client(CatalogClientMixin):
             httpx_client=httpx_client,
             external_location=external_location,
             worker_limit=worker_limit,
-            attach_id=attach_id,
+            attach_opaque_data=attach_opaque_data,
             pool=None,
         )
 
@@ -830,7 +830,7 @@ class Client(CatalogClientMixin):
         input_schema: pa.Schema | None = None,
         settings: dict[str, Any] | None = None,
         secrets: dict[str, Any] | None = None,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> BindRequest:
         """Create a BindRequest for the given function parameters."""
         return BindRequest(
@@ -840,8 +840,8 @@ class Client(CatalogClientMixin):
             input_schema=input_schema,
             settings=self._settings_to_batch(settings),
             secrets=self._secrets_to_batch(secrets),
-            attach_id=self._attach_id,
-            transaction_id=transaction_id,
+            attach_opaque_data=self._attach_opaque_data,
+            transaction_opaque_data=transaction_opaque_data,
         )
 
     @staticmethod
@@ -933,7 +933,7 @@ class Client(CatalogClientMixin):
         input_schema: pa.Schema | None,
         settings: dict[str, Any] | None,
         secrets: dict[str, Any] | None,
-        transaction_id: bytes | None,
+        transaction_opaque_data: bytes | None,
         projection_ids: list[int] | None,
         pushdown_filters_batch: pa.RecordBatch | None,
         phase: TableInOutFunctionInitPhase | None,
@@ -966,7 +966,7 @@ class Client(CatalogClientMixin):
             input_schema=input_schema,
             settings=settings,
             secrets=secrets,
-            transaction_id=transaction_id,
+            transaction_opaque_data=transaction_opaque_data,
         )
         bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
 
@@ -1388,7 +1388,7 @@ class Client(CatalogClientMixin):
         projection_ids: list[int] | None = None,
         pushdown_filters: bytes | None = None,
         settings: dict[str, Any] | None = None,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> Generator[pa.RecordBatch]:
         """Invoke a table-in-out function on the worker and stream results.
 
@@ -1412,7 +1412,7 @@ class Client(CatalogClientMixin):
                 to push down to the function.
             settings: Optional dictionary of settings/pragmas to
                 pass to the function.
-            transaction_id: Optional unique identifier for the DuckDB transaction.
+            transaction_opaque_data: Optional unique identifier for the DuckDB transaction.
 
         Yields:
             Output RecordBatches from the function. In single-worker mode, output
@@ -1449,7 +1449,7 @@ class Client(CatalogClientMixin):
                     input_schema=input_schema,
                     settings=settings,
                     secrets=None,
-                    transaction_id=transaction_id,
+                    transaction_opaque_data=transaction_opaque_data,
                     projection_ids=projection_ids,
                     pushdown_filters_batch=pushdown_filters_batch,
                     phase=TableInOutFunctionInitPhase.INPUT,
@@ -1557,7 +1557,7 @@ class Client(CatalogClientMixin):
         projection_ids: list[int] | None = None,
         pushdown_filters: bytes | None = None,
         settings: dict[str, Any] | None = None,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> Generator[pa.RecordBatch]:
         """Invoke a table function (source function) and stream output batches.
 
@@ -1580,7 +1580,7 @@ class Client(CatalogClientMixin):
                 to push down to the function.
             settings: Optional dictionary of settings/pragmas to
                 pass to the function.
-            transaction_id: Optional unique identifier for the DuckDB transaction.
+            transaction_opaque_data: Optional unique identifier for the DuckDB transaction.
 
         Yields:
             Output RecordBatches from the function. In parallel mode
@@ -1607,7 +1607,7 @@ class Client(CatalogClientMixin):
                 input_schema=None,
                 settings=settings,
                 secrets=None,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
                 projection_ids=projection_ids,
                 pushdown_filters_batch=pushdown_filters_batch,
                 phase=None,
@@ -1719,7 +1719,7 @@ class Client(CatalogClientMixin):
         bind_result_callback: Callable[[BindResponse], None] | None = None,
         settings: dict[str, Any] | None = None,
         secrets: dict[str, Any] | None = None,
-        transaction_id: bytes | None = None,
+        transaction_opaque_data: bytes | None = None,
     ) -> Generator[pa.RecordBatch]:
         """Invoke a scalar function on the worker and stream results.
 
@@ -1744,7 +1744,7 @@ class Client(CatalogClientMixin):
                 pass to the function.
             secrets: Optional dictionary of secret name to value pairs.
                 Values can be simple scalars or dicts (for struct-typed secrets).
-            transaction_id: Optional unique identifier for the DuckDB transaction.
+            transaction_opaque_data: Optional unique identifier for the DuckDB transaction.
 
         Yields:
             Output RecordBatches from the function. Each output batch has a single
@@ -1780,7 +1780,7 @@ class Client(CatalogClientMixin):
                     input_schema=input_schema,
                     settings=settings,
                     secrets=secrets,
-                    transaction_id=transaction_id,
+                    transaction_opaque_data=transaction_opaque_data,
                     projection_ids=None,
                     pushdown_filters_batch=None,
                     phase=None,

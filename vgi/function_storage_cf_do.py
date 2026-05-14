@@ -12,7 +12,7 @@ Usage:
     to enable. Optionally set ``VGI_CF_DO_TOKEN`` for bearer auth.
 
 Workflow contract:
-    Every ``execution_id`` (and ``transaction_id``) has a single linear
+    Every ``execution_id`` (and ``transaction_opaque_data``) has a single linear
     lifecycle: create → push/put repeatedly → terminal op → DONE. The
     terminal op is ``queue_clear``, ``worker_collect``, or
     ``transaction_state_clear``. Ids are never reused after their
@@ -399,7 +399,9 @@ class FunctionStorageCfDo:
 
     # --- Aggregate State ---
 
-    def aggregate_state_get(self, execution_id: bytes, group_ids: list[int], *, shard_key: str = "") -> list[tuple[int, bytes] | None]:
+    def aggregate_state_get(
+        self, execution_id: bytes, group_ids: list[int], *, shard_key: str = ""
+    ) -> list[tuple[int, bytes] | None]:
         """Load aggregate states for specific group_ids.
 
         Returns a list parallel to ``group_ids`` with ``(group_id, state)``
@@ -467,7 +469,9 @@ class FunctionStorageCfDo:
 
     # --- Transaction State ---
 
-    def transaction_state_get(self, transaction_id: bytes, keys: list[bytes], *, shard_key: str = "") -> list[bytes | None]:
+    def transaction_state_get(
+        self, transaction_opaque_data: bytes, keys: list[bytes], *, shard_key: str = ""
+    ) -> list[bytes | None]:
         """Load transaction-scoped values for the given keys."""
         if not keys:
             return []
@@ -475,7 +479,7 @@ class FunctionStorageCfDo:
         data = self._post(
             "transaction_state_get",
             {
-                "transaction_id": base64.b64encode(transaction_id).decode(),
+                "transaction_opaque_data": base64.b64encode(transaction_opaque_data).decode(),
                 "keys": [base64.b64encode(k).decode() for k in keys],
             },
             shard_key=shard_key,
@@ -484,14 +488,16 @@ class FunctionStorageCfDo:
         result: list[bytes | None] = [base64.b64decode(v) if v is not None else None for v in data["values"]]
         _logger.debug(
             "transaction_state_get txn=%s keys=%d hits=%d elapsed_ms=%.1f",
-            transaction_id.hex()[:8],
+            transaction_opaque_data.hex()[:8],
             len(keys),
             sum(1 for v in result if v is not None),
             (time.monotonic() - t0) * 1000,
         )
         return result
 
-    def transaction_state_put(self, transaction_id: bytes, items: list[tuple[bytes, bytes]], *, shard_key: str = "") -> None:
+    def transaction_state_put(
+        self, transaction_opaque_data: bytes, items: list[tuple[bytes, bytes]], *, shard_key: str = ""
+    ) -> None:
         """Write transaction-scoped values."""
         if not items:
             return
@@ -499,7 +505,7 @@ class FunctionStorageCfDo:
         self._post(
             "transaction_state_put",
             {
-                "transaction_id": base64.b64encode(transaction_id).decode(),
+                "transaction_opaque_data": base64.b64encode(transaction_opaque_data).decode(),
                 "items": [
                     {
                         "key": base64.b64encode(k).decode(),
@@ -513,31 +519,33 @@ class FunctionStorageCfDo:
         )
         _logger.debug(
             "transaction_state_put txn=%s items=%d elapsed_ms=%.1f",
-            transaction_id.hex()[:8],
+            transaction_opaque_data.hex()[:8],
             len(items),
             (time.monotonic() - t0) * 1000,
         )
 
-    def transaction_state_clear(self, transaction_id: bytes, *, shard_key: str = "") -> None:
+    def transaction_state_clear(self, transaction_opaque_data: bytes, *, shard_key: str = "") -> None:
         """Drop all state for a transaction."""
         t0 = time.monotonic()
         self._post(
             "transaction_state_clear",
             {
-                "transaction_id": base64.b64encode(transaction_id).decode(),
+                "transaction_opaque_data": base64.b64encode(transaction_opaque_data).decode(),
             },
             attempt_id=uuid.uuid4().hex,
             shard_key=shard_key,
         )
         _logger.debug(
             "transaction_state_clear txn=%s elapsed_ms=%.1f",
-            transaction_id.hex()[:8],
+            transaction_opaque_data.hex()[:8],
             (time.monotonic() - t0) * 1000,
         )
 
     # --- Aggregate Window Partition ---
 
-    def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes, *, shard_key: str = "") -> None:
+    def aggregate_window_partition_put(
+        self, execution_id: bytes, partition_id: int, data: bytes, *, shard_key: str = ""
+    ) -> None:
         """Store a cached windowed-aggregate partition payload."""
         t0 = time.monotonic()
         self._post(
@@ -558,7 +566,9 @@ class FunctionStorageCfDo:
             (time.monotonic() - t0) * 1000,
         )
 
-    def aggregate_window_partition_get(self, execution_id: bytes, partition_id: int, *, shard_key: str = "") -> bytes | None:
+    def aggregate_window_partition_get(
+        self, execution_id: bytes, partition_id: int, *, shard_key: str = ""
+    ) -> bytes | None:
         """Load a cached windowed-aggregate partition payload."""
         t0 = time.monotonic()
         resp = self._post(

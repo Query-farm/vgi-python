@@ -119,10 +119,7 @@ def _emit_type(dtype: pa.DataType, *, origin: str) -> str:
         key_type = _emit_type(dtype.key_type, origin=f"{origin}[map key]")
         item_type = _emit_type(dtype.item_type, origin=f"{origin}[map value]")
         # pyarrow's pa.map_ defaults keys_sorted=False.
-        return (
-            f'map(field("key", {key_type}, false), '
-            f'field("value", {item_type}, true), false)'
-        )
+        return f'map(field("key", {key_type}, false), field("value", {item_type}, true), false)'
 
     if pa.types.is_dictionary(dtype):
         _use("dictionary")
@@ -138,8 +135,7 @@ def _emit_type(dtype: pa.DataType, *, origin: str) -> str:
         _use("struct")
         _use("field")
         child_exprs = [
-            _emit_field(dtype.field(i), origin=f"{origin}[struct child {i}]")
-            for i in range(dtype.num_fields)
+            _emit_field(dtype.field(i), origin=f"{origin}[struct child {i}]") for i in range(dtype.num_fields)
         ]
         return "struct([" + ", ".join(child_exprs) + "])"
 

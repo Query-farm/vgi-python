@@ -49,7 +49,6 @@ from vgi.table_function import (
     bind_fixed_schema,
 )
 
-
 # Queue-item encoding: (partition_id, start, end) packed as three uint64s.
 # Decoded by ``process()`` on the worker; partition_id is what the worker
 # emits to DuckDB via the batch_index= kwarg.
@@ -118,8 +117,7 @@ class PartitionedBatchIndexFunction(TableFunctionGenerator[_BatchIndexArgs, _Bat
             FunctionExample(
                 sql="SELECT * FROM partitioned_batch_index(100)",
                 description=(
-                    "Generate 0..99 in parallel; DuckDB sinks reassemble "
-                    "output in partition_id (insertion) order."
+                    "Generate 0..99 in parallel; DuckDB sinks reassemble output in partition_id (insertion) order."
                 ),
             ),
         ]
@@ -187,9 +185,7 @@ class _BatchIndexMarkedState(ArrowSerializableDataclass):
 
 @bind_fixed_schema
 @_cardinality_from_count
-class PartitionedBatchIndexMarkedFunction(
-    TableFunctionGenerator[_BatchIndexMarkedArgs, _BatchIndexMarkedState]
-):
+class PartitionedBatchIndexMarkedFunction(TableFunctionGenerator[_BatchIndexMarkedArgs, _BatchIndexMarkedState]):
     """Two-column batch_index fixture for direct ordering observation.
 
     Output rows are ``(partition_id, seq)`` where ``partition_id`` is the
@@ -240,9 +236,7 @@ class PartitionedBatchIndexMarkedFunction(
         return GlobalInitResponse()
 
     @classmethod
-    def initial_state(
-        cls, params: ProcessParams[_BatchIndexMarkedArgs]
-    ) -> _BatchIndexMarkedState:
+    def initial_state(cls, params: ProcessParams[_BatchIndexMarkedArgs]) -> _BatchIndexMarkedState:
         return _BatchIndexMarkedState()
 
     @classmethod
@@ -266,8 +260,7 @@ class PartitionedBatchIndexMarkedFunction(
         batch_end_idx = min(state.current_idx + cls.BATCH_SIZE, state.current_end or 0)
         rows = batch_end_idx - state.current_idx
         partition_ids = [state.partition_id] * rows
-        seqs = list(range(state.current_idx - (state.current_start or 0),
-                          batch_end_idx - (state.current_start or 0)))
+        seqs = list(range(state.current_idx - (state.current_start or 0), batch_end_idx - (state.current_start or 0)))
         out.emit(
             pa.RecordBatch.from_pydict(
                 {"partition_id": partition_ids, "seq": seqs},

@@ -72,6 +72,7 @@ def partition_field(
     Returns:
         A ``pa.Field`` carrying ``{VGI_PARTITION_COLUMN_KEY: b"true"}``
         in its metadata.
+
     """
     merged: dict[bytes, bytes] = {VGI_PARTITION_COLUMN_KEY: b"true"}
     if metadata:

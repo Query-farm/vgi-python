@@ -1,7 +1,7 @@
 """VGI application-level OpenTelemetry and Sentry instrumentation.
 
 Provides ``VgiTracer`` — a thin wrapper that enriches both OTel spans and
-Sentry scopes with VGI-level attributes (function name, attach_id, etc.)
+Sentry scopes with VGI-level attributes (function name, attach_opaque_data, etc.)
 and creates ``vgi.execute.*`` per-batch records (OTel spans + Sentry
 spans + Sentry breadcrumbs).
 

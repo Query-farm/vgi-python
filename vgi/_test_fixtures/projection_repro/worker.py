@@ -42,14 +42,14 @@ from vgi import Worker
 from vgi.arguments import Arg
 from vgi.catalog import Catalog, Schema
 from vgi.catalog.catalog_interface import (
-    AttachId,
+    AttachOpaqueData,
     ReadOnlyCatalogInterface,
     ScanFunctionResult,
     SchemaInfo,
     SchemaObjectType,
     SerializedSchema,
     TableInfo,
-    TransactionId,
+    TransactionOpaqueData,
 )
 from vgi.function import Function
 from vgi.invocation import GlobalInitResponse
@@ -356,17 +356,19 @@ class ProjReproCatalog(ReadOnlyCatalogInterface):
             check_constraints=[],
         )
 
-    def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> list[SchemaInfo]:
+    def schemas(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None
+    ) -> list[SchemaInfo]:
         # Override the declarative ``Schema(tables=[])``-derived
         # ``estimated_object_count[table] = 0`` with the real population.
         # Without this, the C++ client treats the static zero as a hard
         # guarantee and skips ``catalog_schema_contents_tables``, hiding
         # every table this catalog publishes via the override below.
-        infos = super().schemas(attach_id=attach_id, transaction_id=transaction_id)
+        infos = super().schemas(attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data)
         for i, info in enumerate(infos):
             if info.name == "main":
                 infos[i] = SchemaInfo(
-                    attach_id=info.attach_id,
+                    attach_opaque_data=info.attach_opaque_data,
                     name=info.name,
                     comment=info.comment,
                     tags=info.tags,
@@ -380,20 +382,22 @@ class ProjReproCatalog(ReadOnlyCatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Any,
     ) -> Any:
         if name.lower() == "main" and type == SchemaObjectType.TABLE:
             return [self._info(table_name) for table_name in _TABLE_NAMES]
-        return super().schema_contents(attach_id=attach_id, transaction_id=transaction_id, name=name, type=type)
+        return super().schema_contents(
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data, name=name, type=type
+        )
 
     def table_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
@@ -408,8 +412,8 @@ class ProjReproCatalog(ReadOnlyCatalogInterface):
     def table_scan_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None,

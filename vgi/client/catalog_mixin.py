@@ -17,15 +17,15 @@ Usage:
     result = client.catalog_attach(
         name="my_catalog", data_version_spec=None, implementation_version=None
     )
-    schemas = client.schemas(attach_id=result.attach_id)
+    schemas = client.schemas(attach_opaque_data=result.attach_opaque_data)
 
     # Use transactions for atomic operations
-    tx_id = client.catalog_transaction_begin(attach_id=result.attach_id)
+    tx_id = client.catalog_transaction_begin(attach_opaque_data=result.attach_opaque_data)
     client.schema_create(
-        attach_id=result.attach_id, transaction_id=tx_id, name="new_schema"
+        attach_opaque_data=result.attach_opaque_data, transaction_opaque_data=tx_id, name="new_schema"
     )
     client.catalog_transaction_commit(
-        attach_id=result.attach_id, transaction_id=tx_id
+        attach_opaque_data=result.attach_opaque_data, transaction_opaque_data=tx_id
     )
 
 Error Handling:
@@ -47,7 +47,7 @@ from vgi_rpc.rpc import RpcError
 from vgi_rpc.utils import deserialize_record_batch
 
 from vgi.catalog import (
-    AttachId,
+    AttachOpaqueData,
     CatalogAttachResult,
     CatalogInfo,
     FunctionInfo,
@@ -60,7 +60,7 @@ from vgi.catalog import (
     SerializedSchema,
     SqlExpression,
     TableInfo,
-    TransactionId,
+    TransactionOpaqueData,
     ViewInfo,
 )
 from vgi.protocol import (
@@ -187,7 +187,7 @@ class CatalogClientMixin:
                 implementation version (``None`` = unconstrained).
 
         Returns:
-            CatalogAttachResult with attach_id, catalog capabilities, and
+            CatalogAttachResult with attach_opaque_data, catalog capabilities, and
             the resolved concrete versions the worker picked.
 
         """
@@ -201,15 +201,15 @@ class CatalogClientMixin:
                 )
             )
 
-    def catalog_detach(self, *, attach_id: AttachId) -> None:
+    def catalog_detach(self, *, attach_opaque_data: AttachOpaqueData) -> None:
         """Detach from a catalog.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
+            attach_opaque_data: The attachment ID from catalog_attach.
 
         """
         with self._catalog_connect() as proxy:
-            proxy.catalog_detach(attach_id=attach_id)
+            proxy.catalog_detach(attach_opaque_data=attach_opaque_data)
 
     def catalog_create(
         self,
@@ -245,12 +245,14 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_drop(name=name)
 
-    def catalog_version(self, *, attach_id: AttachId, transaction_id: TransactionId | None = None) -> int:
+    def catalog_version(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None = None
+    ) -> int:
         """Get the current catalog version.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID for transactional reads.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID for transactional reads.
 
         Returns:
             The current catalog version number, or 0 if empty.
@@ -258,63 +260,69 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             return proxy.catalog_version(
-                attach_id=attach_id,
-                transaction_id=transaction_id,
+                attach_opaque_data=attach_opaque_data,
+                transaction_opaque_data=transaction_opaque_data,
             ).version
 
     # ========== Transaction Methods ==========
 
-    def catalog_transaction_begin(self, *, attach_id: AttachId) -> TransactionId | None:
+    def catalog_transaction_begin(self, *, attach_opaque_data: AttachOpaqueData) -> TransactionOpaqueData | None:
         """Begin a new transaction.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
+            attach_opaque_data: The attachment ID from catalog_attach.
 
         Returns:
-            TransactionId for the new transaction, or None if transactions
+            TransactionOpaqueData for the new transaction, or None if transactions
             are not supported by this catalog.
 
         """
         with self._catalog_connect() as proxy:
-            tx_id = proxy.catalog_transaction_begin(attach_id=attach_id).transaction_id
-            return TransactionId(tx_id) if tx_id else None
+            tx_id = proxy.catalog_transaction_begin(attach_opaque_data=attach_opaque_data).transaction_opaque_data
+            return TransactionOpaqueData(tx_id) if tx_id else None
 
-    def catalog_transaction_commit(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
+    def catalog_transaction_commit(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData
+    ) -> None:
         """Commit a transaction.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: The transaction ID to commit.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: The transaction ID to commit.
 
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_transaction_commit(
-                attach_id=attach_id,
-                transaction_id=transaction_id,
+                attach_opaque_data=attach_opaque_data,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
-    def catalog_transaction_rollback(self, *, attach_id: AttachId, transaction_id: TransactionId) -> None:
+    def catalog_transaction_rollback(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData
+    ) -> None:
         """Rollback a transaction.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: The transaction ID to rollback.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: The transaction ID to rollback.
 
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_transaction_rollback(
-                attach_id=attach_id,
-                transaction_id=transaction_id,
+                attach_opaque_data=attach_opaque_data,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     # ========== Schema Methods ==========
 
-    def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None = None) -> list[SchemaInfo]:
+    def schemas(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None = None
+    ) -> list[SchemaInfo]:
         """List schemas in the catalog.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID for transactional reads.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID for transactional reads.
 
         Returns:
             List of SchemaInfo for each schema in the catalog.
@@ -322,22 +330,22 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             return proxy.catalog_schemas(
-                attach_id=attach_id,
-                transaction_id=transaction_id,
+                attach_opaque_data=attach_opaque_data,
+                transaction_opaque_data=transaction_opaque_data,
             ).to_infos()
 
     def schema_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         name: str,
     ) -> SchemaInfo | None:
         """Get information about a schema.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID for transactional reads.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID for transactional reads.
             name: The schema name.
 
         Returns:
@@ -346,16 +354,16 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             return proxy.catalog_schema_get(  # type: ignore[no-any-return]
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 name=name,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             ).to_optional()
 
     def schema_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         name: str,
         comment: str | None = None,
         tags: dict[str, str] | None = None,
@@ -363,8 +371,8 @@ class CatalogClientMixin:
         """Create a new schema.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             name: The name for the new schema.
             comment: Optional description of the schema.
             tags: Optional key-value tags for the schema.
@@ -372,18 +380,18 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_schema_create(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 name=name,
                 comment=comment,
                 tags=tags,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def schema_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
@@ -391,8 +399,8 @@ class CatalogClientMixin:
         """Drop a schema.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             name: The name of the schema to drop.
             ignore_not_found: If True, don't error if schema doesn't exist.
             cascade: If True, drop all contained tables and views.
@@ -400,19 +408,19 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_schema_drop(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 name=name,
                 ignore_not_found=ignore_not_found,
                 cascade=cascade,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     @overload
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         name: str,
         type: Literal[SchemaObjectType.TABLE],
     ) -> Sequence[TableInfo]: ...
@@ -421,8 +429,8 @@ class CatalogClientMixin:
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         name: str,
         type: Literal[SchemaObjectType.VIEW],
     ) -> Sequence[ViewInfo]: ...
@@ -431,8 +439,8 @@ class CatalogClientMixin:
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         name: str,
         type: Literal[SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION],
     ) -> Sequence[FunctionInfo]: ...
@@ -441,8 +449,8 @@ class CatalogClientMixin:
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         name: str,
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
@@ -451,8 +459,8 @@ class CatalogClientMixin:
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         name: str,
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo]: ...
@@ -460,16 +468,16 @@ class CatalogClientMixin:
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         name: str,
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo]:
         """List contents of a schema (tables, views, functions, macros).
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID for transactional reads.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID for transactional reads.
             name: The schema name.
             type: The type of objects to return. Must be a SchemaObjectType enum:
                 - SchemaObjectType.TABLE: Return only tables
@@ -486,29 +494,29 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             if type == SchemaObjectType.TABLE:
                 return proxy.catalog_schema_contents_tables(
-                    attach_id=attach_id,
+                    attach_opaque_data=attach_opaque_data,
                     name=name,
-                    transaction_id=transaction_id,
+                    transaction_opaque_data=transaction_opaque_data,
                 ).to_infos()
             elif type == SchemaObjectType.VIEW:
                 return proxy.catalog_schema_contents_views(
-                    attach_id=attach_id,
+                    attach_opaque_data=attach_opaque_data,
                     name=name,
-                    transaction_id=transaction_id,
+                    transaction_opaque_data=transaction_opaque_data,
                 ).to_infos()
             elif type in (SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO):
                 return proxy.catalog_schema_contents_macros(
-                    attach_id=attach_id,
+                    attach_opaque_data=attach_opaque_data,
                     name=name,
                     type=type,
-                    transaction_id=transaction_id,
+                    transaction_opaque_data=transaction_opaque_data,
                 ).to_infos()
             else:
                 return proxy.catalog_schema_contents_functions(
-                    attach_id=attach_id,
+                    attach_opaque_data=attach_opaque_data,
                     name=name,
                     type=type,
-                    transaction_id=transaction_id,
+                    transaction_opaque_data=transaction_opaque_data,
                 ).to_infos()
 
     # ========== Table Methods ==========
@@ -516,16 +524,16 @@ class CatalogClientMixin:
     def table_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
     ) -> TableInfo | None:
         """Get information about a table.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID for transactional reads.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID for transactional reads.
             schema_name: The schema containing the table.
             name: The table name.
 
@@ -535,17 +543,17 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             return proxy.catalog_table_get(  # type: ignore[no-any-return]
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             ).to_optional()
 
     def table_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         columns: SerializedSchema,
@@ -557,8 +565,8 @@ class CatalogClientMixin:
         """Create a new table.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema to create the table in.
             name: The name for the new table.
             columns: Serialized PyArrow schema for the table columns.
@@ -571,7 +579,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_table_create(
                 request=TableCreateRequest(
-                    attach_id=attach_id,
+                    attach_opaque_data=attach_opaque_data,
                     schema_name=schema_name,
                     name=name,
                     columns=columns,
@@ -579,15 +587,15 @@ class CatalogClientMixin:
                     not_null_constraints=not_null_constraints or [],
                     unique_constraints=unique_constraints or [],
                     check_constraints=check_constraints or [],
-                    transaction_id=transaction_id,
+                    transaction_opaque_data=transaction_opaque_data,
                 )
             )
 
     def table_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
@@ -596,8 +604,8 @@ class CatalogClientMixin:
         """Drop a table.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema containing the table.
             name: The name of the table to drop.
             ignore_not_found: If True, don't error if table doesn't exist.
@@ -606,19 +614,19 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_table_drop(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 ignore_not_found=ignore_not_found,
                 cascade=cascade,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def table_scan_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
@@ -630,8 +638,8 @@ class CatalogClientMixin:
         DuckDB function to call to obtain the table data.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID for transactional reads.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID for transactional reads.
             schema_name: The schema containing the table.
             name: The table name.
             at_unit: Optional time travel unit (e.g., 'timestamp', 'version').
@@ -646,12 +654,12 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             result_bytes = proxy.catalog_table_scan_function_get(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 at_unit=at_unit,
                 at_value=at_value,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
             batch, _ = deserialize_record_batch(result_bytes)
             return ScanFunctionResult.deserialize(batch)
@@ -659,8 +667,8 @@ class CatalogClientMixin:
     def table_comment_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         comment: str | None,
@@ -669,8 +677,8 @@ class CatalogClientMixin:
         """Set or clear the comment on a table.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema containing the table.
             name: The table name.
             comment: The new comment, or None to clear.
@@ -679,19 +687,19 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_table_comment_set(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 comment=comment,
                 ignore_not_found=ignore_not_found,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def table_rename(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         new_name: str,
@@ -700,8 +708,8 @@ class CatalogClientMixin:
         """Rename a table.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema containing the table.
             name: The current name of the table.
             new_name: The new name for the table.
@@ -710,19 +718,19 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_table_rename(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 new_name=new_name,
                 ignore_not_found=ignore_not_found,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def table_column_add(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         column_definition: SerializedSchema,
@@ -732,8 +740,8 @@ class CatalogClientMixin:
         """Add a new column to a table.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema containing the table.
             name: The table name.
             column_definition: Serialized schema with single field for the new column.
@@ -743,20 +751,20 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_add(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 column_definition=column_definition,
                 ignore_not_found=ignore_not_found,
                 if_column_not_exists=if_column_not_exists,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def table_column_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -767,8 +775,8 @@ class CatalogClientMixin:
         """Drop a column from a table.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema containing the table.
             name: The table name.
             column_name: The name of the column to drop.
@@ -779,21 +787,21 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_drop(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 column_name=column_name,
                 ignore_not_found=ignore_not_found,
                 if_column_exists=if_column_exists,
                 cascade=cascade,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def table_column_rename(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -803,8 +811,8 @@ class CatalogClientMixin:
         """Rename a column.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema containing the table.
             name: The table name.
             column_name: The current name of the column.
@@ -814,20 +822,20 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_rename(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 column_name=column_name,
                 new_column_name=new_column_name,
                 ignore_not_found=ignore_not_found,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def table_column_default_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -837,8 +845,8 @@ class CatalogClientMixin:
         """Set the default value expression for a column.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema containing the table.
             name: The table name.
             column_name: The column to set the default for.
@@ -848,20 +856,20 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_default_set(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 column_name=column_name,
                 expression=expression,
                 ignore_not_found=ignore_not_found,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def table_column_default_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -870,8 +878,8 @@ class CatalogClientMixin:
         """Remove the default value from a column.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema containing the table.
             name: The table name.
             column_name: The column to remove the default from.
@@ -880,19 +888,19 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_default_drop(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 column_name=column_name,
                 ignore_not_found=ignore_not_found,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def table_column_type_change(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         column_definition: SerializedSchema,
@@ -902,8 +910,8 @@ class CatalogClientMixin:
         """Change the type of a column.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema containing the table.
             name: The table name.
             column_definition: Serialized schema with single field defining the
@@ -914,20 +922,20 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_type_change(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 column_definition=column_definition,
                 expression=expression,
                 ignore_not_found=ignore_not_found,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def table_not_null_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -936,8 +944,8 @@ class CatalogClientMixin:
         """Remove NOT NULL constraint from a column.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema containing the table.
             name: The table name.
             column_name: The column to remove NOT NULL from.
@@ -946,19 +954,19 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_table_not_null_drop(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 column_name=column_name,
                 ignore_not_found=ignore_not_found,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def table_not_null_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         column_name: str,
@@ -967,8 +975,8 @@ class CatalogClientMixin:
         """Add NOT NULL constraint to a column.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema containing the table.
             name: The table name.
             column_name: The column to add NOT NULL to.
@@ -977,12 +985,12 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_table_not_null_set(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 column_name=column_name,
                 ignore_not_found=ignore_not_found,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     # ========== View Methods ==========
@@ -990,16 +998,16 @@ class CatalogClientMixin:
     def view_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
     ) -> ViewInfo | None:
         """Get information about a view.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID for transactional reads.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID for transactional reads.
             schema_name: The schema containing the view.
             name: The view name.
 
@@ -1009,17 +1017,17 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             return proxy.catalog_view_get(  # type: ignore[no-any-return]
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             ).to_optional()
 
     def view_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         definition: str,
@@ -1028,8 +1036,8 @@ class CatalogClientMixin:
         """Create a new view.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema to create the view in.
             name: The name for the new view.
             definition: The SQL SELECT statement defining the view.
@@ -1038,19 +1046,19 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_view_create(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 definition=definition,
                 on_conflict=on_conflict,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def view_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
@@ -1059,8 +1067,8 @@ class CatalogClientMixin:
         """Drop a view.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema containing the view.
             name: The name of the view to drop.
             ignore_not_found: If True, don't error if view doesn't exist.
@@ -1069,19 +1077,19 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_view_drop(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 ignore_not_found=ignore_not_found,
                 cascade=cascade,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def view_rename(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         new_name: str,
@@ -1090,8 +1098,8 @@ class CatalogClientMixin:
         """Rename a view.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema containing the view.
             name: The current name of the view.
             new_name: The new name for the view.
@@ -1100,19 +1108,19 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_view_rename(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 new_name=new_name,
                 ignore_not_found=ignore_not_found,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def view_comment_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         comment: str | None,
@@ -1121,8 +1129,8 @@ class CatalogClientMixin:
         """Set or clear the comment on a view.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema containing the view.
             name: The view name.
             comment: The new comment, or None to clear.
@@ -1131,12 +1139,12 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_view_comment_set(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 comment=comment,
                 ignore_not_found=ignore_not_found,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     # ========== Macro Methods ==========
@@ -1144,16 +1152,16 @@ class CatalogClientMixin:
     def macro_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
     ) -> MacroInfo | None:
         """Get information about a macro.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID for transactional reads.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID for transactional reads.
             schema_name: The schema containing the macro.
             name: The macro name.
 
@@ -1163,17 +1171,17 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             return proxy.catalog_macro_get(  # type: ignore[no-any-return]
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             ).to_optional()
 
     def macro_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         macro_type: MacroType,
@@ -1185,8 +1193,8 @@ class CatalogClientMixin:
         """Create a new macro.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema to create the macro in.
             name: The name for the new macro.
             macro_type: Whether this is a scalar or table macro.
@@ -1199,7 +1207,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_macro_create(
                 request=MacroCreateRequest(
-                    attach_id=attach_id,
+                    attach_opaque_data=attach_opaque_data,
                     schema_name=schema_name,
                     name=name,
                     macro_type=macro_type,
@@ -1207,15 +1215,15 @@ class CatalogClientMixin:
                     definition=definition,
                     on_conflict=on_conflict,
                     parameter_default_values=parameter_default_values,
-                    transaction_id=transaction_id,
+                    transaction_opaque_data=transaction_opaque_data,
                 )
             )
 
     def macro_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None = None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
         ignore_not_found: bool = False,
@@ -1223,8 +1231,8 @@ class CatalogClientMixin:
         """Drop a macro.
 
         Args:
-            attach_id: The attachment ID from catalog_attach.
-            transaction_id: Optional transaction ID.
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID.
             schema_name: The schema containing the macro.
             name: The name of the macro to drop.
             ignore_not_found: If True, don't error if macro doesn't exist.
@@ -1232,9 +1240,9 @@ class CatalogClientMixin:
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_macro_drop(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
                 ignore_not_found=ignore_not_found,
-                transaction_id=transaction_id,
+                transaction_opaque_data=transaction_opaque_data,
             )

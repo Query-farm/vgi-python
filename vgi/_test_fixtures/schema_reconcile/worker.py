@@ -36,14 +36,14 @@ from vgi_rpc.rpc import OutputCollector
 from vgi import Worker
 from vgi.catalog import Catalog, Schema
 from vgi.catalog.catalog_interface import (
-    AttachId,
+    AttachOpaqueData,
     ReadOnlyCatalogInterface,
     ScanFunctionResult,
     SchemaInfo,
     SchemaObjectType,
     SerializedSchema,
     TableInfo,
-    TransactionId,
+    TransactionOpaqueData,
 )
 from vgi.invocation import BindResponse, GlobalInitResponse
 from vgi.table_function import (
@@ -525,18 +525,20 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
             supports_delete=True,
         )
 
-    def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> list[SchemaInfo]:
+    def schemas(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None
+    ) -> list[SchemaInfo]:
         # The declarative ``Schema(tables=[])`` would auto-populate
         # ``estimated_object_count[table] = 0``, which the C++ client treats
         # as a hard guarantee and uses to skip the bulk RPC. But this catalog
         # publishes tables via the ``schema_contents`` override below, not
         # via the declarative ``tables=`` field — so the count is wrong.
         # Override at the catalog level to report the real population.
-        infos = super().schemas(attach_id=attach_id, transaction_id=transaction_id)
+        infos = super().schemas(attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data)
         for i, info in enumerate(infos):
             if info.name == _SCHEMA_NAME:
                 infos[i] = SchemaInfo(
-                    attach_id=info.attach_id,
+                    attach_opaque_data=info.attach_opaque_data,
                     name=info.name,
                     comment=info.comment,
                     tags=info.tags,
@@ -550,20 +552,22 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Any,
     ) -> Any:
         if name.lower() == _SCHEMA_NAME and type == SchemaObjectType.TABLE:
             return [self._table_info(spec) for spec in TABLES.values()]
-        return super().schema_contents(attach_id=attach_id, transaction_id=transaction_id, name=name, type=type)
+        return super().schema_contents(
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data, name=name, type=type
+        )
 
     def table_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
@@ -585,8 +589,8 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
     def table_scan_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None,
@@ -597,8 +601,8 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
     def table_insert_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ScanFunctionResult:
@@ -607,8 +611,8 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
     def table_update_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ScanFunctionResult:
@@ -617,8 +621,8 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
     def table_delete_function_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ScanFunctionResult:

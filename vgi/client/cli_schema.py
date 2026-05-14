@@ -16,8 +16,8 @@ import click
 from vgi.catalog import FunctionInfo, SchemaObjectType, TableInfo, ViewInfo
 from vgi.client.cli_utils import (
     function_info_to_dict,
-    get_attach_id_from_options,
-    hex_to_transaction_id,
+    get_attach_opaque_data_from_options,
+    hex_to_transaction_opaque_data,
     output_json,
     parse_json_option,
     schema_info_to_dict,
@@ -33,48 +33,52 @@ def schema() -> None:
 
 
 @schema.command("list")
-@click.option("--attach-id", help="Hex-encoded attach ID")
+@click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
 @click.option("--worker", "-w", required=True, help="VGI worker command")
-@click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
+@click.option("--transaction-opaque-data", help="Transaction ID (hex) for transactional read")
 def schema_list(
-    attach_id: str | None,
+    attach_opaque_data: str | None,
     catalog_name: str | None,
     attach_options: str,
     worker: str,
-    transaction_id: str | None,
+    transaction_opaque_data: str | None,
 ) -> None:
     """List schemas in a catalog."""
     client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_id, is_stateful = get_attach_id_from_options(client, attach_id, catalog_name, opts)
+    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
+        client, attach_opaque_data, catalog_name, opts
+    )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-id for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     for schema_info in client.schemas(
-        attach_id=resolved_attach_id,
-        transaction_id=(hex_to_transaction_id(transaction_id) if transaction_id else None),
+        attach_opaque_data=resolved_attach_opaque_data,
+        transaction_opaque_data=(
+            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
+        ),
     ):
         output_json(schema_info_to_dict(schema_info))
 
 
 @schema.command("get")
 @click.argument("name")
-@click.option("--attach-id", help="Hex-encoded attach ID")
+@click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
 @click.option("--worker", "-w", required=True, help="VGI worker command")
-@click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
+@click.option("--transaction-opaque-data", help="Transaction ID (hex) for transactional read")
 def schema_get(
     name: str,
-    attach_id: str | None,
+    attach_opaque_data: str | None,
     catalog_name: str | None,
     attach_options: str,
     worker: str,
-    transaction_id: str | None,
+    transaction_opaque_data: str | None,
 ) -> None:
     """Get information about a schema.
 
@@ -83,15 +87,19 @@ def schema_get(
     """
     client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_id, is_stateful = get_attach_id_from_options(client, attach_id, catalog_name, opts)
+    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
+        client, attach_opaque_data, catalog_name, opts
+    )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-id for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     schema_info = client.schema_get(
-        attach_id=resolved_attach_id,
-        transaction_id=(hex_to_transaction_id(transaction_id) if transaction_id else None),
+        attach_opaque_data=resolved_attach_opaque_data,
+        transaction_opaque_data=(
+            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
+        ),
         name=name,
     )
     if schema_info:
@@ -102,20 +110,20 @@ def schema_get(
 
 @schema.command("create")
 @click.argument("name")
-@click.option("--attach-id", help="Hex-encoded attach ID")
+@click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
 @click.option("--worker", "-w", required=True, help="VGI worker command")
-@click.option("--transaction-id", help="Transaction ID (hex)")
+@click.option("--transaction-opaque-data", help="Transaction ID (hex)")
 @click.option("--comment", help="Description of the schema")
 @click.option("--tags", default="{}", help="Metadata tags as JSON object")
 def schema_create(
     name: str,
-    attach_id: str | None,
+    attach_opaque_data: str | None,
     catalog_name: str | None,
     attach_options: str,
     worker: str,
-    transaction_id: str | None,
+    transaction_opaque_data: str | None,
     comment: str | None,
     tags: str,
 ) -> None:
@@ -126,16 +134,20 @@ def schema_create(
     """
     client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_id, is_stateful = get_attach_id_from_options(client, attach_id, catalog_name, opts)
+    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
+        client, attach_opaque_data, catalog_name, opts
+    )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-id for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     tags_dict = parse_json_option(tags, "--tags")
     client.schema_create(
-        attach_id=resolved_attach_id,
-        transaction_id=(hex_to_transaction_id(transaction_id) if transaction_id else None),
+        attach_opaque_data=resolved_attach_opaque_data,
+        transaction_opaque_data=(
+            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
+        ),
         name=name,
         comment=comment,
         tags=tags_dict,
@@ -145,20 +157,20 @@ def schema_create(
 
 @schema.command("drop")
 @click.argument("name")
-@click.option("--attach-id", help="Hex-encoded attach ID")
+@click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
 @click.option("--worker", "-w", required=True, help="VGI worker command")
-@click.option("--transaction-id", help="Transaction ID (hex)")
+@click.option("--transaction-opaque-data", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if not found")
 @click.option("--cascade", is_flag=True, help="Drop contained tables and views")
 def schema_drop(
     name: str,
-    attach_id: str | None,
+    attach_opaque_data: str | None,
     catalog_name: str | None,
     attach_options: str,
     worker: str,
-    transaction_id: str | None,
+    transaction_opaque_data: str | None,
     ignore_not_found: bool,
     cascade: bool,
 ) -> None:
@@ -169,15 +181,19 @@ def schema_drop(
     """
     client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_id, is_stateful = get_attach_id_from_options(client, attach_id, catalog_name, opts)
+    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
+        client, attach_opaque_data, catalog_name, opts
+    )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-id for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     client.schema_drop(
-        attach_id=resolved_attach_id,
-        transaction_id=(hex_to_transaction_id(transaction_id) if transaction_id else None),
+        attach_opaque_data=resolved_attach_opaque_data,
+        transaction_opaque_data=(
+            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
+        ),
         name=name,
         ignore_not_found=ignore_not_found,
         cascade=cascade,
@@ -187,11 +203,11 @@ def schema_drop(
 
 @schema.command("contents")
 @click.argument("name")
-@click.option("--attach-id", help="Hex-encoded attach ID")
+@click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
 @click.option("--worker", "-w", required=True, help="VGI worker command")
-@click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
+@click.option("--transaction-opaque-data", help="Transaction ID (hex) for transactional read")
 @click.option(
     "--type",
     "object_type",
@@ -201,11 +217,11 @@ def schema_drop(
 )
 def schema_contents(
     name: str,
-    attach_id: str | None,
+    attach_opaque_data: str | None,
     catalog_name: str | None,
     attach_options: str,
     worker: str,
-    transaction_id: str | None,
+    transaction_opaque_data: str | None,
     object_type: str,
 ) -> None:
     """List contents of a schema by object type.
@@ -217,10 +233,12 @@ def schema_contents(
     """
     client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_id, is_stateful = get_attach_id_from_options(client, attach_id, catalog_name, opts)
+    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
+        client, attach_opaque_data, catalog_name, opts
+    )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-id for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
 
@@ -228,8 +246,10 @@ def schema_contents(
     type_filter = SchemaObjectType(object_type)
 
     for item in client.schema_contents(
-        attach_id=resolved_attach_id,
-        transaction_id=(hex_to_transaction_id(transaction_id) if transaction_id else None),
+        attach_opaque_data=resolved_attach_opaque_data,
+        transaction_opaque_data=(
+            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
+        ),
         name=name,
         type=type_filter,
     ):

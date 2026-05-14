@@ -1003,9 +1003,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         preserves_order=attrs.get("preserves_order", OrderPreservation.PRESERVES_ORDER),
         max_workers=attrs.get("max_workers"),
         supports_batch_index=bool(attrs.get("supports_batch_index", False)),
-        partition_kind=_validate_partition_kind(
-            cls, attrs.get("partition_kind", PartitionKind.NOT_PARTITIONED)
-        ),
+        partition_kind=_validate_partition_kind(cls, attrs.get("partition_kind", PartitionKind.NOT_PARTITIONED)),
         order_dependent=attrs.get("order_dependent", OrderDependence.NOT_ORDER_DEPENDENT),
         distinct_dependent=attrs.get("distinct_dependent", DistinctDependence.NOT_DISTINCT_DEPENDENT),
         supports_window=bool(attrs.get("supports_window", False)),
@@ -1044,6 +1042,7 @@ def _validate_partition_kind(cls: type, kind: PartitionKind) -> PartitionKind:
         return kind
 
     from vgi.schema_utils import VGI_PARTITION_COLUMN_KEY
+
     annotated_fields: list[str] = []
     for field in fixed_schema:
         md = field.metadata

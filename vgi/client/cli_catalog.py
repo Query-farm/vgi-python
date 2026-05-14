@@ -5,10 +5,10 @@ This module provides CLI commands for catalog operations, organized hierarchical
 catalog
 ├── list                    # List available catalogs
 ├── attach <name>           # Attach to a catalog
-├── detach <attach_id>      # Detach from a catalog
+├── detach <attach_opaque_data>      # Detach from a catalog
 ├── create <name>           # Create a new catalog
 ├── drop <name>             # Drop a catalog
-├── version                 # Get catalog version (--attach-id or --catalog)
+├── version                 # Get catalog version (--attach-opaque-data or --catalog)
 ├── schema                  # Schema operations
 │   ├── list/get/create/drop/contents
 ├── table                   # Table operations
@@ -31,9 +31,9 @@ from vgi.client.cli_transaction import transaction
 from vgi.client.cli_utils import (
     bytes_to_hex,
     catalog_attach_result_to_dict,
-    get_attach_id_from_options,
-    hex_to_attach_id,
-    hex_to_transaction_id,
+    get_attach_opaque_data_from_options,
+    hex_to_attach_opaque_data,
+    hex_to_transaction_opaque_data,
     output_json,
     parse_json_option,
 )
@@ -69,7 +69,7 @@ def catalog_list(worker: str) -> None:
 @click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--options", default="{}", help="Catalog options as JSON object")
 def catalog_attach(name: str, worker: str, options: str) -> None:
-    """Attach to a catalog and return attach_id.
+    """Attach to a catalog and return attach_opaque_data.
 
     NAME is the catalog name to attach to.
 
@@ -86,16 +86,16 @@ def catalog_attach(name: str, worker: str, options: str) -> None:
 
 
 @catalog.command("detach")
-@click.argument("attach_id")
+@click.argument("attach_opaque_data")
 @click.option("--worker", "-w", required=True, help="VGI worker command")
-def catalog_detach(attach_id: str, worker: str) -> None:
+def catalog_detach(attach_opaque_data: str, worker: str) -> None:
     """Detach from a catalog.
 
     ATTACH_ID is the hex-encoded attach ID from catalog attach.
 
     """
     client = Client(worker)
-    client.catalog_detach(attach_id=hex_to_attach_id(attach_id))
+    client.catalog_detach(attach_opaque_data=hex_to_attach_opaque_data(attach_opaque_data))
     output_json({"status": "detached"})
 
 
@@ -140,32 +140,36 @@ def catalog_drop(name: str, worker: str) -> None:
 
 
 @catalog.command("version")
-@click.option("--attach-id", help="Hex-encoded attach ID")
+@click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
 @click.option("--worker", "-w", required=True, help="VGI worker command")
-@click.option("--transaction-id", help="Transaction ID (hex) for transactional read")
+@click.option("--transaction-opaque-data", help="Transaction ID (hex) for transactional read")
 def catalog_version(
-    attach_id: str | None,
+    attach_opaque_data: str | None,
     catalog_name: str | None,
     attach_options: str,
     worker: str,
-    transaction_id: str | None,
+    transaction_opaque_data: str | None,
 ) -> None:
     """Get the current catalog version."""
     client = Client(worker)
     opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_id, is_stateful = get_attach_id_from_options(client, attach_id, catalog_name, opts)
+    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
+        client, attach_opaque_data, catalog_name, opts
+    )
     if is_stateful and catalog_name:
         click.echo(
-            "Warning: Using --catalog with a stateful catalog. Consider using --attach-id for session persistence.",
+            "Warning: Using --catalog with a stateful catalog. Consider using --attach-opaque-data for session persistence.",
             err=True,
         )
     version = client.catalog_version(
-        attach_id=resolved_attach_id,
-        transaction_id=(hex_to_transaction_id(transaction_id) if transaction_id else None),
+        attach_opaque_data=resolved_attach_opaque_data,
+        transaction_opaque_data=(
+            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
+        ),
     )
-    output_json({"version": version, "attach_id": bytes_to_hex(resolved_attach_id)})
+    output_json({"version": version, "attach_opaque_data": bytes_to_hex(resolved_attach_opaque_data)})
 
 
 # Add nested subcommand groups

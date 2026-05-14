@@ -18,7 +18,7 @@ import pyarrow as pa
 
 from vgi.arguments import Arguments
 from vgi.catalog.catalog_interface import (
-    AttachId,
+    AttachOpaqueData,
     ColumnStatistics,
     IndexConstraintType,
     IndexInfo,
@@ -284,9 +284,7 @@ class Table:
         # on_bind even though they inherit _inline_bind_safe via MRO.
         if self.inline_bind:
             if self.function is None:
-                raise ValueError(
-                    f"Table '{self.name}': inline_bind=True requires function= to be set"
-                )
+                raise ValueError(f"Table '{self.name}': inline_bind=True requires function= to be set")
             if not getattr(self.function, "_inline_bind_safe", False):
                 raise ValueError(
                     f"Table '{self.name}': inline_bind=True requires the function class "
@@ -750,7 +748,7 @@ class Schema:
     macros: Sequence[Macro] = ()
     indexes: Sequence[Index] = ()
 
-    def to_schema_info(self, attach_id: AttachId) -> SchemaInfo:
+    def to_schema_info(self, attach_opaque_data: AttachOpaqueData) -> SchemaInfo:
         """Convert to SchemaInfo for catalog response.
 
         Populates ``estimated_object_count`` from the declared population so
@@ -776,7 +774,7 @@ class Schema:
         for func in self.functions:
             function_counts[func.get_metadata().function_type] += 1
         return SchemaInfo(
-            attach_id=attach_id,
+            attach_opaque_data=attach_opaque_data,
             name=self.name,
             comment=self.comment,
             tags=dict(self.tags),

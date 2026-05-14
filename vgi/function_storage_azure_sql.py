@@ -323,15 +323,11 @@ class FunctionStorageAzureSql:
         INSERT/UPSERT body here when this backend is brought back into
         the matrix.
         """
-        raise NotImplementedError(
-            "stream_state is not yet implemented for the Azure SQL backend."
-        )
+        raise NotImplementedError("stream_state is not yet implemented for the Azure SQL backend.")
 
     def stream_state_scan(self, execution_id: bytes, *, shard_key: str = "") -> list[tuple[bytes, bytes]]:
         """Non-destructive read of (stream_id, state_data) for execution_id."""
-        raise NotImplementedError(
-            "stream_state is not yet implemented for the Azure SQL backend."
-        )
+        raise NotImplementedError("stream_state is not yet implemented for the Azure SQL backend.")
 
     # --- Work Queue ---
 
@@ -470,7 +466,9 @@ class FunctionStorageAzureSql:
 
     # --- Aggregate State ---
 
-    def aggregate_state_get(self, execution_id: bytes, group_ids: list[int], *, shard_key: str = "") -> list[tuple[int, bytes] | None]:
+    def aggregate_state_get(
+        self, execution_id: bytes, group_ids: list[int], *, shard_key: str = ""
+    ) -> list[tuple[int, bytes] | None]:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError("Aggregate functions are not yet supported with the Azure SQL storage backend.")
 
@@ -484,25 +482,33 @@ class FunctionStorageAzureSql:
 
     # --- Transaction State ---
 
-    def transaction_state_get(self, transaction_id: bytes, keys: list[bytes], *, shard_key: str = "") -> list[bytes | None]:
+    def transaction_state_get(
+        self, transaction_opaque_data: bytes, keys: list[bytes], *, shard_key: str = ""
+    ) -> list[bytes | None]:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError("Transaction state is not yet supported with the Azure SQL storage backend.")
 
-    def transaction_state_put(self, transaction_id: bytes, items: list[tuple[bytes, bytes]], *, shard_key: str = "") -> None:
+    def transaction_state_put(
+        self, transaction_opaque_data: bytes, items: list[tuple[bytes, bytes]], *, shard_key: str = ""
+    ) -> None:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError("Transaction state is not yet supported with the Azure SQL storage backend.")
 
-    def transaction_state_clear(self, transaction_id: bytes, *, shard_key: str = "") -> None:
+    def transaction_state_clear(self, transaction_opaque_data: bytes, *, shard_key: str = "") -> None:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError("Transaction state is not yet supported with the Azure SQL storage backend.")
 
-    def aggregate_window_partition_put(self, execution_id: bytes, partition_id: int, data: bytes, *, shard_key: str = "") -> None:
+    def aggregate_window_partition_put(
+        self, execution_id: bytes, partition_id: int, data: bytes, *, shard_key: str = ""
+    ) -> None:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError(
             "Aggregate window functions are not yet supported with the Azure SQL storage backend."
         )
 
-    def aggregate_window_partition_get(self, execution_id: bytes, partition_id: int, *, shard_key: str = "") -> bytes | None:
+    def aggregate_window_partition_get(
+        self, execution_id: bytes, partition_id: int, *, shard_key: str = ""
+    ) -> bytes | None:
         """Not yet supported on Azure SQL."""
         raise NotImplementedError(
             "Aggregate window functions are not yet supported with the Azure SQL storage backend."

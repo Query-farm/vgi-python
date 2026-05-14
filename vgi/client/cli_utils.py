@@ -1,7 +1,7 @@
 """Shared utilities for VGI CLI commands.
 
 This module provides common utilities used across CLI command groups:
-- Hex string conversion for AttachId and TransactionId
+- Hex string conversion for AttachOpaqueData and TransactionOpaqueData
 - JSON to Arrow schema conversion for table columns
 - Output formatting helpers
 
@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 import click
 import pyarrow as pa
 
-from vgi.catalog import AttachId, TransactionId
+from vgi.catalog import AttachOpaqueData, TransactionOpaqueData
 
 if TYPE_CHECKING:
     from vgi.catalog import CatalogAttachResult, FunctionInfo, SchemaInfo, TableInfo, ViewInfo
@@ -87,36 +87,36 @@ def hex_to_bytes(hex_string: str) -> bytes:
         raise click.ClickException(f"Invalid hex string '{hex_string}': {e}") from e
 
 
-def hex_to_attach_id(hex_string: str) -> AttachId:
-    """Convert a hex string to AttachId.
+def hex_to_attach_opaque_data(hex_string: str) -> AttachOpaqueData:
+    """Convert a hex string to AttachOpaqueData.
 
     Args:
         hex_string: Hexadecimal string (e.g., "deadbeef")
 
     Returns:
-        AttachId
+        AttachOpaqueData
 
     Raises:
         click.ClickException: If hex string is invalid
 
     """
-    return AttachId(hex_to_bytes(hex_string))
+    return AttachOpaqueData(hex_to_bytes(hex_string))
 
 
-def hex_to_transaction_id(hex_string: str) -> TransactionId:
-    """Convert a hex string to TransactionId.
+def hex_to_transaction_opaque_data(hex_string: str) -> TransactionOpaqueData:
+    """Convert a hex string to TransactionOpaqueData.
 
     Args:
         hex_string: Hexadecimal string (e.g., "deadbeef")
 
     Returns:
-        TransactionId
+        TransactionOpaqueData
 
     Raises:
         click.ClickException: If hex string is invalid
 
     """
-    return TransactionId(hex_to_bytes(hex_string))
+    return TransactionOpaqueData(hex_to_bytes(hex_string))
 
 
 def bytes_to_hex(data: bytes) -> str:
@@ -345,16 +345,16 @@ def catalog_attach_result_to_dict(result: CatalogAttachResult) -> dict[str, Any]
         result: CatalogAttachResult object
 
     Returns:
-        Dictionary representation with attach_id as hex
+        Dictionary representation with attach_opaque_data as hex
 
     """
     return {
-        "attach_id": bytes_to_hex(result.attach_id),
+        "attach_opaque_data": bytes_to_hex(result.attach_opaque_data),
         "supports_transactions": result.supports_transactions,
         "supports_time_travel": result.supports_time_travel,
         "catalog_version_frozen": result.catalog_version_frozen,
         "catalog_version": result.catalog_version,
-        "attach_id_required": result.attach_id_required,
+        "attach_opaque_data_required": result.attach_opaque_data_required,
         "default_schema": result.default_schema,
         "settings": [bytes_to_hex(s) for s in result.settings],
         "resolved_data_version": result.resolved_data_version,
@@ -385,55 +385,55 @@ def scan_function_result_to_dict(result: ScanFunctionResult) -> dict[str, Any]:
     }
 
 
-def get_attach_id_from_options(
+def get_attach_opaque_data_from_options(
     client: Client,
-    attach_id: str | None,
+    attach_opaque_data: str | None,
     catalog: str | None,
     attach_options: dict[str, Any] | None,
-) -> tuple[AttachId, bool]:
-    """Get attach_id from either explicit --attach-id or auto-attach via --catalog.
+) -> tuple[AttachOpaqueData, bool]:
+    """Get attach_opaque_data from either explicit --attach-opaque-data or auto-attach via --catalog.
 
     This helper supports two workflows:
-    1. Explicit attach_id: Use a pre-obtained attach_id (for stateful catalogs)
+    1. Explicit attach_opaque_data: Use a pre-obtained attach_opaque_data (for stateful catalogs)
     2. Auto-attach: Attach to catalog on-the-fly (for stateless catalogs)
 
     Args:
         client: VGI Client instance
-        attach_id: Hex-encoded attach ID (from --attach-id option)
+        attach_opaque_data: Hex-encoded attach ID (from --attach-opaque-data option)
         catalog: Catalog name (from --catalog option)
         attach_options: Options for catalog attach (from --attach-options option)
 
     Returns:
-        Tuple of (attach_id, is_stateful) where is_stateful indicates if
+        Tuple of (attach_opaque_data, is_stateful) where is_stateful indicates if
         a warning should be shown for stateful catalogs using auto-attach.
 
     Raises:
-        click.ClickException: If neither attach_id nor catalog is provided,
+        click.ClickException: If neither attach_opaque_data nor catalog is provided,
             or if both are provided.
 
     """
-    if attach_id and catalog:
+    if attach_opaque_data and catalog:
         raise click.ClickException(
-            "Cannot specify both --attach-id and --catalog. "
-            "Use --attach-id for stateful catalogs or --catalog for auto-attach."
+            "Cannot specify both --attach-opaque-data and --catalog. "
+            "Use --attach-opaque-data for stateful catalogs or --catalog for auto-attach."
         )
 
-    if not attach_id and not catalog:
+    if not attach_opaque_data and not catalog:
         raise click.ClickException(
-            "Must specify either --attach-id or --catalog. "
-            "Use --attach-id with a previously attached catalog, "
+            "Must specify either --attach-opaque-data or --catalog. "
+            "Use --attach-opaque-data with a previously attached catalog, "
             "or --catalog to auto-attach."
         )
 
-    if attach_id:
-        return hex_to_attach_id(attach_id), False
+    if attach_opaque_data:
+        return hex_to_attach_opaque_data(attach_opaque_data), False
 
     # Auto-attach via --catalog
     assert catalog is not None
     options = attach_options or {}
     result = client.catalog_attach(name=catalog, options=options, data_version_spec=None, implementation_version=None)
 
-    # Return the attach_id and whether this is a stateful catalog
+    # Return the attach_opaque_data and whether this is a stateful catalog
     # (is_stateful=True means caller should warn about using --catalog
     # with a stateful catalog)
-    return result.attach_id, result.attach_id_required
+    return result.attach_opaque_data, result.attach_opaque_data_required

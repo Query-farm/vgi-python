@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from vgi_rpc.rpc import CallContext
 
 from vgi.catalog import (
-    AttachId,
+    AttachOpaqueData,
     CatalogAttachResult,
     CatalogInfo,
     CatalogInterface,
@@ -29,7 +29,7 @@ from vgi.catalog import (
     SchemaObjectType,
     SerializedSchema,
     TableInfo,
-    TransactionId,
+    TransactionOpaqueData,
     ViewInfo,
 )
 from vgi.worker import Worker
@@ -91,19 +91,19 @@ class InMemoryCatalog(CatalogInterface):
         """Initialize the in-memory catalog."""
         # Maps catalog name -> CatalogData
         self._catalogs: dict[str, CatalogData] = {}
-        # Maps attach_id -> catalog_name
-        self._attachments: dict[AttachId, str] = {}
+        # Maps attach_opaque_data -> catalog_name
+        self._attachments: dict[AttachOpaqueData, str] = {}
         # Create default "memory" catalog with "main" schema
         self._create_default_catalog()
 
     def _create_default_catalog(self) -> None:
         """Create the default memory catalog with main schema."""
         catalog = CatalogData(name="memory")
-        # Create a placeholder attach_id for internal use
-        placeholder_attach_id = AttachId(b"\x00" * 16)
+        # Create a placeholder attach_opaque_data for internal use
+        placeholder_attach_opaque_data = AttachOpaqueData(b"\x00" * 16)
         catalog.schemas["main"] = SchemaData(
             info=SchemaInfo(
-                attach_id=placeholder_attach_id,
+                attach_opaque_data=placeholder_attach_opaque_data,
                 name="main",
                 comment=None,
                 tags={},
@@ -111,11 +111,11 @@ class InMemoryCatalog(CatalogInterface):
         )
         self._catalogs["memory"] = catalog
 
-    def _get_catalog(self, attach_id: AttachId) -> CatalogData:
-        """Get the catalog for the given attach_id."""
-        catalog_name = self._attachments.get(attach_id)
+    def _get_catalog(self, attach_opaque_data: AttachOpaqueData) -> CatalogData:
+        """Get the catalog for the given attach_opaque_data."""
+        catalog_name = self._attachments.get(attach_opaque_data)
         if catalog_name is None:
-            msg = f"No catalog attached with id {attach_id!r}"
+            msg = f"No catalog attached with id {attach_opaque_data!r}"
             raise ValueError(msg)
         catalog = self._catalogs.get(catalog_name)
         if catalog is None:
@@ -123,18 +123,18 @@ class InMemoryCatalog(CatalogInterface):
             raise ValueError(msg)
         return catalog
 
-    def _get_schema(self, attach_id: AttachId, schema_name: str) -> SchemaData:
-        """Get the schema for the given attach_id and schema name."""
-        catalog = self._get_catalog(attach_id)
+    def _get_schema(self, attach_opaque_data: AttachOpaqueData, schema_name: str) -> SchemaData:
+        """Get the schema for the given attach_opaque_data and schema name."""
+        catalog = self._get_catalog(attach_opaque_data)
         schema = catalog.schemas.get(schema_name)
         if schema is None:
             msg = f"Schema {schema_name!r} not found in catalog"
             raise ValueError(msg)
         return schema
 
-    def _increment_version(self, attach_id: AttachId) -> None:
+    def _increment_version(self, attach_opaque_data: AttachOpaqueData) -> None:
         """Increment the catalog version after a modification."""
-        catalog = self._get_catalog(attach_id)
+        catalog = self._get_catalog(attach_opaque_data)
         catalog.version += 1
 
     # Required abstract methods
@@ -162,13 +162,13 @@ class InMemoryCatalog(CatalogInterface):
             msg = f"Catalog {name!r} not found"
             raise ValueError(msg)
 
-        # Generate a unique attach_id
-        attach_id = AttachId(uuid.uuid4().bytes)
-        self._attachments[attach_id] = name
+        # Generate a unique attach_opaque_data
+        attach_opaque_data = AttachOpaqueData(uuid.uuid4().bytes)
+        self._attachments[attach_opaque_data] = name
 
         catalog = self._catalogs[name]
         return CatalogAttachResult(
-            attach_id=attach_id,
+            attach_opaque_data=attach_opaque_data,
             supports_transactions=False,
             supports_time_travel=False,
             catalog_version_frozen=False,
@@ -179,25 +179,25 @@ class InMemoryCatalog(CatalogInterface):
             resolved_implementation_version=None,
         )
 
-    def catalog_detach(self, *, attach_id: AttachId) -> None:
+    def catalog_detach(self, *, attach_opaque_data: AttachOpaqueData) -> None:
         """Detach from the catalog."""
-        self._attachments.pop(attach_id, None)
+        self._attachments.pop(attach_opaque_data, None)
 
     def schema_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
     ) -> SchemaInfo | None:
         """Get information about a schema."""
-        catalog = self._get_catalog(attach_id)
+        catalog = self._get_catalog(attach_opaque_data)
         schema_data = catalog.schemas.get(name)
         if schema_data is None:
             return None
-        # Update the attach_id in the returned info
+        # Update the attach_opaque_data in the returned info
         return SchemaInfo(
-            attach_id=attach_id,
+            attach_opaque_data=attach_opaque_data,
             name=schema_data.info.name,
             comment=schema_data.info.comment,
             tags=schema_data.info.tags,
@@ -206,15 +206,15 @@ class InMemoryCatalog(CatalogInterface):
     def table_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
     ) -> TableInfo | None:
         """Get information about a table."""
-        catalog = self._get_catalog(attach_id)
+        catalog = self._get_catalog(attach_opaque_data)
         schema_data = catalog.schemas.get(schema_name)
         if schema_data is None:
             return None
@@ -226,13 +226,13 @@ class InMemoryCatalog(CatalogInterface):
     def view_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> ViewInfo | None:
         """Get information about a view."""
-        catalog = self._get_catalog(attach_id)
+        catalog = self._get_catalog(attach_opaque_data)
         schema_data = catalog.schemas.get(schema_name)
         if schema_data is None:
             return None
@@ -244,13 +244,13 @@ class InMemoryCatalog(CatalogInterface):
     def macro_get(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
     ) -> MacroInfo | None:
         """Get information about a macro."""
-        catalog = self._get_catalog(attach_id)
+        catalog = self._get_catalog(attach_opaque_data)
         schema_data = catalog.schemas.get(schema_name)
         if schema_data is None:
             return None
@@ -264,13 +264,13 @@ class InMemoryCatalog(CatalogInterface):
     def catalog_version(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         ctx: Any = None,
     ) -> int:
         """Get the current catalog version."""
         del ctx
-        catalog = self._get_catalog(attach_id)
+        catalog = self._get_catalog(attach_opaque_data)
         return catalog.version
 
     def catalog_create(self, *, name: str, on_conflict: OnConflict, options: dict[str, Any]) -> None:
@@ -284,11 +284,11 @@ class InMemoryCatalog(CatalogInterface):
             # REPLACE: fall through to create
 
         catalog = CatalogData(name=name)
-        # Create a placeholder attach_id for internal use
-        placeholder_attach_id = AttachId(b"\x00" * 16)
+        # Create a placeholder attach_opaque_data for internal use
+        placeholder_attach_opaque_data = AttachOpaqueData(b"\x00" * 16)
         catalog.schemas["main"] = SchemaData(
             info=SchemaInfo(
-                attach_id=placeholder_attach_id,
+                attach_opaque_data=placeholder_attach_opaque_data,
                 name="main",
                 comment=None,
                 tags={},
@@ -307,9 +307,11 @@ class InMemoryCatalog(CatalogInterface):
             del self._attachments[aid]
         del self._catalogs[name]
 
-    def schemas(self, *, attach_id: AttachId, transaction_id: TransactionId | None) -> list[SchemaInfo]:
+    def schemas(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None
+    ) -> list[SchemaInfo]:
         """Get a list of schemas in the catalog."""
-        catalog = self._get_catalog(attach_id)
+        catalog = self._get_catalog(attach_opaque_data)
         result = []
         for schema_data in catalog.schemas.values():
             # Populate estimated_object_count from the in-memory population so
@@ -330,7 +332,7 @@ class InMemoryCatalog(CatalogInterface):
             }
             result.append(
                 SchemaInfo(
-                    attach_id=attach_id,
+                    attach_opaque_data=attach_opaque_data,
                     name=schema_data.info.name,
                     comment=schema_data.info.comment,
                     tags=schema_data.info.tags,
@@ -342,39 +344,39 @@ class InMemoryCatalog(CatalogInterface):
     def schema_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None,
         tags: dict[str, str],
     ) -> None:
         """Create a new schema."""
-        catalog = self._get_catalog(attach_id)
+        catalog = self._get_catalog(attach_opaque_data)
         if name in catalog.schemas:
             msg = f"Schema {name!r} already exists"
             raise ValueError(msg)
         catalog.schemas[name] = SchemaData(
             info=SchemaInfo(
-                attach_id=attach_id,
+                attach_opaque_data=attach_opaque_data,
                 name=name,
                 comment=comment,
                 tags=tags,
             )
         )
-        self._increment_version(attach_id)
+        self._increment_version(attach_opaque_data)
 
     def schema_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         ignore_not_found: bool,
         cascade: bool,
     ) -> None:
         """Drop a schema."""
-        catalog = self._get_catalog(attach_id)
+        catalog = self._get_catalog(attach_opaque_data)
         if name not in catalog.schemas:
             if ignore_not_found:
                 return
@@ -385,14 +387,14 @@ class InMemoryCatalog(CatalogInterface):
             msg = f"Schema {name!r} is not empty, use CASCADE to drop"
             raise ValueError(msg)
         del catalog.schemas[name]
-        self._increment_version(attach_id)
+        self._increment_version(attach_opaque_data)
 
     @overload
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.TABLE],
     ) -> Sequence[TableInfo]: ...
@@ -401,8 +403,8 @@ class InMemoryCatalog(CatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.VIEW],
     ) -> Sequence[ViewInfo]: ...
@@ -411,8 +413,8 @@ class InMemoryCatalog(CatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[
             SchemaObjectType.SCALAR_FUNCTION,
@@ -425,8 +427,8 @@ class InMemoryCatalog(CatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
@@ -435,8 +437,8 @@ class InMemoryCatalog(CatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: Literal[SchemaObjectType.INDEX],
     ) -> Sequence[IndexInfo]: ...
@@ -444,16 +446,16 @@ class InMemoryCatalog(CatalogInterface):
     def schema_contents(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         name: str,
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
         """Get the contents of a schema.
 
         Args:
-            attach_id: The attachment identifier.
-            transaction_id: The transaction identifier, if any.
+            attach_opaque_data: The attachment identifier.
+            transaction_opaque_data: The transaction identifier, if any.
             name: The name of the schema.
             type: The type of objects to return. Must be a SchemaObjectType enum.
 
@@ -462,7 +464,7 @@ class InMemoryCatalog(CatalogInterface):
             depending on the type parameter.
 
         """
-        schema_data = self._get_schema(attach_id, name)
+        schema_data = self._get_schema(attach_opaque_data, name)
         result: list[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo] = []
 
         # Normalize type parameter (may be string from wire protocol)
@@ -493,8 +495,8 @@ class InMemoryCatalog(CatalogInterface):
     def table_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         columns: SerializedSchema,
@@ -506,7 +508,7 @@ class InMemoryCatalog(CatalogInterface):
         foreign_key_constraints: list[bytes] | None = None,
     ) -> None:
         """Create a new table."""
-        schema_data = self._get_schema(attach_id, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_name)
         if name in schema_data.tables:
             if on_conflict == OnConflict.ERROR:
                 msg = f"Table {name!r} already exists in schema {schema_name!r}"
@@ -527,40 +529,40 @@ class InMemoryCatalog(CatalogInterface):
                 tags={},
             )
         )
-        self._increment_version(attach_id)
+        self._increment_version(attach_opaque_data)
 
     def table_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         ignore_not_found: bool,
         cascade: bool = False,
     ) -> None:
         """Drop a table."""
-        schema_data = self._get_schema(attach_id, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_name)
         if name not in schema_data.tables:
             if ignore_not_found:
                 return
             msg = f"Table {name!r} not found in schema {schema_name!r}"
             raise ValueError(msg)
         del schema_data.tables[name]
-        self._increment_version(attach_id)
+        self._increment_version(attach_opaque_data)
 
     def table_comment_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         comment: str | None,
         ignore_not_found: bool,
     ) -> None:
         """Set the comment for a table."""
-        schema_data = self._get_schema(attach_id, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_name)
         table_data = schema_data.tables.get(name)
         if table_data is None:
             if ignore_not_found:
@@ -581,20 +583,20 @@ class InMemoryCatalog(CatalogInterface):
                 tags=old_info.tags,
             )
         )
-        self._increment_version(attach_id)
+        self._increment_version(attach_opaque_data)
 
     def table_rename(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         new_name: str,
         ignore_not_found: bool,
     ) -> None:
         """Rename a table."""
-        schema_data = self._get_schema(attach_id, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_name)
         if name not in schema_data.tables:
             if ignore_not_found:
                 return
@@ -618,20 +620,20 @@ class InMemoryCatalog(CatalogInterface):
                 tags=old_info.tags,
             )
         )
-        self._increment_version(attach_id)
+        self._increment_version(attach_opaque_data)
 
     def view_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         definition: str,
         on_conflict: OnConflict,
     ) -> None:
         """Create a new view."""
-        schema_data = self._get_schema(attach_id, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_name)
         if name in schema_data.views:
             if on_conflict == OnConflict.ERROR:
                 msg = f"View {name!r} already exists in schema {schema_name!r}"
@@ -649,40 +651,40 @@ class InMemoryCatalog(CatalogInterface):
                 tags={},
             )
         )
-        self._increment_version(attach_id)
+        self._increment_version(attach_opaque_data)
 
     def view_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         ignore_not_found: bool,
         cascade: bool = False,
     ) -> None:
         """Drop a view."""
-        schema_data = self._get_schema(attach_id, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_name)
         if name not in schema_data.views:
             if ignore_not_found:
                 return
             msg = f"View {name!r} not found in schema {schema_name!r}"
             raise ValueError(msg)
         del schema_data.views[name]
-        self._increment_version(attach_id)
+        self._increment_version(attach_opaque_data)
 
     def view_rename(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         new_name: str,
         ignore_not_found: bool,
     ) -> None:
         """Rename a view."""
-        schema_data = self._get_schema(attach_id, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_name)
         if name not in schema_data.views:
             if ignore_not_found:
                 return
@@ -703,20 +705,20 @@ class InMemoryCatalog(CatalogInterface):
                 tags=old_info.tags,
             )
         )
-        self._increment_version(attach_id)
+        self._increment_version(attach_opaque_data)
 
     def view_comment_set(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         comment: str | None,
         ignore_not_found: bool,
     ) -> None:
         """Set the comment for a view."""
-        schema_data = self._get_schema(attach_id, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_name)
         view_data = schema_data.views.get(name)
         if view_data is None:
             if ignore_not_found:
@@ -734,13 +736,13 @@ class InMemoryCatalog(CatalogInterface):
                 tags=old_info.tags,
             )
         )
-        self._increment_version(attach_id)
+        self._increment_version(attach_opaque_data)
 
     def macro_create(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         macro_type: MacroType,
@@ -750,7 +752,7 @@ class InMemoryCatalog(CatalogInterface):
         parameter_default_values: pa.RecordBatch | None = None,
     ) -> None:
         """Create a new macro."""
-        schema_data = self._get_schema(attach_id, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_name)
         if name in schema_data.macros:
             if on_conflict == OnConflict.ERROR:
                 msg = f"Macro {name!r} already exists in schema {schema_name!r}"
@@ -771,26 +773,26 @@ class InMemoryCatalog(CatalogInterface):
                 tags={},
             )
         )
-        self._increment_version(attach_id)
+        self._increment_version(attach_opaque_data)
 
     def macro_drop(
         self,
         *,
-        attach_id: AttachId,
-        transaction_id: TransactionId | None,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         ignore_not_found: bool,
     ) -> None:
         """Drop a macro."""
-        schema_data = self._get_schema(attach_id, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_name)
         if name not in schema_data.macros:
             if ignore_not_found:
                 return
             msg = f"Macro {name!r} not found in schema {schema_name!r}"
             raise ValueError(msg)
         del schema_data.macros[name]
-        self._increment_version(attach_id)
+        self._increment_version(attach_opaque_data)
 
 
 class InMemoryCatalogWorker(Worker):

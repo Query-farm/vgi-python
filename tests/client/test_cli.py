@@ -222,8 +222,8 @@ class TestCLIValidation:
         assert result.exit_code != 0
         assert "out of range" in result.output
 
-    def test_invalid_attach_id_hex(self, fixture_worker: str) -> None:
-        """--attach-id must be valid hex."""
+    def test_invalid_attach_opaque_data_hex(self, fixture_worker: str) -> None:
+        """--attach-opaque-data must be valid hex."""
         runner = CliRunner()
         result = runner.invoke(
             cli,
@@ -232,7 +232,7 @@ class TestCLIValidation:
                 "sequence",
                 "--args",
                 "[5]",
-                "--attach-id",
+                "--attach-opaque-data",
                 "not_hex_string",
                 "--worker",
                 fixture_worker,
@@ -480,8 +480,8 @@ class TestCLIOptions:
         )
         assert result.exit_code == 0
 
-    def test_valid_attach_id(self, fixture_worker: str) -> None:
-        """Valid hex attach-id is accepted."""
+    def test_valid_attach_opaque_data(self, fixture_worker: str) -> None:
+        """Valid hex attach-opaque-data is accepted."""
         runner = CliRunner()
         result = runner.invoke(
             cli,
@@ -490,7 +490,7 @@ class TestCLIOptions:
                 "sequence",
                 "--args",
                 "[5]",
-                "--attach-id",
+                "--attach-opaque-data",
                 "deadbeef",
                 "--worker",
                 fixture_worker,

@@ -54,9 +54,7 @@ class _OrderModeState(ArrowSerializableDataclass):
     current_idx: int = 0
 
 
-class _BasePartitionedOrderMode(
-    TableFunctionGenerator[_OrderModeArgs, _OrderModeState]
-):
+class _BasePartitionedOrderMode(TableFunctionGenerator[_OrderModeArgs, _OrderModeState]):
     """Shared multi-worker work-queue logic. Subclasses pin ``Meta``.
 
     The chunk/batch sizing matches ``PartitionedSequenceFunction``: 1k chunks,
@@ -113,8 +111,7 @@ class PartitionedPreservesOrderFunction(_BasePartitionedOrderMode):
     class Meta:
         name = "partitioned_preserves_order"
         description = (
-            "Multi-worker partitioned sequence; preserves_order=PRESERVES_ORDER "
-            "(maps to DuckDB INSERTION_ORDER)."
+            "Multi-worker partitioned sequence; preserves_order=PRESERVES_ORDER (maps to DuckDB INSERTION_ORDER)."
         )
         categories = ["generator", "utility"]
         preserves_order = OrderPreservation.PRESERVES_ORDER
@@ -133,10 +130,7 @@ class PartitionedNoOrderGuaranteeFunction(_BasePartitionedOrderMode):
 
     class Meta:
         name = "partitioned_no_order_guarantee"
-        description = (
-            "Multi-worker partitioned sequence; preserves_order=NO_ORDER_GUARANTEE "
-            "(maps to DuckDB NO_ORDER)."
-        )
+        description = "Multi-worker partitioned sequence; preserves_order=NO_ORDER_GUARANTEE (maps to DuckDB NO_ORDER)."
         categories = ["generator", "utility"]
         preserves_order = OrderPreservation.NO_ORDER_GUARANTEE
         examples = [
