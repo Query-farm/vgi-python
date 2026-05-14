@@ -159,10 +159,15 @@ from vgi._test_fixtures.table import (
 )
 from vgi._test_fixtures.table_in_out import (
     BufferInputFunction,
+    CrashOnCombineFunction,
+    CrashOnFinalizeFunction,
+    CrashOnProcessFunction,
     EchoFunction,
     ExceptionFinalizeFunction,
     ExceptionProcessFunction,
     FilterBySettingFunction,
+    HangOnProcessFunction,
+    LargeStateFunction,
     RepeatInputsFunction,
     SumAllColumnsFunction,
     SumAllColumnsSimpleDistributed,
@@ -286,6 +291,11 @@ _EXAMPLE_CATALOG = Catalog(
                 UnnestTensorRowsFunction,
                 ExceptionFinalizeFunction,
                 ExceptionProcessFunction,
+                CrashOnProcessFunction,
+                CrashOnCombineFunction,
+                CrashOnFinalizeFunction,
+                HangOnProcessFunction,
+                LargeStateFunction,
                 # TableFunctionGenerator - generate output without input
                 ConstantColumnsFunction,
                 SlowCancellableFunction,

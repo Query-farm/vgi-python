@@ -25,10 +25,18 @@ SumAllColumnsFunction          - Aggregates numeric columns into sums
 ExceptionProcessFunction       - Raises exception during process (test)
 ExceptionFinalizeFunction      - Raises exception during finalize (test)
 SumAllColumnsSimpleDistributed - Distributed aggregation via callback API
+CrashOnProcessFunction         - SIGKILLs the worker mid-process (test)
+CrashOnCombineFunction         - Raises during combine() (test)
+CrashOnFinalizeFunction        - Raises during finalize() (test)
+HangOnProcessFunction          - Sleeps forever in process() (manual cancel test)
+LargeStateFunction             - Buffers ~N MB per state_id (IPC chunking test)
 """
 
 from __future__ import annotations
 
+import os
+import signal
+import time
 from dataclasses import dataclass, field
 from collections.abc import Iterator
 from typing import Annotated, Any
@@ -59,6 +67,11 @@ __all__ = [
     "SumAllColumnsSimpleDistributed",
     "ExceptionProcessFunction",
     "ExceptionFinalizeFunction",
+    "CrashOnProcessFunction",
+    "CrashOnCombineFunction",
+    "CrashOnFinalizeFunction",
+    "HangOnProcessFunction",
+    "LargeStateFunction",
 ]
 
 
@@ -755,3 +768,171 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction[SingleTableArguments, Su
             sums[field.name] = pc.sum(table.column(field.name))
 
         return [pa.RecordBatch.from_pylist([{name: val for name, val in sums.items()}], schema=params.output_schema)]
+
+
+# ============================================================================
+# Failure-injection fixtures
+# ============================================================================
+# These are buffered_table functions designed to exercise crash/error paths in
+# the C++ Sink+Source operator. Each one fails in a specific phase so we can
+# test that the operator: throws cleanly, drains the worker pool, doesn't leak
+# in-flight workers, and recovers on the next query.
+
+
+class CrashOnProcessFunction(BufferInputFunction):
+    """SIGKILLs its own worker process on the first process() call.
+
+    Tests the C++ side's handling of an abrupt worker death mid-RPC:
+    subprocess writes the request, worker dies before responding, ReadUnary
+    sees EOF / EPIPE / SIGCHLD depending on timing. The exception should
+    propagate cleanly and gstate teardown should cancel-dispatch peer workers.
+    """
+
+    class Meta(BufferInputFunction.Meta):
+        name = "crash_on_process"
+        description = "Worker SIGKILLs itself during process (test)"
+        categories = ["test", "crash"]
+
+    @classmethod
+    def process(  # type: ignore[override]
+        cls,
+        params: ProcessParams[SingleTableArguments],
+        state: BufferInputState,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        # SIGKILL with no handler; the process dies immediately. The C++
+        # side has a pending unary RPC awaiting the response.
+        os.kill(os.getpid(), signal.SIGKILL)
+
+
+class CrashOnCombineFunction(BufferInputFunction):
+    """Buffers input normally; raises during combine().
+
+    Tests that a combine RPC error propagates as IOException, that the
+    combine_worker is dropped (not pushed back into gstate.workers), and
+    that the rest of the worker pool drains.
+    """
+
+    class Meta(BufferInputFunction.Meta):
+        name = "crash_on_combine"
+        description = "Worker raises during combine (test)"
+        categories = ["test", "crash"]
+
+    @classmethod
+    def combine(  # type: ignore[override]
+        cls, state_ids: list[int], params: ProcessParams[SingleTableArguments]
+    ) -> list[int]:
+        raise RuntimeError("Intentional exception during combine()")
+
+
+class CrashOnFinalizeFunction(BufferInputFunction):
+    """Buffers input, combine returns normally, finalize raises on first yield.
+
+    Tests source-phase error propagation: GetData calls
+    RpcBufferedTableFinalize, the worker raises, the IOException unwinds the
+    source thread, and remaining workers are still released cleanly.
+    """
+
+    class Meta(BufferInputFunction.Meta):
+        name = "crash_on_finalize"
+        description = "Worker raises during finalize (test)"
+        categories = ["test", "crash"]
+
+    @classmethod
+    def finalize(  # type: ignore[override]
+        cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments]
+    ) -> Iterator[pa.RecordBatch]:
+        raise RuntimeError("Intentional exception during finalize()")
+        yield  # type: ignore[unreachable]  # make this a generator function
+
+
+class HangOnProcessFunction(BufferInputFunction):
+    """Sleeps for an hour in process(); used by the manual cancellation smoke.
+
+    sqllogictest can't simulate Ctrl-C cleanly, so this fixture is driven by
+    scripts/smoke_buffered_cancel.sh — it starts the query, waits a moment,
+    then SIGINTs the duckdb process and asserts the query was cancelled.
+    """
+
+    class Meta(BufferInputFunction.Meta):
+        name = "hang_on_process"
+        description = "Worker sleeps in process (manual cancel test)"
+        categories = ["test", "hang"]
+
+    @classmethod
+    def process(  # type: ignore[override]
+        cls,
+        params: ProcessParams[SingleTableArguments],
+        state: BufferInputState,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        time.sleep(3600)
+
+
+@dataclass(kw_only=True)
+class LargeStateState(ArrowSerializableDataclass):
+    """Holds a single large bytes buffer; the C++ side ships this through
+    combine/finalize via the RPC's outer envelope, exercising IPC chunking
+    on the response path."""
+
+    payload: bytes = b""
+
+
+class LargeStateFunction(TableInOutGenerator[SingleTableArguments, LargeStateState]):
+    """Accumulates a large payload per state_id and emits it during finalize.
+
+    Each process() call appends N KB to the per-state_id payload. The total
+    bytes per finalize_state_id grows linearly with input row count. The
+    test passes ~100 MB through combine to exercise the IPC chunking that
+    happens transparently in vgi_rpc for large messages.
+    """
+
+    state_class = LargeStateState
+
+    class Meta:
+        name = "large_state"
+        description = "Buffers ~1 MB per input batch into state (IPC test)"
+        categories = ["test", "memory"]
+        buffered_table = True
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[SingleTableArguments]) -> LargeStateState:
+        return LargeStateState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[SingleTableArguments],
+        state: LargeStateState,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        # Append 1 MB of zero bytes per input batch. Combine ships the full
+        # accumulated payload back via Arrow IPC; chunking is the worker
+        # library's responsibility — we just want to land a multi-MB message
+        # on the wire.
+        state.payload += b"\x00" * (1024 * 1024)
+        out.emit(empty_batch(params.output_schema))
+
+    @classmethod
+    def combine(
+        cls, state_ids: list[int], params: ProcessParams[SingleTableArguments]
+    ) -> list[int]:
+        return state_ids
+
+    @classmethod
+    def finalize(
+        cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments]
+    ) -> Iterator[pa.RecordBatch]:
+        stored = params.storage.aggregate_get([finalize_state_id])
+        if not stored or stored[0] is None:
+            return
+        state = LargeStateState.deserialize_from_bytes(stored[0][1])
+        # Emit one row with the payload length so the test can assert
+        # we round-tripped the right number of bytes through combine.
+        yield pa.RecordBatch.from_pydict(
+            {name: [len(state.payload)] for name in params.output_schema.names},
+            schema=params.output_schema,
+        )
