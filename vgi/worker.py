@@ -2446,10 +2446,22 @@ class Worker:
         ``base_params`` per RPC via ``_dataclass_replace`` to inject the
         request-scoped ``storage`` / ``auth_context`` / ``batch_index`` /
         ``state_id`` fields.
+
+        Accepts either a unary buffered_table_* request (carries
+        ``function_name`` + ``attach_opaque_data`` directly) or an
+        ``InitRequest`` (carries them under ``bind_call``). The latter
+        is used by the ``BUFFERED_TABLE_FINALIZE`` init phase.
         """
+        function_name = getattr(request, "function_name", None)
+        attach = getattr(request, "attach_opaque_data", None)
+        if function_name is None:
+            # InitRequest path — fields live on the inner bind_call.
+            function_name = request.bind_call.function_name
+            if attach is None:
+                attach = request.bind_call.attach_opaque_data
         func_cls = self._resolve_function_by_name(
-            request.function_name,
-            self._unwrap_attach(request.attach_opaque_data),
+            function_name,
+            self._unwrap_attach(attach),
             function_type=TableInOutGenerator,
         )
         # Runtime narrowing for mypy — the function_type filter above
@@ -2457,7 +2469,7 @@ class Worker:
         # is type[Function] (the base class).
         if not issubclass(func_cls, TableInOutGenerator):
             raise TypeError(
-                f"Function '{request.function_name}' is not a TableInOutGenerator "
+                f"Function '{function_name}' is not a TableInOutGenerator "
                 f"(got {func_cls.__name__})"
             )
         cold_storage = BoundStorage(
