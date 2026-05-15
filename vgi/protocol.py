@@ -1404,6 +1404,30 @@ class BufferedTableFinalizeResponse(ArrowSerializableDataclass):
     has_more: bool
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BufferedTableDestructorRequest(ArrowSerializableDataclass):
+    """Request for buffered_table_destructor — best-effort end-of-query cleanup.
+
+    Fired by the C++ Sink+Source operator from its destructor regardless
+    of success / cancel / throw. Idempotent on the worker side: missing
+    entries are not errors. Delivery is best-effort — worker death or
+    network drop can lose the RPC; FunctionStorage's
+    ``cleanup_old_entries(max_age_days=1)`` is the backstop for missed
+    deliveries.
+    """
+
+    function_name: str
+    execution_id: bytes
+    attach_opaque_data: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BufferedTableDestructorResponse(ArrowSerializableDataclass):
+    """Response from buffered_table_destructor — empty ack."""
+
+    pass
+
+
 # ---------------------------------------------------------------------------
 # Aggregate Window Function RPC Types
 # ---------------------------------------------------------------------------
@@ -1678,6 +1702,10 @@ class VgiProtocol(Protocol):
 
     def buffered_table_finalize(self, request: BufferedTableFinalizeRequest) -> BufferedTableFinalizeResponse:
         """Pull one batch from a finalize_state_id's generator."""
+        ...
+
+    def buffered_table_destructor(self, request: BufferedTableDestructorRequest) -> BufferedTableDestructorResponse:
+        """Best-effort end-of-query cleanup of buffered_table state. Must not raise."""
         ...
 
     # ========== Aggregate Window Function Methods (optional, all unary) ==========

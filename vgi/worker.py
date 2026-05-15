@@ -2617,6 +2617,55 @@ class Worker:
             writer.write_batch(batch)
         return BufferedTableFinalizeResponse(output_batch=sink.getvalue().to_pybytes(), has_more=has_more)
 
+    def buffered_table_destructor(
+        self,
+        request: Any,  # BufferedTableDestructorRequest — lazy import below
+        ctx: CallContext,
+    ) -> Any:  # BufferedTableDestructorResponse
+        """Best-effort end-of-query cleanup.
+
+        The C++ Sink+Source operator fires this from its destructor
+        regardless of success / cancel / throw. Idempotent: missing
+        entries are not errors. Delivery is best-effort — worker death
+        or network drop can lose the RPC; FunctionStorage's
+        ``cleanup_old_entries(max_age_days=1)`` is the backstop for
+        missed deliveries.
+        """
+        from vgi.protocol import BufferedTableDestructorResponse
+
+        # Drop any leftover finalize iterators for this execution_id.
+        # These hold generator stack frames (process-local by nature) so
+        # they have no FunctionStorage equivalent — popping the dict is
+        # the only cleanup possible. In steady state finalize iterators
+        # self-clean on StopIteration; this branch only matches on
+        # mid-drain cancellation paths.
+        leftover = [k for k in _buffered_table_finalize_iters
+                    if k[0] == request.execution_id]
+        for k in leftover:
+            _buffered_table_finalize_iters.pop(k, None)
+
+        # Wipe FunctionStorage rows: the b"buf_init" metadata, the
+        # b"buf" per-state-id RMW slots, and the b"buf" append log.
+        # execution_clear() sweeps every namespace for the scope in one
+        # call. Best-effort: failures here don't propagate (the operator
+        # is already torn down); cleanup_old_entries is the backstop.
+        try:
+            func_cls = self._resolve_function_by_name(
+                request.function_name,
+                self._unwrap_attach(request.attach_opaque_data),
+                function_type=TableInOutGenerator,
+            )
+            storage = BoundStorage(
+                func_cls.storage, request.execution_id, request=request, auth=ctx.auth,
+            )
+            storage.execution_clear()
+        except Exception:
+            _logger.exception(
+                "buffered_table_destructor: storage cleanup failed "
+                "(execution_id=%s)", request.execution_id.hex(),
+            )
+        return BufferedTableDestructorResponse()
+
     # ========== Windowed Aggregate Methods ==========
 
     def aggregate_window_init(

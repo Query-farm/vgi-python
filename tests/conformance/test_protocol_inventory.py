@@ -134,6 +134,13 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
             "integration/aggregate/* and tests/test_aggregate_function.py."
         ),
     ),
+    "buffered_table_destructor": NotExposed(
+        reason=(
+            "DuckDB-only. The C++ Sink+Source operator fires this from its "
+            "destructor; non-DuckDB clients have no equivalent. Covered by C++ "
+            "integration/table_in_out/buffered_*.test."
+        ),
+    ),
     # ---------- Catalog lifecycle / transactions ----------
     "catalog_catalogs": ("catalogs",),
     "catalog_attach": ("catalog_attach",),
