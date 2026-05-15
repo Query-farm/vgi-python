@@ -235,16 +235,18 @@ class TestFunctionStorageAzureSql:
     # --- Cleanup Tests ---
 
     def test_cleanup_old_entries(self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor) -> None:
-        """Test cleanup runs DELETE on all three tables."""
+        """Test cleanup runs DELETE on every state-bearing table."""
         mock_cursor.rowcount = 0
         deleted = storage.cleanup_old_entries(max_age_days=1.0)
         assert deleted >= 0
 
-        # Verify all three tables were cleaned
+        # Verify every state-bearing table was cleaned: legacy three plus
+        # the unified state_* pair.
         delete_calls = [sql for sql, _ in mock_cursor.executed if "DELETE FROM" in sql]
-        assert len(delete_calls) == 3
+        assert len(delete_calls) == 5
         tables = {sql.split("DELETE FROM ")[1].split(" ")[0] for sql, _ in mock_cursor.executed if "DELETE FROM" in sql}
-        assert tables == {"worker_state", "work_queue", "invocation_registry"}
+        assert tables == {"worker_state", "work_queue", "invocation_registry",
+                          "function_state", "function_state_log"}
 
     # --- Factory Tests ---
 
@@ -344,3 +346,114 @@ class TestLazyStorageDescriptor:
                 pass
 
         assert MyFunction.storage is mock_storage
+
+
+class TestFunctionStorageAzureSqlStateUnified:
+    """Tests for the unified state_* API on the Azure SQL backend."""
+
+    @pytest.fixture
+    def mock_cursor(self) -> _MockCursor:
+        """Fresh mock cursor per test."""
+        return _MockCursor()
+
+    @pytest.fixture
+    def storage(self, mock_cursor: _MockCursor) -> FunctionStorageAzureSql:
+        """Storage instance with mocked pymssql.connect."""
+        mock_conn = _MockConnection(mock_cursor)
+        s = FunctionStorageAzureSql(
+            server="t.example", database="db", user="u", password="p",
+        )
+        s._connect = lambda: mock_conn  # type: ignore[assignment,return-value]
+        return s
+
+    def test_state_get_many_emits_in_clause(
+        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+    ) -> None:
+        """state_get_many issues an IN-clause SELECT against function_state."""
+        mock_cursor.set_results([(b"k1", b"v1"), (b"k2", b"v2")])
+        result = storage.state_get_many(b"exec1", b"agg", [b"k1", b"k2", b"miss"])
+        assert result == [b"v1", b"v2", None]
+        sql, params = mock_cursor.executed[0]
+        assert "function_state" in sql
+        assert "drained_at IS NULL" in sql
+        assert params[:2] == (b"exec1", b"agg")
+        assert b"k1" in params and b"k2" in params and b"miss" in params
+
+    def test_state_get_many_empty_keys_no_sql(
+        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+    ) -> None:
+        """Empty key list short-circuits without touching SQL."""
+        result = storage.state_get_many(b"exec1", b"agg", [])
+        assert result == []
+        assert mock_cursor.executed == []
+
+    def test_state_put_many_uses_merge(
+        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+    ) -> None:
+        """state_put_many issues one MERGE statement per item."""
+        mock_cursor.set_results([])  # replay-detection SELECT misses → fresh write
+        storage.state_put_many(b"exec1", b"agg", [(b"k1", b"v1"), (b"k2", b"v2")])
+        merge_sqls = [s for s, _ in mock_cursor.executed if "MERGE function_state" in s]
+        assert len(merge_sqls) == 2  # one MERGE per item
+
+    def test_state_put_many_replay_silent_no_op(
+        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+    ) -> None:
+        """A replay (first item already present with our attempt_id) is silent."""
+        mock_cursor.set_results([(1,)])
+        storage.state_put_many(b"exec1", b"agg", [(b"k1", b"v1"), (b"k2", b"v2")])
+        merge_sqls = [s for s, _ in mock_cursor.executed if "MERGE function_state" in s]
+        assert merge_sqls == []  # nothing written
+
+    def test_state_drain_emits_update_with_output(
+        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+    ) -> None:
+        """state_drain uses UPDATE..OUTPUT for atomic tombstone-and-read-back."""
+        mock_cursor.set_results([])  # replay miss
+        result = storage.state_drain(b"exec1", b"agg")
+        assert result == []
+        update_sqls = [s for s, _ in mock_cursor.executed if "UPDATE function_state" in s]
+        assert len(update_sqls) == 1
+        assert "OUTPUT inserted." in update_sqls[0]
+        assert "drained_by_attempt" in update_sqls[0]
+
+    def test_state_delete_specific_keys(
+        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+    ) -> None:
+        """state_delete with a key list emits an IN-clause DELETE."""
+        mock_cursor.rowcount = 2
+        deleted = storage.state_delete(b"exec1", b"agg", [b"k1", b"k2"])
+        assert deleted == 2
+        sql, params = mock_cursor.executed[0]
+        assert "DELETE FROM function_state" in sql
+        assert b"k1" in params and b"k2" in params
+
+    def test_state_delete_namespace(
+        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+    ) -> None:
+        """state_delete with keys=None wipes the whole namespace."""
+        mock_cursor.rowcount = 7
+        deleted = storage.state_delete(b"exec1", b"agg", None)
+        assert deleted == 7
+        sql, params = mock_cursor.executed[0]
+        assert sql == "DELETE FROM function_state WHERE scope_id = %s AND ns = %s"
+        assert params == (b"exec1", b"agg")
+
+    def test_execution_clear_wipes_both_tables(
+        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+    ) -> None:
+        """execution_clear deletes from both function_state and function_state_log."""
+        mock_cursor.rowcount = 3
+        deleted = storage.execution_clear(b"exec1")
+        # Two DELETEs, each reports rowcount 3 → 6 total.
+        assert deleted == 6
+        sqls = [s for s, _ in mock_cursor.executed]
+        assert any("DELETE FROM function_state " in s for s in sqls)
+        assert any("DELETE FROM function_state_log " in s for s in sqls)
+
+    def test_legacy_aggregate_state_get_now_raises_with_migration_hint(
+        self, storage: FunctionStorageAzureSql,
+    ) -> None:
+        """Legacy aggregate_state_get raises with a clear migration message."""
+        with pytest.raises(NotImplementedError, match="state_get_many"):
+            storage.aggregate_state_get(b"e", [1, 2])

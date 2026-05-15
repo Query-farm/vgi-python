@@ -727,3 +727,104 @@ class TestLazyStorageDescriptorCfDo:
         with patch.dict("os.environ", env):
             s = _resolve_storage()
             assert isinstance(s, FunctionStorageCfDo)
+
+
+class TestCfDoStateUnified:
+    """Tests for the unified state_* HTTP client."""
+
+    def test_state_get_many_emits_keys(
+        self, storage: FunctionStorageCfDo, mock_transport: _MockTransport,
+    ) -> None:
+        """state_get_many POSTs scope_id/ns/keys, returns parallel value list."""
+        mock_transport.queue_response(200, {"rows": [
+            {"value": _b64(b"v1")},
+            None,
+            {"value": _b64(b"v3")},
+        ]})
+        result = storage.state_get_many(b"exec1", b"agg", [b"k1", b"k2", b"k3"])
+        assert result == [b"v1", None, b"v3"]
+        body = _body(mock_transport.requests[0])
+        assert body["scope_id"] == _b64(b"exec1")
+        assert body["ns"] == _b64(b"agg")
+        assert body["keys"] == [_b64(b"k1"), _b64(b"k2"), _b64(b"k3")]
+        assert "attempt_id" not in body  # read-only — no replay-detection needed
+
+    def test_state_get_many_empty_keys_no_request(
+        self, storage: FunctionStorageCfDo, mock_transport: _MockTransport,
+    ) -> None:
+        """Empty key list short-circuits — no HTTP."""
+        result = storage.state_get_many(b"exec1", b"agg", [])
+        assert result == []
+        assert mock_transport.requests == []
+
+    def test_state_put_many_carries_attempt_id(
+        self, storage: FunctionStorageCfDo, mock_transport: _MockTransport,
+    ) -> None:
+        """state_put_many sends items + attempt_id (replay-detection)."""
+        mock_transport.queue_response(200, {})
+        storage.state_put_many(b"exec1", b"agg", [(b"k1", b"v1"), (b"k2", b"v2")])
+        body = _body(mock_transport.requests[0])
+        assert body["scope_id"] == _b64(b"exec1")
+        assert body["ns"] == _b64(b"agg")
+        assert body["items"] == [
+            {"key": _b64(b"k1"), "value": _b64(b"v1")},
+            {"key": _b64(b"k2"), "value": _b64(b"v2")},
+        ]
+        assert "attempt_id" in body
+        assert len(body["attempt_id"]) == 32  # uuid.uuid4().hex
+
+    def test_state_scan_no_attempt_id(
+        self, storage: FunctionStorageCfDo, mock_transport: _MockTransport,
+    ) -> None:
+        """state_scan is read-only — no attempt_id."""
+        mock_transport.queue_response(200, {"rows": [
+            {"key": _b64(b"k"), "value": _b64(b"v")},
+        ]})
+        result = storage.state_scan(b"exec1", b"agg")
+        assert result == [(b"k", b"v")]
+        body = _body(mock_transport.requests[0])
+        assert "attempt_id" not in body
+
+    def test_state_drain_carries_attempt_id_for_read_back_replay(
+        self, storage: FunctionStorageCfDo, mock_transport: _MockTransport,
+    ) -> None:
+        """state_drain sends attempt_id (read-back replay on retry)."""
+        mock_transport.queue_response(200, {"rows": [
+            {"key": _b64(b"k1"), "value": _b64(b"v1")},
+            {"key": _b64(b"k2"), "value": _b64(b"v2")},
+        ]})
+        result = storage.state_drain(b"exec1", b"agg")
+        assert sorted(result) == [(b"k1", b"v1"), (b"k2", b"v2")]
+        body = _body(mock_transport.requests[0])
+        assert "attempt_id" in body
+
+    def test_state_delete_with_keys(
+        self, storage: FunctionStorageCfDo, mock_transport: _MockTransport,
+    ) -> None:
+        """state_delete with key list sends keys + returns count."""
+        mock_transport.queue_response(200, {"deleted": 2})
+        n = storage.state_delete(b"exec1", b"agg", [b"k1", b"k2"])
+        assert n == 2
+        body = _body(mock_transport.requests[0])
+        assert body["keys"] == [_b64(b"k1"), _b64(b"k2")]
+
+    def test_state_delete_namespace_no_keys_field(
+        self, storage: FunctionStorageCfDo, mock_transport: _MockTransport,
+    ) -> None:
+        """state_delete with keys=None omits the keys field — server interprets as wipe-namespace."""
+        mock_transport.queue_response(200, {"deleted": 5})
+        n = storage.state_delete(b"exec1", b"agg", None)
+        assert n == 5
+        body = _body(mock_transport.requests[0])
+        assert "keys" not in body
+
+    def test_execution_clear_returns_count(
+        self, storage: FunctionStorageCfDo, mock_transport: _MockTransport,
+    ) -> None:
+        """execution_clear sends scope_id, returns total deleted across both tables."""
+        mock_transport.queue_response(200, {"deleted": 8})
+        n = storage.execution_clear(b"exec1")
+        assert n == 8
+        body = _body(mock_transport.requests[0])
+        assert body["scope_id"] == _b64(b"exec1")
+        assert "attempt_id" in body  # naturally idempotent but audited

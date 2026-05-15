@@ -624,6 +624,207 @@ class FunctionStorageCfDo:
             (time.monotonic() - t0) * 1000,
         )
 
+    # ========================================================================
+    # Unified state_* client (composite-key K/V over (scope_id, ns, key))
+    # ========================================================================
+    #
+    # Mirrors the server-side handlers in
+    # vgi-cloudflare-durable-object-storage/src/index.ts. attempt_id is
+    # generated client-side and spliced into the request body before the
+    # retry loop in _post() so a retried HTTP call carries the same id and
+    # the server's replay-detection returns the prior result rather than
+    # re-executing. Read-only methods (state_get_many, state_scan,
+    # state_log_scan) don't carry attempt_id.
+
+    def state_get_many(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        keys: list[bytes],
+        *,
+        shard_key: str = "",
+    ) -> list[bytes | None]:
+        """Batched non-destructive read of values keyed by ``(scope_id, ns, key)``.
+
+        Single HTTP roundtrip regardless of key count.
+        """
+        if not keys:
+            return []
+        t0 = time.monotonic()
+        data = self._post(
+            "state_get_many",
+            {
+                "scope_id": base64.b64encode(scope_id).decode(),
+                "ns": base64.b64encode(ns).decode(),
+                "keys": [base64.b64encode(k).decode() for k in keys],
+            },
+            shard_key=shard_key,
+        )
+        # Server returns rows as a list parallel to the input keys.
+        rows = data["rows"]
+        result: list[bytes | None] = [
+            None if r is None else base64.b64decode(r["value"]) for r in rows
+        ]
+        _logger.debug(
+            "state_get_many scope=%s ns=%s n_keys=%d hits=%d elapsed_ms=%.1f",
+            scope_id.hex()[:8], ns.hex()[:8], len(keys),
+            sum(1 for r in result if r is not None),
+            (time.monotonic() - t0) * 1000,
+        )
+        return result
+
+    def state_put_many(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        items: list[tuple[bytes, bytes]],
+        *,
+        shard_key: str = "",
+    ) -> None:
+        """Batched atomic upsert of ``(key, value)`` pairs in one namespace."""
+        if not items:
+            return
+        t0 = time.monotonic()
+        self._post(
+            "state_put_many",
+            {
+                "scope_id": base64.b64encode(scope_id).decode(),
+                "ns": base64.b64encode(ns).decode(),
+                "items": [
+                    {"key": base64.b64encode(k).decode(),
+                     "value": base64.b64encode(v).decode()}
+                    for k, v in items
+                ],
+            },
+            attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
+        )
+        _logger.debug(
+            "state_put_many scope=%s ns=%s n_items=%d elapsed_ms=%.1f",
+            scope_id.hex()[:8], ns.hex()[:8], len(items),
+            (time.monotonic() - t0) * 1000,
+        )
+
+    def state_scan(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        *,
+        shard_key: str = "",
+    ) -> list[tuple[bytes, bytes]]:
+        """Non-destructive scan of every (key, value) in one namespace."""
+        t0 = time.monotonic()
+        data = self._post(
+            "state_scan",
+            {
+                "scope_id": base64.b64encode(scope_id).decode(),
+                "ns": base64.b64encode(ns).decode(),
+            },
+            shard_key=shard_key,
+        )
+        rows = data["rows"]
+        result = [
+            (base64.b64decode(r["key"]), base64.b64decode(r["value"]))
+            for r in rows
+        ]
+        _logger.debug(
+            "state_scan scope=%s ns=%s rows=%d elapsed_ms=%.1f",
+            scope_id.hex()[:8], ns.hex()[:8], len(result),
+            (time.monotonic() - t0) * 1000,
+        )
+        return result
+
+    def state_drain(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        *,
+        shard_key: str = "",
+    ) -> list[tuple[bytes, bytes]]:
+        """Atomic scan-and-tombstone of every (key, value) in one namespace.
+
+        Carries attempt_id so a retried call returns the prior tombstoned
+        values byte-identically (mirrors today's worker_collect replay).
+        """
+        t0 = time.monotonic()
+        data = self._post(
+            "state_drain",
+            {
+                "scope_id": base64.b64encode(scope_id).decode(),
+                "ns": base64.b64encode(ns).decode(),
+            },
+            attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
+        )
+        rows = data["rows"]
+        result = [
+            (base64.b64decode(r["key"]), base64.b64decode(r["value"]))
+            for r in rows
+        ]
+        _logger.debug(
+            "state_drain scope=%s ns=%s rows=%d elapsed_ms=%.1f",
+            scope_id.hex()[:8], ns.hex()[:8], len(result),
+            (time.monotonic() - t0) * 1000,
+        )
+        return result
+
+    def state_delete(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        keys: list[bytes] | None = None,
+        *,
+        shard_key: str = "",
+    ) -> int:
+        """Delete by key list, or wipe the entire namespace if ``keys is None``.
+
+        Naturally idempotent — an attempt_id is sent for audit but server
+        doesn't gate on it (delete-of-already-deleted is a no-op).
+        """
+        t0 = time.monotonic()
+        body: dict[str, object] = {
+            "scope_id": base64.b64encode(scope_id).decode(),
+            "ns": base64.b64encode(ns).decode(),
+        }
+        if keys is not None:
+            body["keys"] = [base64.b64encode(k).decode() for k in keys]
+        data = self._post(
+            "state_delete",
+            body,
+            attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
+        )
+        deleted = int(data["deleted"])
+        _logger.debug(
+            "state_delete scope=%s ns=%s mode=%s deleted=%d elapsed_ms=%.1f",
+            scope_id.hex()[:8], ns.hex()[:8],
+            "all" if keys is None else f"n_keys={len(keys)}",
+            deleted, (time.monotonic() - t0) * 1000,
+        )
+        return deleted
+
+    def execution_clear(
+        self,
+        scope_id: bytes,
+        *,
+        shard_key: str = "",
+    ) -> int:
+        """Wipe ALL state and log rows for ``scope_id`` across every namespace."""
+        t0 = time.monotonic()
+        data = self._post(
+            "execution_clear",
+            {"scope_id": base64.b64encode(scope_id).decode()},
+            attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
+        )
+        deleted = int(data["deleted"])
+        _logger.debug(
+            "execution_clear scope=%s deleted=%d elapsed_ms=%.1f",
+            scope_id.hex()[:8], deleted,
+            (time.monotonic() - t0) * 1000,
+        )
+        return deleted
+
     # --- Factory ---
 
     @classmethod

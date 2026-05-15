@@ -221,6 +221,50 @@ class FunctionStorageAzureSql:
                 execution_id VARBINARY(16) PRIMARY KEY,
                 created_at DATETIME2 DEFAULT GETUTCDATE()
             );
+
+            -- Unified state_* tables. scope_id holds either execution_id
+            -- or transaction_opaque_data; ns is a caller-chosen namespace
+            -- (b"agg", b"win", b"buf", b"txn", etc.). last_attempt_id +
+            -- drained_at/drained_by_attempt power internal replay-detection
+            -- (silent no-op for state_put_many retries; read-back for
+            -- state_drain retries). VARBINARY(255) because scope_id /
+            -- ns / key shapes vary across callers (16-byte UUIDs for
+            -- execution_id, ASCII for transaction-state keys).
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'function_state')
+            CREATE TABLE function_state (
+                scope_id VARBINARY(255) NOT NULL,
+                ns VARBINARY(255) NOT NULL,
+                [key] VARBINARY(255) NOT NULL,
+                value VARBINARY(MAX) NOT NULL,
+                last_attempt_id VARBINARY(16) NOT NULL,
+                drained_at DATETIME2 DEFAULT NULL,
+                drained_by_attempt VARBINARY(16) DEFAULT NULL,
+                created_at DATETIME2 DEFAULT GETUTCDATE(),
+                PRIMARY KEY (scope_id, ns, [key])
+            );
+
+            -- function_state_log: append-only log keyed by (scope, ns, key).
+            -- IDENTITY column gives a global monotonic ordinal per row;
+            -- (scope, ns, key, attempt_id) is unique so a retried
+            -- state_append maps back to its original ordinal.
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'function_state_log')
+            CREATE TABLE function_state_log (
+                id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                scope_id VARBINARY(255) NOT NULL,
+                ns VARBINARY(255) NOT NULL,
+                [key] VARBINARY(255) NOT NULL,
+                value VARBINARY(MAX) NOT NULL,
+                attempt_id VARBINARY(16) NOT NULL,
+                created_at DATETIME2 DEFAULT GETUTCDATE()
+            );
+
+            IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_function_state_log_lookup')
+            CREATE INDEX idx_function_state_log_lookup
+                ON function_state_log(scope_id, ns, [key], id);
+
+            IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_function_state_log_replay')
+            CREATE UNIQUE INDEX idx_function_state_log_replay
+                ON function_state_log(scope_id, ns, [key], attempt_id);
         """)
         conn.commit()
         elapsed_ms = (time.monotonic() - t0) * 1000
@@ -447,7 +491,8 @@ class FunctionStorageAzureSql:
             max_age_seconds = int(max_age_days * 86400)
             cursor = conn.cursor()
             total = 0
-            for table in ("worker_state", "work_queue", "invocation_registry"):
+            for table in ("worker_state", "work_queue", "invocation_registry",
+                          "function_state", "function_state_log"):
                 cursor.execute(
                     f"DELETE FROM {table} WHERE DATEDIFF(SECOND, created_at, GETUTCDATE()) > %s",  # noqa: S608
                     (max_age_seconds,),
@@ -464,67 +509,272 @@ class FunctionStorageAzureSql:
 
         return self._execute_with_retry(_do)
 
-    # --- Aggregate State ---
+    # ------------------------------------------------------------------
+    # Legacy RMW families: NotImplementedError. Production callers in
+    # vgi-python migrated to the unified state_* API in Turn 3 of the
+    # storage refactor — these stubs remain only because the
+    # FunctionStorage Protocol still declares them (cohabitation window).
+    # Turn 5 of the refactor will delete the protocol entries and these
+    # stubs together.
+    # ------------------------------------------------------------------
 
     def aggregate_state_get(
         self, execution_id: bytes, group_ids: list[int], *, shard_key: str = ""
     ) -> list[tuple[int, bytes] | None]:
-        """Not yet supported on Azure SQL."""
-        raise NotImplementedError("Aggregate functions are not yet supported with the Azure SQL storage backend.")
+        raise NotImplementedError("Use state_get_many; aggregate_state_* is being removed (Turn 5).")
 
     def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]], *, shard_key: str = "") -> None:
-        """Not yet supported on Azure SQL."""
-        raise NotImplementedError("Aggregate functions are not yet supported with the Azure SQL storage backend.")
+        raise NotImplementedError("Use state_put_many; aggregate_state_* is being removed (Turn 5).")
 
     def aggregate_state_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
-        """Not yet supported on Azure SQL."""
-        raise NotImplementedError("Aggregate functions are not yet supported with the Azure SQL storage backend.")
-
-    # --- Transaction State ---
+        raise NotImplementedError("Use state_delete or execution_clear; aggregate_state_* is being removed (Turn 5).")
 
     def transaction_state_get(
         self, transaction_opaque_data: bytes, keys: list[bytes], *, shard_key: str = ""
     ) -> list[bytes | None]:
-        """Not yet supported on Azure SQL."""
-        raise NotImplementedError("Transaction state is not yet supported with the Azure SQL storage backend.")
+        raise NotImplementedError("Use state_get_many; transaction_state_* is being removed (Turn 5).")
 
     def transaction_state_put(
         self, transaction_opaque_data: bytes, items: list[tuple[bytes, bytes]], *, shard_key: str = ""
     ) -> None:
-        """Not yet supported on Azure SQL."""
-        raise NotImplementedError("Transaction state is not yet supported with the Azure SQL storage backend.")
+        raise NotImplementedError("Use state_put_many; transaction_state_* is being removed (Turn 5).")
 
     def transaction_state_clear(self, transaction_opaque_data: bytes, *, shard_key: str = "") -> None:
-        """Not yet supported on Azure SQL."""
-        raise NotImplementedError("Transaction state is not yet supported with the Azure SQL storage backend.")
+        raise NotImplementedError("Use execution_clear; transaction_state_* is being removed (Turn 5).")
 
     def aggregate_window_partition_put(
         self, execution_id: bytes, partition_id: int, data: bytes, *, shard_key: str = ""
     ) -> None:
-        """Not yet supported on Azure SQL."""
-        raise NotImplementedError(
-            "Aggregate window functions are not yet supported with the Azure SQL storage backend."
-        )
+        raise NotImplementedError("Use state_put; aggregate_window_partition_* is being removed (Turn 5).")
 
     def aggregate_window_partition_get(
         self, execution_id: bytes, partition_id: int, *, shard_key: str = ""
     ) -> bytes | None:
-        """Not yet supported on Azure SQL."""
-        raise NotImplementedError(
-            "Aggregate window functions are not yet supported with the Azure SQL storage backend."
-        )
+        raise NotImplementedError("Use state_get; aggregate_window_partition_* is being removed (Turn 5).")
 
     def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int, *, shard_key: str = "") -> None:
-        """Not yet supported on Azure SQL."""
-        raise NotImplementedError(
-            "Aggregate window functions are not yet supported with the Azure SQL storage backend."
-        )
+        raise NotImplementedError("Use state_delete; aggregate_window_partition_* is being removed (Turn 5).")
 
     def aggregate_window_partition_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
-        """Not yet supported on Azure SQL."""
-        raise NotImplementedError(
-            "Aggregate window functions are not yet supported with the Azure SQL storage backend."
-        )
+        raise NotImplementedError("Use state_delete or execution_clear; aggregate_window_partition_* is being removed (Turn 5).")
+
+    # ========================================================================
+    # Unified state_* implementation
+    # ========================================================================
+    #
+    # Mirrors the SQLite backend's contract. Every mutating call generates
+    # an internal attempt_id (UUID4 bytes); replay-detection in
+    # state_put_many checks whether the FIRST item's last_attempt_id
+    # matches; state_drain checks drained_by_attempt and returns prior
+    # tombstoned values on retry. T-SQL MERGE for upsert; IDENTITY column
+    # on function_state_log gives global ordinals.
+
+    def state_get_many(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        keys: list[bytes],
+        *,
+        shard_key: str = "",
+    ) -> list[bytes | None]:
+        del shard_key
+        if not keys:
+            return []
+
+        def _do(conn: pymssql.Connection) -> list[bytes | None]:
+            cursor = conn.cursor()
+            placeholders = ",".join("%s" for _ in keys)
+            cursor.execute(
+                f"""
+                SELECT [key], value FROM function_state
+                WHERE scope_id = %s AND ns = %s AND [key] IN ({placeholders})
+                  AND drained_at IS NULL
+                """,  # noqa: S608
+                (scope_id, ns, *keys),
+            )
+            found: dict[bytes, bytes] = {bytes(k): bytes(v) for k, v in cursor.fetchall()}
+            return [found.get(bytes(k)) for k in keys]
+
+        return self._execute_with_retry(_do)
+
+    def state_put_many(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        items: list[tuple[bytes, bytes]],
+        *,
+        shard_key: str = "",
+    ) -> None:
+        del shard_key
+        if not items:
+            return
+        import uuid
+
+        attempt_id = uuid.uuid4().bytes
+
+        def _do(conn: pymssql.Connection) -> None:
+            cursor = conn.cursor()
+            # Replay-detection: did the first item already land with our
+            # attempt_id? Mirrors the CfDo aggregate_state_put first-item
+            # check (`index.ts:618`); first key is sufficient because the
+            # batch is atomic per-call.
+            first_key, _ = items[0]
+            cursor.execute(
+                """
+                SELECT 1 FROM function_state
+                WHERE scope_id = %s AND ns = %s AND [key] = %s AND last_attempt_id = %s
+                """,
+                (scope_id, ns, first_key, attempt_id),
+            )
+            if cursor.fetchone() is not None:
+                return  # Replay — silent no-op.
+            for k, v in items:
+                cursor.execute(
+                    """
+                    MERGE function_state AS t
+                    USING (VALUES (CAST(%s AS VARBINARY(255)),
+                                   CAST(%s AS VARBINARY(255)),
+                                   CAST(%s AS VARBINARY(255)),
+                                   CAST(%s AS VARBINARY(MAX)),
+                                   CAST(%s AS VARBINARY(16))))
+                        AS s(scope_id, ns, [key], value, last_attempt_id)
+                    ON t.scope_id = s.scope_id AND t.ns = s.ns AND t.[key] = s.[key]
+                    WHEN MATCHED THEN
+                        UPDATE SET value = s.value,
+                                   last_attempt_id = s.last_attempt_id,
+                                   created_at = GETUTCDATE(),
+                                   drained_at = NULL,
+                                   drained_by_attempt = NULL
+                    WHEN NOT MATCHED THEN
+                        INSERT (scope_id, ns, [key], value, last_attempt_id)
+                        VALUES (s.scope_id, s.ns, s.[key], s.value, s.last_attempt_id);
+                    """,
+                    (scope_id, ns, k, v, attempt_id),
+                )
+            conn.commit()
+
+        self._execute_with_retry(_do)
+
+    def state_scan(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        *,
+        shard_key: str = "",
+    ) -> list[tuple[bytes, bytes]]:
+        del shard_key
+
+        def _do(conn: pymssql.Connection) -> list[tuple[bytes, bytes]]:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT [key], value FROM function_state
+                WHERE scope_id = %s AND ns = %s AND drained_at IS NULL
+                """,
+                (scope_id, ns),
+            )
+            return [(bytes(k), bytes(v)) for k, v in cursor.fetchall()]
+
+        return self._execute_with_retry(_do)
+
+    def state_drain(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        *,
+        shard_key: str = "",
+    ) -> list[tuple[bytes, bytes]]:
+        del shard_key
+        import uuid
+
+        attempt_id = uuid.uuid4().bytes
+
+        def _do(conn: pymssql.Connection) -> list[tuple[bytes, bytes]]:
+            cursor = conn.cursor()
+            # Read-back replay: any rows already tombstoned with our
+            # attempt_id? Return them.
+            cursor.execute(
+                """
+                SELECT [key], value FROM function_state
+                WHERE scope_id = %s AND ns = %s AND drained_by_attempt = %s
+                ORDER BY [key]
+                """,
+                (scope_id, ns, attempt_id),
+            )
+            replay = cursor.fetchall()
+            if replay:
+                return [(bytes(k), bytes(v)) for k, v in replay]
+            # Fresh drain: tombstone live rows for this attempt_id, then
+            # read them back. T-SQL doesn't support UPDATE..RETURNING the
+            # same way SQLite does; use OUTPUT clause.
+            cursor.execute(
+                """
+                UPDATE function_state
+                SET drained_at = GETUTCDATE(),
+                    drained_by_attempt = %s
+                OUTPUT inserted.[key], inserted.value
+                WHERE scope_id = %s AND ns = %s AND drained_at IS NULL
+                """,
+                (attempt_id, scope_id, ns),
+            )
+            rows = cursor.fetchall()
+            conn.commit()
+            return [(bytes(k), bytes(v)) for k, v in rows]
+
+        return self._execute_with_retry(_do)
+
+    def state_delete(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        keys: list[bytes] | None = None,
+        *,
+        shard_key: str = "",
+    ) -> int:
+        del shard_key
+
+        def _do(conn: pymssql.Connection) -> int:
+            cursor = conn.cursor()
+            if keys is None:
+                cursor.execute(
+                    "DELETE FROM function_state WHERE scope_id = %s AND ns = %s",
+                    (scope_id, ns),
+                )
+            else:
+                if not keys:
+                    return 0
+                placeholders = ",".join("%s" for _ in keys)
+                cursor.execute(
+                    f"""
+                    DELETE FROM function_state
+                    WHERE scope_id = %s AND ns = %s AND [key] IN ({placeholders})
+                    """,  # noqa: S608
+                    (scope_id, ns, *keys),
+                )
+            count = int(cursor.rowcount)
+            conn.commit()
+            return count
+
+        return self._execute_with_retry(_do)
+
+    def execution_clear(
+        self,
+        scope_id: bytes,
+        *,
+        shard_key: str = "",
+    ) -> int:
+        del shard_key
+
+        def _do(conn: pymssql.Connection) -> int:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM function_state WHERE scope_id = %s", (scope_id,))
+            n1 = int(cursor.rowcount)
+            cursor.execute("DELETE FROM function_state_log WHERE scope_id = %s", (scope_id,))
+            n2 = int(cursor.rowcount)
+            conn.commit()
+            return n1 + n2
+
+        return self._execute_with_retry(_do)
 
     # --- Factory ---
 
