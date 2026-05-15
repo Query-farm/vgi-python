@@ -983,14 +983,16 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
     ) -> None:
         """Clear per-transaction storage on commit (best-effort hygiene)."""
         del attach_opaque_data
-        TxCachedValueFunction.storage.transaction_state_clear(bytes(transaction_opaque_data))
+        # transaction_opaque_data plays the role of scope_id in the unified
+        # state_* API; execution_clear wipes every namespace for that scope.
+        TxCachedValueFunction.storage.execution_clear(bytes(transaction_opaque_data))
 
     def catalog_transaction_rollback(
         self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData
     ) -> None:
         """Mirror of commit — same cleanup path."""
         del attach_opaque_data
-        TxCachedValueFunction.storage.transaction_state_clear(bytes(transaction_opaque_data))
+        TxCachedValueFunction.storage.execution_clear(bytes(transaction_opaque_data))
 
 
 class ExampleWorker(Worker):

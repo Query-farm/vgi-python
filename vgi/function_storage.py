@@ -656,10 +656,20 @@ class TransactionBoundStorage:
             shard_key = _derive_shard_key(attach_opaque_data=attach_opaque_data, auth=auth, _origin=origin)
         self._shard_key = shard_key
 
+    # Backed by the unified state_* API: scope_id = transaction_opaque_data,
+    # ns = b"txn". Caller-supplied keys are user-chosen bytes (typically
+    # short ASCII like b"watermark:topic-A"); the storage doesn't interpret
+    # them. This class is preserved as a convenience wrapper so callers
+    # don't have to thread the (transaction_opaque_data, b"txn") pair on
+    # every call — the surface stays clean.
+
+    _NS = b"txn"
+
     def get(self, keys: list[bytes]) -> list[bytes | None]:
         """Load values for a list of keys; parallel return list."""
-        return self._base.transaction_state_get(
+        return self._base.state_get_many(
             self._transaction_opaque_data,
+            self._NS,
             keys,
             shard_key=self._shard_key,
         )
@@ -670,8 +680,9 @@ class TransactionBoundStorage:
 
     def put(self, items: list[tuple[bytes, bytes]]) -> None:
         """Write a batch of (key, value) pairs."""
-        self._base.transaction_state_put(
+        self._base.state_put_many(
             self._transaction_opaque_data,
+            self._NS,
             items,
             shard_key=self._shard_key,
         )
@@ -681,8 +692,11 @@ class TransactionBoundStorage:
         self.put([(key, value)])
 
     def clear(self) -> None:
-        """Drop every value for this transaction."""
-        self._base.transaction_state_clear(
+        """Drop every value for this transaction (every namespace)."""
+        # execution_clear sweeps all namespaces — same effect as the old
+        # transaction_state_clear since the only namespace under txn scope
+        # is b"txn".
+        self._base.execution_clear(
             self._transaction_opaque_data,
             shard_key=self._shard_key,
         )

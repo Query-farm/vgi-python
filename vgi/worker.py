@@ -2043,14 +2043,18 @@ class Worker:
         if cached is not None:
             return cast(Arguments, cached)
 
-        result = storage.aggregate_get([-2])
-        if result[0] is None:
+        # Const args live at the synthetic group_id -2 in namespace b"agg" —
+        # same row-keyspace as the rest of aggregate_state, no separate table
+        # needed. The negative key avoids collision with caller-supplied
+        # group_ids (which are non-negative).
+        result = storage.state_get(b"agg", BoundStorage.pack_int_key(-2))
+        if result is None:
             # Most aggregates have no const params; cache the negative result
             # so we don't re-hit storage on every aggregate_window /
             # aggregate_update / etc.
             _aggregate_const_args_cache.put(shard_key, execution_id, _ABSENT_SENTINEL)
             return None
-        parsed = Arguments.deserialize_from_bytes(result[0][1])
+        parsed = Arguments.deserialize_from_bytes(result)
         _aggregate_const_args_cache.put(shard_key, execution_id, parsed)
         return parsed
 
@@ -2105,10 +2109,12 @@ class Worker:
                 "which is not yet supported for aggregate functions."
             )
 
-        # Store const arguments in FunctionStorage for later callbacks (group_id=-2).
+        # Store const arguments in FunctionStorage for later callbacks
+        # (synthetic group_id=-2 in namespace b"agg").
         if request.arguments and request.arguments.positional:
             storage = BoundStorage(func_cls.storage, execution_id, request=request, auth=ctx.auth)
-            storage.aggregate_put([(-2, request.arguments.serialize_to_bytes())])
+            storage.state_put(b"agg", BoundStorage.pack_int_key(-2),
+                              request.arguments.serialize_to_bytes())
 
         return AggregateBindResponse(
             output_schema=result.output_schema,
@@ -2171,11 +2177,12 @@ class Worker:
         # are also persisted so multi-batch state survives.
         existing_gids: set[int] = set()
         states: _UpdateTrackingDict[int, Any] = _UpdateTrackingDict()
-        stored = storage.aggregate_get(unique_gids)
+        gid_keys = [BoundStorage.pack_int_key(g) for g in unique_gids]
+        stored = storage.state_get_many(b"agg", gid_keys)
         for i, gid in enumerate(unique_gids):
-            result = stored[i]
-            if result is not None:
-                states[gid] = func_cls.state_class.deserialize_from_bytes(result[1])
+            value = stored[i]
+            if value is not None:
+                states[gid] = func_cls.state_class.deserialize_from_bytes(value)
                 existing_gids.add(gid)
             else:
                 states[gid] = func_cls.initial_state(params)
@@ -2218,9 +2225,12 @@ class Worker:
         # (its state may have been mutated by the user) and (b) every gid the
         # user's ``update()`` explicitly wrote during this batch.
         gids_to_persist = existing_gids | states.written
-        state_data: list[tuple[int, bytes]] = [(gid, states[gid].serialize_to_bytes()) for gid in gids_to_persist]
-        if state_data:
-            storage.aggregate_put(state_data)
+        items: list[tuple[bytes, bytes]] = [
+            (BoundStorage.pack_int_key(gid), states[gid].serialize_to_bytes())
+            for gid in gids_to_persist
+        ]
+        if items:
+            storage.state_put_many(b"agg", items)
 
         return AggregateUpdateResponse()
 
@@ -2262,11 +2272,12 @@ class Worker:
             auth_context=ctx.auth,
         )
         states: dict[int, Any] = {}
-        stored = storage.aggregate_get(all_gids)
+        all_keys = [BoundStorage.pack_int_key(g) for g in all_gids]
+        stored = storage.state_get_many(b"agg", all_keys)
         for i, gid in enumerate(all_gids):
-            result = stored[i]
-            if result is not None:
-                states[gid] = func_cls.state_class.deserialize_from_bytes(result[1])
+            value = stored[i]
+            if value is not None:
+                states[gid] = func_cls.state_class.deserialize_from_bytes(value)
             # else: group was never updated — leave absent from states dict
 
         # Apply merges. Skip pairs where both source and target were never
@@ -2285,9 +2296,13 @@ class Worker:
 
         # Save updated targets back to storage.
         updated_targets = set(target_ids)
-        state_data = [(gid, states[gid].serialize_to_bytes()) for gid in updated_targets if gid in states]
-        if state_data:
-            storage.aggregate_put(state_data)
+        items = [
+            (BoundStorage.pack_int_key(gid), states[gid].serialize_to_bytes())
+            for gid in updated_targets
+            if gid in states
+        ]
+        if items:
+            storage.state_put_many(b"agg", items)
 
         return AggregateCombineResponse()
 
@@ -2324,11 +2339,12 @@ class Worker:
             auth_context=ctx.auth,
         )
         states: dict[int, Any] = {}
-        stored = storage.aggregate_get(gid_list)
+        gid_keys = [BoundStorage.pack_int_key(g) for g in gid_list]
+        stored = storage.state_get_many(b"agg", gid_keys)
         for i, gid in enumerate(gid_list):
-            result = stored[i]
-            if result is not None:
-                states[gid] = func_cls.state_class.deserialize_from_bytes(result[1])
+            value = stored[i]
+            if value is not None:
+                states[gid] = func_cls.state_class.deserialize_from_bytes(value)
             else:
                 # Group was never updated — no entry in FunctionStorage.
                 # Pass None so finalize() can return NULL (SQL standard for
@@ -2365,12 +2381,12 @@ class Worker:
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
         # Called once when all states have been destroyed (C++ tracks with
-        # destroy_counter == group_id_counter). Clear all FunctionStorage state.
+        # destroy_counter == group_id_counter). Clear all FunctionStorage
+        # state. execution_clear() sweeps every namespace (b"agg", b"win",
+        # b"buf", anything else) for this execution_id in one call —
+        # subsumes the per-family clears we used to need.
         storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
-        storage.aggregate_clear()
-        # Safety sweep for windowed aggregates — in case a window_destructor
-        # RPC was dropped mid-query.
-        storage.aggregate_window_partition_clear()
+        storage.execution_clear()
         _window_partition_cache.clear_execution(request.execution_id)
         _aggregate_const_args_cache.clear_execution(storage._shard_key, request.execution_id)
 
@@ -2617,7 +2633,7 @@ class Worker:
             window_state_bytes=window_state_bytes,
             window_state_class_name=type(window_state).__name__ if window_state is not None else "",
         )
-        storage.aggregate_window_partition_put(request.partition_id, payload)
+        storage.state_put(b"win", BoundStorage.pack_int_key(request.partition_id), payload)
 
         # Populate the in-process cache with the already-decoded partition
         # so aggregate_window() can skip the storage read + deserialize.
@@ -2732,7 +2748,7 @@ class Worker:
         if cached is not None:
             return cached
 
-        payload = storage.aggregate_window_partition_get(partition_id)
+        payload = storage.state_get(b"win", BoundStorage.pack_int_key(partition_id))
         if payload is None:
             raise OSError(
                 f"aggregate_window called for unknown partition_id={partition_id} "
@@ -2860,7 +2876,7 @@ class Worker:
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
         storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
-        storage.aggregate_window_partition_delete(request.partition_id)
+        storage.state_delete(b"win", [BoundStorage.pack_int_key(request.partition_id)])
         _window_partition_cache.delete(request.execution_id, request.partition_id)
         return AggregateWindowDestructorResponse()
 
@@ -2885,7 +2901,8 @@ class Worker:
         # declares const params.
         if request.arguments and request.arguments.positional:
             storage = BoundStorage(func_cls.storage, execution_id, request=request, auth=ctx.auth)
-            storage.aggregate_put([(-2, request.arguments.serialize_to_bytes())])
+            storage.state_put(b"agg", BoundStorage.pack_int_key(-2),
+                              request.arguments.serialize_to_bytes())
 
         storage = BoundStorage(func_cls.storage, execution_id, request=request, auth=ctx.auth)
         const_args = self._load_aggregate_const_args(func_cls, storage)
@@ -2912,7 +2929,7 @@ class Worker:
         _streaming_session_cache.put(execution_id, session)
         # Also persist to FunctionStorage so a chunk RPC landing on a
         # different pool worker can reload the session.
-        storage.aggregate_window_partition_put(_STREAMING_SESSION_STORAGE_KEY, _encode_streaming_session(session))
+        storage.state_put(b"win", BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY), _encode_streaming_session(session))
         return AggregateStreamingOpenResponse(execution_id=execution_id)
 
     def aggregate_streaming_chunk(
@@ -2938,7 +2955,7 @@ class Worker:
             import time as _t
 
             t_get_start = _t.perf_counter()
-            payload = cold_storage.aggregate_window_partition_get(_STREAMING_SESSION_STORAGE_KEY)
+            payload = cold_storage.state_get(b"win", BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY))
             t_get = _t.perf_counter() - t_get_start
             with _streaming_persist_lock:
                 _streaming_persist_stats["storage_get_seconds"] += t_get
@@ -2996,7 +3013,7 @@ class Worker:
         payload = _encode_streaming_session(session)
         t_enc = _t.perf_counter() - t_enc_start
         t_put_start = _t.perf_counter()
-        storage.aggregate_window_partition_put(_STREAMING_SESSION_STORAGE_KEY, payload)
+        storage.state_put(b"win", BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY), payload)
         t_put = _t.perf_counter() - t_put_start
         _record_persist_timing(t_enc, t_put, len(payload))
         with _streaming_persist_lock:
@@ -3027,10 +3044,10 @@ class Worker:
                 func_cls = None
             if func_cls is not None and issubclass(func_cls, AggregateFunction):
                 cold_storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
-                payload = cold_storage.aggregate_window_partition_get(_STREAMING_SESSION_STORAGE_KEY)
+                payload = cold_storage.state_get(b"win", BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY))
                 if payload is not None:
                     session = _decode_streaming_session(payload, func_cls)
-                cold_storage.aggregate_window_partition_delete(_STREAMING_SESSION_STORAGE_KEY)
+                cold_storage.state_delete(b"win", [BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY)])
             if session is None:
                 # Idempotent: nothing to clean up.
                 return AggregateStreamingCloseResponse()
@@ -3053,7 +3070,7 @@ class Worker:
             _logger.exception("streaming_close raised; session dropped anyway")
 
         # Drop the persisted state.
-        storage.aggregate_window_partition_delete(_STREAMING_SESSION_STORAGE_KEY)
+        storage.state_delete(b"win", [BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY)])
 
         # Dump worker-side persist stats accumulated for this session.
         with _streaming_persist_lock:

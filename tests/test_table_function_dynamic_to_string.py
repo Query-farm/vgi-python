@@ -144,8 +144,9 @@ class TestTableFunctionDynamicToString:
         """Dispatcher populates BindParams.storage keyed by global_execution_id.
 
         Lets dynamic_to_string read whatever process() persisted via
-        worker_put without manually reconstructing BoundStorage.
+        the unified state_* API without manually reconstructing BoundStorage.
         """
+        from vgi.function_storage import BoundStorage
 
         @init_single_worker
         @bind_fixed_schema
@@ -158,8 +159,11 @@ class TestTableFunctionDynamicToString:
             @classmethod
             def dynamic_to_string(cls, params: BindParams[_Args], execution_id: bytes) -> Mapping[str, str]:
                 assert params.storage is not None
-                pairs = params.storage.worker_scan()
-                return {f"pid_{wid}": state.decode() for wid, state in sorted(pairs)}
+                pairs = params.storage.state_scan(b"profile")
+                return {
+                    f"pid_{int.from_bytes(k, 'little', signed=True)}": v.decode()
+                    for k, v in sorted(pairs)
+                }
 
             @classmethod
             def process(cls, params, state, out) -> None:  # type: ignore[no-untyped-def]
@@ -170,8 +174,11 @@ class TestTableFunctionDynamicToString:
 
         worker = _MyWorker()
         execution_id = b"\x01\x02\x03\x04\x05\x06\x07\x08"
-        _StorageFunc.storage.worker_put(execution_id, worker_id=10, state=b"hello")
-        _StorageFunc.storage.worker_put(execution_id, worker_id=20, state=b"world")
+        _StorageFunc.storage.state_put_many(
+            execution_id, b"profile",
+            [(BoundStorage.pack_int_key(10), b"hello"),
+             (BoundStorage.pack_int_key(20), b"world")],
+        )
 
         result = worker.table_function_dynamic_to_string(_request("with_storage"), _ctx())
         assert dict(zip(result.keys, result.values, strict=True)) == {

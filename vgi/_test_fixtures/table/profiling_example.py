@@ -124,9 +124,15 @@ class ProfilingDemoFunction(TableFunctionGenerator[ProfilingDemoArgs, ProfilingS
     ) -> None:
         if state.remaining <= 0:
             # Final write so dynamic_to_string sees the totals even after
-            # the stream finishes.
+            # the stream finishes. One row per OS pid via state_put under
+            # namespace b"profile" — dynamic_to_string drains them all.
             elapsed_us = (time.monotonic_ns() - state.started_at_ns) // 1000
-            params.storage.put(_pack_snapshot(state.rows_emitted, state.batches_emitted, elapsed_us))
+            import os as _os
+            params.storage.state_put(
+                b"profile",
+                BoundStorage.pack_int_key(_os.getpid()),
+                _pack_snapshot(state.rows_emitted, state.batches_emitted, elapsed_us),
+            )
             out.finish()
             return
         batch_size = params.args.batch_size
@@ -145,9 +151,14 @@ class ProfilingDemoFunction(TableFunctionGenerator[ProfilingDemoArgs, ProfilingS
         state.batches_emitted += 1
 
         # Per-tick snapshot — overwrites this worker's slot. The dispatcher's
-        # collect() on dynamic_to_string sums one snapshot per worker pid.
+        # state_drain on dynamic_to_string sums one snapshot per worker pid.
         elapsed_us = (time.monotonic_ns() - state.started_at_ns) // 1000
-        params.storage.put(_pack_snapshot(state.rows_emitted, state.batches_emitted, elapsed_us))
+        import os as _os
+        params.storage.state_put(
+            b"profile",
+            BoundStorage.pack_int_key(_os.getpid()),
+            _pack_snapshot(state.rows_emitted, state.batches_emitted, elapsed_us),
+        )
 
     @classmethod
     def dynamic_to_string(
@@ -159,7 +170,8 @@ class ProfilingDemoFunction(TableFunctionGenerator[ProfilingDemoArgs, ProfilingS
         # time). Construct one with the execution_id we received.
         storage = BoundStorage(cls.storage, execution_id, request=params.bind_call, auth=params.auth_context)
         try:
-            snapshots = storage.collect()
+            # state_drain returns (key, value) pairs; we only want the values.
+            snapshots = [v for _, v in storage.state_drain(b"profile")]
         except Exception:
             return {}
         if not snapshots:
