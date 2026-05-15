@@ -362,11 +362,18 @@ class FunctionStorage(Protocol):
         Per-key order is recovered via the ``(scope_id, ns, key, id)`` index;
         ``state_log_scan`` yields rows in id order, which corresponds to
         append order. Concurrent appenders to the *same* key get distinct
-        ordinals but interleaving is undefined.
+        ordinals but interleaving across writers is undefined.
 
-        Idempotent on retry: if an earlier attempt with the same
-        backend-internal ``attempt_id`` already inserted a row, returns the
-        prior ordinal without re-inserting.
+        **Idempotency scope.** The internal ``attempt_id`` covers
+        *transport-layer* retries within a single backend call: an HTTP
+        retry on CfDo carries the same id and replays correctly; a
+        pymssql ``OperationalError`` retry on Azure SQL replays correctly.
+        **Caller-level retries** (re-invoking ``state_append`` for the
+        same logical record after the call already returned) generate a
+        fresh id and produce duplicate rows. If you need caller-level
+        idempotency, dedupe on the caller side — e.g., check
+        ``state_log_scan`` before appending, or key your namespace on a
+        stable content hash.
         """
         ...
 
@@ -602,7 +609,14 @@ class BoundStorage:
         )
 
     def state_append(self, ns: bytes, key: bytes, item: bytes) -> int:
-        """Append an item to the (ns, key) log; return the assigned ordinal."""
+        """Append an item to the (ns, key) log; return the assigned ordinal.
+
+        Idempotency covers transport-layer retries only (HTTP retry on
+        CfDo, pymssql driver-level retry on Azure SQL). Caller-level
+        retries — re-invoking ``state_append`` for the same logical
+        record after it returned — produce duplicate rows. See the
+        underlying ``FunctionStorage.state_append`` for the full contract.
+        """
         return self._base.state_append(
             self._execution_id, ns, key, item, shard_key=self._shard_key
         )
@@ -1099,16 +1113,21 @@ class FunctionStorageSqlite:
         *,
         shard_key: str = "",
     ) -> int:
-        """Append item; return ordinal. Replay returns prior ordinal via UNIQUE."""
+        """Append item; return ordinal. Defensive against transport-layer replay only."""
         del shard_key
         import uuid
 
         attempt_id = uuid.uuid4().bytes
         conn = self._conn()
-        # INSERT OR IGNORE on the UNIQUE(scope, ns, key, attempt_id) index
-        # is the replay primitive. On conflict the row already exists from a
-        # prior call with this attempt_id; cur.lastrowid is unreliable in
-        # that case (SQLite returns 0), so we always SELECT back by attempt_id.
+        # INSERT OR IGNORE + SELECT-by-attempt_id is structurally a replay
+        # primitive but currently has no path to fire: SQLite has no retry
+        # layer above this method, and the public state_append signature
+        # generates a fresh UUID4 per call (no caller-supplied attempt_id).
+        # The pattern is here for symmetry with the Azure SQL / CfDo
+        # implementations and to leave the door open for future exposure
+        # of caller-level attempt_id. Could be simplified to
+        # `INSERT ... RETURNING id` (SQLite ≥3.35) if we commit to never
+        # exposing that contract — would save one SQL round-trip per call.
         conn.execute(
             """
             INSERT OR IGNORE INTO function_state_log

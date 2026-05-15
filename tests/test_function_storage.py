@@ -260,6 +260,21 @@ class TestFunctionStorageSqlite:
         ord3 = storage.state_append(scope, b"buf", b"k", b"c")
         assert ord1 < ord2 < ord3
 
+    def test_state_append_caller_retry_produces_duplicates(self, storage: FunctionStorageSqlite) -> None:
+        """Caller-level retry inserts a duplicate row (fresh internal attempt_id).
+
+        This is the limitation called out in state_append's "Idempotency
+        scope" docstring section. Callers who need exactly-once semantics
+        across their own retries must dedupe externally (check
+        ``state_log_scan`` first, or key the namespace on a content hash).
+        Pinning this behavior in a test so any future change to expose
+        caller-supplied attempt_id will deliberately break it.
+        """
+        scope = b"exec-log"
+        storage.state_append(scope, b"buf", b"k", b"payload")
+        storage.state_append(scope, b"buf", b"k", b"payload")  # caller retry
+        assert storage.state_log_scan(scope, b"buf", b"k") == [b"payload", b"payload"]
+
     def test_state_log_scan_isolates_keys(self, storage: FunctionStorageSqlite) -> None:
         """Logs for distinct keys in the same namespace stay separate."""
         scope = b"exec-log"
