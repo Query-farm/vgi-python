@@ -43,7 +43,32 @@ __all__ = [
     "TableInOutGenerator",
     "TableInOutFunction",
     "TableInOutFunctionStateNoOp",
+    "pack_int_cursor",
+    "unpack_int_cursor",
 ]
+
+
+# --- Cursor helpers for cursor-based finalize streams -----------------------
+#
+# The framework's BufferedFinalizeState carries an opaque ``cursor: bytes``
+# wire-state field. The canonical encoding is the int64 of the last
+# state_log id consumed; these helpers make that intent explicit at
+# call sites without coupling user code to struct layout.
+
+def pack_int_cursor(value: int) -> bytes:
+    """Encode a signed int64 cursor (e.g., last log_id consumed)."""
+    return value.to_bytes(8, "little", signed=True)
+
+
+def unpack_int_cursor(cursor: bytes, default: int = -1) -> int:
+    """Decode a packed int64 cursor; ``b""`` returns ``default``.
+
+    Use ``default=-1`` (before-first sentinel) to start at the beginning
+    of a state_log when no prior cursor exists.
+    """
+    if not cursor:
+        return default
+    return int.from_bytes(cursor, "little", signed=True)
 
 
 class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
@@ -81,6 +106,34 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
         ``buffered_table_combine`` when ``Meta.buffered_table = True``.
         """
         return state_ids
+
+    @classmethod
+    def finalize_log_key(
+        cls, finalize_state_id: int, params: ProcessParams[TArgs],
+    ) -> tuple[bytes, bytes]:
+        """Return (ns, key) of the state_log to drain as finalize output.
+
+        Buffered-table only. Called once at init time
+        (``phase=BUFFERED_TABLE_FINALIZE``) when the framework builds
+        the cursor stream state. The framework then drains this log
+        per tick — no per-tick user code.
+
+        Default matches the buffered convention: ``(b"buf", pack_int_key(state_id))``,
+        where ``process()`` writes input batches via ``state_append``.
+        Override when the function post-processes during ``combine()``
+        and writes to a different (ns, key) — e.g.,
+        ``BatchIndexBufferInputFunction`` writes a sorted log under
+        ``b"buf_sorted"``.
+
+        Caller responsibility: the data must exist at (ns, key) by the
+        time finalize starts. Typically that means writing during
+        ``process()`` and/or ``combine()``.
+        """
+        # Local import: BoundStorage lives in vgi.function_storage; we
+        # avoid a top-level import to keep the module's import graph flat.
+        from vgi.function_storage import BoundStorage
+
+        return (b"buf", BoundStorage.pack_int_key(finalize_state_id))
 
     @classmethod
     def has_finalize_override(cls) -> bool:

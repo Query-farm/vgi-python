@@ -534,26 +534,31 @@ class FunctionStorageCfDo:
         ns: bytes,
         key: bytes,
         *,
+        after_id: int = -1,
+        limit: int | None = None,
         shard_key: str = "",
-    ) -> list[bytes]:
-        """Return all values appended to (scope_id, ns, key) in ordinal order."""
+    ) -> list[tuple[int, bytes]]:
+        """Return (id, value) pairs for (scope_id, ns, key) with id > after_id."""
         t0 = time.monotonic()
-        data = self._post(
-            "state_log_scan",
-            {
-                "scope_id": base64.b64encode(scope_id).decode(),
-                "ns": base64.b64encode(ns).decode(),
-                "key": base64.b64encode(key).decode(),
-            },
-            shard_key=shard_key,
-        )
-        values = [base64.b64decode(v) for v in data["values"]]
+        body: dict[str, object] = {
+            "scope_id": base64.b64encode(scope_id).decode(),
+            "ns": base64.b64encode(ns).decode(),
+            "key": base64.b64encode(key).decode(),
+            "after_id": after_id,
+        }
+        if limit is not None:
+            body["limit"] = int(limit)
+        data = self._post("state_log_scan", body, shard_key=shard_key)
+        rows = [
+            (int(r["id"]), base64.b64decode(r["value"]))
+            for r in data["rows"]
+        ]
         _logger.debug(
-            "state_log_scan scope=%s ns=%s key=%s rows=%d elapsed_ms=%.1f",
-            scope_id.hex()[:8], ns.hex()[:8], key.hex()[:8], len(values),
-            (time.monotonic() - t0) * 1000,
+            "state_log_scan scope=%s ns=%s key=%s after_id=%d rows=%d elapsed_ms=%.1f",
+            scope_id.hex()[:8], ns.hex()[:8], key.hex()[:8],
+            after_id, len(rows), (time.monotonic() - t0) * 1000,
         )
-        return values
+        return rows
 
     # --- Factory ---
 

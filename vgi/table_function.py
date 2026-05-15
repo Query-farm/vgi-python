@@ -266,13 +266,18 @@ class TableInOutFunctionInitPhase(Enum):
     """Indicate the phase of the init call for TableInOutFunction.
 
     INPUT/FINALIZE drive the streaming in_out_function path.
-    BUFFERED_TABLE is the Sink+Source path — after init, traffic moves to
-    the ``buffered_table_process``/``_combine``/``_finalize`` RPCs.
+    BUFFERED_TABLE is the Sink+Source init phase — after init, traffic
+    moves to ``buffered_table_process``/``_combine``.
+    BUFFERED_TABLE_FINALIZE opens a cursor-driven finalize stream for
+    one finalize_state_id; the C++ Source phase reads batches from the
+    returned stream and the worker drains a state_log via cursor with
+    no per-tick user code.
     """
 
     INPUT = auto()
     FINALIZE = auto()
     BUFFERED_TABLE = auto()
+    BUFFERED_TABLE_FINALIZE = auto()
 
 
 class OrderByDirection(Enum):

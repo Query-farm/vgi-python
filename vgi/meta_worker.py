@@ -585,10 +585,6 @@ class MetaWorker:
         """Dispatch buffered_table_combine to the right worker."""
         return self._dispatch_aggregate(request, "buffered_table_combine", ctx)
 
-    def buffered_table_finalize(self, request: Any, ctx: CallContext) -> Any:
-        """Dispatch buffered_table_finalize to the right worker."""
-        return self._dispatch_aggregate(request, "buffered_table_finalize", ctx)
-
     def buffered_table_destructor(self, request: Any, ctx: CallContext) -> Any:
         """Dispatch buffered_table_destructor to the right worker."""
         return self._dispatch_aggregate(request, "buffered_table_destructor", ctx)

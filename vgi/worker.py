@@ -109,6 +109,7 @@ from vgi.logging_config import LogFormat, LogLevel
 from vgi.otel import VgiTracer, get_noop_tracer
 from vgi.protocol import (
     BindRequest,
+    BufferedFinalizeState,
     CatalogAttachRequest,
     CatalogCreateRequest,
     CatalogsResponse,
@@ -128,7 +129,6 @@ from vgi.protocol import (
     TableFunctionDynamicToStringResponse,
     TableFunctionStatisticsRequest,
     TableInOutExchangeState,
-    TableInOutFinalizeState,
     TableProducerState,
     TablesResponse,
     TransactionBeginResponse,
@@ -449,38 +449,47 @@ _aggregate_const_args_cache = _AggregateConstArgsCache()
 _BUFFERED_TABLE_INIT_KEY = -1
 
 
-# Process-local cache for in-flight finalize generators. Keyed by
-# (execution_id, finalize_state_id). Each entry is the iterator returned
-# by ``cls.finalize(finalize_state_id, params)``. Populated lazily on the
-# first ``buffered_table_finalize`` RPC for a given key; advanced one
-# batch per subsequent call; evicted when the iterator is exhausted.
-_buffered_table_finalize_iters: dict[tuple[bytes, int], Any] = {}
+# Cursor-based finalize stream constants. ``BufferedFinalizeState.produce()``
+# uses these to drain the next page of a state_log per tick. Single tunable
+# value across all functions; if profiling shows it's wrong, lift to a
+# per-function Meta override.
+_FINALIZE_PREFETCH = 8
+
+# Streaming-shape FINALIZE phase materializes the user's
+# ``finalize() -> list[batch]`` return into a single state_log keyed
+# by this constant. One streaming finalize per execution; one key.
+_STREAMING_FINALIZE_KEY = b""
 
 
-class _ChainIter:
-    """Iterator that yields one prefix item then chains to a tail iterator.
+def _build_bound_storage_from_fields(
+    execution_id: bytes,
+    attach_opaque_data: bytes | None,
+    ctx: CallContext,
+) -> BoundStorage:
+    """Cold-build a BoundStorage from (execution_id, attach_opaque_data, ctx).
 
-    Used by buffered_table_finalize to peek one batch ahead so the
-    response's has_more flag is accurate. We can't unread a value from an
-    arbitrary iterator (some are generators), so we stash the peeked value
-    here for the next RPC to consume.
+    Called by ``BufferedFinalizeState.produce()`` per tick. The storage
+    backend is process-singleton (resolved via the same
+    ``_resolve_storage()`` path that ``Function.storage`` uses), so this
+    is a thin wrapper construction — no registry walk, no auth
+    handshake. ``attach_opaque_data`` and ``ctx.auth`` are forwarded
+    so backends that derive a per-attach shard_key (CfDo) route to
+    the right Durable Object.
     """
+    from vgi.function import _resolve_storage
 
-    __slots__ = ("_first", "_tail", "_emitted")
+    return BoundStorage(
+        _resolve_storage(),
+        execution_id,
+        request=None,
+        attach_opaque_data=attach_opaque_data,
+        auth=ctx.auth,
+    )
 
-    def __init__(self, first: Any, tail: Any) -> None:
-        self._first = first
-        self._tail = tail
-        self._emitted = False
 
-    def __iter__(self) -> _ChainIter:
-        return self
-
-    def __next__(self) -> Any:
-        if not self._emitted:
-            self._emitted = True
-            return self._first
-        return next(self._tail)
+def _decode_ipc_batch(value: bytes) -> pa.RecordBatch:
+    """Read a single record batch from an Arrow IPC stream byte payload."""
+    return pa.ipc.open_stream(value).read_next_batch()
 
 
 # Streaming-partitioned aggregate sessions: session state is held in an
@@ -2586,62 +2595,12 @@ class Worker:
         finalize_state_ids = list(func_cls.combine(list(request.state_ids), params))
         return BufferedTableCombineResponse(finalize_state_ids=finalize_state_ids)
 
-    def buffered_table_finalize(
-        self,
-        request: Any,  # BufferedTableFinalizeRequest
-        ctx: CallContext,
-    ) -> Any:  # BufferedTableFinalizeResponse
-        """Pull one batch from a finalize_state_id's iterator.
-
-        Lazy-init: on first call for a given (execution_id, finalize_state_id),
-        invoke ``cls.finalize(finalize_state_id, params)`` and stash the
-        returned iterator. Each subsequent call advances by one batch and
-        reports ``has_more`` based on iterator exhaustion.
-        """
-        from vgi.protocol import BufferedTableFinalizeResponse
-
-        func_cls, params = self._load_buffered_table_params(request, ctx)
-
-        key = (request.execution_id, request.finalize_state_id)
-        iter_ = _buffered_table_finalize_iters.get(key)
-        if iter_ is None:
-            # Buffered-table finalize takes (finalize_state_id, params) — a
-            # different signature from the streaming-shape finalize(params)
-            # declared on the TableInOutGenerator base class. Buffered
-            # subclasses (BufferInputFunction, BatchIndexBufferInputFunction)
-            # override with the wider signature; this duck-typed call relies
-            # on Meta.buffered_table=True routing only those subclasses here.
-            result = func_cls.finalize(request.finalize_state_id, params)  # type: ignore[call-arg]
-            # Accept either a generator/iterator or a concrete list of batches.
-            iter_ = iter(result)
-            _buffered_table_finalize_iters[key] = iter_
-
-        try:
-            batch = next(iter_)
-        except StopIteration:
-            _buffered_table_finalize_iters.pop(key, None)
-            # Emit an empty batch with the output schema so the C++ side
-            # has something to type-check against.
-            sink = pa.BufferOutputStream()
-            with pa.ipc.new_stream(sink, params.output_schema) as writer:
-                writer.write_batch(pa.RecordBatch.from_pylist([], schema=params.output_schema))
-            return BufferedTableFinalizeResponse(output_batch=sink.getvalue().to_pybytes(), has_more=False)
-
-        # Peek for end-of-stream so the response's has_more flag is correct.
-        try:
-            next_batch = next(iter_)
-            has_more = True
-            # Stash the peeked batch so the next RPC gets it. Use a tiny
-            # shim iterator that yields the peeked batch first.
-            _buffered_table_finalize_iters[key] = _ChainIter(next_batch, iter_)
-        except StopIteration:
-            has_more = False
-            _buffered_table_finalize_iters.pop(key, None)
-
-        sink = pa.BufferOutputStream()
-        with pa.ipc.new_stream(sink, batch.schema) as writer:
-            writer.write_batch(batch)
-        return BufferedTableFinalizeResponse(output_batch=sink.getvalue().to_pybytes(), has_more=has_more)
+    # buffered_table_finalize unary RPC removed — Source phase now opens
+    # a BUFFERED_TABLE_FINALIZE init stream per finalize_state_id and
+    # drains via ReadDataBatch. The framework's BufferedFinalizeState
+    # produces batches directly from the user's declared state_log
+    # (vgi/_test_fixtures/table_in_out.py: finalize_log_key). No
+    # per-tick user code; no in-process iterator dict.
 
     def buffered_table_destructor(
         self,
@@ -2659,19 +2618,13 @@ class Worker:
         """
         from vgi.protocol import BufferedTableDestructorResponse
 
-        # Drop any leftover finalize iterators for this execution_id.
-        # These hold generator stack frames (process-local by nature) so
-        # they have no FunctionStorage equivalent — popping the dict is
-        # the only cleanup possible. In steady state finalize iterators
-        # self-clean on StopIteration; this branch only matches on
-        # mid-drain cancellation paths.
-        leftover = [k for k in _buffered_table_finalize_iters
-                    if k[0] == request.execution_id]
-        for k in leftover:
-            _buffered_table_finalize_iters.pop(k, None)
+        # No in-process state to clean: BufferedFinalizeState is fully
+        # wire-serializable; finalize streams are managed by vgi-rpc's
+        # session machinery, not by us.
 
         # Wipe FunctionStorage rows: the b"buf_init" metadata, the
-        # b"buf" per-state-id RMW slots, and the b"buf" append log.
+        # b"buf" per-state-id RMW slots, and the b"buf" / b"buf_sorted"
+        # append logs.
         # execution_clear() sweeps every namespace for the scope in one
         # call. Best-effort: failures here don't propagate (the operator
         # is already torn down); cleanup_old_entries is the backstop.
@@ -3332,17 +3285,35 @@ class Worker:
                 )
                 input_schema = request.bind_call.input_schema
             elif request.phase == TableInOutFunctionInitPhase.FINALIZE:
-                # Pre-compute finalize batches
+                # Streaming-shape FINALIZE: materialize the user's
+                # finalize() return into BoundedStorage so the framework
+                # can stream it via cursor — same shape as buffered.
+                # User-facing API unchanged: finalize(params) -> list[batch].
+                # Removes the prior _batches: Transient anti-pattern that
+                # silently truncated streams over HTTP.
                 finalize_batches = type(instance).finalize(params)
-                state = TableInOutFinalizeState(
-                    _batches=finalize_batches,
+                for batch in finalize_batches:
+                    sink = pa.BufferOutputStream()
+                    with pa.ipc.new_stream(sink, batch.schema) as w:
+                        w.write_batch(batch)
+                    params.storage.state_append(
+                        b"streaming_finalize",
+                        _STREAMING_FINALIZE_KEY,
+                        sink.getvalue().to_pybytes(),
+                    )
+                state = BufferedFinalizeState(
+                    execution_id=init_response.execution_id,
+                    ns=b"streaming_finalize",
+                    key=_STREAMING_FINALIZE_KEY,
+                    attach_opaque_data=request.bind_call.attach_opaque_data,
                 )
                 input_schema = None  # Producer — no input
             elif request.phase == TableInOutFunctionInitPhase.BUFFERED_TABLE:
                 # Sink+Source path. The init RPC itself carries no data
-                # exchange — all subsequent traffic uses the dedicated
-                # buffered_table_{process,combine,finalize} RPCs. Persist
-                # the init request + response into FunctionStorage so any
+                # exchange — subsequent traffic uses the dedicated
+                # buffered_table_{process,combine} RPCs and the
+                # BUFFERED_TABLE_FINALIZE init phase opens the source-side
+                # stream. Persist init metadata to FunctionStorage so any
                 # pool worker can cold-load and serve subsequent RPCs.
                 # No in-process cache: workers are stateless w.r.t.
                 # buffered_table executions.
@@ -3351,10 +3322,42 @@ class Worker:
                     BoundStorage.pack_int_key(_BUFFERED_TABLE_INIT_KEY),
                     _encode_buffered_table_init(request, init_response),
                 )
-                # An empty-batches TableInOutFinalizeState produces nothing
-                # and immediately calls out.finish() — exactly the right
-                # behavior for a stream we won't use.
-                state = TableInOutFinalizeState(_batches=[])
+                # An empty-key BufferedFinalizeState scanning a never-written
+                # log produces nothing on first tick — out.finish() fires
+                # immediately. Exactly the right behavior for a stream the
+                # caller won't actually drain.
+                state = BufferedFinalizeState(
+                    execution_id=init_response.execution_id,
+                    ns=b"buf_init",
+                    key=b"__never_written__",
+                    attach_opaque_data=request.bind_call.attach_opaque_data,
+                )
+                input_schema = None
+            elif request.phase == TableInOutFunctionInitPhase.BUFFERED_TABLE_FINALIZE:
+                if request.finalize_state_id is None:
+                    raise ValueError(
+                        "BUFFERED_TABLE_FINALIZE phase requires finalize_state_id"
+                    )
+                if request.execution_id is None:
+                    raise ValueError(
+                        "BUFFERED_TABLE_FINALIZE phase requires execution_id "
+                        "(secondary init only)"
+                    )
+                # Cold-load init metadata from FunctionStorage. func_cls
+                # and params live only here; they don't enter the wire
+                # state. The framework's per-tick produce() drains
+                # BoundedStorage directly via cursor — no per-tick user
+                # code, no func_cls reference required at tick time.
+                func_cls, finalize_params = self._load_buffered_table_params(request, ctx)
+                ns, key = func_cls.finalize_log_key(
+                    request.finalize_state_id, finalize_params,
+                )
+                state = BufferedFinalizeState(
+                    execution_id=request.execution_id,
+                    ns=ns,
+                    key=key,
+                    attach_opaque_data=request.bind_call.attach_opaque_data,
+                )
                 input_schema = None
             else:
                 raise ValueError(f"Unknown init phase for table-in-out function: {request.phase}")

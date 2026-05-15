@@ -16,10 +16,10 @@ from vgi_rpc.utils import deserialize_record_batch
 from tests.conftest import make_schema
 from vgi.arguments import Arg, Arguments, ArgumentValidationError
 from vgi.protocol import (
+    BufferedFinalizeState,
     ProcessState,
     ScalarExchangeState,
     TableInOutExchangeState,
-    TableInOutFinalizeState,
     TableProducerState,
     VgiProtocol,
 )
@@ -296,7 +296,7 @@ class TestProtocolStateTyping:
             ScalarExchangeState,
             TableProducerState,
             TableInOutExchangeState,
-            TableInOutFinalizeState,
+            BufferedFinalizeState,
         }
         assert get_args(return_hint)[1].__name__ == "GlobalInitResponse"
         assert get_origin(return_hint) is Stream

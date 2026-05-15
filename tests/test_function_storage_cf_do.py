@@ -312,15 +312,33 @@ class TestCfDoStateUnified:
         assert body["item"] == _b64(b"payload")
         assert "attempt_id" in body
 
-    def test_state_log_scan_no_attempt_id_returns_values(
+    def test_state_log_scan_no_attempt_id_returns_rows(
         self, storage: FunctionStorageCfDo, mock_transport: _MockTransport,
     ) -> None:
-        """state_log_scan is read-only — no attempt_id; values returned in order."""
-        mock_transport.queue_response(200, {"values": [_b64(b"a"), _b64(b"b"), _b64(b"c")]})
+        """state_log_scan is read-only — no attempt_id; (id, value) returned in order."""
+        mock_transport.queue_response(200, {"rows": [
+            {"id": 1, "value": _b64(b"a")},
+            {"id": 2, "value": _b64(b"b")},
+            {"id": 3, "value": _b64(b"c")},
+        ]})
         result = storage.state_log_scan(b"exec1", b"buf", b"k1")
-        assert result == [b"a", b"b", b"c"]
+        assert result == [(1, b"a"), (2, b"b"), (3, b"c")]
         body = _body(mock_transport.requests[0])
         assert body["scope_id"] == _b64(b"exec1")
         assert body["ns"] == _b64(b"buf")
         assert body["key"] == _b64(b"k1")
+        # Default after_id=-1 (before-first); limit omitted means unbounded.
+        assert body["after_id"] == -1
+        assert "limit" not in body
         assert "attempt_id" not in body
+
+    def test_state_log_scan_with_after_id_and_limit(
+        self, storage: FunctionStorageCfDo, mock_transport: _MockTransport,
+    ) -> None:
+        """after_id + limit are forwarded in the request body for cursor-based paging."""
+        mock_transport.queue_response(200, {"rows": [{"id": 5, "value": _b64(b"e")}]})
+        result = storage.state_log_scan(b"exec1", b"buf", b"k1", after_id=4, limit=1)
+        assert result == [(5, b"e")]
+        body = _body(mock_transport.requests[0])
+        assert body["after_id"] == 4
+        assert body["limit"] == 1

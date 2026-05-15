@@ -14,7 +14,8 @@ StreamState Implementations
 - **ScalarExchangeState**: Calls ScalarFunctionGenerator.process() per batch
 - **TableProducerState**: Calls TableFunctionGenerator.process() per tick
 - **TableInOutExchangeState**: Calls TableInOutGenerator.process() per input
-- **TableInOutFinalizeState**: Emits pre-computed finalize batches as producer
+- **BufferedFinalizeState**: Drains a state_log via cursor for finalize
+  streams (both buffered_table and streaming-shape FINALIZE)
 
 """
 
@@ -92,7 +93,7 @@ __all__ = [
     "TableFunctionDynamicToStringRequest",
     "TableFunctionDynamicToStringResponse",
     "TableInOutExchangeState",
-    "TableInOutFinalizeState",
+    "BufferedFinalizeState",
     "TableProducerState",
     "TablesResponse",
     "TransactionBeginResponse",
@@ -154,6 +155,9 @@ class InitRequest(ArrowSerializableDataclass):
 
     # Table-in-out extras
     phase: TableInOutFunctionInitPhase | None = None
+    # Buffered-table finalize stream: which state_id this stream serves.
+    # Required when phase=BUFFERED_TABLE_FINALIZE; None otherwise.
+    finalize_state_id: int | None = None
 
     # Secondary init (None = global init, set = secondary)
     execution_id: bytes | None = None
@@ -1191,30 +1195,61 @@ class TableInOutExchangeState(ExchangeState):
 
 
 @dataclass
-class TableInOutFinalizeState(ProducerState):
-    """Producer state for table-in-out function finalize streams.
+class BufferedFinalizeState(ProducerState):
+    """Cursor-driven streaming finalize. Drains a state_log via cursor.
 
-    Emits pre-computed finalize batches one per ``produce()`` call.
-    Calls ``out.finish()`` when all batches have been emitted.
+    Wire-serializable end-to-end: nothing here is Transient, nothing
+    holds object references. Each ``produce()`` tick: cold-build
+    BoundedStorage from (execution_id + attach), scan the next page of
+    log rows past ``cursor``, emit, advance cursor. No per-tick user
+    code — the user's job during process()/combine() (or, for
+    streaming-shape FINALIZE, the worker's init handler) is to ensure
+    the output batches exist in the state_log under (ns, key).
 
+    Used by both:
+    * the buffered_table finalize phase — data written by process() and
+      optionally post-processed by combine()
+    * the streaming-shape FINALIZE phase — worker materializes the
+      user's ``finalize() -> list[batch]`` return into BoundedStorage
+      at init time
     """
 
-    _batches: Annotated[list[pa.RecordBatch], Transient()] = field(default_factory=list, repr=False)
-    _index: Annotated[int, Transient()] = field(default=0, repr=False)
+    execution_id: bytes = b""
+    ns: bytes = b""
+    key: bytes = b""
+    cursor: bytes = b""                           # opaque, b"" = before-first
+    attach_opaque_data: bytes | None = None
 
     def produce(self, out: OutputCollector, ctx: CallContext) -> None:
-        """Emit the next finalize batch, or finish if done."""
-        if self._index >= len(self._batches):
+        """Drain the next page of (ns, key) past cursor; finish at EOL."""
+        # Local imports keep the protocol module's import graph minimal
+        # and avoid a circular dependency on vgi.worker.
+        from vgi.table_in_out_function import pack_int_cursor, unpack_int_cursor
+        from vgi.worker import (
+            _FINALIZE_PREFETCH,
+            _build_bound_storage_from_fields,
+            _decode_ipc_batch,
+        )
+
+        storage = _build_bound_storage_from_fields(
+            self.execution_id, self.attach_opaque_data, ctx,
+        )
+        last_id = unpack_int_cursor(self.cursor)
+        rows = storage.state_log_scan(
+            self.ns, self.key, after_id=last_id, limit=_FINALIZE_PREFETCH,
+        )
+        if not rows:
             out.finish()
             return
-        out.emit(self._batches[self._index])
-        self._index += 1
+        for _log_id, value in rows:
+            out.emit(_decode_ipc_batch(value))
+        self.cursor = pack_int_cursor(rows[-1][0])
 
 
 # Type alias for the union of all stream state variants produced by init().
 # vgi-rpc resolves this union using a method-local numeric tag in HTTP state
 # tokens, so state recovery does not depend on Python class names.
-ProcessState = ScalarExchangeState | TableProducerState | TableInOutExchangeState | TableInOutFinalizeState
+ProcessState = ScalarExchangeState | TableProducerState | TableInOutExchangeState | BufferedFinalizeState
 
 
 # ---------------------------------------------------------------------------
@@ -1378,30 +1413,6 @@ class BufferedTableCombineResponse(ArrowSerializableDataclass):
     """Response from buffered_table_combine — opaque partition keys."""
 
     finalize_state_ids: Annotated[list[int], ArrowType(pa.list_(pa.int64()))]
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class BufferedTableFinalizeRequest(ArrowSerializableDataclass):
-    """Request for buffered_table_finalize — pull one batch for a partition.
-
-    The C++ source phase calls this repeatedly with the same
-    ``finalize_state_id`` while the response's ``has_more`` is True; when
-    has_more is False, the partition is exhausted and the source phase moves
-    to the next ``finalize_state_id`` from the queue.
-    """
-
-    function_name: str
-    execution_id: bytes
-    finalize_state_id: int
-    attach_opaque_data: bytes | None = None
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class BufferedTableFinalizeResponse(ArrowSerializableDataclass):
-    """Response from buffered_table_finalize — one IPC batch + has_more."""
-
-    output_batch: bytes  # Full IPC stream bytes — one batch
-    has_more: bool
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1698,10 +1709,6 @@ class VgiProtocol(Protocol):
 
     def buffered_table_combine(self, request: BufferedTableCombineRequest) -> BufferedTableCombineResponse:
         """Once-per-query end-of-input signal. Returns finalize_state_ids."""
-        ...
-
-    def buffered_table_finalize(self, request: BufferedTableFinalizeRequest) -> BufferedTableFinalizeResponse:
-        """Pull one batch from a finalize_state_id's generator."""
         ...
 
     def buffered_table_destructor(self, request: BufferedTableDestructorRequest) -> BufferedTableDestructorResponse:

@@ -418,12 +418,25 @@ class TestFunctionStorageAzureSqlStateUnified:
     def test_state_log_scan_emits_select_in_id_order(
         self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
     ) -> None:
-        """state_log_scan SELECTs values for (scope, ns, key) ORDER BY id."""
-        mock_cursor.set_results([(b"a",), (b"b",), (b"c",)])
+        """state_log_scan SELECTs (id, value) for (scope, ns, key) ORDER BY id."""
+        mock_cursor.set_results([(1, b"a"), (2, b"b"), (3, b"c")])
         result = storage.state_log_scan(b"exec1", b"buf", b"k")
-        assert result == [b"a", b"b", b"c"]
+        assert result == [(1, b"a"), (2, b"b"), (3, b"c")]
         sql, params = mock_cursor.executed[0]
-        assert "SELECT value FROM function_state_log" in sql
+        assert "SELECT id, value FROM function_state_log" in sql
         assert "ORDER BY id" in sql
-        assert params == (b"exec1", b"buf", b"k")
+        # Default after_id=-1 (before-first); no FETCH clause when limit is None.
+        assert params == (b"exec1", b"buf", b"k", -1)
+        assert "FETCH NEXT" not in sql
+
+    def test_state_log_scan_with_limit_emits_offset_fetch(
+        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+    ) -> None:
+        """limit=N appends OFFSET/FETCH NEXT clause and threads N into params."""
+        mock_cursor.set_results([(2, b"b")])
+        result = storage.state_log_scan(b"exec1", b"buf", b"k", after_id=1, limit=1)
+        assert result == [(2, b"b")]
+        sql, params = mock_cursor.executed[0]
+        assert "OFFSET 0 ROWS FETCH NEXT" in sql
+        assert params == (b"exec1", b"buf", b"k", 1, 1)
 

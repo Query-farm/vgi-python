@@ -383,12 +383,20 @@ class FunctionStorage(Protocol):
         ns: bytes,
         key: bytes,
         *,
+        after_id: int = -1,
+        limit: int | None = None,
         shard_key: str = "",
-    ) -> list[bytes]:
-        """Yield all values appended to (scope_id, ns, key) in ordinal order.
+    ) -> list[tuple[int, bytes]]:
+        """Yield (id, value) pairs for (scope_id, ns, key) with id > after_id.
 
-        Non-destructive. Repeat calls return identical results until
-        ``execution_clear`` wipes the log rows.
+        Returns rows in ascending ``id`` order. ``after_id=-1`` is the
+        before-first sentinel (returns from the start). ``limit=None`` is
+        unbounded; positive values cap the result at that many rows.
+        Use the returned ``id`` of the last row as the next ``after_id``
+        for cursor-based scrolling.
+
+        Non-destructive. Repeat calls with the same parameters return
+        identical results until ``execution_clear`` wipes the log rows.
         """
         ...
 
@@ -621,10 +629,21 @@ class BoundStorage:
             self._execution_id, ns, key, item, shard_key=self._shard_key
         )
 
-    def state_log_scan(self, ns: bytes, key: bytes) -> list[bytes]:
-        """Yield all values appended to (ns, key) in ordinal order."""
+    def state_log_scan(
+        self,
+        ns: bytes,
+        key: bytes,
+        *,
+        after_id: int = -1,
+        limit: int | None = None,
+    ) -> list[tuple[int, bytes]]:
+        """Yield (id, value) pairs for (ns, key) with id > after_id.
+
+        See ``FunctionStorage.state_log_scan`` for the full contract.
+        """
         return self._base.state_log_scan(
-            self._execution_id, ns, key, shard_key=self._shard_key
+            self._execution_id, ns, key,
+            after_id=after_id, limit=limit, shard_key=self._shard_key,
         )
 
     @staticmethod
@@ -1152,20 +1171,26 @@ class FunctionStorageSqlite:
         ns: bytes,
         key: bytes,
         *,
+        after_id: int = -1,
+        limit: int | None = None,
         shard_key: str = "",
-    ) -> list[bytes]:
-        """Yield all values for (scope_id, ns, key) in ordinal order."""
+    ) -> list[tuple[int, bytes]]:
+        """Yield (id, value) pairs for (scope_id, ns, key) with id > after_id."""
         del shard_key
         conn = self._conn()
-        rows = conn.execute(
-            """
-            SELECT value FROM function_state_log
-            WHERE scope_id = ? AND ns = ? AND key = ?
+        # SQLite supports LIMIT -1 as unbounded, but we pass NULL via
+        # a parameter for clarity. Use LIMIT ? with -1 sentinel.
+        sql = """
+            SELECT id, value FROM function_state_log
+            WHERE scope_id = ? AND ns = ? AND key = ? AND id > ?
             ORDER BY id
-            """,
-            (scope_id, ns, key),
+            LIMIT ?
+        """
+        sqlite_limit = -1 if limit is None else int(limit)
+        rows = conn.execute(
+            sql, (scope_id, ns, key, after_id, sqlite_limit),
         ).fetchall()
-        return [bytes(v) for (v,) in rows]
+        return [(int(rid), bytes(v)) for (rid, v) in rows]
 
     # --- Maintenance (not part of protocol) ---
 

@@ -244,13 +244,18 @@ class TestFunctionStorageSqlite:
 
     # --- state_append / state_log_scan (append-only log) ---
 
+    @staticmethod
+    def _values(rows: list[tuple[int, bytes]]) -> list[bytes]:
+        """Strip ids from state_log_scan rows for value-only assertions."""
+        return [v for _, v in rows]
+
     def test_state_append_then_log_scan_single_key(self, storage: FunctionStorageSqlite) -> None:
         """Appended values come back in append order via state_log_scan."""
         scope = b"exec-log"
         storage.state_append(scope, b"buf", b"k", b"a")
         storage.state_append(scope, b"buf", b"k", b"b")
         storage.state_append(scope, b"buf", b"k", b"c")
-        assert storage.state_log_scan(scope, b"buf", b"k") == [b"a", b"b", b"c"]
+        assert self._values(storage.state_log_scan(scope, b"buf", b"k")) == [b"a", b"b", b"c"]
 
     def test_state_append_returns_monotone_ordinals_per_key(self, storage: FunctionStorageSqlite) -> None:
         """Per-key ordinals strictly increase across appends."""
@@ -259,6 +264,41 @@ class TestFunctionStorageSqlite:
         ord2 = storage.state_append(scope, b"buf", b"k", b"b")
         ord3 = storage.state_append(scope, b"buf", b"k", b"c")
         assert ord1 < ord2 < ord3
+
+    def test_state_log_scan_returns_ids_matching_state_append(self, storage: FunctionStorageSqlite) -> None:
+        """The (id, value) pairs from state_log_scan match the ordinals state_append returned."""
+        scope = b"exec-log"
+        ord_a = storage.state_append(scope, b"buf", b"k", b"a")
+        ord_b = storage.state_append(scope, b"buf", b"k", b"b")
+        rows = storage.state_log_scan(scope, b"buf", b"k")
+        assert rows == [(ord_a, b"a"), (ord_b, b"b")]
+
+    def test_state_log_scan_after_id_skips_consumed_rows(self, storage: FunctionStorageSqlite) -> None:
+        """after_id=N returns only rows with id > N — cursor-based scrolling."""
+        scope = b"exec-log"
+        ord_a = storage.state_append(scope, b"buf", b"k", b"a")
+        ord_b = storage.state_append(scope, b"buf", b"k", b"b")
+        ord_c = storage.state_append(scope, b"buf", b"k", b"c")
+        # First page (everything).
+        first = storage.state_log_scan(scope, b"buf", b"k")
+        assert first == [(ord_a, b"a"), (ord_b, b"b"), (ord_c, b"c")]
+        # Resume past the first row.
+        rest = storage.state_log_scan(scope, b"buf", b"k", after_id=ord_a)
+        assert rest == [(ord_b, b"b"), (ord_c, b"c")]
+        # Resume past everything we've seen — empty.
+        assert storage.state_log_scan(scope, b"buf", b"k", after_id=ord_c) == []
+
+    def test_state_log_scan_limit_caps_rows(self, storage: FunctionStorageSqlite) -> None:
+        """limit=N returns at most N rows (in id order)."""
+        scope = b"exec-log"
+        for letter in (b"a", b"b", b"c", b"d"):
+            storage.state_append(scope, b"buf", b"k", letter)
+        page1 = storage.state_log_scan(scope, b"buf", b"k", limit=2)
+        assert self._values(page1) == [b"a", b"b"]
+        page2 = storage.state_log_scan(scope, b"buf", b"k", after_id=page1[-1][0], limit=2)
+        assert self._values(page2) == [b"c", b"d"]
+        page3 = storage.state_log_scan(scope, b"buf", b"k", after_id=page2[-1][0], limit=2)
+        assert page3 == []
 
     def test_state_append_caller_retry_produces_duplicates(self, storage: FunctionStorageSqlite) -> None:
         """Caller-level retry inserts a duplicate row (fresh internal attempt_id).
@@ -273,7 +313,7 @@ class TestFunctionStorageSqlite:
         scope = b"exec-log"
         storage.state_append(scope, b"buf", b"k", b"payload")
         storage.state_append(scope, b"buf", b"k", b"payload")  # caller retry
-        assert storage.state_log_scan(scope, b"buf", b"k") == [b"payload", b"payload"]
+        assert self._values(storage.state_log_scan(scope, b"buf", b"k")) == [b"payload", b"payload"]
 
     def test_state_log_scan_isolates_keys(self, storage: FunctionStorageSqlite) -> None:
         """Logs for distinct keys in the same namespace stay separate."""
@@ -281,23 +321,23 @@ class TestFunctionStorageSqlite:
         storage.state_append(scope, b"buf", b"k1", b"a")
         storage.state_append(scope, b"buf", b"k2", b"x")
         storage.state_append(scope, b"buf", b"k1", b"b")
-        assert storage.state_log_scan(scope, b"buf", b"k1") == [b"a", b"b"]
-        assert storage.state_log_scan(scope, b"buf", b"k2") == [b"x"]
+        assert self._values(storage.state_log_scan(scope, b"buf", b"k1")) == [b"a", b"b"]
+        assert self._values(storage.state_log_scan(scope, b"buf", b"k2")) == [b"x"]
 
     def test_state_log_scan_isolates_namespaces(self, storage: FunctionStorageSqlite) -> None:
         """Logs for the same key in different namespaces stay separate."""
         scope = b"exec-log"
         storage.state_append(scope, b"ns-a", b"k", b"a1")
         storage.state_append(scope, b"ns-b", b"k", b"b1")
-        assert storage.state_log_scan(scope, b"ns-a", b"k") == [b"a1"]
-        assert storage.state_log_scan(scope, b"ns-b", b"k") == [b"b1"]
+        assert self._values(storage.state_log_scan(scope, b"ns-a", b"k")) == [b"a1"]
+        assert self._values(storage.state_log_scan(scope, b"ns-b", b"k")) == [b"b1"]
 
     def test_state_log_scan_isolates_scopes(self, storage: FunctionStorageSqlite) -> None:
         """Logs for the same key in different scopes stay separate."""
         storage.state_append(b"exec-A", b"buf", b"k", b"a")
         storage.state_append(b"exec-B", b"buf", b"k", b"b")
-        assert storage.state_log_scan(b"exec-A", b"buf", b"k") == [b"a"]
-        assert storage.state_log_scan(b"exec-B", b"buf", b"k") == [b"b"]
+        assert self._values(storage.state_log_scan(b"exec-A", b"buf", b"k")) == [b"a"]
+        assert self._values(storage.state_log_scan(b"exec-B", b"buf", b"k")) == [b"b"]
 
     def test_state_log_scan_is_non_destructive(self, storage: FunctionStorageSqlite) -> None:
         """Repeated scans return the same data."""
@@ -306,7 +346,8 @@ class TestFunctionStorageSqlite:
         storage.state_append(scope, b"buf", b"k", b"b")
         first = storage.state_log_scan(scope, b"buf", b"k")
         second = storage.state_log_scan(scope, b"buf", b"k")
-        assert first == second == [b"a", b"b"]
+        assert first == second
+        assert self._values(first) == [b"a", b"b"]
 
     def test_state_log_scan_empty_returns_empty(self, storage: FunctionStorageSqlite) -> None:
         """Scan of a (scope, ns, key) that was never appended returns []."""
@@ -328,4 +369,7 @@ class TestFunctionStorageSqlite:
         ord1 = bs.state_append(b"buf", b"k", b"a")
         ord2 = bs.state_append(b"buf", b"k", b"b")
         assert ord1 < ord2
-        assert bs.state_log_scan(b"buf", b"k") == [b"a", b"b"]
+        rows = bs.state_log_scan(b"buf", b"k")
+        assert rows == [(ord1, b"a"), (ord2, b"b")]
+        # Cursor-based: after_id + limit also work through the facade.
+        assert bs.state_log_scan(b"buf", b"k", after_id=ord1, limit=1) == [(ord2, b"b")]

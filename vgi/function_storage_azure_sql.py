@@ -681,22 +681,41 @@ class FunctionStorageAzureSql:
         ns: bytes,
         key: bytes,
         *,
+        after_id: int = -1,
+        limit: int | None = None,
         shard_key: str = "",
-    ) -> list[bytes]:
-        """Yield all values for (scope_id, ns, key) in ordinal order."""
+    ) -> list[tuple[int, bytes]]:
+        """Yield (id, value) pairs for (scope_id, ns, key) with id > after_id."""
         del shard_key
 
-        def _do(conn: pymssql.Connection) -> list[bytes]:
+        def _do(conn: pymssql.Connection) -> list[tuple[int, bytes]]:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT value FROM function_state_log
-                WHERE scope_id = %s AND ns = %s AND [key] = %s
-                ORDER BY id
-                """,
-                (scope_id, ns, key),
-            )
-            return [bytes(cast(Any, v)) for (v,) in cursor.fetchall()]
+            # T-SQL: ORDER BY ... OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
+            # is the canonical paging form. When limit is None we omit
+            # the FETCH clause to get all rows.
+            if limit is None:
+                cursor.execute(
+                    """
+                    SELECT id, value FROM function_state_log
+                    WHERE scope_id = %s AND ns = %s AND [key] = %s AND id > %s
+                    ORDER BY id
+                    """,
+                    (scope_id, ns, key, after_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT id, value FROM function_state_log
+                    WHERE scope_id = %s AND ns = %s AND [key] = %s AND id > %s
+                    ORDER BY id
+                    OFFSET 0 ROWS FETCH NEXT %s ROWS ONLY
+                    """,
+                    (scope_id, ns, key, after_id, int(limit)),
+                )
+            return [
+                (int(cast(Any, rid)), bytes(cast(Any, v)))
+                for (rid, v) in cursor.fetchall()
+            ]
 
         return self._execute_with_retry(_do)
 
