@@ -2429,20 +2429,26 @@ class Worker:
             ),
             auth_context=ctx.auth,
             batch_index=request.batch_index,
+            state_id=request.state_id,
         )
 
         batch = pa.ipc.open_stream(request.input_batch).read_next_batch()
 
         # Load existing state for this state_id from the unified state_*
-        # store. Buffered_table fixtures live under namespace b"buf"; key is
-        # the int state_id packed as 8-byte little-endian (BoundStorage
-        # convenience). Create initial state if absent.
+        # store ONLY when the function declares a state_class. Functions with
+        # state_class=None (e.g. BufferInputFunction) manage their own state
+        # via state_append / state_log_scan and would pay a useless round-trip
+        # here. Skipping shaves one full state_get per process() call —
+        # significant on a hot Sink path with thousands of input batches.
         from vgi.function_storage import BoundStorage as _BS
 
         _state_key = _BS.pack_int_key(request.state_id)
-        stored_value = params.storage.state_get(b"buf", _state_key)
-        if stored_value is not None and func_cls.state_class is not None:
-            state = func_cls.state_class.deserialize_from_bytes(stored_value)
+        if func_cls.state_class is not None:
+            stored_value = params.storage.state_get(b"buf", _state_key)
+            if stored_value is not None:
+                state = func_cls.state_class.deserialize_from_bytes(stored_value)
+            else:
+                state = func_cls.initial_state(params)
         else:
             state = func_cls.initial_state(params)
 

@@ -366,6 +366,14 @@ class ProcessParams[TArgs]:
     # None for every other call path.
     batch_index: int | None = None
 
+    # Per-thread state_id for buffered_table functions. The C++ Sink assigns
+    # one unique state_id per worker (atomic counter, scoped per execution),
+    # then includes it on every buffered_table_process RPC for that thread so
+    # the worker can key its accumulator by it. Process()'s direct callers
+    # (e.g. the streaming exchange path) leave this None. Set on the
+    # buffered_table_process path only — see vgi/worker.py:buffered_table_process.
+    state_id: int | None = None
+
 
 class TableFunctionBase[TArgs](vgi.function.Function):
     """Base class for table functions with cardinality and schema validation.

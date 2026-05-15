@@ -37,7 +37,7 @@ from __future__ import annotations
 import os
 import signal
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from collections.abc import Iterator
 from typing import Annotated, Any
 
@@ -133,19 +133,7 @@ class EchoFunction(TableInOutGenerator[SingleTableArguments]):
         return BindResponse(output_schema=params.bind_call.input_schema)
 
 
-@dataclass(kw_only=True)
-class BufferInputState(ArrowSerializableDataclass):
-    """Per-state_id buffer of IPC-encoded record batches.
-
-    Each entry is one input batch serialized as IPC stream bytes — bytes
-    rather than ``pa.RecordBatch`` objects so the state round-trips cleanly
-    through ``ArrowSerializableDataclass.serialize_to_bytes``.
-    """
-
-    batches: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
-
-
-class BufferInputFunction(TableInOutGenerator[SingleTableArguments, BufferInputState]):
+class BufferInputFunction(TableInOutGenerator[SingleTableArguments, None]):
     """Buffering function — collects all input, emits during finalize.
 
     Uses the buffered table function path (``Meta.buffered_table = True``):
@@ -155,16 +143,18 @@ class BufferInputFunction(TableInOutGenerator[SingleTableArguments, BufferInputS
     Under UNION ALL the inputs are distributed across Sink threads and the
     combined output is the union of every buffer.
 
+    State storage: ``state_class = None`` skips the framework's per-call
+    state_get/state_put round-trip. process() appends each input batch to
+    ``state_log`` keyed by ``(b"buf", state_id)``; finalize() drains via
+    ``state_log_scan`` in append order. Storage cost is O(N batches) inserts
+    instead of the O(N^2) RMW pattern that state_class would force.
+
     Schema:
         Input:  any schema
         Output: same schema (passthrough)
     """
 
-    # Explicit state_class — TableInOutGenerator's generic param isn't auto-
-    # reflected onto the class today (only TableInOutFunction has that
-    # __init_subclass__ hook). The buffered_table_process worker handler
-    # uses this to deserialize the per-state_id state.
-    state_class = BufferInputState
+    state_class = None
 
     class Meta:
         """Metadata for BufferInputFunction."""
@@ -181,27 +171,34 @@ class BufferInputFunction(TableInOutGenerator[SingleTableArguments, BufferInputS
         ]
 
     @classmethod
-    def initial_state(cls, params: ProcessParams[SingleTableArguments]) -> BufferInputState:
-        return BufferInputState()
+    def initial_state(cls, params: ProcessParams[SingleTableArguments]) -> None:
+        return None
 
     @classmethod
     def process(
         cls,
         params: ProcessParams[SingleTableArguments],
-        state: BufferInputState,
+        state: None,
         batch: pa.RecordBatch,
         out: OutputCollector,
     ) -> None:
-        """Serialize the batch and append to this state_id's buffer.
+        """Serialize the batch and append to this state_id's log.
 
         Under the buffered_table path ``out`` is a NoOpCollector that
         silently accepts the trailing zero-row emit but would raise on any
         non-empty emit — process() is sink-only.
         """
+        from vgi.function_storage import BoundStorage as _BS
+
+        assert params.state_id is not None, (
+            "buffered_table_process did not populate ProcessParams.state_id"
+        )
         sink = pa.BufferOutputStream()
         with pa.ipc.new_stream(sink, batch.schema) as writer:
             writer.write_batch(batch)
-        state.batches.append(sink.getvalue().to_pybytes())
+        params.storage.state_append(
+            b"buf", _BS.pack_int_key(params.state_id), sink.getvalue().to_pybytes()
+        )
         out.emit(empty_batch(params.output_schema))
 
     @classmethod
@@ -210,7 +207,7 @@ class BufferInputFunction(TableInOutGenerator[SingleTableArguments, BufferInputS
     ) -> list[int]:
         """Pass-through partitioning: each state_id is its own finalize key.
 
-        No cross-state merging is needed — each thread's buffer is already a
+        No cross-state merging is needed — each thread's log is already a
         complete, ordered slice of the rows that landed on that thread.
         Returning ``state_ids`` lets DuckDB's parallel Source phase drain all
         buffers concurrently.
@@ -221,19 +218,12 @@ class BufferInputFunction(TableInOutGenerator[SingleTableArguments, BufferInputS
     def finalize(
         cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments]
     ) -> Iterator[pa.RecordBatch]:
-        """Yield the buffered batches for one finalize_state_id, one per RPC.
-
-        The framework wraps this generator at the worker side: each
-        ``buffered_table_finalize`` RPC consumes one ``yield`` and reports
-        ``has_more`` based on whether the iterator is exhausted.
-        """
+        """Yield the buffered batches for one finalize_state_id, one per RPC."""
         from vgi.function_storage import BoundStorage as _BS
 
-        stored = params.storage.state_get(b"buf", _BS.pack_int_key(finalize_state_id))
-        if stored is None:
-            return
-        state = BufferInputState.deserialize_from_bytes(stored)
-        for batch_bytes in state.batches:
+        for batch_bytes in params.storage.state_log_scan(
+            b"buf", _BS.pack_int_key(finalize_state_id)
+        ):
             yield pa.ipc.open_stream(batch_bytes).read_next_batch()
 
 
@@ -831,7 +821,7 @@ class CrashOnProcessFunction(BufferInputFunction):
     def process(  # type: ignore[override]
         cls,
         params: ProcessParams[SingleTableArguments],
-        state: BufferInputState,
+        state: None,
         batch: pa.RecordBatch,
         out: OutputCollector,
     ) -> None:
@@ -898,7 +888,7 @@ class HangOnProcessFunction(BufferInputFunction):
     def process(  # type: ignore[override]
         cls,
         params: ProcessParams[SingleTableArguments],
-        state: BufferInputState,
+        state: None,
         batch: pa.RecordBatch,
         out: OutputCollector,
     ) -> None:
@@ -999,41 +989,34 @@ class OrderedBufferInputFunction(BufferInputFunction):
         sink_order_dependent = True
 
 
-@dataclass(kw_only=True)
-class IndexedBatch(ArrowSerializableDataclass):
-    """One (batch_index, batch_bytes) pair stored per process() call.
+def _pack_indexed_batch(batch_index: int, batch_bytes: bytes) -> bytes:
+    """Pack (batch_index, batch_bytes) into a single appendable blob.
 
-    The Arrow schema generator can't infer a heterogeneous tuple type, so
-    pairs are wrapped in a named dataclass with explicit fields.
+    Layout: 8 bytes little-endian signed batch_index || raw IPC stream bytes.
+    Used by BatchIndexBufferInputFunction to thread per-batch ordering keys
+    through the append-only state_log without an extra ArrowSerializableDataclass
+    round-trip.
     """
-
-    batch_index: int
-    batch_bytes: bytes
+    return batch_index.to_bytes(8, "little", signed=True) + batch_bytes
 
 
-@dataclass(kw_only=True)
-class BatchIndexBufferInputState(ArrowSerializableDataclass):
-    """Accumulates IndexedBatch entries for later ordering.
-
-    Each Sink thread keeps its own slice keyed by batch_index. combine()
-    merges all slices, sorts by batch_index globally, and writes the
-    ordered buffer to slot 0 for finalize() to yield in source order.
-    """
-
-    pairs: list[IndexedBatch] = field(default_factory=list)
+def _unpack_indexed_batch(blob: bytes) -> tuple[int, bytes]:
+    """Inverse of _pack_indexed_batch."""
+    return int.from_bytes(blob[:8], "little", signed=True), blob[8:]
 
 
-class BatchIndexBufferInputFunction(TableInOutGenerator[SingleTableArguments, BatchIndexBufferInputState]):
+class BatchIndexBufferInputFunction(TableInOutGenerator[SingleTableArguments, None]):
     """Buffered table function that demands ``batch_index`` per ``process()``.
 
     Uses ``Meta.requires_input_batch_index=True`` so the C++ operator
     declares ``RequiredPartitionInfo()=BatchIndex()`` and threads DuckDB's
-    per-chunk batch_index into every ``process()`` call. The worker stores
-    ``(batch_index, ipc_bytes)`` per Sink thread; combine() merges and
-    sorts globally; finalize() yields in source order under parallel ingest.
+    per-chunk batch_index into every ``process()`` call. process() appends
+    ``(batch_index, ipc_bytes)`` tuples (struct-packed) to the per-thread
+    state_log; combine() collects all state_ids; finalize() drains every
+    log, sorts by batch_index globally, and yields in source order.
     """
 
-    state_class = BatchIndexBufferInputState
+    state_class = None
 
     class Meta:
         # Declared standalone (not inheriting from BufferInputFunction.Meta)
@@ -1047,16 +1030,14 @@ class BatchIndexBufferInputFunction(TableInOutGenerator[SingleTableArguments, Ba
         requires_input_batch_index = True
 
     @classmethod
-    def initial_state(
-        cls, params: ProcessParams[SingleTableArguments]
-    ) -> BatchIndexBufferInputState:
-        return BatchIndexBufferInputState()
+    def initial_state(cls, params: ProcessParams[SingleTableArguments]) -> None:
+        return None
 
     @classmethod
     def process(
         cls,
         params: ProcessParams[SingleTableArguments],
-        state: BatchIndexBufferInputState,
+        state: None,
         batch: pa.RecordBatch,
         out: OutputCollector,
     ) -> None:
@@ -1067,11 +1048,16 @@ class BatchIndexBufferInputFunction(TableInOutGenerator[SingleTableArguments, Ba
                 "batch_index_buffer_input.process() received batch_index=None "
                 "— Meta.requires_input_batch_index plumbing is broken"
             )
+        assert params.state_id is not None
+        from vgi.function_storage import BoundStorage as _BS
+
         sink = pa.BufferOutputStream()
         with pa.ipc.new_stream(sink, batch.schema) as writer:
             writer.write_batch(batch)
-        state.pairs.append(
-            IndexedBatch(batch_index=params.batch_index, batch_bytes=sink.getvalue().to_pybytes())
+        params.storage.state_append(
+            b"buf",
+            _BS.pack_int_key(params.state_id),
+            _pack_indexed_batch(params.batch_index, sink.getvalue().to_pybytes()),
         )
         out.emit(empty_batch(params.output_schema))
 
@@ -1079,23 +1065,14 @@ class BatchIndexBufferInputFunction(TableInOutGenerator[SingleTableArguments, Ba
     def combine(
         cls, state_ids: list[int], params: ProcessParams[SingleTableArguments]
     ) -> list[int]:
-        """Merge per-state buffers, sort by batch_index, write to slot 0."""
-        if not state_ids:
-            return []
-        from vgi.function_storage import BoundStorage as _BS
+        """Pass state_ids through; finalize() does the global sort.
 
-        keys = [_BS.pack_int_key(sid) for sid in state_ids]
-        stored = params.storage.state_get_many(b"buf", keys)
-        all_pairs: list[IndexedBatch] = []
-        for entry in stored:
-            if entry is None:
-                continue
-            partial = BatchIndexBufferInputState.deserialize_from_bytes(entry)
-            all_pairs.extend(partial.pairs)
-        all_pairs.sort(key=lambda p: p.batch_index)
-        merged = BatchIndexBufferInputState(pairs=all_pairs)
-        params.storage.state_put(b"buf", _BS.pack_int_key(0), merged.serialize_to_bytes())
-        return [0]
+        We could instead drain every log here and re-emit a single sorted
+        log under state_id 0, but that's an O(N) re-write of every batch.
+        Pushing the sort into finalize() keeps Sink->Source latency low and
+        only walks each batch once.
+        """
+        return state_ids
 
     @classmethod
     def finalize(
@@ -1103,9 +1080,15 @@ class BatchIndexBufferInputFunction(TableInOutGenerator[SingleTableArguments, Ba
     ) -> Iterator[pa.RecordBatch]:
         from vgi.function_storage import BoundStorage as _BS
 
-        stored = params.storage.state_get(b"buf", _BS.pack_int_key(finalize_state_id))
-        if stored is None:
-            return
-        state = BatchIndexBufferInputState.deserialize_from_bytes(stored)
-        for entry in state.pairs:
-            yield pa.ipc.open_stream(entry.batch_bytes).read_next_batch()
+        # NB. There is exactly one finalize() per state_id (combine returned
+        # state_ids unchanged), so we only see this thread's log here. To get
+        # a globally ordered output the caller should choose Meta.sink_order_dependent
+        # OR use a single Sink thread; otherwise per-thread output order is
+        # batch_index-ascending only within this slice.
+        log_bytes = params.storage.state_log_scan(
+            b"buf", _BS.pack_int_key(finalize_state_id)
+        )
+        pairs = [_unpack_indexed_batch(b) for b in log_bytes]
+        pairs.sort(key=lambda p: p[0])
+        for _idx, batch_bytes in pairs:
+            yield pa.ipc.open_stream(batch_bytes).read_next_batch()
