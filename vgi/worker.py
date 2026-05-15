@@ -434,17 +434,20 @@ class _AggregateConstArgsCache:
 _aggregate_const_args_cache = _AggregateConstArgsCache()
 
 
-# Process-local cache for the buffered-table-function path. Keyed by
-# execution_id (raw bytes). Maps to (func_cls, ProcessParams). The init
-# handler populates this on phase=BUFFERED_TABLE; the
-# buffered_table_{process,combine,finalize} handlers read it instead of
-# re-shipping the bind context on every RPC.
+# Buffered-table init metadata is persisted to FunctionStorage at init
+# time (namespace b"buf_init", key = pack_int_key(_BUFFERED_TABLE_INIT_KEY))
+# and cold-loaded by every subsequent buffered_table_{process,combine,
+# finalize} RPC. There is intentionally NO in-process cache here — workers
+# are stateless w.r.t. buffered_table executions, so any pool worker can
+# serve any RPC for any execution_id. The C++ Sink+Source operator no
+# longer has to pin one worker per query.
 #
-# Lifetime: until the C++ side tears down the execution. We could plumb a
-# destructor RPC to evict eagerly; for now the entry survives until the
-# worker process exits. The map is process-local, so each worker instance
-# only sees its own executions (primary or per-thread secondary).
-_buffered_table_exec_cache: dict[bytes, tuple[type, Any]] = {}
+# Cost: one extra storage round-trip per RPC. Negligible on subprocess
+# (SQLite is microseconds). One HTTP RTT on CfDo deployments — if that
+# surfaces as a hot-path bottleneck, the mitigation is to thread the
+# init metadata bytes through the request envelope from C++ instead.
+_BUFFERED_TABLE_INIT_KEY = -1
+
 
 # Process-local cache for in-flight finalize generators. Keyed by
 # (execution_id, finalize_state_id). Each entry is the iterator returned
@@ -530,6 +533,32 @@ def _decode_streaming_session(payload: bytes, func_cls: type[AggregateFunction[A
         output_schema=pa.ipc.open_stream(d["output_schema_bytes"]).schema,
         partition_key_count=d["partition_key_count"],
         order_key_count=d["order_key_count"],
+    )
+
+
+# --- Buffered-table init metadata persistence ----------------------------
+#
+# Persists just the two ArrowSerializableDataclass envelopes (the init
+# request that the C++ side originally shipped, and the GlobalInitResponse
+# the worker built from it). On cold-load, deserializing these is enough
+# to rebuild the full ProcessParams via the same code path the init
+# handler runs. func_cls is NOT persisted — re-resolved by name from the
+# function registry on every load, both to avoid pickle-loading arbitrary
+# classes and to handle version skew if the function definition changes.
+
+
+def _encode_buffered_table_init(init_call: InitRequest, init_response: GlobalInitResponse) -> bytes:
+    return pickle.dumps({
+        "init_call_bytes": init_call.serialize_to_bytes(),
+        "init_response_bytes": init_response.serialize_to_bytes(),
+    })
+
+
+def _decode_buffered_table_init(payload: bytes) -> tuple[InitRequest, GlobalInitResponse]:
+    d = pickle.loads(payload)
+    return (
+        InitRequest.deserialize_from_bytes(d["init_call_bytes"]),
+        GlobalInitResponse.deserialize_from_bytes(d["init_response_bytes"]),
     )
 
 
@@ -2394,6 +2423,54 @@ class Worker:
 
     # ========== Buffered Table Function Methods (Sink+Source path) ==========
 
+    def _load_buffered_table_params(
+        self, request: Any, ctx: CallContext,
+    ) -> tuple[type[TableInOutGenerator[Any, Any]], ProcessParams[Any]]:
+        """Cold-load buffered_table init metadata from FunctionStorage.
+
+        Always reads from storage — no in-process cache. Costs one
+        round-trip per RPC; trade-off explained next to the
+        ``_BUFFERED_TABLE_INIT_KEY`` constant. Raises ``OSError`` if the
+        execution_id is unknown (init never ran on this catalog, or the
+        destructor has already fired).
+
+        Returns ``(func_cls, base_params)``. Callers further specialize
+        ``base_params`` per RPC via ``_dataclass_replace`` to inject the
+        request-scoped ``storage`` / ``auth_context`` / ``batch_index`` /
+        ``state_id`` fields.
+        """
+        func_cls = self._resolve_function_by_name(
+            request.function_name,
+            self._unwrap_attach(request.attach_opaque_data),
+            function_type=TableInOutGenerator,
+        )
+        cold_storage = BoundStorage(
+            func_cls.storage, request.execution_id, request=request, auth=ctx.auth,
+        )
+        payload = cold_storage.state_get(
+            b"buf_init", BoundStorage.pack_int_key(_BUFFERED_TABLE_INIT_KEY),
+        )
+        if payload is None:
+            raise OSError(
+                f"buffered_table: unknown execution_id {request.execution_id.hex()} "
+                f"(init never ran or destructor already fired)"
+            )
+        init_call, init_response = _decode_buffered_table_init(payload)
+        # Rebuild ProcessParams from the persisted init request — same
+        # construction the init handler performs (worker.py search:
+        # "Table-in-out function: separate INPUT and FINALIZE phases").
+        base_params = ProcessParams(
+            args=func_cls._parse_arguments(func_cls.FunctionArguments, init_call.bind_call.arguments),
+            init_call=init_call,
+            init_response=init_response,
+            output_schema=init_call.output_schema,
+            settings=_batch_to_scalar_dict(init_call.bind_call.settings),
+            secrets=SecretsAccessor(init_call.bind_call.secrets).to_dict(),
+            storage=cold_storage,
+            auth_context=ctx.auth,
+        )
+        return func_cls, base_params
+
     def buffered_table_process(
         self,
         request: Any,  # BufferedTableProcessRequest — lazy import below
@@ -2410,24 +2487,14 @@ class Worker:
         """
         from vgi.protocol import BufferedTableProcessResponse
 
-        cached = _buffered_table_exec_cache.get(request.execution_id)
-        if cached is None:
-            raise RuntimeError(
-                f"buffered_table_process: execution {request.execution_id.hex()} "
-                f"not initialized — was init phase=BUFFERED_TABLE called first?"
-            )
-        func_cls, params = cached
-        # Rebuild storage with this request's auth context so the storage
-        # layer's request-scoped fields stay consistent. Forward the
-        # per-call batch_index (only set when Meta.requires_input_batch_index
-        # = True; otherwise None). ProcessParams is otherwise immutable
-        # across process() calls within one execution.
+        func_cls, params = self._load_buffered_table_params(request, ctx)
+        # Inject per-RPC fields. ``storage`` is already bound to the right
+        # execution_id by the loader; we still call _dataclass_replace
+        # to forward batch_index / state_id (set only on the process
+        # path). Per-RPC fields rebuilt as today; ProcessParams is
+        # otherwise immutable across process() calls within one execution.
         params = _dataclass_replace(
             params,
-            storage=BoundStorage(
-                func_cls.storage, request.execution_id, request=request, auth=ctx.auth
-            ),
-            auth_context=ctx.auth,
             batch_index=request.batch_index,
             state_id=request.state_id,
         )
@@ -2495,20 +2562,7 @@ class Worker:
         the partition keys the source phase will iterate over."""
         from vgi.protocol import BufferedTableCombineResponse
 
-        cached = _buffered_table_exec_cache.get(request.execution_id)
-        if cached is None:
-            raise RuntimeError(
-                f"buffered_table_combine: execution {request.execution_id.hex()} "
-                f"not initialized"
-            )
-        func_cls, params = cached
-        params = _dataclass_replace(
-            params,
-            storage=BoundStorage(
-                func_cls.storage, request.execution_id, request=request, auth=ctx.auth
-            ),
-            auth_context=ctx.auth,
-        )
+        func_cls, params = self._load_buffered_table_params(request, ctx)
         finalize_state_ids = list(func_cls.combine(list(request.state_ids), params))
         return BufferedTableCombineResponse(finalize_state_ids=finalize_state_ids)
 
@@ -2526,20 +2580,7 @@ class Worker:
         """
         from vgi.protocol import BufferedTableFinalizeResponse
 
-        cached = _buffered_table_exec_cache.get(request.execution_id)
-        if cached is None:
-            raise RuntimeError(
-                f"buffered_table_finalize: execution {request.execution_id.hex()} "
-                f"not initialized"
-            )
-        func_cls, params = cached
-        params = _dataclass_replace(
-            params,
-            storage=BoundStorage(
-                func_cls.storage, request.execution_id, request=request, auth=ctx.auth
-            ),
-            auth_context=ctx.auth,
-        )
+        func_cls, params = self._load_buffered_table_params(request, ctx)
 
         key = (request.execution_id, request.finalize_state_id)
         iter_ = _buffered_table_finalize_iters.get(key)
@@ -3221,11 +3262,16 @@ class Worker:
             elif request.phase == TableInOutFunctionInitPhase.BUFFERED_TABLE:
                 # Sink+Source path. The init RPC itself carries no data
                 # exchange — all subsequent traffic uses the dedicated
-                # buffered_table_{process,combine,finalize} RPCs. We just
-                # cache the function class + params keyed by execution_id
-                # so those handlers can rebuild ProcessParams without
-                # re-shipping the bind context on every call.
-                _buffered_table_exec_cache[init_response.execution_id] = (type(instance), params)
+                # buffered_table_{process,combine,finalize} RPCs. Persist
+                # the init request + response into FunctionStorage so any
+                # pool worker can cold-load and serve subsequent RPCs.
+                # No in-process cache: workers are stateless w.r.t.
+                # buffered_table executions.
+                params.storage.state_put(
+                    b"buf_init",
+                    BoundStorage.pack_int_key(_BUFFERED_TABLE_INIT_KEY),
+                    _encode_buffered_table_init(request, init_response),
+                )
                 # An empty-batches TableInOutFinalizeState produces nothing
                 # and immediately calls out.finish() — exactly the right
                 # behavior for a stream we won't use.
