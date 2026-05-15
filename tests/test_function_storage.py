@@ -16,65 +16,6 @@ class TestFunctionStorageSqlite:
         db_path = str(tmp_path / "test_storage.db")
         return FunctionStorageSqlite(db_path)
 
-    # --- Worker State Tests ---
-
-    def test_worker_put_and_collect(self, storage: FunctionStorageSqlite) -> None:
-        """Test storing and collecting worker states."""
-        invocation_id = b"inv123"
-
-        # Store states from multiple workers
-        storage.worker_put(invocation_id, worker_id=1, state=b"state1")
-        storage.worker_put(invocation_id, worker_id=2, state=b"state2")
-        storage.worker_put(invocation_id, worker_id=3, state=b"state3")
-
-        # Collect all states
-        states = storage.worker_collect(invocation_id)
-
-        assert len(states) == 3
-        assert set(states) == {b"state1", b"state2", b"state3"}
-
-        # Verify collect is atomic - second collect should return empty
-        states2 = storage.worker_collect(invocation_id)
-        assert states2 == []
-
-    def test_worker_put_replaces_existing(self, storage: FunctionStorageSqlite) -> None:
-        """Test that worker_put replaces existing state for same worker."""
-        invocation_id = b"inv123"
-
-        storage.worker_put(invocation_id, worker_id=1, state=b"old_state")
-        storage.worker_put(invocation_id, worker_id=1, state=b"new_state")
-
-        states = storage.worker_collect(invocation_id)
-        assert states == [b"new_state"]
-
-    def test_worker_scan_non_destructive(self, storage: FunctionStorageSqlite) -> None:
-        """worker_scan returns (worker_id, state) pairs without deleting."""
-        invocation_id = b"inv-scan"
-
-        storage.worker_put(invocation_id, worker_id=11, state=b"a")
-        storage.worker_put(invocation_id, worker_id=22, state=b"b")
-
-        first = sorted(storage.worker_scan(invocation_id))
-        assert first == [(11, b"a"), (22, b"b")]
-
-        # Repeat read returns the same data — non-destructive.
-        second = sorted(storage.worker_scan(invocation_id))
-        assert second == first
-
-        # And worker_collect after scan still drains.
-        collected = sorted(storage.worker_collect(invocation_id))
-        assert collected == [b"a", b"b"]
-        assert storage.worker_scan(invocation_id) == []
-
-    def test_worker_scan_isolates_executions(self, storage: FunctionStorageSqlite) -> None:
-        """worker_scan only returns rows for the given execution_id."""
-        storage.worker_put(b"exec-A", worker_id=1, state=b"a1")
-        storage.worker_put(b"exec-B", worker_id=1, state=b"b1")
-
-        assert storage.worker_scan(b"exec-A") == [(1, b"a1")]
-        assert storage.worker_scan(b"exec-B") == [(1, b"b1")]
-        assert storage.worker_scan(b"exec-missing") == []
-
     # --- Work Queue Tests ---
 
     def test_queue_push_and_pop(self, storage: FunctionStorageSqlite) -> None:

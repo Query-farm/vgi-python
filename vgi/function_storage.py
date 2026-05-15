@@ -18,7 +18,6 @@ Implementations:
 import hashlib
 import logging
 import os
-import random
 import sqlite3
 import threading
 from typing import Any, Protocol
@@ -131,139 +130,28 @@ def _get_default_db_path() -> str:
 class FunctionStorage(Protocol):
     """Storage protocol for VGI distributed function execution.
 
-    Provides three access patterns for distributed function state:
+    Two access patterns:
 
-    **Worker State** - Partial results from each worker process.
-    Each worker stores its state during processing, primary worker collects
-    all states during finalization for aggregation.
+    **Unified state_*** - Composite-key K/V over ``(scope_id, ns, key)``.
+    The catch-all family for per-execution state, per-transaction state,
+    per-group aggregate state, and any other "this caller picks the
+    namespace" pattern. Read-modify-write singletons via
+    ``state_get_many`` / ``state_put_many``; non-destructive enumeration
+    via ``state_scan``; atomic scan-and-delete via ``state_drain``;
+    targeted or namespace-wide deletion via ``state_delete``;
+    cross-namespace teardown via ``execution_clear``.
 
-    **Work Queue** - Atomic work distribution across workers.
-    Primary worker enqueues work items, workers atomically claim items
-    from the queue for processing.
+    **Work Queue** - Atomic FIFO work distribution. Producer pushes,
+    workers atomically claim. Distinct from state_* (destructive consume,
+    not key-addressable).
 
-    **Aggregate State** - Per-group-id state for aggregate functions.
-    Each group_id maps to a serialized state blob. Thread-local hash tables
-    in DuckDB guarantee no concurrent writes to the same group_id, so no
-    versioning or locking is needed.
+    Idempotency: backends generate ``attempt_id`` per call internally
+    (CfDo before its HTTP retry loop, SQLite/Azure SQL fresh per call)
+    and use it to detect replays. ``state_put_many`` retries silent
+    no-op; ``state_drain`` retries return prior tombstoned values
+    byte-identically.
 
     """
-
-    def worker_put(
-        self,
-        execution_id: bytes,
-        worker_id: int,
-        state: bytes,
-        *,
-        shard_key: str = "",
-    ) -> None:
-        """Store state for a specific worker.
-
-        If state already exists for this (execution_id, worker_id) pair,
-        it will be replaced.
-
-        Args:
-            execution_id: Unique identifier for the function invocation.
-            worker_id: Process ID of the worker storing the state.
-            state: Serialized state bytes.
-            shard_key: Routing key for the CF DO backend. Ignored by
-                SQLite / Azure backends. Set automatically by
-                BoundStorage from the caller's attach_opaque_data / auth context;
-                manual callers can leave it empty for the default
-                ``"loc-anon"`` shard.
-
-        """
-        ...
-
-    def worker_collect(self, execution_id: bytes, *, shard_key: str = "") -> list[bytes]:
-        """Atomically collect and delete all worker states.
-
-        This is typically called by the primary worker during finalization
-        to collect all worker states for aggregation.
-
-        Args:
-            execution_id: Unique identifier for the function invocation.
-            shard_key: Routing key for the CF DO backend; ignored by
-                SQLite / Azure backends. Set automatically by BoundStorage
-                from the caller's attach_opaque_data / auth context.
-
-        Returns:
-            List of serialized state bytes from all workers.
-
-        """
-        ...
-
-    def worker_scan(self, execution_id: bytes, *, shard_key: str = "") -> list[tuple[int, bytes]]:
-        """Non-destructive read of all worker states for an execution.
-
-        Companion to ``worker_collect`` for use cases where multiple
-        readers need to observe the same set of worker states without
-        mutating storage. The intended consumer is the table-function
-        ``dynamic_to_string`` hook, which fires once per parallel scan
-        thread at end-of-stream and is best-effort: every thread must
-        be able to read the full set, which precludes the
-        atomic-destructive semantics of ``worker_collect``.
-
-        Args:
-            execution_id: Unique identifier for the function invocation.
-            shard_key: Routing key for the CF DO backend; ignored by
-                SQLite / Azure backends. Set automatically by BoundStorage
-                from the caller's attach_opaque_data / auth context.
-
-        Returns:
-            List of ``(worker_id, state_bytes)`` pairs. Order is
-            implementation-defined.
-
-        """
-        ...
-
-    # --- Scan Worker State (per-stream-id, distinct from worker_state) ---
-    #
-    # ``worker_state`` above is keyed by ``os.getpid()`` and conflates threads
-    # in one process — under HTTP transport (waitress thread pool) every scan
-    # worker landing in the same Python process collides on a single row.
-    # ``scan_worker_state`` keys by the framework's per-scan-worker UUID
-    # (``vgi_rpc.rpc._common._current_stream_id``), giving each scan worker
-    # its own row regardless of pid/thread/machine.
-
-    def stream_state_put(self, execution_id: bytes, stream_id: bytes, state: bytes, *, shard_key: str = "") -> None:
-        """Store per-scan-worker state for an execution.
-
-        Replaces any prior state for the same ``(execution_id, stream_id)``
-        pair — successive ticks of one scan worker overwrite each other.
-
-        Args:
-            execution_id: Unique identifier for the function invocation.
-            stream_id: The framework's per-scan-worker stream UUID
-                (raw bytes; typically the 16-byte form of the hex
-                ``_current_stream_id`` ContextVar).
-            state: Serialized state bytes.
-            shard_key: Routing key for the CF DO backend; ignored by
-                SQLite / Azure backends. Set automatically by BoundStorage
-                from the caller's attach_opaque_data / auth context.
-
-        """
-        ...
-
-    def stream_state_scan(self, execution_id: bytes, *, shard_key: str = "") -> list[tuple[bytes, bytes]]:
-        """Non-destructive read of all per-scan-worker states for an execution.
-
-        The intended consumer is the table-function ``dynamic_to_string``
-        hook. Each scan worker writes one row keyed by its stream_id;
-        ``dynamic_to_string`` reads all of them to build the EXPLAIN ANALYZE
-        Extra Info block.
-
-        Args:
-            execution_id: Unique identifier for the function invocation.
-            shard_key: Routing key for the CF DO backend; ignored by
-                SQLite / Azure backends. Set automatically by BoundStorage
-                from the caller's attach_opaque_data / auth context.
-
-        Returns:
-            List of ``(stream_id, state_bytes)`` pairs. Order is
-            implementation-defined.
-
-        """
-        ...
 
     # --- Work Queue (distributed work items) ---
 
@@ -321,168 +209,6 @@ class FunctionStorage(Protocol):
         """
         ...
 
-    # --- Aggregate State (per-group-id storage for aggregate functions) ---
-
-    def aggregate_state_get(
-        self, execution_id: bytes, group_ids: list[int], *, shard_key: str = ""
-    ) -> list[tuple[int, bytes] | None]:
-        """Load aggregate states for specific group_ids.
-
-        Non-destructive read. Returns a list parallel to the input
-        ``group_ids``: each element is ``(group_id, state_bytes)`` for
-        groups that exist, or ``None`` for unknown group_ids.
-
-        Args:
-            execution_id: Unique identifier for the function invocation.
-            group_ids: List of group_ids to look up.
-            shard_key: Routing key for the CF DO backend; ignored by
-                SQLite / Azure backends. Set automatically by BoundStorage
-                from the caller's attach_opaque_data / auth context.
-
-        Returns:
-            List parallel to ``group_ids`` with found states or None.
-
-        """
-        ...
-
-    def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]], *, shard_key: str = "") -> None:
-        """Unconditionally write aggregate states for the given group_ids.
-
-        Uses INSERT OR REPLACE semantics — existing states are overwritten.
-        No version checking is performed; DuckDB's thread-local hash tables
-        guarantee that each group_id is only written by one thread during
-        the UPDATE phase.
-
-        Args:
-            execution_id: Unique identifier for the function invocation.
-            data: List of ``(group_id, state_bytes)`` pairs to store.
-            shard_key: Routing key for the CF DO backend; ignored by
-                SQLite / Azure backends. Set automatically by BoundStorage
-                from the caller's attach_opaque_data / auth context.
-
-        """
-        ...
-
-    def aggregate_state_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
-        """Remove all aggregate states for an execution_id.
-
-        Called after all FINALIZE exchanges complete to clean up storage.
-
-        Args:
-            execution_id: Unique identifier for the function invocation.
-            shard_key: Routing key for the CF DO backend; ignored by
-                SQLite / Azure backends. Set automatically by BoundStorage
-                from the caller's attach_opaque_data / auth context.
-
-        """
-        ...
-
-    # --- Transaction State (per-transaction K/V; visible across executions) ---
-    #
-    # Unlike ``worker_state`` and ``aggregate_state`` (both keyed by
-    # ``execution_id`` — i.e. one query/init), transaction state is keyed by
-    # ``transaction_opaque_data`` so that every execution within a SQL transaction
-    # sees the same store. The intended use is "snapshot data the user
-    # expects to be stable for the lifetime of the transaction" —
-    # e.g. Kafka topic watermarks. Repeated reads of the same key return
-    # the same bytes regardless of the broker's current state, so a user
-    # who does ``BEGIN; SELECT ...; SELECT ...; COMMIT;`` gets the
-    # row count they expect.
-    #
-    # Implementations should bound staleness via ``cleanup_old_entries``
-    # (transaction_opaque_data never reused after rollback/commit, but we don't
-    # always get a callback).
-
-    def transaction_state_get(
-        self, transaction_opaque_data: bytes, keys: list[bytes], *, shard_key: str = ""
-    ) -> list[bytes | None]:
-        """Load transaction-scoped state values for the given keys.
-
-        Returns a list parallel to ``keys``: each element is the stored
-        ``bytes`` value or ``None`` if the (transaction_opaque_data, key) pair is
-        unknown. Non-destructive — repeated calls return the same bytes.
-
-        Args:
-            transaction_opaque_data: Caller-supplied transaction identifier
-                (typically the framework's catalog ``transaction_opaque_data``).
-            keys: List of binary keys to look up.
-            shard_key: Routing key for the CF DO backend; ignored by
-                SQLite / Azure backends. Set automatically by BoundStorage
-                from the caller's attach_opaque_data / auth context.
-
-        Returns:
-            List parallel to ``keys`` with found values or ``None``.
-
-        """
-        ...
-
-    def transaction_state_put(
-        self, transaction_opaque_data: bytes, items: list[tuple[bytes, bytes]], *, shard_key: str = ""
-    ) -> None:
-        """Unconditionally write transaction-scoped state values.
-
-        ``INSERT OR REPLACE`` semantics — existing values for the same
-        ``(transaction_opaque_data, key)`` are overwritten. Implementations
-        should be safe to call concurrently from multiple workers.
-
-        Args:
-            transaction_opaque_data: Caller-supplied transaction identifier.
-            items: List of ``(key, value)`` byte tuples.
-            shard_key: Routing key for the CF DO backend; ignored by
-                SQLite / Azure backends. Set automatically by BoundStorage
-                from the caller's attach_opaque_data / auth context.
-
-        """
-        ...
-
-    def transaction_state_clear(self, transaction_opaque_data: bytes, *, shard_key: str = "") -> None:
-        """Drop all state for a transaction.
-
-        Called by the catalog implementation when it observes a commit
-        or rollback. Implementations also cleanup old entries via TTL
-        sweep so a leaked transaction_opaque_data eventually GCs even without
-        the explicit clear.
-
-        Args:
-            transaction_opaque_data: Caller-supplied transaction identifier.
-            shard_key: Routing key for the CF DO backend; ignored by
-                SQLite / Azure backends. Set automatically by BoundStorage
-                from the caller's attach_opaque_data / auth context.
-
-        """
-        ...
-
-    # --- Aggregate Window Partition (per-partition cached input for windowed aggregates) ---
-
-    def aggregate_window_partition_put(
-        self, execution_id: bytes, partition_id: int, data: bytes, *, shard_key: str = ""
-    ) -> None:
-        """Write a cached partition payload for a windowed aggregate.
-
-        The payload is typically an Arrow IPC stream carrying the full
-        partition input plus any derived window_state. Keyed by
-        ``(execution_id, partition_id)`` with INSERT OR REPLACE semantics.
-        """
-        ...
-
-    def aggregate_window_partition_get(
-        self, execution_id: bytes, partition_id: int, *, shard_key: str = ""
-    ) -> bytes | None:
-        """Load the cached partition payload for a windowed aggregate."""
-        ...
-
-    def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int, *, shard_key: str = "") -> None:
-        """Delete one cached partition. No-op if not present."""
-        ...
-
-    def aggregate_window_partition_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
-        """Remove all cached partitions for an execution_id.
-
-        Safety-sweep called from ``aggregate_destructor`` to catch any
-        partitions whose destructor RPCs were dropped mid-query.
-        """
-        ...
-
     # ========================================================================
     # Unified state_* API (composite-key K/V over (scope_id, ns, key))
     # ========================================================================
@@ -531,6 +257,7 @@ class FunctionStorage(Protocol):
 
         Returns:
             List parallel to ``keys`` of stored values or ``None``.
+
         """
         ...
 
@@ -745,56 +472,6 @@ class BoundStorage:
             shard_key=self._shard_key,
         )
 
-    def put(self, state: bytes) -> None:
-        """Store state for a specific worker."""
-        self._base.worker_put(
-            self._execution_id,
-            os.getpid(),
-            state,
-            shard_key=self._shard_key,
-        )
-
-    def collect(self) -> list[bytes]:
-        """Atomically collect and delete all worker states."""
-        return self._base.worker_collect(
-            self._execution_id,
-            shard_key=self._shard_key,
-        )
-
-    def worker_scan(self) -> list[tuple[int, bytes]]:
-        """Non-destructive read of (worker_id, state) pairs for this execution."""
-        return self._base.worker_scan(
-            self._execution_id,
-            shard_key=self._shard_key,
-        )
-
-    # --- Scan Worker State (per-stream-id) ---
-
-    def stream_state_put(self, state: bytes) -> None:
-        """Store state for the current scan worker.
-
-        Keyed by the framework's per-stream UUID (``_current_stream_id``
-        ContextVar) so each scan worker has its own row regardless of
-        pid/thread/machine — distinct from ``put()`` which conflates
-        multiple threads in one Python process. Falls back to a
-        pid-derived key when no stream is active (stdio transport, or
-        any code path called outside an HTTP scan request).
-        """
-        sid = _scan_worker_stream_id()
-        self._base.stream_state_put(
-            self._execution_id,
-            sid,
-            state,
-            shard_key=self._shard_key,
-        )
-
-    def stream_state_scan(self) -> list[tuple[bytes, bytes]]:
-        """Non-destructive read of (stream_id, state) pairs for this execution."""
-        return self._base.stream_state_scan(
-            self._execution_id,
-            shard_key=self._shard_key,
-        )
-
     def queue_push(self, items: list[bytes]) -> int:
         """Add work items to the queue and register the invocation."""
         return self._base.queue_push(
@@ -828,65 +505,6 @@ class BoundStorage:
             shard_key=self._shard_key,
         )
 
-    # --- Aggregate State ---
-
-    def aggregate_get(self, group_ids: list[int]) -> list[tuple[int, bytes] | None]:
-        """Load aggregate states for specific group_ids."""
-        return self._base.aggregate_state_get(
-            self._execution_id,
-            group_ids,
-            shard_key=self._shard_key,
-        )
-
-    def aggregate_put(self, data: list[tuple[int, bytes]]) -> None:
-        """Unconditionally write aggregate states."""
-        self._base.aggregate_state_put(
-            self._execution_id,
-            data,
-            shard_key=self._shard_key,
-        )
-
-    def aggregate_clear(self) -> None:
-        """Remove all aggregate states for this execution."""
-        self._base.aggregate_state_clear(
-            self._execution_id,
-            shard_key=self._shard_key,
-        )
-
-    # --- Aggregate Window Partition ---
-
-    def aggregate_window_partition_put(self, partition_id: int, data: bytes) -> None:
-        """Write a cached partition payload for a windowed aggregate."""
-        self._base.aggregate_window_partition_put(
-            self._execution_id,
-            partition_id,
-            data,
-            shard_key=self._shard_key,
-        )
-
-    def aggregate_window_partition_get(self, partition_id: int) -> bytes | None:
-        """Load the cached partition payload."""
-        return self._base.aggregate_window_partition_get(
-            self._execution_id,
-            partition_id,
-            shard_key=self._shard_key,
-        )
-
-    def aggregate_window_partition_delete(self, partition_id: int) -> None:
-        """Delete one cached partition."""
-        self._base.aggregate_window_partition_delete(
-            self._execution_id,
-            partition_id,
-            shard_key=self._shard_key,
-        )
-
-    def aggregate_window_partition_clear(self) -> None:
-        """Remove all cached partitions for this execution."""
-        self._base.aggregate_window_partition_clear(
-            self._execution_id,
-            shard_key=self._shard_key,
-        )
-
     # ========================================================================
     # Unified state_* facade — composite-key K/V over (ns, key)
     # ========================================================================
@@ -897,7 +515,7 @@ class BoundStorage:
     # a separate facade bound to ``transaction_opaque_data``.
 
     def state_get(self, ns: bytes, key: bytes) -> bytes | None:
-        """Convenience: read one key's value (or None)."""
+        """Read one key's value (or None)."""
         result = self._base.state_get_many(
             self._execution_id, ns, [key], shard_key=self._shard_key
         )
@@ -910,7 +528,7 @@ class BoundStorage:
         )
 
     def state_put(self, ns: bytes, key: bytes, value: bytes) -> None:
-        """Convenience: upsert one (key, value)."""
+        """Upsert one (key, value)."""
         self._base.state_put_many(
             self._execution_id, ns, [(key, value)], shard_key=self._shard_key
         )
@@ -1087,16 +705,6 @@ class FunctionStorageSqlite:
                     created_at REAL DEFAULT (julianday('now'))
                 )
             """)
-            # Worker state table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS worker_state (
-                    execution_id BLOB NOT NULL,
-                    process_id INTEGER NOT NULL,
-                    state_data BLOB NOT NULL,
-                    created_at REAL DEFAULT (julianday('now')),
-                    PRIMARY KEY (execution_id, process_id)
-                )
-            """)
             # Work queue table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS work_queue (
@@ -1117,58 +725,11 @@ class FunctionStorageSqlite:
                     created_at REAL DEFAULT (julianday('now'))
                 )
             """)
-            # Aggregate state - per-group-id storage for aggregate functions
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS aggregate_state (
-                    execution_id BLOB NOT NULL,
-                    group_id INTEGER NOT NULL,
-                    state_data BLOB NOT NULL,
-                    created_at REAL DEFAULT (julianday('now')),
-                    PRIMARY KEY (execution_id, group_id)
-                )
-            """)
-            # Transaction state - per-(transaction_opaque_data, key) storage for state
-            # the user expects to be stable across multiple statements
-            # within one SQL transaction (e.g. Kafka topic watermarks for
-            # snapshot isolation).
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS transaction_state (
-                    transaction_opaque_data BLOB NOT NULL,
-                    key BLOB NOT NULL,
-                    value BLOB NOT NULL,
-                    created_at REAL DEFAULT (julianday('now')),
-                    PRIMARY KEY (transaction_opaque_data, key)
-                )
-            """)
-            # Scan worker state - per-(execution_id, stream_id) storage for
-            # diagnostic blobs that must be scoped to the exact scan worker
-            # that produced them. Distinct from worker_state above (which is
-            # keyed by os.getpid() and conflates threads of one process).
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS scan_worker_state (
-                    execution_id BLOB NOT NULL,
-                    stream_id BLOB NOT NULL,
-                    state_data BLOB NOT NULL,
-                    created_at REAL DEFAULT (julianday('now')),
-                    PRIMARY KEY (execution_id, stream_id)
-                )
-            """)
-            # Aggregate window partitions - per-partition cached input for windowed aggregates
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS aggregate_window_partitions (
-                    execution_id BLOB NOT NULL,
-                    partition_id INTEGER NOT NULL,
-                    payload BLOB NOT NULL,
-                    created_at REAL DEFAULT (julianday('now')),
-                    PRIMARY KEY (execution_id, partition_id)
-                )
-            """)
             # ----------------------------------------------------------------
             # Unified state_* tables — composite-key K/V over (scope_id, ns,
-            # key). Replaces (during the cohabitation window) worker_state /
-            # stream_state / aggregate_state / aggregate_window_partitions /
-            # transaction_state. See plan file + FunctionStorage protocol
-            # docstrings.
+            # key). The single home for per-execution / per-transaction /
+            # per-group / per-pid state. Caller chooses the namespace via
+            # the ``ns`` column; storage doesn't interpret it.
             #
             # last_attempt_id powers internal replay-detection: a retried
             # state_put_many with the same id is a silent no-op; a retried
@@ -1215,83 +776,6 @@ class FunctionStorageSqlite:
             conn.commit()
         finally:
             conn.close()
-
-    # --- Worker State ---
-
-    def worker_put(self, execution_id: bytes, worker_id: int, state: bytes, *, shard_key: str = "") -> None:
-        """Store state for a specific worker. ``shard_key`` is ignored (no sharding in SQLite)."""
-        del shard_key
-        # Opportunistically clean old entries (1% of calls)
-        if random.random() < 0.01:
-            self.cleanup_old_entries(max_age_days=1.0)
-
-        conn = self._conn()
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO worker_state
-            (execution_id, process_id, state_data, created_at)
-            VALUES (?, ?, ?, julianday('now'))
-            """,
-            (execution_id, worker_id, state),
-        )
-        conn.commit()
-
-    def worker_collect(self, execution_id: bytes, *, shard_key: str = "") -> list[bytes]:
-        """Atomically collect and delete all worker states. ``shard_key`` is ignored (no sharding in SQLite)."""
-        del shard_key
-        conn = self._conn()
-        cursor = conn.execute(
-            """
-            DELETE FROM worker_state
-            WHERE execution_id = ?
-            RETURNING state_data
-            """,
-            (execution_id,),
-        )
-        states = [row[0] for row in cursor.fetchall()]
-        conn.commit()
-        return states
-
-    def worker_scan(self, execution_id: bytes, *, shard_key: str = "") -> list[tuple[int, bytes]]:
-        """Non-destructive read of (process_id, state_data) for execution_id."""
-        conn = self._conn()
-        cursor = conn.execute(
-            """
-            SELECT process_id, state_data
-            FROM worker_state
-            WHERE execution_id = ?
-            """,
-            (execution_id,),
-        )
-        return [(int(row[0]), row[1]) for row in cursor.fetchall()]
-
-    # --- Scan Worker State ---
-
-    def stream_state_put(self, execution_id: bytes, stream_id: bytes, state: bytes, *, shard_key: str = "") -> None:
-        """Store per-(execution_id, stream_id) state."""
-        conn = self._conn()
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO scan_worker_state
-            (execution_id, stream_id, state_data, created_at)
-            VALUES (?, ?, ?, julianday('now'))
-            """,
-            (execution_id, stream_id, state),
-        )
-        conn.commit()
-
-    def stream_state_scan(self, execution_id: bytes, *, shard_key: str = "") -> list[tuple[bytes, bytes]]:
-        """Non-destructive read of (stream_id, state_data) for execution_id."""
-        conn = self._conn()
-        cursor = conn.execute(
-            """
-            SELECT stream_id, state_data
-            FROM scan_worker_state
-            WHERE execution_id = ?
-            """,
-            (execution_id,),
-        )
-        return [(row[0], row[1]) for row in cursor.fetchall()]
 
     # --- Work Queue ---
 
@@ -1354,165 +838,6 @@ class FunctionStorageSqlite:
         conn.commit()
         return cursor.rowcount
 
-    # --- Aggregate State ---
-
-    def aggregate_state_get(
-        self, execution_id: bytes, group_ids: list[int], *, shard_key: str = ""
-    ) -> list[tuple[int, bytes] | None]:
-        """Load aggregate states for specific group_ids.
-
-        Batches queries in chunks of 500 to stay under SQLite's default
-        999-parameter limit.
-        """
-        if not group_ids:
-            return []
-        conn = self._conn()
-        found: dict[int, bytes] = {}
-        chunk_size = 500
-        for i in range(0, len(group_ids), chunk_size):
-            chunk = group_ids[i : i + chunk_size]
-            placeholders = ",".join("?" * len(chunk))
-            cursor = conn.execute(
-                f"SELECT group_id, state_data FROM aggregate_state "  # noqa: S608
-                f"WHERE execution_id = ? AND group_id IN ({placeholders})",
-                (execution_id, *chunk),
-            )
-            for row in cursor.fetchall():
-                found[row[0]] = row[1]
-        return [(gid, found[gid]) if gid in found else None for gid in group_ids]
-
-    def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]], *, shard_key: str = "") -> None:
-        """Unconditionally write aggregate states."""
-        if not data:
-            return
-        # Opportunistically clean old entries (1% of calls)
-        if random.random() < 0.01:
-            self.cleanup_old_entries(max_age_days=1.0)
-
-        conn = self._conn()
-        conn.executemany(
-            """
-            INSERT OR REPLACE INTO aggregate_state
-            (execution_id, group_id, state_data, created_at)
-            VALUES (?, ?, ?, julianday('now'))
-            """,
-            [(execution_id, gid, state_bytes) for gid, state_bytes in data],
-        )
-        conn.commit()
-
-    def aggregate_state_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
-        """Remove all aggregate states for an execution_id."""
-        conn = self._conn()
-        conn.execute(
-            "DELETE FROM aggregate_state WHERE execution_id = ?",
-            (execution_id,),
-        )
-        conn.commit()
-
-    # --- Transaction State ---
-
-    def transaction_state_get(
-        self, transaction_opaque_data: bytes, keys: list[bytes], *, shard_key: str = ""
-    ) -> list[bytes | None]:
-        """Load transaction-scoped values for the given keys."""
-        if not keys:
-            return []
-        conn = self._conn()
-        found: dict[bytes, bytes] = {}
-        chunk_size = 500  # stay under SQLite's 999-parameter limit
-        for i in range(0, len(keys), chunk_size):
-            chunk = keys[i : i + chunk_size]
-            placeholders = ",".join("?" * len(chunk))
-            cursor = conn.execute(
-                f"SELECT key, value FROM transaction_state "  # noqa: S608
-                f"WHERE transaction_opaque_data = ? AND key IN ({placeholders})",
-                (transaction_opaque_data, *chunk),
-            )
-            for row in cursor.fetchall():
-                found[row[0]] = row[1]
-        return [found.get(k) for k in keys]
-
-    def transaction_state_put(
-        self, transaction_opaque_data: bytes, items: list[tuple[bytes, bytes]], *, shard_key: str = ""
-    ) -> None:
-        """Write transaction-scoped values."""
-        if not items:
-            return
-        # Opportunistically clean old entries (1% of calls). Transaction
-        # state is short-lived and dropped explicitly on commit/rollback,
-        # but a TTL sweep covers leaks from missed callbacks.
-        if random.random() < 0.01:
-            self.cleanup_old_entries(max_age_days=1.0)
-
-        conn = self._conn()
-        conn.executemany(
-            """
-            INSERT OR REPLACE INTO transaction_state
-            (transaction_opaque_data, key, value, created_at)
-            VALUES (?, ?, ?, julianday('now'))
-            """,
-            [(transaction_opaque_data, k, v) for k, v in items],
-        )
-        conn.commit()
-
-    def transaction_state_clear(self, transaction_opaque_data: bytes, *, shard_key: str = "") -> None:
-        """Drop all state for a transaction."""
-        conn = self._conn()
-        conn.execute(
-            "DELETE FROM transaction_state WHERE transaction_opaque_data = ?",
-            (transaction_opaque_data,),
-        )
-        conn.commit()
-
-    # --- Aggregate Window Partition ---
-
-    def aggregate_window_partition_put(
-        self, execution_id: bytes, partition_id: int, data: bytes, *, shard_key: str = ""
-    ) -> None:
-        """Store a cached windowed-aggregate partition payload."""
-        if random.random() < 0.01:
-            self.cleanup_old_entries(max_age_days=1.0)
-        conn = self._conn()
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO aggregate_window_partitions
-            (execution_id, partition_id, payload, created_at)
-            VALUES (?, ?, ?, julianday('now'))
-            """,
-            (execution_id, partition_id, data),
-        )
-        conn.commit()
-
-    def aggregate_window_partition_get(
-        self, execution_id: bytes, partition_id: int, *, shard_key: str = ""
-    ) -> bytes | None:
-        """Load a cached windowed-aggregate partition payload."""
-        conn = self._conn()
-        cursor = conn.execute(
-            "SELECT payload FROM aggregate_window_partitions WHERE execution_id = ? AND partition_id = ?",
-            (execution_id, partition_id),
-        )
-        row = cursor.fetchone()
-        return row[0] if row else None
-
-    def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int, *, shard_key: str = "") -> None:
-        """Delete a single cached windowed-aggregate partition."""
-        conn = self._conn()
-        conn.execute(
-            "DELETE FROM aggregate_window_partitions WHERE execution_id = ? AND partition_id = ?",
-            (execution_id, partition_id),
-        )
-        conn.commit()
-
-    def aggregate_window_partition_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
-        """Remove all cached windowed-aggregate partitions for an execution_id."""
-        conn = self._conn()
-        conn.execute(
-            "DELETE FROM aggregate_window_partitions WHERE execution_id = ?",
-            (execution_id,),
-        )
-        conn.commit()
-
     # ========================================================================
     # Unified state_* implementation
     # ========================================================================
@@ -1533,6 +858,7 @@ class FunctionStorageSqlite:
         *,
         shard_key: str = "",
     ) -> list[bytes | None]:
+        """Batched read by key list. Returns parallel list with None for misses."""
         del shard_key
         if not keys:
             return []
@@ -1559,6 +885,7 @@ class FunctionStorageSqlite:
         *,
         shard_key: str = "",
     ) -> None:
+        """Atomic batched upsert. First-key replay-detection on attempt_id."""
         del shard_key
         if not items:
             return
@@ -1608,6 +935,7 @@ class FunctionStorageSqlite:
         *,
         shard_key: str = "",
     ) -> list[tuple[bytes, bytes]]:
+        """Non-destructive scan of all live (key, value) in a namespace."""
         del shard_key
         conn = self._conn()
         rows = conn.execute(
@@ -1626,6 +954,7 @@ class FunctionStorageSqlite:
         *,
         shard_key: str = "",
     ) -> list[tuple[bytes, bytes]]:
+        """Destructive scan-and-tombstone. Replay returns prior tombstoned values."""
         del shard_key
         import uuid
 
@@ -1669,6 +998,7 @@ class FunctionStorageSqlite:
         *,
         shard_key: str = "",
     ) -> int:
+        """Delete by key list, or whole namespace if keys is None. Returns count deleted."""
         del shard_key
         conn = self._conn()
         if keys is None:
@@ -1696,6 +1026,7 @@ class FunctionStorageSqlite:
         *,
         shard_key: str = "",
     ) -> int:
+        """Wipe all state and log rows for scope_id across every namespace."""
         del shard_key
         conn = self._conn()
         c1 = conn.execute(
@@ -1722,89 +1053,18 @@ class FunctionStorageSqlite:
 
         """
         conn = self._conn()
-        cursor1 = conn.execute(
-            """
-            DELETE FROM global_state_storage
-            WHERE julianday('now') - created_at > ?
-            """,
-            (max_age_days,),
-        )
-        cursor2 = conn.execute(
-            """
-            DELETE FROM worker_state
-            WHERE julianday('now') - created_at > ?
-            """,
-            (max_age_days,),
-        )
-        cursor3 = conn.execute(
-            """
-            DELETE FROM work_queue
-            WHERE julianday('now') - created_at > ?
-            """,
-            (max_age_days,),
-        )
-        cursor4 = conn.execute(
-            """
-            DELETE FROM invocation_registry
-            WHERE julianday('now') - created_at > ?
-            """,
-            (max_age_days,),
-        )
-        cursor5 = conn.execute(
-            """
-            DELETE FROM aggregate_state
-            WHERE julianday('now') - created_at > ?
-            """,
-            (max_age_days,),
-        )
-        cursor6 = conn.execute(
-            """
-            DELETE FROM aggregate_window_partitions
-            WHERE julianday('now') - created_at > ?
-            """,
-            (max_age_days,),
-        )
-        cursor7 = conn.execute(
-            """
-            DELETE FROM transaction_state
-            WHERE julianday('now') - created_at > ?
-            """,
-            (max_age_days,),
-        )
-        cursor8 = conn.execute(
-            """
-            DELETE FROM scan_worker_state
-            WHERE julianday('now') - created_at > ?
-            """,
-            (max_age_days,),
-        )
-        # Unified state_* tables — sweep both live AND tombstoned rows past
-        # the retention horizon. Tombstones (drained_at IS NOT NULL) exist
-        # for replay-detection and live until cleanup runs.
-        cursor9 = conn.execute(
-            """
-            DELETE FROM function_state
-            WHERE julianday('now') - created_at > ?
-            """,
-            (max_age_days,),
-        )
-        cursor10 = conn.execute(
-            """
-            DELETE FROM function_state_log
-            WHERE julianday('now') - created_at > ?
-            """,
-            (max_age_days,),
-        )
+        total = 0
+        for table in (
+            "global_state_storage",
+            "work_queue",
+            "invocation_registry",
+            "function_state",
+            "function_state_log",
+        ):
+            cursor = conn.execute(
+                f"DELETE FROM {table} WHERE julianday('now') - created_at > ?",  # noqa: S608
+                (max_age_days,),
+            )
+            total += int(cursor.rowcount)
         conn.commit()
-        return (
-            int(cursor1.rowcount)
-            + int(cursor2.rowcount)
-            + int(cursor3.rowcount)
-            + int(cursor4.rowcount)
-            + int(cursor5.rowcount)
-            + int(cursor6.rowcount)
-            + int(cursor7.rowcount)
-            + int(cursor8.rowcount)
-            + int(cursor9.rowcount)
-            + int(cursor10.rowcount)
-        )
+        return total

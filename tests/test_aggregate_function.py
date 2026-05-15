@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Annotated, Any
 
 import pyarrow as pa
@@ -376,97 +375,6 @@ class TestInitSubclassParameterExtraction:
                 return pa.record_batch({"result": pa.array([], type=pa.float64())})
 
         assert StateExtractAgg.state_class is TwoFieldState  # type: ignore[misc]
-
-
-# =========================================================================
-# Test Group 2: FunctionStorage aggregate methods
-# =========================================================================
-
-
-class TestFunctionStorageAggregate:
-    """Tests for FunctionStorageSqlite aggregate_state_get/put/clear."""
-
-    @pytest.fixture
-    def storage(self, tmp_path: Path) -> Any:
-        from vgi.function_storage import FunctionStorageSqlite
-
-        return FunctionStorageSqlite(str(tmp_path / "test_agg.db"))
-
-    def _exec_id(self) -> bytes:
-        return b"test_execution_001"
-
-    def test_put_and_get(self, storage: Any) -> None:
-        """Store states and retrieve them; verify data matches."""
-        eid = self._exec_id()
-        storage.aggregate_state_put(eid, [(1, b"state_a"), (2, b"state_b"), (3, b"state_c")])
-
-        result = storage.aggregate_state_get(eid, [1, 2, 3])
-        assert len(result) == 3
-        assert result[0] == (1, b"state_a")
-        assert result[1] == (2, b"state_b")
-        assert result[2] == (3, b"state_c")
-
-    def test_get_missing_group_ids(self, storage: Any) -> None:
-        """Request group_ids not in storage returns None for those."""
-        eid = self._exec_id()
-        result = storage.aggregate_state_get(eid, [99, 100])
-        assert result == [None, None]
-
-    def test_get_mixed(self, storage: Any) -> None:
-        """Some group_ids exist, some do not; correct mix of data and None."""
-        eid = self._exec_id()
-        storage.aggregate_state_put(eid, [(1, b"exists"), (3, b"also_exists")])
-
-        result = storage.aggregate_state_get(eid, [1, 2, 3, 4])
-        assert result[0] == (1, b"exists")
-        assert result[1] is None
-        assert result[2] == (3, b"also_exists")
-        assert result[3] is None
-
-    def test_get_empty_list(self, storage: Any) -> None:
-        """Empty group_ids returns empty list."""
-        eid = self._exec_id()
-        result = storage.aggregate_state_get(eid, [])
-        assert result == []
-
-    def test_put_empty_list(self, storage: Any) -> None:
-        """Put with empty data does not error."""
-        eid = self._exec_id()
-        storage.aggregate_state_put(eid, [])
-        # No error is the success condition
-
-    def test_clear(self, storage: Any) -> None:
-        """Put states, clear, then get returns None."""
-        eid = self._exec_id()
-        storage.aggregate_state_put(eid, [(1, b"data1"), (2, b"data2")])
-        storage.aggregate_state_clear(eid)
-        result = storage.aggregate_state_get(eid, [1, 2])
-        assert result == [None, None]
-
-    def test_batching_exceeds_chunk_size(self, storage: Any) -> None:
-        """Put 600+ group_ids (exceeds 500 chunk size), get all back correctly."""
-        eid = self._exec_id()
-        count = 600
-        data = [(i, f"state_{i}".encode()) for i in range(count)]
-        storage.aggregate_state_put(eid, data)
-
-        group_ids = list(range(count))
-        result = storage.aggregate_state_get(eid, group_ids)
-        assert len(result) == count
-        for i in range(count):
-            assert result[i] is not None
-            gid, state_bytes = result[i]
-            assert gid == i
-            assert state_bytes == f"state_{i}".encode()
-
-    def test_overwrite(self, storage: Any) -> None:
-        """Put a group_id twice with different data; get returns latest."""
-        eid = self._exec_id()
-        storage.aggregate_state_put(eid, [(1, b"old_data")])
-        storage.aggregate_state_put(eid, [(1, b"new_data")])
-
-        result = storage.aggregate_state_get(eid, [1])
-        assert result == [(1, b"new_data")]
 
 
 # =========================================================================

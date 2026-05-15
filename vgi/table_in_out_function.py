@@ -9,6 +9,7 @@ with automatic state serialization for distributed processing.
 
 from __future__ import annotations
 
+import os
 import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, final, get_args, get_origin
@@ -403,7 +404,9 @@ class TableInOutFunction[
 
         # Save state for distributed processing (upsert semantics)
         if state is not None:
-            params.storage.put(state.serialize_to_bytes())
+            params.storage.state_put(
+                b"sd", BoundStorage.pack_int_key(os.getpid()), state.serialize_to_bytes()
+            )
 
         # Handle single batch or list of batches — exchange must emit exactly one
         if isinstance(result, list):
@@ -427,7 +430,10 @@ class TableInOutFunction[
 
         """
         if cls.state_class is not None and cls.state_class is not TableInOutFunctionStateNoOp:
-            states = [cls.state_class.deserialize_from_bytes(i) for i in params.storage.collect()]
+            states = [
+                cls.state_class.deserialize_from_bytes(v)
+                for _k, v in params.storage.state_drain(b"sd")
+            ]
         else:
             states = []
 

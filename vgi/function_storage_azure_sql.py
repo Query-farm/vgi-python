@@ -18,7 +18,6 @@ Usage:
 import contextlib
 import logging
 import os
-import random
 import struct
 import time
 from collections.abc import Callable
@@ -196,15 +195,6 @@ class FunctionStorageAzureSql:
         conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("""
-            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'worker_state')
-            CREATE TABLE worker_state (
-                execution_id VARBINARY(16) NOT NULL,
-                process_id INT NOT NULL,
-                state_data VARBINARY(MAX) NOT NULL,
-                created_at DATETIME2 DEFAULT GETUTCDATE(),
-                PRIMARY KEY (execution_id, process_id)
-            );
-
             IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'work_queue')
             CREATE TABLE work_queue (
                 id BIGINT IDENTITY(1,1) PRIMARY KEY,
@@ -269,109 +259,6 @@ class FunctionStorageAzureSql:
         conn.commit()
         elapsed_ms = (time.monotonic() - t0) * 1000
         _logger.debug("ensure_tables elapsed_ms=%.1f", elapsed_ms)
-
-    # --- Worker State ---
-
-    def worker_put(self, execution_id: bytes, worker_id: int, state: bytes, *, shard_key: str = "") -> None:
-        """Store state for a specific worker."""
-        if random.random() < 0.01:
-            self.cleanup_old_entries(max_age_days=1.0)
-
-        def _do(conn: pymssql.Connection) -> None:
-            t0 = time.monotonic()
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                MERGE worker_state AS t
-                USING (VALUES (CAST(%s AS VARBINARY(16)), %s, CAST(%s AS VARBINARY(MAX))))
-                    AS s(execution_id, process_id, state_data)
-                ON t.execution_id = s.execution_id AND t.process_id = s.process_id
-                WHEN MATCHED THEN
-                    UPDATE SET state_data = s.state_data, created_at = GETUTCDATE()
-                WHEN NOT MATCHED THEN
-                    INSERT (execution_id, process_id, state_data)
-                    VALUES (s.execution_id, s.process_id, s.state_data);
-                """,
-                (execution_id, worker_id, state),
-            )
-            conn.commit()
-            _logger.debug(
-                "worker_put eid=%s worker_id=%d state_bytes=%d elapsed_ms=%.1f",
-                execution_id.hex()[:8],
-                worker_id,
-                len(state),
-                (time.monotonic() - t0) * 1000,
-            )
-
-        self._execute_with_retry(_do)
-
-    def worker_collect(self, execution_id: bytes, *, shard_key: str = "") -> list[bytes]:
-        """Atomically collect and delete all worker states."""
-
-        def _do(conn: pymssql.Connection) -> list[bytes]:
-            t0 = time.monotonic()
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                DELETE FROM worker_state
-                OUTPUT deleted.state_data
-                WHERE execution_id = CAST(%s AS VARBINARY(16))
-                """,
-                (execution_id,),
-            )
-            states: list[bytes] = [row[0] for row in cursor.fetchall()]  # type: ignore[misc]
-            conn.commit()
-            _logger.debug(
-                "worker_collect eid=%s states_returned=%d elapsed_ms=%.1f",
-                execution_id.hex()[:8],
-                len(states),
-                (time.monotonic() - t0) * 1000,
-            )
-            return states
-
-        return self._execute_with_retry(_do)
-
-    def worker_scan(self, execution_id: bytes, *, shard_key: str = "") -> list[tuple[int, bytes]]:
-        """Non-destructive read of (process_id, state_data) for execution_id."""
-
-        def _do(conn: pymssql.Connection) -> list[tuple[int, bytes]]:
-            t0 = time.monotonic()
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT process_id, state_data
-                FROM worker_state
-                WHERE execution_id = CAST(%s AS VARBINARY(16))
-                """,
-                (execution_id,),
-            )
-            rows: list[tuple[int, bytes]] = [(int(r[0]), r[1]) for r in cursor.fetchall()]  # type: ignore[misc, arg-type]
-            _logger.debug(
-                "worker_scan eid=%s rows=%d elapsed_ms=%.1f",
-                execution_id.hex()[:8],
-                len(rows),
-                (time.monotonic() - t0) * 1000,
-            )
-            return rows
-
-        return self._execute_with_retry(_do)
-
-    # --- Scan Worker State ---
-
-    def stream_state_put(self, execution_id: bytes, stream_id: bytes, state: bytes, *, shard_key: str = "") -> None:
-        """Store per-(execution_id, stream_id) state.
-
-        Not yet implemented for Azure SQL — raises so callers can detect
-        the missing capability rather than silently dropping diagnostic
-        rows. Add a ``stream_state`` table to the Azure schema and an
-        INSERT/UPSERT body here when this backend is brought back into
-        the matrix.
-        """
-        raise NotImplementedError("stream_state is not yet implemented for the Azure SQL backend.")
-
-    def stream_state_scan(self, execution_id: bytes, *, shard_key: str = "") -> list[tuple[bytes, bytes]]:
-        """Non-destructive read of (stream_id, state_data) for execution_id."""
-        raise NotImplementedError("stream_state is not yet implemented for the Azure SQL backend.")
 
     # --- Work Queue ---
 
@@ -491,7 +378,7 @@ class FunctionStorageAzureSql:
             max_age_seconds = int(max_age_days * 86400)
             cursor = conn.cursor()
             total = 0
-            for table in ("worker_state", "work_queue", "invocation_registry",
+            for table in ("work_queue", "invocation_registry",
                           "function_state", "function_state_log"):
                 cursor.execute(
                     f"DELETE FROM {table} WHERE DATEDIFF(SECOND, created_at, GETUTCDATE()) > %s",  # noqa: S608
@@ -508,55 +395,6 @@ class FunctionStorageAzureSql:
             return total
 
         return self._execute_with_retry(_do)
-
-    # ------------------------------------------------------------------
-    # Legacy RMW families: NotImplementedError. Production callers in
-    # vgi-python migrated to the unified state_* API in Turn 3 of the
-    # storage refactor — these stubs remain only because the
-    # FunctionStorage Protocol still declares them (cohabitation window).
-    # Turn 5 of the refactor will delete the protocol entries and these
-    # stubs together.
-    # ------------------------------------------------------------------
-
-    def aggregate_state_get(
-        self, execution_id: bytes, group_ids: list[int], *, shard_key: str = ""
-    ) -> list[tuple[int, bytes] | None]:
-        raise NotImplementedError("Use state_get_many; aggregate_state_* is being removed (Turn 5).")
-
-    def aggregate_state_put(self, execution_id: bytes, data: list[tuple[int, bytes]], *, shard_key: str = "") -> None:
-        raise NotImplementedError("Use state_put_many; aggregate_state_* is being removed (Turn 5).")
-
-    def aggregate_state_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
-        raise NotImplementedError("Use state_delete or execution_clear; aggregate_state_* is being removed (Turn 5).")
-
-    def transaction_state_get(
-        self, transaction_opaque_data: bytes, keys: list[bytes], *, shard_key: str = ""
-    ) -> list[bytes | None]:
-        raise NotImplementedError("Use state_get_many; transaction_state_* is being removed (Turn 5).")
-
-    def transaction_state_put(
-        self, transaction_opaque_data: bytes, items: list[tuple[bytes, bytes]], *, shard_key: str = ""
-    ) -> None:
-        raise NotImplementedError("Use state_put_many; transaction_state_* is being removed (Turn 5).")
-
-    def transaction_state_clear(self, transaction_opaque_data: bytes, *, shard_key: str = "") -> None:
-        raise NotImplementedError("Use execution_clear; transaction_state_* is being removed (Turn 5).")
-
-    def aggregate_window_partition_put(
-        self, execution_id: bytes, partition_id: int, data: bytes, *, shard_key: str = ""
-    ) -> None:
-        raise NotImplementedError("Use state_put; aggregate_window_partition_* is being removed (Turn 5).")
-
-    def aggregate_window_partition_get(
-        self, execution_id: bytes, partition_id: int, *, shard_key: str = ""
-    ) -> bytes | None:
-        raise NotImplementedError("Use state_get; aggregate_window_partition_* is being removed (Turn 5).")
-
-    def aggregate_window_partition_delete(self, execution_id: bytes, partition_id: int, *, shard_key: str = "") -> None:
-        raise NotImplementedError("Use state_delete; aggregate_window_partition_* is being removed (Turn 5).")
-
-    def aggregate_window_partition_clear(self, execution_id: bytes, *, shard_key: str = "") -> None:
-        raise NotImplementedError("Use state_delete or execution_clear; aggregate_window_partition_* is being removed (Turn 5).")
 
     # ========================================================================
     # Unified state_* implementation
@@ -577,6 +415,7 @@ class FunctionStorageAzureSql:
         *,
         shard_key: str = "",
     ) -> list[bytes | None]:
+        """Batched read by key list. Returns parallel list with None for misses."""
         del shard_key
         if not keys:
             return []
@@ -605,6 +444,7 @@ class FunctionStorageAzureSql:
         *,
         shard_key: str = "",
     ) -> None:
+        """Atomic batched upsert. First-key replay-detection on attempt_id."""
         del shard_key
         if not items:
             return
@@ -662,6 +502,7 @@ class FunctionStorageAzureSql:
         *,
         shard_key: str = "",
     ) -> list[tuple[bytes, bytes]]:
+        """Non-destructive scan of all live (key, value) in a namespace."""
         del shard_key
 
         def _do(conn: pymssql.Connection) -> list[tuple[bytes, bytes]]:
@@ -684,6 +525,7 @@ class FunctionStorageAzureSql:
         *,
         shard_key: str = "",
     ) -> list[tuple[bytes, bytes]]:
+        """Destructive scan-and-tombstone. Replay returns prior tombstoned values."""
         del shard_key
         import uuid
 
@@ -731,6 +573,7 @@ class FunctionStorageAzureSql:
         *,
         shard_key: str = "",
     ) -> int:
+        """Delete by key list, or whole namespace if keys is None. Returns count deleted."""
         del shard_key
 
         def _do(conn: pymssql.Connection) -> int:
@@ -763,6 +606,7 @@ class FunctionStorageAzureSql:
         *,
         shard_key: str = "",
     ) -> int:
+        """Wipe all state and log rows for scope_id across every namespace."""
         del shard_key
 
         def _do(conn: pymssql.Connection) -> int:
