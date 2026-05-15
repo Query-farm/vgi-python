@@ -403,3 +403,27 @@ class TestFunctionStorageAzureSqlStateUnified:
         assert any("DELETE FROM function_state " in s for s in sqls)
         assert any("DELETE FROM function_state_log " in s for s in sqls)
 
+    def test_state_append_replay_returns_prior_ordinal(
+        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+    ) -> None:
+        """state_append: replay-detection SELECT hit returns prior ordinal — no INSERT."""
+        mock_cursor.set_results([(42,)])  # replay-detection SELECT finds prior id=42
+        ordinal = storage.state_append(b"exec1", b"buf", b"k", b"item")
+        assert ordinal == 42
+        sqls = [s for s, _ in mock_cursor.executed]
+        # Only the replay-detection SELECT should have run; no INSERT.
+        assert any("SELECT id FROM function_state_log" in s for s in sqls)
+        assert not any("INSERT INTO function_state_log" in s for s in sqls)
+
+    def test_state_log_scan_emits_select_in_id_order(
+        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+    ) -> None:
+        """state_log_scan SELECTs values for (scope, ns, key) ORDER BY id."""
+        mock_cursor.set_results([(b"a",), (b"b",), (b"c",)])
+        result = storage.state_log_scan(b"exec1", b"buf", b"k")
+        assert result == [b"a", b"b", b"c"]
+        sql, params = mock_cursor.executed[0]
+        assert "SELECT value FROM function_state_log" in sql
+        assert "ORDER BY id" in sql
+        assert params == (b"exec1", b"buf", b"k")
+

@@ -340,10 +340,48 @@ class FunctionStorage(Protocol):
         Naturally idempotent. Returns total row count deleted across both
         ``function_state`` and ``function_state_log`` tables.
 
-        Does NOT touch ``queue_*`` rows or any of the legacy
-        ``worker_state`` / ``stream_state`` / ``aggregate_state`` /
-        ``aggregate_window_partition`` tables that still exist during the
-        cohabitation window — see the plan file for migration phasing.
+        Does NOT touch ``queue_*`` rows.
+        """
+        ...
+
+    # --- Append-only log ---
+
+    def state_append(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        item: bytes,
+        *,
+        shard_key: str = "",
+    ) -> int:
+        """Append ``item`` to the log keyed by (scope_id, ns, key); return ordinal.
+
+        Ordinals are globally monotonic across all (scope, ns, key) triples
+        on a given backend (one IDENTITY/AUTOINCREMENT column for the table).
+        Per-key order is recovered via the ``(scope_id, ns, key, id)`` index;
+        ``state_log_scan`` yields rows in id order, which corresponds to
+        append order. Concurrent appenders to the *same* key get distinct
+        ordinals but interleaving is undefined.
+
+        Idempotent on retry: if an earlier attempt with the same
+        backend-internal ``attempt_id`` already inserted a row, returns the
+        prior ordinal without re-inserting.
+        """
+        ...
+
+    def state_log_scan(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        *,
+        shard_key: str = "",
+    ) -> list[bytes]:
+        """Yield all values appended to (scope_id, ns, key) in ordinal order.
+
+        Non-destructive. Repeat calls return identical results until
+        ``execution_clear`` wipes the log rows.
         """
         ...
 
@@ -561,6 +599,18 @@ class BoundStorage:
         """Wipe ALL state and log rows for this execution across every namespace."""
         return self._base.execution_clear(
             self._execution_id, shard_key=self._shard_key
+        )
+
+    def state_append(self, ns: bytes, key: bytes, item: bytes) -> int:
+        """Append an item to the (ns, key) log; return the assigned ordinal."""
+        return self._base.state_append(
+            self._execution_id, ns, key, item, shard_key=self._shard_key
+        )
+
+    def state_log_scan(self, ns: bytes, key: bytes) -> list[bytes]:
+        """Yield all values appended to (ns, key) in ordinal order."""
+        return self._base.state_log_scan(
+            self._execution_id, ns, key, shard_key=self._shard_key
         )
 
     @staticmethod
@@ -1039,6 +1089,64 @@ class FunctionStorageSqlite:
         )
         conn.commit()
         return int(c1.rowcount) + int(c2.rowcount)
+
+    def state_append(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        item: bytes,
+        *,
+        shard_key: str = "",
+    ) -> int:
+        """Append item; return ordinal. Replay returns prior ordinal via UNIQUE."""
+        del shard_key
+        import uuid
+
+        attempt_id = uuid.uuid4().bytes
+        conn = self._conn()
+        # INSERT OR IGNORE on the UNIQUE(scope, ns, key, attempt_id) index
+        # is the replay primitive. On conflict the row already exists from a
+        # prior call with this attempt_id; cur.lastrowid is unreliable in
+        # that case (SQLite returns 0), so we always SELECT back by attempt_id.
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO function_state_log
+                (scope_id, ns, key, value, attempt_id)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (scope_id, ns, key, item, attempt_id),
+        )
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT id FROM function_state_log
+            WHERE scope_id = ? AND ns = ? AND key = ? AND attempt_id = ?
+            """,
+            (scope_id, ns, key, attempt_id),
+        ).fetchone()
+        return int(row[0])
+
+    def state_log_scan(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        *,
+        shard_key: str = "",
+    ) -> list[bytes]:
+        """Yield all values for (scope_id, ns, key) in ordinal order."""
+        del shard_key
+        conn = self._conn()
+        rows = conn.execute(
+            """
+            SELECT value FROM function_state_log
+            WHERE scope_id = ? AND ns = ? AND key = ?
+            ORDER BY id
+            """,
+            (scope_id, ns, key),
+        ).fetchall()
+        return [bytes(v) for (v,) in rows]
 
     # --- Maintenance (not part of protocol) ---
 

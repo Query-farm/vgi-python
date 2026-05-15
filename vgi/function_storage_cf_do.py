@@ -494,6 +494,67 @@ class FunctionStorageCfDo:
         )
         return deleted
 
+    def state_append(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        item: bytes,
+        *,
+        shard_key: str = "",
+    ) -> int:
+        """Append item to (scope_id, ns, key) log; return assigned ordinal.
+
+        Replay: if a prior call with the same attempt_id already inserted,
+        the server returns the prior ordinal so retries are idempotent.
+        """
+        t0 = time.monotonic()
+        data = self._post(
+            "state_append",
+            {
+                "scope_id": base64.b64encode(scope_id).decode(),
+                "ns": base64.b64encode(ns).decode(),
+                "key": base64.b64encode(key).decode(),
+                "item": base64.b64encode(item).decode(),
+            },
+            attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
+        )
+        ordinal = int(data["ordinal"])
+        _logger.debug(
+            "state_append scope=%s ns=%s key=%s ordinal=%d elapsed_ms=%.1f",
+            scope_id.hex()[:8], ns.hex()[:8], key.hex()[:8], ordinal,
+            (time.monotonic() - t0) * 1000,
+        )
+        return ordinal
+
+    def state_log_scan(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        *,
+        shard_key: str = "",
+    ) -> list[bytes]:
+        """Return all values appended to (scope_id, ns, key) in ordinal order."""
+        t0 = time.monotonic()
+        data = self._post(
+            "state_log_scan",
+            {
+                "scope_id": base64.b64encode(scope_id).decode(),
+                "ns": base64.b64encode(ns).decode(),
+                "key": base64.b64encode(key).decode(),
+            },
+            shard_key=shard_key,
+        )
+        values = [base64.b64decode(v) for v in data["values"]]
+        _logger.debug(
+            "state_log_scan scope=%s ns=%s key=%s rows=%d elapsed_ms=%.1f",
+            scope_id.hex()[:8], ns.hex()[:8], key.hex()[:8], len(values),
+            (time.monotonic() - t0) * 1000,
+        )
+        return values
+
     # --- Factory ---
 
     @classmethod

@@ -297,4 +297,30 @@ class TestCfDoStateUnified:
         assert n == 8
         body = _body(mock_transport.requests[0])
         assert body["scope_id"] == _b64(b"exec1")
-        assert "attempt_id" in body  # naturally idempotent but audited
+
+    def test_state_append_carries_attempt_id_returns_ordinal(
+        self, storage: FunctionStorageCfDo, mock_transport: _MockTransport,
+    ) -> None:
+        """state_append sends scope/ns/key/item + attempt_id, returns ordinal."""
+        mock_transport.queue_response(200, {"ordinal": 17})
+        ordinal = storage.state_append(b"exec1", b"buf", b"k1", b"payload")
+        assert ordinal == 17
+        body = _body(mock_transport.requests[0])
+        assert body["scope_id"] == _b64(b"exec1")
+        assert body["ns"] == _b64(b"buf")
+        assert body["key"] == _b64(b"k1")
+        assert body["item"] == _b64(b"payload")
+        assert "attempt_id" in body
+
+    def test_state_log_scan_no_attempt_id_returns_values(
+        self, storage: FunctionStorageCfDo, mock_transport: _MockTransport,
+    ) -> None:
+        """state_log_scan is read-only — no attempt_id; values returned in order."""
+        mock_transport.queue_response(200, {"values": [_b64(b"a"), _b64(b"b"), _b64(b"c")]})
+        result = storage.state_log_scan(b"exec1", b"buf", b"k1")
+        assert result == [b"a", b"b", b"c"]
+        body = _body(mock_transport.requests[0])
+        assert body["scope_id"] == _b64(b"exec1")
+        assert body["ns"] == _b64(b"buf")
+        assert body["key"] == _b64(b"k1")
+        assert "attempt_id" not in body

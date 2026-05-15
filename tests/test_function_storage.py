@@ -241,3 +241,76 @@ class TestFunctionStorageSqlite:
             packed = BoundStorage.pack_int_key(n)
             assert len(packed) == 8
             assert int.from_bytes(packed, "little", signed=True) == n
+
+    # --- state_append / state_log_scan (append-only log) ---
+
+    def test_state_append_then_log_scan_single_key(self, storage: FunctionStorageSqlite) -> None:
+        """Appended values come back in append order via state_log_scan."""
+        scope = b"exec-log"
+        storage.state_append(scope, b"buf", b"k", b"a")
+        storage.state_append(scope, b"buf", b"k", b"b")
+        storage.state_append(scope, b"buf", b"k", b"c")
+        assert storage.state_log_scan(scope, b"buf", b"k") == [b"a", b"b", b"c"]
+
+    def test_state_append_returns_monotone_ordinals_per_key(self, storage: FunctionStorageSqlite) -> None:
+        """Per-key ordinals strictly increase across appends."""
+        scope = b"exec-log"
+        ord1 = storage.state_append(scope, b"buf", b"k", b"a")
+        ord2 = storage.state_append(scope, b"buf", b"k", b"b")
+        ord3 = storage.state_append(scope, b"buf", b"k", b"c")
+        assert ord1 < ord2 < ord3
+
+    def test_state_log_scan_isolates_keys(self, storage: FunctionStorageSqlite) -> None:
+        """Logs for distinct keys in the same namespace stay separate."""
+        scope = b"exec-log"
+        storage.state_append(scope, b"buf", b"k1", b"a")
+        storage.state_append(scope, b"buf", b"k2", b"x")
+        storage.state_append(scope, b"buf", b"k1", b"b")
+        assert storage.state_log_scan(scope, b"buf", b"k1") == [b"a", b"b"]
+        assert storage.state_log_scan(scope, b"buf", b"k2") == [b"x"]
+
+    def test_state_log_scan_isolates_namespaces(self, storage: FunctionStorageSqlite) -> None:
+        """Logs for the same key in different namespaces stay separate."""
+        scope = b"exec-log"
+        storage.state_append(scope, b"ns-a", b"k", b"a1")
+        storage.state_append(scope, b"ns-b", b"k", b"b1")
+        assert storage.state_log_scan(scope, b"ns-a", b"k") == [b"a1"]
+        assert storage.state_log_scan(scope, b"ns-b", b"k") == [b"b1"]
+
+    def test_state_log_scan_isolates_scopes(self, storage: FunctionStorageSqlite) -> None:
+        """Logs for the same key in different scopes stay separate."""
+        storage.state_append(b"exec-A", b"buf", b"k", b"a")
+        storage.state_append(b"exec-B", b"buf", b"k", b"b")
+        assert storage.state_log_scan(b"exec-A", b"buf", b"k") == [b"a"]
+        assert storage.state_log_scan(b"exec-B", b"buf", b"k") == [b"b"]
+
+    def test_state_log_scan_is_non_destructive(self, storage: FunctionStorageSqlite) -> None:
+        """Repeated scans return the same data."""
+        scope = b"exec-log"
+        storage.state_append(scope, b"buf", b"k", b"a")
+        storage.state_append(scope, b"buf", b"k", b"b")
+        first = storage.state_log_scan(scope, b"buf", b"k")
+        second = storage.state_log_scan(scope, b"buf", b"k")
+        assert first == second == [b"a", b"b"]
+
+    def test_state_log_scan_empty_returns_empty(self, storage: FunctionStorageSqlite) -> None:
+        """Scan of a (scope, ns, key) that was never appended returns []."""
+        assert storage.state_log_scan(b"exec-x", b"buf", b"k") == []
+
+    def test_execution_clear_wipes_log(self, storage: FunctionStorageSqlite) -> None:
+        """execution_clear removes function_state_log rows for the scope."""
+        scope = b"exec-log"
+        storage.state_append(scope, b"buf", b"k", b"a")
+        storage.state_append(scope, b"buf", b"k", b"b")
+        storage.execution_clear(scope)
+        assert storage.state_log_scan(scope, b"buf", b"k") == []
+
+    def test_facade_state_append_log_scan_roundtrip(self, storage: FunctionStorageSqlite) -> None:
+        """BoundStorage.state_append / state_log_scan wrappers work."""
+        from vgi.function_storage import BoundStorage
+
+        bs = BoundStorage(storage, b"exec-log", attach_opaque_data=b"a")
+        ord1 = bs.state_append(b"buf", b"k", b"a")
+        ord2 = bs.state_append(b"buf", b"k", b"b")
+        assert ord1 < ord2
+        assert bs.state_log_scan(b"buf", b"k") == [b"a", b"b"]

@@ -620,6 +620,76 @@ class FunctionStorageAzureSql:
 
         return self._execute_with_retry(_do)
 
+    def state_append(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        item: bytes,
+        *,
+        shard_key: str = "",
+    ) -> int:
+        """Append item; return assigned ordinal. Replay returns prior ordinal."""
+        del shard_key
+        import uuid
+
+        attempt_id = uuid.uuid4().bytes
+
+        def _do(conn: pymssql.Connection) -> int:
+            cursor = conn.cursor()
+            # Replay-detection via idx_function_state_log_replay UNIQUE
+            # (scope_id, ns, key, attempt_id). Look up first; if a prior
+            # call with this attempt_id already inserted, return its id.
+            cursor.execute(
+                """
+                SELECT id FROM function_state_log
+                WHERE scope_id = %s AND ns = %s AND [key] = %s AND attempt_id = %s
+                """,
+                (scope_id, ns, key, attempt_id),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                return int(row[0])
+            cursor.execute(
+                """
+                INSERT INTO function_state_log
+                    (scope_id, ns, [key], value, attempt_id)
+                OUTPUT inserted.id
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (scope_id, ns, key, item, attempt_id),
+            )
+            new_id = int(cursor.fetchone()[0])
+            conn.commit()
+            return new_id
+
+        return self._execute_with_retry(_do)
+
+    def state_log_scan(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        *,
+        shard_key: str = "",
+    ) -> list[bytes]:
+        """Yield all values for (scope_id, ns, key) in ordinal order."""
+        del shard_key
+
+        def _do(conn: pymssql.Connection) -> list[bytes]:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT value FROM function_state_log
+                WHERE scope_id = %s AND ns = %s AND [key] = %s
+                ORDER BY id
+                """,
+                (scope_id, ns, key),
+            )
+            return [bytes(v) for (v,) in cursor.fetchall()]
+
+        return self._execute_with_retry(_do)
+
     # --- Factory ---
 
     @classmethod
