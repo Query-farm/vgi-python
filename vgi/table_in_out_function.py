@@ -57,6 +57,31 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
 
     """
 
+    # Subclasses opt into framework-managed state by setting this to a
+    # concrete ArrowSerializableDataclass type. Default None means
+    # process()/finalize() get state=None and the framework skips its
+    # round-trip on the buffered_table path. TableInOutFunction's
+    # __init_subclass__ infers this from the TState type parameter when a
+    # subclass declares one. Constrained to ArrowSerializableDataclass so
+    # the framework can call serialize_to_bytes / deserialize_from_bytes
+    # on instances without further type narrowing at the call site.
+    state_class: type[ArrowSerializableDataclass] | None = None
+
+    @classmethod
+    def combine(cls, state_ids: list[int], params: ProcessParams[TArgs]) -> list[int]:
+        """Buffered-table only: collapse Sink-thread state_ids into finalize keys.
+
+        Default returns state_ids unchanged (pass-through partitioning —
+        each Sink thread's slice becomes one finalize partition). Override
+        to merge state across threads (e.g. global sort under
+        ``sink_order_dependent``) and return the keys the source phase
+        will iterate.
+
+        Not invoked on the streaming exchange path; only by
+        ``buffered_table_combine`` when ``Meta.buffered_table = True``.
+        """
+        return state_ids
+
     @classmethod
     def has_finalize_override(cls) -> bool:
         """Whether this class's ``finalize``/``finish`` represents real work.

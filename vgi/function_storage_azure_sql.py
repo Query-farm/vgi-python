@@ -21,6 +21,7 @@ import os
 import struct
 import time
 from collections.abc import Callable
+from typing import Any, cast
 
 import pymssql
 
@@ -431,7 +432,12 @@ class FunctionStorageAzureSql:
                 """,  # noqa: S608
                 (scope_id, ns, *keys),
             )
-            found: dict[bytes, bytes] = {bytes(k): bytes(v) for k, v in cursor.fetchall()}
+            # pymssql cursor values are typed as a broad Any-equivalent
+            # union; the columns we SELECT are VARBINARY (function_state.key,
+            # function_state.value) so the runtime value is always bytes.
+            found: dict[bytes, bytes] = {
+                bytes(cast(Any, k)): bytes(cast(Any, v)) for k, v in cursor.fetchall()
+            }
             return [found.get(bytes(k)) for k in keys]
 
         return self._execute_with_retry(_do)
@@ -514,7 +520,7 @@ class FunctionStorageAzureSql:
                 """,
                 (scope_id, ns),
             )
-            return [(bytes(k), bytes(v)) for k, v in cursor.fetchall()]
+            return [(bytes(cast(Any, k)), bytes(cast(Any, v))) for k, v in cursor.fetchall()]
 
         return self._execute_with_retry(_do)
 
@@ -545,7 +551,7 @@ class FunctionStorageAzureSql:
             )
             replay = cursor.fetchall()
             if replay:
-                return [(bytes(k), bytes(v)) for k, v in replay]
+                return [(bytes(cast(Any, k)), bytes(cast(Any, v))) for k, v in replay]
             # Fresh drain: tombstone live rows for this attempt_id, then
             # read them back. T-SQL doesn't support UPDATE..RETURNING the
             # same way SQLite does; use OUTPUT clause.
@@ -561,7 +567,7 @@ class FunctionStorageAzureSql:
             )
             rows = cursor.fetchall()
             conn.commit()
-            return [(bytes(k), bytes(v)) for k, v in rows]
+            return [(bytes(cast(Any, k)), bytes(cast(Any, v))) for k, v in rows]
 
         return self._execute_with_retry(_do)
 
@@ -648,8 +654,10 @@ class FunctionStorageAzureSql:
                 (scope_id, ns, key, attempt_id),
             )
             row = cursor.fetchone()
+            # function_state_log.id is BIGINT IDENTITY → int at runtime;
+            # pymssql's typed-row narrowing can't see that.
             if row is not None:
-                return int(row[0])
+                return int(cast(Any, row[0]))
             cursor.execute(
                 """
                 INSERT INTO function_state_log
@@ -659,7 +667,9 @@ class FunctionStorageAzureSql:
                 """,
                 (scope_id, ns, key, item, attempt_id),
             )
-            new_id = int(cursor.fetchone()[0])
+            inserted_row = cursor.fetchone()
+            assert inserted_row is not None, "INSERT ... OUTPUT inserted.id returned no row"
+            new_id = int(cast(Any, inserted_row[0]))
             conn.commit()
             return new_id
 
@@ -686,7 +696,7 @@ class FunctionStorageAzureSql:
                 """,
                 (scope_id, ns, key),
             )
-            return [bytes(v) for (v,) in cursor.fetchall()]
+            return [bytes(cast(Any, v)) for (v,) in cursor.fetchall()]
 
         return self._execute_with_retry(_do)
 

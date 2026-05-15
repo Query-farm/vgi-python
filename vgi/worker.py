@@ -473,7 +473,7 @@ class _ChainIter:
         self._tail = tail
         self._emitted = False
 
-    def __iter__(self) -> "_ChainIter":
+    def __iter__(self) -> _ChainIter:
         return self
 
     def __next__(self) -> Any:
@@ -1972,7 +1972,6 @@ class Worker:
         request = self._unwrap_bind_call(request)
         func_cls = self._resolve_function(request)
         self._validate_required_settings(func_cls, request)
-
         instance = func_cls(logger=_logger)
         return instance.bind(request, ctx=ctx)  # type: ignore[attr-defined, no-any-return]
 
@@ -2444,6 +2443,14 @@ class Worker:
             self._unwrap_attach(request.attach_opaque_data),
             function_type=TableInOutGenerator,
         )
+        # Runtime narrowing for mypy — the function_type filter above
+        # already guarantees this, but the resolver's static return type
+        # is type[Function] (the base class).
+        if not issubclass(func_cls, TableInOutGenerator):
+            raise TypeError(
+                f"Function '{request.function_name}' is not a TableInOutGenerator "
+                f"(got {func_cls.__name__})"
+            )
         cold_storage = BoundStorage(
             func_cls.storage, request.execution_id, request=request, auth=ctx.auth,
         )
@@ -2510,6 +2517,11 @@ class Worker:
         from vgi.function_storage import BoundStorage as _BS
 
         _state_key = _BS.pack_int_key(request.state_id)
+        # Untyped on purpose: the value alternates between an
+        # ArrowSerializableDataclass instance (when state_class is set) and
+        # whatever initial_state() returns (often None). Caller-side
+        # process() does the actual type narrowing.
+        state: Any
         if func_cls.state_class is not None:
             stored_value = params.storage.state_get(b"buf", _state_key)
             if stored_value is not None:
@@ -2527,7 +2539,8 @@ class Worker:
         # response stream — exactly the same channel the streaming path
         # uses. ReadUnaryResponse on the C++ side picks them up via
         # DispatchBatch → HandleBatchLogMessage → duckdb_logs.
-        from vgi_rpc.log import Level as _Level, Message as _Message
+        from vgi_rpc.log import Level as _Level
+        from vgi_rpc.log import Message as _Message
 
         emit_log = ctx.emit_client_log
 
@@ -2543,10 +2556,15 @@ class Worker:
             def finish(self) -> None:
                 pass
 
-            def client_log(self, level: "_Level", message: str, **extra: str) -> None:
+            def client_log(self, level: _Level, message: str, **extra: str) -> None:
                 emit_log(_Message(level, message, **extra))
 
-        func_cls.process(params, state, batch, _NoOpCollector())
+        # _NoOpCollector duck-types OutputCollector. The base class has a
+        # heavy constructor (output_schema, externalization knobs, server_id)
+        # that's unnecessary here — buffered process is sink-only and can't
+        # emit data. Honest type-ignore: emit() / finish() / client_log()
+        # are the only members the user's process() can reach.
+        func_cls.process(params, state, batch, _NoOpCollector())  # type: ignore[arg-type]
 
         # Persist the updated state — namespace b"buf", key = packed state_id.
         if func_cls.state_class is not None:
@@ -2558,8 +2576,10 @@ class Worker:
         request: Any,  # BufferedTableCombineRequest
         ctx: CallContext,
     ) -> Any:  # BufferedTableCombineResponse
-        """End-of-input signal. Delegate to the user's combine() and return
-        the partition keys the source phase will iterate over."""
+        """End-of-input signal: delegate to combine() and return partition keys.
+
+        Returns the finalize_state_ids the source phase will iterate over.
+        """
         from vgi.protocol import BufferedTableCombineResponse
 
         func_cls, params = self._load_buffered_table_params(request, ctx)
@@ -2585,7 +2605,13 @@ class Worker:
         key = (request.execution_id, request.finalize_state_id)
         iter_ = _buffered_table_finalize_iters.get(key)
         if iter_ is None:
-            result = func_cls.finalize(request.finalize_state_id, params)
+            # Buffered-table finalize takes (finalize_state_id, params) — a
+            # different signature from the streaming-shape finalize(params)
+            # declared on the TableInOutGenerator base class. Buffered
+            # subclasses (BufferInputFunction, BatchIndexBufferInputFunction)
+            # override with the wider signature; this duck-typed call relies
+            # on Meta.buffered_table=True routing only those subclasses here.
+            result = func_cls.finalize(request.finalize_state_id, params)  # type: ignore[call-arg]
             # Accept either a generator/iterator or a concrete list of batches.
             iter_ = iter(result)
             _buffered_table_finalize_iters[key] = iter_
@@ -3025,7 +3051,11 @@ class Worker:
         _streaming_session_cache.put(execution_id, session)
         # Also persist to FunctionStorage so a chunk RPC landing on a
         # different pool worker can reload the session.
-        storage.state_put(b"win", BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY), _encode_streaming_session(session))
+        storage.state_put(
+            b"win",
+            BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY),
+            _encode_streaming_session(session),
+        )
         return AggregateStreamingOpenResponse(execution_id=execution_id)
 
     def aggregate_streaming_chunk(

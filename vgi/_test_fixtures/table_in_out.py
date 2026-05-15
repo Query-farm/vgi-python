@@ -214,10 +214,19 @@ class BufferInputFunction(TableInOutGenerator[SingleTableArguments, None]):
         return state_ids
 
     @classmethod
-    def finalize(
+    def finalize(  # type: ignore[override]
         cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments]
     ) -> Iterator[pa.RecordBatch]:
-        """Yield the buffered batches for one finalize_state_id, one per RPC."""
+        """Yield the buffered batches for one finalize_state_id, one per RPC.
+
+        Buffered-table finalize signature is ``(finalize_state_id, params)``,
+        which is wider than the streaming-shape ``(params)`` declared on
+        the TableInOutGenerator base. The ``# type: ignore[override]``
+        documents that this is a deliberate signature widening — the
+        worker-side dispatcher (vgi/worker.py:buffered_table_finalize)
+        only routes Meta.buffered_table=True subclasses through this
+        path, so the duck-typed call lands correctly at runtime.
+        """
         for batch_bytes in params.storage.state_log_scan(
             b"buf", BoundStorage.pack_int_key(finalize_state_id)
         ):
@@ -552,7 +561,8 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
         stored = params.storage.state_get_many(b"buf", keys)
         merged: dict[str, pa.Scalar[Any]] = {name: pa.scalar(0, type=field.type)
                                              for name, field in zip(params.output_schema.names,
-                                                                     params.output_schema)}
+                                                                     params.output_schema,
+                                                                     strict=True)}
         for entry in stored:
             if entry is None:
                 continue
@@ -564,17 +574,22 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
         return [0]
 
     @classmethod
-    def finalize(
+    def finalize(  # type: ignore[override]
         cls, finalize_state_id: int, params: ProcessParams[SumAllColumnsFunctionArguments]
     ) -> Iterator[pa.RecordBatch]:
-        """Yield one row carrying the merged column sums."""
+        """Yield one row carrying the merged column sums.
+
+        Buffered-table finalize signature widening — see the
+        ``# type: ignore[override]`` comment on
+        ``BufferInputFunction.finalize`` for rationale.
+        """
         stored = params.storage.state_get(b"buf", BoundStorage.pack_int_key(finalize_state_id))
         if stored is None:
             # No data at all — emit zeros so SQL like
             # `SELECT * FROM sum_all_columns((SELECT 1 WHERE 1=0))` still
             # produces a row with the expected shape.
             sums = {name: pa.scalar(0, type=field.type)
-                    for name, field in zip(params.output_schema.names, params.output_schema)}
+                    for name, field in zip(params.output_schema.names, params.output_schema, strict=True)}
             yield pa.RecordBatch.from_pydict({name: [val] for name, val in sums.items()},
                                               schema=params.output_schema)
             return
@@ -596,8 +611,11 @@ class ExceptionProcessFunction(
 ):
     """Buffered table function that raises an exception on the second batch."""
 
-    # Use our own state class, overriding SumAllColumnsFunction.state_class.
-    state_class = ExceptionProcessState
+    # Narrowing state_class from SumAllColumnsState to ExceptionProcessState
+    # is intentional; both are ArrowSerializableDataclass subclasses, but
+    # the base class declares state_class with the concrete type for
+    # type-narrowing in generic contexts.
+    state_class = ExceptionProcessState  # type: ignore[assignment]
 
     class Meta(SumAllColumnsFunction.Meta):
         """Metadata for ExceptionProcessFunction."""
@@ -620,14 +638,19 @@ class ExceptionProcessFunction(
         batch: pa.RecordBatch,
         out: OutputCollector,
     ) -> None:
-        """Raise an exception on the second batch."""
+        """Raise an exception on the second batch.
+
+        ``# type: ignore[override]`` — narrows ``state`` from the parent's
+        ``SumAllColumnsState`` to ``ExceptionProcessState`` (the override
+        on ``state_class`` above pairs with this type).
+        """
         state.batch_count += 1
         if state.batch_count % 2 == 0:
             raise ValueError(f"Intentional exception on batch {state.batch_count}")
         # Sink-only — no emit needed.
 
     @classmethod
-    def combine(  # type: ignore[override]
+    def combine(
         cls, state_ids: list[int], params: ProcessParams[SumAllColumnsFunctionArguments]
     ) -> list[int]:
         # Pass-through partitioning: no aggregation across states needed.
@@ -640,7 +663,7 @@ class ExceptionProcessFunction(
         # If we ever reach finalize, emit a zero-sum row (the only behavior
         # the existing test asserts is the *exception* path from process).
         sums = {name: pa.scalar(0, type=field.type)
-                for name, field in zip(params.output_schema.names, params.output_schema)}
+                for name, field in zip(params.output_schema.names, params.output_schema, strict=True)}
         yield pa.RecordBatch.from_pydict({name: [val] for name, val in sums.items()},
                                           schema=params.output_schema)
 
@@ -662,7 +685,7 @@ class ExceptionFinalizeFunction(SumAllColumnsFunction):
     ) -> Iterator[pa.RecordBatch]:
         """Raise an intentional exception when the C++ side pulls a batch."""
         raise ValueError("Intentional exception during finalize()")
-        yield  # type: ignore[unreachable]  # make this a generator function
+        yield  # make this a generator function
 
 
 @dataclass(slots=True, kw_only=True)
@@ -812,7 +835,7 @@ class CrashOnProcessFunction(BufferInputFunction):
         categories = ["test", "crash"]
 
     @classmethod
-    def process(  # type: ignore[override]
+    def process(
         cls,
         params: ProcessParams[SingleTableArguments],
         state: None,
@@ -838,7 +861,7 @@ class CrashOnCombineFunction(BufferInputFunction):
         categories = ["test", "crash"]
 
     @classmethod
-    def combine(  # type: ignore[override]
+    def combine(
         cls, state_ids: list[int], params: ProcessParams[SingleTableArguments]
     ) -> list[int]:
         raise RuntimeError("Intentional exception during combine()")
@@ -862,7 +885,7 @@ class CrashOnFinalizeFunction(BufferInputFunction):
         cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments]
     ) -> Iterator[pa.RecordBatch]:
         raise RuntimeError("Intentional exception during finalize()")
-        yield  # type: ignore[unreachable]  # make this a generator function
+        yield  # make this a generator function
 
 
 class HangOnProcessFunction(BufferInputFunction):
@@ -879,7 +902,7 @@ class HangOnProcessFunction(BufferInputFunction):
         categories = ["test", "hang"]
 
     @classmethod
-    def process(  # type: ignore[override]
+    def process(
         cls,
         params: ProcessParams[SingleTableArguments],
         state: None,
@@ -891,9 +914,10 @@ class HangOnProcessFunction(BufferInputFunction):
 
 @dataclass(kw_only=True)
 class LargeStateState(ArrowSerializableDataclass):
-    """Holds a single large bytes buffer; the C++ side ships this through
-    combine/finalize via the RPC's outer envelope, exercising IPC chunking
-    on the response path.
+    """Holds a single large bytes buffer.
+
+    The C++ side ships this through combine/finalize via the RPC's outer
+    envelope, exercising IPC chunking on the response path.
     """
 
     payload: bytes = b""
@@ -942,10 +966,10 @@ class LargeStateFunction(TableInOutGenerator[SingleTableArguments, LargeStateSta
         return state_ids
 
     @classmethod
-    def finalize(
+    def finalize(  # type: ignore[override]
         cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments]
     ) -> Iterator[pa.RecordBatch]:
-
+        """Buffered-table finalize signature widening — see BufferInputFunction.finalize."""
         stored = params.storage.state_get(b"buf", BoundStorage.pack_int_key(finalize_state_id))
         if stored is None:
             return
@@ -1068,15 +1092,17 @@ class BatchIndexBufferInputFunction(TableInOutGenerator[SingleTableArguments, No
         return state_ids
 
     @classmethod
-    def finalize(
+    def finalize(  # type: ignore[override]
         cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments]
     ) -> Iterator[pa.RecordBatch]:
+        """Buffered-table finalize signature widening — see BufferInputFunction.finalize.
 
-        # NB. There is exactly one finalize() per state_id (combine returned
-        # state_ids unchanged), so we only see this thread's log here. To get
-        # a globally ordered output the caller should choose Meta.sink_order_dependent
-        # OR use a single Sink thread; otherwise per-thread output order is
-        # batch_index-ascending only within this slice.
+        NB. There is exactly one finalize() per state_id (combine returned
+        state_ids unchanged), so we only see this thread's log here. To get
+        a globally ordered output the caller should choose Meta.sink_order_dependent
+        OR use a single Sink thread; otherwise per-thread output order is
+        batch_index-ascending only within this slice.
+        """
         log_bytes = params.storage.state_log_scan(
             b"buf", BoundStorage.pack_int_key(finalize_state_id)
         )
