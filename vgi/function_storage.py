@@ -483,6 +483,143 @@ class FunctionStorage(Protocol):
         """
         ...
 
+    # ========================================================================
+    # Unified state_* API (composite-key K/V over (scope_id, ns, key))
+    # ========================================================================
+    #
+    # See /Users/rusty/.claude/plans/yes-lets-make-a-elegant-sparrow.md for
+    # the full design rationale. This API replaces the four RMW families
+    # (``worker_*``, ``stream_state_*``, ``aggregate_state_*``,
+    # ``aggregate_window_partition_*``) plus ``transaction_state_*`` with a
+    # single composite-key shape:
+    #
+    #   ``(scope_id, ns, key) -> value``
+    #
+    # ``scope_id`` carries the role of today's ``execution_id`` /
+    # ``transaction_opaque_data`` — caller decides whether they're scoping by
+    # invocation or by transaction. ``ns`` is a namespace selector chosen by
+    # the caller (e.g. ``b"agg"`` for aggregate state, ``b"buf"`` for buffered
+    # accumulators); the storage doesn't interpret it.
+    #
+    # Idempotency: the public API does not expose ``attempt_id``. Each backend
+    # generates its own ``attempt_id = uuid.uuid4().bytes`` per call and uses
+    # it for replay-detection (silent no-op for ``state_put_many`` retries,
+    # read-back for ``state_drain`` retries). The CfDo HTTP client splices
+    # the same id into retries within its ``_post()`` retry loop so server-
+    # side replay-detection works across the network.
+
+    def state_get_many(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        keys: list[bytes],
+        *,
+        shard_key: str = "",
+    ) -> list[bytes | None]:
+        """Batched non-destructive read of values keyed by ``(scope_id, ns, key)``.
+
+        Returns a list parallel to ``keys`` with the stored ``bytes`` for
+        hits and ``None`` for misses. Single-call so cloud backends (CfDo)
+        can serve a 100-key request as one HTTP roundtrip.
+
+        Args:
+            scope_id: Caller's scope identifier (typically ``execution_id`` for
+                per-query state, ``transaction_opaque_data`` for txn-scoped state).
+            ns: Caller-chosen namespace bytes; the storage doesn't interpret.
+            keys: List of binary keys to look up.
+            shard_key: CF DO routing key; ignored by SQLite/Azure backends.
+
+        Returns:
+            List parallel to ``keys`` of stored values or ``None``.
+        """
+        ...
+
+    def state_put_many(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        items: list[tuple[bytes, bytes]],
+        *,
+        shard_key: str = "",
+    ) -> None:
+        """Batched atomic upsert of ``(key, value)`` pairs in one namespace.
+
+        Atomic per backend's single-statement isolation: either every item
+        in the batch is written, or none are. Existing values for the same
+        ``(scope_id, ns, key)`` are overwritten.
+
+        Internally generates an ``attempt_id`` for backend replay-detection;
+        a retried call (e.g. CfDo HTTP retry on transport failure) carrying
+        the same id is detected as a replay and silently no-ops (the
+        prior successful call's result is the ground truth).
+        """
+        ...
+
+    def state_scan(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        *,
+        shard_key: str = "",
+    ) -> list[tuple[bytes, bytes]]:
+        """Non-destructive scan of every ``(key, value)`` in one namespace.
+
+        Order is implementation-defined. Use when you need to enumerate
+        an unknown key set (e.g. drainer-side discovery of which sink
+        threads produced state).
+        """
+        ...
+
+    def state_drain(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        *,
+        shard_key: str = "",
+    ) -> list[tuple[bytes, bytes]]:
+        """Atomically scan-and-delete every ``(key, value)`` in one namespace.
+
+        Tombstones the rows internally for replay-detection: a retried call
+        with the same internal ``attempt_id`` returns the same drained
+        values without re-deleting. Replaces today's ``worker_collect``.
+        """
+        ...
+
+    def state_delete(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        keys: list[bytes] | None = None,
+        *,
+        shard_key: str = "",
+    ) -> int:
+        """Delete by key list, or wipe the entire namespace if ``keys is None``.
+
+        Naturally idempotent — deleting an already-deleted row is a no-op.
+        Returns the count of rows actually removed. Replaces today's
+        per-family ``*_clear`` methods.
+        """
+        ...
+
+    def execution_clear(
+        self,
+        scope_id: bytes,
+        *,
+        shard_key: str = "",
+    ) -> int:
+        """Wipe ALL state and log rows for ``scope_id`` across every namespace.
+
+        Used as a safety-sweep at end-of-execution / on crash recovery.
+        Naturally idempotent. Returns total row count deleted across both
+        ``function_state`` and ``function_state_log`` tables.
+
+        Does NOT touch ``queue_*`` rows or any of the legacy
+        ``worker_state`` / ``stream_state`` / ``aggregate_state`` /
+        ``aggregate_window_partition`` tables that still exist during the
+        cohabitation window — see the plan file for migration phasing.
+        """
+        ...
+
 
 class TransactionBoundStorage:
     """Convenience wrapper bound to a single transaction_opaque_data.
@@ -736,6 +873,74 @@ class BoundStorage:
             shard_key=self._shard_key,
         )
 
+    # ========================================================================
+    # Unified state_* facade — composite-key K/V over (ns, key)
+    # ========================================================================
+    #
+    # See FunctionStorage.state_* docstrings for the full semantic. These
+    # facade wrappers bind ``scope_id = execution_id`` (the common case);
+    # for transaction-scoped state, use BoundStorage.transaction() to get
+    # a separate facade bound to ``transaction_opaque_data``.
+
+    def state_get(self, ns: bytes, key: bytes) -> bytes | None:
+        """Convenience: read one key's value (or None)."""
+        result = self._base.state_get_many(
+            self._execution_id, ns, [key], shard_key=self._shard_key
+        )
+        return result[0]
+
+    def state_get_many(self, ns: bytes, keys: list[bytes]) -> list[bytes | None]:
+        """Batched non-destructive read."""
+        return self._base.state_get_many(
+            self._execution_id, ns, keys, shard_key=self._shard_key
+        )
+
+    def state_put(self, ns: bytes, key: bytes, value: bytes) -> None:
+        """Convenience: upsert one (key, value)."""
+        self._base.state_put_many(
+            self._execution_id, ns, [(key, value)], shard_key=self._shard_key
+        )
+
+    def state_put_many(self, ns: bytes, items: list[tuple[bytes, bytes]]) -> None:
+        """Batched atomic upsert."""
+        self._base.state_put_many(
+            self._execution_id, ns, items, shard_key=self._shard_key
+        )
+
+    def state_scan(self, ns: bytes) -> list[tuple[bytes, bytes]]:
+        """Non-destructive scan of every (key, value) in one namespace."""
+        return self._base.state_scan(
+            self._execution_id, ns, shard_key=self._shard_key
+        )
+
+    def state_drain(self, ns: bytes) -> list[tuple[bytes, bytes]]:
+        """Atomic scan-and-delete of every (key, value) in one namespace."""
+        return self._base.state_drain(
+            self._execution_id, ns, shard_key=self._shard_key
+        )
+
+    def state_delete(self, ns: bytes, keys: list[bytes] | None = None) -> int:
+        """Delete by key list, or wipe entire namespace if keys is None."""
+        return self._base.state_delete(
+            self._execution_id, ns, keys, shard_key=self._shard_key
+        )
+
+    def execution_clear(self) -> int:
+        """Wipe ALL state and log rows for this execution across every namespace."""
+        return self._base.execution_clear(
+            self._execution_id, shard_key=self._shard_key
+        )
+
+    @staticmethod
+    def pack_int_key(i: int) -> bytes:
+        """Sugar: encode an int as 8-byte little-endian for use as ``state_*`` key.
+
+        The common case for buffered_table state_id, aggregate group_id,
+        window partition_id is an int. This canonicalizes the encoding so
+        every caller produces the same bytes for the same int.
+        """
+        return i.to_bytes(8, "little", signed=True)
+
     @staticmethod
     def serialize_record_batch(batch: pa.RecordBatch) -> bytes:
         """Serialize a RecordBatch to Arrow IPC stream bytes."""
@@ -943,6 +1148,55 @@ class FunctionStorageSqlite:
                     created_at REAL DEFAULT (julianday('now')),
                     PRIMARY KEY (execution_id, partition_id)
                 )
+            """)
+            # ----------------------------------------------------------------
+            # Unified state_* tables — composite-key K/V over (scope_id, ns,
+            # key). Replaces (during the cohabitation window) worker_state /
+            # stream_state / aggregate_state / aggregate_window_partitions /
+            # transaction_state. See plan file + FunctionStorage protocol
+            # docstrings.
+            #
+            # last_attempt_id powers internal replay-detection: a retried
+            # state_put_many with the same id is a silent no-op; a retried
+            # state_drain returns the prior tombstoned values. CfDo client
+            # generates the id (per-HTTP-call); SQLite generates per-call too
+            # so the semantic is uniform across backends.
+            #
+            # Tombstone columns drained_at / drained_by_attempt mark rows
+            # that state_drain has consumed; rows linger until cleanup_old_entries
+            # sweeps them past the retention horizon.
+            # ----------------------------------------------------------------
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS function_state (
+                    scope_id           BLOB NOT NULL,
+                    ns                 BLOB NOT NULL,
+                    key                BLOB NOT NULL,
+                    value              BLOB NOT NULL,
+                    last_attempt_id    BLOB NOT NULL,
+                    drained_at         REAL DEFAULT NULL,
+                    drained_by_attempt BLOB DEFAULT NULL,
+                    created_at         REAL DEFAULT (julianday('now')),
+                    PRIMARY KEY (scope_id, ns, key)
+                )
+            """)
+            # function_state_log: append-only log keyed by (scope_id, ns, key).
+            # Each (scope, ns, key, attempt_id) is unique so a retried
+            # state_append (Step 2) maps back to the prior ordinal.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS function_state_log (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scope_id    BLOB NOT NULL,
+                    ns          BLOB NOT NULL,
+                    key         BLOB NOT NULL,
+                    value       BLOB NOT NULL,
+                    attempt_id  BLOB NOT NULL,
+                    created_at  REAL DEFAULT (julianday('now')),
+                    UNIQUE (scope_id, ns, key, attempt_id)
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS function_state_log_lookup_idx
+                    ON function_state_log(scope_id, ns, key, id)
             """)
             conn.commit()
         finally:
@@ -1245,6 +1499,202 @@ class FunctionStorageSqlite:
         )
         conn.commit()
 
+    # ========================================================================
+    # Unified state_* implementation
+    # ========================================================================
+    #
+    # See FunctionStorage protocol docstrings + plan file for contracts.
+    # Idempotency: every mutating call generates ``attempt_id = uuid.uuid4().bytes``
+    # internally. SQLite is single-process (modulo WAL cross-process), so
+    # retries within one Python process don't actually happen — but
+    # implementing the same replay-detection pattern as the CfDo backend
+    # keeps the semantic uniform across backends and protects multi-process
+    # subprocess workers retrying after a crash.
+
+    def state_get_many(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        keys: list[bytes],
+        *,
+        shard_key: str = "",
+    ) -> list[bytes | None]:
+        del shard_key
+        if not keys:
+            return []
+        conn = self._conn()
+        # Returns rows in key-list order via a CASE, so callers don't have to
+        # re-sort. Tombstoned rows (drained_at IS NOT NULL) are invisible.
+        placeholders = ",".join("?" for _ in keys)
+        rows = conn.execute(
+            f"""
+            SELECT key, value FROM function_state
+            WHERE scope_id = ? AND ns = ? AND key IN ({placeholders})
+              AND drained_at IS NULL
+            """,
+            (scope_id, ns, *keys),
+        ).fetchall()
+        found: dict[bytes, bytes] = {bytes(k): bytes(v) for k, v in rows}
+        return [found.get(bytes(k)) for k in keys]
+
+    def state_put_many(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        items: list[tuple[bytes, bytes]],
+        *,
+        shard_key: str = "",
+    ) -> None:
+        del shard_key
+        if not items:
+            return
+        import uuid
+
+        attempt_id = uuid.uuid4().bytes
+        # Replay-detection: check whether the FIRST item is already present
+        # with this attempt_id. Mirrors today's CfDo aggregate_state_put
+        # check (`index.ts:618`); first-key check is sufficient because
+        # state_put_many is atomic per call (all-or-none under SQLite's
+        # statement isolation), so seeing the first key persisted with our
+        # attempt_id means the whole batch was persisted.
+        first_key, _ = items[0]
+        conn = self._conn()
+        prior_row = conn.execute(
+            """
+            SELECT 1 FROM function_state
+            WHERE scope_id = ? AND ns = ? AND key = ? AND last_attempt_id = ?
+            """,
+            (scope_id, ns, first_key, attempt_id),
+        ).fetchone()
+        # Per-process attempt_id collision is astronomically rare (UUID4),
+        # but we check anyway for symmetry with CfDo.
+        if prior_row is not None:
+            return
+        conn.executemany(
+            """
+            INSERT INTO function_state
+                (scope_id, ns, key, value, last_attempt_id, created_at,
+                 drained_at, drained_by_attempt)
+            VALUES (?, ?, ?, ?, ?, julianday('now'), NULL, NULL)
+            ON CONFLICT(scope_id, ns, key) DO UPDATE SET
+                value = excluded.value,
+                last_attempt_id = excluded.last_attempt_id,
+                created_at = julianday('now'),
+                drained_at = NULL,
+                drained_by_attempt = NULL
+            """,
+            [(scope_id, ns, k, v, attempt_id) for k, v in items],
+        )
+        conn.commit()
+
+    def state_scan(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        *,
+        shard_key: str = "",
+    ) -> list[tuple[bytes, bytes]]:
+        del shard_key
+        conn = self._conn()
+        rows = conn.execute(
+            """
+            SELECT key, value FROM function_state
+            WHERE scope_id = ? AND ns = ? AND drained_at IS NULL
+            """,
+            (scope_id, ns),
+        ).fetchall()
+        return [(bytes(k), bytes(v)) for k, v in rows]
+
+    def state_drain(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        *,
+        shard_key: str = "",
+    ) -> list[tuple[bytes, bytes]]:
+        del shard_key
+        import uuid
+
+        attempt_id = uuid.uuid4().bytes
+        conn = self._conn()
+        # Replay: if any rows are already tombstoned with this attempt_id,
+        # return them without re-tombstoning. Mirrors CfDo's worker_collect
+        # read-back replay (`index.ts:368`).
+        replay_rows = conn.execute(
+            """
+            SELECT key, value FROM function_state
+            WHERE scope_id = ? AND ns = ? AND drained_by_attempt = ?
+            ORDER BY key
+            """,
+            (scope_id, ns, attempt_id),
+        ).fetchall()
+        if replay_rows:
+            return [(bytes(k), bytes(v)) for k, v in replay_rows]
+        # Fresh drain: tombstone live rows for this attempt_id, then read
+        # them back. UPDATE ... RETURNING is SQLite ≥3.35; available in
+        # all supported Python builds. Two-statement is also fine —
+        # SQLite serializes within one connection.
+        rows = conn.execute(
+            """
+            UPDATE function_state
+            SET drained_at = julianday('now'),
+                drained_by_attempt = ?
+            WHERE scope_id = ? AND ns = ? AND drained_at IS NULL
+            RETURNING key, value
+            """,
+            (attempt_id, scope_id, ns),
+        ).fetchall()
+        conn.commit()
+        return [(bytes(k), bytes(v)) for k, v in rows]
+
+    def state_delete(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        keys: list[bytes] | None = None,
+        *,
+        shard_key: str = "",
+    ) -> int:
+        del shard_key
+        conn = self._conn()
+        if keys is None:
+            cur = conn.execute(
+                "DELETE FROM function_state WHERE scope_id = ? AND ns = ?",
+                (scope_id, ns),
+            )
+        else:
+            if not keys:
+                return 0
+            placeholders = ",".join("?" for _ in keys)
+            cur = conn.execute(
+                f"""
+                DELETE FROM function_state
+                WHERE scope_id = ? AND ns = ? AND key IN ({placeholders})
+                """,
+                (scope_id, ns, *keys),
+            )
+        conn.commit()
+        return int(cur.rowcount)
+
+    def execution_clear(
+        self,
+        scope_id: bytes,
+        *,
+        shard_key: str = "",
+    ) -> int:
+        del shard_key
+        conn = self._conn()
+        c1 = conn.execute(
+            "DELETE FROM function_state WHERE scope_id = ?",
+            (scope_id,),
+        )
+        c2 = conn.execute(
+            "DELETE FROM function_state_log WHERE scope_id = ?",
+            (scope_id,),
+        )
+        conn.commit()
+        return int(c1.rowcount) + int(c2.rowcount)
+
     # --- Maintenance (not part of protocol) ---
 
     def cleanup_old_entries(self, max_age_days: float = 1.0) -> int:
@@ -1314,6 +1764,23 @@ class FunctionStorageSqlite:
             """,
             (max_age_days,),
         )
+        # Unified state_* tables — sweep both live AND tombstoned rows past
+        # the retention horizon. Tombstones (drained_at IS NOT NULL) exist
+        # for replay-detection and live until cleanup runs.
+        cursor9 = conn.execute(
+            """
+            DELETE FROM function_state
+            WHERE julianday('now') - created_at > ?
+            """,
+            (max_age_days,),
+        )
+        cursor10 = conn.execute(
+            """
+            DELETE FROM function_state_log
+            WHERE julianday('now') - created_at > ?
+            """,
+            (max_age_days,),
+        )
         conn.commit()
         return (
             int(cursor1.rowcount)
@@ -1324,4 +1791,6 @@ class FunctionStorageSqlite:
             + int(cursor6.rowcount)
             + int(cursor7.rowcount)
             + int(cursor8.rowcount)
+            + int(cursor9.rowcount)
+            + int(cursor10.rowcount)
         )
