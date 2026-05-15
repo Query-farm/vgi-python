@@ -1226,7 +1226,6 @@ class BufferedFinalizeState(ProducerState):
         # and avoid a circular dependency on vgi.worker.
         from vgi.table_in_out_function import pack_int_cursor, unpack_int_cursor
         from vgi.worker import (
-            _FINALIZE_PREFETCH,
             _build_bound_storage_from_fields,
             _decode_ipc_batch,
         )
@@ -1235,15 +1234,18 @@ class BufferedFinalizeState(ProducerState):
             self.execution_id, self.attach_opaque_data, ctx,
         )
         last_id = unpack_int_cursor(self.cursor)
+        # OutputCollector enforces one data batch per produce() tick, so
+        # we read exactly one row per call. Framework loops the ticks
+        # until out.finish() is called on EOS.
         rows = storage.state_log_scan(
-            self.ns, self.key, after_id=last_id, limit=_FINALIZE_PREFETCH,
+            self.ns, self.key, after_id=last_id, limit=1,
         )
         if not rows:
             out.finish()
             return
-        for _log_id, value in rows:
-            out.emit(_decode_ipc_batch(value))
-        self.cursor = pack_int_cursor(rows[-1][0])
+        log_id, value = rows[0]
+        out.emit(_decode_ipc_batch(value))
+        self.cursor = pack_int_cursor(log_id)
 
 
 # Type alias for the union of all stream state variants produced by init().

@@ -449,12 +449,6 @@ _aggregate_const_args_cache = _AggregateConstArgsCache()
 _BUFFERED_TABLE_INIT_KEY = -1
 
 
-# Cursor-based finalize stream constants. ``BufferedFinalizeState.produce()``
-# uses these to drain the next page of a state_log per tick. Single tunable
-# value across all functions; if profiling shows it's wrong, lift to a
-# per-function Meta override.
-_FINALIZE_PREFETCH = 8
-
 # Streaming-shape FINALIZE phase materializes the user's
 # ``finalize() -> list[batch]`` return into a single state_log keyed
 # by this constant. One streaming finalize per execution; one key.
