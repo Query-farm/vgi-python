@@ -37,8 +37,8 @@ from __future__ import annotations
 import os
 import signal
 import time
-from dataclasses import dataclass
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Annotated, Any
 
 import pyarrow as pa
@@ -49,10 +49,11 @@ from vgi_rpc.rpc import OutputCollector
 from vgi_rpc.utils import empty_batch
 
 from vgi.arguments import Arg, Setting, TableInput
-from vgi.invocation import BindResponse, GlobalInitResponse
+from vgi.function_storage import BoundStorage
+from vgi.invocation import BindResponse
 from vgi.metadata import FunctionExample
 from vgi.schema_utils import schema
-from vgi.table_function import BindParams, InitParams, ProcessParams, TableCardinality
+from vgi.table_function import BindParams, ProcessParams, TableCardinality
 from vgi.table_in_out_function import (
     TableInOutFunction,
     TableInOutGenerator,
@@ -188,8 +189,6 @@ class BufferInputFunction(TableInOutGenerator[SingleTableArguments, None]):
         silently accepts the trailing zero-row emit but would raise on any
         non-empty emit — process() is sink-only.
         """
-        from vgi.function_storage import BoundStorage as _BS
-
         assert params.state_id is not None, (
             "buffered_table_process did not populate ProcessParams.state_id"
         )
@@ -197,7 +196,7 @@ class BufferInputFunction(TableInOutGenerator[SingleTableArguments, None]):
         with pa.ipc.new_stream(sink, batch.schema) as writer:
             writer.write_batch(batch)
         params.storage.state_append(
-            b"buf", _BS.pack_int_key(params.state_id), sink.getvalue().to_pybytes()
+            b"buf", BoundStorage.pack_int_key(params.state_id), sink.getvalue().to_pybytes()
         )
         out.emit(empty_batch(params.output_schema))
 
@@ -219,10 +218,8 @@ class BufferInputFunction(TableInOutGenerator[SingleTableArguments, None]):
         cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments]
     ) -> Iterator[pa.RecordBatch]:
         """Yield the buffered batches for one finalize_state_id, one per RPC."""
-        from vgi.function_storage import BoundStorage as _BS
-
         for batch_bytes in params.storage.state_log_scan(
-            b"buf", _BS.pack_int_key(finalize_state_id)
+            b"buf", BoundStorage.pack_int_key(finalize_state_id)
         ):
             yield pa.ipc.open_stream(batch_bytes).read_next_batch()
 
@@ -550,9 +547,8 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
         """
         if not state_ids:
             return []
-        from vgi.function_storage import BoundStorage as _BS
 
-        keys = [_BS.pack_int_key(sid) for sid in state_ids]
+        keys = [BoundStorage.pack_int_key(sid) for sid in state_ids]
         stored = params.storage.state_get_many(b"buf", keys)
         merged: dict[str, pa.Scalar[Any]] = {name: pa.scalar(0, type=field.type)
                                              for name, field in zip(params.output_schema.names,
@@ -564,7 +560,7 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
             for name in params.output_schema.names:
                 merged[name] = pc.add(merged[name], partial.column(name)[0])
         merged_state = SumAllColumnsState(partial_sums=cls._scalars_to_single_row_batch(merged))
-        params.storage.state_put(b"buf", _BS.pack_int_key(0), merged_state.serialize_to_bytes())
+        params.storage.state_put(b"buf", BoundStorage.pack_int_key(0), merged_state.serialize_to_bytes())
         return [0]
 
     @classmethod
@@ -572,9 +568,7 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
         cls, finalize_state_id: int, params: ProcessParams[SumAllColumnsFunctionArguments]
     ) -> Iterator[pa.RecordBatch]:
         """Yield one row carrying the merged column sums."""
-        from vgi.function_storage import BoundStorage as _BS
-
-        stored = params.storage.state_get(b"buf", _BS.pack_int_key(finalize_state_id))
+        stored = params.storage.state_get(b"buf", BoundStorage.pack_int_key(finalize_state_id))
         if stored is None:
             # No data at all — emit zeros so SQL like
             # `SELECT * FROM sum_all_columns((SELECT 1 WHERE 1=0))` still
@@ -899,7 +893,8 @@ class HangOnProcessFunction(BufferInputFunction):
 class LargeStateState(ArrowSerializableDataclass):
     """Holds a single large bytes buffer; the C++ side ships this through
     combine/finalize via the RPC's outer envelope, exercising IPC chunking
-    on the response path."""
+    on the response path.
+    """
 
     payload: bytes = b""
 
@@ -950,9 +945,8 @@ class LargeStateFunction(TableInOutGenerator[SingleTableArguments, LargeStateSta
     def finalize(
         cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments]
     ) -> Iterator[pa.RecordBatch]:
-        from vgi.function_storage import BoundStorage as _BS
 
-        stored = params.storage.state_get(b"buf", _BS.pack_int_key(finalize_state_id))
+        stored = params.storage.state_get(b"buf", BoundStorage.pack_int_key(finalize_state_id))
         if stored is None:
             return
         state = LargeStateState.deserialize_from_bytes(stored)
@@ -1049,14 +1043,13 @@ class BatchIndexBufferInputFunction(TableInOutGenerator[SingleTableArguments, No
                 "— Meta.requires_input_batch_index plumbing is broken"
             )
         assert params.state_id is not None
-        from vgi.function_storage import BoundStorage as _BS
 
         sink = pa.BufferOutputStream()
         with pa.ipc.new_stream(sink, batch.schema) as writer:
             writer.write_batch(batch)
         params.storage.state_append(
             b"buf",
-            _BS.pack_int_key(params.state_id),
+            BoundStorage.pack_int_key(params.state_id),
             _pack_indexed_batch(params.batch_index, sink.getvalue().to_pybytes()),
         )
         out.emit(empty_batch(params.output_schema))
@@ -1078,7 +1071,6 @@ class BatchIndexBufferInputFunction(TableInOutGenerator[SingleTableArguments, No
     def finalize(
         cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments]
     ) -> Iterator[pa.RecordBatch]:
-        from vgi.function_storage import BoundStorage as _BS
 
         # NB. There is exactly one finalize() per state_id (combine returned
         # state_ids unchanged), so we only see this thread's log here. To get
@@ -1086,7 +1078,7 @@ class BatchIndexBufferInputFunction(TableInOutGenerator[SingleTableArguments, No
         # OR use a single Sink thread; otherwise per-thread output order is
         # batch_index-ascending only within this slice.
         log_bytes = params.storage.state_log_scan(
-            b"buf", _BS.pack_int_key(finalize_state_id)
+            b"buf", BoundStorage.pack_int_key(finalize_state_id)
         )
         pairs = [_unpack_indexed_batch(b) for b in log_bytes]
         pairs.sort(key=lambda p: p[0])
