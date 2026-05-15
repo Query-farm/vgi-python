@@ -2417,10 +2417,16 @@ class Worker:
 
         batch = pa.ipc.open_stream(request.input_batch).read_next_batch()
 
-        # Load existing state for this state_id; create initial if absent.
-        stored = params.storage.aggregate_get([request.state_id])
-        if stored[0] is not None and func_cls.state_class is not None:
-            state = func_cls.state_class.deserialize_from_bytes(stored[0][1])
+        # Load existing state for this state_id from the unified state_*
+        # store. Buffered_table fixtures live under namespace b"buf"; key is
+        # the int state_id packed as 8-byte little-endian (BoundStorage
+        # convenience). Create initial state if absent.
+        from vgi.function_storage import BoundStorage as _BS
+
+        _state_key = _BS.pack_int_key(request.state_id)
+        stored_value = params.storage.state_get(b"buf", _state_key)
+        if stored_value is not None and func_cls.state_class is not None:
+            state = func_cls.state_class.deserialize_from_bytes(stored_value)
         else:
             state = func_cls.initial_state(params)
 
@@ -2453,8 +2459,9 @@ class Worker:
 
         func_cls.process(params, state, batch, _NoOpCollector())
 
-        # Persist the updated state.
-        params.storage.aggregate_put([(request.state_id, state.serialize_to_bytes())])
+        # Persist the updated state — namespace b"buf", key = packed state_id.
+        if func_cls.state_class is not None:
+            params.storage.state_put(b"buf", _state_key, state.serialize_to_bytes())
         return BufferedTableProcessResponse()
 
     def buffered_table_combine(

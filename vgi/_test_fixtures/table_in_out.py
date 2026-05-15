@@ -227,10 +227,12 @@ class BufferInputFunction(TableInOutGenerator[SingleTableArguments, BufferInputS
         ``buffered_table_finalize`` RPC consumes one ``yield`` and reports
         ``has_more`` based on whether the iterator is exhausted.
         """
-        stored = params.storage.aggregate_get([finalize_state_id])
-        if not stored or stored[0] is None:
+        from vgi.function_storage import BoundStorage as _BS
+
+        stored = params.storage.state_get(b"buf", _BS.pack_int_key(finalize_state_id))
+        if stored is None:
             return
-        state = BufferInputState.deserialize_from_bytes(stored[0][1])
+        state = BufferInputState.deserialize_from_bytes(stored)
         for batch_bytes in state.batches:
             yield pa.ipc.open_stream(batch_bytes).read_next_batch()
 
@@ -558,18 +560,21 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
         """
         if not state_ids:
             return []
-        stored = params.storage.aggregate_get(state_ids)
+        from vgi.function_storage import BoundStorage as _BS
+
+        keys = [_BS.pack_int_key(sid) for sid in state_ids]
+        stored = params.storage.state_get_many(b"buf", keys)
         merged: dict[str, pa.Scalar[Any]] = {name: pa.scalar(0, type=field.type)
                                              for name, field in zip(params.output_schema.names,
                                                                      params.output_schema)}
         for entry in stored:
             if entry is None:
                 continue
-            partial = SumAllColumnsState.deserialize_from_bytes(entry[1]).partial_sums
+            partial = SumAllColumnsState.deserialize_from_bytes(entry).partial_sums
             for name in params.output_schema.names:
                 merged[name] = pc.add(merged[name], partial.column(name)[0])
         merged_state = SumAllColumnsState(partial_sums=cls._scalars_to_single_row_batch(merged))
-        params.storage.aggregate_put([(0, merged_state.serialize_to_bytes())])
+        params.storage.state_put(b"buf", _BS.pack_int_key(0), merged_state.serialize_to_bytes())
         return [0]
 
     @classmethod
@@ -577,8 +582,10 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
         cls, finalize_state_id: int, params: ProcessParams[SumAllColumnsFunctionArguments]
     ) -> Iterator[pa.RecordBatch]:
         """Yield one row carrying the merged column sums."""
-        stored = params.storage.aggregate_get([finalize_state_id])
-        if not stored or stored[0] is None:
+        from vgi.function_storage import BoundStorage as _BS
+
+        stored = params.storage.state_get(b"buf", _BS.pack_int_key(finalize_state_id))
+        if stored is None:
             # No data at all — emit zeros so SQL like
             # `SELECT * FROM sum_all_columns((SELECT 1 WHERE 1=0))` still
             # produces a row with the expected shape.
@@ -587,7 +594,7 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
             yield pa.RecordBatch.from_pydict({name: [val] for name, val in sums.items()},
                                               schema=params.output_schema)
             return
-        partial = SumAllColumnsState.deserialize_from_bytes(stored[0][1]).partial_sums
+        partial = SumAllColumnsState.deserialize_from_bytes(stored).partial_sums
         sums = {name: partial.column(name)[0] for name in params.output_schema.names}
         yield pa.RecordBatch.from_pydict({name: [val] for name, val in sums.items()},
                                           schema=params.output_schema)
@@ -953,10 +960,12 @@ class LargeStateFunction(TableInOutGenerator[SingleTableArguments, LargeStateSta
     def finalize(
         cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments]
     ) -> Iterator[pa.RecordBatch]:
-        stored = params.storage.aggregate_get([finalize_state_id])
-        if not stored or stored[0] is None:
+        from vgi.function_storage import BoundStorage as _BS
+
+        stored = params.storage.state_get(b"buf", _BS.pack_int_key(finalize_state_id))
+        if stored is None:
             return
-        state = LargeStateState.deserialize_from_bytes(stored[0][1])
+        state = LargeStateState.deserialize_from_bytes(stored)
         # Emit one row with the payload length so the test can assert
         # we round-tripped the right number of bytes through combine.
         yield pa.RecordBatch.from_pydict(
@@ -1073,25 +1082,30 @@ class BatchIndexBufferInputFunction(TableInOutGenerator[SingleTableArguments, Ba
         """Merge per-state buffers, sort by batch_index, write to slot 0."""
         if not state_ids:
             return []
-        stored = params.storage.aggregate_get(state_ids)
+        from vgi.function_storage import BoundStorage as _BS
+
+        keys = [_BS.pack_int_key(sid) for sid in state_ids]
+        stored = params.storage.state_get_many(b"buf", keys)
         all_pairs: list[IndexedBatch] = []
         for entry in stored:
             if entry is None:
                 continue
-            partial = BatchIndexBufferInputState.deserialize_from_bytes(entry[1])
+            partial = BatchIndexBufferInputState.deserialize_from_bytes(entry)
             all_pairs.extend(partial.pairs)
         all_pairs.sort(key=lambda p: p.batch_index)
         merged = BatchIndexBufferInputState(pairs=all_pairs)
-        params.storage.aggregate_put([(0, merged.serialize_to_bytes())])
+        params.storage.state_put(b"buf", _BS.pack_int_key(0), merged.serialize_to_bytes())
         return [0]
 
     @classmethod
     def finalize(
         cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments]
     ) -> Iterator[pa.RecordBatch]:
-        stored = params.storage.aggregate_get([finalize_state_id])
-        if not stored or stored[0] is None:
+        from vgi.function_storage import BoundStorage as _BS
+
+        stored = params.storage.state_get(b"buf", _BS.pack_int_key(finalize_state_id))
+        if stored is None:
             return
-        state = BatchIndexBufferInputState.deserialize_from_bytes(stored[0][1])
+        state = BatchIndexBufferInputState.deserialize_from_bytes(stored)
         for entry in state.pairs:
             yield pa.ipc.open_stream(entry.batch_bytes).read_next_batch()
