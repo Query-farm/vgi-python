@@ -334,6 +334,7 @@ class FunctionType(Enum):
 
     SCALAR = "scalar"
     TABLE = "table"
+    TABLE_BUFFERING = "table_buffering"
     AGGREGATE = "aggregate"
 
 
@@ -478,29 +479,25 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     # on functions that register a finalize callback.
     has_finalize: bool = False
 
-    # True if the function opts into the buffered table function path —
-    # a custom Sink+Source PhysicalOperator (see DuckDB issue #18222). The
-    # C++ OptimizerExtension rewrites the LogicalGet of such functions; the
-    # streaming ``in_out_function`` / ``in_out_function_final`` callbacks
-    # are deliberately *not* wired when this is true.
-    buffered_table: bool = False
-
-    # Only meaningful when ``buffered_table`` is true. When true, the source
-    # phase is single-threaded and ``finalize_state_id``s drain in
-    # combine-returned order. Default false enables parallel finalize.
+    # Only meaningful when ``function_type == FunctionType.TABLE_BUFFERING``
+    # (i.e. the function is registered through the Sink+Source path). When
+    # true, the source phase is single-threaded and ``finalize_state_id``s
+    # drain in combine-returned order. Default false enables parallel
+    # finalize.
     source_order_dependent: bool = False
 
-    # Only meaningful when ``buffered_table`` is true. When true, the SINK
-    # phase runs single-threaded — every process() call arrives in source
-    # order on one worker. Mutually exclusive with requires_input_batch_index.
+    # Only meaningful when ``function_type == FunctionType.TABLE_BUFFERING``.
+    # When true, the SINK phase runs single-threaded — every process() call
+    # arrives in source order on one worker. Mutually exclusive with
+    # requires_input_batch_index.
     sink_order_dependent: bool = False
 
-    # Only meaningful when ``buffered_table`` is true. When true, the C++
-    # Sink operator declares RequiredPartitionInfo()=BatchIndex(); each
-    # process() RPC carries a globally-unique monotonic batch_index from
-    # DuckDB's source. Workers can sort by it in combine() to reconstruct
-    # source order under parallel ingest. Mutually exclusive with
-    # sink_order_dependent.
+    # Only meaningful when ``function_type == FunctionType.TABLE_BUFFERING``.
+    # When true, the C++ Sink operator declares
+    # RequiredPartitionInfo()=BatchIndex(); each process() RPC carries a
+    # globally-unique monotonic batch_index from DuckDB's source. Workers
+    # can sort by it in combine() to reconstruct source order under parallel
+    # ingest. Mutually exclusive with sink_order_dependent.
     requires_input_batch_index: bool = False
 
     # Settings required by the function
@@ -2235,7 +2232,9 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                     # Filter by function type
                     if type_enum == SchemaObjectType.SCALAR_FUNCTION and func_info.function_type != FunctionType.SCALAR:
                         continue
-                    if type_enum == SchemaObjectType.TABLE_FUNCTION and func_info.function_type != FunctionType.TABLE:
+                    if type_enum == SchemaObjectType.TABLE_FUNCTION and func_info.function_type not in (
+                        FunctionType.TABLE, FunctionType.TABLE_BUFFERING,
+                    ):
                         continue
                     if (
                         type_enum == SchemaObjectType.AGGREGATE_FUNCTION
@@ -2262,6 +2261,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         func_type_map = {
             MetadataFunctionType.SCALAR: FunctionType.SCALAR,
             MetadataFunctionType.TABLE: FunctionType.TABLE,
+            MetadataFunctionType.TABLE_BUFFERING: FunctionType.TABLE_BUFFERING,
             MetadataFunctionType.AGGREGATE: FunctionType.AGGREGATE,
         }
         func_type = func_type_map.get(meta.function_type, FunctionType.TABLE)
@@ -2319,7 +2319,6 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             supports_window=meta.supports_window,
             streaming_partitioned=meta.streaming_partitioned,
             has_finalize=meta.has_finalize,
-            buffered_table=meta.buffered_table,
             source_order_dependent=meta.source_order_dependent,
             sink_order_dependent=meta.sink_order_dependent,
             requires_input_batch_index=meta.requires_input_batch_index,

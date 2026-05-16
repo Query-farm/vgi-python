@@ -233,6 +233,44 @@ class TestFunctionStorageSqlite:
         assert bs.state_get(b"agg", b"k1") == b"v1"
         assert bs.state_get(b"agg", b"missing") is None
 
+    def test_facade_rejects_reserved_ns_prefix(self, storage: FunctionStorageSqlite) -> None:
+        """User-supplied bytes starting with b"_vgi/" are rejected at every state_* entry."""
+        import pytest
+
+        from vgi.function_storage import BoundStorage
+
+        bs = BoundStorage(storage, b"exec1", attach_opaque_data=b"a")
+        reserved = b"_vgi/anything"
+        with pytest.raises(ValueError, match="reserved prefix"):
+            bs.state_get(reserved, b"k")
+        with pytest.raises(ValueError, match="reserved prefix"):
+            bs.state_put(reserved, b"k", b"v")
+        with pytest.raises(ValueError, match="reserved prefix"):
+            bs.state_get_many(reserved, [b"k"])
+        with pytest.raises(ValueError, match="reserved prefix"):
+            bs.state_put_many(reserved, [(b"k", b"v")])
+        with pytest.raises(ValueError, match="reserved prefix"):
+            bs.state_scan(reserved)
+        with pytest.raises(ValueError, match="reserved prefix"):
+            bs.state_drain(reserved)
+        with pytest.raises(ValueError, match="reserved prefix"):
+            bs.state_delete(reserved)
+        with pytest.raises(ValueError, match="reserved prefix"):
+            bs.state_append(reserved, b"k", b"v")
+        with pytest.raises(ValueError, match="reserved prefix"):
+            bs.state_log_scan(reserved, b"k")
+
+    def test_facade_framework_ns_member_passes_through(self, storage: FunctionStorageSqlite) -> None:
+        """FrameworkNS members bypass the reserved-prefix check and resolve to their bytes value."""
+        from vgi.function_storage import BoundStorage, FrameworkNS
+
+        bs = BoundStorage(storage, b"exec1", attach_opaque_data=b"a")
+        bs.state_put(FrameworkNS.AGGREGATE_STATE, b"k1", b"v1")
+        assert bs.state_get(FrameworkNS.AGGREGATE_STATE, b"k1") == b"v1"
+        # Same key under a raw user namespace must NOT see the framework
+        # write — they live in different ns rows.
+        assert bs.state_get(b"agg", b"k1") is None
+
     def test_facade_pack_int_key(self) -> None:
         """pack_int_key is little-endian, signed, 8 bytes — round-trips to int.from_bytes."""
         from vgi.function_storage import BoundStorage

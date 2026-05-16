@@ -263,21 +263,20 @@ def _effective_projection_ids(func_cls: Any, projection_ids: list[int] | None) -
 
 
 class TableInOutFunctionInitPhase(Enum):
-    """Indicate the phase of the init call for TableInOutFunction.
+    """Init-call phase for table functions.
 
-    INPUT/FINALIZE drive the streaming in_out_function path.
-    BUFFERED_TABLE is the Sink+Source init phase — after init, traffic
-    moves to ``buffered_table_process``/``_combine``.
-    BUFFERED_TABLE_FINALIZE opens a cursor-driven finalize stream for
-    one finalize_state_id; the C++ Source phase reads batches from the
-    returned stream and the worker drains a state_log via cursor with
-    no per-tick user code.
+    ``INPUT`` / ``FINALIZE`` drive the streaming TableInOutGenerator path.
+    ``TABLE_BUFFERING`` is the Sink+Source init phase for
+    ``TableBufferingFunction`` — after init, traffic moves to
+    ``table_buffering_process`` / ``_combine`` (unary) and
+    ``TABLE_BUFFERING_FINALIZE`` opens a producer-mode finalize stream
+    per finalize_state_id.
     """
 
     INPUT = auto()
     FINALIZE = auto()
-    BUFFERED_TABLE = auto()
-    BUFFERED_TABLE_FINALIZE = auto()
+    TABLE_BUFFERING = auto()
+    TABLE_BUFFERING_FINALIZE = auto()
 
 
 class OrderByDirection(Enum):
@@ -364,20 +363,12 @@ class ProcessParams[TArgs]:
     current_pushdown_filters: Any = None  # PushdownFilters | None
 
     # Globally-unique monotonic batch index for this process() call. Populated
-    # ONLY for buffered_table functions with Meta.requires_input_batch_index=True
-    # — the C++ Sink reads it from DuckDB's per-chunk OperatorPartitionInfo
-    # and forwards it. Workers can accumulate (batch_index, payload) tuples
-    # and sort in combine() to reconstruct source order under parallel ingest.
-    # None for every other call path.
+    # ONLY for TableBufferingFunction subclasses with
+    # Meta.requires_input_batch_index=True — the C++ Sink reads it from DuckDB's
+    # per-chunk OperatorPartitionInfo and forwards it. Workers can accumulate
+    # (batch_index, payload) tuples and sort in combine() to reconstruct source
+    # order under parallel ingest. None for every other call path.
     batch_index: int | None = None
-
-    # Per-thread state_id for buffered_table functions. The C++ Sink assigns
-    # one unique state_id per worker (atomic counter, scoped per execution),
-    # then includes it on every buffered_table_process RPC for that thread so
-    # the worker can key its accumulator by it. Process()'s direct callers
-    # (e.g. the streaming exchange path) leave this None. Set on the
-    # buffered_table_process path only — see vgi/worker.py:buffered_table_process.
-    state_id: int | None = None
 
 
 class TableFunctionBase[TArgs](vgi.function.Function):
@@ -644,6 +635,115 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             auth_context=auth_context if auth_context is not None else AuthContext.anonymous(),
         )
 
+    # ------------------------------------------------------------------
+    # Bind / global_init — shared framework hooks for every table function.
+    #
+    # Subclasses define ``on_bind`` (and optionally ``on_init``) for the
+    # user-facing behavior; the framework's wire entry points ``bind`` and
+    # ``global_init`` are ``@final`` and live here so we have a single
+    # source of truth across TableFunctionGenerator / TableInOutGenerator /
+    # TableBufferingFunction.
+    # ------------------------------------------------------------------
+
+    @classmethod
+    @abstractmethod
+    def on_bind(
+        cls,
+        params: BindParams[TArgs],
+    ) -> BindResponse:
+        """Produce the output schema and perform other bind-time logic.
+
+        Subclasses must override. Common patterns:
+
+          * Pass through: ``return BindResponse(output_schema=params.bind_call.input_schema)``
+          * Custom shape: build a ``pa.Schema`` from ``params.args`` and return it.
+          * Dynamic secrets: declare ``*, my_secret: Annotated[..., Secret()] = None``
+            or call ``params.secrets.get(...)``; the framework will issue a
+            secret-scope retry automatically.
+
+        Args:
+            params: Bind parameters including arguments and schema.
+
+        Returns:
+            BindResponse with output_schema and optional opaque_data.
+
+        """
+
+    @final
+    @classmethod
+    def bind(
+        cls,
+        input: BindRequest,
+        *,
+        ctx: CallContext | None = None,
+    ) -> BindResponse:
+        """Bind protocol entry point. Do not override; use ``on_bind()``.
+
+        Validates type bounds when an input schema is present (table-input
+        functions), constructs BindParameters, calls ``on_bind()``, and
+        wraps the result for transmission to global_init. If ``on_bind()``
+        triggered dynamic secret lookups via SecretsAccessor, returns a
+        secret-scope request to trigger two-phase bind.
+
+        Note: we do NOT auto-request secrets before ``on_bind()``. Table
+        functions handle secrets via ``on_bind`` kwargs (``Secret()``
+        annotations) and ``SecretsAccessor.get()`` calls, which may use
+        dynamic scopes computed from function arguments.
+        """
+        auth = ctx.auth if ctx is not None else AuthContext.anonymous()
+        params = cls._make_bind_params(input, auth_context=auth)
+
+        if input.input_schema is not None:
+            cls._validate_arg_type_bounds(cls.FunctionArguments, params.args, input.input_schema)
+
+        result = cls.on_bind(params, **cls._extract_bind_kwargs(input))
+
+        if params.secrets.needs_resolution:
+            return BindResponse.secret_scope_request(params.secrets.pending_lookups)
+
+        return result
+
+    @classmethod
+    def on_init(
+        cls,
+        params: InitParams[TArgs],
+    ) -> GlobalInitResponse:
+        """One-time setup after bind, before processing batches.
+
+        Override to perform per-execution setup (open external resources,
+        allocate caches, etc.). Default is a no-op.
+        """
+        return GlobalInitResponse()
+
+    @final
+    @classmethod
+    def global_init(
+        cls, input: InitRequest, *, ctx: CallContext | None = None,
+    ) -> GlobalInitResponse:
+        """Global init protocol entry point. Do not override; use ``on_init()``."""
+        execution_id = uuid.uuid4().bytes
+        auth = ctx.auth if ctx is not None else AuthContext.anonymous()
+        params = InitParams[TArgs](
+            args=cls._parse_arguments(cls.FunctionArguments, input.bind_call.arguments),
+            init_call=input,
+            output_schema=project_schema(
+                _effective_projection_ids(cls, input.projection_ids), input.output_schema,
+            ),
+            settings=_batch_to_scalar_dict(input.bind_call.settings),
+            secrets=SecretsAccessor(input.bind_call.secrets).to_dict(),
+            execution_id=execution_id,
+            storage=BoundStorage(cls.storage, execution_id, request=input, auth=auth),
+            auth_context=auth,
+        )
+
+        result = cls.on_init(params)
+
+        return GlobalInitResponse(
+            max_workers=result.max_workers,
+            execution_id=execution_id,
+            opaque_data=result.opaque_data,
+        )
+
     @classmethod
     def cardinality(cls, params: BindParams[TArgs]) -> TableCardinality:
         """Return the cardinality for the output.
@@ -810,112 +910,9 @@ class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
 
     """
 
-    @classmethod
-    @abstractmethod
-    def on_bind(
-        cls,
-        params: BindParams[TArgs],
-    ) -> BindResponse:
-        """Produce the output schema and perform other bind time logic.
-
-        Override to perform custom bind-time logic such as validating
-        arguments or computing a dynamic output type.
-
-        Subclasses may declare keyword-only parameters annotated with
-        ``Setting()`` or ``Secret()`` to receive values automatically::
-
-            @classmethod
-            def on_bind(cls, params, *, my_setting: Annotated[pa.Scalar, Setting()] = None):
-                ...
-
-        Args:
-            params: Bind parameters including arguments and schema.
-
-        Returns:
-            BindResponse with output_schema and optional opaque_data.
-
-        """
-
-    @final
-    @classmethod
-    def bind(
-        cls,
-        input: BindRequest,
-        *,
-        ctx: CallContext | None = None,
-    ) -> BindResponse:
-        """Bind protocol entry point. Do not override; use on_bind() instead.
-
-        Validates type bounds, constructs BindParameters, calls on_bind(),
-        and wraps the result for transmission to global_init. If on_bind()
-        triggers dynamic secret lookups via SecretsAccessor, returns a
-        secret scope request to trigger two-phase bind.
-
-        Note: unlike ScalarFunction.bind(), we do NOT auto-request secrets
-        before on_bind(). Table functions handle secrets via on_bind()
-        kwargs (Secret() annotations) and SecretsAccessor.get() calls,
-        which may use dynamic scopes computed from function arguments.
-
-        """
-        auth = ctx.auth if ctx is not None else AuthContext.anonymous()
-        params = cls._make_bind_params(input, auth_context=auth)
-        result = cls.on_bind(params, **cls._extract_bind_kwargs(input))
-
-        # Check if on_bind() registered pending secret lookups
-        if params.secrets.needs_resolution:
-            return BindResponse.secret_scope_request(params.secrets.pending_lookups)
-
-        return result
-
-    @classmethod
-    def on_init(
-        cls,
-        params: InitParams[TArgs],
-    ) -> GlobalInitResponse:
-        """Initialize the function during the init API call.
-
-        Override to perform one-time setup that should happen after bind
-        but before processing batches.
-
-        Args:
-            params: Init parameters including arguments, schemas, and opaque data from
-                bind.
-
-        Returns:
-            GlobalInitResponse
-
-        """
-        return GlobalInitResponse()
-
-    @final
-    @classmethod
-    def global_init(cls, input: InitRequest, *, ctx: CallContext | None = None) -> GlobalInitResponse:
-        """Global init protocol entry point. Do not override; use on_init() instead.
-
-        Deserializes the wrapped bind data, calls on_init(), and
-        wraps the result for transmission to process().
-
-        """
-        execution_id = uuid.uuid4().bytes
-        auth = ctx.auth if ctx is not None else AuthContext.anonymous()
-        params = InitParams[TArgs](
-            args=cls._parse_arguments(cls.FunctionArguments, input.bind_call.arguments),
-            init_call=input,
-            output_schema=project_schema(_effective_projection_ids(cls, input.projection_ids), input.output_schema),
-            settings=_batch_to_scalar_dict(input.bind_call.settings),
-            secrets=SecretsAccessor(input.bind_call.secrets).to_dict(),
-            execution_id=execution_id,
-            storage=BoundStorage(cls.storage, execution_id, request=input, auth=auth),
-            auth_context=auth,
-        )
-
-        result = cls.on_init(params)
-
-        return GlobalInitResponse(
-            max_workers=result.max_workers,
-            execution_id=execution_id,
-            opaque_data=result.opaque_data,
-        )
+    # bind / on_bind / on_init / global_init are defined on TableFunctionBase.
+    # TableFunctionGenerator subclasses must override the abstract on_bind
+    # to declare an output schema (TFG has no input schema to default to).
 
     @classmethod
     def initial_state(cls, params: ProcessParams[TArgs]) -> TState | None:

@@ -43,6 +43,7 @@ class FunctionType(Enum):
     AGGREGATE = "aggregate"
     SCALAR = "scalar"
     TABLE = "table"
+    TABLE_BUFFERING = "table_buffering"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

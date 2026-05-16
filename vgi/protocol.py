@@ -14,8 +14,8 @@ StreamState Implementations
 - **ScalarExchangeState**: Calls ScalarFunctionGenerator.process() per batch
 - **TableProducerState**: Calls TableFunctionGenerator.process() per tick
 - **TableInOutExchangeState**: Calls TableInOutGenerator.process() per input
-- **BufferedFinalizeState**: Drains a state_log via cursor for finalize
-  streams (both buffered_table and streaming-shape FINALIZE)
+- **BufferedFinalizeState**: Drains a state_log via cursor for streaming-shape
+  FINALIZE phase of TableInOutGenerator
 
 """
 
@@ -95,6 +95,13 @@ __all__ = [
     "TableInOutExchangeState",
     "BufferedFinalizeState",
     "TableProducerState",
+    "TableBufferingCombineRequest",
+    "TableBufferingCombineResponse",
+    "TableBufferingDestructorRequest",
+    "TableBufferingDestructorResponse",
+    "TableBufferingFinalizeState",
+    "TableBufferingProcessRequest",
+    "TableBufferingProcessResponse",
     "TablesResponse",
     "TransactionBeginResponse",
     "VgiProtocol",
@@ -156,8 +163,10 @@ class InitRequest(ArrowSerializableDataclass):
     # Table-in-out extras
     phase: TableInOutFunctionInitPhase | None = None
     # Buffered-table finalize stream: which state_id this stream serves.
-    # Required when phase=BUFFERED_TABLE_FINALIZE; None otherwise.
-    finalize_state_id: int | None = None
+    # Required when phase=TABLE_BUFFERING_FINALIZE; None otherwise. Opaque
+    # bytes — worker chose the encoding when its combine() returned the
+    # finalize_state_ids list.
+    finalize_state_id: bytes | None = None
 
     # Secondary init (None = global init, set = secondary)
     execution_id: bytes | None = None
@@ -1198,20 +1207,16 @@ class TableInOutExchangeState(ExchangeState):
 class BufferedFinalizeState(ProducerState):
     """Cursor-driven streaming finalize. Drains a state_log via cursor.
 
-    Wire-serializable end-to-end: nothing here is Transient, nothing
-    holds object references. Each ``produce()`` tick: cold-build
-    BoundedStorage from (execution_id + attach), scan the next page of
-    log rows past ``cursor``, emit, advance cursor. No per-tick user
-    code — the user's job during process()/combine() (or, for
-    streaming-shape FINALIZE, the worker's init handler) is to ensure
-    the output batches exist in the state_log under (ns, key).
-
-    Used by both:
-    * the buffered_table finalize phase — data written by process() and
-      optionally post-processed by combine()
-    * the streaming-shape FINALIZE phase — worker materializes the
-      user's ``finalize() -> list[batch]`` return into BoundedStorage
-      at init time
+    Used by the streaming-shape ``TableInOutGenerator`` FINALIZE phase
+    (not the new ``TableBufferingFunction`` path — that has its own
+    ``TableBufferingFinalizeState``). Wire-serializable end-to-end:
+    nothing here is Transient, nothing holds object references. Each
+    ``produce()`` tick: cold-build BoundedStorage from
+    (execution_id + attach), scan the next page of log rows past
+    ``cursor``, emit, advance cursor. No per-tick user code — the
+    worker's init handler materializes the user's
+    ``finalize() -> list[batch]`` return into BoundedStorage at init
+    time, and produce() drains it.
     """
 
     execution_id: bytes = b""
@@ -1248,10 +1253,49 @@ class BufferedFinalizeState(ProducerState):
         self.cursor = pack_int_cursor(log_id)
 
 
+@dataclass
+class TableBufferingFinalizeState(ProducerState):
+    """Streaming finalize state for ``TableBufferingFunction.finalize``.
+
+    Producer-mode stream parameterized by (execution_id, finalize_state_id).
+    One streaming RPC per finalize_state_id; framework calls user's
+    ``cls.finalize(params, finalize_state_id, state, out)`` per tick,
+    serializing the user's ``state_blob`` between ticks so the stream
+    survives worker-process boundaries (HTTP transport).
+    """
+
+    function_name: str = ""
+    execution_id: bytes = b""
+    transaction_id: bytes | None = None
+    finalize_state_id: bytes = b""
+    # Serialized form of the user's TFinalizeState (ArrowSerializableDataclass
+    # bytes), or b"" on the first tick before initial_finalize_state() runs.
+    state_blob: bytes = b""
+    # True after the user's initial_finalize_state() has been invoked and
+    # state_blob is populated. Distinguishes "first tick / build initial"
+    # from "subsequent tick / deserialize existing".
+    state_initialized: bool = False
+    attach_opaque_data: bytes | None = None
+
+    def produce(self, out: OutputCollector, ctx: CallContext) -> None:
+        """Drive one tick of the user's finalize() callback."""
+        # Local import: keeps the protocol module's import graph minimal
+        # and avoids a circular dependency on vgi.worker.
+        from vgi.worker import run_table_buffering_finalize_tick
+
+        run_table_buffering_finalize_tick(self, out, ctx)
+
+
 # Type alias for the union of all stream state variants produced by init().
 # vgi-rpc resolves this union using a method-local numeric tag in HTTP state
 # tokens, so state recovery does not depend on Python class names.
-ProcessState = ScalarExchangeState | TableProducerState | TableInOutExchangeState | BufferedFinalizeState
+ProcessState = (
+    ScalarExchangeState
+    | TableProducerState
+    | TableInOutExchangeState
+    | BufferedFinalizeState
+    | TableBufferingFinalizeState
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1349,94 +1393,67 @@ class AggregateDestructorResponse(ArrowSerializableDataclass):
 
 
 # ---------------------------------------------------------------------------
-# Buffered Table Function RPC Types
+# Table Sink+Source RPC Types
 # ---------------------------------------------------------------------------
-# Sink+Source PhysicalOperator path. Bind and init reuse the existing bind +
-# PerformInit(phase="BUFFERED_TABLE") RPCs; per-thread secondary workers
-# attach to the coordinator's execution_id via FunctionConnectionParams.
-# After bind+init, traffic uses the three RPCs below.
+# Sink+Source PhysicalOperator path for TableBufferingFunction subclasses.
+# Contract:
+#   * process() is UNARY; the worker-chosen state_id rides on the response
+#     as opaque bytes.
+#   * state_ids / finalize_state_ids are opaque bytes throughout.
+#   * finalize is the existing streaming-init path with new
+#     TableBufferingFinalizeState driving user finalize() per tick.
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class BufferedTableProcessRequest(ArrowSerializableDataclass):
-    """Request for buffered_table_process — sink one batch into state_id.
-
-    The C++ side serializes Sink chunks for this thread's worker. The worker
-    loads state for ``(execution_id, state_id)``, calls
-    ``cls.process(params, state, batch, NoOpCollector())``, persists. process
-    must not emit non-empty batches — the source phase owns output.
-    """
+class TableBufferingProcessRequest(ArrowSerializableDataclass):
+    """Request for table_buffering_process — sink one batch (unary)."""
 
     function_name: str
     execution_id: bytes
-    state_id: int  # int64; assigned by C++ atomic counter per Sink thread
     input_batch: bytes  # Full IPC stream bytes
     attach_opaque_data: bytes | None = None
-    # Globally-unique monotonic position from DuckDB's source-side batch
-    # tagging, populated only when Meta.requires_input_batch_index=True
-    # (operator advertises RequiredPartitionInfo()=BatchIndex()). Workers
-    # that need source-order ordering accumulate (batch_index, payload)
-    # tuples and sort in combine().
+    transaction_id: bytes | None = None
     batch_index: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class BufferedTableProcessResponse(ArrowSerializableDataclass):
-    """Response from buffered_table_process — empty ack.
+class TableBufferingProcessResponse(ArrowSerializableDataclass):
+    """Response from table_buffering_process — the worker-chosen state_id."""
 
-    Note: in-band ``OutputCollector.client_log`` calls inside the user's
-    process() route to the worker's local logger only (stderr) — they do
-    not currently surface in DuckDB's ``duckdb_logs()`` view. To forward
-    logs through, a future revision will carry log messages on the response
-    schema. v1 known limitation.
-    """
-
-    pass
+    state_id: bytes
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class BufferedTableCombineRequest(ArrowSerializableDataclass):
-    """Request for buffered_table_combine — once-per-query end-of-input.
-
-    Carries every state_id observed across all Sink threads. The worker
-    runs ``cls.combine(state_ids, params)`` and returns the
-    ``finalize_state_ids`` partition keys that the source phase will iterate.
-    Workers may coordinate with peers here (e.g. via shared BoundStorage).
-    """
+class TableBufferingCombineRequest(ArrowSerializableDataclass):
+    """Request for table_buffering_combine — once-per-query end-of-input."""
 
     function_name: str
     execution_id: bytes
-    state_ids: Annotated[list[int], ArrowType(pa.list_(pa.int64()))]
+    state_ids: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
     attach_opaque_data: bytes | None = None
+    transaction_id: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class BufferedTableCombineResponse(ArrowSerializableDataclass):
-    """Response from buffered_table_combine — opaque partition keys."""
+class TableBufferingCombineResponse(ArrowSerializableDataclass):
+    """Response from table_buffering_combine — opaque finalize partition keys."""
 
-    finalize_state_ids: Annotated[list[int], ArrowType(pa.list_(pa.int64()))]
+    finalize_state_ids: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class BufferedTableDestructorRequest(ArrowSerializableDataclass):
-    """Request for buffered_table_destructor — best-effort end-of-query cleanup.
-
-    Fired by the C++ Sink+Source operator from its destructor regardless
-    of success / cancel / throw. Idempotent on the worker side: missing
-    entries are not errors. Delivery is best-effort — worker death or
-    network drop can lose the RPC; FunctionStorage's
-    ``cleanup_old_entries(max_age_days=1)`` is the backstop for missed
-    deliveries.
-    """
+class TableBufferingDestructorRequest(ArrowSerializableDataclass):
+    """Request for table_buffering_destructor — best-effort cleanup."""
 
     function_name: str
     execution_id: bytes
     attach_opaque_data: bytes | None = None
+    transaction_id: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class BufferedTableDestructorResponse(ArrowSerializableDataclass):
-    """Response from buffered_table_destructor — empty ack."""
+class TableBufferingDestructorResponse(ArrowSerializableDataclass):
+    """Response from table_buffering_destructor — empty ack."""
 
     pass
 
@@ -1703,18 +1720,24 @@ class VgiProtocol(Protocol):
         """Best-effort cleanup of aggregate states. Must not raise."""
         ...
 
-    # ========== Buffered Table Function Methods (Sink+Source path) ==========
+    # ========== Table Sink+Source Function Methods ==========
 
-    def buffered_table_process(self, request: BufferedTableProcessRequest) -> BufferedTableProcessResponse:
-        """Sink one input batch into per-(execution_id, state_id) state."""
+    def table_buffering_process(
+        self, request: TableBufferingProcessRequest,
+    ) -> TableBufferingProcessResponse:
+        """Sink one input batch; return the worker-chosen state_id."""
         ...
 
-    def buffered_table_combine(self, request: BufferedTableCombineRequest) -> BufferedTableCombineResponse:
+    def table_buffering_combine(
+        self, request: TableBufferingCombineRequest,
+    ) -> TableBufferingCombineResponse:
         """Once-per-query end-of-input signal. Returns finalize_state_ids."""
         ...
 
-    def buffered_table_destructor(self, request: BufferedTableDestructorRequest) -> BufferedTableDestructorResponse:
-        """Best-effort end-of-query cleanup of buffered_table state. Must not raise."""
+    def table_buffering_destructor(
+        self, request: TableBufferingDestructorRequest,
+    ) -> TableBufferingDestructorResponse:
+        """Best-effort end-of-query cleanup. Must not raise."""
         ...
 
     # ========== Aggregate Window Function Methods (optional, all unary) ==========

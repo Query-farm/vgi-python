@@ -577,17 +577,48 @@ class MetaWorker:
     # _dispatch_aggregate helper isn't aggregate-specific — it just looks up
     # the function by name in each worker's registry.
 
-    def buffered_table_process(self, request: Any, ctx: CallContext) -> Any:
-        """Dispatch buffered_table_process to the right worker."""
-        return self._dispatch_aggregate(request, "buffered_table_process", ctx)
+    def table_buffering_process(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch table_buffering_process to the right worker."""
+        return self._dispatch_aggregate(request, "table_buffering_process", ctx)
 
-    def buffered_table_combine(self, request: Any, ctx: CallContext) -> Any:
-        """Dispatch buffered_table_combine to the right worker."""
-        return self._dispatch_aggregate(request, "buffered_table_combine", ctx)
+    def table_buffering_combine(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch table_buffering_combine to the right worker."""
+        return self._dispatch_aggregate(request, "table_buffering_combine", ctx)
 
-    def buffered_table_destructor(self, request: Any, ctx: CallContext) -> Any:
-        """Dispatch buffered_table_destructor to the right worker."""
-        return self._dispatch_aggregate(request, "buffered_table_destructor", ctx)
+    def table_buffering_destructor(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch table_buffering_destructor to the right worker."""
+        return self._dispatch_aggregate(request, "table_buffering_destructor", ctx)
+
+    def _load_table_buffering_params(
+        self, request: Any, ctx: CallContext, *, attach_already_unwrapped: bool = False,
+    ) -> Any:
+        """Dispatch the finalize-tick driver's cold-load to the right worker.
+
+        ``run_table_buffering_finalize_tick`` calls this via
+        ``ctx.implementation._load_table_buffering_params(...)``. Under
+        MetaWorker, the wrapped attach_opaque_data steers us to the right
+        sub-worker; we unwrap the meta-prefix and delegate.
+
+        ``attach_already_unwrapped`` is forwarded to the sub-worker — see
+        ``Worker._load_table_buffering_params`` for semantics.
+        """
+        fn_name = getattr(request, "function_name", "")
+        if hasattr(request, "attach_opaque_data") and request.attach_opaque_data:
+            try:
+                worker, original_id = self._unwrap_attach_opaque_data(request.attach_opaque_data)
+                request = dataclasses.replace(request, attach_opaque_data=original_id)
+                return worker._load_table_buffering_params(
+                    request, ctx, attach_already_unwrapped=attach_already_unwrapped,
+                )
+            except (IndexError, KeyError):
+                pass
+        for w in self._workers:
+            registry = type(w)._build_registry()
+            if fn_name in registry:
+                return w._load_table_buffering_params(
+                    request, ctx, attach_already_unwrapped=attach_already_unwrapped,
+                )
+        raise ValueError(f"Unknown table_buffering function '{fn_name}'")
 
     # ========== Serve entry point ==========
 

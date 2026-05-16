@@ -100,7 +100,14 @@ class CatalogFunctionType(Enum):
     """Aggregate function: many inputs → one output."""
 
     TABLE = auto()
-    """Table function: returns a table."""
+    """Table function: returns a table (streaming producer or streaming exchange)."""
+
+    TABLE_BUFFERING = auto()
+    """Buffered table function: Sink+Source PhysicalOperator that sees all
+    input before producing output. Dispatched to the custom
+    ``PhysicalVgiTableBufferingFunction`` operator instead of the streaming
+    ``in_out_function`` registration. The class hierarchy is the dispatch
+    key — set automatically for ``TableBufferingFunction`` subclasses."""
 
 
 class FunctionStability(Enum):
@@ -391,28 +398,20 @@ class ResolvedMetadata:
     # LATERAL-projected input.
     has_finalize: bool = False
 
-    # Buffered table function path (Sink+Source PhysicalOperator).
-    # When True, the C++ extension registers this function via a custom
-    # PhysicalOperator that ingests all input through Sink, calls a single
-    # cross-pipeline combine, then emits via parallel Source. Required for
-    # functions whose finalize must see the complete input stream (e.g. under
-    # UNION ALL — see DuckDB issue #18222).
-    # Implies has_finalize=True.
-    buffered_table: bool = False
-
-    # When True (only meaningful with buffered_table=True), the source phase
-    # is single-threaded and finalize_state_ids are drained in the order
-    # combine() returned them. The default (False) enables parallel finalize.
+    # When True (only meaningful when ``function_type == TABLE_BUFFERING``),
+    # the source phase is single-threaded and finalize_state_ids are drained
+    # in the order combine() returned them. The default (False) enables
+    # parallel finalize.
     source_order_dependent: bool = False
 
-    # When True (only meaningful with buffered_table=True), the SINK phase
-    # runs single-threaded — every process() call arrives in source order on
-    # one worker. The default (False) parallelizes ingest. Mutually
-    # exclusive with requires_input_batch_index (single-thread already
-    # orders; no batch_index needed).
+    # When True (only meaningful when ``function_type == TABLE_BUFFERING``),
+    # the SINK phase runs single-threaded — every process() call arrives in
+    # source order on one worker. The default (False) parallelizes ingest.
+    # Mutually exclusive with requires_input_batch_index (single-thread
+    # already orders; no batch_index needed).
     sink_order_dependent: bool = False
 
-    # When True (only meaningful with buffered_table=True), the C++ Sink
+    # When True (only meaningful when ``function_type == TABLE_BUFFERING``), the C++ Sink
     # operator declares RequiredPartitionInfo()=BatchIndex(), causing DuckDB
     # to thread a globally-unique monotonic batch_index from the source
     # into every process() call. Workers can accumulate (batch_index,
@@ -450,7 +449,6 @@ class ResolvedMetadata:
             "supports_window": self.supports_window,
             "streaming_partitioned": self.streaming_partitioned,
             "has_finalize": self.has_finalize,
-            "buffered_table": self.buffered_table,
             "source_order_dependent": self.source_order_dependent,
             "sink_order_dependent": self.sink_order_dependent,
             "requires_input_batch_index": self.requires_input_batch_index,
@@ -485,7 +483,6 @@ class ResolvedMetadata:
             supports_window=d.get("supports_window", False),
             streaming_partitioned=d.get("streaming_partitioned", False),
             has_finalize=d.get("has_finalize", False),
-            buffered_table=d.get("buffered_table", False),
             source_order_dependent=d.get("source_order_dependent", False),
             sink_order_dependent=d.get("sink_order_dependent", False),
             requires_input_batch_index=d.get("requires_input_batch_index", False),
@@ -841,9 +838,12 @@ def _normalize_examples(
 # Class names are used (not classes) to avoid circular imports.
 # Note: Functions with an Arg[TableInput] parameter receive table input.
 _CLASS_NAME_TO_FUNCTION_TYPE: dict[str, CatalogFunctionType] = {
-    # Table functions (including those with table input)
+    # Buffered table function (Sink+Source). Must come before "TableFunctionBase"
+    # in the MRO walk — ``_infer_function_type`` returns on the first match, so
+    # the more-specific entry wins for TableBufferingFunction subclasses.
+    "TableBufferingFunction": CatalogFunctionType.TABLE_BUFFERING,
+    # Streaming table functions (TableFunctionGenerator + TableInOutGenerator).
     "TableFunctionBase": CatalogFunctionType.TABLE,
-    # Future function types (not yet implemented)
     "AggregateFunction": CatalogFunctionType.AGGREGATE,
     "ScalarFunction": CatalogFunctionType.SCALAR,
     "ScalarFunctionGenerator": CatalogFunctionType.SCALAR,
@@ -876,18 +876,18 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         # Set to True or False to force the emitted ``in_out_function_final``
         # registration bit; leave unset (None) to auto-detect from finish/finalize.
         "has_finalize",
-        # Buffered table function (Sink+Source PhysicalOperator). Implies has_finalize.
-        "buffered_table",
-        # When True (only with buffered_table), source phase is single-threaded
-        # and finalize_state_ids drain in combine-returned order.
+        # Buffered table function knobs (only meaningful when the class is a
+        # TableBufferingFunction subclass — function_type == TABLE_BUFFERING).
+        # When True, source phase is single-threaded and finalize_state_ids
+        # drain in combine-returned order.
         "source_order_dependent",
-        # When True (only with buffered_table), the SINK phase runs single-
-        # threaded — process() calls arrive in source order on one worker.
+        # When True, the SINK phase runs single-threaded — process() calls
+        # arrive in source order on one worker.
         "sink_order_dependent",
-        # When True (only with buffered_table), DuckDB threads a globally-
-        # unique monotonic batch_index from the source into every process()
-        # call. Worker can reconstruct source order in combine() by sorting
-        # accumulated (batch_index, payload) tuples.
+        # When True, DuckDB threads a globally-unique monotonic batch_index
+        # from the source into every process() call. Worker can reconstruct
+        # source order in combine() by sorting accumulated (batch_index,
+        # payload) tuples.
         "requires_input_batch_index",
         # Aggregate function specific
         "order_dependent",
@@ -971,24 +971,28 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
             stacklevel=2,
         )
 
-    # Infer function type from class hierarchy
+    # Infer function type from class hierarchy. TableBufferingFunction
+    # subclasses resolve to ``CatalogFunctionType.TABLE_BUFFERING`` — that's
+    # the single source of truth for the C++ optimizer rewriter, not a
+    # separate Meta flag.
     function_type = _infer_function_type(cls)
+    is_buffering = function_type is CatalogFunctionType.TABLE_BUFFERING
 
     # Cross-flag validation for the buffered table path.
-    if attrs.get("source_order_dependent") and not attrs.get("buffered_table"):
+    if attrs.get("source_order_dependent") and not is_buffering:
         raise TypeError(
-            f"{cls.__name__}: Meta.source_order_dependent is only meaningful when "
-            f"Meta.buffered_table = True"
+            f"{cls.__name__}: Meta.source_order_dependent is only meaningful on "
+            f"TableBufferingFunction subclasses"
         )
-    if attrs.get("sink_order_dependent") and not attrs.get("buffered_table"):
+    if attrs.get("sink_order_dependent") and not is_buffering:
         raise TypeError(
-            f"{cls.__name__}: Meta.sink_order_dependent is only meaningful when "
-            f"Meta.buffered_table = True"
+            f"{cls.__name__}: Meta.sink_order_dependent is only meaningful on "
+            f"TableBufferingFunction subclasses"
         )
-    if attrs.get("requires_input_batch_index") and not attrs.get("buffered_table"):
+    if attrs.get("requires_input_batch_index") and not is_buffering:
         raise TypeError(
-            f"{cls.__name__}: Meta.requires_input_batch_index is only meaningful when "
-            f"Meta.buffered_table = True"
+            f"{cls.__name__}: Meta.requires_input_batch_index is only meaningful on "
+            f"TableBufferingFunction subclasses"
         )
     if attrs.get("sink_order_dependent") and attrs.get("requires_input_batch_index"):
         raise TypeError(
@@ -1085,11 +1089,9 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         distinct_dependent=attrs.get("distinct_dependent", DistinctDependence.NOT_DISTINCT_DEPENDENT),
         supports_window=bool(attrs.get("supports_window", False)),
         streaming_partitioned=bool(attrs.get("streaming_partitioned", False)),
-        # buffered_table implies has_finalize — the buffered path always
+        # TABLE_BUFFERING implies has_finalize — the buffered path always
         # invokes the worker's finalize phase (it's the whole point).
-        has_finalize=(_detect_has_finalize(cls, function_type)
-                      or bool(attrs.get("buffered_table", False))),
-        buffered_table=bool(attrs.get("buffered_table", False)),
+        has_finalize=(_detect_has_finalize(cls, function_type) or is_buffering),
         source_order_dependent=bool(attrs.get("source_order_dependent", False)),
         sink_order_dependent=bool(attrs.get("sink_order_dependent", False)),
         requires_input_batch_index=bool(attrs.get("requires_input_batch_index", False)),
@@ -1160,6 +1162,11 @@ def _detect_has_finalize(cls: type, function_type: CatalogFunctionType) -> bool:
     override the heuristic, and so the Meta-level ``has_finalize`` flag is
     handled in one place.
     """
+    if function_type is CatalogFunctionType.TABLE_BUFFERING:
+        # The Sink+Source path is, by construction, an exchange that emits
+        # output exclusively in the Source phase — has_finalize is always True
+        # and is not detected from the user's class.
+        return True
     if function_type is not CatalogFunctionType.TABLE:
         return False
     # Lazy import to avoid a circular dependency.
@@ -1239,7 +1246,6 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("supports_window", pa.bool_()),
         pa.field("streaming_partitioned", pa.bool_()),
         pa.field("has_finalize", pa.bool_()),
-        pa.field("buffered_table", pa.bool_()),
         pa.field("source_order_dependent", pa.bool_()),
         pa.field("sink_order_dependent", pa.bool_()),
         pa.field("requires_input_batch_index", pa.bool_()),

@@ -100,7 +100,7 @@ from vgi.catalog.setting import SettingSpec, extract_setting_specs
 from vgi.function import (
     Function,
 )
-from vgi.function_storage import BoundStorage
+from vgi.function_storage import BoundStorage, FrameworkNS
 from vgi.invocation import (
     BindResponse,
     GlobalInitResponse,
@@ -123,6 +123,7 @@ from vgi.protocol import (
     ProcessState,
     ScalarExchangeState,
     SchemasResponse,
+    TableBufferingFinalizeState,
     TableCreateRequest,
     TableFunctionCardinalityRequest,
     TableFunctionDynamicToStringRequest,
@@ -136,6 +137,10 @@ from vgi.protocol import (
     ViewsResponse,
 )
 from vgi.scalar_function import ScalarFunctionGenerator
+from vgi.table_buffering_function import (
+    TableBufferingFunction,
+    TableBufferingParams,
+)
 from vgi.table_function import (
     ProcessParams,
     SecretsAccessor,
@@ -434,19 +439,18 @@ class _AggregateConstArgsCache:
 _aggregate_const_args_cache = _AggregateConstArgsCache()
 
 
-# Buffered-table init metadata is persisted to FunctionStorage at init
-# time (namespace b"buf_init", key = pack_int_key(_BUFFERED_TABLE_INIT_KEY))
-# and cold-loaded by every subsequent buffered_table_{process,combine,
-# finalize} RPC. There is intentionally NO in-process cache here — workers
-# are stateless w.r.t. buffered_table executions, so any pool worker can
-# serve any RPC for any execution_id. The C++ Sink+Source operator no
-# longer has to pin one worker per query.
+# TableBufferingFunction init metadata is persisted to FunctionStorage at
+# init time (namespace FrameworkNS.BUFFERING_INIT, key = pack_int_key(_TABLE_BUFFERING_INIT_KEY))
+# and cold-loaded by every subsequent table_buffering_{process,combine}
+# RPC. There is intentionally NO in-process cache here — workers are
+# stateless w.r.t. table_buffering executions, so any pool worker can
+# serve any RPC for any execution_id.
 #
 # Cost: one extra storage round-trip per RPC. Negligible on subprocess
 # (SQLite is microseconds). One HTTP RTT on CfDo deployments — if that
 # surfaces as a hot-path bottleneck, the mitigation is to thread the
 # init metadata bytes through the request envelope from C++ instead.
-_BUFFERED_TABLE_INIT_KEY = -1
+_TABLE_BUFFERING_INIT_KEY = -1
 
 
 # Streaming-shape FINALIZE phase materializes the user's
@@ -484,6 +488,83 @@ def _build_bound_storage_from_fields(
 def _decode_ipc_batch(value: bytes) -> pa.RecordBatch:
     """Read a single record batch from an Arrow IPC stream byte payload."""
     return pa.ipc.open_stream(value).read_next_batch()
+
+
+def _deserialize_finalize_state(func_cls: type, blob: bytes) -> Any:
+    """Deserialize a TFinalizeState blob using the class's resolved type.
+
+    Reads the ``_finalize_state_class`` attribute that
+    ``TableBufferingFunction.__init_subclass__`` records at class-definition
+    time. ``None`` means "no per-tick state declared" (user passed
+    ``TFinalizeState=None`` or didn't parameterize) — we pass the raw blob
+    through, which user code in that path also won't read.
+    """
+    state_type = getattr(func_cls, "_finalize_state_class", None)
+    if state_type is None:
+        return None
+    return state_type.deserialize_from_bytes(blob)
+
+
+def run_table_buffering_finalize_tick(state: Any, out: Any, ctx: Any) -> None:
+    """One tick of ``cls.finalize(params, fid, state, out)``.
+
+    Lazy-imported by ``TableBufferingFinalizeState.produce()`` to break
+    the protocol→worker import cycle. Cold-resolves func_cls + params on
+    every call (no in-process cache — different worker processes may
+    handle different ticks under HTTP).
+    """
+    from dataclasses import dataclass as _dc
+
+    from vgi.protocol import TableBufferingFinalizeState as _TBFS
+
+    assert isinstance(state, _TBFS), type(state)
+
+    @_dc
+    class _FinalizeStubRequest:
+        function_name: str
+        execution_id: bytes
+        attach_opaque_data: bytes | None
+        transaction_id: bytes | None
+
+    stub = _FinalizeStubRequest(
+        function_name=state.function_name,
+        execution_id=state.execution_id,
+        attach_opaque_data=state.attach_opaque_data,
+        transaction_id=state.transaction_id,
+    )
+
+    worker = ctx.implementation
+    if worker is None:
+        raise RuntimeError(
+            "table_buffering_finalize: ctx.implementation is None — "
+            "vgi-rpc must be ≥0.16.2 (the release that surfaces the "
+            "protocol implementation on CallContext)."
+        )
+    # ``state.attach_opaque_data`` carries the already-unwrapped attach
+    # bytes that init() stashed on the producer state. The seal is bound
+    # to the original sealer's auth — under HTTP, the rehydrated tick
+    # runs in a different auth context and re-unwrap fails. Skip it.
+    func_cls, params = worker._load_table_buffering_params(
+        stub, ctx, attach_already_unwrapped=True,
+    )
+
+    if not state.state_initialized:
+        user_state: Any = func_cls.initial_finalize_state(
+            state.finalize_state_id, params,
+        )
+        state.state_initialized = True
+    else:
+        user_state = (
+            _deserialize_finalize_state(func_cls, state.state_blob)
+            if state.state_blob else None
+        )
+
+    func_cls.finalize(params, state.finalize_state_id, user_state, out)
+
+    if user_state is None:
+        state.state_blob = b""
+    else:
+        state.state_blob = user_state.serialize_to_bytes()
 
 
 # Streaming-partitioned aggregate sessions: session state is held in an
@@ -550,14 +631,14 @@ def _decode_streaming_session(payload: bytes, func_cls: type[AggregateFunction[A
 # classes and to handle version skew if the function definition changes.
 
 
-def _encode_buffered_table_init(init_call: InitRequest, init_response: GlobalInitResponse) -> bytes:
+def _encode_table_buffering_init(init_call: InitRequest, init_response: GlobalInitResponse) -> bytes:
     return pickle.dumps({
         "init_call_bytes": init_call.serialize_to_bytes(),
         "init_response_bytes": init_response.serialize_to_bytes(),
     })
 
 
-def _decode_buffered_table_init(payload: bytes) -> tuple[InitRequest, GlobalInitResponse]:
+def _decode_table_buffering_init(payload: bytes) -> tuple[InitRequest, GlobalInitResponse]:
     d = pickle.loads(payload)
     return (
         InitRequest.deserialize_from_bytes(d["init_call_bytes"]),
@@ -2074,11 +2155,11 @@ class Worker:
         if cached is not None:
             return cast(Arguments, cached)
 
-        # Const args live at the synthetic group_id -2 in namespace b"agg" —
+        # Const args live at the synthetic group_id -2 in namespace FrameworkNS.AGGREGATE_STATE —
         # same row-keyspace as the rest of aggregate_state, no separate table
         # needed. The negative key avoids collision with caller-supplied
         # group_ids (which are non-negative).
-        result = storage.state_get(b"agg", BoundStorage.pack_int_key(-2))
+        result = storage.state_get(FrameworkNS.AGGREGATE_STATE, BoundStorage.pack_int_key(-2))
         if result is None:
             # Most aggregates have no const params; cache the negative result
             # so we don't re-hit storage on every aggregate_window /
@@ -2141,10 +2222,10 @@ class Worker:
             )
 
         # Store const arguments in FunctionStorage for later callbacks
-        # (synthetic group_id=-2 in namespace b"agg").
+        # (synthetic group_id=-2 in namespace FrameworkNS.AGGREGATE_STATE).
         if request.arguments and request.arguments.positional:
             storage = BoundStorage(func_cls.storage, execution_id, request=request, auth=ctx.auth)
-            storage.state_put(b"agg", BoundStorage.pack_int_key(-2),
+            storage.state_put(FrameworkNS.AGGREGATE_STATE, BoundStorage.pack_int_key(-2),
                               request.arguments.serialize_to_bytes())
 
         return AggregateBindResponse(
@@ -2209,7 +2290,7 @@ class Worker:
         existing_gids: set[int] = set()
         states: _UpdateTrackingDict[int, Any] = _UpdateTrackingDict()
         gid_keys = [BoundStorage.pack_int_key(g) for g in unique_gids]
-        stored = storage.state_get_many(b"agg", gid_keys)
+        stored = storage.state_get_many(FrameworkNS.AGGREGATE_STATE, gid_keys)
         for i, gid in enumerate(unique_gids):
             value = stored[i]
             if value is not None:
@@ -2261,7 +2342,7 @@ class Worker:
             for gid in gids_to_persist
         ]
         if items:
-            storage.state_put_many(b"agg", items)
+            storage.state_put_many(FrameworkNS.AGGREGATE_STATE, items)
 
         return AggregateUpdateResponse()
 
@@ -2304,7 +2385,7 @@ class Worker:
         )
         states: dict[int, Any] = {}
         all_keys = [BoundStorage.pack_int_key(g) for g in all_gids]
-        stored = storage.state_get_many(b"agg", all_keys)
+        stored = storage.state_get_many(FrameworkNS.AGGREGATE_STATE, all_keys)
         for i, gid in enumerate(all_gids):
             value = stored[i]
             if value is not None:
@@ -2333,7 +2414,7 @@ class Worker:
             if gid in states
         ]
         if items:
-            storage.state_put_many(b"agg", items)
+            storage.state_put_many(FrameworkNS.AGGREGATE_STATE, items)
 
         return AggregateCombineResponse()
 
@@ -2371,7 +2452,7 @@ class Worker:
         )
         states: dict[int, Any] = {}
         gid_keys = [BoundStorage.pack_int_key(g) for g in gid_list]
-        stored = storage.state_get_many(b"agg", gid_keys)
+        stored = storage.state_get_many(FrameworkNS.AGGREGATE_STATE, gid_keys)
         for i, gid in enumerate(gid_list):
             value = stored[i]
             if value is not None:
@@ -2413,9 +2494,10 @@ class Worker:
 
         # Called once when all states have been destroyed (C++ tracks with
         # destroy_counter == group_id_counter). Clear all FunctionStorage
-        # state. execution_clear() sweeps every namespace (b"agg", b"win",
-        # b"buf", anything else) for this execution_id in one call —
-        # subsumes the per-family clears we used to need.
+        # state. execution_clear() sweeps every namespace (every FrameworkNS
+        # member plus any user-chosen namespaces under b"buf"/etc.) for this
+        # execution_id in one call — subsumes the per-family clears we used to
+        # need.
         storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
         storage.execution_clear()
         _window_partition_cache.clear_execution(request.execution_id)
@@ -2423,66 +2505,66 @@ class Worker:
 
         return AggregateDestructorResponse()
 
-    # ========== Buffered Table Function Methods (Sink+Source path) ==========
 
-    def _load_buffered_table_params(
+    # ========== Table Sink+Source Function Methods (new buffered API) ==========
+
+    def _load_table_buffering_params(
         self, request: Any, ctx: CallContext,
-    ) -> tuple[type[TableInOutGenerator[Any, Any]], ProcessParams[Any]]:
-        """Cold-load buffered_table init metadata from FunctionStorage.
+        *, attach_already_unwrapped: bool = False,
+    ) -> tuple[type[TableBufferingFunction[Any, Any]], TableBufferingParams[Any]]:
+        """Cold-load buffering-table init metadata; build ``TableBufferingParams``.
 
-        Always reads from storage — no in-process cache. Costs one
-        round-trip per RPC; trade-off explained next to the
-        ``_BUFFERED_TABLE_INIT_KEY`` constant. Raises ``OSError`` if the
-        execution_id is unknown (init never ran on this catalog, or the
-        destructor has already fired).
+        Accepts either a unary table_buffering_* request (function_name,
+        execution_id, attach_opaque_data, transaction_id at top level)
+        or an ``InitRequest`` (fields under ``bind_call``).
 
-        Returns ``(func_cls, base_params)``. Callers further specialize
-        ``base_params`` per RPC via ``_dataclass_replace`` to inject the
-        request-scoped ``storage`` / ``auth_context`` / ``batch_index`` /
-        ``state_id`` fields.
-
-        Accepts either a unary buffered_table_* request (carries
-        ``function_name`` + ``attach_opaque_data`` directly) or an
-        ``InitRequest`` (carries them under ``bind_call``). The latter
-        is used by the ``BUFFERED_TABLE_FINALIZE`` init phase.
+        ``attach_already_unwrapped`` — pass True from callers that hold
+        an already-unwrapped attach (e.g. ``run_table_buffering_finalize_tick``,
+        which reads attach off a producer-stream state where init() stashed
+        the unwrapped form). The seal is per-caller-auth; re-unwrapping on
+        a different HTTP turn fails because ``current_auth()`` no longer
+        matches the original sealer's identity.
         """
         function_name = getattr(request, "function_name", None)
         attach = getattr(request, "attach_opaque_data", None)
+        transaction_id = getattr(request, "transaction_id", None)
         if function_name is None:
-            # InitRequest path — fields live on the inner bind_call.
             function_name = request.bind_call.function_name
             if attach is None:
                 attach = request.bind_call.attach_opaque_data
+            if transaction_id is None:
+                transaction_id = getattr(
+                    request.bind_call, "transaction_opaque_data", None,
+                )
+        attach_unwrapped = attach if attach_already_unwrapped else self._unwrap_attach(attach)
         func_cls = self._resolve_function_by_name(
-            function_name,
-            self._unwrap_attach(attach),
-            function_type=TableInOutGenerator,
+            function_name, attach_unwrapped, function_type=TableBufferingFunction,
         )
-        # Runtime narrowing for mypy — the function_type filter above
-        # already guarantees this, but the resolver's static return type
-        # is type[Function] (the base class).
-        if not issubclass(func_cls, TableInOutGenerator):
+        if not issubclass(func_cls, TableBufferingFunction):
             raise TypeError(
-                f"Function '{function_name}' is not a TableInOutGenerator "
+                f"Function '{function_name}' is not a TableBufferingFunction "
                 f"(got {func_cls.__name__})"
             )
         cold_storage = BoundStorage(
             func_cls.storage, request.execution_id, request=request, auth=ctx.auth,
         )
         payload = cold_storage.state_get(
-            b"buf_init", BoundStorage.pack_int_key(_BUFFERED_TABLE_INIT_KEY),
+            FrameworkNS.BUFFERING_INIT, BoundStorage.pack_int_key(_TABLE_BUFFERING_INIT_KEY),
         )
         if payload is None:
             raise OSError(
-                f"buffered_table: unknown execution_id {request.execution_id.hex()} "
+                f"table_buffering: unknown execution_id "
+                f"{request.execution_id.hex()} "
                 f"(init never ran or destructor already fired)"
             )
-        init_call, init_response = _decode_buffered_table_init(payload)
-        # Rebuild ProcessParams from the persisted init request — same
-        # construction the init handler performs (worker.py search:
-        # "Table-in-out function: separate INPUT and FINALIZE phases").
-        base_params = ProcessParams(
-            args=func_cls._parse_arguments(func_cls.FunctionArguments, init_call.bind_call.arguments),
+        init_call, init_response = _decode_table_buffering_init(payload)
+        # AttachOpaqueData is a NewType over bytes; just pass the bytes
+        # through. Empty when the catalog doesn't seal attaches.
+        attach_id = bytes(attach_unwrapped or b"")
+        params = TableBufferingParams(
+            args=func_cls._parse_arguments(
+                func_cls.FunctionArguments, init_call.bind_call.arguments,
+            ),
             init_call=init_call,
             init_response=init_response,
             output_schema=init_call.output_schema,
@@ -2490,155 +2572,71 @@ class Worker:
             secrets=SecretsAccessor(init_call.bind_call.secrets).to_dict(),
             storage=cold_storage,
             auth_context=ctx.auth,
+            execution_id=request.execution_id,
+            attach_id=attach_id,
+            transaction_id=transaction_id,
+            function_name=function_name,
+            worker_path=None,
         )
-        return func_cls, base_params
+        return func_cls, params
 
-    def buffered_table_process(
+    def table_buffering_process(
         self,
-        request: Any,  # BufferedTableProcessRequest — lazy import below
+        request: Any,
         ctx: CallContext,
-    ) -> Any:  # BufferedTableProcessResponse
-        """Sink one input batch into per-(execution_id, state_id) state.
+    ) -> Any:
+        """Sink one input batch; return worker-chosen state_id (unary)."""
+        from vgi.protocol import TableBufferingProcessResponse
 
-        The C++ Sink phase ships one chunk at a time. We load the per-state
-        accumulator from BoundStorage (lazily creating via initial_state),
-        call the user's ``process(params, state, batch, NoOpCollector())``,
-        and persist. The collector silently swallows zero-row emits (so
-        existing fixtures' ``out.emit(empty_batch(...))`` calls still work)
-        and raises on non-zero-row emits — output is finalize-only.
-        """
-        from vgi.protocol import BufferedTableProcessResponse
-
-        func_cls, params = self._load_buffered_table_params(request, ctx)
-        # Inject per-RPC fields. ``storage`` is already bound to the right
-        # execution_id by the loader; we still call _dataclass_replace
-        # to forward batch_index / state_id (set only on the process
-        # path). Per-RPC fields rebuilt as today; ProcessParams is
-        # otherwise immutable across process() calls within one execution.
-        params = _dataclass_replace(
-            params,
-            batch_index=request.batch_index,
-            state_id=request.state_id,
-        )
-
+        func_cls, params = self._load_table_buffering_params(request, ctx)
+        if request.batch_index is not None:
+            params = _dataclass_replace(params, batch_index=request.batch_index)
         batch = pa.ipc.open_stream(request.input_batch).read_next_batch()
+        state_id = func_cls.process(batch, params)
+        if not isinstance(state_id, (bytes, bytearray)):
+            raise TypeError(
+                f"{func_cls.__name__}.process() returned "
+                f"{type(state_id).__name__}; must return bytes "
+                f"(the opaque state_id)"
+            )
+        return TableBufferingProcessResponse(state_id=bytes(state_id))
 
-        # Load existing state for this state_id from the unified state_*
-        # store ONLY when the function declares a state_class. Functions with
-        # state_class=None (e.g. BufferInputFunction) manage their own state
-        # via state_append / state_log_scan and would pay a useless round-trip
-        # here. Skipping shaves one full state_get per process() call —
-        # significant on a hot Sink path with thousands of input batches.
-        from vgi.function_storage import BoundStorage as _BS
-
-        _state_key = _BS.pack_int_key(request.state_id)
-        # Untyped on purpose: the value alternates between an
-        # ArrowSerializableDataclass instance (when state_class is set) and
-        # whatever initial_state() returns (often None). Caller-side
-        # process() does the actual type narrowing.
-        state: Any
-        if func_cls.state_class is not None:
-            stored_value = params.storage.state_get(b"buf", _state_key)
-            if stored_value is not None:
-                state = func_cls.state_class.deserialize_from_bytes(stored_value)
-            else:
-                state = func_cls.initial_state(params)
-        else:
-            state = func_cls.initial_state(params)
-
-        # NoOpCollector mirrors the streaming OutputCollector interface.
-        # emit() must not carry rows — buffered process is sink-only; output
-        # is deferred to finalize(). client_log() routes through the
-        # CallContext's emit_client_log sink so the messages reach the C++
-        # side as zero-row batches with vgi_rpc.log_level metadata in the
-        # response stream — exactly the same channel the streaming path
-        # uses. ReadUnaryResponse on the C++ side picks them up via
-        # DispatchBatch → HandleBatchLogMessage → duckdb_logs.
-        from vgi_rpc.log import Level as _Level
-        from vgi_rpc.log import Message as _Message
-
-        emit_log = ctx.emit_client_log
-
-        class _NoOpCollector:
-            def emit(self, batch: pa.RecordBatch) -> None:
-                if batch.num_rows != 0:
-                    raise ValueError(
-                        f"buffered_table_process: {func_cls.__name__}.process() "
-                        f"emitted {batch.num_rows} rows — buffered functions must "
-                        f"defer all output to finalize()"
-                    )
-
-            def finish(self) -> None:
-                pass
-
-            def client_log(self, level: _Level, message: str, **extra: str) -> None:
-                emit_log(_Message(level, message, **extra))
-
-        # _NoOpCollector duck-types OutputCollector. The base class has a
-        # heavy constructor (output_schema, externalization knobs, server_id)
-        # that's unnecessary here — buffered process is sink-only and can't
-        # emit data. Honest type-ignore: emit() / finish() / client_log()
-        # are the only members the user's process() can reach.
-        func_cls.process(params, state, batch, _NoOpCollector())  # type: ignore[arg-type]
-
-        # Persist the updated state — namespace b"buf", key = packed state_id.
-        if func_cls.state_class is not None:
-            params.storage.state_put(b"buf", _state_key, state.serialize_to_bytes())
-        return BufferedTableProcessResponse()
-
-    def buffered_table_combine(
+    def table_buffering_combine(
         self,
-        request: Any,  # BufferedTableCombineRequest
+        request: Any,
         ctx: CallContext,
-    ) -> Any:  # BufferedTableCombineResponse
-        """End-of-input signal: delegate to combine() and return partition keys.
+    ) -> Any:
+        """End-of-input bridge: hand all state_ids to user combine()."""
+        from vgi.protocol import TableBufferingCombineResponse
 
-        Returns the finalize_state_ids the source phase will iterate over.
-        """
-        from vgi.protocol import BufferedTableCombineResponse
+        func_cls, params = self._load_table_buffering_params(request, ctx)
+        finalize_state_ids = list(
+            func_cls.combine(list(request.state_ids), params),
+        )
+        for i, fid in enumerate(finalize_state_ids):
+            if not isinstance(fid, (bytes, bytearray)):
+                raise TypeError(
+                    f"{func_cls.__name__}.combine() returned non-bytes "
+                    f"finalize_state_id at index {i}: "
+                    f"{type(fid).__name__}"
+                )
+        return TableBufferingCombineResponse(
+            finalize_state_ids=[bytes(fid) for fid in finalize_state_ids],
+        )
 
-        func_cls, params = self._load_buffered_table_params(request, ctx)
-        finalize_state_ids = list(func_cls.combine(list(request.state_ids), params))
-        return BufferedTableCombineResponse(finalize_state_ids=finalize_state_ids)
-
-    # buffered_table_finalize unary RPC removed — Source phase now opens
-    # a BUFFERED_TABLE_FINALIZE init stream per finalize_state_id and
-    # drains via ReadDataBatch. The framework's BufferedFinalizeState
-    # produces batches directly from the user's declared state_log
-    # (vgi/_test_fixtures/table_in_out.py: finalize_log_key). No
-    # per-tick user code; no in-process iterator dict.
-
-    def buffered_table_destructor(
+    def table_buffering_destructor(
         self,
-        request: Any,  # BufferedTableDestructorRequest — lazy import below
+        request: Any,
         ctx: CallContext,
-    ) -> Any:  # BufferedTableDestructorResponse
-        """Best-effort end-of-query cleanup.
+    ) -> Any:
+        """Best-effort end-of-query cleanup."""
+        from vgi.protocol import TableBufferingDestructorResponse
 
-        The C++ Sink+Source operator fires this from its destructor
-        regardless of success / cancel / throw. Idempotent: missing
-        entries are not errors. Delivery is best-effort — worker death
-        or network drop can lose the RPC; FunctionStorage's
-        ``cleanup_old_entries(max_age_days=1)`` is the backstop for
-        missed deliveries.
-        """
-        from vgi.protocol import BufferedTableDestructorResponse
-
-        # No in-process state to clean: BufferedFinalizeState is fully
-        # wire-serializable; finalize streams are managed by vgi-rpc's
-        # session machinery, not by us.
-
-        # Wipe FunctionStorage rows: the b"buf_init" metadata, the
-        # b"buf" per-state-id RMW slots, and the b"buf" / b"buf_sorted"
-        # append logs.
-        # execution_clear() sweeps every namespace for the scope in one
-        # call. Best-effort: failures here don't propagate (the operator
-        # is already torn down); cleanup_old_entries is the backstop.
         try:
             func_cls = self._resolve_function_by_name(
                 request.function_name,
                 self._unwrap_attach(request.attach_opaque_data),
-                function_type=TableInOutGenerator,
+                function_type=TableBufferingFunction,
             )
             storage = BoundStorage(
                 func_cls.storage, request.execution_id, request=request, auth=ctx.auth,
@@ -2646,10 +2644,10 @@ class Worker:
             storage.execution_clear()
         except Exception:
             _logger.exception(
-                "buffered_table_destructor: storage cleanup failed "
+                "table_buffering_destructor: storage cleanup failed "
                 "(execution_id=%s)", request.execution_id.hex(),
             )
-        return BufferedTableDestructorResponse()
+        return TableBufferingDestructorResponse()
 
     # ========== Windowed Aggregate Methods ==========
 
@@ -2714,7 +2712,11 @@ class Worker:
             window_state_bytes=window_state_bytes,
             window_state_class_name=type(window_state).__name__ if window_state is not None else "",
         )
-        storage.state_put(b"win", BoundStorage.pack_int_key(request.partition_id), payload)
+        storage.state_put(
+            FrameworkNS.AGGREGATE_WINDOW_PARTITION,
+            BoundStorage.pack_int_key(request.partition_id),
+            payload,
+        )
 
         # Populate the in-process cache with the already-decoded partition
         # so aggregate_window() can skip the storage read + deserialize.
@@ -2829,7 +2831,7 @@ class Worker:
         if cached is not None:
             return cached
 
-        payload = storage.state_get(b"win", BoundStorage.pack_int_key(partition_id))
+        payload = storage.state_get(FrameworkNS.AGGREGATE_WINDOW_PARTITION, BoundStorage.pack_int_key(partition_id))
         if payload is None:
             raise OSError(
                 f"aggregate_window called for unknown partition_id={partition_id} "
@@ -2957,7 +2959,7 @@ class Worker:
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
         storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
-        storage.state_delete(b"win", [BoundStorage.pack_int_key(request.partition_id)])
+        storage.state_delete(FrameworkNS.AGGREGATE_WINDOW_PARTITION, [BoundStorage.pack_int_key(request.partition_id)])
         _window_partition_cache.delete(request.execution_id, request.partition_id)
         return AggregateWindowDestructorResponse()
 
@@ -2982,7 +2984,7 @@ class Worker:
         # declares const params.
         if request.arguments and request.arguments.positional:
             storage = BoundStorage(func_cls.storage, execution_id, request=request, auth=ctx.auth)
-            storage.state_put(b"agg", BoundStorage.pack_int_key(-2),
+            storage.state_put(FrameworkNS.AGGREGATE_STATE, BoundStorage.pack_int_key(-2),
                               request.arguments.serialize_to_bytes())
 
         storage = BoundStorage(func_cls.storage, execution_id, request=request, auth=ctx.auth)
@@ -3011,7 +3013,7 @@ class Worker:
         # Also persist to FunctionStorage so a chunk RPC landing on a
         # different pool worker can reload the session.
         storage.state_put(
-            b"win",
+            FrameworkNS.STREAMING_SESSION,
             BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY),
             _encode_streaming_session(session),
         )
@@ -3040,7 +3042,10 @@ class Worker:
             import time as _t
 
             t_get_start = _t.perf_counter()
-            payload = cold_storage.state_get(b"win", BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY))
+            payload = cold_storage.state_get(
+                FrameworkNS.STREAMING_SESSION,
+                BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY),
+            )
             t_get = _t.perf_counter() - t_get_start
             with _streaming_persist_lock:
                 _streaming_persist_stats["storage_get_seconds"] += t_get
@@ -3098,7 +3103,11 @@ class Worker:
         payload = _encode_streaming_session(session)
         t_enc = _t.perf_counter() - t_enc_start
         t_put_start = _t.perf_counter()
-        storage.state_put(b"win", BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY), payload)
+        storage.state_put(
+            FrameworkNS.STREAMING_SESSION,
+            BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY),
+            payload,
+        )
         t_put = _t.perf_counter() - t_put_start
         _record_persist_timing(t_enc, t_put, len(payload))
         with _streaming_persist_lock:
@@ -3129,10 +3138,16 @@ class Worker:
                 func_cls = None
             if func_cls is not None and issubclass(func_cls, AggregateFunction):
                 cold_storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
-                payload = cold_storage.state_get(b"win", BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY))
+                payload = cold_storage.state_get(
+                    FrameworkNS.STREAMING_SESSION,
+                    BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY),
+                )
                 if payload is not None:
                     session = _decode_streaming_session(payload, func_cls)
-                cold_storage.state_delete(b"win", [BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY)])
+                cold_storage.state_delete(
+                    FrameworkNS.STREAMING_SESSION,
+                    [BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY)],
+                )
             if session is None:
                 # Idempotent: nothing to clean up.
                 return AggregateStreamingCloseResponse()
@@ -3155,7 +3170,10 @@ class Worker:
             _logger.exception("streaming_close raised; session dropped anyway")
 
         # Drop the persisted state.
-        storage.state_delete(b"win", [BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY)])
+        storage.state_delete(
+            FrameworkNS.STREAMING_SESSION,
+            [BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY)],
+        )
 
         # Dump worker-side persist stats accumulated for this session.
         with _streaming_persist_lock:
@@ -3264,6 +3282,78 @@ class Worker:
             )
             input_schema = request.bind_call.input_schema
 
+        elif isinstance(instance, TableBufferingFunction):
+            # Table sink+source function. Two init phases reuse the
+            # TABLE_BUFFERING (sink init) / TABLE_BUFFERING_FINALIZE (stream init) enum
+            # values (renaming the phase strings is in task #6).
+            cold_storage = BoundStorage(
+                type(instance).storage, init_response.execution_id,
+                request=request, auth=ctx.auth,
+            )
+            # request.bind_call has already been unwrapped by
+            # _unwrap_bind_call at the top of init(); attach_opaque_data
+            # is the plaintext AttachOpaqueData bytes (NewType over bytes).
+            attach_id = bytes(request.bind_call.attach_opaque_data or b"")
+            # Widen to ProcessParams so the later TableInOutGenerator /
+            # TableFunctionGenerator branches can rebind `params` without
+            # tripping mypy's local-type narrowing.
+            params: ProcessParams[Any]
+            params = TableBufferingParams(
+                args=type(instance)._parse_arguments(
+                    type(instance).FunctionArguments,
+                    request.bind_call.arguments,
+                ),
+                init_call=request,
+                init_response=init_response,
+                output_schema=output_schema,
+                settings=_batch_to_scalar_dict(request.bind_call.settings),
+                secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
+                storage=cold_storage,
+                auth_context=ctx.auth,
+                execution_id=init_response.execution_id,
+                attach_id=attach_id,
+                transaction_id=getattr(
+                    request.bind_call, "transaction_opaque_data", None,
+                ),
+                function_name=request.bind_call.function_name,
+                worker_path=None,
+            )
+            if request.phase == TableInOutFunctionInitPhase.TABLE_BUFFERING:
+                # Sink init: persist init metadata so any pool worker
+                # can cold-load + serve subsequent process/combine RPCs.
+                cold_storage.state_put(
+                    FrameworkNS.BUFFERING_INIT,
+                    BoundStorage.pack_int_key(_TABLE_BUFFERING_INIT_KEY),
+                    _encode_table_buffering_init(request, init_response),
+                )
+                state = BufferedFinalizeState(
+                    execution_id=init_response.execution_id,
+                    ns=FrameworkNS.BUFFERING_INIT,
+                    key=b"__never_written__",
+                    attach_opaque_data=request.bind_call.attach_opaque_data,
+                )
+                input_schema = None
+            elif request.phase == TableInOutFunctionInitPhase.TABLE_BUFFERING_FINALIZE:
+                if request.finalize_state_id is None:
+                    raise ValueError(
+                        "TABLE_BUFFERING_FINALIZE phase requires finalize_state_id"
+                    )
+                state = TableBufferingFinalizeState(
+                    function_name=request.bind_call.function_name,
+                    execution_id=init_response.execution_id,
+                    transaction_id=getattr(
+                        request.bind_call, "transaction_opaque_data", None,
+                    ),
+                    finalize_state_id=bytes(request.finalize_state_id),
+                    attach_opaque_data=request.bind_call.attach_opaque_data,
+                )
+                input_schema = None
+            else:
+                raise ValueError(
+                    f"Unsupported init phase for TableBufferingFunction: "
+                    f"{request.phase}"
+                )
+
         elif isinstance(instance, TableInOutGenerator):
             # Table-in-out function: separate INPUT and FINALIZE phases
             params = ProcessParams(
@@ -3303,68 +3393,17 @@ class Worker:
                     with pa.ipc.new_stream(sink, batch.schema) as w:
                         w.write_batch(batch)
                     params.storage.state_append(
-                        b"streaming_finalize",
+                        FrameworkNS.STREAMING_FINALIZE,
                         _STREAMING_FINALIZE_KEY,
                         sink.getvalue().to_pybytes(),
                     )
                 state = BufferedFinalizeState(
                     execution_id=init_response.execution_id,
-                    ns=b"streaming_finalize",
+                    ns=FrameworkNS.STREAMING_FINALIZE,
                     key=_STREAMING_FINALIZE_KEY,
                     attach_opaque_data=request.bind_call.attach_opaque_data,
                 )
                 input_schema = None  # Producer — no input
-            elif request.phase == TableInOutFunctionInitPhase.BUFFERED_TABLE:
-                # Sink+Source path. The init RPC itself carries no data
-                # exchange — subsequent traffic uses the dedicated
-                # buffered_table_{process,combine} RPCs and the
-                # BUFFERED_TABLE_FINALIZE init phase opens the source-side
-                # stream. Persist init metadata to FunctionStorage so any
-                # pool worker can cold-load and serve subsequent RPCs.
-                # No in-process cache: workers are stateless w.r.t.
-                # buffered_table executions.
-                params.storage.state_put(
-                    b"buf_init",
-                    BoundStorage.pack_int_key(_BUFFERED_TABLE_INIT_KEY),
-                    _encode_buffered_table_init(request, init_response),
-                )
-                # An empty-key BufferedFinalizeState scanning a never-written
-                # log produces nothing on first tick — out.finish() fires
-                # immediately. Exactly the right behavior for a stream the
-                # caller won't actually drain.
-                state = BufferedFinalizeState(
-                    execution_id=init_response.execution_id,
-                    ns=b"buf_init",
-                    key=b"__never_written__",
-                    attach_opaque_data=request.bind_call.attach_opaque_data,
-                )
-                input_schema = None
-            elif request.phase == TableInOutFunctionInitPhase.BUFFERED_TABLE_FINALIZE:
-                if request.finalize_state_id is None:
-                    raise ValueError(
-                        "BUFFERED_TABLE_FINALIZE phase requires finalize_state_id"
-                    )
-                if request.execution_id is None:
-                    raise ValueError(
-                        "BUFFERED_TABLE_FINALIZE phase requires execution_id "
-                        "(secondary init only)"
-                    )
-                # Cold-load init metadata from FunctionStorage. func_cls
-                # and params live only here; they don't enter the wire
-                # state. The framework's per-tick produce() drains
-                # BoundedStorage directly via cursor — no per-tick user
-                # code, no func_cls reference required at tick time.
-                func_cls, finalize_params = self._load_buffered_table_params(request, ctx)
-                ns, key = func_cls.finalize_log_key(
-                    request.finalize_state_id, finalize_params,
-                )
-                state = BufferedFinalizeState(
-                    execution_id=request.execution_id,
-                    ns=ns,
-                    key=key,
-                    attach_opaque_data=request.bind_call.attach_opaque_data,
-                )
-                input_schema = None
             else:
                 raise ValueError(f"Unknown init phase for table-in-out function: {request.phase}")
 

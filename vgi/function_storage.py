@@ -15,6 +15,7 @@ Implementations:
 
 """
 
+import enum
 import hashlib
 import logging
 import os
@@ -30,9 +31,59 @@ import pyarrow as pa
 _shard_logger = logging.getLogger("vgi.storage.shard")
 
 __all__ = [
+    "FrameworkNS",
     "FunctionStorage",
     "FunctionStorageSqlite",
 ]
+
+
+_RESERVED_NS_PREFIX = b"_vgi/"
+
+
+class FrameworkNS(bytes, enum.Enum):
+    """Framework-reserved storage namespaces.
+
+    All members start with ``b"_vgi/"``; user code may NOT pass a bytes
+    namespace with that prefix to ``BoundStorage.state_*`` — the reserved
+    prefix is checked at every entry point. Framework code threads a
+    member of this enum instead; the wrappers accept either form and
+    normalise to plain bytes downstream.
+
+    Adding a new entry: keep it ASCII-only, snake_case, prefixed
+    ``_vgi/``. Don't rename existing entries — names are persisted in
+    sqlite / Azure SQL / CfDo rows on disk and an unbounded backfill
+    would be required.
+    """
+
+    BUFFERING_INIT = b"_vgi/buffering_init"
+    STREAMING_FINALIZE = b"_vgi/streaming_finalize"
+    TIO_STATE = b"_vgi/tio_state"
+    AGGREGATE_STATE = b"_vgi/aggregate_state"
+    AGGREGATE_WINDOW_PARTITION = b"_vgi/aggregate_window_partition"
+    STREAMING_SESSION = b"_vgi/streaming_session"
+
+
+def _coerce_ns(ns: "bytes | FrameworkNS") -> bytes:
+    """Validate the namespace and return plain bytes.
+
+    ``FrameworkNS`` members carry the reserved prefix legitimately and
+    pass through. Caller-supplied bytes starting with ``_vgi/`` raise
+    ``ValueError`` — that prefix is reserved for framework-owned state.
+    """
+    if isinstance(ns, FrameworkNS):
+        return bytes(ns.value)
+    if not isinstance(ns, (bytes, bytearray)):
+        raise TypeError(
+            f"namespace must be bytes or FrameworkNS, got {type(ns).__name__}"
+        )
+    ns_bytes = bytes(ns)
+    if ns_bytes.startswith(_RESERVED_NS_PREFIX):
+        raise ValueError(
+            f"namespace {ns_bytes!r} starts with the reserved prefix "
+            f"{_RESERVED_NS_PREFIX!r} — use a vgi.function_storage.FrameworkNS "
+            "member or choose a different prefix"
+        )
+    return ns_bytes
 
 
 def _derive_shard_key(*, attach_opaque_data: bytes | None, auth: Any, _origin: str = "?") -> str:
@@ -567,47 +618,47 @@ class BoundStorage:
     # for transaction-scoped state, use BoundStorage.transaction() to get
     # a separate facade bound to ``transaction_opaque_data``.
 
-    def state_get(self, ns: bytes, key: bytes) -> bytes | None:
+    def state_get(self, ns: "bytes | FrameworkNS", key: bytes) -> bytes | None:
         """Read one key's value (or None)."""
         result = self._base.state_get_many(
-            self._execution_id, ns, [key], shard_key=self._shard_key
+            self._execution_id, _coerce_ns(ns), [key], shard_key=self._shard_key
         )
         return result[0]
 
-    def state_get_many(self, ns: bytes, keys: list[bytes]) -> list[bytes | None]:
+    def state_get_many(self, ns: "bytes | FrameworkNS", keys: list[bytes]) -> list[bytes | None]:
         """Batched non-destructive read."""
         return self._base.state_get_many(
-            self._execution_id, ns, keys, shard_key=self._shard_key
+            self._execution_id, _coerce_ns(ns), keys, shard_key=self._shard_key
         )
 
-    def state_put(self, ns: bytes, key: bytes, value: bytes) -> None:
+    def state_put(self, ns: "bytes | FrameworkNS", key: bytes, value: bytes) -> None:
         """Upsert one (key, value)."""
         self._base.state_put_many(
-            self._execution_id, ns, [(key, value)], shard_key=self._shard_key
+            self._execution_id, _coerce_ns(ns), [(key, value)], shard_key=self._shard_key
         )
 
-    def state_put_many(self, ns: bytes, items: list[tuple[bytes, bytes]]) -> None:
+    def state_put_many(self, ns: "bytes | FrameworkNS", items: list[tuple[bytes, bytes]]) -> None:
         """Batched atomic upsert."""
         self._base.state_put_many(
-            self._execution_id, ns, items, shard_key=self._shard_key
+            self._execution_id, _coerce_ns(ns), items, shard_key=self._shard_key
         )
 
-    def state_scan(self, ns: bytes) -> list[tuple[bytes, bytes]]:
+    def state_scan(self, ns: "bytes | FrameworkNS") -> list[tuple[bytes, bytes]]:
         """Non-destructive scan of every (key, value) in one namespace."""
         return self._base.state_scan(
-            self._execution_id, ns, shard_key=self._shard_key
+            self._execution_id, _coerce_ns(ns), shard_key=self._shard_key
         )
 
-    def state_drain(self, ns: bytes) -> list[tuple[bytes, bytes]]:
+    def state_drain(self, ns: "bytes | FrameworkNS") -> list[tuple[bytes, bytes]]:
         """Atomic scan-and-delete of every (key, value) in one namespace."""
         return self._base.state_drain(
-            self._execution_id, ns, shard_key=self._shard_key
+            self._execution_id, _coerce_ns(ns), shard_key=self._shard_key
         )
 
-    def state_delete(self, ns: bytes, keys: list[bytes] | None = None) -> int:
+    def state_delete(self, ns: "bytes | FrameworkNS", keys: list[bytes] | None = None) -> int:
         """Delete by key list, or wipe entire namespace if keys is None."""
         return self._base.state_delete(
-            self._execution_id, ns, keys, shard_key=self._shard_key
+            self._execution_id, _coerce_ns(ns), keys, shard_key=self._shard_key
         )
 
     def execution_clear(self) -> int:
@@ -616,7 +667,7 @@ class BoundStorage:
             self._execution_id, shard_key=self._shard_key
         )
 
-    def state_append(self, ns: bytes, key: bytes, item: bytes) -> int:
+    def state_append(self, ns: "bytes | FrameworkNS", key: bytes, item: bytes) -> int:
         """Append an item to the (ns, key) log; return the assigned ordinal.
 
         Idempotency covers transport-layer retries only (HTTP retry on
@@ -626,12 +677,12 @@ class BoundStorage:
         underlying ``FunctionStorage.state_append`` for the full contract.
         """
         return self._base.state_append(
-            self._execution_id, ns, key, item, shard_key=self._shard_key
+            self._execution_id, _coerce_ns(ns), key, item, shard_key=self._shard_key
         )
 
     def state_log_scan(
         self,
-        ns: bytes,
+        ns: "bytes | FrameworkNS",
         key: bytes,
         *,
         after_id: int = -1,
@@ -642,7 +693,7 @@ class BoundStorage:
         See ``FunctionStorage.state_log_scan`` for the full contract.
         """
         return self._base.state_log_scan(
-            self._execution_id, ns, key,
+            self._execution_id, _coerce_ns(ns), key,
             after_id=after_id, limit=limit, shard_key=self._shard_key,
         )
 
@@ -650,7 +701,7 @@ class BoundStorage:
     def pack_int_key(i: int) -> bytes:
         """Sugar: encode an int as 8-byte little-endian for use as ``state_*`` key.
 
-        The common case for buffered_table state_id, aggregate group_id,
+        The common case for table_buffering state_id, aggregate group_id,
         window partition_id is an int. This canonicalizes the encoding so
         every caller produces the same bytes for the same int.
         """

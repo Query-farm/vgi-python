@@ -770,6 +770,7 @@ class Schema:
             CatalogFunctionType.SCALAR: 0,
             CatalogFunctionType.AGGREGATE: 0,
             CatalogFunctionType.TABLE: 0,
+            CatalogFunctionType.TABLE_BUFFERING: 0,
         }
         for func in self.functions:
             function_counts[func.get_metadata().function_type] += 1
@@ -783,7 +784,10 @@ class Schema:
                 "view": len(self.views),
                 "scalar_function": function_counts[CatalogFunctionType.SCALAR],
                 "aggregate_function": function_counts[CatalogFunctionType.AGGREGATE],
-                "table_function": function_counts[CatalogFunctionType.TABLE],
+                "table_function": (
+                    function_counts[CatalogFunctionType.TABLE]
+                    + function_counts[CatalogFunctionType.TABLE_BUFFERING]
+                ),
                 "macro": len(self.macros),
                 "index": len(self.indexes),
             },

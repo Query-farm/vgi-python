@@ -10,34 +10,27 @@ with automatic state serialization for distributed processing.
 from __future__ import annotations
 
 import os
-import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, final, get_args, get_origin
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
-from vgi_rpc.rpc import AuthContext, CallContext, OutputCollector
+from vgi_rpc.rpc import OutputCollector
 from vgi_rpc.utils import empty_batch
 
-from vgi.function_storage import BoundStorage
+from vgi.function_storage import BoundStorage, FrameworkNS
 from vgi.invocation import (
     BindResponse,
-    GlobalInitResponse,
 )
 from vgi.table_function import (
     _ON_CANCEL_CAVEATS,
     BindParams,
-    InitParams,
     ProcessParams,
-    SecretsAccessor,
     TableFunctionBase,
-    _batch_to_scalar_dict,
-    _effective_projection_ids,
-    project_schema,
 )
 
 if TYPE_CHECKING:
-    from vgi.protocol import BindRequest, InitRequest
+    pass
 
 __all__ = [
     "TableInOutGenerator",
@@ -85,55 +78,12 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
     # Subclasses opt into framework-managed state by setting this to a
     # concrete ArrowSerializableDataclass type. Default None means
     # process()/finalize() get state=None and the framework skips its
-    # round-trip on the buffered_table path. TableInOutFunction's
-    # __init_subclass__ infers this from the TState type parameter when a
-    # subclass declares one. Constrained to ArrowSerializableDataclass so
-    # the framework can call serialize_to_bytes / deserialize_from_bytes
-    # on instances without further type narrowing at the call site.
+    # round-trip. TableInOutFunction's __init_subclass__ infers this from
+    # the TState type parameter when a subclass declares one. Constrained
+    # to ArrowSerializableDataclass so the framework can call
+    # serialize_to_bytes / deserialize_from_bytes on instances without
+    # further type narrowing at the call site.
     state_class: type[ArrowSerializableDataclass] | None = None
-
-    @classmethod
-    def combine(cls, state_ids: list[int], params: ProcessParams[TArgs]) -> list[int]:
-        """Buffered-table only: collapse Sink-thread state_ids into finalize keys.
-
-        Default returns state_ids unchanged (pass-through partitioning —
-        each Sink thread's slice becomes one finalize partition). Override
-        to merge state across threads (e.g. global sort under
-        ``sink_order_dependent``) and return the keys the source phase
-        will iterate.
-
-        Not invoked on the streaming exchange path; only by
-        ``buffered_table_combine`` when ``Meta.buffered_table = True``.
-        """
-        return state_ids
-
-    @classmethod
-    def finalize_log_key(
-        cls, finalize_state_id: int, params: ProcessParams[TArgs],
-    ) -> tuple[bytes, bytes]:
-        """Return (ns, key) of the state_log to drain as finalize output.
-
-        Buffered-table only. Called once at init time
-        (``phase=BUFFERED_TABLE_FINALIZE``) when the framework builds
-        the cursor stream state. The framework then drains this log
-        per tick — no per-tick user code.
-
-        Default matches the buffered convention: ``(b"buf", pack_int_key(state_id))``,
-        where ``process()`` writes input batches via ``state_append``.
-        Override when the function post-processes during ``combine()``
-        and writes to a different (ns, key) — e.g.,
-        ``BatchIndexBufferInputFunction`` writes a sorted log under
-        ``b"buf_sorted"``.
-
-        Caller responsibility: the data must exist at (ns, key) by the
-        time finalize starts. Typically that means writing during
-        ``process()`` and/or ``combine()``.
-        """
-        # Local import: BoundStorage lives in vgi.function_storage; we
-        # avoid a top-level import to keep the module's import graph flat.
-        from vgi.function_storage import BoundStorage
-
-        return (b"buf", BoundStorage.pack_int_key(finalize_state_id))
 
     @classmethod
     def has_finalize_override(cls) -> bool:
@@ -183,102 +133,15 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
         cls,
         params: BindParams[TArgs],
     ) -> BindResponse:
-        """Produce the output schema and perform other bind time logic.
+        """Pass-through default — output schema is the input schema.
 
-        Override to perform custom bind-time logic such as validating
-        arguments or computing a dynamic output type.
-
-        Subclasses may declare keyword-only parameters annotated with
-        ``Setting()`` or ``Secret()`` to receive values automatically.
-
-        Args:
-            params: Bind parameters including arguments and schema.
-
-        Returns:
-            BindResponse with output_schema and optional opaque_data.
-
+        Override to compute a dynamic output type or validate arguments.
+        See ``TableFunctionBase.on_bind`` for the broader contract.
         """
         assert params.bind_call.input_schema is not None
         return BindResponse(output_schema=params.bind_call.input_schema)
 
-    @final
-    @classmethod
-    def bind(
-        cls,
-        input: BindRequest,
-        *,
-        ctx: CallContext | None = None,
-    ) -> BindResponse:
-        """Bind protocol entry point. Do not override; use on_bind() instead.
-
-        Validates type bounds, constructs BindParameters, calls on_bind(),
-        and wraps the result for transmission to global_init. If on_bind()
-        triggers dynamic secret lookups, returns a secret scope request.
-
-        """
-        auth = ctx.auth if ctx is not None else AuthContext.anonymous()
-        params = cls._make_bind_params(input, auth_context=auth)
-
-        if input.input_schema is not None:
-            cls._validate_arg_type_bounds(cls.FunctionArguments, params.args, input.input_schema)
-
-        result = cls.on_bind(params, **cls._extract_bind_kwargs(input))
-
-        # Check if on_bind() registered pending secret lookups
-        if params.secrets.needs_resolution:
-            return BindResponse.secret_scope_request(params.secrets.pending_lookups)
-
-        return result
-
-    @classmethod
-    def on_init(
-        cls,
-        params: InitParams[TArgs],
-    ) -> GlobalInitResponse:
-        """Initialize the function during the init API call.
-
-        Override to perform one-time setup that should happen after bind
-        but before processing batches.
-
-        Args:
-            params: Init parameters including arguments, schemas, and opaque data from
-                bind.
-
-        Returns:
-            GlobalInitResponse
-
-        """
-        return GlobalInitResponse()
-
-    @final
-    @classmethod
-    def global_init(cls, input: InitRequest, *, ctx: CallContext | None = None) -> GlobalInitResponse:
-        """Global init protocol entry point. Do not override; use on_init() instead.
-
-        Deserializes the wrapped bind data, calls on_init(), and
-        wraps the result for transmission to process().
-
-        """
-        execution_id = uuid.uuid4().bytes
-        auth = ctx.auth if ctx is not None else AuthContext.anonymous()
-        params = InitParams[TArgs](
-            args=cls._parse_arguments(cls.FunctionArguments, input.bind_call.arguments),
-            init_call=input,
-            output_schema=project_schema(_effective_projection_ids(cls, input.projection_ids), input.output_schema),
-            settings=_batch_to_scalar_dict(input.bind_call.settings),
-            secrets=SecretsAccessor(input.bind_call.secrets).to_dict(),
-            execution_id=execution_id,
-            storage=BoundStorage(cls.storage, execution_id, request=input, auth=auth),
-            auth_context=auth,
-        )
-
-        result = cls.on_init(params)
-
-        return GlobalInitResponse(
-            max_workers=result.max_workers,
-            execution_id=execution_id,
-            opaque_data=result.opaque_data,
-        )
+    # bind / on_init / global_init are defined on TableFunctionBase.
 
     @classmethod
     def initial_state(cls, params: ProcessParams[TArgs]) -> TState | None:
@@ -483,7 +346,7 @@ class TableInOutFunction[
         # Save state for distributed processing (upsert semantics)
         if state is not None:
             params.storage.state_put(
-                b"sd", BoundStorage.pack_int_key(os.getpid()), state.serialize_to_bytes()
+                FrameworkNS.TIO_STATE, BoundStorage.pack_int_key(os.getpid()), state.serialize_to_bytes()
             )
 
         # Handle single batch or list of batches — exchange must emit exactly one
@@ -510,7 +373,7 @@ class TableInOutFunction[
         if cls.state_class is not None and cls.state_class is not TableInOutFunctionStateNoOp:
             states = [
                 cls.state_class.deserialize_from_bytes(v)
-                for _k, v in params.storage.state_drain(b"sd")
+                for _k, v in params.storage.state_drain(FrameworkNS.TIO_STATE)
             ]
         else:
             states = []

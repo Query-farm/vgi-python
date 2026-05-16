@@ -37,27 +37,41 @@ from __future__ import annotations
 import os
 import signal
 import time
-from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Annotated, Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
-from vgi_rpc.log import Level
 from vgi_rpc.rpc import OutputCollector
 from vgi_rpc.utils import empty_batch
 
 from vgi.arguments import Arg, Setting, TableInput
-from vgi.function_storage import BoundStorage
 from vgi.invocation import BindResponse
 from vgi.metadata import FunctionExample
 from vgi.schema_utils import schema
+from vgi.table_buffering_function import (
+    TableBufferingFunction,
+    TableBufferingParams,
+)
 from vgi.table_function import BindParams, ProcessParams, TableCardinality
 from vgi.table_in_out_function import (
     TableInOutFunction,
     TableInOutGenerator,
 )
+
+
+# Per-tick cursor state for finalize streams that drain a state_log via
+# state_log_scan. Wire-serializable so the producer-mode stream survives
+# HTTP tick boundaries.
+@dataclass
+class _LogDrainState(ArrowSerializableDataclass):
+    """Cursor over a per-state state_log; after_id starts at -1 (before-first)."""
+
+    # Namespace under which finalize draws batches. Defaults to b"buf" —
+    # the conventional location process() writes via state_append.
+    ns: bytes = b"buf"
+    after_id: int = -1
 
 __all__ = [
     "EchoFunction",
@@ -134,36 +148,24 @@ class EchoFunction(TableInOutGenerator[SingleTableArguments]):
         return BindResponse(output_schema=params.bind_call.input_schema)
 
 
-class BufferInputFunction(TableInOutGenerator[SingleTableArguments, None]):
+class BufferInputFunction(TableBufferingFunction[SingleTableArguments, _LogDrainState]):
     """Buffering function — collects all input, emits during finalize.
 
-    Uses the buffered table function path (``Meta.buffered_table = True``):
-    each parallel Sink thread accumulates into its own ``state_id``,
-    ``combine`` returns those state_ids as-is (pass-through partitioning),
-    and ``finalize`` yields the buffered batches for one state_id per RPC.
-    Under UNION ALL the inputs are distributed across Sink threads and the
-    combined output is the union of every buffer.
-
-    State storage: ``state_class = None`` skips the framework's per-call
-    state_get/state_put round-trip. process() appends each input batch to
-    ``state_log`` keyed by ``(b"buf", state_id)``; finalize() drains via
-    ``state_log_scan`` in append order. Storage cost is O(N batches) inserts
-    instead of the O(N^2) RMW pattern that state_class would force.
+    One bucket per execution: ``process()`` returns ``params.execution_id``
+    for every call and appends to a single shared state_log under
+    ``(b"buf", b"")``. ``combine()`` collapses every state_id (all are
+    identical) to a single finalize_state_id. ``finalize()`` cursor-drains
+    one batch per tick.
 
     Schema:
         Input:  any schema
         Output: same schema (passthrough)
     """
 
-    state_class = None
-
     class Meta:
-        """Metadata for BufferInputFunction."""
-
         name = "buffer_input"
         description = "Collects all input batches and emits during finalization"
         categories = ["utility", "buffer"]
-        buffered_table = True
         examples = [
             FunctionExample(
                 sql="SELECT * FROM buffer_input((SELECT * FROM input_table))",
@@ -172,52 +174,58 @@ class BufferInputFunction(TableInOutGenerator[SingleTableArguments, None]):
         ]
 
     @classmethod
-    def initial_state(cls, params: ProcessParams[SingleTableArguments]) -> None:
-        return None
+    def on_bind(cls, params: BindParams[SingleTableArguments]) -> BindResponse:
+        assert params.bind_call.input_schema is not None
+        return BindResponse(output_schema=params.bind_call.input_schema)
 
     @classmethod
     def process(
         cls,
-        params: ProcessParams[SingleTableArguments],
-        state: None,
         batch: pa.RecordBatch,
-        out: OutputCollector,
-    ) -> None:
-        """Serialize the batch and append to this state_id's log.
-
-        Under the buffered_table path ``out`` is a NoOpCollector that
-        silently accepts the trailing zero-row emit but would raise on any
-        non-empty emit — process() is sink-only.
-        """
-        assert params.state_id is not None, (
-            "buffered_table_process did not populate ProcessParams.state_id"
-        )
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> bytes:
+        """Append the batch to the shared state_log; return execution_id."""
         sink = pa.BufferOutputStream()
         with pa.ipc.new_stream(sink, batch.schema) as writer:
             writer.write_batch(batch)
-        params.storage.state_append(
-            b"buf", BoundStorage.pack_int_key(params.state_id), sink.getvalue().to_pybytes()
-        )
-        out.emit(empty_batch(params.output_schema))
+        params.storage.state_append(b"buf", b"", sink.getvalue().to_pybytes())
+        return params.execution_id
 
     @classmethod
     def combine(
-        cls, state_ids: list[int], params: ProcessParams[SingleTableArguments]
-    ) -> list[int]:
-        """Pass-through partitioning: each state_id is its own finalize key.
+        cls,
+        state_ids: list[bytes],
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> list[bytes]:
+        # Every state_id is params.execution_id; collapse to one stream.
+        return [params.execution_id]
 
-        No cross-state merging is needed — each thread's log is already a
-        complete, ordered slice of the rows that landed on that thread.
-        Returning ``state_ids`` lets DuckDB's parallel Source phase drain all
-        buffers concurrently.
-        """
-        return state_ids
+    @classmethod
+    def initial_finalize_state(
+        cls,
+        finalize_state_id: bytes,
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> _LogDrainState:
+        return _LogDrainState(ns=b"buf", after_id=-1)
 
-    # No finalize override: the framework's default finalize_log_key
-    # returns (b"buf", pack_int_key(state_id)) — exactly where process()
-    # writes via state_append above. The framework drains it directly
-    # via cursor in BufferedFinalizeState.produce(); no per-tick user
-    # code needed.
+    @classmethod
+    def finalize(
+        cls,
+        params: TableBufferingParams[SingleTableArguments],
+        finalize_state_id: bytes,
+        state: _LogDrainState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit one buffered batch per tick; finish at end-of-log."""
+        rows = params.storage.state_log_scan(
+            state.ns, b"", after_id=state.after_id, limit=1,
+        )
+        if not rows:
+            out.finish()
+            return
+        log_id, value = rows[0]
+        out.emit(pa.ipc.open_stream(value).read_next_batch())
+        state.after_id = log_id
 
 
 class FilterBySettingFunction(TableInOutGenerator[SingleTableArguments]):
@@ -375,7 +383,7 @@ class SumAllColumnsState(ArrowSerializableDataclass):
     partial_sums: Annotated[pa.RecordBatch, ArrowType(pa.binary())]
 
 
-class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, SumAllColumnsState]):
+class SumAllColumnsFunction(TableBufferingFunction[SumAllColumnsFunctionArguments, _LogDrainState]):
     """Aggregation function that computes column-wise sums across all batches.
 
     USE CASE
@@ -418,15 +426,9 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
     """
 
     class Meta:
-        """Metadata for SumAllColumnsFunction."""
-
         name = "sum_all_columns"
         description = "Computes column-wise sums across all batches"
         categories = ["aggregation", "numeric"]
-        # Uses the buffered table function path: each parallel Sink thread
-        # accumulates per-thread sums, combine reduces them to a single
-        # partition, finalize yields one row with the total.
-        buffered_table = True
         examples = [
             FunctionExample(
                 sql="SELECT * FROM sum_all_columns((SELECT * FROM input_table))",
@@ -487,98 +489,96 @@ class SumAllColumnsFunction(TableInOutGenerator[SumAllColumnsFunctionArguments, 
         return pa.RecordBatch.from_arrays(arrays, names=list(values.keys()))
 
     @classmethod
-    def initial_state(cls, params: ProcessParams[SumAllColumnsFunctionArguments]) -> SumAllColumnsState:
-        """Initialize running sums to zero."""
-        return SumAllColumnsState(
-            partial_sums=pa.RecordBatch.from_pylist(
-                [{name: 0 for name in params.output_schema.names}], schema=params.output_schema
-            )
-        )
-
-    # The state class must be a dataclass-style class for the framework's
-    # auto-detection from TableInOutGenerator[..., TState], but the
-    # generic-param plumbing on TableInOutGenerator doesn't auto-populate
-    # state_class (only TableInOutFunction does). Set it explicitly.
-    state_class = SumAllColumnsState
-
-    @classmethod
     def process(
         cls,
-        params: ProcessParams[SumAllColumnsFunctionArguments],
-        state: SumAllColumnsState,
         batch: pa.RecordBatch,
-        out: OutputCollector,
-    ) -> None:
-        """Accumulate this batch into the per-state_id partial_sums."""
+        params: TableBufferingParams[SumAllColumnsFunctionArguments],
+    ) -> bytes:
+        """Append this batch's partial sums to the per-execution log.
+
+        Race-safe append (state_append is atomic). combine() reduces.
+        """
         if params.args.logging:
-            out.client_log(
-                Level.INFO,
-                f"Processing batch with {batch.num_rows} rows",
+            import logging as _lg
+            _lg.getLogger("vgi.fixture.sum_all_columns").info(
+                "Processing batch with %d rows", batch.num_rows,
             )
 
+        # Compute partial sums for this batch only.
         sums: dict[str, pa.Scalar[Any]] = {}
         for name in params.output_schema.names:
             col_sum = pc.sum(batch.column(name))
-            prev = state.partial_sums.column(name)[0]
             if col_sum.is_valid:
-                sums[name] = pc.add(prev, col_sum)
+                sums[name] = col_sum
             else:
-                sums[name] = prev
-
-        state.partial_sums = cls._scalars_to_single_row_batch(sums)
-        # No out.emit needed — the buffered NoOpCollector swallows zero-row
-        # emits but emitting nothing is the cleanest signal that process is
-        # sink-only here.
+                sums[name] = pa.scalar(
+                    0, type=params.output_schema.field(name).type,
+                )
+        partial = cls._scalars_to_single_row_batch(sums)
+        params.storage.state_append(
+            b"partial", b"",
+            SumAllColumnsState(partial_sums=partial).serialize_to_bytes(),
+        )
+        return params.execution_id
 
     @classmethod
     def combine(
-        cls, state_ids: list[int], params: ProcessParams[SumAllColumnsFunctionArguments]
-    ) -> list[int]:
-        """Merge every per-thread state into a single output batch.
+        cls,
+        state_ids: list[bytes],
+        params: TableBufferingParams[SumAllColumnsFunctionArguments],
+    ) -> list[bytes]:
+        """Reduce all per-batch partials into one merged batch.
 
-        Reads each per-state_id ``partial_sums`` from shared BoundStorage,
-        column-sums them across states, and writes the merged result as
-        a single batch into the ``b"buf_sorted"`` log under key 0. The
-        framework's BufferedFinalizeState then drains that log on the
-        Source phase. Returns ``[0]`` so DuckDB's Source phase opens
-        exactly one finalize stream.
+        combine() runs once on the coordinator after every process()
+        completes — no race here. Drains the append-only log, sums, and
+        writes the merged row to b"buf"/b"" for finalize to drain.
 
-        Empty-input guard: if no Sink threads ran (state_ids is empty)
-        or every per-thread sum was zero, we still write the zeros row
-        so SQL like ``SELECT * FROM sum_all_columns((SELECT 1 WHERE 1=0))``
-        produces one row with the expected shape (matching the prior
-        unary-finalize fixture's empty-input contract).
+        Empty-input guard: even with no state_ids, writes the zeros row
+        so ``SELECT ... FROM sum_all_columns((SELECT 1 WHERE 1=0))``
+        produces one row of the expected shape.
         """
-        merged: dict[str, pa.Scalar[Any]] = {name: pa.scalar(0, type=field.type)
-                                             for name, field in zip(params.output_schema.names,
-                                                                     params.output_schema,
-                                                                     strict=True)}
-        if state_ids:
-            keys = [BoundStorage.pack_int_key(sid) for sid in state_ids]
-            stored = params.storage.state_get_many(b"buf", keys)
-            for entry in stored:
-                if entry is None:
-                    continue
-                partial = SumAllColumnsState.deserialize_from_bytes(entry).partial_sums
-                for name in params.output_schema.names:
-                    merged[name] = pc.add(merged[name], partial.column(name)[0])
+        merged: dict[str, pa.Scalar[Any]] = {
+            name: pa.scalar(0, type=field.type)
+            for name, field in zip(
+                params.output_schema.names, params.output_schema, strict=True,
+            )
+        }
+        for _log_id, blob in params.storage.state_log_scan(b"partial", b""):
+            partial = SumAllColumnsState.deserialize_from_bytes(blob).partial_sums
+            for name in params.output_schema.names:
+                merged[name] = pc.add(merged[name], partial.column(name)[0])
         merged_batch = cls._scalars_to_single_row_batch(merged)
         sink = pa.BufferOutputStream()
         with pa.ipc.new_stream(sink, merged_batch.schema) as w:
             w.write_batch(merged_batch)
-        params.storage.state_append(
-            b"buf_sorted",
-            BoundStorage.pack_int_key(0),
-            sink.getvalue().to_pybytes(),
-        )
-        return [0]
+        params.storage.state_append(b"buf", b"", sink.getvalue().to_pybytes())
+        return [params.execution_id]
 
     @classmethod
-    def finalize_log_key(
-        cls, finalize_state_id: int, params: ProcessParams[SumAllColumnsFunctionArguments],
-    ) -> tuple[bytes, bytes]:
-        """combine() consolidates all output to (b"buf_sorted", pack_int_key(0))."""
-        return (b"buf_sorted", BoundStorage.pack_int_key(0))
+    def initial_finalize_state(
+        cls,
+        finalize_state_id: bytes,
+        params: TableBufferingParams[SumAllColumnsFunctionArguments],
+    ) -> _LogDrainState:
+        return _LogDrainState(ns=b"buf", after_id=-1)
+
+    @classmethod
+    def finalize(
+        cls,
+        params: TableBufferingParams[SumAllColumnsFunctionArguments],
+        finalize_state_id: bytes,
+        state: _LogDrainState,
+        out: OutputCollector,
+    ) -> None:
+        rows = params.storage.state_log_scan(
+            state.ns, b"", after_id=state.after_id, limit=1,
+        )
+        if not rows:
+            out.finish()
+            return
+        log_id, value = rows[0]
+        out.emit(pa.ipc.open_stream(value).read_next_batch())
+        state.after_id = log_id
 
 
 @dataclass(kw_only=True)
@@ -588,86 +588,50 @@ class ExceptionProcessState(ArrowSerializableDataclass):
     batch_count: int = 0
 
 
-class ExceptionProcessFunction(
-    SumAllColumnsFunction, TableInOutGenerator[SumAllColumnsFunctionArguments, ExceptionProcessState]
-):
+class ExceptionProcessFunction(SumAllColumnsFunction):
     """Buffered table function that raises an exception on the second batch."""
 
-    # Narrowing state_class from SumAllColumnsState to ExceptionProcessState
-    # is intentional; both are ArrowSerializableDataclass subclasses, but
-    # the base class declares state_class with the concrete type for
-    # type-narrowing in generic contexts.
-    state_class = ExceptionProcessState  # type: ignore[assignment]
-
     class Meta(SumAllColumnsFunction.Meta):
-        """Metadata for ExceptionProcessFunction."""
-
         name = "exception_process"
         description = "Test function that raises exception during process"
         categories = ["test", "error"]
-        # buffered_table inherited from SumAllColumnsFunction.Meta
 
     @classmethod
-    def initial_state(cls, params: ProcessParams[SumAllColumnsFunctionArguments]) -> ExceptionProcessState:  # type: ignore[override]
-        """Create initial state."""
-        return ExceptionProcessState()
-
-    @classmethod
-    def process(  # type: ignore[override]
+    def process(
         cls,
-        params: ProcessParams[SumAllColumnsFunctionArguments],
-        state: ExceptionProcessState,
         batch: pa.RecordBatch,
-        out: OutputCollector,
-    ) -> None:
+        params: TableBufferingParams[SumAllColumnsFunctionArguments],
+    ) -> bytes:
         """Raise an exception on the second batch.
 
-        ``# type: ignore[override]`` — narrows ``state`` from the parent's
-        ``SumAllColumnsState`` to ``ExceptionProcessState`` (the override
-        on ``state_class`` above pairs with this type).
+        Race-safe counter: append-only log under b"count"/b"" — count is
+        the number of log entries seen so far. Concurrent process() calls
+        on HTTP serialize through state_append's atomic id minting.
         """
-        state.batch_count += 1
-        if state.batch_count % 2 == 0:
-            raise ValueError(f"Intentional exception on batch {state.batch_count}")
-        # Sink-only — no emit needed.
-
-    @classmethod
-    def combine(
-        cls, state_ids: list[int], params: ProcessParams[SumAllColumnsFunctionArguments]
-    ) -> list[int]:
-        # Pass-through partitioning: no aggregation across states needed.
-        return state_ids
-
-    @classmethod
-    def finalize(  # type: ignore[override]
-        cls, finalize_state_id: int, params: ProcessParams[SumAllColumnsFunctionArguments]
-    ) -> Iterator[pa.RecordBatch]:
-        # If we ever reach finalize, emit a zero-sum row (the only behavior
-        # the existing test asserts is the *exception* path from process).
-        sums = {name: pa.scalar(0, type=field.type)
-                for name, field in zip(params.output_schema.names, params.output_schema, strict=True)}
-        yield pa.RecordBatch.from_pydict({name: [val] for name, val in sums.items()},
-                                          schema=params.output_schema)
+        params.storage.state_append(b"count", b"", b"")
+        count = len(params.storage.state_log_scan(b"count", b""))
+        if count % 2 == 0:
+            raise ValueError(f"Intentional exception on batch {count}")
+        return params.execution_id
 
 
 class ExceptionFinalizeFunction(SumAllColumnsFunction):
     """Buffered table function that raises an exception during finalize()."""
 
     class Meta(SumAllColumnsFunction.Meta):
-        """Metadata for ExceptionFinalizeFunction."""
-
         name = "exception_finalize"
         description = "Test function that raises exception during finalize"
         categories = ["test", "error"]
-        # buffered_table inherited from SumAllColumnsFunction.Meta
 
     @classmethod
-    def finalize(  # type: ignore[override]
-        cls, finalize_state_id: int, params: ProcessParams[SumAllColumnsFunctionArguments]
-    ) -> Iterator[pa.RecordBatch]:
-        """Raise an intentional exception when the C++ side pulls a batch."""
+    def finalize(
+        cls,
+        params: TableBufferingParams[SumAllColumnsFunctionArguments],
+        finalize_state_id: bytes,
+        state: _LogDrainState,
+        out: OutputCollector,
+    ) -> None:
         raise ValueError("Intentional exception during finalize()")
-        yield  # make this a generator function
 
 
 @dataclass(slots=True, kw_only=True)
@@ -796,20 +760,14 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction[SingleTableArguments, Su
 # ============================================================================
 # Failure-injection fixtures
 # ============================================================================
-# These are buffered_table functions designed to exercise crash/error paths in
+# These are table_buffering functions designed to exercise crash/error paths in
 # the C++ Sink+Source operator. Each one fails in a specific phase so we can
 # test that the operator: throws cleanly, drains the worker pool, doesn't leak
 # in-flight workers, and recovers on the next query.
 
 
 class CrashOnProcessFunction(BufferInputFunction):
-    """SIGKILLs its own worker process on the first process() call.
-
-    Tests the C++ side's handling of an abrupt worker death mid-RPC:
-    subprocess writes the request, worker dies before responding, ReadUnary
-    sees EOF / EPIPE / SIGCHLD depending on timing. The exception should
-    propagate cleanly and gstate teardown should cancel-dispatch peer workers.
-    """
+    """SIGKILLs its own worker process on the first process() call."""
 
     class Meta(BufferInputFunction.Meta):
         name = "crash_on_process"
@@ -819,23 +777,15 @@ class CrashOnProcessFunction(BufferInputFunction):
     @classmethod
     def process(
         cls,
-        params: ProcessParams[SingleTableArguments],
-        state: None,
         batch: pa.RecordBatch,
-        out: OutputCollector,
-    ) -> None:
-        # SIGKILL with no handler; the process dies immediately. The C++
-        # side has a pending unary RPC awaiting the response.
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> bytes:
         os.kill(os.getpid(), signal.SIGKILL)
+        return params.execution_id  # unreachable
 
 
 class CrashOnCombineFunction(BufferInputFunction):
-    """Buffers input normally; raises during combine().
-
-    Tests that a combine RPC error propagates as IOException, that the
-    combine_worker is dropped (not pushed back into gstate.workers), and
-    that the rest of the worker pool drains.
-    """
+    """Buffers input normally; raises during combine()."""
 
     class Meta(BufferInputFunction.Meta):
         name = "crash_on_combine"
@@ -844,62 +794,32 @@ class CrashOnCombineFunction(BufferInputFunction):
 
     @classmethod
     def combine(
-        cls, state_ids: list[int], params: ProcessParams[SingleTableArguments]
-    ) -> list[int]:
+        cls, state_ids: list[bytes], params: TableBufferingParams[SingleTableArguments]
+    ) -> list[bytes]:
         raise RuntimeError("Intentional exception during combine()")
 
 
 class CrashOnFinalizeFunction(BufferInputFunction):
-    """Buffers input, combine returns normally, finalize raises on first yield.
-
-    Tests source-phase error propagation: the framework's
-    BufferedFinalizeState.produce() calls _decode_ipc_batch on the
-    next stored value; combine() planted a deliberately malformed
-    payload, decode raises, the IOException unwinds the source thread,
-    and remaining workers are still released cleanly.
-
-    The error message is the Arrow IPC decoder's complaint about the
-    malformed bytes (not a user-controlled message). The integration
-    test asserts the failure path, not the specific text.
-    """
+    """Combine returns normally, finalize raises on first tick."""
 
     class Meta(BufferInputFunction.Meta):
         name = "crash_on_finalize"
-        description = "Worker plants malformed payload; source-phase decode raises (test)"
+        description = "Worker raises during finalize (test)"
         categories = ["test", "crash"]
 
     @classmethod
-    def combine(
-        cls, state_ids: list[int], params: ProcessParams[SingleTableArguments]
-    ) -> list[int]:
-        """Plant a poison entry so the source-phase decode raises.
-
-        Drop a malformed payload into b"buf_sorted" so the framework's
-        cursor-drain raises during ``_decode_ipc_batch`` on the source
-        phase. Return ``[0]`` (one finalize_state_id) so DuckDB opens
-        the stream that will then immediately fail.
-        """
-        params.storage.state_append(
-            b"buf_sorted",
-            BoundStorage.pack_int_key(0),
-            b"\x00\x01\x02\x03not-valid-arrow-ipc",
-        )
-        return [0]
-
-    @classmethod
-    def finalize_log_key(
-        cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments],
-    ) -> tuple[bytes, bytes]:
-        return (b"buf_sorted", BoundStorage.pack_int_key(0))
+    def finalize(
+        cls,
+        params: TableBufferingParams[SingleTableArguments],
+        finalize_state_id: bytes,
+        state: _LogDrainState,
+        out: OutputCollector,
+    ) -> None:
+        raise ValueError("Intentional exception during finalize()")
 
 
 class HangOnProcessFunction(BufferInputFunction):
-    """Sleeps for an hour in process(); used by the manual cancellation smoke.
-
-    sqllogictest can't simulate Ctrl-C cleanly, so this fixture is driven by
-    scripts/smoke_buffered_cancel.sh — it starts the query, waits a moment,
-    then SIGINTs the duckdb process and asserts the query was cancelled.
-    """
+    """Sleeps for an hour in process(); used by the manual cancellation smoke."""
 
     class Meta(BufferInputFunction.Meta):
         name = "hang_on_process"
@@ -909,12 +829,11 @@ class HangOnProcessFunction(BufferInputFunction):
     @classmethod
     def process(
         cls,
-        params: ProcessParams[SingleTableArguments],
-        state: None,
         batch: pa.RecordBatch,
-        out: OutputCollector,
-    ) -> None:
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> bytes:
         time.sleep(3600)
+        return params.execution_id  # unreachable
 
 
 @dataclass(kw_only=True)
@@ -928,77 +847,85 @@ class LargeStateState(ArrowSerializableDataclass):
     payload: bytes = b""
 
 
-class LargeStateFunction(TableInOutGenerator[SingleTableArguments, LargeStateState]):
+class LargeStateFunction(TableBufferingFunction[SingleTableArguments, _LogDrainState]):
     """Accumulates a large payload per state_id and emits it during finalize.
 
-    Each process() call appends N KB to the per-state_id payload. The total
-    bytes per finalize_state_id grows linearly with input row count. The
-    test passes ~100 MB through combine to exercise the IPC chunking that
-    happens transparently in vgi_rpc for large messages.
+    Each process() call appends 1 MB to the per-worker payload via RMW on
+    BoundStorage. combine() materializes one output row per worker into a
+    state_log; finalize() drains it cursor-style.
     """
-
-    state_class = LargeStateState
 
     class Meta:
         name = "large_state"
         description = "Buffers ~1 MB per input batch into state (IPC test)"
         categories = ["test", "memory"]
-        buffered_table = True
 
     @classmethod
-    def initial_state(cls, params: ProcessParams[SingleTableArguments]) -> LargeStateState:
-        return LargeStateState()
+    def on_bind(cls, params: BindParams[SingleTableArguments]) -> BindResponse:
+        assert params.bind_call.input_schema is not None
+        return BindResponse(output_schema=params.bind_call.input_schema)
 
     @classmethod
     def process(
         cls,
-        params: ProcessParams[SingleTableArguments],
-        state: LargeStateState,
         batch: pa.RecordBatch,
-        out: OutputCollector,
-    ) -> None:
-        # Append 1 MB of zero bytes per input batch. Combine ships the full
-        # accumulated payload back via Arrow IPC; chunking is the worker
-        # library's responsibility — we just want to land a multi-MB message
-        # on the wire.
-        state.payload += b"\x00" * (1024 * 1024)
-        out.emit(empty_batch(params.output_schema))
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> bytes:
+        """Append 1 MB per call to the per-execution log.
+
+        Race-safe append; combine() sums the total payload size by
+        scanning the log.
+        """
+        params.storage.state_append(
+            b"large", b"", b"\x00" * (1024 * 1024),
+        )
+        return params.execution_id
 
     @classmethod
     def combine(
-        cls, state_ids: list[int], params: ProcessParams[SingleTableArguments]
-    ) -> list[int]:
-        """Materialize one output row per state_id into the sorted log.
-
-        Translates each per-state RMW payload into a one-row output
-        batch on ``b"buf_sorted"`` keyed by state_id, so the framework's
-        cursor drain emits exactly one row per finalize_state_id.
-        """
-        for sid in state_ids:
-            stored = params.storage.state_get(b"buf", BoundStorage.pack_int_key(sid))
-            payload_len = (
-                len(LargeStateState.deserialize_from_bytes(stored).payload)
-                if stored is not None else 0
-            )
-            out_batch = pa.RecordBatch.from_pydict(
-                {name: [payload_len] for name in params.output_schema.names},
-                schema=params.output_schema,
-            )
-            sink = pa.BufferOutputStream()
-            with pa.ipc.new_stream(sink, out_batch.schema) as w:
-                w.write_batch(out_batch)
-            params.storage.state_append(
-                b"buf_sorted", BoundStorage.pack_int_key(sid),
-                sink.getvalue().to_pybytes(),
-            )
-        return state_ids
+        cls,
+        state_ids: list[bytes],
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> list[bytes]:
+        """Materialize one output row carrying the total payload size."""
+        total = sum(
+            len(blob) for _log_id, blob in params.storage.state_log_scan(b"large", b"")
+        )
+        out_batch = pa.RecordBatch.from_pydict(
+            {name: [total] for name in params.output_schema.names},
+            schema=params.output_schema,
+        )
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, out_batch.schema) as w:
+            w.write_batch(out_batch)
+        params.storage.state_append(b"buf", b"", sink.getvalue().to_pybytes())
+        return [params.execution_id]
 
     @classmethod
-    def finalize_log_key(
-        cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments],
-    ) -> tuple[bytes, bytes]:
-        """combine() writes per-state output to (b"buf_sorted", pack(state_id))."""
-        return (b"buf_sorted", BoundStorage.pack_int_key(finalize_state_id))
+    def initial_finalize_state(
+        cls,
+        finalize_state_id: bytes,
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> _LogDrainState:
+        return _LogDrainState(ns=b"buf", after_id=-1)
+
+    @classmethod
+    def finalize(
+        cls,
+        params: TableBufferingParams[SingleTableArguments],
+        finalize_state_id: bytes,
+        state: _LogDrainState,
+        out: OutputCollector,
+    ) -> None:
+        rows = params.storage.state_log_scan(
+            state.ns, b"", after_id=state.after_id, limit=1,
+        )
+        if not rows:
+            out.finish()
+            return
+        log_id, value = rows[0]
+        out.emit(pa.ipc.open_stream(value).read_next_batch())
+        state.after_id = log_id
 
 
 # ============================================================================
@@ -1042,96 +969,88 @@ def _unpack_indexed_batch(blob: bytes) -> tuple[int, bytes]:
     return int.from_bytes(blob[:8], "little", signed=True), blob[8:]
 
 
-class BatchIndexBufferInputFunction(TableInOutGenerator[SingleTableArguments, None]):
+class BatchIndexBufferInputFunction(TableBufferingFunction[SingleTableArguments, _LogDrainState]):
     """Buffered table function that demands ``batch_index`` per ``process()``.
 
     Uses ``Meta.requires_input_batch_index=True`` so the C++ operator
     declares ``RequiredPartitionInfo()=BatchIndex()`` and threads DuckDB's
-    per-chunk batch_index into every ``process()`` call. process() appends
-    ``(batch_index, ipc_bytes)`` tuples (struct-packed) to the per-thread
-    state_log; combine() collects all state_ids; finalize() drains every
-    log, sorts by batch_index globally, and yields in source order.
+    per-chunk batch_index into every ``process()`` call. process() packs
+    (batch_index, ipc_bytes) into the per-worker state_log; combine() sorts
+    globally by batch_index and re-writes a sorted log; finalize() drains
+    cursor-style.
     """
 
-    state_class = None
-
     class Meta:
-        # Declared standalone (not inheriting from BufferInputFunction.Meta)
-        # because resolve_metadata's vars(meta_class) only sees directly-set
-        # attributes — Python class attribute inheritance on Meta doesn't
-        # carry through. Explicit beats implicit here.
         name = "batch_index_buffer_input"
         description = "buffer_input variant using batch_index to reconstruct order"
         categories = ["test", "ordering"]
-        buffered_table = True
         requires_input_batch_index = True
 
     @classmethod
-    def initial_state(cls, params: ProcessParams[SingleTableArguments]) -> None:
-        return None
+    def on_bind(cls, params: BindParams[SingleTableArguments]) -> BindResponse:
+        assert params.bind_call.input_schema is not None
+        return BindResponse(output_schema=params.bind_call.input_schema)
 
     @classmethod
     def process(
         cls,
-        params: ProcessParams[SingleTableArguments],
-        state: None,
         batch: pa.RecordBatch,
-        out: OutputCollector,
-    ) -> None:
-        # batch_index must be present when Meta.requires_input_batch_index=True;
-        # if it's None the C++ side failed to thread it through.
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> bytes:
         if params.batch_index is None:
             raise RuntimeError(
                 "batch_index_buffer_input.process() received batch_index=None "
                 "— Meta.requires_input_batch_index plumbing is broken"
             )
-        assert params.state_id is not None
-
         sink = pa.BufferOutputStream()
         with pa.ipc.new_stream(sink, batch.schema) as writer:
             writer.write_batch(batch)
+        # Append-only — race-safe under concurrent Sink threads. combine()
+        # collects and sorts globally by batch_index.
         params.storage.state_append(
-            b"buf",
-            BoundStorage.pack_int_key(params.state_id),
+            b"unsorted", b"",
             _pack_indexed_batch(params.batch_index, sink.getvalue().to_pybytes()),
         )
-        out.emit(empty_batch(params.output_schema))
+        return params.execution_id
 
     @classmethod
     def combine(
-        cls, state_ids: list[int], params: ProcessParams[SingleTableArguments]
-    ) -> list[int]:
-        """Sort per state_id and write a sorted log for the framework to drain.
-
-        Drains the unsorted log, sorts by batch_index, re-writes the
-        sorted batches as a NEW append log under ``b"buf_sorted"``
-        keyed by state_id. ``finalize_log_key`` points the framework
-        at the sorted log; the framework then drains it via cursor
-        with no per-tick user code.
-
-        Cost: 2x storage write for the duration of the query (unsorted
-        + sorted logs both live until the destructor RPC fires
-        ``execution_clear``). Acceptable; storage is the cheap dimension
-        here and combine runs once. A future ``state_log_drain``
-        primitive could delete-as-it-writes to halve this.
-        """
-        for sid in state_ids:
-            unsorted = params.storage.state_log_scan(
-                b"buf", BoundStorage.pack_int_key(sid),
-            )
-            pairs = [_unpack_indexed_batch(value) for _log_id, value in unsorted]
-            pairs.sort(key=lambda p: p[0])
-            for _idx, batch_bytes in pairs:
-                params.storage.state_append(
-                    b"buf_sorted",
-                    BoundStorage.pack_int_key(sid),
-                    batch_bytes,
-                )
-        return state_ids
+        cls,
+        state_ids: list[bytes],
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> list[bytes]:
+        """Sort globally by batch_index and re-emit as a single ordered log."""
+        all_pairs: list[tuple[int, bytes]] = [
+            _unpack_indexed_batch(v)
+            for _, v in params.storage.state_log_scan(b"unsorted", b"")
+        ]
+        all_pairs.sort(key=lambda p: p[0])
+        for _idx, batch_bytes in all_pairs:
+            params.storage.state_append(b"buf", b"", batch_bytes)
+        return [params.execution_id]
 
     @classmethod
-    def finalize_log_key(
-        cls, finalize_state_id: int, params: ProcessParams[SingleTableArguments],
-    ) -> tuple[bytes, bytes]:
-        """combine() writes per-state_id sorted output to (b"buf_sorted", pack(state_id))."""
-        return (b"buf_sorted", BoundStorage.pack_int_key(finalize_state_id))
+    def initial_finalize_state(
+        cls,
+        finalize_state_id: bytes,
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> _LogDrainState:
+        return _LogDrainState(ns=b"buf", after_id=-1)
+
+    @classmethod
+    def finalize(
+        cls,
+        params: TableBufferingParams[SingleTableArguments],
+        finalize_state_id: bytes,
+        state: _LogDrainState,
+        out: OutputCollector,
+    ) -> None:
+        rows = params.storage.state_log_scan(
+            state.ns, b"", after_id=state.after_id, limit=1,
+        )
+        if not rows:
+            out.finish()
+            return
+        log_id, value = rows[0]
+        out.emit(pa.ipc.open_stream(value).read_next_batch())
+        state.after_id = log_id
