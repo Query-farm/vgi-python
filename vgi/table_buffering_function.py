@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, TypeVar, get_args, get_origin
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, get_args, get_origin
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
@@ -54,6 +54,77 @@ __all__ = [
     "TableBufferingFunction",
     "TableBufferingParams",
 ]
+
+
+# Sentinel meaning "no parameterization of TableBufferingFunction was found
+# in the MRO walk; leave the existing class attribute alone (inherits via
+# normal MRO lookup from a base that did resolve)". Distinguished from None
+# (a valid resolved value meaning "no per-tick state").
+_UNCHANGED: Any = object()
+
+
+def _resolve_finalize_state_class(
+    cls: type,
+) -> type[ArrowSerializableDataclass] | None | Any:
+    """Walk ``cls.__mro__`` to resolve ``TFinalizeState`` to a concrete type.
+
+    Returns the resolved class, ``None`` (state explicitly disabled), or
+    the ``_UNCHANGED`` sentinel when no TBF parameterization is found.
+
+    Handles generic-through chains by maintaining a TypeVar→concrete
+    substitution map as we walk from most-derived to base. When an
+    intermediate class binds a TypeVar to a concrete type, later levels
+    that reference that TypeVar in their own bases get substituted.
+    """
+    # Walk lazy-imported to avoid the forward-reference dance.
+    substitutions: dict[TypeVar, Any] = {}
+    saw_parameterization = False
+
+    for klass in cls.__mro__:
+        # __orig_bases__ is per-class (not inherited); look it up directly
+        # on klass without falling back to attribute resolution.
+        orig_bases = klass.__dict__.get("__orig_bases__", ())
+        for base in orig_bases:
+            origin = get_origin(base)
+            if origin is None or not isinstance(origin, type):
+                continue
+            if not issubclass(origin, TableBufferingFunction):
+                continue
+            saw_parameterization = True
+            type_args = get_args(base)
+
+            if origin is TableBufferingFunction:
+                # Direct parameterization: TableBufferingFunction[TArgs, TState].
+                if len(type_args) < 2:
+                    continue
+                state = type_args[1]
+                # Resolve transitively through prior substitutions.
+                while isinstance(state, TypeVar) and state in substitutions:
+                    state = substitutions[state]
+                if state is None or state is type(None):
+                    return None
+                if isinstance(state, TypeVar):
+                    # Still unresolved — generic-through to a leaf class
+                    # that we either haven't seen yet (impossible: we walk
+                    # most-derived first) or that didn't bind. Leave None.
+                    return None
+                return state
+
+            # Intermediate parameterized base — record TypeVar substitutions
+            # so the next iteration up the MRO can use them.
+            type_params: tuple[TypeVar, ...] = getattr(origin, "__parameters__", ())
+            # strict=False on purpose: an intermediate generic may declare
+            # more TypeVars than the parameterization binds (callers can
+            # leave trailing positions unbound by intent), in which case
+            # ``zip`` should silently truncate.
+            for tv, ta in zip(type_params, type_args, strict=False):
+                # If ta itself is a TypeVar resolved earlier (deeper-nested
+                # generic), chase the chain to its concrete binding.
+                while isinstance(ta, TypeVar) and ta in substitutions:
+                    ta = substitutions[ta]
+                substitutions[tv] = ta
+
+    return _UNCHANGED if not saw_parameterization else None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -141,33 +212,32 @@ class TableBufferingFunction[TArgs, TFinalizeState = None](TableFunctionBase[TAr
     def __init_subclass__(cls) -> None:  # noqa: D105 — internal hook
         super().__init_subclass__()
 
-        # Resolve ``TFinalizeState`` from this class's directly-declared
-        # ``__orig_bases__`` (i.e. the ``TableBufferingFunction[Args, State]``
-        # specialization). When the subclass doesn't re-parameterize the base
-        # (e.g. ``class Foo(BufferInputFunction): ...``) we leave the parent's
-        # resolution alone via normal class-attribute inheritance.
-        # ``TableFunctionBase.__init_subclass__`` (called via super() above)
-        # has already validated that ``state_type`` is None or an
-        # ``ArrowSerializableDataclass`` subclass; we just record it.
-        for base in cls.__dict__.get("__orig_bases__", ()):
-            origin = get_origin(base)
-            if origin is None or not (
-                isinstance(origin, type) and issubclass(origin, TableBufferingFunction)
-            ):
-                continue
-            type_args = get_args(base)
-            if len(type_args) < 2:
-                continue
-            state_type = type_args[1]
-            if state_type is None or state_type is type(None):
-                cls._finalize_state_class = None
-            elif isinstance(state_type, TypeVar):
-                # Generic-through (e.g. ``class Foo[X](TableBufferingFunction[Args, X]): ...``).
-                # Concrete subclasses below this one will resolve it.
-                pass
-            else:
-                cls._finalize_state_class = state_type
-            break
+        # Resolve ``TFinalizeState`` by walking the MRO chain of
+        # generic-parameterizations. The naive "look at cls.__orig_bases__"
+        # approach handles ``class Foo(TableBufferingFunction[Args, State])``
+        # but silently loses the state type on intermediate generics:
+        #
+        #     class Mid[X](TableBufferingFunction[Args, X]):  ...
+        #     class Concrete(Mid[MyState]):                   # bug: TFinalizeState = None
+        #
+        # ``Concrete.__orig_bases__`` is ``(Mid[MyState],)``; the old loop
+        # saw origin=Mid (a TBF subclass), tried ``type_args[1]`` (out of
+        # range, only one arg), and bailed, leaving _finalize_state_class
+        # unset → MyState lost. We instead walk ``cls.__mro__``, build a
+        # TypeVar→concrete substitution map level by level, and resolve
+        # when we reach a base whose origin is TableBufferingFunction
+        # itself. ``TableFunctionBase.__init_subclass__`` (via super())
+        # has already validated state_type when it was first introduced.
+        resolved = _resolve_finalize_state_class(cls)
+        if resolved is _UNCHANGED:
+            # No parameterization found in the MRO walk — leave the
+            # inherited class-attribute value alone (covers
+            # ``class Foo(BufferInputFunction): ...`` where Foo doesn't
+            # re-parameterize and just inherits BufferInputFunction's
+            # resolved class).
+            pass
+        else:
+            cls._finalize_state_class = resolved
 
         meta = getattr(cls, "Meta", None)
         if meta is None:
