@@ -30,7 +30,8 @@ that did NOT run the corresponding ``process()`` calls.
 from __future__ import annotations
 
 from abc import abstractmethod
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, get_args, get_origin
 
 import pyarrow as pa
@@ -155,6 +156,22 @@ class TableBufferingParams[TArgs](ProcessParams[TArgs]):
     transaction_id: bytes | None
     function_name: str
     worker_path: str | None = None
+
+    # In-band log sink — emits a 0-row log batch on the RPC response stream,
+    # which DuckDB surfaces as a row in ``duckdb_logs()`` with ``type='VGI'``.
+    # Use this from ``process()`` and ``combine()`` (which are unary RPCs and
+    # have no ``OutputCollector``). The streaming ``finalize(... out)``
+    # callback should use ``out.client_log(...)`` instead — it goes through
+    # the same wire mechanism but flows through the producer-mode stream.
+    #
+    # The worker handler wires this to ``ctx.client_log`` before invoking
+    # the user callback; the default no-op is a safety net for unit-test
+    # callers that build ``TableBufferingParams`` outside the RPC path.
+    client_log: Callable[..., None] = field(
+        default=lambda *_a, **_kw: None,
+        repr=False,
+        compare=False,
+    )
 
 
 class TableBufferingFunction[TArgs, TFinalizeState = None](TableFunctionBase[TArgs]):

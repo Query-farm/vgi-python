@@ -43,6 +43,7 @@ from typing import Annotated, Any
 import pyarrow as pa
 import pyarrow.compute as pc
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
+from vgi_rpc.log import Level
 from vgi_rpc.rpc import OutputCollector
 from vgi_rpc.utils import empty_batch
 
@@ -499,9 +500,16 @@ class SumAllColumnsFunction(TableBufferingFunction[SumAllColumnsFunctionArgument
         Race-safe append (state_append is atomic). combine() reduces.
         """
         if params.args.logging:
-            import logging as _lg
-            _lg.getLogger("vgi.fixture.sum_all_columns").info(
-                "Processing batch with %d rows", batch.num_rows,
+            # Goes through the same wire mechanism as the streaming
+            # ``out.client_log()`` path — emits a 0-row log batch on the
+            # ``table_buffering_process`` response stream that DuckDB
+            # surfaces in ``duckdb_logs()`` with type='VGI'. The Python
+            # stdlib ``logging.getLogger(...).info(...)`` we used before
+            # didn't reach the wire and never showed up in duckdb_logs
+            # (the framework provides no stdlib-logging-to-wire bridge).
+            params.client_log(
+                Level.INFO,
+                f"Processing batch with {batch.num_rows} rows",
             )
 
         # Compute partial sums for this batch only.

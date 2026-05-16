@@ -2577,6 +2577,12 @@ class Worker:
             transaction_id=transaction_id,
             function_name=function_name,
             worker_path=None,
+            # process() and combine() are unary RPCs and have no
+            # OutputCollector; expose ctx.client_log on params so they can
+            # emit log batches that surface in DuckDB's duckdb_logs() with
+            # type='VGI'. Mirrors out.client_log() on the streaming
+            # finalize() callback.
+            client_log=ctx.client_log,
         )
         return func_cls, params
 
