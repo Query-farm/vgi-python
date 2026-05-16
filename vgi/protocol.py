@@ -1277,6 +1277,13 @@ class TableBufferingFinalizeState(ProducerState):
     # from "subsequent tick / deserialize existing".
     state_initialized: bool = False
     attach_opaque_data: bytes | None = None
+    # Pushdown carried from the InitRequest. Wire-serialized on every tick so
+    # an HTTP rehydration on a different worker process still knows which
+    # columns to project and which filter predicates to apply. The streaming
+    # peer ``TableInOutExchangeState`` rehydrates these the same way on every
+    # round-trip (``vgi/protocol.py:1106-1119``).
+    projection_ids: list[int] | None = None
+    pushdown_filters: Annotated[pa.RecordBatch | None, ArrowType(pa.large_binary())] = None
 
     def produce(self, out: OutputCollector, ctx: CallContext) -> None:
         """Drive one tick of the user's finalize() callback."""

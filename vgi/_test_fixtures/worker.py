@@ -167,6 +167,7 @@ from vgi._test_fixtures.table_in_out import (
     CrashOnCombineFunction,
     CrashOnFinalizeFunction,
     CrashOnProcessFunction,
+    EchoBufferingFunction,
     EchoFunction,
     ExceptionFinalizeFunction,
     ExceptionProcessFunction,
@@ -304,6 +305,7 @@ _EXAMPLE_CATALOG = Catalog(
                 LargeStateFunction,
                 OrderedBufferInputFunction,
                 BatchIndexBufferInputFunction,
+                EchoBufferingFunction,
                 SlowCancellableBufferingFunction,
                 # TableFunctionGenerator - generate output without input
                 ConstantColumnsFunction,

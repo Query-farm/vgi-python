@@ -229,6 +229,91 @@ class BufferInputFunction(TableBufferingFunction[SingleTableArguments, _LogDrain
         state.after_id = log_id
 
 
+class EchoBufferingFunction(TableBufferingFunction[SingleTableArguments, _LogDrainState]):
+    """Buffered passthrough with projection + filter pushdown enabled.
+
+    Same shape as :class:`BufferInputFunction` (process buffers input,
+    finalize drains one batch per tick) but declares all three pushdown
+    flags so DuckDB sends ``projection_ids`` / ``pushdown_filters`` on the
+    InitRequest. The framework:
+
+    * Narrows ``params.output_schema`` to the projected columns; the
+      ``OutputCollector.emit`` call's ``batch.select(target_names)`` then
+      drops non-projected columns from the buffered full-width batch.
+    * Wraps ``out`` in ``_FilteringOutputCollector`` (because
+      ``auto_apply_filters=True``) so emitted batches are filter-applied
+      automatically.
+
+    User code stays the streaming-style passthrough — no awareness of
+    projection or filters needed. The fixture verifies that buffered
+    TableBufferingFunction pushdown actually plumbs through end-to-end.
+    """
+
+    class Meta:
+        """Metadata for EchoBufferingFunction."""
+
+        name = "echo_buffering"
+        description = "Buffered passthrough with projection + filter pushdown"
+        categories = ["test", "buffer", "pushdown"]
+        projection_pushdown = True
+        filter_pushdown = True
+        auto_apply_filters = True
+
+    @classmethod
+    def on_bind(cls, params: BindParams[SingleTableArguments]) -> BindResponse:
+        """Output schema = input schema (passthrough)."""
+        assert params.bind_call.input_schema is not None
+        return BindResponse(output_schema=params.bind_call.input_schema)
+
+    @classmethod
+    def process(
+        cls,
+        batch: pa.RecordBatch,
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> bytes:
+        """Buffer the full input batch (no projection at storage time)."""
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, batch.schema) as writer:
+            writer.write_batch(batch)
+        params.storage.state_append(b"buf", b"", sink.getvalue().to_pybytes())
+        return params.execution_id
+
+    @classmethod
+    def combine(
+        cls,
+        state_ids: list[bytes],  # noqa: ARG003 - collapse to one finalize stream
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> list[bytes]:
+        return [params.execution_id]
+
+    @classmethod
+    def initial_finalize_state(
+        cls,
+        finalize_state_id: bytes,  # noqa: ARG003 - one bucket per execution
+        params: TableBufferingParams[SingleTableArguments],  # noqa: ARG003
+    ) -> _LogDrainState:
+        return _LogDrainState(ns=b"buf", after_id=-1)
+
+    @classmethod
+    def finalize(
+        cls,
+        params: TableBufferingParams[SingleTableArguments],
+        finalize_state_id: bytes,  # noqa: ARG003
+        state: _LogDrainState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit one buffered batch per tick — framework narrows + filters."""
+        rows = params.storage.state_log_scan(
+            state.ns, b"", after_id=state.after_id, limit=1,
+        )
+        if not rows:
+            out.finish()
+            return
+        log_id, value = rows[0]
+        out.emit(pa.ipc.open_stream(value).read_next_batch())
+        state.after_id = log_id
+
+
 class FilterBySettingFunction(TableInOutGenerator[SingleTableArguments]):
     """Filters input rows where the value column meets a threshold setting.
 

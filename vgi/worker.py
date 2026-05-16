@@ -512,10 +512,24 @@ def run_table_buffering_finalize_tick(state: Any, out: Any, ctx: Any) -> None:
     the protocol→worker import cycle. Cold-resolves func_cls + params on
     every call (no in-process cache — different worker processes may
     handle different ticks under HTTP).
+
+    Applies the pushdown contract symmetric with the streaming
+    ``TableInOutExchangeState`` (``protocol.py:1106-1186``): narrow
+    ``params.output_schema`` to the projected slots and, when
+    ``Meta.auto_apply_filters`` is True, wrap ``out`` in a filtering
+    collector so the user's ``finalize()`` doesn't need to know.
     """
+    import dataclasses as _dc_mod
     from dataclasses import dataclass as _dc
 
-    from vgi.protocol import TableBufferingFinalizeState as _TBFS
+    from vgi.protocol import (
+        TableBufferingFinalizeState as _TBFS,
+    )
+    from vgi.protocol import (
+        _FilteringOutputCollector,
+        _TrackingOutputCollector,
+    )
+    from vgi.table_function import _effective_projection_ids, project_schema
 
     assert isinstance(state, _TBFS), type(state)
 
@@ -548,6 +562,38 @@ def run_table_buffering_finalize_tick(state: Any, out: Any, ctx: Any) -> None:
         stub, ctx, attach_already_unwrapped=True,
     )
 
+    # Narrow output_schema based on projection_ids carried on the state.
+    # ``_effective_projection_ids`` returns None when the function didn't
+    # opt into projection_pushdown — a safety net so a stale projection_ids
+    # field on the wire (from a misbehaving C++ client) can't corrupt the
+    # output schema for a function that never asked for projection.
+    proj_ids = _effective_projection_ids(func_cls, state.projection_ids)
+    if proj_ids is not None:
+        params = _dc_mod.replace(
+            params,
+            output_schema=project_schema(proj_ids, params.output_schema),
+        )
+
+    # Apply auto-apply-filters: wrap `out` in
+    # ``_TrackingOutputCollector`` (the inner-validation wrapper that the
+    # streaming path uses at protocol.py:1177) and then in
+    # ``_FilteringOutputCollector`` so each batch emitted by user's
+    # finalize() is filtered through the PushdownFilters object before
+    # reaching the caller. _FilteringOutputCollector.emit threads
+    # ``batch_index=`` through to the inner; only _TrackingOutputCollector
+    # accepts that kwarg, so a raw OutputCollector wrap would TypeError.
+    # Mirrors protocol.py:1176-1186.
+    auto_apply = (
+        state.pushdown_filters is not None
+        and func_cls._should_auto_apply_filters()
+    )
+    effective_out = out
+    if auto_apply:
+        pushdown_obj = func_cls.pushdown_filters(state.pushdown_filters)
+        if pushdown_obj is not None:
+            tracking_out = _TrackingOutputCollector(out)
+            effective_out = _FilteringOutputCollector(tracking_out, func_cls, pushdown_obj)
+
     if not state.state_initialized:
         user_state: Any = func_cls.initial_finalize_state(
             state.finalize_state_id, params,
@@ -559,7 +605,13 @@ def run_table_buffering_finalize_tick(state: Any, out: Any, ctx: Any) -> None:
             if state.state_blob else None
         )
 
-    func_cls.finalize(params, state.finalize_state_id, user_state, out)
+    func_cls.finalize(params, state.finalize_state_id, user_state, effective_out)
+
+    # If we wrapped `out`, drain any buffered output before the tick returns.
+    # `_FilteringOutputCollector.propagate()` is the streaming-path
+    # convention; absent on the no-filter path so guard the call.
+    if auto_apply and hasattr(effective_out, "propagate"):
+        effective_out.propagate()
 
     if user_state is None:
         state.state_blob = b""
@@ -3352,6 +3404,14 @@ class Worker:
                     ),
                     finalize_state_id=bytes(request.finalize_state_id),
                     attach_opaque_data=request.bind_call.attach_opaque_data,
+                    # Thread pushdown info from the InitRequest onto the producer
+                    # state so it survives HTTP rehydration. The state is wire-
+                    # serialized between produce() ticks; carrying projection_ids
+                    # + pushdown_filters here lets every tick (potentially on a
+                    # different worker process) narrow output_schema and apply
+                    # filters consistently with the C++ Sink+Source contract.
+                    projection_ids=request.projection_ids,
+                    pushdown_filters=request.pushdown_filters,
                 )
                 input_schema = None
             else:
