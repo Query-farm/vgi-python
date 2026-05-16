@@ -169,6 +169,7 @@ from vgi._test_fixtures.table_in_out import (
     CrashOnProcessFunction,
     EchoBufferingFunction,
     EchoFunction,
+    EchoWitnessFunction,
     ExceptionFinalizeFunction,
     ExceptionProcessFunction,
     FilterBySettingFunction,
@@ -289,6 +290,7 @@ _EXAMPLE_CATALOG = Catalog(
             functions=[
                 # TableInOutGenerator - transform input batches
                 EchoFunction,
+                EchoWitnessFunction,
                 BufferInputFunction,
                 FilterBySettingFunction,
                 RepeatInputsFunction,

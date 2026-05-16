@@ -76,6 +76,7 @@ class _LogDrainState(ArrowSerializableDataclass):
 
 __all__ = [
     "EchoFunction",
+    "EchoWitnessFunction",
     "BufferInputFunction",
     "FilterBySettingFunction",
     "RepeatInputsFunction",
@@ -147,6 +148,53 @@ class EchoFunction(TableInOutGenerator[SingleTableArguments]):
         """Produce the output schema."""
         assert params.bind_call.input_schema is not None
         return BindResponse(output_schema=params.bind_call.input_schema)
+
+
+class EchoWitnessFunction(TableInOutGenerator[SingleTableArguments]):
+    """Integer-output fixture that encodes the post-projection column count.
+
+    Designed to verify that projection pushdown ACTUALLY narrows the
+    schema reaching the worker (rather than just relying on DuckDB to
+    narrow above the operator). Each emitted row has every column set
+    to ``len(params.output_schema)`` — i.e., the worker's observed
+    column count after framework projection narrowing.
+
+    With pushdown working:
+        ``SELECT a FROM echo_witness((SELECT 1 AS a, 2 AS b, 3 AS c))`` → 1
+
+    Without pushdown (DuckDB requests all columns, narrows above):
+        ``SELECT a FROM echo_witness((SELECT 1 AS a, 2 AS b, 3 AS c))`` → 3
+
+    Output schema mirrors input (must be all integer columns for the
+    encoding to work). Filter pushdown is intentionally off — this
+    fixture only probes projection.
+    """
+
+    class Meta:
+        name = "echo_witness"
+        description = "Emits len(observed_output_schema) per column — projection probe"
+        categories = ["test", "pushdown"]
+        projection_pushdown = True
+
+    @classmethod
+    def on_bind(cls, params: BindParams[SingleTableArguments]) -> BindResponse:
+        assert params.bind_call.input_schema is not None
+        return BindResponse(output_schema=params.bind_call.input_schema)
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[SingleTableArguments],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        observed = len(params.output_schema)
+        cols = {
+            field.name: pa.array([observed] * batch.num_rows, type=field.type)
+            for field in params.output_schema
+        }
+        out.emit(pa.RecordBatch.from_pydict(cols, schema=params.output_schema))
 
 
 class BufferInputFunction(TableBufferingFunction[SingleTableArguments, _LogDrainState]):
