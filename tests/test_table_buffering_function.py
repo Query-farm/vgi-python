@@ -199,3 +199,223 @@ class NoStateFunc(TableBufferingFunction[SingleTableArguments, None]):
 def test_explicit_none_state_resolves_to_none() -> None:
     """``TableBufferingFunction[Args, None]`` resolves to None (no per-tick state)."""
     assert NoStateFunc._finalize_state_class is None
+
+
+# ===========================================================================
+# TableBufferingFinalizeState.on_cancel wiring
+#
+# Until this landing the buffered finalize path inherited the no-op
+# ``StreamState.on_cancel`` from the base, so ``cls.on_cancel(...)`` was
+# dead code despite being a documented user-facing API. These tests
+# directly drive the protocol-layer ``on_cancel`` and assert it routes
+# through the user's classmethod, with the correct arguments and
+# resilience to teardown-path failures.
+#
+# We test at the protocol layer rather than via SQL integration because
+# the wire-level cancel is delivered asynchronously by VgiCancelDispatcher
+# (one thread writes the cancel batch; the subprocess worker reads it on
+# its own schedule), and racing that against a test assertion produces
+# flaky tests. The contract that matters — "when the framework calls
+# state.on_cancel, the user's classmethod runs with deserialized state"
+# — is fully exercised here.
+# ===========================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _OnCancelProbeState(ArrowSerializableDataclass):
+    """State carrying a serialized counter so we can verify deserialization."""
+
+    emitted: int = 0
+
+    @classmethod
+    def arrow_schema(cls) -> pa.Schema:
+        """Wire layout — single int64 column."""
+        return pa.schema([pa.field("emitted", pa.int64())])
+
+
+# Module-level capture buckets for the fixture's on_cancel to write into.
+# Cleared per-test via the fixture decorator below.
+_on_cancel_invocations: list[tuple[bytes, int]] = []
+
+
+def _stub_finalize_emit_then_finish(cls, params, finalize_state_id, state, out):  # noqa: ARG001
+    """Fixture-stand-in finalize — irrelevant for the cancel tests."""
+    out.finish()
+
+
+@_attach_stub_methods
+class _OnCancelProbe(TableBufferingFunction[SingleTableArguments, _OnCancelProbeState]):
+    """Records every on_cancel invocation into ``_on_cancel_invocations``.
+
+    The deserialized ``state.emitted`` lets us prove the on_cancel path
+    correctly read the wire-serialized state_blob (not a fresh state).
+    """
+
+    class Meta:
+        """Test fixture metadata."""
+
+        name = "on_cancel_probe"
+
+    @classmethod
+    def on_cancel(
+        cls,
+        params,  # noqa: ARG003 — protocol layer wires this; we don't inspect it
+        finalize_state_id: bytes,
+        state,
+    ) -> None:
+        """Append (finalize_state_id, state.emitted) so tests can assert."""
+        emitted = state.emitted if state is not None else -1
+        _on_cancel_invocations.append((finalize_state_id, emitted))
+
+
+class _StubWorker:
+    """Stand-in for vgi.worker.Worker — only needs _load_table_buffering_params.
+
+    ``TableBufferingFinalizeState.on_cancel`` reads ``ctx.implementation``
+    and calls ``._load_table_buffering_params(stub_request, ctx,
+    attach_already_unwrapped=True)`` on it. We mock the return value to
+    point at our probe fixture and a dummy params object.
+    """
+
+    def __init__(self, func_cls: type, params: object) -> None:
+        self._func_cls = func_cls
+        self._params = params
+
+    def _load_table_buffering_params(  # noqa: ARG002 - signature mirrored
+        self, request, ctx, *, attach_already_unwrapped: bool = False,
+    ):
+        return self._func_cls, self._params
+
+
+class _StubCallContext:
+    """Minimal CallContext stand-in: just ``implementation`` and ``auth``."""
+
+    def __init__(self, implementation: object) -> None:
+        self.implementation = implementation
+        self.auth = None
+
+
+def _build_finalize_state(
+    *,
+    state_initialized: bool,
+    state: _OnCancelProbeState | None,
+    finalize_state_id: bytes = b"fid-test",
+) -> object:
+    """Construct a TableBufferingFinalizeState wired for on_cancel testing."""
+    from vgi.protocol import TableBufferingFinalizeState
+
+    blob = state.serialize_to_bytes() if state is not None else b""
+    return TableBufferingFinalizeState(
+        function_name="on_cancel_probe",
+        execution_id=b"exec-test",
+        transaction_id=None,
+        finalize_state_id=finalize_state_id,
+        state_blob=blob,
+        state_initialized=state_initialized,
+        attach_opaque_data=b"",
+    )
+
+
+def test_on_cancel_invokes_user_classmethod_with_deserialized_state() -> None:
+    """Happy path — state_initialized=True, blob deserializes, cls.on_cancel runs."""
+    _on_cancel_invocations.clear()
+
+    fstate = _build_finalize_state(
+        state_initialized=True,
+        state=_OnCancelProbeState(emitted=42),
+    )
+    ctx = _StubCallContext(implementation=_StubWorker(_OnCancelProbe, params=object()))
+
+    fstate.on_cancel(ctx)
+
+    assert _on_cancel_invocations == [(b"fid-test", 42)]
+
+
+def test_on_cancel_skips_when_state_uninitialized() -> None:
+    """Pre-init cancel — no user state to forward, so cls.on_cancel must not run.
+
+    The protocol's on_cancel returns early when ``state_initialized`` is
+    False. This is the "cancel arrived before initial_finalize_state ran"
+    case — there's no user state worth synthesizing.
+    """
+    _on_cancel_invocations.clear()
+
+    fstate = _build_finalize_state(state_initialized=False, state=None)
+    ctx = _StubCallContext(implementation=_StubWorker(_OnCancelProbe, params=object()))
+
+    fstate.on_cancel(ctx)
+
+    assert _on_cancel_invocations == []
+
+
+def test_on_cancel_passes_none_state_when_blob_empty() -> None:
+    """State_initialized=True with empty blob → cls.on_cancel(..., state=None).
+
+    Possible if the fixture's ``initial_finalize_state`` returned None;
+    state_initialized flips True but state_blob stays empty. The user's
+    on_cancel must tolerate a None state.
+    """
+    _on_cancel_invocations.clear()
+
+    fstate = _build_finalize_state(state_initialized=True, state=None)
+    ctx = _StubCallContext(implementation=_StubWorker(_OnCancelProbe, params=object()))
+
+    fstate.on_cancel(ctx)
+
+    # _OnCancelProbe.on_cancel records emitted=-1 for state is None — see
+    # the fixture; this asserts the on_cancel WAS called with None.
+    assert _on_cancel_invocations == [(b"fid-test", -1)]
+
+
+def test_on_cancel_swallows_implementation_lookup_failures() -> None:
+    """If ctx.implementation is None or load fails, on_cancel is a quiet no-op.
+
+    teardown paths shouldn't crash. The framework's on_cancel hook is
+    best-effort by design (vgi-rpc/_server.py catches and logs anything
+    that escapes); we make sure nothing escapes in the first place.
+    """
+    _on_cancel_invocations.clear()
+
+    fstate = _build_finalize_state(
+        state_initialized=True,
+        state=_OnCancelProbeState(emitted=7),
+    )
+    # implementation=None covers the run_table_buffering_finalize_tick
+    # diagnostic path: produce() raises with a clear message, but
+    # on_cancel must silently skip so we don't double-fault during
+    # teardown.
+    ctx = _StubCallContext(implementation=None)
+
+    fstate.on_cancel(ctx)  # must not raise
+
+    assert _on_cancel_invocations == []
+
+
+def test_on_cancel_swallows_user_exceptions() -> None:
+    """User's on_cancel raising must not propagate — we're on teardown.
+
+    Without the contextlib.suppress in protocol.on_cancel, a user fixture
+    that raises in on_cancel would propagate through the framework's
+    own on_cancel hook (which already catches but only at the outer
+    level), producing log noise during normal LIMIT teardown.
+    """
+    _on_cancel_invocations.clear()
+
+    @_attach_stub_methods
+    class _RaisingProbe(TableBufferingFunction[SingleTableArguments, _OnCancelProbeState]):
+        class Meta:
+            """Test fixture metadata."""
+
+            name = "raising_probe"
+
+        @classmethod
+        def on_cancel(cls, params, finalize_state_id, state):  # noqa: ARG003
+            raise RuntimeError("user fixture error during teardown")
+
+    fstate = _build_finalize_state(
+        state_initialized=True,
+        state=_OnCancelProbeState(emitted=1),
+    )
+    ctx = _StubCallContext(implementation=_StubWorker(_RaisingProbe, params=object()))
+
+    fstate.on_cancel(ctx)  # must not raise

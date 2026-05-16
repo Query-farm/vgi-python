@@ -52,7 +52,11 @@ from vgi._test_fixtures.aggregate import (
     WindowSumBatchFunction,
     WindowSumFunction,
 )
-from vgi._test_fixtures.cancellable import SlowCancellableFunction, SlowCancellableInOutFunction
+from vgi._test_fixtures.cancellable import (
+    SlowCancellableBufferingFunction,
+    SlowCancellableFunction,
+    SlowCancellableInOutFunction,
+)
 from vgi._test_fixtures.nest_tensor import NestTensorFunction, UnnestTensorFunction, UnnestTensorRowsFunction
 from vgi._test_fixtures.scalar import (
     AddValuesFunction,
@@ -300,6 +304,7 @@ _EXAMPLE_CATALOG = Catalog(
                 LargeStateFunction,
                 OrderedBufferInputFunction,
                 BatchIndexBufferInputFunction,
+                SlowCancellableBufferingFunction,
                 # TableFunctionGenerator - generate output without input
                 ConstantColumnsFunction,
                 SlowCancellableFunction,

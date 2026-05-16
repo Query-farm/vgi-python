@@ -545,6 +545,17 @@ class SumAllColumnsFunction(TableBufferingFunction[SumAllColumnsFunctionArgument
         so ``SELECT ... FROM sum_all_columns((SELECT 1 WHERE 1=0))``
         produces one row of the expected shape.
         """
+        if params.args.logging:
+            # Symmetric with process() — fires through ``params.client_log``
+            # (the unary-RPC analogue of ``out.client_log``) so the message
+            # lands in DuckDB's ``duckdb_logs()`` with type='VGI'. Used by
+            # ``logging.test`` to verify the in-band log path works from
+            # ``combine()`` too, not just from ``process()``.
+            params.client_log(
+                Level.INFO,
+                f"Combining {len(state_ids)} state_ids",
+            )
+
         merged: dict[str, pa.Scalar[Any]] = {
             name: pa.scalar(0, type=field.type)
             for name, field in zip(

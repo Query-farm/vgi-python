@@ -35,6 +35,10 @@ from vgi_rpc.rpc import OutputCollector
 from vgi.arguments import Arg, TableInput
 from vgi.invocation import BindResponse
 from vgi.schema_utils import schema
+from vgi.table_buffering_function import (
+    TableBufferingFunction,
+    TableBufferingParams,
+)
 from vgi.table_function import (
     BindParams,
     ProcessParams,
@@ -45,6 +49,7 @@ from vgi.table_function import (
 from vgi.table_in_out_function import TableInOutGenerator
 
 __all__ = [
+    "SlowCancellableBufferingFunction",
     "SlowCancellableFunction",
     "SlowCancellableInOutFunction",
 ]
@@ -184,3 +189,144 @@ class SlowCancellableInOutFunction(TableInOutGenerator[SlowCancellableInOutArgs,
     ) -> None:
         processed = state.processed if state is not None else 0
         _append_cancel_probe(params.args.probe_path, processed=processed)
+
+
+# ============================================================================
+# TableBufferingFunction variant — exercises the on_cancel wiring on
+# ``TableBufferingFinalizeState`` (the Sink+Source path). Mirrors the
+# streaming fixtures above; the only structural difference is that
+# emission lives in ``finalize()`` rather than ``process()``, so cancel
+# fires through the producer-mode stream-cancel path on the Source side.
+# ============================================================================
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SlowCancellableBufferingArgs:
+    """Arguments for :class:`SlowCancellableBufferingFunction`."""
+
+    probe_path: Annotated[str, Arg(0, doc="Path to append to when on_cancel fires")]
+    # TableBufferingFunction must accept a TABLE input — the operator's
+    # Sink phase wraps the input pipeline. We ignore the rows themselves
+    # (the test is purely about Source-side cancel), but DuckDB's binder
+    # requires the function to declare TableInput for subquery args.
+    data: Annotated[TableInput, Arg(1, doc="Input table (rows ignored)")]
+    count: Annotated[
+        int, Arg("count", default=1_000, doc="Total rows to emit during finalize", ge=1),
+    ] = 1_000
+    sleep_ms: Annotated[
+        int, Arg("sleep_ms", default=10, doc="Sleep per emitted row (ms)", ge=0),
+    ] = 10
+
+
+@dataclass(kw_only=True)
+class SlowCancellableBufferingState(ArrowSerializableDataclass):
+    """Per-tick state — counter survives wire round-trips for HTTP rehydration."""
+
+    emitted: int = 0
+    # We snapshot probe_path and total count here so on_cancel doesn't need
+    # to chase them off ``params.args`` (which is fine on subprocess but
+    # forces an extra cold-load round-trip on HTTP rehydration).
+    probe_path: str = ""
+    total: int = 0
+
+
+class SlowCancellableBufferingFunction(
+    TableBufferingFunction[SlowCancellableBufferingArgs, SlowCancellableBufferingState],
+):
+    """Slow buffered producer that records ``on_cancel`` to a file.
+
+    Sink absorbs all input (we don't actually use the input data — this
+    fixture is purely about exercising the Source-side cancel path).
+    ``finalize()`` then emits ``count`` rows with a per-row sleep so a
+    LIMIT 1 query reliably triggers cancel before EOS. ``on_cancel``
+    appends ``pid=<n> emitted=<m>`` to the probe path so the integration
+    test can assert that the cancel hook actually fired.
+
+    SQL::
+
+        SELECT n FROM slow_cancellable_buffering('/tmp/probe.txt',
+                                                 (SELECT 1 AS x),
+                                                 sleep_ms := 20,
+                                                 count := 1000)
+        LIMIT 1;
+    """
+
+    class Meta:
+        name = "slow_cancellable_buffering"
+        description = (
+            "Slow buffered table function with an on_cancel file probe (test fixture)"
+        )
+        categories = ["test"]
+
+    @classmethod
+    def on_bind(
+        cls, params: BindParams[SlowCancellableBufferingArgs],
+    ) -> BindResponse:
+        # Emit a single-column INT64 output regardless of input schema;
+        # the input is ignored (Sink absorbs but doesn't accumulate).
+        return BindResponse(output_schema=schema({"n": pa.int64()}))
+
+    @classmethod
+    def process(
+        cls,
+        batch: pa.RecordBatch,  # noqa: ARG003 — sink absorbs but ignores
+        params: TableBufferingParams[SlowCancellableBufferingArgs],
+    ) -> bytes:
+        # We don't store anything; just return the execution_id so
+        # combine() sees a stable bucket. Cancel testing is a Source-side
+        # concern, not a Sink-side one.
+        return params.execution_id
+
+    @classmethod
+    def combine(
+        cls,
+        state_ids: list[bytes],  # noqa: ARG003
+        params: TableBufferingParams[SlowCancellableBufferingArgs],
+    ) -> list[bytes]:
+        return [params.execution_id]
+
+    @classmethod
+    def initial_finalize_state(
+        cls,
+        finalize_state_id: bytes,  # noqa: ARG003
+        params: TableBufferingParams[SlowCancellableBufferingArgs],
+    ) -> SlowCancellableBufferingState:
+        return SlowCancellableBufferingState(
+            probe_path=params.args.probe_path,
+            total=params.args.count,
+        )
+
+    @classmethod
+    def finalize(
+        cls,
+        params: TableBufferingParams[SlowCancellableBufferingArgs],
+        finalize_state_id: bytes,  # noqa: ARG002 — unused; producer-mode tick
+        state: SlowCancellableBufferingState,
+        out: OutputCollector,
+    ) -> None:
+        if state.emitted >= state.total:
+            out.finish()
+            return
+        if params.args.sleep_ms > 0:
+            time.sleep(params.args.sleep_ms / 1000.0)
+        batch = pa.RecordBatch.from_pydict(
+            {"n": [state.emitted]}, schema=params.output_schema,
+        )
+        state.emitted += 1
+        out.emit(batch)
+
+    @classmethod
+    def on_cancel(
+        cls,
+        params: TableBufferingParams[SlowCancellableBufferingArgs],  # noqa: ARG003
+        finalize_state_id: bytes,  # noqa: ARG003
+        state: SlowCancellableBufferingState | None,
+    ) -> None:
+        # ``state`` is None when cancel fires before initial_finalize_state
+        # ran. In that case there's nothing to attribute (we never reached
+        # the user's setup), but we still write a probe line so the test
+        # can distinguish "cancel never fired" from "cancel fired pre-init".
+        if state is None:
+            _append_cancel_probe("/dev/null", emitted=-1)
+            return
+        _append_cancel_probe(state.probe_path, emitted=state.emitted)

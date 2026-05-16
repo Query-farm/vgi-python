@@ -22,6 +22,7 @@ StreamState Implementations
 from __future__ import annotations
 
 import base64
+import contextlib
 import dataclasses
 import logging
 from dataclasses import dataclass, field
@@ -1284,6 +1285,61 @@ class TableBufferingFinalizeState(ProducerState):
         from vgi.worker import run_table_buffering_finalize_tick
 
         run_table_buffering_finalize_tick(self, out, ctx)
+
+    def on_cancel(self, ctx: CallContext) -> None:
+        """Forward the framework's cancel signal to ``cls.on_cancel``.
+
+        Fired by vgi-rpc when the consumer abandons the stream before EOS
+        (DuckDB LIMIT, exception unwind, user break). Resolves func_cls
+        + params the same way ``produce()`` does (cold-load from storage)
+        and deserializes the user's last-emitted finalize state from
+        ``self.state_blob``. Anything raised inside the user hook is
+        swallowed — we're already on a teardown path; don't mask the
+        original cancel.
+
+        Idempotent: if ``state_initialized`` is False we haven't yet run
+        ``initial_finalize_state``, so there's no user state worth
+        forwarding — skip rather than build a fresh one just to discard it.
+        """
+        if not self.state_initialized:
+            return
+        # Local imports: same reason as produce(); the worker module pulls
+        # in heavy dependencies (FunctionStorage backends, etc.) that we
+        # don't want eager-loaded on protocol import.
+        from dataclasses import dataclass as _dc
+
+        from vgi.worker import _deserialize_finalize_state
+
+        @_dc
+        class _CancelStubRequest:
+            function_name: str
+            execution_id: bytes
+            attach_opaque_data: bytes | None
+            transaction_id: bytes | None
+
+        stub = _CancelStubRequest(
+            function_name=self.function_name,
+            execution_id=self.execution_id,
+            attach_opaque_data=self.attach_opaque_data,
+            transaction_id=self.transaction_id,
+        )
+        worker = ctx.implementation
+        if worker is None:
+            # produce() raises in this case; on_cancel is teardown so we
+            # silently skip — better than crashing during pipeline unwind.
+            return
+        try:
+            func_cls, params = worker._load_table_buffering_params(
+                stub, ctx, attach_already_unwrapped=True,
+            )
+        except Exception:  # noqa: BLE001 — teardown path, swallow
+            return
+        user_state = (
+            _deserialize_finalize_state(func_cls, self.state_blob)
+            if self.state_blob else None
+        )
+        with contextlib.suppress(Exception):
+            func_cls.on_cancel(params, self.finalize_state_id, user_state)
 
 
 # Type alias for the union of all stream state variants produced by init().
