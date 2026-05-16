@@ -137,6 +137,20 @@ class TestDemoBlobStorageUnit:
         assert data == b"compressed"
         assert encoding == "zstd"
 
+    def test_upload_with_gzip_encoding(self) -> None:
+        """Upload with content_encoding='gzip' stores encoding and uses .arrow.gz extension."""
+        storage = DemoBlobStorage()
+        storage.set_base_url("http://127.0.0.1:9999")
+        url = storage.upload(b"compressed", pa.schema([]), content_encoding="gzip")
+        assert url.endswith(".arrow.gz")
+
+        key = url.rsplit("/", 1)[1]
+        entry = storage.get(key)
+        assert entry is not None
+        data, encoding = entry
+        assert data == b"compressed"
+        assert encoding == "gzip"
+
     def test_eviction(self) -> None:
         """Exceeding max_blobs evicts oldest entries."""
         storage = DemoBlobStorage(max_blobs=3)
@@ -193,7 +207,7 @@ class TestDemoBlobStorageUnit:
 
 @pytest.mark.parametrize(
     ("compression", "expected_extension"),
-    [("none", ".arrow"), ("zstd", ".arrow.zst")],
+    [("none", ".arrow"), ("zstd", ".arrow.zst"), ("gzip", ".arrow.gz")],
 )
 def test_demo_output_offload_large_response(compression: str, expected_extension: str) -> None:
     """Large random_bytes output should be externalized to demo blobs and resolved by HTTP client."""
@@ -204,6 +218,8 @@ def test_demo_output_offload_large_response(compression: str, expected_extension
         http_parser = pytest.importorskip("aiohttp.http_parser")
         if not bool(getattr(http_parser, "HAS_ZSTD", False)):
             pytest.skip("zstd test requires aiohttp zstd decode support (backports.zstd)")
+    # gzip needs no capability check — stdlib zlib always handles it
+    # and aiohttp's default Accept-Encoding includes gzip.
 
     from vgi_rpc import ExternalLocationConfig
     from vgi_rpc.http import http_capabilities, http_connect
@@ -270,7 +286,7 @@ def test_demo_output_offload_large_response(compression: str, expected_extension
         assert fetch_ms is not None
 
 
-@pytest.mark.parametrize("compression", ["none", "zstd"])
+@pytest.mark.parametrize("compression", ["none", "zstd", "gzip"])
 def test_demo_input_upload_url_then_exchange(compression: str) -> None:
     """Upload input via server-vended URL and process via external-location input batch."""
     pytest.importorskip("vgi_rpc.http")
@@ -311,6 +327,12 @@ def test_demo_input_upload_url_then_exchange(compression: str) -> None:
 
             payload = zstandard.ZstdCompressor(level=3).compress(payload)
             headers["Content-Encoding"] = "zstd"
+        elif compression == "gzip":
+            import zlib
+
+            co = zlib.compressobj(6, zlib.DEFLATED, 31)
+            payload = co.compress(payload) + co.flush(zlib.Z_FINISH)
+            headers["Content-Encoding"] = "gzip"
 
         put_resp = httpx.put(upload.upload_url, content=payload, headers=headers, timeout=30.0)
         assert put_resp.status_code == 201

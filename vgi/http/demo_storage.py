@@ -42,8 +42,15 @@ class DemoBlobStorage:
     # -- ExternalStorage protocol --
 
     def upload(self, data: bytes, schema: Any, *, content_encoding: str | None = None) -> str:
-        """Upload IPC bytes and return a fetch URL."""
-        ext = ".arrow.zst" if content_encoding == "zstd" else ".arrow"
+        """Upload IPC bytes and return a fetch URL.
+
+        Extension reflects the codec so that operators rummaging through
+        the in-memory blob store can tell at a glance what they're
+        looking at.  Content-Encoding is what actually drives the GET
+        response header; the extension is cosmetic.
+        """
+        ext_for_codec = {"zstd": ".arrow.zst", "gzip": ".arrow.gz"}
+        ext = ext_for_codec.get(content_encoding or "", ".arrow")
         key = f"{uuid.uuid4().hex}{ext}"
         with self._lock:
             self._blobs[key] = (data, content_encoding)
@@ -114,8 +121,9 @@ class BlobResource:
 
     def on_head(self, req: Any, resp: Any, blob_id: str) -> None:  # noqa: D102
         # Mirror on_get headers (Content-Length/-Type/-Encoding) without a body.
-        # Required so external_fetch._head_probe can discover Content-Encoding;
-        # otherwise a 405 forces a plain GET path that skips zstd decompression.
+        # Required so external_fetch._head_probe can discover Content-Encoding
+        # (zstd or gzip); otherwise a 405 forces a plain GET path that skips
+        # decompression.
         import falcon
 
         entry = self._storage.get(blob_id)
@@ -131,10 +139,11 @@ class BlobResource:
 
     def on_put(self, req: Any, resp: Any, blob_id: str) -> None:  # noqa: D102
         # vgi_rpc's _CompressionMiddleware drains ``req.bounded_stream`` when
-        # the request carries ``Content-Encoding: zstd`` and stashes the
-        # decompressed payload on ``req.context.decompressed_stream``. Prefer
-        # that stream when present so we capture the raw IPC bytes; the
-        # producer's SHA-256 in custom_metadata is computed pre-compression so
+        # the request carries a supported ``Content-Encoding`` (zstd or gzip)
+        # and stashes the decompressed payload on
+        # ``req.context.decompressed_stream``. Prefer that stream when
+        # present so we capture the raw IPC bytes; the producer's
+        # SHA-256 in custom_metadata is computed pre-compression so
         # downstream verification still succeeds when we serve uncompressed.
         decompressed_stream = getattr(req.context, "decompressed_stream", None)
         if decompressed_stream is not None:

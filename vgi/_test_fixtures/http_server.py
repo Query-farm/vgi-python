@@ -168,7 +168,7 @@ def main() -> None:
         externalize_compression: str = typer.Option(
             "none",
             "--externalize-compression",
-            help="Compression for externalized batches: none or zstd",
+            help="Compression for externalized batches: none, zstd, or gzip",
         ),
         demo_storage: bool = typer.Option(
             False,
@@ -217,8 +217,18 @@ def main() -> None:
         upload_url_provider: Any = None
         max_request_bytes: int | None = None
         compression_choice = externalize_compression.lower()
-        if compression_choice not in {"none", "zstd"}:
-            raise typer.BadParameter("externalize-compression must be one of: none, zstd")
+        if compression_choice not in {"none", "zstd", "gzip"}:
+            raise typer.BadParameter("externalize-compression must be one of: none, zstd, gzip")
+
+        def _make_compression() -> "Compression | None":
+            if compression_choice == "none":
+                return None
+            # ``Compression.level`` historically defaults to 3 (zstd-tuned);
+            # leave it at the dataclass default for zstd, but use a
+            # gzip-appropriate 6 when the operator picks gzip.
+            if compression_choice == "gzip":
+                return Compression(algorithm="gzip", level=6)
+            return Compression(algorithm="zstd")
         if bucket and demo_storage:
             raise typer.BadParameter("--s3-bucket and --demo-storage are mutually exclusive")
         if bucket:
@@ -228,7 +238,7 @@ def main() -> None:
                 region_name=s3_region,
                 endpoint_url=s3_endpoint_url,
             )
-            compression = Compression() if compression_choice == "zstd" else None
+            compression = _make_compression()
             external_location = ExternalLocationConfig(
                 storage=storage,
                 externalize_threshold_bytes=externalize_threshold_bytes,
@@ -245,7 +255,7 @@ def main() -> None:
             from vgi.http.demo_storage import DemoBlobStorage, localhost_only_validator
 
             demo_blob_storage = DemoBlobStorage()
-            compression = Compression() if compression_choice == "zstd" else None
+            compression = _make_compression()
             external_location = ExternalLocationConfig(
                 storage=demo_blob_storage,
                 externalize_threshold_bytes=externalize_threshold_bytes,
