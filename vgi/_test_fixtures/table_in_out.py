@@ -91,6 +91,7 @@ __all__ = [
     "LargeStateFunction",
     "OrderedBufferInputFunction",
     "BatchIndexBufferInputFunction",
+    "OrderedSourceFunction",
 ]
 
 
@@ -1206,3 +1207,92 @@ class BatchIndexBufferInputFunction(TableBufferingFunction[SingleTableArguments,
         log_id, value = rows[0]
         out.emit(pa.ipc.open_stream(value).read_next_batch())
         state.after_id = log_id
+
+
+@dataclass
+class _OneShotState(ArrowSerializableDataclass):
+    """Single-emit cursor for ``OrderedSourceFunction.finalize``."""
+
+    value: int = 0
+    emitted: bool = False
+
+
+class OrderedSourceFunction(TableBufferingFunction[SingleTableArguments, _OneShotState]):
+    """Buffered table function with ``source_order_dependent=True``.
+
+    Forces ``ParallelSource()=false`` and ``SourceOrder()=FIXED_ORDER`` on the
+    C++ ``PhysicalVgiTableBufferingFunction``. The Source phase serial-drains
+    ``finalize_queue`` in whatever order ``combine()`` populated it; without
+    ``source_order_dependent`` the parallel Source drains would race and emit
+    rows in arbitrary order.
+
+    The fixture deliberately ignores its input and emits a fixed 0..15
+    integer sequence so the assertion is deterministic regardless of Sink
+    parallelism or input partitioning: ``combine()`` returns sixteen
+    finalize_state_ids encoded as 4-byte big-endian integers in ascending
+    order; ``finalize()`` decodes its state_id and emits exactly one row
+    containing that integer. With ``source_order_dependent`` the C++ Source
+    must yield rows in the same 0..15 order.
+
+    Output schema: single ``v`` column (BIGINT).
+    """
+
+    class Meta:
+        name = "ordered_source"
+        description = (
+            "Emits a fixed 0..15 sequence via source_order_dependent=True; "
+            "input is ignored"
+        )
+        categories = ["test", "ordering"]
+        source_order_dependent = True
+
+    _N_ROWS = 16
+
+    @classmethod
+    def on_bind(cls, params: BindParams[SingleTableArguments]) -> BindResponse:
+        return BindResponse(output_schema=schema(v=pa.int64()))
+
+    @classmethod
+    def process(
+        cls,
+        batch: pa.RecordBatch,
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> bytes:
+        # Input is irrelevant — the test asserts source ordering, not data.
+        return params.execution_id
+
+    @classmethod
+    def combine(
+        cls,
+        state_ids: list[bytes],
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> list[bytes]:
+        # Fixed monotonically-ascending list of 4-byte big-endian integers.
+        # FIXED_ORDER Source must drain finalize_queue in this exact order.
+        return [i.to_bytes(4, "big") for i in range(cls._N_ROWS)]
+
+    @classmethod
+    def initial_finalize_state(
+        cls,
+        finalize_state_id: bytes,
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> _OneShotState:
+        return _OneShotState(value=int.from_bytes(finalize_state_id, "big"))
+
+    @classmethod
+    def finalize(
+        cls,
+        params: TableBufferingParams[SingleTableArguments],
+        finalize_state_id: bytes,
+        state: _OneShotState,
+        out: OutputCollector,
+    ) -> None:
+        if state.emitted:
+            out.finish()
+            return
+        out.emit(
+            pa.RecordBatch.from_pylist(
+                [{"v": state.value}], schema=params.output_schema
+            )
+        )
+        state.emitted = True
