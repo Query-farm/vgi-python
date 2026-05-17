@@ -1050,6 +1050,8 @@ class TestScanBranchSerialization:
         assert schema.field("arguments").type == pa.binary()
         assert schema.field("branch_filter").type == pa.string()
         assert schema.field("branch_filter").nullable is True
+        assert schema.field("writable").type == pa.bool_()
+        assert schema.field("writable").nullable is False
 
     def test_scan_branches_result_schema(self) -> None:
         """ScanBranchesResult Arrow schema: branches as list<binary>, required_extensions hoisted to top-level."""
@@ -1075,6 +1077,22 @@ class TestScanBranchSerialization:
         assert restored.positional_arguments[0].as_py() == "s3://bucket/orders.parquet"
         assert restored.named_arguments["hive_partitioning"].as_py() is True
         assert restored.branch_filter is None
+        assert restored.writable is False  # default
+
+    def test_scan_branch_round_trip_with_writable(self) -> None:
+        """A ScanBranch with writable=True round-trips losslessly."""
+        from vgi.catalog import ScanBranch
+
+        original = ScanBranch(
+            function_name="kafka_writable_scan",
+            positional_arguments=[pa.scalar("topic1", pa.string())],
+            named_arguments={},
+            writable=True,
+        )
+        batch, _ = deserialize_record_batch(original.serialize())
+        restored = ScanBranch.deserialize(batch)
+        assert restored.writable is True
+        assert restored.function_name == "kafka_writable_scan"
 
     def test_scan_branch_round_trip_with_filter(self) -> None:
         """A ScanBranch with a branch_filter preserves the raw SQL text."""

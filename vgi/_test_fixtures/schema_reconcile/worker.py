@@ -605,7 +605,9 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
+        writable_branch_function_name: str | None = None,
     ) -> ScanFunctionResult:
+        del writable_branch_function_name
         return self._route("schema_reconcile_insert", schema_name, name)
 
     def table_update_function_get(

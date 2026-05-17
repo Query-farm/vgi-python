@@ -610,6 +610,15 @@ _EXAMPLE_CATALOG = Catalog(
                     columns=schema(n=pa.int64()),
                     comment="Multi-branch: worker returns empty branches list — used by multi_branch_empty_branches.test",
                 ),
+                # Parse-time rejection — worker returns two ScanBranch
+                # entries both with writable=True. ParseScanBranchesResult
+                # must throw BinderException citing DuckDB's
+                # single-writable-catalog rule. See multi_branch_two_writable.test.
+                Table(
+                    name="multi_branch_two_writable",
+                    columns=schema(n=pa.int64()),
+                    comment="Multi-branch with two writable=True arms — used by multi_branch_two_writable.test",
+                ),
                 # ENUM (dictionary-encoded) column table — tests that statistics
                 # report actual string values, not dictionary indices.
                 Table(
@@ -1021,6 +1030,29 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         # must reject this at the wire layer.
         if schema_name.lower() == "data" and name.lower() == "multi_branch_empty":
             return ScanBranchesResult(branches=[], required_extensions=[])
+
+        # multi_branch_two_writable: two ScanBranch entries both with
+        # writable=True. ParseScanBranchesResult must reject loudly with
+        # BinderException — DuckDB's single-writable-catalog-per-transaction
+        # rule means at most one branch may be writable.
+        if schema_name.lower() == "data" and name.lower() == "multi_branch_two_writable":
+            return ScanBranchesResult(
+                branches=[
+                    ScanBranch(
+                        function_name="sequence",
+                        positional_arguments=[pa.scalar(10)],
+                        named_arguments={},
+                        writable=True,
+                    ),
+                    ScanBranch(
+                        function_name="sequence",
+                        positional_arguments=[pa.scalar(10)],
+                        named_arguments={},
+                        writable=True,
+                    ),
+                ],
+                required_extensions=[],
+            )
 
         # multi_branch_nopushdown: VGI sequence(50) + read_csv_auto. read_csv
         # has filter_pushdown=false in DuckDB, so any user WHERE clause stays

@@ -3992,6 +3992,7 @@ class Worker:
         schema_name: str,
         name: str,
         transaction_opaque_data: bytes | None = None,
+        writable_branch_function_name: str | None = None,
     ) -> bytes:
         """Get the insert function for a table. Returns WriteFunctionResult as IPC bytes."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
@@ -4003,6 +4004,7 @@ class Worker:
             else None,
             schema_name=schema_name,
             name=name,
+            writable_branch_function_name=writable_branch_function_name,
         )
         return result.serialize()
 

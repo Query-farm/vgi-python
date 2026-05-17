@@ -638,8 +638,9 @@ WriteFunctionResult = ScanFunctionResult
 #
 # See the design memo at
 # ``~/.claude/plans/right-now-vgi-and-partitioned-nebula.md`` for the
-# rewriter semantics, ``branch_filter`` model, and v1 scope decisions
-# (writes refused, AT-clause refused, fail-fast error semantics).
+# rewriter semantics, ``branch_filter`` model, and current scope
+# decisions (INSERT-only on writable arm, UPDATE/DELETE/MERGE refused,
+# AT-clause refused, fail-fast error semantics).
 
 
 @dataclass(frozen=True)
@@ -662,6 +663,15 @@ class ScanBranch:
             (Kafka 7d retention + Iceberg nightly batches with ~24h
             overlap) non-overlapping at scan time, without changing the
             worker code. ``None`` means unconstrained.
+        writable: Declares this branch as the INSERT target for the
+            multi-branch table. At most one branch per table may set
+            this true (enforced at catalog-load by the C++ extension —
+            multiple writable arms would violate DuckDB's single-
+            writable-catalog-per-transaction rule). When no branch is
+            writable, the table is read-only. UPDATE/DELETE/MERGE
+            remain refused on multi-branch tables regardless of this
+            flag; the contract is INSERT-only until cross-arm
+            semantics have customer-driven evidence.
 
     """
 
@@ -669,12 +679,14 @@ class ScanBranch:
     positional_arguments: list[pa.Scalar]  # type: ignore[type-arg]
     named_arguments: dict[str, pa.Scalar]  # type: ignore[type-arg]
     branch_filter: str | None = None
+    writable: bool = False
 
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
             pa.field("function_name", pa.string(), nullable=False),
             pa.field("arguments", pa.binary(), nullable=False),
             pa.field("branch_filter", pa.string(), nullable=True),
+            pa.field("writable", pa.bool_(), nullable=False),
         ]  # type: ignore[arg-type]
     )
 
@@ -700,6 +712,7 @@ class ScanBranch:
             "function_name": self.function_name,
             "arguments": serialize_record_batch_bytes(argument_batch),
             "branch_filter": self.branch_filter,
+            "writable": self.writable,
         }
 
     def serialize(self) -> bytes:
@@ -739,6 +752,8 @@ class ScanBranch:
             positional_arguments=positional_arguments,
             named_arguments=named_arguments,
             branch_filter=cast("str | None", branch_filter_value) if branch_filter_value is not None else None,
+            # writable is non-nullable on the wire — trust the schema.
+            writable=bool(row["writable"]),
         )
 
 
@@ -1663,11 +1678,20 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
+        writable_branch_function_name: str | None = None,
     ) -> ScanFunctionResult:
         """Get the write function for INSERT operations on the table.
 
         Returns a ScanFunctionResult identifying the TableInOutGenerator function
         to call for inserting rows into this table.
+
+        ``writable_branch_function_name`` is set by the C++ extension when the
+        table is multi-branch and a branch declared ``writable=True``: the value
+        is the writable arm's ``ScanBranch.function_name``. Workers serving
+        multi-branch tables can use this to dispatch the INSERT to the correct
+        underlying storage without re-resolving the writable arm internally.
+        For single-branch tables this is ``None`` (or unset for legacy
+        overrides).
         """
         raise NotImplementedError("Table insert not supported.")
 
@@ -2329,8 +2353,12 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
+        writable_branch_function_name: str | None = None,
     ) -> ScanFunctionResult:
         """Get insert function for a table."""
+        # ReadOnlyCatalogInterface tables are single-branch — writable arm
+        # disambiguation is not relevant here. Discard the hint.
+        del writable_branch_function_name
         return self._write_function_get(
             schema_name=schema_name,
             name=name,

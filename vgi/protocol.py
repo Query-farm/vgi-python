@@ -2033,8 +2033,17 @@ class VgiProtocol(Protocol):
         schema_name: str,
         name: str,
         transaction_opaque_data: bytes | None = None,
+        writable_branch_function_name: str | None = None,
     ) -> bytes:
-        """Get the insert function for a table. Returns WriteFunctionResult as IPC bytes."""
+        """Get the insert function for a table. Returns WriteFunctionResult as IPC bytes.
+
+        ``writable_branch_function_name`` is set by the C++ extension when the
+        table is multi-branch and a branch declared ``writable=True``: the value
+        is the writable arm's ``ScanBranch.function_name``. The worker uses it
+        to disambiguate which physical arm to dispatch the INSERT to without
+        re-resolving the writable arm internally. For single-branch tables (the
+        common case) this is None and the worker dispatches as today.
+        """
         ...
 
     def catalog_table_update_function_get(

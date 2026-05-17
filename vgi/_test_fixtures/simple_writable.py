@@ -737,8 +737,9 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
+        writable_branch_function_name: str | None = None,
     ) -> ScanFunctionResult:
-        del attach_opaque_data, transaction_opaque_data
+        del attach_opaque_data, transaction_opaque_data, writable_branch_function_name
         # Route the broken table to the misbehaving insert function. Tests rely
         # on this lying about RETURNING shape so the C++ runtime validator
         # gets exercised.

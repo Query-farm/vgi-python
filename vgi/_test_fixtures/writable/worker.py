@@ -1082,8 +1082,12 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
+        writable_branch_function_name: str | None = None,
     ) -> ScanFunctionResult:
         """Return the generic insert function for a table."""
+        # writable_branch_function_name is unused — the WritableCatalog is
+        # single-branch only.
+        del writable_branch_function_name
         return self._function_get("insert", schema_name=schema_name, name=name)
 
     def table_update_function_get(
