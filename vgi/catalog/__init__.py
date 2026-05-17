@@ -20,6 +20,8 @@ from vgi.catalog.catalog_interface import (
     MacroType,
     OnConflict,
     ReadOnlyCatalogInterface,
+    ScanBranch,
+    ScanBranchesResult,
     ScanFunctionResult,
     SchemaInfo,
     SchemaObjectType,
@@ -61,6 +63,8 @@ __all__ = [
     "TableInfo",
     "ViewInfo",
     "FunctionInfo",
+    "ScanBranch",
+    "ScanBranchesResult",
     "ScanFunctionResult",
     # Declarative descriptors
     "Catalog",

@@ -1038,6 +1038,99 @@ class TestArrowSchemaCorrectness:
         assert schema.field("required_extensions").type == pa.list_(pa.string())
 
 
+class TestScanBranchSerialization:
+    """ScanBranch and ScanBranchesResult round-trip and schema checks."""
+
+    def test_scan_branch_schema(self) -> None:
+        """ScanBranch Arrow schema mirrors ScanFunctionResult sans required_extensions, plus branch_filter."""
+        from vgi.catalog import ScanBranch
+
+        schema = ScanBranch.ARROW_SCHEMA
+        assert schema.field("function_name").type == pa.string()
+        assert schema.field("arguments").type == pa.binary()
+        assert schema.field("branch_filter").type == pa.string()
+        assert schema.field("branch_filter").nullable is True
+
+    def test_scan_branches_result_schema(self) -> None:
+        """ScanBranchesResult Arrow schema: branches as list<binary>, required_extensions hoisted to top-level."""
+        from vgi.catalog import ScanBranchesResult
+
+        schema = ScanBranchesResult.ARROW_SCHEMA
+        assert schema.field("branches").type == pa.list_(pa.binary())
+        assert schema.field("required_extensions").type == pa.list_(pa.string())
+
+    def test_scan_branch_round_trip_no_filter(self) -> None:
+        """A ScanBranch with no branch_filter round-trips losslessly."""
+        from vgi.catalog import ScanBranch
+
+        original = ScanBranch(
+            function_name="read_parquet",
+            positional_arguments=[pa.scalar("s3://bucket/orders.parquet", pa.string())],
+            named_arguments={"hive_partitioning": pa.scalar(True, pa.bool_())},
+        )
+        batch, _ = deserialize_record_batch(original.serialize())
+        restored = ScanBranch.deserialize(batch)
+        assert restored.function_name == "read_parquet"
+        assert len(restored.positional_arguments) == 1
+        assert restored.positional_arguments[0].as_py() == "s3://bucket/orders.parquet"
+        assert restored.named_arguments["hive_partitioning"].as_py() is True
+        assert restored.branch_filter is None
+
+    def test_scan_branch_round_trip_with_filter(self) -> None:
+        """A ScanBranch with a branch_filter preserves the raw SQL text."""
+        from vgi.catalog import ScanBranch
+
+        original = ScanBranch(
+            function_name="vgi_table_function",
+            positional_arguments=[pa.scalar("kafka_worker", pa.string()), pa.scalar("kafka_scan", pa.string())],
+            named_arguments={},
+            branch_filter="ts >= TIMESTAMP '2026-05-15 00:00:00'",
+        )
+        batch, _ = deserialize_record_batch(original.serialize())
+        restored = ScanBranch.deserialize(batch)
+        assert restored.branch_filter == "ts >= TIMESTAMP '2026-05-15 00:00:00'"
+        assert len(restored.positional_arguments) == 2
+
+    def test_scan_branches_result_round_trip(self) -> None:
+        """ScanBranchesResult round-trips two heterogeneous branches + required_extensions."""
+        from vgi.catalog import ScanBranch, ScanBranchesResult
+
+        original = ScanBranchesResult(
+            branches=[
+                ScanBranch(
+                    function_name="vgi_table_function",
+                    positional_arguments=[pa.scalar("kafka_worker", pa.string())],
+                    named_arguments={},
+                    branch_filter="ts >= TIMESTAMP '2026-05-15'",
+                ),
+                ScanBranch(
+                    function_name="iceberg_scan",
+                    positional_arguments=[pa.scalar("s3://archive/orders", pa.string())],
+                    named_arguments={},
+                    branch_filter="ts < TIMESTAMP '2026-05-15'",
+                ),
+            ],
+            required_extensions=["iceberg", "httpfs"],
+        )
+        batch, _ = deserialize_record_batch(original.serialize())
+        restored = ScanBranchesResult.deserialize(batch)
+        assert len(restored.branches) == 2
+        assert restored.branches[0].function_name == "vgi_table_function"
+        assert restored.branches[1].function_name == "iceberg_scan"
+        assert restored.required_extensions == ["iceberg", "httpfs"]
+
+    def test_scan_branches_result_empty_branches_rejected(self) -> None:
+        """Empty branches list is rejected at deserialize — workers must return >=1 branch."""
+        import pytest
+
+        from vgi.catalog import ScanBranchesResult
+
+        empty = ScanBranchesResult(branches=[], required_extensions=[])
+        batch, _ = deserialize_record_batch(empty.serialize())
+        with pytest.raises(ValueError, match="branches list must not be empty"):
+            ScanBranchesResult.deserialize(batch)
+
+
 class TestSecretTypeSpecSerialization:
     """Test SecretTypeSpec serialization round-trip."""
 

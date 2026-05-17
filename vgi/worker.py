@@ -3932,6 +3932,38 @@ class Worker:
         )
         return result.serialize()
 
+    def catalog_table_scan_branches_get(
+        self,
+        attach_opaque_data: bytes,
+        schema_name: str,
+        name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
+        transaction_opaque_data: bytes | None = None,
+    ) -> bytes:
+        """Get the list of scan branches for a multi-branch table.
+
+        Returns ScanBranchesResult as IPC bytes. The CatalogInterface base
+        provides a default-impl shim that wraps the legacy
+        ``table_scan_function_get`` as a one-branch result, so every existing
+        single-source worker automatically responds correctly here without
+        further code changes.
+        """
+        _validate_at_params(at_unit, at_value)
+        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        cat = self._get_catalog()
+        result = cat.table_scan_branches_get(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
+            if transaction_opaque_data
+            else None,
+            schema_name=schema_name,
+            name=name,
+            at_unit=at_unit,
+            at_value=at_value,
+        )
+        return result.serialize()
+
     def catalog_table_column_statistics_get(
         self,
         attach_opaque_data: bytes,

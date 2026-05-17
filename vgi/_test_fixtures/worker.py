@@ -190,6 +190,8 @@ from vgi.catalog import (
     Macro,
     MacroType,
     ReadOnlyCatalogInterface,
+    ScanBranch,
+    ScanBranchesResult,
     ScanFunctionResult,
     Schema,
     SecretTypeSpec,
@@ -554,6 +556,60 @@ _EXAMPLE_CATALOG = Catalog(
                     columns=schema(n=pa.int64()),
                     comment="123456 integers; stats served by the sequence function, not the table",
                 ),
+                # Multi-branch fixture — two ScanBranch entries both calling
+                # sequence() with different counts. SELECT count(*) should
+                # return 100 (50 + 50). Exercises VgiMultiScanRewriter end-to-end.
+                Table(
+                    name="multi_branch_numbers",
+                    columns=schema(n=pa.int64()),
+                    comment="Multi-branch: UNION of sequence(50) + sequence(50) — used by multi_branch_scan.test",
+                ),
+                # Multi-branch with branch_filters that partition the value range.
+                # Branch A: sequence(100) with `n < 50`; branch B: sequence(100)
+                # with `n >= 50`. Non-overlapping; total rows = 100.
+                Table(
+                    name="multi_branch_filtered_numbers",
+                    columns=schema(n=pa.int64()),
+                    comment="Multi-branch with complementary branch_filters — exercises pruning",
+                ),
+                # Heterogeneous multi-branch: one VGI arm + one native read_parquet
+                # arm. The parquet file is created by the test at a well-known path
+                # (see multi_branch_heterogeneous.test). Demonstrates that cold-tier
+                # data can come from any DuckDB function the worker names, without
+                # tunneling through the worker pipe.
+                Table(
+                    name="multi_branch_hetero",
+                    columns=schema(n=pa.int64()),
+                    comment="Multi-branch: sequence(50) + read_parquet — used by multi_branch_heterogeneous.test",
+                ),
+                # Column reconciliation: 3 read_parquet branches, the test creates
+                # the parquet files with deliberately different column orders and
+                # a missing column on one branch. Canonical schema (a, b) is
+                # populated by name; missing columns NULL-fill.
+                Table(
+                    name="multi_branch_recon",
+                    columns=schema(a=pa.int64(), b=pa.int64()),
+                    comment="Multi-branch: column reconciliation — used by multi_branch_reconciliation.test",
+                ),
+                # Pushdown-incapable arm test (E3): one VGI sequence() arm
+                # (filter_pushdown=True) + one read_csv arm (read_csv lacks
+                # native filter pushdown, so filters stay as LogicalFilter
+                # above the scan). Tests that the rewriter doesn't assume
+                # pushdown always succeeds.
+                Table(
+                    name="multi_branch_nopushdown",
+                    columns=schema(n=pa.int64()),
+                    comment="Multi-branch: VGI + read_csv — used by multi_branch_pushdown_incapable.test",
+                ),
+                # Empty-branches loud-fail test (E6): worker returns
+                # branches=[] from table_scan_branches_get. The C++ side's
+                # ParseScanBranchesResult must reject this at the wire layer
+                # with a BinderException before any plan is built.
+                Table(
+                    name="multi_branch_empty",
+                    columns=schema(n=pa.int64()),
+                    comment="Multi-branch: worker returns empty branches list — used by multi_branch_empty_branches.test",
+                ),
                 # ENUM (dictionary-encoded) column table — tests that statistics
                 # report actual string values, not dictionary indices.
                 Table(
@@ -854,7 +910,177 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 comment="Table with constraints that evolve across versions",
                 tags={},
             )
+        # Multi-branch tables: accept AT at table_get and pass it through to
+        # the underlying handler with AT stripped. The C++ side's B2 guard
+        # in VgiTableEntry::GetScanFunctionImpl detects branches.size() > 1
+        # and throws BinderException before any scan-function-get RPC fires.
+        # Returning TableInfo here lets the C++ binding flow proceed far enough
+        # to hit that guard with the documented error message.
+        if (schema_name.lower() == "data"
+            and name.lower() in ("multi_branch_numbers", "multi_branch_filtered_numbers")):
+            return super().table_get(
+                attach_opaque_data=attach_opaque_data,
+                transaction_opaque_data=transaction_opaque_data,
+                schema_name=schema_name,
+                name=name,
+                at_unit=None,
+                at_value=None,
+            )
         return super().table_get(
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=transaction_opaque_data,
+            schema_name=schema_name,
+            name=name,
+            at_unit=at_unit,
+            at_value=at_value,
+        )
+
+    def table_scan_branches_get(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_name: str,
+        name: str,
+        at_unit: str | None,
+        at_value: str | None,
+    ) -> ScanBranchesResult:
+        """Return multi-branch scan plans for the multi_branch_* test tables.
+
+        Falls through to the CatalogInterface default-impl shim for every
+        other table, which wraps the legacy table_scan_function_get result
+        as a one-branch list.
+        """
+        _validate_at_params(at_unit, at_value)
+
+        # multi_branch_numbers: two arms, each sequence(50). Union size = 100.
+        if schema_name.lower() == "data" and name.lower() == "multi_branch_numbers":
+            return ScanBranchesResult(
+                branches=[
+                    ScanBranch(
+                        function_name="sequence",
+                        positional_arguments=[pa.scalar(50)],
+                        named_arguments={},
+                    ),
+                    ScanBranch(
+                        function_name="sequence",
+                        positional_arguments=[pa.scalar(50)],
+                        named_arguments={},
+                    ),
+                ],
+                required_extensions=[],
+            )
+
+        # multi_branch_filtered_numbers: two arms each sequence(100) with
+        # complementary branch_filters carving the value range in half.
+        # Total rows = 100 (50 from each arm after filtering).
+        if schema_name.lower() == "data" and name.lower() == "multi_branch_filtered_numbers":
+            return ScanBranchesResult(
+                branches=[
+                    ScanBranch(
+                        function_name="sequence",
+                        positional_arguments=[pa.scalar(100)],
+                        named_arguments={},
+                        branch_filter="n < 50",
+                    ),
+                    ScanBranch(
+                        function_name="sequence",
+                        positional_arguments=[pa.scalar(100)],
+                        named_arguments={},
+                        branch_filter="n >= 50",
+                    ),
+                ],
+                required_extensions=[],
+            )
+
+        # multi_branch_hetero: one VGI arm (sequence(50)) + one native
+        # read_parquet arm pointing at a well-known path the test creates
+        # before querying. The parquet file has a single column "n" holding
+        # values 50..99. Total rows = 100.
+        if schema_name.lower() == "data" and name.lower() == "multi_branch_hetero":
+            return ScanBranchesResult(
+                branches=[
+                    ScanBranch(
+                        function_name="sequence",
+                        positional_arguments=[pa.scalar(50)],
+                        named_arguments={},
+                    ),
+                    ScanBranch(
+                        function_name="read_parquet",
+                        positional_arguments=[
+                            pa.scalar("/tmp/vgi_hetero_branch.parquet", pa.string())
+                        ],
+                        named_arguments={},
+                    ),
+                ],
+                required_extensions=[],
+            )
+
+        # multi_branch_empty: worker deliberately returns branches=[] to
+        # exercise the C++ side's BinderException loud-fail. ParseScanBranchesResult
+        # must reject this at the wire layer.
+        if schema_name.lower() == "data" and name.lower() == "multi_branch_empty":
+            return ScanBranchesResult(branches=[], required_extensions=[])
+
+        # multi_branch_nopushdown: VGI sequence(50) + read_csv_auto. read_csv
+        # has filter_pushdown=false in DuckDB, so any user WHERE clause stays
+        # as a LogicalFilter above the csv arm — the rewriter must not assume
+        # pushdown always succeeds.
+        if schema_name.lower() == "data" and name.lower() == "multi_branch_nopushdown":
+            return ScanBranchesResult(
+                branches=[
+                    ScanBranch(
+                        function_name="sequence",
+                        positional_arguments=[pa.scalar(50)],
+                        named_arguments={},
+                    ),
+                    ScanBranch(
+                        function_name="read_csv_auto",
+                        positional_arguments=[
+                            pa.scalar("/tmp/vgi_nopushdown_branch.csv", pa.string())
+                        ],
+                        named_arguments={},
+                    ),
+                ],
+                required_extensions=[],
+            )
+
+        # multi_branch_recon: three read_parquet branches with deliberately
+        # mismatched column shapes — used to exercise column-reconciliation
+        # by NAME with NULL-fill for missing canonicals. Canonical schema
+        # is (a int64, b int64). The test creates the parquet files at the
+        # paths below before querying.
+        if schema_name.lower() == "data" and name.lower() == "multi_branch_recon":
+            return ScanBranchesResult(
+                branches=[
+                    ScanBranch(
+                        function_name="read_parquet",
+                        positional_arguments=[
+                            pa.scalar("/tmp/vgi_recon_a_b.parquet", pa.string())
+                        ],
+                        named_arguments={},
+                    ),
+                    ScanBranch(
+                        function_name="read_parquet",
+                        positional_arguments=[
+                            pa.scalar("/tmp/vgi_recon_b_a.parquet", pa.string())
+                        ],
+                        named_arguments={},
+                    ),
+                    ScanBranch(
+                        function_name="read_parquet",
+                        positional_arguments=[
+                            pa.scalar("/tmp/vgi_recon_a_only.parquet", pa.string())
+                        ],
+                        named_arguments={},
+                    ),
+                ],
+                required_extensions=[],
+            )
+
+        # Everything else: fall through to the default-impl shim (wraps
+        # table_scan_function_get as a one-branch list).
+        return super().table_scan_branches_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=transaction_opaque_data,
             schema_name=schema_name,

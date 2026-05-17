@@ -620,6 +620,209 @@ WriteFunctionResult = ScanFunctionResult
 
 
 # ============================================================================
+# Multi-branch scan (catalog_table_scan_branches_get)
+# ============================================================================
+#
+# A table whose data spans multiple physical sources (canonical example:
+# hot rows in Kafka + historical rows in Iceberg/Delta/parquet) declares
+# one ``ScanBranch`` per source. The VGI DuckDB extension's optimizer-
+# extension rewrites a placeholder ``LogicalGet`` into a
+# ``LogicalSetOperation(UNION_ALL, ...)`` with one arm per branch, each
+# binding its own ``TableFunction`` (a VGI function, or a native reader
+# like ``iceberg_scan`` / ``read_parquet``).
+#
+# This is **wire-compat with single-branch workers**: the new RPC
+# ``catalog_table_scan_branches_get`` is additive; old workers that don't
+# implement it cause the C++ side to fall back to
+# ``catalog_table_scan_function_get`` and synthesise a one-branch result.
+#
+# See the design memo at
+# ``~/.claude/plans/right-now-vgi-and-partitioned-nebula.md`` for the
+# rewriter semantics, ``branch_filter`` model, and v1 scope decisions
+# (writes refused, AT-clause refused, fail-fast error semantics).
+
+
+@dataclass(frozen=True)
+class ScanBranch:
+    """One physical source backing a multi-branch scan.
+
+    Attributes:
+        function_name: The DuckDB function to call for this branch
+            (e.g., ``"read_parquet"``, ``"iceberg_scan"``, or a VGI
+            table function). The C++ rewriter resolves this name against
+            DuckDB's function catalog and binds it at optimize time.
+        positional_arguments: Positional arguments as PyArrow scalars,
+            passed through to the function's ``bind``.
+        named_arguments: Named arguments as PyArrow scalars.
+        branch_filter: Optional SQL expression text (parsed by DuckDB's
+            parser, bound against the branch's bound column list). The
+            rewriter AND's this into every scan of this branch BEFORE
+            filter pushdown, so the branch only ever sees rows in its
+            declared scope. Used to make overlapping physical sources
+            (Kafka 7d retention + Iceberg nightly batches with ~24h
+            overlap) non-overlapping at scan time, without changing the
+            worker code. ``None`` means unconstrained.
+
+    """
+
+    function_name: str
+    positional_arguments: list[pa.Scalar]  # type: ignore[type-arg]
+    named_arguments: dict[str, pa.Scalar]  # type: ignore[type-arg]
+    branch_filter: str | None = None
+
+    ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        [
+            pa.field("function_name", pa.string(), nullable=False),
+            pa.field("arguments", pa.binary(), nullable=False),
+            pa.field("branch_filter", pa.string(), nullable=True),
+        ]  # type: ignore[arg-type]
+    )
+
+    def to_row_dict(self) -> dict[str, Any]:
+        """Convert to a dictionary for batch construction.
+
+        Arguments are serialized as nested Arrow IPC bytes (same trick as
+        :class:`ScanFunctionResult`).
+        """
+        argument_values: dict[str, pa.Scalar] = {}  # type: ignore[type-arg]
+        argument_schema: list[pa.Field] = []
+        for index, arg in enumerate(self.positional_arguments):
+            argument_schema.append(pa.field(f"arg_{index}", arg.type))
+            argument_values[f"arg_{index}"] = arg
+        for name, value in self.named_arguments.items():
+            argument_schema.append(pa.field(name, value.type))
+            argument_values[name] = value
+        argument_batch = pa.RecordBatch.from_pylist(
+            [argument_values],
+            schema=pa.schema(argument_schema),
+        )
+        return {
+            "function_name": self.function_name,
+            "arguments": serialize_record_batch_bytes(argument_batch),
+            "branch_filter": self.branch_filter,
+        }
+
+    def serialize(self) -> bytes:
+        """Serialize to Arrow IPC bytes (1-row batch using ARROW_SCHEMA)."""
+        batch = pa.RecordBatch.from_pylist(
+            [self.to_row_dict()],
+            schema=self.ARROW_SCHEMA,
+        )
+        return serialize_record_batch_bytes(batch)
+
+    @classmethod
+    def deserialize(cls, batch: pa.RecordBatch) -> Self:
+        """Deserialize from a 1-row Arrow RecordBatch."""
+        from vgi_rpc.utils import _validate_single_row_batch
+
+        row = _validate_single_row_batch(
+            batch,
+            cls.__name__,
+            required_fields=["function_name", "arguments"],
+        )
+
+        arguments_bytes = cast(bytes, row["arguments"])
+        arguments_batch, _ = deserialize_record_batch(arguments_bytes)
+
+        positional_arguments: list[pa.Scalar] = []  # type: ignore[type-arg]
+        named_arguments: dict[str, pa.Scalar] = {}  # type: ignore[type-arg]
+        for arg_field in arguments_batch.schema:
+            value = arguments_batch.column(arg_field.name)[0]
+            if arg_field.name.startswith("arg_"):
+                positional_arguments.append(value)
+            else:
+                named_arguments[arg_field.name] = value
+
+        branch_filter_value = row.get("branch_filter")
+        return cls(
+            function_name=cast(str, row["function_name"]),
+            positional_arguments=positional_arguments,
+            named_arguments=named_arguments,
+            branch_filter=cast("str | None", branch_filter_value) if branch_filter_value is not None else None,
+        )
+
+
+@dataclass(frozen=True)
+class ScanBranchesResult:
+    """Result from getting the list of scan branches for a multi-branch table.
+
+    The result tells the VGI DuckDB extension which DuckDB function(s) to
+    call to obtain the data for the table. Each branch is bound independently
+    and the rewriter unions their output.
+
+    Attributes:
+        branches: One ``ScanBranch`` per physical source. Order is meaningful
+            for stable diagnostic output (``vgi_table_branches()``) but not
+            for query semantics (UNION ALL is unordered).
+        required_extensions: Union of all DuckDB extensions needed across all
+            branches (e.g., ``["iceberg", "httpfs"]``). The C++ side auto-loads
+            unloaded entries before running the rewrite; missing extensions
+            surface the existing extension-load diagnostic. Hoisted to the
+            top level so workers don't repeat ``"iceberg"`` on every branch
+            that uses it.
+
+    """
+
+    branches: list[ScanBranch]
+    required_extensions: list[str] = field(default_factory=list)
+
+    # On the wire each branch is serialized as its own IPC stream (bytes),
+    # carried in a list<binary> column. The C++ side parses each entry via
+    # ScanBranch::deserialize, matching the nested-IPC trick used for the
+    # arguments field on ScanFunctionResult/ScanBranch themselves.
+    ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        [
+            pa.field("branches", pa.list_(pa.binary()), nullable=False),
+            pa.field("required_extensions", pa.list_(pa.string()), nullable=False),
+        ]  # type: ignore[arg-type]
+    )
+
+    def to_row_dict(self) -> dict[str, Any]:
+        """Convert to a dictionary for batch construction."""
+        return {
+            "branches": [branch.serialize() for branch in self.branches],
+            "required_extensions": list(self.required_extensions),
+        }
+
+    def serialize(self) -> bytes:
+        """Serialize to Arrow IPC bytes (1-row batch using ARROW_SCHEMA)."""
+        batch = pa.RecordBatch.from_pylist(
+            [self.to_row_dict()],
+            schema=self.ARROW_SCHEMA,
+        )
+        return serialize_record_batch_bytes(batch)
+
+    @classmethod
+    def deserialize(cls, batch: pa.RecordBatch) -> Self:
+        """Deserialize from a 1-row Arrow RecordBatch.
+
+        Empty branches list is rejected — workers must return at least one
+        branch. (See the design memo's "loud at attach" rule.)
+        """
+        from vgi_rpc.utils import _validate_single_row_batch
+
+        row = _validate_single_row_batch(
+            batch,
+            cls.__name__,
+            required_fields=["branches"],
+        )
+
+        branch_blobs = cast("list[bytes]", row["branches"])
+        if not branch_blobs:
+            raise ValueError(f"{cls.__name__}: branches list must not be empty")
+
+        branches: list[ScanBranch] = []
+        for blob in branch_blobs:
+            branch_batch, _ = deserialize_record_batch(blob)
+            branches.append(ScanBranch.deserialize(branch_batch))
+
+        return cls(
+            branches=branches,
+            required_extensions=list(cast("list[str]", row.get("required_extensions") or [])),
+        )
+
+
+# ============================================================================
 # Column Statistics
 # ============================================================================
 
@@ -1363,6 +1566,76 @@ class CatalogInterface(ABC):
         this table. The at_unit and at_value support time travel queries.
         """
         raise NotImplementedError("Table scan function get not implemented.")
+
+    def table_scan_branches_get(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_name: str,
+        name: str,
+        at_unit: str | None,
+        at_value: str | None,
+    ) -> ScanBranchesResult:
+        """Get the list of scan branches for a multi-source table.
+
+        Multi-branch tables compose a logical scan from N physical sources
+        (canonical case: Kafka hot tier + Iceberg cold tier). The VGI DuckDB
+        extension's optimizer-extension rewrites the placeholder ``LogicalGet``
+        into ``LogicalSetOperation(UNION_ALL, ...)``, one arm per branch.
+
+        Default implementation: delegate to :meth:`table_scan_function_get`
+        and wrap the single ``ScanFunctionResult`` as a one-branch list.
+        This makes every existing single-source worker automatically
+        compatible with the new branches-aware C++ side, while letting
+        workers that genuinely need multi-source override this method.
+
+        Workers that override should NOT also raise from
+        :meth:`table_scan_function_get` — the legacy method must keep
+        working for old C++ extensions that don't yet probe for the new
+        branches RPC. Common pattern: a worker implements both, where
+        :meth:`table_scan_function_get` returns ``branches[0]`` (the
+        primary branch) and :meth:`table_scan_branches_get` returns the
+        full list.
+
+        Args:
+            attach_opaque_data: Per-attach session token.
+            transaction_opaque_data: Optional transaction token.
+            schema_name: Schema containing the table.
+            name: Table name.
+            at_unit: Optional time-travel unit (e.g., ``"VERSION"`` /
+                ``"TIMESTAMP"``). The VGI C++ side refuses ``AT(...)`` on
+                multi-branch tables (>1 branch) at bind time, so workers
+                returning multiple branches should expect ``at_unit`` /
+                ``at_value`` to always be ``None``; single-branch returns
+                still honour them.
+            at_value: Optional time-travel value matching ``at_unit``.
+
+        Returns:
+            A :class:`ScanBranchesResult` carrying one or more
+            :class:`ScanBranch` entries plus the union of required
+            extensions across all branches.
+
+        """
+        legacy = self.table_scan_function_get(
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=transaction_opaque_data,
+            schema_name=schema_name,
+            name=name,
+            at_unit=at_unit,
+            at_value=at_value,
+        )
+        return ScanBranchesResult(
+            branches=[
+                ScanBranch(
+                    function_name=legacy.function_name,
+                    positional_arguments=list(legacy.positional_arguments),
+                    named_arguments=dict(legacy.named_arguments),
+                    branch_filter=None,
+                ),
+            ],
+            required_extensions=list(legacy.required_extensions),
+        )
 
     def table_column_statistics_get(
         self,

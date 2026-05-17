@@ -1988,6 +1988,31 @@ class VgiProtocol(Protocol):
         """Get the scan function for a table. Returns ScanFunctionResult as IPC bytes."""
         ...
 
+    def catalog_table_scan_branches_get(
+        self,
+        attach_opaque_data: bytes,
+        schema_name: str,
+        name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
+        transaction_opaque_data: bytes | None = None,
+    ) -> bytes:
+        """Get the list of scan branches for a multi-branch table. Returns ScanBranchesResult as IPC bytes.
+
+        Additive successor to ``catalog_table_scan_function_get``. Workers that
+        only implement the legacy method continue to work — the VGI extension's
+        C++ side catches ``MethodNotImplementedError`` and falls back to the
+        legacy RPC, wrapping the single-function result as a one-branch list.
+        Workers that implement BOTH the legacy and the branches method
+        guarantee single-process compatibility with both old and new extensions.
+
+        Multi-branch tables compose a logical scan from N physical sources
+        (canonical case: Kafka hot tier + Iceberg cold tier). The extension's
+        optimizer rewrite stitches the branches together via
+        ``LogicalSetOperation(UNION_ALL, ...)``, one arm per branch.
+        """
+        ...
+
     def catalog_table_column_statistics_get(
         self,
         attach_opaque_data: bytes,

@@ -26,6 +26,8 @@ from vgi.catalog.catalog_interface import (
     FunctionInfo,
     IndexInfo,
     MacroInfo,
+    ScanBranch,
+    ScanBranchesResult,
     ScanFunctionResult,
     SchemaInfo,
     TableInfo,
@@ -50,6 +52,8 @@ INFO_TYPES: tuple[type, ...] = (
 # type is `bytes` (raw IPC). Not inferable from method signatures alone.
 EXTRA_RESPONSE_TYPES: tuple[type, ...] = (
     ScanFunctionResult,  # catalog_table_{scan,insert,update,delete}_function_get
+    ScanBranchesResult,  # catalog_table_scan_branches_get (top-level wrapper)
+    ScanBranch,          # one entry inside ScanBranchesResult.branches (binary blob)
 )
 
 
