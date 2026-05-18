@@ -30,6 +30,9 @@ test-data/v.parquet
 # Playwright MCP
 .playwright-mcp/
 
+# beads (local tool state — see commit 9cf33e2)
+.beads/
+
 # wrangler files
 .wrangler
 .dev.vars*
