@@ -122,6 +122,24 @@ def _parse_type(expr: str) -> pa.DataType:
         children = [_parse_field(part) for part in _split_top_level_comma(inner)]
         return pa.struct(children)
 
+    if expr.startswith("arrow::timestamp(") and expr.endswith(")"):
+        # arrow::timestamp(arrow::TimeUnit::UNIT) or arrow::timestamp(unit, "tz").
+        inside = expr[len("arrow::timestamp(") : -1]
+        parts = _split_top_level_comma(inside)
+        unit_map = {
+            "arrow::TimeUnit::SECOND": "s",
+            "arrow::TimeUnit::MILLI": "ms",
+            "arrow::TimeUnit::MICRO": "us",
+            "arrow::TimeUnit::NANO": "ns",
+        }
+        unit = unit_map[parts[0].strip()]
+        if len(parts) == 1:
+            return pa.timestamp(unit)
+        if len(parts) == 2:
+            tz = parts[1].strip()
+            assert tz.startswith('"') and tz.endswith('"'), f"unexpected timezone literal: {tz!r}"
+            return pa.timestamp(unit, tz=tz[1:-1])
+
     raise AssertionError(f"cannot parse generated type expression: {expr!r}")
 
 

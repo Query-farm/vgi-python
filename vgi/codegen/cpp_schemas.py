@@ -112,6 +112,23 @@ def _emit_type(dtype: pa.DataType, *, origin: str) -> str:
         ]
         return "arrow::struct_({" + ", ".join(child_exprs) + "})"
 
+    if pa.types.is_timestamp(dtype):
+        unit_map = {
+            "s": "arrow::TimeUnit::SECOND",
+            "ms": "arrow::TimeUnit::MILLI",
+            "us": "arrow::TimeUnit::MICRO",
+            "ns": "arrow::TimeUnit::NANO",
+        }
+        unit_expr = unit_map.get(dtype.unit)
+        if unit_expr is None:
+            raise GeneratorError(
+                f"timestamp at {origin} has unknown unit {dtype.unit!r}; expected one of {sorted(unit_map)}.",
+            )
+        if dtype.tz is None:
+            return f"arrow::timestamp({unit_expr})"
+        # arrow::timestamp(unit, timezone) — timezone string is verbatim per the Arrow spec.
+        return f'arrow::timestamp({unit_expr}, "{dtype.tz}")'
+
     raise GeneratorError(
         f"vgi.codegen.cpp_schemas: unsupported Arrow type {type(dtype).__name__!r} at {origin} "
         f"(type={dtype!r}).\n"
