@@ -29,6 +29,7 @@ import contextlib
 import re
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
@@ -38,6 +39,7 @@ from vgi_rpc.rpc import OutputCollector
 from vgi.catalog import (
     AttachOpaqueData,
     CatalogAttachResult,
+    CatalogDataVersionRelease,
     CatalogInfo,
     ReadOnlyCatalogInterface,
     ScanFunctionResult,
@@ -64,6 +66,38 @@ CATALOG_NAME = "versioned_tables"
 DATA_VERSION_SPEC = ">=1.0.0,<4.0.0"
 SUPPORTED_VERSIONS: tuple[str, ...] = ("1.0.0", "1.1.0", "2.0.0", "3.0.0")
 DEFAULT_VERSION = "3.0.0"
+
+# Source for `CatalogInfo.source_url` — points at the repo so the describe
+# page (and Cupola) can render a "View source →" link.
+SOURCE_URL = "https://github.com/Query-farm/vgi-python"
+
+# Public release manifest. Ordering invariant: newest-first. Uniqueness
+# invariant: each ``version`` appears at most once. The describe page and
+# Cupola consume this verbatim, so adding a release means prepending here.
+DATA_VERSION_RELEASES: tuple[CatalogDataVersionRelease, ...] = (
+    CatalogDataVersionRelease(
+        version="3.0.0",
+        released_at=datetime(2026, 4, 15, tzinfo=UTC),
+        summary="Removed deprecated 'animals' table; 'plants' is now the only table.",
+        notes_url="https://github.com/Query-farm/vgi-python/releases/tag/data-v3.0.0",
+    ),
+    CatalogDataVersionRelease(
+        version="2.0.0",
+        released_at=datetime(2026, 2, 1, tzinfo=UTC),
+        summary="Added 'plants' table alongside 'animals'.",
+        notes_url="https://github.com/Query-farm/vgi-python/releases/tag/data-v2.0.0",
+    ),
+    CatalogDataVersionRelease(
+        version="1.1.0",
+        released_at=datetime(2026, 1, 10, tzinfo=UTC),
+        summary="Added 'sound' column to 'animals'.",
+    ),
+    CatalogDataVersionRelease(
+        version="1.0.0",
+        released_at=datetime(2026, 1, 1, tzinfo=UTC),
+        summary="Initial release.",
+    ),
+)
 
 # Implementation versions use a distinctly different numbering (10.x / 11.x)
 # from data versions (1.x / 2.x / 3.x) so test assertions can't confuse the
@@ -348,17 +382,23 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
     # ------------------------------------------------------------------ catalogs
 
     def catalogs(self) -> list[CatalogInfo]:
-        """Advertise catalog name and version metadata for discovery.
+        """Advertise catalog name, version metadata, and the release manifest.
 
         ``implementation_version`` advertises the default (newest) impl. Clients
         that want an older impl pass a spec (``^10.0.0``, ``~10.0.0``, etc.)
         via the ATTACH ``implementation_version`` option.
+
+        ``releases`` surfaces ``DATA_VERSION_RELEASES`` so the describe page
+        and Cupola can render a discoverable release timeline; ``source_url``
+        points back at the repo for further reading.
         """
         return [
             CatalogInfo(
                 name=CATALOG_NAME,
                 implementation_version=DEFAULT_IMPLEMENTATION_VERSION,
                 data_version_spec=DATA_VERSION_SPEC,
+                releases=list(DATA_VERSION_RELEASES),
+                source_url=SOURCE_URL,
             ),
         ]
 

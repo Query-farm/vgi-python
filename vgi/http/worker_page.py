@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from vgi.catalog.attach_option import AttachOptionSpec
     from vgi.catalog.catalog_interface import (
         AttachOpaqueData,
+        CatalogDataVersionRelease,
         CatalogInterface,
         FunctionInfo,
         SchemaInfo,
@@ -244,6 +245,11 @@ class _CatalogPanel:
     data_version_spec: str | None = None
     attach_option_specs: tuple[AttachOptionSpec, ...] = ()
     comment: str | None = None
+    # Published data-version releases, newest-first. Duplicates by
+    # ``version`` are dropped at deserialization (uniqueness contract).
+    releases: tuple[CatalogDataVersionRelease, ...] = ()
+    # Optional link to where the worker's code lives.
+    source_url: str | None = None
 
 
 def _collect_catalog_panels(worker_cls: type[Worker]) -> list[_CatalogPanel]:
@@ -285,6 +291,22 @@ def _collect_catalog_panels(worker_cls: type[Worker]) -> list[_CatalogPanel]:
                     specs.append(AttachOptionSpec.deserialize(batch))
                 except Exception:  # noqa: BLE001 — drop unparseable spec, keep the page
                     _logger.debug("failed to deserialize attach option spec", exc_info=True)
+
+            # Defend against duplicate ``version`` entries — the contract is
+            # one entry per version, but Arrow can't enforce that.
+            seen_versions: set[str] = set()
+            releases: list[CatalogDataVersionRelease] = []
+            for release in info.releases or ():
+                if release.version in seen_versions:
+                    _logger.warning(
+                        "duplicate version %r in releases for catalog %r; dropping later entry",
+                        release.version,
+                        info.name,
+                    )
+                    continue
+                seen_versions.add(release.version)
+                releases.append(release)
+
             panels.append(
                 _CatalogPanel(
                     name=info.name,
@@ -292,6 +314,8 @@ def _collect_catalog_panels(worker_cls: type[Worker]) -> list[_CatalogPanel]:
                     data_version_spec=info.data_version_spec,
                     attach_option_specs=tuple(specs),
                     comment=static_comment if info.name == static_name else None,
+                    releases=tuple(releases),
+                    source_url=info.source_url,
                 )
             )
         if panels:
@@ -584,6 +608,43 @@ def _build_attach_sql(catalog_name: str, panel_id: str, requested_version: str |
     )
 
 
+def _build_release_timeline(panel: _CatalogPanel) -> str:
+    """Render the data-version release timeline for one catalog.
+
+    Each row carries the version (clickable to fill the catalog's
+    ``.dv-input``), the release date, the one-line summary, and an
+    optional ``details →`` link when ``notes_url`` is set. The catalog
+    enforces newest-first ordering on the wire; we render in the order
+    received.
+    """
+    parts: list[str] = [
+        '<div class="release-timeline" '
+        f'data-catalog="{_esc(panel.name)}">'
+        '<div class="section-label">Releases</div>'
+        '<ul class="release-list">'
+    ]
+    for release in panel.releases:
+        date_str = release.released_at.strftime("%Y-%m-%d") if release.released_at is not None else ""
+        notes = (
+            f' <a class="release-details" href="{_esc(release.notes_url)}" '
+            'target="_blank" rel="noopener">details &rarr;</a>'
+            if release.notes_url
+            else ""
+        )
+        summary = f'<span class="release-summary">{_esc(release.summary)}</span>' if release.summary else ""
+        parts.append(
+            "<li>"
+            f'<button type="button" class="release-version" '
+            f'data-catalog="{_esc(panel.name)}" data-version="{_esc(release.version)}">'
+            f"{_esc(release.version)}</button>"
+            f'<span class="release-date">{_esc(date_str)}</span>'
+            f"{summary}{notes}"
+            "</li>"
+        )
+    parts.append("</ul></div>")
+    return "\n".join(parts)
+
+
 def _build_connect_section(
     panels: list[_CatalogPanel],
     prefix: str,
@@ -628,10 +689,21 @@ def _build_connect_section(
         if panel.comment:
             parts.append(f'<p class="catalog-comment">{_esc(panel.comment)}</p>')
 
+        # Implementation chip + optional source link. We render both inline
+        # in one row so they line up visually; the source link can appear on
+        # its own when there's no implementation version.
+        impl_bits: list[str] = []
         if panel.implementation_version:
-            parts.append(
-                f'<div class="impl-chip">Implementation <code>{_esc(panel.implementation_version)}</code></div>'
+            impl_bits.append(
+                f'<span class="impl-chip">Implementation <code>{_esc(panel.implementation_version)}</code></span>'
             )
+        if panel.source_url:
+            impl_bits.append(
+                f'<a class="source-link" href="{_esc(panel.source_url)}" target="_blank" rel="noopener">'
+                "View source &rarr;</a>"
+            )
+        if impl_bits:
+            parts.append('<div class="impl-row">' + " ".join(impl_bits) + "</div>")
 
         # Apply form: GET reload with ?catalog=&data_version_spec= so the URL
         # is the source of truth for the user's chosen version.
@@ -654,6 +726,9 @@ def _build_connect_section(
                 "</label>"
                 "</form>"
             )
+
+        if panel.releases:
+            parts.append(_build_release_timeline(panel))
 
         parts.append(_build_attach_sql(panel.name, str(i), sql_version))
         parts.append(_build_attach_options_table(panel.attach_option_specs))
@@ -690,6 +765,16 @@ def _build_connect_section(
         "}"
         'document.querySelectorAll(".dv-input").forEach(function(inp){'
         'inp.addEventListener("input",function(){updateDvClause(inp);updateCupolaHref();});});'
+        # Release timeline: clicking a version button fills the matching
+        # dv-input and refreshes the SQL clause + Cupola href.
+        'document.querySelectorAll(".release-version").forEach(function(btn){'
+        'btn.addEventListener("click",function(){'
+        "var name=btn.dataset.catalog;"
+        "var inp=document.querySelector('.dv-input[data-catalog=\"'+name+'\"]');"
+        "if(!inp)return;"
+        "inp.value=btn.dataset.version;"
+        "updateDvClause(inp);updateCupolaHref();"
+        "inp.focus();});});"
         # Tab switching
         'document.querySelectorAll(".catalog-tab").forEach(function(tab){'
         'tab.addEventListener("click",function(){'
@@ -1058,10 +1143,13 @@ _PAGE_TEMPLATE = (
   .catalog-tab.active {{ color: #2d5016; border-bottom-color: #2d5016; }}
   .catalog-panel[hidden] {{ display: none; }}
   .catalog-comment {{ color: #6b6b5a; margin: 0 0 8px; font-size: 0.9em; }}
-  .impl-chip {{ display: inline-block; font-size: 0.8em; color: #6b6b5a;
-                 background: #f0ece0; padding: 3px 10px; border-radius: 999px;
-                 margin: 0 0 10px; }}
+  .impl-row {{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+                margin: 0 0 10px; font-size: 0.85em; }}
+  .impl-chip {{ display: inline-block; font-size: 0.85em; color: #6b6b5a;
+                 background: #f0ece0; padding: 3px 10px; border-radius: 999px; }}
   .impl-chip code {{ background: none; padding: 0; color: #2d5016; font-weight: 600; }}
+  .source-link {{ color: #2d5016; font-weight: 600; text-decoration: none; }}
+  .source-link:hover {{ color: #4a7c23; text-decoration: underline; }}
   .dv-row {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
               margin: 0 0 10px; font-size: 0.9em; }}
   .dv-label {{ font-weight: 600; color: #2c2c1e; }}
@@ -1082,6 +1170,25 @@ _PAGE_TEMPLATE = (
                 font-size: 0.95em; }}
   .dv-error code {{ background: rgba(195,51,51,0.10); color: #6b1414; }}
   .dv-error strong {{ font-weight: 700; }}
+  .release-timeline {{ margin: 0 0 16px; }}
+  .release-list {{ list-style: none; padding: 0; margin: 6px 0 0;
+                    border: 1px solid #e0dcd0; border-radius: 6px;
+                    background: #fff; }}
+  .release-list li {{ display: flex; align-items: center; gap: 10px;
+                       padding: 8px 12px; border-bottom: 1px solid #f0ece0;
+                       font-size: 0.9em; flex-wrap: wrap; }}
+  .release-list li:last-child {{ border-bottom: none; }}
+  .release-version {{ font-family: 'JetBrains Mono', monospace; font-weight: 600;
+                       color: #2d5016; background: #f0ece0; border: 1px solid #e0dcd0;
+                       padding: 3px 10px; border-radius: 4px; cursor: pointer;
+                       font-size: 0.9em; transition: background 0.15s, color 0.15s; }}
+  .release-version:hover {{ background: #2d5016; color: #faf8f0; }}
+  .release-date {{ color: #6b6b5a; font-size: 0.85em;
+                    font-family: 'JetBrains Mono', monospace; }}
+  .release-summary {{ color: #2c2c1e; flex: 1 1 auto; min-width: 180px; }}
+  .release-details {{ color: #2d5016; font-weight: 600; font-size: 0.85em;
+                       text-decoration: none; }}
+  .release-details:hover {{ text-decoration: underline; }}
   .cupola-box {{ display: flex; align-items: center; gap: 16px;
                   border: 1px solid #2d5016; border-radius: 8px; padding: 16px 20px;
                   margin-bottom: 32px; background: #2d5016; color: #faf8f0;

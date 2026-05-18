@@ -13,6 +13,7 @@ from vgi.catalog import (
     AttachOpaqueData,
     Catalog,
     CatalogAttachResult,
+    CatalogDataVersionRelease,
     CatalogInfo,
     ReadOnlyCatalogInterface,
     Schema,
@@ -683,3 +684,139 @@ class TestCupolaDeepLink:
         html = build_worker_page(_MultiCatalogWorker, "/vgi").decode()
         assert "updateDvClause(inp)" in html
         assert "updateCupolaHref()" in html
+
+
+# ---------------------------------------------------------------------------
+# Release timeline + source link
+# ---------------------------------------------------------------------------
+
+
+class _ReleasesCatalogInterface(ReadOnlyCatalogInterface):
+    """Single catalog carrying a populated release manifest + source_url."""
+
+    catalog = _TEST_PROD_CATALOG
+    catalog_name = "prod"
+
+    def catalogs(self) -> list[CatalogInfo]:
+        """Advertise a populated release manifest for UI tests."""
+        from datetime import UTC, datetime
+
+        return [
+            CatalogInfo(
+                name="prod",
+                implementation_version="2.4.0",
+                data_version_spec=">=2.0.0,<3.0.0",
+                source_url="https://example.com/repo",
+                releases=[
+                    CatalogDataVersionRelease(
+                        version="2.1.0",
+                        released_at=datetime(2026, 3, 1, tzinfo=UTC),
+                        summary="Added 'plants' table.",
+                        notes_url="https://example.com/v2.1.0",
+                    ),
+                    CatalogDataVersionRelease(
+                        version="2.0.0",
+                        released_at=datetime(2026, 2, 1, tzinfo=UTC),
+                        summary="Initial 2.x line.",
+                    ),
+                ],
+            ),
+        ]
+
+    def catalog_attach(
+        self,
+        *,
+        name: str,
+        options: dict[str, Any],
+        data_version_spec: str | None,
+        implementation_version: str | None,
+        ctx: Any = None,
+    ) -> CatalogAttachResult:
+        """Stub — accept any version so the timeline renders cleanly."""
+        del options, data_version_spec, implementation_version, ctx, name
+        return CatalogAttachResult(
+            attach_opaque_data=AttachOpaqueData(b"\x00" * 16),
+            supports_transactions=False,
+            supports_time_travel=False,
+            catalog_version_frozen=True,
+            catalog_version=1,
+            attach_opaque_data_required=False,
+            default_schema="main",
+            settings=[],
+            secret_types=[],
+            comment=None,
+            tags={},
+            resolved_data_version=None,
+            resolved_implementation_version=None,
+        )
+
+
+class _ReleasesWorker(Worker):
+    """Test worker exposing a populated release manifest."""
+
+    catalog_interface = _ReleasesCatalogInterface
+    catalog = _TEST_PROD_CATALOG
+
+
+class TestReleaseTimeline:
+    """Per-catalog release-history panel rendered under the dv-input."""
+
+    def test_timeline_renders_for_populated_releases(self) -> None:
+        """Every release shows as a clickable button with its date + summary."""
+        html = build_worker_page(_ReleasesWorker, "/vgi").decode()
+        assert 'class="release-timeline"' in html
+        assert 'class="release-list"' in html
+        # Each version is a clickable button keyed by data-version.
+        assert 'data-version="2.1.0"' in html
+        assert 'data-version="2.0.0"' in html
+        # Dates render as YYYY-MM-DD.
+        assert "2026-03-01" in html
+        assert "2026-02-01" in html
+        # Summaries land verbatim (with HTML escaping of the apostrophe).
+        assert "Added &#x27;plants&#x27; table." in html
+        assert "Initial 2.x line." in html
+
+    def test_notes_url_renders_when_set(self) -> None:
+        """``notes_url`` becomes a 'details →' link; absent fields don't."""
+        html = build_worker_page(_ReleasesWorker, "/vgi").decode()
+        assert 'href="https://example.com/v2.1.0"' in html
+        assert "details" in html
+        # 2.0.0 has no notes_url — it shouldn't get a link.
+        # Count: only one release-details anchor expected.
+        assert html.count('class="release-details"') == 1
+
+    def test_no_timeline_when_no_releases(self) -> None:
+        """Workers without releases render no timeline panel."""
+        html = build_worker_page(_MinimalWorker, "/vgi").decode()
+        assert 'class="release-timeline"' not in html
+        assert 'class="release-list"' not in html
+
+    def test_version_button_wired_to_dv_input(self) -> None:
+        """JS click handler fills the matching dv-input and refreshes state."""
+        html = build_worker_page(_ReleasesWorker, "/vgi").decode()
+        assert "release-version" in html
+        # The click handler in the inline script fills the dv-input by
+        # data-catalog and then updates the SQL clause + Cupola href.
+        assert "inp.value=btn.dataset.version" in html
+        assert "updateDvClause(inp);updateCupolaHref();" in html
+
+
+class TestSourceLink:
+    """``source_url`` renders inline next to the implementation chip."""
+
+    def test_source_link_renders_when_set(self) -> None:
+        """Worker with ``source_url`` gets a 'View source →' anchor."""
+        html = build_worker_page(_ReleasesWorker, "/vgi").decode()
+        assert 'class="source-link"' in html
+        assert 'href="https://example.com/repo"' in html
+        assert "View source" in html
+
+    def test_no_source_link_when_unset(self) -> None:
+        """Workers without ``source_url`` render no anchor."""
+        html = build_worker_page(_MinimalWorker, "/vgi").decode()
+        assert 'class="source-link"' not in html
+
+    def test_impl_row_groups_chip_and_link(self) -> None:
+        """The impl row wraps the chip + source link in one container."""
+        html = build_worker_page(_ReleasesWorker, "/vgi").decode()
+        assert 'class="impl-row"' in html

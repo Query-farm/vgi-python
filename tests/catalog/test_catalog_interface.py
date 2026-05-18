@@ -10,6 +10,7 @@ from vgi_rpc.utils import deserialize_record_batch
 from vgi.catalog import (
     AttachOpaqueData,
     CatalogAttachResult,
+    CatalogDataVersionRelease,
     CatalogExample,
     CatalogInfo,
     CatalogInterface,
@@ -830,6 +831,89 @@ class TestSchemaObjectType:
         assert SchemaObjectType("table_function") == SchemaObjectType.TABLE_FUNCTION
         assert SchemaObjectType("scalar_macro") == SchemaObjectType.SCALAR_MACRO
         assert SchemaObjectType("table_macro") == SchemaObjectType.TABLE_MACRO
+
+
+class TestCatalogDataVersionRelease:
+    """Tests for the data-version release manifest fields on CatalogInfo."""
+
+    def test_defaults(self) -> None:
+        """Release defaults: no date, empty summary, no notes URL."""
+        r = CatalogDataVersionRelease(version="1.0.0")
+        assert r.version == "1.0.0"
+        assert r.released_at is None
+        assert r.summary == ""
+        assert r.notes_url is None
+
+    def test_round_trip(self) -> None:
+        """Populated release survives Arrow serialization."""
+        from datetime import UTC, datetime
+
+        r = CatalogDataVersionRelease(
+            version="2.4.1",
+            released_at=datetime(2026, 4, 15, 12, 30, tzinfo=UTC),
+            summary="Added 'plants' table.",
+            notes_url="https://example.com/releases/2.4.1",
+        )
+        batch, _ = deserialize_record_batch(r.serialize_to_bytes())
+        restored = CatalogDataVersionRelease.deserialize_from_batch(batch)
+        assert restored.version == r.version
+        assert restored.released_at == r.released_at
+        assert restored.summary == r.summary
+        assert restored.notes_url == r.notes_url
+
+    def test_round_trip_nullable_fields_unset(self) -> None:
+        """Optional fields round-trip as None / empty string when unset."""
+        r = CatalogDataVersionRelease(version="1.0.0")
+        batch, _ = deserialize_record_batch(r.serialize_to_bytes())
+        restored = CatalogDataVersionRelease.deserialize_from_batch(batch)
+        assert restored.version == "1.0.0"
+        assert restored.released_at is None
+        assert restored.summary == ""
+        assert restored.notes_url is None
+
+
+class TestCatalogInfoReleases:
+    """CatalogInfo.releases and source_url defaults + round-trip."""
+
+    def test_defaults(self) -> None:
+        """Releases and source_url default to empty list / None."""
+        info = CatalogInfo(name="c", implementation_version=None, data_version_spec=None)
+        assert info.releases == []
+        assert info.source_url is None
+
+    def test_round_trip_with_releases(self) -> None:
+        """CatalogInfo carries its releases list across serialization."""
+        from datetime import UTC, datetime
+
+        releases = [
+            CatalogDataVersionRelease(
+                version="3.0.0",
+                released_at=datetime(2026, 4, 15, tzinfo=UTC),
+                summary="Removed 'animals'.",
+                notes_url="https://example.com/v3",
+            ),
+            CatalogDataVersionRelease(
+                version="2.0.0",
+                released_at=datetime(2026, 2, 1, tzinfo=UTC),
+                summary="Added 'plants'.",
+            ),
+        ]
+        info = CatalogInfo(
+            name="warehouse",
+            implementation_version="1.0.0",
+            data_version_spec=">=1.0.0,<4.0.0",
+            releases=releases,
+            source_url="https://example.com/repo",
+        )
+        batch, _ = deserialize_record_batch(info.serialize_to_bytes())
+        restored = CatalogInfo.deserialize_from_batch(batch)
+        assert restored.source_url == "https://example.com/repo"
+        assert len(restored.releases) == 2
+        assert restored.releases[0].version == "3.0.0"
+        assert restored.releases[0].summary == "Removed 'animals'."
+        assert restored.releases[0].notes_url == "https://example.com/v3"
+        assert restored.releases[1].version == "2.0.0"
+        assert restored.releases[1].notes_url is None
 
 
 class TestSchemaContentsTypeFilter:

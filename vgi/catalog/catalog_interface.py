@@ -8,6 +8,7 @@ import dataclasses
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -53,6 +54,7 @@ __all__ = [
     "OrderPreservation",
     "PartitionKind",
     # Catalog-specific
+    "CatalogDataVersionRelease",
     "CatalogExample",
     "CatalogInfo",
     "ColumnStatistics",
@@ -97,6 +99,47 @@ SqlExpression = NewType("SqlExpression", str)
 
 
 @dataclass(frozen=True)
+class CatalogDataVersionRelease(ArrowSerializableDataclass):
+    """One published data version of a catalog.
+
+    ``data_version_spec`` advertises a *compatibility range*; this record
+    advertises *what's actually been published*. Together they let a
+    client (the describe page, Cupola, programmatic consumers) render a
+    discoverable release timeline without scraping the worker's repo.
+
+    Contracts on the ``CatalogInfo.releases`` list this belongs to:
+
+    * **Ordering** — entries MUST appear newest-first. Unspecified order
+      would force consumers to sort by ``version`` string, which requires
+      a comparator the protocol does not define (semver vs. calver vs.
+      date-stamped vs. RC tags are all valid).
+    * **Uniqueness** — each ``version`` MUST appear at most once. Mirrors
+      the same invariant on ``attach_option_specs``'s ``name``. Consumers
+      defend against duplicates (log-and-skip later entries) since Arrow
+      cannot enforce key uniqueness at the wire level.
+
+    Long-form release notes do not live here — link to a CHANGELOG anchor,
+    GitHub release page, PR, or migration guide via ``notes_url``.
+    """
+
+    # Concrete version, not a spec. e.g. "1.0.0", "2.4.1". Semver carries
+    # the breaking-change signal directly — major bumps are breaking,
+    # minor/patch are not.
+    version: str
+
+    # Release date (UTC). ``None`` when the worker doesn't track dates.
+    released_at: Annotated[datetime | None, ArrowType(pa.timestamp("us", tz="UTC"))] = None
+
+    # One-line human summary. Empty string when unknown.
+    summary: str = ""
+
+    # Optional per-release link to detailed notes. Distinct from
+    # ``CatalogInfo.source_url`` (which points at the repo as a whole):
+    # this points at what changed in *this* release.
+    notes_url: str | None = None
+
+
+@dataclass(frozen=True)
 class CatalogInfo(ArrowSerializableDataclass):
     """Discovery record for a catalog exposed by a worker.
 
@@ -116,6 +159,13 @@ class CatalogInfo(ArrowSerializableDataclass):
     # Each AttachOptionSpec is serialized as bytes for Arrow compatibility.
     # Enables pre-attach discovery via the catalogs() RPC.
     attach_option_specs: list[bytes] = field(default_factory=list)
+    # Concrete published data versions, newest-first. Empty when the worker
+    # doesn't track release history. See ``CatalogDataVersionRelease`` for
+    # the per-entry ordering and uniqueness contracts.
+    releases: list[CatalogDataVersionRelease] = field(default_factory=list)
+    # Where this worker's code lives — repo, build, docs. ``None`` when
+    # the worker doesn't advertise a source location.
+    source_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -697,7 +747,7 @@ class ScanBranch:
         :class:`ScanFunctionResult`).
         """
         argument_values: dict[str, pa.Scalar] = {}  # type: ignore[type-arg]
-        argument_schema: list[pa.Field] = []
+        argument_schema: list[pa.Field] = []  # type: ignore[type-arg]
         for index, arg in enumerate(self.positional_arguments):
             argument_schema.append(pa.field(f"arg_{index}", arg.type))
             argument_values[f"arg_{index}"] = arg
@@ -2534,7 +2584,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                     if type_enum == SchemaObjectType.SCALAR_FUNCTION and func_info.function_type != FunctionType.SCALAR:
                         continue
                     if type_enum == SchemaObjectType.TABLE_FUNCTION and func_info.function_type not in (
-                        FunctionType.TABLE, FunctionType.TABLE_BUFFERING,
+                        FunctionType.TABLE,
+                        FunctionType.TABLE_BUFFERING,
                     ):
                         continue
                     if (
