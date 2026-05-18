@@ -26,7 +26,7 @@ import contextlib
 import dataclasses
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Annotated, Any, Protocol, get_args, get_origin
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Protocol, get_args, get_origin
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -1724,7 +1724,37 @@ class VgiProtocol(Protocol):
     ``vgi_rpc.RpcServer(VgiProtocol, worker)`` handles serialization,
     dispatching, error propagation, and stream lifecycle.
 
+    Application protocol surface version
+    ------------------------------------
+    ``protocol_version`` is the canonical semver (MAJOR.MINOR.PATCH) of the
+    method-and-schema contract this Protocol declares. The vgi-rpc framework
+    enforces an exact major+minor match (patch ignored) on every dispatched
+    request: when a client sends a mismatched version, the server raises
+    ``ProtocolVersionError`` at the dispatch boundary with a directional
+    "upgrade the client" / "upgrade the worker" message.
+
+    Bump rules:
+
+    - **Major** — any backwards-incompatible change: removing a method,
+      renaming a method/parameter, changing a parameter or return type,
+      adding a required parameter.
+    - **Minor** — additive: a new method, a new optional parameter, or a new
+      optional response column.
+    - **Patch** — worker-side bug fixes that do not touch the surface.
+
+    Because Arrow's column-count check in the C++ consumer rejects
+    return-schema drift today, even "minor" additive bumps force clients to
+    rebuild in practice. Bump major when the surface changes and you want all
+    deployed clients to refuse to talk to the new server until rebuilt.
+
+    Cross-language consumers (Rust / Go workers) read ``vgi/protocol_version.txt``
+    (generated, committed). The C++ DuckDB extension reads
+    ``VGI_PROTOCOL_VERSION`` from ``vgi/src/generated/vgi_protocol_version.hpp``
+    (also generated; sibling of ``vgi_protocol_constants.hpp`` but produced by
+    a dedicated generator so this version doesn't pollute the byte-key constants).
     """
+
+    protocol_version: ClassVar[str] = "1.0.0"
 
     def bind(self, request: BindRequest) -> BindResponse:
         """Resolve output schema and validate arguments."""

@@ -1725,7 +1725,7 @@ dev = [
 
 [[package]]
 name = "vgi-rpc"
-version = "0.16.1"
+version = "0.17.1"
 source = { directory = "/Users/rusty/Development/vgi-rpc" }
 dependencies = [
     { name = "docstring-parser" },
