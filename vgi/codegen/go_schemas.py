@@ -118,6 +118,23 @@ def _emit_type(dtype: pa.DataType, *, origin: str) -> str:
         ]
         return "arrow.StructOf(\n" + ",\n".join("\t\t" + c for c in child_exprs) + ",\n\t)"
 
+    if pa.types.is_timestamp(dtype):
+        unit_map = {
+            "s": "arrow.Second",
+            "ms": "arrow.Millisecond",
+            "us": "arrow.Microsecond",
+            "ns": "arrow.Nanosecond",
+        }
+        unit_expr = unit_map.get(dtype.unit)
+        if unit_expr is None:
+            raise GeneratorError(
+                f"timestamp at {origin} has unknown unit {dtype.unit!r}; expected one of {sorted(unit_map)}.",
+            )
+        # arrow-go has no module-level timestamp singleton; construct the type.
+        # TimeZone is the verbatim Arrow tz string ("" when naive).
+        tz = dtype.tz or ""
+        return f'&arrow.TimestampType{{Unit: {unit_expr}, TimeZone: "{tz}"}}'
+
     raise GeneratorError(
         f"vgi.codegen.go_schemas: unsupported Arrow type {type(dtype).__name__!r} at {origin} "
         f"(type={dtype!r}).\n"
