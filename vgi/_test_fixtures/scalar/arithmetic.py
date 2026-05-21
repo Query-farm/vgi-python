@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Arithmetic scalar fixtures (multiply, double, add, sum, concat)."""
 
 from __future__ import annotations

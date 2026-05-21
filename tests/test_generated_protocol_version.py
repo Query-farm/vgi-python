@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Drift test for `vgi.codegen.protocol_version`.
 
 Validates that the committed ``vgi/protocol_version.txt`` matches

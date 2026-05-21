@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Secret type descriptor for declarative worker secret type definitions.
 
 This module provides the SecretTypeSpec class for defining secret types

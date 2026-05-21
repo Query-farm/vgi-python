@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for the BufferInputFunction (collect then emit)."""
 
 import pyarrow as pa

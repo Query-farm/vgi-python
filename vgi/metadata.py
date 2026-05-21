@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Function metadata for introspection, documentation, and DuckDB registration.
 
 This module provides declarative metadata classes that enable functions to

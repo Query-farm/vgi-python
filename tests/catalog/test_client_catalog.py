@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for Client catalog methods using CatalogClientMixin.
 
 These tests verify that the unified Client class can perform catalog operations

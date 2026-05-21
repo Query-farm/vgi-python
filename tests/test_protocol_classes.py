@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Unit tests for VGI protocol classes.
 
 Tests cover Invocation, Arguments, InitResult, and table_function classes.

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Filter pushdown AST classes for table functions.
 
 This module provides:

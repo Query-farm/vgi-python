@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Core data structures for VGI function calls and bind results.
 
 This module defines the foundational classes used during function binding

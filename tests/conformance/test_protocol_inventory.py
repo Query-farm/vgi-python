@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Fail when a ``VgiProtocol`` RPC is silently added without Python coverage.
 
 ``vgi.client.Client`` is not the user-facing API — real users invoke VGI from

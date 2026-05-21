@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Setting descriptor for declarative worker settings.
 
 This module provides the Setting descriptor class for defining worker settings

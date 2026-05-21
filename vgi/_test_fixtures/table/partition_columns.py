@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Reference fixtures for the v2 PartitionColumns (Hive-style) batch_index mode.
 
 These exercise the ``Meta.partition_kind`` + ``partition_field()``

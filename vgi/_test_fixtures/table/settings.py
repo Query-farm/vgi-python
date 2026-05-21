@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Settings/secrets fixtures: settings_aware, struct_settings, secret_demo, scoped_secret_demo."""
 
 from __future__ import annotations

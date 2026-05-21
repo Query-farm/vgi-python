@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Shared helpers for spawning ``vgi-fixture-http`` as a subprocess.
 
 Lifted from ``tests/test_http_demo_storage.py`` so that conformance tests and

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 # ruff: noqa: D100, D101, D102, D103, D106
 """Tests for nest_tensor aggregate + unnest_tensor table function."""
 

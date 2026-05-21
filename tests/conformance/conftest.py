@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Conformance-suite-specific fixtures.
 
 Top-level ``tests/conftest.py`` already exposes ``client_transport``,

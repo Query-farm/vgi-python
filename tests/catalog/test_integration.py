@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Integration tests for catalog operations via full client→worker round-trip.
 
 Each test exercises the complete pipeline:

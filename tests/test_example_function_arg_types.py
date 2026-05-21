@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for example function argument type inference.
 
 These tests verify that the Arg[type] subscript syntax correctly captures

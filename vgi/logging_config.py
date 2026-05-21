@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Shared logging configuration for VGI worker CLIs.
 
 Provides enums, known-logger registry, and a configure function that

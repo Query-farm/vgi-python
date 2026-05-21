@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Setting/secret/auth-aware scalar fixtures (multiply_by_setting, return_secret_value, who_am_i)."""
 
 from __future__ import annotations

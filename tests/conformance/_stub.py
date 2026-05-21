@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Helper for conformance-area stub files.
 
 Each ``test_<area>.py`` that hasn't been fleshed out yet uses ``skip_area()``

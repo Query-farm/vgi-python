@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Conformance stub for ``vgi/test/sql/integration/scalar/``.
 
 Mirror the scalar-function sqllogictests against the Python ``Client`` probe so

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for Setting/Secret annotation support across all function types."""
 
 from __future__ import annotations

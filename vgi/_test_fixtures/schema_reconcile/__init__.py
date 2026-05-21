@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Self-contained schema-reconciliation test fixture.
 
 Exposes one writable virtual table whose declared Arrow schema is

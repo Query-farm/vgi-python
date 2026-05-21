@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """TransactorClient — connects to a db-transactor subprocess.
 
 Handles auto-spawning the transactor process if one isn't running,

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Null-handling and conditional-message scalar fixtures."""
 
 from __future__ import annotations

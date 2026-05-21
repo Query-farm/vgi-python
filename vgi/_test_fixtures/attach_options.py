@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Example worker that declares attach-time options of many types and echoes them back.
 
 This worker exists to exercise the attach-time options pipeline end-to-end:

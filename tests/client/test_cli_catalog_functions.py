@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for CLI catalog operations to list available functions.
 
 These tests verify that the CLI can list all example functions via the

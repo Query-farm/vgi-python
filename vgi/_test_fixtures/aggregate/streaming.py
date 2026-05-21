@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Streaming-partitioned aggregate fixtures.
 
 Exercise the ``streaming_partitioned`` opt-in: ``streaming_open`` /

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Fail when the example worker registers a function the Python probe can't reach.
 
 The example worker at ``vgi-fixture-worker`` registers every example function

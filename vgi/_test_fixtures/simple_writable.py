@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Minimal in-memory writable worker — no transactor, no subcursor.
 
 Skips proper transactional semantics: data is mutated in process memory and

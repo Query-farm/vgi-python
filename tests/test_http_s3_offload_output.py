@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """HTTP transport integration tests for S3 externalized output responses."""
 
 from __future__ import annotations

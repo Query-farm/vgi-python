@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Zero-boilerplate CLI for serving VGI workers.
 
 Loads any Worker by module reference and serves it — stdio by default

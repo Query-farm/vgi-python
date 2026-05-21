@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Drift + determinism tests for `vgi.codegen.cpp_constants`.
 
 Sibling of ``test_generated_cpp_schemas.py`` but narrower: validates

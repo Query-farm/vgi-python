@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Deliberately-broken PartitionColumns fixtures for v2 contract testing.
 
 Each fixture violates one specific clause of the PartitionColumns contract

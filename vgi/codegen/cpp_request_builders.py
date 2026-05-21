@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 r"""Emit RecordBatch-builders for VGI RPC request schemas as a C++ header.
 
 Companion to ``cpp_schemas`` (which emits the schema-factory header). This

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Example VGI worker that validates data_version_spec / implementation_version.
 
 Demonstrates the ATTACH-time versioning protocol end-to-end:

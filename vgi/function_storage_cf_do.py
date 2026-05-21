@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Cloudflare Durable Object storage for VGI function state.
 
 This module provides a FunctionStorage implementation backed by a Cloudflare

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """VGI reference client — canonical implementation for other-language ports.
 
 ``vgi-python`` is the authoritative VGI implementation. Real users invoke

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Partitioned-queue fixtures that opt in to ``supports_batch_index``.
 
 These exist so SQL integration tests can verify the batch_index feature:

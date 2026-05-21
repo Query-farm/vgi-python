@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for catalog dataclass serialization/deserialization."""
 
 import pyarrow as pa

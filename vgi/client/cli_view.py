@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """View CLI commands for VGI.
 
 This module provides CLI commands for view operations:

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for worker-side projection pushdown enforcement.
 
 Verifies that projection_ids are only applied when a function's metadata

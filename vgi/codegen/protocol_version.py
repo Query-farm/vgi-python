@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Emit the canonical VGI protocol_version as a one-line .txt file.
 
 Cross-language source of truth: a Rust/Go/TS worker (or anyone shipping a

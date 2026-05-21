@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Test Python code examples in documentation files.
 
 Uses pytest-examples to validate that code examples in markdown files

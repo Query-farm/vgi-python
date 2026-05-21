@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """HTTP transport integration tests for S3 upload-URL input offload."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Projection-pushdown reproducer worker.
 
 Two table functions, both declaring ``projection_pushdown = True`` and a

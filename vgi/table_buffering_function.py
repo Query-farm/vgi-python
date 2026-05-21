@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Framework for implementing table sink+source functions.
 
 ``TableBufferingFunction`` is the worker-side base for functions that must

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for Client lifecycle, edge cases, and stderr capture."""
 
 from __future__ import annotations

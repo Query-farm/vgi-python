@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 r"""Command-line interface for the VGI client.
 
 This module provides the CLI entry point for invoking VGI functions and

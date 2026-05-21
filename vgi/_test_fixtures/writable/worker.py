@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Writable worker with transactional INSERT, UPDATE, DELETE, and DDL support.
 
 This worker exposes a fully dynamic writable catalog backed by a db-transactor

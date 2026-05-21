@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Deliberately-broken batch_index fixtures for contract-enforcement testing.
 
 These fixtures violate the ``Meta.supports_batch_index = True`` contract in

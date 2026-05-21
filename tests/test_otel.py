@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for vgi.otel — VGI application-level OpenTelemetry instrumentation."""
 
 from __future__ import annotations

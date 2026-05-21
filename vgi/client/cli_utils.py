@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Shared utilities for VGI CLI commands.
 
 This module provides common utilities used across CLI command groups:

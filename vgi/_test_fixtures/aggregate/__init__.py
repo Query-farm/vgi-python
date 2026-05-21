@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Aggregate-function fixtures.
 
 Originally a single 1,179-line module; split into cohesive sub-modules and

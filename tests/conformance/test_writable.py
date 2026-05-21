@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Conformance stub for ``vgi/test/sql/integration/writable/``.
 
 Write support (INSERT/UPDATE/DELETE) RPCs are exposed on ``VgiProtocol`` but

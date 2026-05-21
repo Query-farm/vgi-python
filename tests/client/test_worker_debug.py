@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for VGI_WORKER_DEBUG env var and stderr enrichment in error messages."""
 
 from __future__ import annotations

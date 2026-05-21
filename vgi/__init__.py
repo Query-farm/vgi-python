@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """VGI (Vector Gateway Interface) - Apache Arrow-based protocol for DuckDB extensions.
 
 VGI provides a framework for connecting DuckDB to external programs via

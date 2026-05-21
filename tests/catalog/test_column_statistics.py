@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 # ruff: noqa: S101, D102
 """Tests for column statistics serialization, deserialization, and helpers."""
 

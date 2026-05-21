@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Shared machinery for `cpp_schemas` and `ts_schemas` generators.
 
 Both emitters walk the same VgiProtocol + an explicit info-type list and

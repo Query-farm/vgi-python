@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Geospatial scalar fixtures (geo_distance_*, geo_centroid_*)."""
 
 from __future__ import annotations

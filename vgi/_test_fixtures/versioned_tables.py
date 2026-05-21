@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Example VGI worker whose exposed tables vary per requested data version.
 
 Complements :mod:`vgi._test_fixtures.versioned` (which validates versions but shows

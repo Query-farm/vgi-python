@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Emit ``vgi_protocol_version.hpp`` — the C++ side's view of VgiProtocol.protocol_version.
 
 Sibling of ``vgi.codegen.cpp_constants``: that module emits byte-key constants

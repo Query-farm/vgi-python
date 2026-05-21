@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Storage for VGI function state.
 
 This module provides a storage protocol and implementation for sharing state

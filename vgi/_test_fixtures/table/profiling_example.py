@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Example function exercising the dynamic_to_string callback.
 
 ``ProfilingDemoFunction`` demonstrates the recommended persistence

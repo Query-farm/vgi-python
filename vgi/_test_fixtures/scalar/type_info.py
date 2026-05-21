@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Type-introspection scalar fixtures (type_info_*, any_mixed_*, pair_type_*)."""
 
 from __future__ import annotations

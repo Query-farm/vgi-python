@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """CatalogClientMixin for adding catalog operations to Client.
 
 This module provides a mixin class that adds catalog operation methods

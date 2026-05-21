@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Example worker with built-in functions for testing.
 
 This demonstrates how to create a worker by subclassing Worker

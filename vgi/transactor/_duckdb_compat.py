@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Type-safe shim for VGI's ``subcursor()`` extension to duckdb-python.
 
 The VGI fork of duckdb-python adds ``DuckDBPyConnection.subcursor()`` so

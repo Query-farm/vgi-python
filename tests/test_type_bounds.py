@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for Arg.validate_type_bound() and type_bound repr.
 
 Tests cover:

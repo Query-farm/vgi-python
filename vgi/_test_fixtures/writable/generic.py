@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Generic writable functions parameterized by table_name.
 
 These functions extend the base writable scan/insert/update/delete classes

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Measure VGI worker cold start time and identify bottlenecks.
 
 This script measures:

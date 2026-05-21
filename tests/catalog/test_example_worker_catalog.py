@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for ExampleWorker catalog interface.
 
 These tests verify that the ExampleWorker exposes its functions via the catalog

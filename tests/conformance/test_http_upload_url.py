@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """End-to-end test: ``Client`` transparently externalizes large input batches.
 
 When the HTTP server advertises a small ``max_request_bytes`` and input

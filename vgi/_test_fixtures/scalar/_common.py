@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Shared scalar fixture helpers (numeric type promotion)."""
 
 from __future__ import annotations

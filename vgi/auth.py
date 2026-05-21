@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Convenience re-exports of authentication types from vgi-rpc.
 
 Core types (always available):

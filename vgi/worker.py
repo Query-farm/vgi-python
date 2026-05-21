@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """VGI Worker base class for hosting user-defined functions and catalogs.
 
 A worker is a subprocess that communicates via stdin/stdout using Arrow IPC.
@@ -74,7 +76,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import replace as _dataclass_replace
 from threading import Lock
-from typing import TYPE_CHECKING, Any, cast, final, overload
+from typing import TYPE_CHECKING, Any, ClassVar, cast, final, overload
 
 import pyarrow as pa
 from vgi_rpc.rpc import AuthContext, CallContext, RpcServer, Stream, current_auth, serve_stdio
@@ -998,6 +1000,12 @@ class Worker:
     """
 
     functions: Sequence[type[Function]] = []
+    # Protocol class handed to RpcServer. Defaults to the real VgiProtocol;
+    # test fixtures override this with a VgiProtocol subclass that redeclares
+    # ``protocol_version`` to exercise the framework's version-mismatch
+    # enforcement end-to-end. vgi-rpc reads the version via ``vars(protocol)``,
+    # so the override must redeclare ``protocol_version`` on its own class body.
+    protocol_class: ClassVar[type[VgiProtocol]] = VgiProtocol  # type: ignore[type-abstract]
     catalog_interface: type[CatalogInterface] | None = None
     catalog_name: str | None = "functions"  # Set to None to disable default catalog
     catalog: Catalog | None = None
@@ -1295,7 +1303,7 @@ class Worker:
                 _maybe_init_sentry()
                 otel_config = _resolve_otel_config()
                 worker = cls(quiet=quiet, log_level=effective_level)
-                server = RpcServer(VgiProtocol, worker, server_version=_get_vgi_version())
+                server = RpcServer(cls.protocol_class, worker, server_version=_get_vgi_version())
                 if otel_config is not None:
                     from vgi_rpc.otel import instrument_server
 
@@ -4647,7 +4655,7 @@ class Worker:
         _logger.info("worker_starting")
 
         try:
-            server = RpcServer(VgiProtocol, self, server_version=_get_vgi_version())
+            server = RpcServer(self.protocol_class, self, server_version=_get_vgi_version())
             if otel_config is not None:
                 from vgi_rpc.otel import instrument_server
 

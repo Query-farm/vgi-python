@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """db-transactor — transactional database access for VGI workers.
 
 The transactor is a long-lived subprocess that owns a single DuckDB

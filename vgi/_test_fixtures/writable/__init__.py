@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Writable test-fixture worker and helpers.
 
 These fixtures depend on ``sqlglot`` (via ``vgi.transactor``) and live behind

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Demo of transaction-scoped storage (``BindParams.transaction_storage``).
 
 Backs the ``example.main.tx_cached_value(key, seed)`` function exposed by

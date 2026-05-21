@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """make_pairs_*, repeat_value_*, and constant_columns generators."""
 
 from __future__ import annotations

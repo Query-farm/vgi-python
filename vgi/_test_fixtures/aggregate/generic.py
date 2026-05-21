@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """GenericSumFunction — any-type aggregate (uses on_bind to derive output type)."""
 
 from __future__ import annotations

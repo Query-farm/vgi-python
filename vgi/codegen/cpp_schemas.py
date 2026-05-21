@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Emit Arrow schema factories for the VGI C++ DuckDB extension.
 
 See module docstring in `vgi.codegen._common` for the shared machinery.

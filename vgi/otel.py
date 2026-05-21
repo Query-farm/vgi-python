@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """VGI application-level OpenTelemetry and Sentry instrumentation.
 
 Provides ``VgiTracer`` — a thin wrapper that enriches both OTel spans and

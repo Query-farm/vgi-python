@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Shared aggregate state classes used across multiple submodules."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Windowed aggregate fixtures (window_sum, window_median, window_listagg)."""
 
 from __future__ import annotations

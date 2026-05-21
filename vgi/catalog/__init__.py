@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """VGI Catalog Interface for exposing catalogs, schemas, tables, and views.
 
 This module provides the abstract base class and data types for implementing

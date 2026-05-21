@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for in-process demo blob storage and external batch offloading."""
 
 from __future__ import annotations

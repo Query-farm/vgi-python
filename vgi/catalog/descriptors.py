@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Declarative descriptor classes for catalog definition.
 
 This module provides classes for declaratively defining catalog structure:

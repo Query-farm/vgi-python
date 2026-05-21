@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Percentile aggregate fixture (sorted-quantile demo)."""
 
 from __future__ import annotations

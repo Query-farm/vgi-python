@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 # ruff: noqa: D101, D102, D106
 """Tests for vgi.aggregate_function module."""
 

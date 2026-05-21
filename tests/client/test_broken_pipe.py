@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for worker exit handling in Client and catalog operations.
 
 These tests verify that the Client and CatalogClientMixin properly detect

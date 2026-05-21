@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Drift + determinism tests for `vgi.codegen.ts_client`.
 
 Enforces that `vgi-typescript/src/generated/vgi-client.ts` in the sibling

@@ -3,13 +3,17 @@ name = "vgi"
 version = "0.8.0"
 description = "Vector Gateway Interface - Connect DuckDB to external programs via Apache Arrow"
 readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Rusty Conover", email = "rusty@query.farm" }]
+maintainers = [{ name = "Query Farm LLC", email = "hello@query.farm" }]
+classifiers = ["License :: Other/Proprietary License"]
 requires-python = ">=3.13"
 dependencies = [
     "click",
     "pyarrow",
     "typer>=0.9",
     "platformdirs",
-    "vgi-rpc @ file:///Users/rusty/Development/vgi-rpc",
+    "vgi-rpc>=0.18.1",
     "duckdb>=1.5.0",
     "httpx>=0.24",
 ]
@@ -44,17 +48,11 @@ dev = [
 [project.scripts]
 vgi-serve = "vgi.serve:main"
 vgi-client = "vgi.client.cli:main"
-vgi-fixture-worker = "vgi._test_fixtures.worker:main"
-vgi-fixture-http = "vgi._test_fixtures.http_server:main"
-vgi-fixture-versioned-worker = "vgi._test_fixtures.versioned:main"
-vgi-fixture-versioned-tables-worker = "vgi._test_fixtures.versioned_tables:main"
-vgi-fixture-attach-options-worker = "vgi._test_fixtures.attach_options:main"
-vgi-fixture-writable-worker = "vgi._test_fixtures.writable.worker:main"
-vgi-fixture-simple-writable-worker = "vgi._test_fixtures.simple_writable:main"
 vgi-transactor = "vgi.transactor.server:main"
-
-[tool.hatch.metadata]
-allow-direct-references = true
+# The vgi-fixture-* worker commands are intentionally NOT registered here so
+# they don't ship in the public wheel / pollute end-user PATH. They are provided
+# by the dev-only sidecar distribution in packages/vgi-fixtures (see its
+# pyproject.toml), which is installed via the uv workspace for tests.
 
 [build-system]
 requires = ["hatchling"]
@@ -136,8 +134,12 @@ exclude_lines = [
 [tool.coverage.html]
 directory = "htmlcov"
 
+[tool.uv.workspace]
+members = ["packages/vgi-fixtures"]
+
 [tool.uv.sources]
 # duckdb = { path = "/Users/rusty/Development/duckdb-python/dist/duckdb-1.6.0.dev15-cp314-cp314-macosx_15_0_arm64.whl" }
+vgi-fixtures = { workspace = true }
 
 [dependency-groups]
-dev = ["lxml>=6.0.2", "pytest-timeout>=2.4.0", "ty>=0.0.8"]
+dev = ["lxml>=6.0.2", "pytest-timeout>=2.4.0", "ty>=0.0.8", "vgi-fixtures"]

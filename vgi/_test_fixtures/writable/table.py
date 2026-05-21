@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Writable table infrastructure — transactor proxy and shared helpers.
 
 Provides the ``TransactorProxy`` for connecting to the db-transactor subprocess,

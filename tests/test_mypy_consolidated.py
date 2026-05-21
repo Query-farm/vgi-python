@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Single consolidated mypy run for the project.
 
 Replaces the per-file ``--mypy`` pytest plugin invocation. The plugin

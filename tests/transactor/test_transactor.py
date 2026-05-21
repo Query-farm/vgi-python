@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for TransactorImpl — DuckDB transaction manager."""
 
 # mypy: ignore-errors

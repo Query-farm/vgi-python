@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Drift test for ``vgi.codegen.cpp_protocol_version``.
 
 Mirrors ``test_generated_cpp_constants.py`` but narrower — single string

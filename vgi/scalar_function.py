@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Scalar functions: per-row transforms with single-column output.
 
 Scalar functions are the simplest function type in VGI. They transform each

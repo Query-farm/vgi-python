@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """End-to-end tests for scalar functions via Client subprocess."""
 
 from __future__ import annotations

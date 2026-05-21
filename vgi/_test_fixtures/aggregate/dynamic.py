@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Dynamic-code aggregate fixtures (DynamicAggregate, DynamicMLAggregate)."""
 
 from __future__ import annotations

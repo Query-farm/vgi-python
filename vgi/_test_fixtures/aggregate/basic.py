@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Basic aggregate fixtures: count, sum, avg, weighted_sum."""
 
 from __future__ import annotations

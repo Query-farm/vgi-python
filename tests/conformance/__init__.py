@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Conformance tests that mirror the C++ DuckDB integration suite.
 
 These tests drive the Python ``Client`` against the example worker across every

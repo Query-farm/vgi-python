@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Static catalog scan functions (colors, departments, employees, products, projects)."""
 
 from __future__ import annotations

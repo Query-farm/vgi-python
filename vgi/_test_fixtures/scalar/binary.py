@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Binary-payload and string-cased scalar fixtures (binary_packet, upper_case)."""
 
 from __future__ import annotations

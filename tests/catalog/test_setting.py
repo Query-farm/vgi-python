@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for the Setting descriptor and extraction functions."""
 
 from typing import Annotated

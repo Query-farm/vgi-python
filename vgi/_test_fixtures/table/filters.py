@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Filter-pushdown demos (filter_echo, dynamic_filter_echo, expression_filter, spatial_filter)."""
 
 from __future__ import annotations

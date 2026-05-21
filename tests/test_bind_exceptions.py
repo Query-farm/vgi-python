@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for bind-time exception handling.
 
 These tests verify that exceptions raised during the bind phase

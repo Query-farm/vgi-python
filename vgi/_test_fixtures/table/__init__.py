@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Table-function fixtures.
 
 Originally a single 3,270-line module; split into cohesive sub-modules and

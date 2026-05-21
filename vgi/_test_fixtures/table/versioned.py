@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Versioned data fixtures (versioned_data, versioned_constraints) used by time-travel tests."""
 
 from __future__ import annotations

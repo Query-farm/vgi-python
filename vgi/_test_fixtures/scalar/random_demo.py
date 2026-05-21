@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Random/seeded scalar fixtures (random_int, random_bytes, bernoulli, hash_seed)."""
 
 from __future__ import annotations

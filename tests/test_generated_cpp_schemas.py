@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Drift + determinism tests for `vgi.codegen.cpp_schemas`.
 
 These tests enforce that `vgi/src/generated/vgi_protocol_schemas.hpp` in the

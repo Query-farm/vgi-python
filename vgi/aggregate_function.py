@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Framework for implementing aggregate functions.
 
 AggregateFunction provides a batch-oriented API for DuckDB aggregate functions

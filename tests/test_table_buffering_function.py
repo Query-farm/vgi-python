@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Unit tests for ``vgi.table_buffering_function``.
 
 Currently focused on the ``__init_subclass__`` machinery — specifically

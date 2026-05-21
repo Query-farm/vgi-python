@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Worker description page for VGI HTTP servers.
 
 Generates a pre-rendered HTML page showing worker metadata:

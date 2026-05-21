@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Emit protocol byte-constants for the VGI C++ DuckDB extension.
 
 Companion to ``vgi.codegen.cpp_schemas``. Where that module emits the

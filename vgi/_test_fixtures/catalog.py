@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """In-memory catalog implementation for testing and examples.
 
 This module provides an in-memory implementation of CatalogInterface that can

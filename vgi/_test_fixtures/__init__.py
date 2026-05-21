@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Example implementations for VGI.
 
 This package contains example functions and servers for testing and reference.

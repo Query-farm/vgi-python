@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Conformance test: scalar function on_bind() sees attach_opaque_data and transaction_opaque_data.
 
 When a scalar function is invoked through an ATTACHed catalog, the C++

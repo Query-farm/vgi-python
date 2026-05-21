@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Emit facade-style Schema literals for the VGI TypeScript worker.
 
 Sister module to `vgi.codegen.cpp_schemas`. Same inputs (Protocol walk +

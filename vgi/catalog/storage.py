@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Storage for VGI catalog state.
 
 This module provides a storage protocol and implementation for persisting

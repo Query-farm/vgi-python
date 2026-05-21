@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Base classes for table functions with cardinality hints and callback-based processing.
 
 TableFunctionGenerator produces output batches via a per-tick callback. Each call

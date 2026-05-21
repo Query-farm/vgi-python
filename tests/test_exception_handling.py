@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for improved exception handling in VGI.
 
 This module tests that exceptions are properly propagated from workers to clients

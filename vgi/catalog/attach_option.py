@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """AttachOption descriptor for declarative worker attach-time options.
 
 This module provides the AttachOption descriptor class for declaring options

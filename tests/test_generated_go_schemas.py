@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Drift + determinism tests for `vgi.codegen.go_schemas`.
 
 Enforces that `vgi-go/vgi/generated/protocol_schemas.go` in the sibling

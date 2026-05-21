@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """End-to-end test: ``Client`` transparently resolves pointer batches.
 
 When an HTTP worker externalizes large output batches (via the demo blob

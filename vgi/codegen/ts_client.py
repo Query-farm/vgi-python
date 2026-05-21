@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 r"""Emit a typed TS client surface (interfaces + enums) for vgi-typescript.
 
 Sister module to `vgi.codegen.ts_schemas`. Walks the VgiProtocol and emits

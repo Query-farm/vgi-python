@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Code generation utilities for cross-language VGI clients.
 
 The `cpp_schemas` module emits Arrow schema factories for the C++ VGI DuckDB

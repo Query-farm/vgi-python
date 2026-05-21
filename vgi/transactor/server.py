@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """db-transactor server — multi-database DuckDB transaction manager.
 
 Runs as a long-lived subprocess, accepting ``vgi_rpc`` connections over a

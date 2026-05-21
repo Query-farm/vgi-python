@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """End-to-end access log conformance test over HTTP transport.
 
 Starts the example HTTP server with --log-format json, exercises every function

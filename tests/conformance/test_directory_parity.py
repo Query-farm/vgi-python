@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Guard against silent drift from the C++ integration suite.
 
 Every subdirectory of ``vgi/test/sql/integration/`` represents a feature area

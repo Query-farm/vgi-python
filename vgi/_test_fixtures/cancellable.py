@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 # ruff: noqa: D102, D106
 """Instrumented fixture functions for the `on_cancel` contract.
 

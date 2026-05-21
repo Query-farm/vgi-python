@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Reproducer for the projection-pushdown bug seen in vgi-kafka.
 
 Symptom (from vgi-kafka kafka_consume + DuckDB ``SELECT count(*) FROM

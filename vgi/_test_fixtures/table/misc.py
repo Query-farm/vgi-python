@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Misc fixtures: GeneratorException, LoggingGenerator, ProjectedData, OrderEcho, SampleEcho."""
 
 from __future__ import annotations

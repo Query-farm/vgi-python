@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Schema building utilities for VGI functions.
 
 This module provides helpers for creating and modifying Arrow schemas with

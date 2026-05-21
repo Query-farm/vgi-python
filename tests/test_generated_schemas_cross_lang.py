@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Cross-language conformance for the generated protocol schemas.
 
 The three per-language drift tests (``test_generated_cpp_schemas.py``,

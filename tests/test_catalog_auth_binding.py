@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for AEAD identity-binding of catalog opaque-data envelopes.
 
 ``attach_opaque_data`` and ``transaction_opaque_data`` are implementation-chosen

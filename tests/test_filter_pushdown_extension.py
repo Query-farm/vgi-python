@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Filter-pushdown evaluation against canonical Arrow extension types.
 
 Regression test for the issue where DuckDB's VGI extension serialises

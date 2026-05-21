@@ -10,6 +10,12 @@ resolution-markers = [
     "python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
+[manifest]
+members = [
+    "vgi",
+    "vgi-fixtures",
+]
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.6.1"
@@ -1682,6 +1688,7 @@ dev = [
     { name = "lxml" },
     { name = "pytest-timeout" },
     { name = "ty" },
+    { name = "vgi-fixtures" },
 ]
 
 [package.metadata]
@@ -1707,7 +1714,7 @@ requires-dist = [
     { name = "vgi", extras = ["test-fixtures"], marker = "extra == 'test-fixtures-writable'" },
     { name = "vgi", extras = ["test-fixtures", "test-fixtures-writable", "http", "oauth", "otel", "sentry", "azure"], marker = "extra == 'dev'" },
     { name = "vgi", extras = ["transactor"], marker = "extra == 'test-fixtures-writable'" },
-    { name = "vgi-rpc", directory = "/Users/rusty/Development/vgi-rpc" },
+    { name = "vgi-rpc", specifier = ">=0.18.1" },
     { name = "vgi-rpc", extras = ["conformance", "external", "http", "oauth", "otel", "sentry"], marker = "extra == 'dev'" },
     { name = "vgi-rpc", extras = ["http"], marker = "extra == 'http'" },
     { name = "vgi-rpc", extras = ["oauth"], marker = "extra == 'oauth'" },
@@ -1721,16 +1728,32 @@ dev = [
     { name = "lxml", specifier = ">=6.0.2" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "ty", specifier = ">=0.0.8" },
+    { name = "vgi-fixtures", editable = "packages/vgi-fixtures" },
 ]
 
 [[package]]
+name = "vgi-fixtures"
+version = "0.8.0"
+source = { editable = "packages/vgi-fixtures" }
+dependencies = [
+    { name = "vgi" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "vgi", editable = "." }]
+
+[[package]]
 name = "vgi-rpc"
-version = "0.17.1"
-source = { directory = "/Users/rusty/Development/vgi-rpc" }
+version = "0.18.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "docstring-parser" },
     { name = "pyarrow" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/96/0a/4547e68db1c9664dbae9e59fe37513180683434a098a03ead549b5d26425/vgi_rpc-0.18.1.tar.gz", hash = "sha256:9a916fe349d7826a39bd2a2b1213c33efd4706e64f2ddef79d940b47786d8730", size = 812336, upload-time = "2026-05-21T18:35:09.338Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/40/1b9948cf30e2fb52997b5996d8c79b0210ea08f2d52ecf10c1dcbe3bc452/vgi_rpc-0.18.1-py3-none-any.whl", hash = "sha256:eb8ce58e341993038631b40ae569559e09c66255c1072c1bb836934c168fe0c1", size = 362652, upload-time = "2026-05-21T18:35:07.798Z" },
 ]
 
 [package.optional-dependencies]
@@ -1758,76 +1781,6 @@ otel = [
 ]
 sentry = [
     { name = "sentry-sdk" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", marker = "extra == 'external'", specifier = ">=3.9" },
-    { name = "boto3", marker = "extra == 's3'", specifier = ">=1.28" },
-    { name = "cryptography", marker = "extra == 'mtls'", specifier = ">=41.0" },
-    { name = "docstring-parser", specifier = ">=0.16" },
-    { name = "falcon", marker = "extra == 'http'", specifier = ">=3.0" },
-    { name = "filelock", marker = "extra == 'cli'", specifier = ">=3.13" },
-    { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=2.10" },
-    { name = "httpx", marker = "extra == 'cli'", specifier = ">=0.24" },
-    { name = "httpx", marker = "extra == 'http'", specifier = ">=0.24" },
-    { name = "joserfc", marker = "extra == 'oauth'", specifier = ">=1.0" },
-    { name = "jsonschema", marker = "extra == 'conformance'", specifier = ">=4.0" },
-    { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.20" },
-    { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20" },
-    { name = "pyarrow", specifier = ">=14.0" },
-    { name = "pynacl", marker = "extra == 'http'", specifier = ">=1.5" },
-    { name = "sentry-sdk", marker = "extra == 'sentry'", specifier = ">=2.0" },
-    { name = "tenacity", marker = "extra == 'external'", specifier = ">=8.0" },
-    { name = "typer", marker = "extra == 'cli'", specifier = ">=0.9" },
-    { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2024.1" },
-    { name = "waitress", marker = "extra == 'http'", specifier = ">=2.0" },
-    { name = "zstandard", marker = "extra == 'external'", specifier = ">=0.20" },
-    { name = "zstandard", marker = "extra == 'http'", specifier = ">=0.20" },
-]
-provides-extras = ["http", "s3", "gcs", "cli", "external", "otel", "oauth", "mtls", "sentry", "conformance"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "aioresponses", specifier = ">=0.7" },
-    { name = "boto3", specifier = ">=1.28" },
-    { name = "cryptography", specifier = ">=41.0" },
-    { name = "falcon", specifier = ">=3.0" },
-    { name = "filelock", specifier = ">=3.13" },
-    { name = "google-cloud-storage", specifier = ">=2.10" },
-    { name = "httpx", specifier = ">=0.24" },
-    { name = "joserfc", specifier = ">=1.0" },
-    { name = "jsonschema", specifier = ">=4.0" },
-    { name = "lxml", specifier = ">=6.0.2" },
-    { name = "moto", extras = ["s3"], specifier = ">=4.0" },
-    { name = "mutmut", specifier = ">=3.4.0" },
-    { name = "mypy", specifier = ">=1.0" },
-    { name = "opentelemetry-api", specifier = ">=1.20" },
-    { name = "opentelemetry-sdk", specifier = ">=1.20" },
-    { name = "pyarrow-stubs", specifier = ">=17.0" },
-    { name = "pynacl", specifier = ">=1.5" },
-    { name = "pytest", specifier = ">=7.0" },
-    { name = "pytest-benchmark", specifier = ">=4.0" },
-    { name = "pytest-cov", specifier = ">=4.0" },
-    { name = "pytest-examples", specifier = ">=0.0.10" },
-    { name = "pytest-mypy", specifier = ">=0.10" },
-    { name = "pytest-ruff", specifier = ">=0.1" },
-    { name = "pytest-timeout", specifier = ">=2.4.0" },
-    { name = "ruff", specifier = ">=0.1" },
-    { name = "sentry-sdk", specifier = ">=2.0" },
-    { name = "ty", specifier = ">=0.0.8" },
-    { name = "typer", specifier = ">=0.9" },
-    { name = "types-jsonschema", specifier = ">=4.0" },
-    { name = "waitress", specifier = ">=2.0" },
-]
-docs = [
-    { name = "mkdocs", specifier = ">=1.6" },
-    { name = "mkdocs-d2-plugin", specifier = ">=1.4" },
-    { name = "mkdocs-material", specifier = ">=9.5" },
-    { name = "mkdocs-section-index", specifier = ">=0.3" },
-    { name = "mkdocstrings", extras = ["python"], specifier = ">=0.27" },
-    { name = "pygments", specifier = ">=2.20" },
-    { name = "pymdown-extensions", specifier = ">=10.21.2" },
 ]
 
 [[package]]

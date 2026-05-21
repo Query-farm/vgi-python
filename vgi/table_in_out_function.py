@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Framework for implementing streaming table-in-table-out functions.
 
 TableInOutGenerator processes input batches via a per-batch callback.

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Response types for the VGI protocol.
 
 This module defines response dataclasses and the FunctionType enum:

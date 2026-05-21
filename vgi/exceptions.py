@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Exception classes for VGI.
 
 This module defines custom exceptions used throughout the VGI framework.

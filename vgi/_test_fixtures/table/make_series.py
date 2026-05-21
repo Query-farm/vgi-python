@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """make_series_* generators (count/range/step/csv/float)."""
 
 from __future__ import annotations

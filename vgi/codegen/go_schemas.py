@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Emit arrow-go Schema factories for the VGI Go worker.
 
 Sister module to `vgi.codegen.cpp_schemas` and `vgi.codegen.ts_schemas`.

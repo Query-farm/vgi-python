@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """HTTP utilities for VGI workers.
 
 Provides the worker description page and demo blob storage for HTTP-mode workers.

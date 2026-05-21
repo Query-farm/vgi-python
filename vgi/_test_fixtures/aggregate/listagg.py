@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """ListAgg aggregate fixture (order-dependent string concatenation)."""
 
 from __future__ import annotations

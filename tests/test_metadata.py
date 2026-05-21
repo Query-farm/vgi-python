@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for vgi.metadata module and integration with Function classes."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """End-to-end tests that prove ``Client.from_http`` works against the example worker.
 
 These are the canonical smoke tests for non-DuckDB use — a TypeScript port

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Example table-in/table-out function implementations for testing VGI.
 
 WARNING: EXAMPLE/TEST FUNCTIONS ONLY

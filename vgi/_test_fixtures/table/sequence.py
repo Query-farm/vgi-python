@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Sequence-style table generators (sequence, double_sequence, partitioned_sequence, etc.)."""
 
 from __future__ import annotations

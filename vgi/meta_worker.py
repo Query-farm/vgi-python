@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """MetaWorker — composes multiple Worker instances in a single process.
 
 Each Worker manages its own catalog interface. The MetaWorker dispatches

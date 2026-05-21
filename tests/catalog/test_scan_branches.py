@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Multi-branch scan protocol tests.
 
 Covers ``ScanBranch`` / ``ScanBranchesResult`` dataclasses and the

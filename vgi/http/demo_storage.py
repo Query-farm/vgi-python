@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """In-process blob storage for demonstrating and testing external batch offloading.
 
 Provides a simple HTTP blob store that implements the ``ExternalStorage`` and

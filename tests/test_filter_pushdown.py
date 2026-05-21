@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Unit tests for table_filter_pushdown.py convenience APIs and edge cases."""
 
 from __future__ import annotations

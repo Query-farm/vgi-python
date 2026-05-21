@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """VGI protocol definition for vgi_rpc server integration.
 
 Defines the VgiProtocol, consolidated request types (BindRequest, InitRequest),

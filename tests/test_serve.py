@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for the vgi-serve CLI and programmatic API."""
 
 from __future__ import annotations

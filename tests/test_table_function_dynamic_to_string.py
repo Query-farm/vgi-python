@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Tests for Worker.table_function_dynamic_to_string()."""
 
 from __future__ import annotations

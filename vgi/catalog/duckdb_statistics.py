@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Extract column statistics from DuckDB tables.
 
 Provides a helper to query a DuckDB connection and produce

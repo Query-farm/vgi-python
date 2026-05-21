@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Live integration tests for FunctionStorageCfDo against a running DO.
 
 These tests require a real Cloudflare Worker + Durable Object to be running.

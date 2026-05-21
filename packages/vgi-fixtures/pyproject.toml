@@ -1,0 +1,34 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+#
+# Dev-only sidecar distribution. This package ships NO modules of its own — it
+# exists solely to register the vgi-fixture-* console commands that the test and
+# integration suites invoke. The fixture *modules* live in the main package at
+# vgi/_test_fixtures/; keeping the entry points here keeps them out of the public
+# `vgi` wheel and off end-user PATH. Installed via the uv workspace for dev/CI.
+[project]
+name = "vgi-fixtures"
+version = "0.8.0"
+description = "Development-only VGI test/demo worker entry points (not for production use)"
+requires-python = ">=3.13"
+dependencies = ["vgi"]
+
+[project.scripts]
+vgi-fixture-worker = "vgi._test_fixtures.worker:main"
+vgi-fixture-http = "vgi._test_fixtures.http_server:main"
+vgi-fixture-versioned-worker = "vgi._test_fixtures.versioned:main"
+vgi-fixture-versioned-tables-worker = "vgi._test_fixtures.versioned_tables:main"
+vgi-fixture-attach-options-worker = "vgi._test_fixtures.attach_options:main"
+vgi-fixture-bad-protocol-worker = "vgi._test_fixtures.bad_protocol:main"
+vgi-fixture-writable-worker = "vgi._test_fixtures.writable.worker:main"
+vgi-fixture-simple-writable-worker = "vgi._test_fixtures.simple_writable:main"
+
+[tool.uv.sources]
+vgi = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# This distribution intentionally contains no Python modules.
+bypass-selection = true

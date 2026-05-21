@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Multi-worker partitioned sequence fixtures, one per ``OrderPreservation`` mode.
 
 These three fixtures are clones of :class:`PartitionedSequenceFunction` (see

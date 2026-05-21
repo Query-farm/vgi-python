@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """SumAllFunction — varargs aggregate (sums any number of numeric columns)."""
 
 from __future__ import annotations

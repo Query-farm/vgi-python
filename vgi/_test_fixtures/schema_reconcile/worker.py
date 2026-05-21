@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Schema-reconcile fixture worker.
 
 Hosted inside the consolidated ``vgi-fixture-worker`` (entry point in

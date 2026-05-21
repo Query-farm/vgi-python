@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Arrow-based serialization of function argument specifications.
 
 This module provides classes and functions for serializing function argument

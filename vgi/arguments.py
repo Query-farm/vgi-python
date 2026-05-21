@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Argument parsing and validation for VGI functions.
 
 This module provides classes for handling function arguments in VGI:

@@ -1,3 +1,5 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 """Shared infrastructure for table fixture functions.
 
 Holds the cardinality decorator, the common ``CountdownState``, the
