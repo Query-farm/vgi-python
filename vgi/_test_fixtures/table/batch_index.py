@@ -102,6 +102,12 @@ class PartitionedBatchIndexFunction(TableFunctionGenerator[_BatchIndexArgs, _Bat
     threads.
     """
 
+    # NOTE: left at the original small chunk on purpose. This fixture exercises
+    # the FIXED_ORDER batch-index ordered-sink reassembly path — the same path
+    # implicated in the pre-existing HTTP-transport segfaults. Capping the
+    # partition count (as partitioned_sequence / filter_echo_partitioned now do
+    # to cut remote round-trips) made batch_index.test segfault (exit 139)
+    # locally, so resizing it is deferred until that crash is understood.
     CHUNK_SIZE: ClassVar[int] = 1000
     BATCH_SIZE: ClassVar[int] = 1000
 

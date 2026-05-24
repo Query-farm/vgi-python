@@ -7,6 +7,7 @@ catalog interfaces in VGI workers, enabling DuckDB ATTACH support.
 """
 
 import dataclasses
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -2040,15 +2041,37 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     _function_registry: "dict[tuple[str, str], list[type]] | None" = None
     _macro_registry: "dict[tuple[str, str], Macro] | None" = None
     _index_registry: "dict[tuple[str, str], Index] | None" = None
+    # Lazy registry build is one-time but the fixture HTTP server is
+    # multi-threaded and shares one catalog instance, so concurrent
+    # first-requests can race the build. Serialize it under a lock and flip
+    # ``_registries_built`` only AFTER population so readers never observe a
+    # half-built (mutating) registry. (Shared across instances — fine; the
+    # build is one-time and infrequent.)
+    _build_lock = threading.Lock()
+    _registries_built: bool = False
 
     def _build_registries(self) -> None:
-        """Build lookup dicts from Catalog or legacy patterns.
+        """Build the lookup registries lazily, once, and thread-safely.
+
+        Double-checked locking: the fast path is a lock-free flag read; the
+        actual build runs under ``_build_lock`` and sets ``_registries_built``
+        only after population completes. A concurrent reader either builds
+        (under the lock) or waits for the builder, so it never iterates a
+        registry that another thread is still mutating.
+        """
+        if self._registries_built:
+            return
+        with self._build_lock:
+            if self._registries_built:
+                return
+            self._build_registries_locked()
+
+    def _build_registries_locked(self) -> None:
+        """Populate the registries. Caller must hold ``_build_lock``.
 
         All registry keys are lowercase for case-insensitive lookups.
         Raises ValueError if duplicate names detected within same schema.
         """
-        if self._schema_registry is not None:
-            return
 
         # Import here to avoid circular imports
         from vgi.catalog.descriptors import Schema
@@ -2114,6 +2137,11 @@ class ReadOnlyCatalogInterface(CatalogInterface):
 
             for func_cls in self.functions:
                 _register_function("main", func_cls)
+
+        # Publish last: only now may a concurrent reader skip the build and
+        # iterate these registries (they are fully populated and no longer
+        # mutated).
+        self._registries_built = True
 
     @property
     def _effective_catalog_name(self) -> str:

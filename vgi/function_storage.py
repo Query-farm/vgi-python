@@ -18,19 +18,56 @@ Implementations:
 """
 
 import enum
+import functools
 import hashlib
 import logging
 import os
 import sqlite3
 import threading
-from typing import Any, Protocol
+import time
+from collections.abc import Callable, Iterable
+from typing import Any, Protocol, TypeVar
 
 import pyarrow as pa
+
+from vgi._storage_profile import _PROFILE_ON, _profiler, io_call_bytes
 
 # When the parent vgi.* logger is configured at DEBUG, this emits one line
 # per BoundStorage construction with the resolved shard_key — handy for
 # cross-referencing storage-routing bugs with MetaWorker dispatch logs.
 _shard_logger = logging.getLogger("vgi.storage.shard")
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _profiled(op: str) -> Callable[[_F], _F]:
+    """Record a ``BoundStorage`` op to the shared per-shard profiler.
+
+    No-op (returns the method unchanged, zero overhead) unless
+    ``VGI_STORAGE_PROFILE=1``. Backends that already self-profile at their
+    transport layer (cloudflare-do, ``_profiles_at_transport=True``) are
+    skipped so the two layers never double-count. Records
+    ``(shard_key, op, elapsed, resp_bytes)`` — keyed per shard, i.e. per test.
+    """
+
+    def deco(fn: _F) -> _F:
+        if not _PROFILE_ON:
+            return fn
+
+        @functools.wraps(fn)
+        def wrapper(self: "BoundStorage", *args: Any, **kwargs: Any) -> Any:
+            if getattr(self._base, "_profiles_at_transport", False):
+                return fn(self, *args, **kwargs)
+            t0 = time.monotonic()
+            result = fn(self, *args, **kwargs)
+            _profiler.record(
+                self._shard_key, op, time.monotonic() - t0, io_call_bytes(args, kwargs, result)
+            )
+            return result
+
+        return wrapper  # type: ignore[return-value]
+
+    return deco
 
 __all__ = [
     "FrameworkNS",
@@ -88,6 +125,26 @@ def _coerce_ns(ns: "bytes | FrameworkNS") -> bytes:
     return ns_bytes
 
 
+# Structural (key-free) check that an attach_opaque_data is a sealed AEAD
+# envelope. vgi_rpc.crypto.seal_bytes emits `version(1) || nonce(24) || ct+tag`,
+# so the first byte is the envelope version and the minimum length is fixed.
+# Mirrors worker._ATTACH_ENVELOPE_VERSION and crypto._MIN_TOKEN_LEN.
+_SEALED_ATTACH_VERSION = 1
+_SEALED_ATTACH_MIN_LEN = 1 + 24 + 16  # version + xchacha20 nonce + poly1305 tag
+# Strict mode (opt-in via VGI_REQUIRE_SEALED_ATTACH=1): when attaches are sealed,
+# every attach_opaque_data reaching storage MUST be a sealed envelope. A
+# plaintext value (an unwrapped attach, or a fixed catalog id like
+# b"readonly-catalog-") means a code path forgot the sealed form — which would
+# silently split one logical attach across Durable Objects on cloudflare-do.
+# Fail loudly here so the stack trace names the offending storage call site.
+_REQUIRE_SEALED_ATTACH = os.environ.get("VGI_REQUIRE_SEALED_ATTACH") == "1"
+
+
+def _attach_looks_sealed(value: bytes) -> bool:
+    """True if ``value`` is structurally a sealed attach envelope (no key needed)."""
+    return len(value) >= _SEALED_ATTACH_MIN_LEN and value[0] == _SEALED_ATTACH_VERSION
+
+
 def _derive_shard_key(*, attach_opaque_data: bytes | None, auth: Any, _origin: str = "?") -> str:
     """Return the routing key for the ``FunctionStorageCfDo`` Durable Object.
 
@@ -115,6 +172,15 @@ def _derive_shard_key(*, attach_opaque_data: bytes | None, auth: Any, _origin: s
     storage-routing bugs with MetaWorker dispatch logs.
     """
     if attach_opaque_data is not None:
+        if _REQUIRE_SEALED_ATTACH and not _attach_looks_sealed(attach_opaque_data):
+            raise ValueError(
+                f"unsealed attach_opaque_data reached storage sharding "
+                f"(origin={_origin!r}, {len(attach_opaque_data)} bytes, "
+                f"prefix={attach_opaque_data[:24].hex()!r}): expected a sealed "
+                f"AEAD envelope. A code path passed the plaintext/unwrapped "
+                f"attach instead of the sealed form — sharding on it would split "
+                f"this attach across Durable Objects (VGI_REQUIRE_SEALED_ATTACH=1)."
+            )
         key = "att-" + attach_opaque_data.hex()
     elif auth is not None and getattr(auth, "authenticated", False):
         domain = getattr(auth, "domain", "")
@@ -341,12 +407,15 @@ class FunctionStorage(Protocol):
         ns: bytes,
         *,
         shard_key: str = "",
-    ) -> list[tuple[bytes, bytes]]:
+    ) -> Iterable[tuple[bytes, bytes]]:
         """Non-destructive scan of every ``(key, value)`` in one namespace.
 
-        Order is implementation-defined. Use when you need to enumerate
-        an unknown key set (e.g. drainer-side discovery of which sink
-        threads produced state).
+        Returns an iterable of ``(key, value)`` ordered by key. Large result
+        sets may be streamed in pages by the backend (the ``cloudflare-do``
+        backend pages under the hood), so callers should iterate rather than
+        assume a materialized list. Use when you need to enumerate an unknown
+        key set (e.g. drainer-side discovery of which sink threads produced
+        state).
         """
         ...
 
@@ -356,12 +425,15 @@ class FunctionStorage(Protocol):
         ns: bytes,
         *,
         shard_key: str = "",
-    ) -> list[tuple[bytes, bytes]]:
+    ) -> Iterable[tuple[bytes, bytes]]:
         """Atomically scan-and-delete every ``(key, value)`` in one namespace.
 
-        Tombstones the rows internally for replay-detection: a retried call
-        with the same internal ``attempt_id`` returns the same drained
-        values without re-deleting. Replaces today's ``worker_collect``.
+        Returns an iterable of ``(key, value)`` ordered by key. Tombstones the
+        rows internally for replay-detection: a retried call with the same
+        internal ``attempt_id`` returns the same drained values without
+        re-deleting. The ``cloudflare-do`` backend streams the result in pages
+        but the drain is atomic — beginning to iterate claims the whole
+        namespace, so always consume the iterable fully.
         """
         ...
 
@@ -578,6 +650,7 @@ class BoundStorage:
             shard_key=self._shard_key,
         )
 
+    @_profiled("queue_push")
     def queue_push(self, items: list[bytes]) -> int:
         """Add work items to the queue and register the invocation."""
         return self._base.queue_push(
@@ -590,6 +663,7 @@ class BoundStorage:
         """Serialize and push RecordBatches as work items."""
         return self.queue_push([self.serialize_record_batch(b) for b in batches])
 
+    @_profiled("queue_pop")
     def queue_pop(self) -> bytes | None:
         """Atomically claim one work item from the queue."""
         return self._base.queue_pop(
@@ -604,6 +678,7 @@ class BoundStorage:
             return None
         return self.deserialize_record_batch(data)
 
+    @_profiled("queue_clear")
     def queue_clear(self) -> int:
         """Clear all remaining work items and unregister the invocation."""
         return self._base.queue_clear(
@@ -620,6 +695,7 @@ class BoundStorage:
     # for transaction-scoped state, use BoundStorage.transaction() to get
     # a separate facade bound to ``transaction_opaque_data``.
 
+    @_profiled("state_get")
     def state_get(self, ns: "bytes | FrameworkNS", key: bytes) -> bytes | None:
         """Read one key's value (or None)."""
         result = self._base.state_get_many(
@@ -627,48 +703,63 @@ class BoundStorage:
         )
         return result[0]
 
+    @_profiled("state_get_many")
     def state_get_many(self, ns: "bytes | FrameworkNS", keys: list[bytes]) -> list[bytes | None]:
         """Batched non-destructive read."""
         return self._base.state_get_many(
             self._execution_id, _coerce_ns(ns), keys, shard_key=self._shard_key
         )
 
+    @_profiled("state_put")
     def state_put(self, ns: "bytes | FrameworkNS", key: bytes, value: bytes) -> None:
         """Upsert one (key, value)."""
         self._base.state_put_many(
             self._execution_id, _coerce_ns(ns), [(key, value)], shard_key=self._shard_key
         )
 
+    @_profiled("state_put_many")
     def state_put_many(self, ns: "bytes | FrameworkNS", items: list[tuple[bytes, bytes]]) -> None:
         """Batched atomic upsert."""
         self._base.state_put_many(
             self._execution_id, _coerce_ns(ns), items, shard_key=self._shard_key
         )
 
-    def state_scan(self, ns: "bytes | FrameworkNS") -> list[tuple[bytes, bytes]]:
-        """Non-destructive scan of every (key, value) in one namespace."""
+    @_profiled("state_scan")
+    def state_scan(self, ns: "bytes | FrameworkNS") -> Iterable[tuple[bytes, bytes]]:
+        """Non-destructive scan of every (key, value) in one namespace.
+
+        Returns an iterable (the cloudflare-do backend streams it in pages).
+        """
         return self._base.state_scan(
             self._execution_id, _coerce_ns(ns), shard_key=self._shard_key
         )
 
-    def state_drain(self, ns: "bytes | FrameworkNS") -> list[tuple[bytes, bytes]]:
-        """Atomic scan-and-delete of every (key, value) in one namespace."""
+    @_profiled("state_drain")
+    def state_drain(self, ns: "bytes | FrameworkNS") -> Iterable[tuple[bytes, bytes]]:
+        """Atomic scan-and-delete of every (key, value) in one namespace.
+
+        Returns an iterable; consume it fully (beginning to iterate claims the
+        whole namespace on the cloudflare-do backend).
+        """
         return self._base.state_drain(
             self._execution_id, _coerce_ns(ns), shard_key=self._shard_key
         )
 
+    @_profiled("state_delete")
     def state_delete(self, ns: "bytes | FrameworkNS", keys: list[bytes] | None = None) -> int:
         """Delete by key list, or wipe entire namespace if keys is None."""
         return self._base.state_delete(
             self._execution_id, _coerce_ns(ns), keys, shard_key=self._shard_key
         )
 
+    @_profiled("execution_clear")
     def execution_clear(self) -> int:
         """Wipe ALL state and log rows for this execution across every namespace."""
         return self._base.execution_clear(
             self._execution_id, shard_key=self._shard_key
         )
 
+    @_profiled("state_append")
     def state_append(self, ns: "bytes | FrameworkNS", key: bytes, item: bytes) -> int:
         """Append an item to the (ns, key) log; return the assigned ordinal.
 
@@ -682,6 +773,7 @@ class BoundStorage:
             self._execution_id, _coerce_ns(ns), key, item, shard_key=self._shard_key
         )
 
+    @_profiled("state_log_scan")
     def state_log_scan(
         self,
         ns: "bytes | FrameworkNS",
@@ -1273,3 +1365,95 @@ class FunctionStorageSqlite:
             total += int(cursor.rowcount)
         conn.commit()
         return total
+
+
+class ShardedSqliteStorage:
+    """Debug-only SQLite backend that PARTITIONS storage by ``shard_key``.
+
+    The normal SQLite backend ignores ``shard_key`` (one shared DB), masking
+    shard-routing bugs that only bite ``cloudflare-do`` (which truly shards per
+    Durable Object). This wrapper isolates shards by PREFIXING the scope_id /
+    execution_id with the shard_key, so an op under shard A can't see state
+    written under shard B — reproducing cloudflare-do isolation locally — while
+    using ONE inner store, so concurrency behaves exactly like the normal sqlite
+    backend. (Per-shard databases instead exploded connections and deadlocked
+    the shared-cache :memory: DB under load.) Enabled via ``VGI_SQLITE_SHARD=1``
+    (see ``vgi/function.py:_resolve_storage``). Not for production.
+
+    With ``VGI_SQLITE_SHARD_LOG=1`` it logs every op's (op, shard_key, scope) so
+    a write and a read for one execution can be compared without a remote tail.
+    """
+
+    _SEP = b"\x1f"  # unit separator — absent from attach/execution id bytes
+
+    def __init__(self, db_path: str | None = None) -> None:
+        self._inner = FunctionStorageSqlite(db_path=db_path or ":memory:")
+        self._log = logging.getLogger("vgi.storage.sqlite_shard")
+        self._dbg_on = os.environ.get("VGI_SQLITE_SHARD_LOG") == "1"
+
+    def _p(self, shard_key: str, id_bytes: bytes) -> bytes:
+        """Namespace an execution_id / scope_id by shard_key (transparent to the
+        worker — only the sqlite row key changes, never returned data)."""
+        return shard_key.encode("utf-8") + self._SEP + id_bytes
+
+    def _dbg(self, op: str, shard_key: str, scope: bytes) -> None:
+        if self._dbg_on:
+            self._log.warning("op=%s shard=%s scope=%s", op, shard_key, scope.hex()[:16])
+
+    # --- Work Queue ---
+    def queue_push(self, execution_id: bytes, items: list[bytes], *, shard_key: str = "") -> int:
+        self._dbg("queue_push", shard_key, execution_id)
+        return self._inner.queue_push(self._p(shard_key, execution_id), items)
+
+    def queue_pop(self, execution_id: bytes, *, shard_key: str = "") -> bytes | None:
+        self._dbg("queue_pop", shard_key, execution_id)
+        return self._inner.queue_pop(self._p(shard_key, execution_id))
+
+    def queue_clear(self, execution_id: bytes, *, shard_key: str = "") -> int:
+        self._dbg("queue_clear", shard_key, execution_id)
+        return self._inner.queue_clear(self._p(shard_key, execution_id))
+
+    # --- Unified state (scope_id namespaced by shard_key) ---
+    def state_get_many(
+        self, scope_id: bytes, ns: bytes, keys: list[bytes], *, shard_key: str = ""
+    ) -> list[bytes | None]:
+        self._dbg("state_get_many", shard_key, scope_id)
+        return self._inner.state_get_many(self._p(shard_key, scope_id), ns, keys)
+
+    def state_put_many(
+        self, scope_id: bytes, ns: bytes, items: list[tuple[bytes, bytes]], *, shard_key: str = ""
+    ) -> None:
+        self._dbg("state_put_many", shard_key, scope_id)
+        self._inner.state_put_many(self._p(shard_key, scope_id), ns, items)
+
+    def state_scan(self, scope_id: bytes, ns: bytes, *, shard_key: str = "") -> list[tuple[bytes, bytes]]:
+        self._dbg("state_scan", shard_key, scope_id)
+        return self._inner.state_scan(self._p(shard_key, scope_id), ns)
+
+    def state_drain(self, scope_id: bytes, ns: bytes, *, shard_key: str = "") -> list[tuple[bytes, bytes]]:
+        self._dbg("state_drain", shard_key, scope_id)
+        return self._inner.state_drain(self._p(shard_key, scope_id), ns)
+
+    def state_delete(
+        self, scope_id: bytes, ns: bytes, keys: list[bytes] | None = None, *, shard_key: str = ""
+    ) -> int:
+        self._dbg("state_delete", shard_key, scope_id)
+        return self._inner.state_delete(self._p(shard_key, scope_id), ns, keys)
+
+    def execution_clear(self, scope_id: bytes, *, shard_key: str = "") -> int:
+        self._dbg("execution_clear", shard_key, scope_id)
+        return self._inner.execution_clear(self._p(shard_key, scope_id))
+
+    def state_append(self, scope_id: bytes, ns: bytes, key: bytes, item: bytes, *, shard_key: str = "") -> int:
+        self._dbg("state_append", shard_key, scope_id)
+        return self._inner.state_append(self._p(shard_key, scope_id), ns, key, item)
+
+    def state_log_scan(
+        self, scope_id: bytes, ns: bytes, key: bytes, *, after_id: int = -1,
+        limit: int | None = None, shard_key: str = "",
+    ) -> list[tuple[int, bytes]]:
+        self._dbg("state_log_scan", shard_key, scope_id)
+        return self._inner.state_log_scan(self._p(shard_key, scope_id), ns, key, after_id=after_id, limit=limit)
+
+    def close(self) -> None:
+        self._inner.close()

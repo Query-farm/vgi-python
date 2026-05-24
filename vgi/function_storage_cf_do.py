@@ -11,14 +11,18 @@ Implementation:
 
 Usage:
     Set ``VGI_WORKER_SHARED_STORAGE=cloudflare-do`` plus ``VGI_CF_DO_URL``
-    to enable. Optionally set ``VGI_CF_DO_TOKEN`` for bearer auth.
+    to enable. ``VGI_CF_DO_TOKEN`` carries the per-worker API key minted by
+    the storage service's admin CLI; the multi-tenant deployment requires it.
+    The key resolves (server-side) to this worker's tenant, which isolates
+    its storage from other workers sharing the same deployment — the key is
+    sent as an opaque ``Authorization: Bearer`` value and is never parsed
+    client-side.
 
 Workflow contract:
     Every ``execution_id`` (and ``transaction_opaque_data``) has a single linear
     lifecycle: create → push/put repeatedly → terminal op → DONE. The
-    terminal op is ``queue_clear``, ``worker_collect``, or
-    ``transaction_state_clear``. Ids are never reused after their
-    terminal op.
+    terminal op is ``queue_clear``, ``state_drain``, or
+    ``execution_clear``. Ids are never reused after their terminal op.
 
     ``_post``'s retry loop is synchronous: all retries of one logical call
     (same ``attempt_id``) finish or exhaust before the caller can issue
@@ -34,12 +38,15 @@ Workflow contract:
 
 """
 
+import atexit
 import base64
 import json
 import logging
 import os
+import threading
 import time
 import uuid
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -49,6 +56,18 @@ __all__ = [
 ]
 
 _logger = logging.getLogger("vgi.storage.cf_do")
+
+
+# Per-shard storage round-trip profiler (opt-in via VGI_STORAGE_PROFILE=1).
+#
+# The shared profiler (vgi._storage_profile) normally records at the
+# BoundStorage facade so any backend can be profiled locally. This backend is
+# special: a single logical state_scan / state_drain fans out into many _post
+# round-trips (pagination), and that per-page network cost is the whole reason
+# cloudflare-do is slower than in-process sqlite. So we record at _post here for
+# the true round-trip count, and FunctionStorageCfDo sets
+# _profiles_at_transport=True so BoundStorage defers to us (no double-count).
+from vgi._storage_profile import _PROFILE_ON, _profiler  # noqa: E402
 
 # Optional file-based debug logging
 _debug_log_path = os.environ.get("VGI_CF_DO_DEBUG_LOG")
@@ -73,6 +92,10 @@ class FunctionStorageCfDo:
     without coordination.
 
     """
+
+    # This backend self-profiles at the transport layer (``_post``), so the
+    # BoundStorage facade defers to avoid double-counting. See _storage_profile.
+    _profiles_at_transport = True
 
     # Connection-level retries (DNS / TCP / TLS handshake failures).
     # Status- and read-level retries are layered on top in ``_post`` so
@@ -163,6 +186,7 @@ class FunctionStorageCfDo:
             body = {**body, "attempt_id": attempt_id}
 
         for attempt in range(self._POST_ATTEMPTS):
+            t0 = time.monotonic()
             try:
                 resp = self._client.post(path, json=body)
             except httpx.RequestError as exc:
@@ -222,6 +246,15 @@ class FunctionStorageCfDo:
             if resp.status_code >= 400:
                 # Other 4xx — don't retry, the request itself is bad.
                 raise RuntimeError(f"CF DO storage error {resp.status_code}: {data}")
+            if _PROFILE_ON:
+                # Largest single wire body, either direction — what provider
+                # request/response size caps apply to. resp.request.content is
+                # the actual serialized (base64-inflated) request payload.
+                req_len = len(resp.request.content) if resp.request is not None else 0
+                _profiler.record(
+                    str(body["shard_key"]), endpoint,
+                    time.monotonic() - t0, max(req_len, len(resp.content)),
+                )
             return data
 
         assert last_exc is not None
@@ -382,28 +415,35 @@ class FunctionStorageCfDo:
         ns: bytes,
         *,
         shard_key: str = "",
-    ) -> list[tuple[bytes, bytes]]:
-        """Non-destructive scan of every (key, value) in one namespace."""
+    ) -> Iterator[tuple[bytes, bytes]]:
+        """Stream every (key, value) in one namespace, paging under the hood.
+
+        The server returns key-ordered pages bounded by a byte budget plus a
+        ``next_after`` cursor, so an arbitrarily large namespace never builds an
+        oversized response. Yields lazily; consumers should iterate.
+        """
         t0 = time.monotonic()
-        data = self._post(
-            "state_scan",
-            {
+        after_key: str | None = None
+        n = 0
+        while True:
+            body: dict[str, object] = {
                 "scope_id": base64.b64encode(scope_id).decode(),
                 "ns": base64.b64encode(ns).decode(),
-            },
-            shard_key=shard_key,
-        )
-        rows = data["rows"]
-        result = [
-            (base64.b64decode(r["key"]), base64.b64decode(r["value"]))
-            for r in rows
-        ]
+            }
+            if after_key is not None:
+                body["after_key"] = after_key
+            data = self._post("state_scan", body, shard_key=shard_key)
+            for r in data["rows"]:
+                yield (base64.b64decode(r["key"]), base64.b64decode(r["value"]))
+                n += 1
+            after_key = data.get("next_after")
+            if not after_key:
+                break
         _logger.debug(
             "state_scan scope=%s ns=%s rows=%d elapsed_ms=%.1f",
-            scope_id.hex()[:8], ns.hex()[:8], len(result),
+            scope_id.hex()[:8], ns.hex()[:8], n,
             (time.monotonic() - t0) * 1000,
         )
-        return result
 
     def state_drain(
         self,
@@ -411,33 +451,40 @@ class FunctionStorageCfDo:
         ns: bytes,
         *,
         shard_key: str = "",
-    ) -> list[tuple[bytes, bytes]]:
-        """Atomic scan-and-tombstone of every (key, value) in one namespace.
+    ) -> Iterator[tuple[bytes, bytes]]:
+        """Stream-and-tombstone every (key, value) in one namespace, paged.
 
-        Carries attempt_id so a retried call returns the prior tombstoned
-        values byte-identically (mirrors today's worker_collect replay).
+        A single ``attempt_id`` is minted once and reused across every page so
+        the server's snapshot-then-page drain stays atomic and replay-safe: the
+        first page tombstones the whole namespace, later pages read the
+        tombstoned snapshot. A retried page (same attempt_id + cursor) replays
+        identically. Beginning to iterate commits the drain, so consume fully.
         """
         t0 = time.monotonic()
-        data = self._post(
-            "state_drain",
-            {
+        attempt_id = uuid.uuid4().hex
+        after_key: str | None = None
+        n = 0
+        while True:
+            body: dict[str, object] = {
                 "scope_id": base64.b64encode(scope_id).decode(),
                 "ns": base64.b64encode(ns).decode(),
-            },
-            attempt_id=uuid.uuid4().hex,
-            shard_key=shard_key,
-        )
-        rows = data["rows"]
-        result = [
-            (base64.b64decode(r["key"]), base64.b64decode(r["value"]))
-            for r in rows
-        ]
+            }
+            if after_key is not None:
+                body["after_key"] = after_key
+            data = self._post(
+                "state_drain", body, attempt_id=attempt_id, shard_key=shard_key
+            )
+            for r in data["rows"]:
+                yield (base64.b64decode(r["key"]), base64.b64decode(r["value"]))
+                n += 1
+            after_key = data.get("next_after")
+            if not after_key:
+                break
         _logger.debug(
             "state_drain scope=%s ns=%s rows=%d elapsed_ms=%.1f",
-            scope_id.hex()[:8], ns.hex()[:8], len(result),
+            scope_id.hex()[:8], ns.hex()[:8], n,
             (time.monotonic() - t0) * 1000,
         )
-        return result
 
     def state_delete(
         self,
@@ -572,7 +619,9 @@ class FunctionStorageCfDo:
             VGI_CF_DO_URL: Base URL of the Cloudflare Worker.
 
         Optional:
-            VGI_CF_DO_TOKEN: Bearer token for authentication.
+            VGI_CF_DO_TOKEN: Per-worker API key (sent as a bearer token).
+                Required by the multi-tenant cloudflare-do deployment, where
+                it resolves server-side to this worker's tenant.
 
         """
         url = os.environ.get("VGI_CF_DO_URL")

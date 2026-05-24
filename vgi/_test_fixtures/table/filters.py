@@ -602,7 +602,17 @@ class FilterEchoPartitionedFunction(TableFunctionGenerator[_FilterEchoPartitione
             ),
         ]
 
-    CHUNK_SIZE: ClassVar[int] = 1000
+    # Cap the work queue at ~MAX_PARTITIONS items regardless of count, by sizing
+    # each chunk as ceil(count / MAX_PARTITIONS). The queue is drained one item
+    # per round-trip and serialized at the per-attach DO, so partition *count*
+    # drives remote cost. A fixed chunk size can't serve both a large query and
+    # a small distribution query (too-large chunks collapse the small one to one
+    # partition and kill fan-out); capping the partition count keeps ~24
+    # partitions at any scale. Each work item is a fixed-size (start, end) range
+    # — rows are generated locally and emitted in BATCH_SIZE batches — so this
+    # changes only the *count* of tiny pops, never any HTTP body size. Output is
+    # the echoed/filtered rows (partition-independent), so assertions hold.
+    MAX_PARTITIONS: ClassVar[int] = 24
     BATCH_SIZE: ClassVar[int] = 1000
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = _FILTER_ECHO_PARTITIONED_SCHEMA
@@ -614,8 +624,9 @@ class FilterEchoPartitionedFunction(TableFunctionGenerator[_FilterEchoPartitione
     ) -> GlobalInitResponse:
         """Populate the work queue with (start, end) chunks for parallel consumption."""
         work_items: list[bytes] = []
-        for start_idx in range(0, params.args.count, cls.CHUNK_SIZE):
-            end_idx = min(start_idx + cls.CHUNK_SIZE, params.args.count)
+        chunk = max(1, -(-params.args.count // cls.MAX_PARTITIONS))  # ceil(count / MAX_PARTITIONS)
+        for start_idx in range(0, params.args.count, chunk):
+            end_idx = min(start_idx + chunk, params.args.count)
             work_items.append(struct.pack(">QQ", start_idx, end_idx))
         params.storage.queue_push(work_items)
         return GlobalInitResponse()

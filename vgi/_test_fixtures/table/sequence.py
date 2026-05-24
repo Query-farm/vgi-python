@@ -433,8 +433,8 @@ class PartitionedSequenceFunction(
 
     Example:
     -------
-    With count=3000 and CHUNK_SIZE=1000:
-        Queue is populated with: [(0, 1000), (1000, 2000), (2000, 3000)]
+    With count=3000 and MAX_PARTITIONS=24 (chunk = ceil(3000/24) = 125):
+        Queue is populated with 24 items: [(0, 125), (125, 250), ...].
         Workers pull chunks and generate values for each range.
         Combined output: [0, 1, 2, ..., 2999]
 
@@ -460,8 +460,17 @@ class PartitionedSequenceFunction(
             ),
         ]
 
-    # Size of each work chunk in the queue
-    CHUNK_SIZE: ClassVar[int] = 1000
+    # Cap the work queue at ~MAX_PARTITIONS items regardless of count, by sizing
+    # each chunk as ceil(count / MAX_PARTITIONS). The queue is drained one item
+    # per round-trip and serialized at the per-attach DO, so partition *count*
+    # drives remote cost. A fixed chunk size can't serve both a large query and
+    # a small distribution query (too-large chunks collapse the small one to one
+    # partition and kill fan-out); capping the partition count keeps ~24
+    # partitions at any scale. Each work item is a fixed-size (start, end) range
+    # — rows are generated locally and emitted in BATCH_SIZE batches — so this
+    # changes only the *count* of tiny pops, never any HTTP body size. Output is
+    # the plain sequence (partition-independent), so assertions are unchanged.
+    MAX_PARTITIONS: ClassVar[int] = 24
     # Batch size for output within each chunk
     BATCH_SIZE: ClassVar[int] = 1000
 
@@ -475,8 +484,9 @@ class PartitionedSequenceFunction(
         """Perform the global init of the worker for this function call."""
         # Create work items for each chunk of the sequence
         work_items: list[bytes] = []
-        for start_idx in range(0, params.args.count, cls.CHUNK_SIZE):
-            end_idx = min(start_idx + cls.CHUNK_SIZE, params.args.count)
+        chunk = max(1, -(-params.args.count // cls.MAX_PARTITIONS))  # ceil(count / MAX_PARTITIONS)
+        for start_idx in range(0, params.args.count, chunk):
+            end_idx = min(start_idx + chunk, params.args.count)
             # Pack as two unsigned 64-bit integers: (start_idx, end_idx)
             work_items.append(struct.pack(">QQ", start_idx, end_idx))
 
