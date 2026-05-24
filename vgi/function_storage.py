@@ -125,26 +125,6 @@ def _coerce_ns(ns: "bytes | FrameworkNS") -> bytes:
     return ns_bytes
 
 
-# Structural (key-free) check that an attach_opaque_data is a sealed AEAD
-# envelope. vgi_rpc.crypto.seal_bytes emits `version(1) || nonce(24) || ct+tag`,
-# so the first byte is the envelope version and the minimum length is fixed.
-# Mirrors worker._ATTACH_ENVELOPE_VERSION and crypto._MIN_TOKEN_LEN.
-_SEALED_ATTACH_VERSION = 1
-_SEALED_ATTACH_MIN_LEN = 1 + 24 + 16  # version + xchacha20 nonce + poly1305 tag
-# Strict mode (opt-in via VGI_REQUIRE_SEALED_ATTACH=1): when attaches are sealed,
-# every attach_opaque_data reaching storage MUST be a sealed envelope. A
-# plaintext value (an unwrapped attach, or a fixed catalog id like
-# b"readonly-catalog-") means a code path forgot the sealed form — which would
-# silently split one logical attach across Durable Objects on cloudflare-do.
-# Fail loudly here so the stack trace names the offending storage call site.
-_REQUIRE_SEALED_ATTACH = os.environ.get("VGI_REQUIRE_SEALED_ATTACH") == "1"
-
-
-def _attach_looks_sealed(value: bytes) -> bool:
-    """True if ``value`` is structurally a sealed attach envelope (no key needed)."""
-    return len(value) >= _SEALED_ATTACH_MIN_LEN and value[0] == _SEALED_ATTACH_VERSION
-
-
 def _derive_shard_key(*, attach_opaque_data: bytes | None, auth: Any, _origin: str = "?") -> str:
     """Return the routing key for the ``FunctionStorageCfDo`` Durable Object.
 
@@ -172,15 +152,6 @@ def _derive_shard_key(*, attach_opaque_data: bytes | None, auth: Any, _origin: s
     storage-routing bugs with MetaWorker dispatch logs.
     """
     if attach_opaque_data is not None:
-        if _REQUIRE_SEALED_ATTACH and not _attach_looks_sealed(attach_opaque_data):
-            raise ValueError(
-                f"unsealed attach_opaque_data reached storage sharding "
-                f"(origin={_origin!r}, {len(attach_opaque_data)} bytes, "
-                f"prefix={attach_opaque_data[:24].hex()!r}): expected a sealed "
-                f"AEAD envelope. A code path passed the plaintext/unwrapped "
-                f"attach instead of the sealed form — sharding on it would split "
-                f"this attach across Durable Objects (VGI_REQUIRE_SEALED_ATTACH=1)."
-            )
         key = "att-" + attach_opaque_data.hex()
     elif auth is not None and getattr(auth, "authenticated", False):
         domain = getattr(auth, "domain", "")
@@ -1398,8 +1369,11 @@ class ShardedSqliteStorage:
         self._dbg_on = os.environ.get("VGI_SQLITE_SHARD_LOG") == "1"
 
     def _p(self, shard_key: str, id_bytes: bytes) -> bytes:
-        """Namespace an execution_id / scope_id by shard_key (transparent to the
-        worker — only the sqlite row key changes, never returned data)."""
+        """Namespace an execution_id / scope_id by shard_key.
+
+        Transparent to the worker — only the sqlite row key changes, never the
+        returned data.
+        """
         return shard_key.encode("utf-8") + self._SEP + id_bytes
 
     def _dbg(self, op: str, shard_key: str, scope: bytes) -> None:

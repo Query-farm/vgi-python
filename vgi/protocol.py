@@ -1733,10 +1733,9 @@ class AggregateStreamingCloseResponse(ArrowSerializableDataclass):
 class VgiProtocol(Protocol):
     """VGI wire protocol definition for vgi_rpc.
 
-    Methods:
-    - ``bind()`` / ``init()``: Function invocation protocol (scalar/table)
-    - ``aggregate_*``: Aggregate function RPC methods (all unary)
-    - ``catalog_*``: ~35 typed catalog interface methods
+    Method families: ``bind()`` / ``init()`` (scalar/table function invocation),
+    ``aggregate_*`` (aggregate RPC methods, all unary), and ``catalog_*`` (~35
+    typed catalog interface methods).
 
     ``vgi_rpc.RpcServer(VgiProtocol, worker)`` handles serialization,
     dispatching, error propagation, and stream lifecycle.
