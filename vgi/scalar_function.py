@@ -576,6 +576,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
         input: BindRequest,
         *,
         ctx: CallContext | None = None,
+        attach_plaintext: bytes | None = None,
     ) -> BindResponse:
         """Bind protocol entry point. Do not override; use on_bind() instead.
 
@@ -612,7 +613,9 @@ class ScalarFunctionGenerator(vgi.function.Function):
             input.settings,
             secrets_accessor,
             auth,
-            input.attach_opaque_data,
+            # Plaintext attach for bodies (input.attach_opaque_data stays sealed
+            # for storage sharding); transaction_opaque_data is already sealed.
+            attach_plaintext,
             input.transaction_opaque_data,
         )
         result = cls.on_bind(bind_params)
@@ -669,25 +672,23 @@ class ScalarFunctionGenerator(vgi.function.Function):
 
     @final
     @classmethod
-    def global_init(cls, input: InitRequest, *, sealed_attach: bytes | None = None) -> GlobalInitResponse:
+    def global_init(cls, input: InitRequest, *, attach_plaintext: bytes | None = None) -> GlobalInitResponse:
         """Global init protocol entry point. Do not override; use on_init() instead.
 
         Deserializes the wrapped bind data, calls on_init(), and
         wraps the result for transmission to process().
 
-        ``sealed_attach`` is the sealed attach envelope captured by the worker
-        before unwrapping; storage must shard on it (not the unwrapped
-        plaintext in ``input``) so a scalar's on_init storage lands on the same
-        Durable Object across turns. See vgi.function_storage._derive_shard_key.
+        ``input`` carries the SEALED attach; storage shards on it via
+        ``request=`` (the request is never unwrapped in place). ``attach_plaintext``
+        is accepted for a uniform worker dispatch; scalar ``on_init`` does not
+        expose the attach to bodies, so it is unused here.
         """
+        del attach_plaintext  # uniform-dispatch param; scalar on_init has no attach view
         execution_id = uuid.uuid4().bytes
         result = cls.on_init(
             bind_call=input.bind_call,
             opaque_data=input.bind_opaque_data,
-            storage=BoundStorage(
-                cls.storage, execution_id,
-                attach_opaque_data=sealed_attach, request=input, auth=None,
-            ),
+            storage=BoundStorage(cls.storage, execution_id, request=input, auth=None),
         )
 
         return GlobalInitResponse(

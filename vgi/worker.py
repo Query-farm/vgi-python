@@ -2047,18 +2047,6 @@ class Worker:
             raise self._opaque_data_rejected("transaction_opaque_data") from exc
         return TransactionOpaqueData(plaintext)
 
-    def _unwrap_bind_call(self, bc: Any) -> Any:
-        """Return a copy of a ``BindRequest`` / ``BindCall`` with unwrapped ``attach_opaque_data``.
-
-        Function bodies read ``attach_opaque_data`` straight off the bind call
-        — e.g. a catalog that packs attach-time options into it — so the
-        worker must hand them the plaintext, not the sealed envelope. A no-op
-        when there is no signing key or the field is unset.
-        """
-        if bc is None or bc.attach_opaque_data is None:
-            return bc
-        return _dataclass_replace(bc, attach_opaque_data=self._unwrap_attach(bc.attach_opaque_data))
-
     def _get_catalog(self) -> CatalogInterface:
         """Get the CatalogInterface instance for this worker.
 
@@ -2113,24 +2101,16 @@ class Worker:
         # vgi.attach_opaque_data / vgi.transaction_opaque_data are auto-tagged by vgi-rpc's
         # Sentry dispatch hook (short-hash form) on every method that
         # carries them.
-        # Capture the SEALED attach before unwrapping — storage sharding must use
-        # it (see _derive_shard_key), not the unwrapped plaintext that the
-        # function body sees.
-        sealed_attach = getattr(request, "attach_opaque_data", None)
-        # Unwrap the sealed attach envelope so the function body sees plaintext.
-        request = self._unwrap_bind_call(request)
+        # The request carries the SEALED attach end-to-end — storage shards on it
+        # (BoundStorage(request=...) -> _derive_shard_key), so we never unwrap in
+        # place. Resolution is attach-independent. Function bodies that read the
+        # attach as user data get the plaintext via params.attach_opaque_data;
+        # unwrap once here (the worker holds the signing key) and thread it down.
+        attach_plaintext = self._unwrap_attach(getattr(request, "attach_opaque_data", None))
         func_cls = self._resolve_function(request)
         self._validate_required_settings(func_cls, request)
         instance = func_cls(logger=_logger)
-        # Every TableFunctionBase subclass (generator, table-in-out, buffering)
-        # shares the bind()/_make_bind_params() that build BoundStorage +
-        # TransactionBoundStorage sharded by the sealed attach, so gate on the
-        # base — not leaf types, which silently drops sealed_attach for e.g.
-        # TableBufferingFunction. Scalar bind() doesn't touch storage and its
-        # signature omits the kwarg, so it takes the plain call.
-        if isinstance(instance, TableFunctionBase):
-            return instance.bind(request, ctx=ctx, sealed_attach=sealed_attach)  # type: ignore[attr-defined, no-any-return]
-        return instance.bind(request, ctx=ctx)  # type: ignore[attr-defined, no-any-return]
+        return instance.bind(request, ctx=ctx, attach_plaintext=attach_plaintext)  # type: ignore[attr-defined, no-any-return]
 
     def table_function_cardinality(
         self, request: TableFunctionCardinalityRequest, ctx: CallContext
@@ -2139,8 +2119,7 @@ class Worker:
 
         Implements VgiProtocol.table_function_cardinality().
         """
-        sealed_attach = getattr(request.bind_call, "attach_opaque_data", None)
-        request = _dataclass_replace(request, bind_call=self._unwrap_bind_call(request.bind_call))
+        attach_plaintext = self._unwrap_attach(getattr(request.bind_call, "attach_opaque_data", None))
         func_cls = self._resolve_function(request.bind_call)
         if not issubclass(func_cls, TableFunctionGenerator):
             raise ValueError(
@@ -2148,7 +2127,7 @@ class Worker:
                 f" functions, but '{func_cls.__name__}' is not a TableFunctionGenerator."
             )
         return func_cls.cardinality(
-            func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth, sealed_attach=sealed_attach)
+            func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth, attach_plaintext=attach_plaintext)
         )
 
     def table_function_statistics(self, request: TableFunctionStatisticsRequest, ctx: CallContext) -> bytes | None:
@@ -2158,13 +2137,12 @@ class Worker:
         of the serialized ColumnStatistics batch (same wire shape as
         catalog_table_column_statistics_get), or None when stats are unknown.
         """
-        sealed_attach = getattr(request.bind_call, "attach_opaque_data", None)
-        request = _dataclass_replace(request, bind_call=self._unwrap_bind_call(request.bind_call))
+        attach_plaintext = self._unwrap_attach(getattr(request.bind_call, "attach_opaque_data", None))
         func_cls = self._resolve_function(request.bind_call)
         if not issubclass(func_cls, TableFunctionGenerator):
             return None
         stats = func_cls.statistics(
-            func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth, sealed_attach=sealed_attach)
+            func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth, attach_plaintext=attach_plaintext)
         )
         if not stats:
             return None
@@ -2182,8 +2160,7 @@ class Worker:
         """
         empty = TableFunctionDynamicToStringResponse(keys=[], values=[])
         try:
-            sealed_attach = getattr(request.bind_call, "attach_opaque_data", None)
-            request = _dataclass_replace(request, bind_call=self._unwrap_bind_call(request.bind_call))
+            attach_plaintext = self._unwrap_attach(getattr(request.bind_call, "attach_opaque_data", None))
             func_cls = self._resolve_function(request.bind_call)
         except Exception:
             _logger.exception("dynamic_to_string: failed to resolve function class")
@@ -2195,7 +2172,7 @@ class Worker:
                 request.bind_call,
                 auth_context=ctx.auth,
                 execution_id=request.global_execution_id,
-                sealed_attach=sealed_attach,
+                attach_plaintext=attach_plaintext,
             )
             mapping = func_cls.dynamic_to_string(params, request.global_execution_id)
         except Exception:
@@ -2653,6 +2630,7 @@ class Worker:
             secrets=SecretsAccessor(init_call.bind_call.secrets).to_dict(),
             storage=cold_storage,
             auth_context=ctx.auth,
+            attach_opaque_data=attach_unwrapped,
             execution_id=request.execution_id,
             attach_id=attach_id,
             transaction_id=transaction_id,
@@ -3331,8 +3309,14 @@ class Worker:
         # backend, which truly shards; sqlite ignores shard_key). The sealed
         # bytes are identical across every turn of one attach, so this also
         # preserves per-attach DO locality.
+        # Do NOT unwrap in place: the request carries the SEALED attach so storage
+        # shards on it everywhere (BoundStorage(request=...) / _init_call). The
+        # framework finalize-streamer states shard on ``sealed_bind_attach``
+        # explicitly (they have no request to derive from). ``attach_plaintext``
+        # is the unwrapped form for the few bodies that read it, exposed only via
+        # params.attach_opaque_data.
         sealed_bind_attach = getattr(request.bind_call, "attach_opaque_data", None)
-        request = _dataclass_replace(request, bind_call=self._unwrap_bind_call(request.bind_call))
+        attach_plaintext = self._unwrap_attach(sealed_bind_attach)
         func_cls = self._resolve_function(request.bind_call)
         instance = func_cls(logger=_logger)
 
@@ -3345,11 +3329,9 @@ class Worker:
             )
         else:
             if isinstance(instance, TableFunctionBase):
-                init_response = instance.global_init(request, ctx=ctx, sealed_attach=sealed_bind_attach)
+                init_response = instance.global_init(request, ctx=ctx, attach_plaintext=attach_plaintext)
             elif isinstance(instance, ScalarFunctionGenerator):
-                # Scalar on_init can use storage too; shard it on the sealed
-                # attach, not the unwrapped plaintext in the request.
-                init_response = instance.global_init(request, sealed_attach=sealed_bind_attach)
+                init_response = instance.global_init(request, attach_plaintext=attach_plaintext)
             else:
                 init_response = instance.global_init(request)  # type: ignore[attr-defined]
 
@@ -3379,7 +3361,6 @@ class Worker:
                 _func_cls=type(instance),
                 _init_call=request,
                 _init_response=init_response,
-                _sealed_attach=sealed_bind_attach,
                 _vgi_tracer=self._vgi_tracer,
             )
             input_schema = request.bind_call.input_schema
@@ -3390,12 +3371,12 @@ class Worker:
             # values (renaming the phase strings is in task #6).
             cold_storage = BoundStorage(
                 type(instance).storage, init_response.execution_id,
-                attach_opaque_data=sealed_bind_attach, auth=ctx.auth,
+                request=request, auth=ctx.auth,
             )
-            # request.bind_call has already been unwrapped by
-            # _unwrap_bind_call at the top of init(); attach_opaque_data
-            # is the plaintext AttachOpaqueData bytes (NewType over bytes).
-            attach_id = bytes(request.bind_call.attach_opaque_data or b"")
+            # ``attach_id`` is the user-facing plaintext attach identity (used to
+            # pin attach-time config lookups). request.bind_call carries the
+            # SEALED attach now; use the unwrapped plaintext.
+            attach_id = bytes(attach_plaintext or b"")
             # Widen to ProcessParams so the later TableInOutGenerator /
             # TableFunctionGenerator branches can rebind `params` without
             # tripping mypy's local-type narrowing.
@@ -3412,6 +3393,7 @@ class Worker:
                 secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
                 storage=cold_storage,
                 auth_context=ctx.auth,
+                attach_opaque_data=attach_plaintext,
                 execution_id=init_response.execution_id,
                 attach_id=attach_id,
                 transaction_id=getattr(
@@ -3475,9 +3457,10 @@ class Worker:
                 secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
                 storage=BoundStorage(
                     type(instance).storage, init_response.execution_id,
-                    attach_opaque_data=sealed_bind_attach, auth=ctx.auth,
+                    request=request, auth=ctx.auth,
                 ),
                 auth_context=ctx.auth,
+                attach_opaque_data=attach_plaintext,
             )
 
             if request.phase == TableInOutFunctionInitPhase.INPUT:
@@ -3485,7 +3468,7 @@ class Worker:
                 state = TableInOutExchangeState(
                     _init_call=request,
                     _init_response=init_response,
-                    _sealed_attach=sealed_bind_attach,
+                    _plaintext_attach=attach_plaintext,
                     _func_cls=type(instance),
                     _params=params,
                     _user_state=user_state,
@@ -3530,15 +3513,16 @@ class Worker:
                 secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
                 storage=BoundStorage(
                     type(instance).storage, init_response.execution_id,
-                    attach_opaque_data=sealed_bind_attach, auth=ctx.auth,
+                    request=request, auth=ctx.auth,
                 ),
                 auth_context=ctx.auth,
+                attach_opaque_data=attach_plaintext,
             )
             user_state = type(instance).initial_state(params)
             state = TableProducerState(
                 _init_call=request,
                 _init_response=init_response,
-                _sealed_attach=sealed_bind_attach,
+                _plaintext_attach=attach_plaintext,
                 _func_cls=type(instance),
                 _params=params,
                 _user_state=user_state,

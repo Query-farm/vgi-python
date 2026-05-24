@@ -318,6 +318,10 @@ class BindParams[TArgs]:
     # execution_id).
     storage: BoundStorage | None = None
     auth_context: AuthContext = AuthContext.anonymous()
+    # Plaintext (unwrapped) attach for bodies that read it as user data; the
+    # framework unwraps once and sets it. Storage shards on the SEALED form (via
+    # the request), never this. None when there is no attach.
+    attach_opaque_data: bytes | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -339,6 +343,10 @@ class InitParams[TArgs]:
 
     storage: BoundStorage
     auth_context: AuthContext = AuthContext.anonymous()
+    # Plaintext (unwrapped) attach for bodies that read it as user data; the
+    # framework unwraps once and sets it. Storage shards on the SEALED form (via
+    # the request / init_call), never this. None when there is no attach.
+    attach_opaque_data: bytes | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -371,6 +379,11 @@ class ProcessParams[TArgs]:
     # (batch_index, payload) tuples and sort in combine() to reconstruct source
     # order under parallel ingest. None for every other call path.
     batch_index: int | None = None
+
+    # Plaintext (unwrapped) attach for bodies that read it as user data; the
+    # framework unwraps once and sets it. Storage shards on the SEALED form (via
+    # the init_call), never this. None when there is no attach.
+    attach_opaque_data: bytes | None = None
 
 
 class TableFunctionBase[TArgs](vgi.function.Function):
@@ -615,6 +628,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         *,
         auth_context: AuthContext | None = None,
         execution_id: bytes | None = None,
+        attach_plaintext: bytes | None = None,
     ) -> BindParams[TArgs]:
         """Construct BindParams from a BindRequest.
 
@@ -630,11 +644,22 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             bind_call=input,
             settings=_batch_to_scalar_dict(input.settings),
             secrets=SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided),
-            transaction_storage=TransactionBoundStorage(cls.storage, txn_id, request=input, auth=auth_context)
+            # Storage shards on the SEALED attach carried in ``input`` (the
+            # request is never unwrapped in place). ``attach_plaintext`` is the
+            # unwrapped form, exposed only via ``BindParams.attach_opaque_data``
+            # for bodies that read the attach as user data.
+            transaction_storage=TransactionBoundStorage(
+                cls.storage, txn_id, request=input, auth=auth_context,
+            )
             if txn_id
             else None,
-            storage=BoundStorage(cls.storage, execution_id, request=input, auth=auth_context) if execution_id else None,
+            storage=BoundStorage(
+                cls.storage, execution_id, request=input, auth=auth_context,
+            )
+            if execution_id
+            else None,
             auth_context=auth_context if auth_context is not None else AuthContext.anonymous(),
+            attach_opaque_data=attach_plaintext,
         )
 
     # ------------------------------------------------------------------
@@ -678,6 +703,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         input: BindRequest,
         *,
         ctx: CallContext | None = None,
+        attach_plaintext: bytes | None = None,
     ) -> BindResponse:
         """Bind protocol entry point. Do not override; use ``on_bind()``.
 
@@ -693,7 +719,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         dynamic scopes computed from function arguments.
         """
         auth = ctx.auth if ctx is not None else AuthContext.anonymous()
-        params = cls._make_bind_params(input, auth_context=auth)
+        params = cls._make_bind_params(input, auth_context=auth, attach_plaintext=attach_plaintext)
 
         if input.input_schema is not None:
             cls._validate_arg_type_bounds(cls.FunctionArguments, params.args, input.input_schema)
@@ -721,6 +747,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
     @classmethod
     def global_init(
         cls, input: InitRequest, *, ctx: CallContext | None = None,
+        attach_plaintext: bytes | None = None,
     ) -> GlobalInitResponse:
         """Global init protocol entry point. Do not override; use ``on_init()``."""
         execution_id = uuid.uuid4().bytes
@@ -734,8 +761,11 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             settings=_batch_to_scalar_dict(input.bind_call.settings),
             secrets=SecretsAccessor(input.bind_call.secrets).to_dict(),
             execution_id=execution_id,
+            # Storage shards on the SEALED attach in ``input`` (never unwrapped in
+            # place); ``attach_plaintext`` is exposed only via attach_opaque_data.
             storage=BoundStorage(cls.storage, execution_id, request=input, auth=auth),
             auth_context=auth,
+            attach_opaque_data=attach_plaintext,
         )
 
         result = cls.on_init(params)

@@ -82,9 +82,8 @@ def _get_tx_id(params: ProcessParams[None]) -> bytes:
 
 
 def _get_attach_opaque_data(params: ProcessParams[None]) -> bytes:
-    """Get attach_opaque_data from the bind request."""
-    assert params.init_call is not None
-    attach_opaque_data = params.init_call.bind_call.attach_opaque_data
+    """Get the unwrapped plaintext attach (storage shards on the sealed form)."""
+    attach_opaque_data = params.attach_opaque_data
     if attach_opaque_data:
         return attach_opaque_data
     msg = "attach_opaque_data is required but was not provided in the bind request"

@@ -197,8 +197,9 @@ class EchoAttachOptionsFunction(TableFunctionGenerator[_EchoArgs, _EchoState]):
             out.finish()
             return
 
-        assert params.init_call is not None
-        attach_opaque_data = params.init_call.bind_call.attach_opaque_data
+        # params.attach_opaque_data is the unwrapped plaintext attach (storage
+        # shards on the sealed form via the request); see InitParams.
+        attach_opaque_data = params.attach_opaque_data
         if attach_opaque_data is None:
             raise ValueError("echo_attach_options requires an attach_opaque_data")
 

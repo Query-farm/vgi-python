@@ -210,15 +210,15 @@ def _qualified_from_process(params: ProcessParams[None]) -> str:
 
 
 def _attach_opaque_data_from_bind(params: BindParams[None]) -> bytes:
-    aid = params.bind_call.attach_opaque_data
+    # Unwrapped plaintext attach (storage shards on the sealed form via request).
+    aid = params.attach_opaque_data
     if aid is None:
         raise ValueError("attach_opaque_data missing")
     return bytes(aid)
 
 
 def _attach_opaque_data_from_process(params: ProcessParams[None]) -> bytes:
-    assert params.init_call is not None
-    aid = params.init_call.bind_call.attach_opaque_data
+    aid = params.attach_opaque_data
     if aid is None:
         raise ValueError("attach_opaque_data missing")
     return bytes(aid)

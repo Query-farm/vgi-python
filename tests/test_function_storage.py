@@ -2,10 +2,12 @@
 
 """Tests for vgi.function_storage module."""
 
+import os
 from pathlib import Path
 
 import pytest
 
+import vgi.function_storage as _fs
 from vgi.function_storage import FunctionStorageSqlite
 
 
@@ -413,3 +415,58 @@ class TestFunctionStorageSqlite:
         assert rows == [(ord1, b"a"), (ord2, b"b")]
         # Cursor-based: after_id + limit also work through the facade.
         assert bs.state_log_scan(b"buf", b"k", after_id=ord1, limit=1) == [(ord2, b"b")]
+
+
+class TestSealedAttachGuard:
+    """``VGI_REQUIRE_SEALED_ATTACH=1`` makes ``_derive_shard_key`` reject unsealed attaches.
+
+    Storage must shard on the SEALED attach envelope. An unwrapped/plaintext value
+    reaching ``_derive_shard_key`` means a code path forgot the sealed form — which on
+    the cloudflare-do backend would split one logical ATTACH across Durable Objects.
+    The check is structural (version byte + min length), not cryptographic; the final
+    test documents that limitation.
+    """
+
+    @pytest.fixture
+    def strict(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Flip the module-level guard flag on (it is read at call time)."""
+        monkeypatch.setattr(_fs, "_REQUIRE_SEALED_ATTACH", True)
+
+    def test_plaintext_attach_trips_guard(self, strict: None) -> None:
+        """A fixed/plaintext catalog id reaching storage is rejected (the common bug)."""
+        with pytest.raises(ValueError, match="unsealed attach_opaque_data"):
+            _fs._derive_shard_key(attach_opaque_data=b"readonly-catalog-", auth=None)
+
+    def test_short_plaintext_trips_guard(self, strict: None) -> None:
+        """A short plaintext value (below the sealed min length) is rejected."""
+        with pytest.raises(ValueError, match="unsealed attach_opaque_data"):
+            _fs._derive_shard_key(attach_opaque_data=b"x", auth=None)
+
+    def test_sealed_envelope_passes(self, strict: None) -> None:
+        """version(1) + nonce(24) + tag(16) is structurally sealed; shards as att-…."""
+        sealed = bytes([_fs._SEALED_ATTACH_VERSION]) + os.urandom(_fs._SEALED_ATTACH_MIN_LEN)
+        key = _fs._derive_shard_key(attach_opaque_data=sealed, auth=None)
+        assert key.startswith("att-")
+
+    def test_none_attach_is_loc_anon(self, strict: None) -> None:
+        """No attach is always fine (anonymous/no-ATTACH callers share loc-anon)."""
+        assert _fs._derive_shard_key(attach_opaque_data=None, auth=None) == "loc-anon"
+
+    def test_guard_off_allows_plaintext(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Default (flag off): plaintext is accepted — the guard is opt-in (sqlite ignores shard_key)."""
+        monkeypatch.setattr(_fs, "_REQUIRE_SEALED_ATTACH", False)
+        key = _fs._derive_shard_key(attach_opaque_data=b"readonly-catalog-", auth=None)
+        assert key.startswith("att-")
+
+    def test_structural_check_is_not_cryptographic(self, strict: None) -> None:
+        """Documented limitation: a 0x01-prefixed, >=41-byte plaintext slips through.
+
+        ``_attach_looks_sealed`` only checks the first byte == version and
+        ``len >= MIN``. It catches the common plaintext shapes (fixed ids, short
+        ids), not a crafted look-alike — it is not an authentication check. If a
+        real attach format ever begins 0x01 in plaintext, strengthen the guard.
+        """
+        look_alike = bytes([_fs._SEALED_ATTACH_VERSION]) + b"x" * _fs._SEALED_ATTACH_MIN_LEN
+        assert _fs._attach_looks_sealed(look_alike) is True
+        # ...so it does NOT trip the guard (no raise):
+        _fs._derive_shard_key(attach_opaque_data=look_alike, auth=None)
