@@ -911,11 +911,17 @@ class FunctionStorageSqlite:
         """
         conn = self._connect()
         try:
-            # Drop tables with stale schema (e.g. invocation_id instead of execution_id)
+            # Drop tables with stale schema (e.g. invocation_id instead of
+            # execution_id, or a pre-replay function_state missing
+            # last_attempt_id). The data here is ephemeral in-progress worker
+            # state, so dropping + recreating is safe and self-heals an older
+            # on-disk DB across an upgrade.
             for table, required_col in [
                 ("worker_state", "execution_id"),
                 ("work_queue", "execution_id"),
                 ("invocation_registry", "execution_id"),
+                ("function_state", "last_attempt_id"),
+                ("function_state_log", "attempt_id"),
             ]:
                 cursor = conn.execute(f"PRAGMA table_info({table})")  # noqa: S608
                 columns = {row[1] for row in cursor.fetchall()}
