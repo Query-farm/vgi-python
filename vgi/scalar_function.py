@@ -669,18 +669,25 @@ class ScalarFunctionGenerator(vgi.function.Function):
 
     @final
     @classmethod
-    def global_init(cls, input: InitRequest) -> GlobalInitResponse:
+    def global_init(cls, input: InitRequest, *, sealed_attach: bytes | None = None) -> GlobalInitResponse:
         """Global init protocol entry point. Do not override; use on_init() instead.
 
         Deserializes the wrapped bind data, calls on_init(), and
         wraps the result for transmission to process().
 
+        ``sealed_attach`` is the sealed attach envelope captured by the worker
+        before unwrapping; storage must shard on it (not the unwrapped
+        plaintext in ``input``) so a scalar's on_init storage lands on the same
+        Durable Object across turns. See vgi.function_storage._derive_shard_key.
         """
         execution_id = uuid.uuid4().bytes
         result = cls.on_init(
             bind_call=input.bind_call,
             opaque_data=input.bind_opaque_data,
-            storage=BoundStorage(cls.storage, execution_id, request=input, auth=None),
+            storage=BoundStorage(
+                cls.storage, execution_id,
+                attach_opaque_data=sealed_attach, request=input, auth=None,
+            ),
         )
 
         return GlobalInitResponse(

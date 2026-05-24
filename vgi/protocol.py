@@ -468,6 +468,11 @@ class ScalarExchangeState(ExchangeState):
 
     _init_call: Annotated[InitRequest, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
     _init_response: Annotated[GlobalInitResponse, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
+    # Sealed attach captured before the worker unwrapped the bind_call. Storage
+    # must shard on this, not the unwrapped plaintext in _init_call, so a
+    # scalar's process() storage lands on one DO across exchange turns. Mirrors
+    # TableProducerState / TableInOutExchangeState. See _derive_shard_key.
+    _sealed_attach: bytes | None = field(default=None, repr=False)
     _func_cls: Annotated[type[ScalarFunctionGenerator], Transient()] = field(default=None, repr=False)  # type: ignore[assignment]
     _vgi_tracer: Annotated[VgiTracer, Transient()] = field(default_factory=get_noop_tracer, repr=False)
 
@@ -507,7 +512,8 @@ class ScalarExchangeState(ExchangeState):
                 init_call=self._init_call,
                 init_response=self._init_response,
                 storage=BoundStorage(
-                    cls.storage, self._init_response.execution_id, request=self._init_call, auth=ctx.auth
+                    cls.storage, self._init_response.execution_id,
+                    attach_opaque_data=self._sealed_attach, request=self._init_call, auth=ctx.auth,
                 ),
                 auth_context=ctx.auth,
             )
@@ -947,6 +953,9 @@ class TableProducerState(ProducerState):
     _init_call: Annotated[InitRequest, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
     _init_response: Annotated[GlobalInitResponse, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
     _user_state_bytes: bytes | None = field(default=None, repr=False)
+    # Sealed attach for storage sharding (see TableInOutExchangeState): _init_call
+    # carries the unwrapped plaintext attach; sharding needs the sealed envelope.
+    _sealed_attach: bytes | None = field(default=None, repr=False)
     _func_cls: Annotated[type[TableFunctionGenerator[Any]], Transient()] = field(default=None, repr=False)  # type: ignore[assignment]
     _params: Annotated[ProcessParams[Any], Transient()] = field(default=None, repr=False)  # type: ignore[arg-type]
     _user_state: Annotated[Any, Transient()] = field(default=None, repr=False)
@@ -990,7 +999,8 @@ class TableProducerState(ProducerState):
             settings=_batch_to_scalar_dict(self._init_call.bind_call.settings),
             secrets=SecretsAccessor(self._init_call.bind_call.secrets).to_dict(),
             storage=BoundStorage(
-                func_cls.storage, self._init_response.execution_id, request=self._init_call, auth=None
+                func_cls.storage, self._init_response.execution_id,
+                attach_opaque_data=self._sealed_attach, request=self._init_call, auth=None,
             ),
         )
         # Restore _user_state from serialized bytes if available
@@ -1102,6 +1112,10 @@ class TableInOutExchangeState(ExchangeState):
     _init_call: Annotated[InitRequest, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
     _init_response: Annotated[GlobalInitResponse, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
     _user_state_bytes: bytes | None = field(default=None, repr=False)
+    # The SEALED attach for storage sharding. ``_init_call``'s attach is the
+    # unwrapped plaintext (for the function body); sharding must use the sealed
+    # envelope, so carry it explicitly through serialization/rehydration.
+    _sealed_attach: bytes | None = field(default=None, repr=False)
     _func_cls: Annotated[type[TableInOutGenerator[Any]], Transient()] = field(default=None, repr=False)  # type: ignore[assignment]
     _params: Annotated[ProcessParams[Any], Transient()] = field(default=None, repr=False)  # type: ignore[arg-type]
     _user_state: Annotated[Any, Transient()] = field(default=None, repr=False)
@@ -1145,7 +1159,8 @@ class TableInOutExchangeState(ExchangeState):
             settings=_batch_to_scalar_dict(self._init_call.bind_call.settings),
             secrets=SecretsAccessor(self._init_call.bind_call.secrets).to_dict(),
             storage=BoundStorage(
-                func_cls.storage, self._init_response.execution_id, request=self._init_call, auth=None
+                func_cls.storage, self._init_response.execution_id,
+                attach_opaque_data=self._sealed_attach, request=self._init_call, auth=None,
             ),
         )
         # Restore _user_state from serialized bytes if available
