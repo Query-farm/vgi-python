@@ -102,12 +102,15 @@ class PartitionedBatchIndexFunction(TableFunctionGenerator[_BatchIndexArgs, _Bat
     threads.
     """
 
-    # NOTE: left at the original small chunk on purpose. This fixture exercises
-    # the FIXED_ORDER batch-index ordered-sink reassembly path — the same path
-    # implicated in the pre-existing HTTP-transport segfaults. Capping the
-    # partition count (as partitioned_sequence / filter_echo_partitioned now do
-    # to cut remote round-trips) made batch_index.test segfault (exit 139)
-    # locally, so resizing it is deferred until that crash is understood.
+    # NOTE: left at the original small chunk for now. Capping the partition
+    # count (as partitioned_sequence / filter_echo_partitioned do) once made
+    # batch_index.test segfault (exit 139) — but that turned out to be a
+    # pre-existing use-after-free in the extension's async cancel path (the
+    # cancel dispatcher logged through the destroyed query ClientContext), not
+    # a batch_index bug. The cap just triggered more stream cancellations and
+    # exposed it. With that fixed in the extension, capping this fixture is now
+    # safe to re-enable (verified 15/15 clean under UBSan); deferred only so the
+    # resize lands as its own change.
     CHUNK_SIZE: ClassVar[int] = 1000
     BATCH_SIZE: ClassVar[int] = 1000
 
