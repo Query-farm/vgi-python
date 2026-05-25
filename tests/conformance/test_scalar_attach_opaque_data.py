@@ -48,6 +48,11 @@ class _AttachOpaqueDataEcho(ScalarFunction):
 
 def _bind(attach_opaque_data: bytes | None, transaction_opaque_data: bytes | None) -> None:
     _seen.clear()
+    # The worker unwraps the sealed attach to the framework plaintext
+    # ``uuid(16) || catalog_bytes`` and threads it as ``attach_plaintext``; the
+    # body sees only the catalog bytes. Mimic that here (this test bypasses the
+    # worker), prepending a dummy UUID so the strip yields the catalog bytes back.
+    attach_plaintext = (b"\x00" * 16 + attach_opaque_data) if attach_opaque_data is not None else None
     _AttachOpaqueDataEcho.bind(
         BindRequest(
             function_name="attach_opaque_data_echo",
@@ -56,7 +61,8 @@ def _bind(attach_opaque_data: bytes | None, transaction_opaque_data: bytes | Non
             input_schema=pa.schema([("x", pa.int64())]),
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=transaction_opaque_data,
-        )
+        ),
+        attach_plaintext=attach_plaintext,
     )
 
 

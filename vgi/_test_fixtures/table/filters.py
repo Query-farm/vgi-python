@@ -182,6 +182,131 @@ class FilterEchoFunction(TableFunctionGenerator[FilterEchoFunctionArgs, FilterEc
 
 
 # ============================================================================
+# DictFilterEchoFunction — output column declared as a *dictionary* Arrow type
+# (dictionary<int8, utf8>) with no ENUM metadata. DuckDB maps such a column to
+# plain VARCHAR, so a `WHERE s = 'x'` / `s IN (...)` predicate pushes a VARCHAR
+# (string) literal down to the worker. The worker then emits the column
+# dictionary-encoded, producing a (dictionary column, string literal) pair that
+# the filter evaluator must compare. Naively casting the literal up to the
+# column's dictionary type makes `pc.is_in(dict, dict)` / `pc.equal(dict, dict)`
+# throw `ArrowTypeError: Array type doesn't match type of values set`; the
+# correct path decodes the column to its value type. This fixture pins that
+# behavior so every language implementation handles it identically.
+# ============================================================================
+
+
+_DICT_FILTER_ECHO_SCHEMA = pa.schema(
+    [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+        pa.field("n", pa.int64()),
+        pa.field("s", pa.dictionary(pa.int8(), pa.utf8())),
+    ]
+)
+
+# Deterministic, low-cardinality values so dictionary encoding is meaningful and
+# the row<->value mapping is easy to assert: row i carries _DICT_VALUES[i % len].
+_DICT_VALUES: tuple[str, ...] = ("red", "green", "blue")
+
+
+@dataclass(slots=True, frozen=True)
+class _DictFilterEchoArgs:
+    """Arguments for DictFilterEchoFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+    batch_size: Annotated[int, Arg("batch_size", default=2048, doc="Rows per batch", ge=1)]
+
+
+@dataclass(kw_only=True)
+class _DictFilterEchoState(ArrowSerializableDataclass):
+    """Mutable state tracking remaining rows and position."""
+
+    remaining: int
+    current_index: int = 0
+
+
+@init_single_worker
+@bind_fixed_schema
+@_cardinality_from_count
+class DictFilterEchoFunction(TableFunctionGenerator[_DictFilterEchoArgs, _DictFilterEchoState]):
+    """Emits a dictionary-encoded VARCHAR column to exercise filter pushdown.
+
+    USE CASE
+    --------
+    Regression coverage for filter pushdown over a dictionary-encoded
+    column whose DuckDB-facing type is plain VARCHAR. The pushed literal
+    arrives as a string while the emitted column is ``dictionary<int8,
+    utf8>``; the auto-applied filter must compare the two without
+    throwing. See the module comment above.
+
+    SCHEMA
+    ------
+    Output: {"n": int64, "s": dictionary<int8, utf8> (VARCHAR to DuckDB)}
+
+    Row i has s = ("red", "green", "blue")[i % 3].
+
+    Example:
+    -------
+    SELECT * FROM dict_filter_echo(6) WHERE s = 'green'
+    Returns: rows 1 and 4.
+
+    """
+
+    class Meta:
+        """Metadata for DictFilterEchoFunction."""
+
+        name = "dict_filter_echo"
+        description = "Emits a dictionary-encoded VARCHAR column for filter-pushdown testing"
+        categories = ["generator", "diagnostic", "testing"]
+        filter_pushdown = True
+        auto_apply_filters = True
+        projection_pushdown = True
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM dict_filter_echo(6) WHERE s = 'green'",
+                description="Filter a dictionary-encoded column by an equality predicate",
+            ),
+            FunctionExample(
+                sql="SELECT * FROM dict_filter_echo(6) WHERE s IN ('red', 'blue')",
+                description="Filter a dictionary-encoded column by an IN predicate",
+            ),
+        ]
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = _DICT_FILTER_ECHO_SCHEMA
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_DictFilterEchoArgs]) -> _DictFilterEchoState:
+        """Create initial state with the remaining row count."""
+        return _DictFilterEchoState(remaining=params.args.count)
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_DictFilterEchoArgs],
+        state: _DictFilterEchoState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit a batch with n and a dictionary-encoded s column."""
+        if state.remaining <= 0:
+            out.finish()
+            return
+
+        size = min(state.remaining, params.args.batch_size)
+        start = state.current_index
+
+        n_values = list(range(start, start + size))
+        s_values = [_DICT_VALUES[i % len(_DICT_VALUES)] for i in n_values]
+
+        out.emit(
+            pa.RecordBatch.from_pydict(
+                {"n": n_values, "s": s_values},
+                schema=params.output_schema,
+            )
+        )
+
+        state.current_index += size
+        state.remaining -= size
+
+
+# ============================================================================
 
 
 def _make_wkb_point(x: float, y: float) -> bytes:

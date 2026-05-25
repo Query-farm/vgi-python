@@ -42,9 +42,8 @@ class TestFunctionStorageSqlite:
         assert count == 0
 
     def test_queue_pop_empty_queue(self, storage: FunctionStorageSqlite) -> None:
-        """Test popping from registered but empty queue returns None."""
+        """Test popping from an empty queue returns None."""
         invocation_id = b"inv123"
-        # Register the invocation first
         storage.queue_push(invocation_id, [])
         result = storage.queue_pop(invocation_id)
         assert result is None
@@ -71,12 +70,10 @@ class TestFunctionStorageSqlite:
         # After clear, pop returns None (queue is empty/unknown)
         assert storage.queue_pop(invocation_id) is None
 
-    def test_queue_push_empty_still_registers(self, storage: FunctionStorageSqlite) -> None:
-        """Test that pushing empty list still registers invocation_id."""
+    def test_queue_push_empty_is_noop(self, storage: FunctionStorageSqlite) -> None:
+        """Pushing an empty list adds nothing; pop returns None (no registration)."""
         invocation_id = b"inv123"
         storage.queue_push(invocation_id, [])
-
-        # Pop should return None (empty but known), not raise
         assert storage.queue_pop(invocation_id) is None
 
     def test_queue_clear_empty_queue(self, storage: FunctionStorageSqlite) -> None:
@@ -84,16 +81,6 @@ class TestFunctionStorageSqlite:
         invocation_id = b"inv123"
         cleared = storage.queue_clear(invocation_id)
         assert cleared == 0
-
-    # --- Cleanup Tests ---
-
-    def test_cleanup_old_entries(self, storage: FunctionStorageSqlite) -> None:
-        """Test cleanup doesn't error with no old entries."""
-        # Just verify it doesn't raise
-        deleted = storage.cleanup_old_entries(max_age_days=0.0)
-        # With max_age_days=0, all entries (even fresh ones) would be deleted
-        # but we haven't added any
-        assert deleted >= 0
 
     # --- Default Path Tests ---
 
@@ -230,7 +217,7 @@ class TestFunctionStorageSqlite:
         """BoundStorage.state_put / state_get convenience wrappers work."""
         from vgi.function_storage import BoundStorage
 
-        bs = BoundStorage(storage, b"exec1", attach_opaque_data=b"a")
+        bs = BoundStorage(storage, b"exec1")
         bs.state_put(b"agg", b"k1", b"v1")
         assert bs.state_get(b"agg", b"k1") == b"v1"
         assert bs.state_get(b"agg", b"missing") is None
@@ -241,7 +228,7 @@ class TestFunctionStorageSqlite:
 
         from vgi.function_storage import BoundStorage
 
-        bs = BoundStorage(storage, b"exec1", attach_opaque_data=b"a")
+        bs = BoundStorage(storage, b"exec1")
         reserved = b"_vgi/anything"
         with pytest.raises(ValueError, match="reserved prefix"):
             bs.state_get(reserved, b"k")
@@ -266,7 +253,7 @@ class TestFunctionStorageSqlite:
         """FrameworkNS members bypass the reserved-prefix check and resolve to their bytes value."""
         from vgi.function_storage import BoundStorage, FrameworkNS
 
-        bs = BoundStorage(storage, b"exec1", attach_opaque_data=b"a")
+        bs = BoundStorage(storage, b"exec1")
         bs.state_put(FrameworkNS.AGGREGATE_STATE, b"k1", b"v1")
         assert bs.state_get(FrameworkNS.AGGREGATE_STATE, b"k1") == b"v1"
         # Same key under a raw user namespace must NOT see the framework
@@ -405,7 +392,7 @@ class TestFunctionStorageSqlite:
         """BoundStorage.state_append / state_log_scan wrappers work."""
         from vgi.function_storage import BoundStorage
 
-        bs = BoundStorage(storage, b"exec-log", attach_opaque_data=b"a")
+        bs = BoundStorage(storage, b"exec-log")
         ord1 = bs.state_append(b"buf", b"k", b"a")
         ord2 = bs.state_append(b"buf", b"k", b"b")
         assert ord1 < ord2
@@ -413,3 +400,95 @@ class TestFunctionStorageSqlite:
         assert rows == [(ord1, b"a"), (ord2, b"b")]
         # Cursor-based: after_id + limit also work through the facade.
         assert bs.state_log_scan(b"buf", b"k", after_id=ord1, limit=1) == [(ord2, b"b")]
+
+
+class TestShardKeyDerivation:
+    """The single-rule shard key: att- + hex of the attach UUID.
+
+    The UUID is the 16-byte head of the unwrapped attach plaintext
+    ``uuid(16) || catalog_bytes`` that ``catalog_attach`` mints.
+    """
+
+    def test_att_prefix_is_uuid_hex(self) -> None:
+        """The key is att- + the hex of the 16-byte attach UUID."""
+        import uuid
+
+        from vgi.function_storage import _derive_shard_key
+
+        u = uuid.uuid4().bytes
+        assert _derive_shard_key(attach_uuid=u) == "att-" + u.hex()
+
+    def test_key_is_bounded_and_regex_safe(self) -> None:
+        """The 16-byte UUID yields a fixed 36-char, shard_key-regex-safe key."""
+        import re
+        import uuid
+
+        from vgi.function_storage import _derive_shard_key
+
+        key = _derive_shard_key(attach_uuid=uuid.uuid4().bytes)
+        assert len(key) == 36  # "att-" + 32 hex
+        assert len(key) <= 128
+        assert re.fullmatch(r"att-[0-9a-f]{32}", key)
+
+    def test_stable_across_reseals_and_unique(self) -> None:
+        """Same UUID -> same key (stable across re-seals); distinct UUIDs differ."""
+        import uuid
+
+        from vgi.function_storage import _derive_shard_key
+
+        u = uuid.uuid4().bytes
+        assert _derive_shard_key(attach_uuid=u) == _derive_shard_key(attach_uuid=u)
+        assert _derive_shard_key(attach_uuid=u) != _derive_shard_key(attach_uuid=uuid.uuid4().bytes)
+
+    def test_missing_or_short_uuid_raises(self) -> None:
+        """A missing or non-16-byte UUID is a hard error, not a fallback."""
+        from vgi.function_storage import _derive_shard_key
+
+        with pytest.raises(ValueError, match="16-byte attach uuid"):
+            _derive_shard_key(attach_uuid=None)
+        with pytest.raises(ValueError, match="16-byte attach uuid"):
+            _derive_shard_key(attach_uuid=b"")
+        with pytest.raises(ValueError, match="16-byte attach uuid"):
+            _derive_shard_key(attach_uuid=b"\x00" * 8)
+
+    def test_no_prn_or_loc_anon_branch_remains(self) -> None:
+        """The old auth/anon fallbacks are gone: nothing produces those keys."""
+        import uuid
+
+        from vgi.function_storage import _derive_shard_key
+
+        key = _derive_shard_key(attach_uuid=uuid.uuid4().bytes)
+        assert not key.startswith("prn-")
+        assert key != "loc-anon"
+
+    def test_cfdo_backend_without_attach_refuses(self) -> None:
+        """A remote-sharding backend must refuse to build without an attach."""
+        # (requires_shard_key) must not silently collapse onto one DO.
+        from vgi.function_storage import BoundStorage
+
+        class _FakeCfDo:
+            requires_shard_key = True
+
+        with pytest.raises(ValueError, match="16-byte attach uuid"):
+            BoundStorage(_FakeCfDo(), b"exec1")
+
+    def test_cfdo_backend_shards_on_uuid_prefix(self) -> None:
+        """With a full plaintext (uuid||catalog_bytes), the cfdo shard key is the uuid."""
+        import uuid
+
+        from vgi.function_storage import BoundStorage
+
+        class _FakeCfDo:
+            requires_shard_key = True
+
+        u = uuid.uuid4().bytes
+        bs = BoundStorage(_FakeCfDo(), b"exec1", attach_plaintext=u + b"catalog-bytes")
+        assert bs._shard_key == "att-" + u.hex()
+
+    def test_non_sharding_backend_without_attach_gets_empty_key(self) -> None:
+        """SQLite ignores shard_key, so an attachless execution still builds."""
+        # It just gets an empty routing key rather than raising.
+        from vgi.function_storage import BoundStorage
+
+        bs = BoundStorage(FunctionStorageSqlite(db_path=":memory:"), b"exec1")
+        assert bs._shard_key == ""

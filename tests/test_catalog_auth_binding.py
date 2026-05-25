@@ -213,11 +213,13 @@ def test_subprocess_worker_passes_through() -> None:
     with as_principal("test", "alice"):
         result = w.catalog_attach(_attach_request())
         envelope = result.attach_opaque_data
-        # Pass-through: the value is the implementation's raw plaintext.
-        assert envelope == b"readonly-catalog-"
-        # And any "principal" can use it — there is no binding without a key.
+        # No key => no sealing, but the framework still mints a 16-byte shard UUID
+        # and prepends it: the value is uuid(16) || the implementation's plaintext.
+        assert envelope[16:] == b"readonly-catalog-"
+        assert len(envelope) == 16 + len(b"readonly-catalog-")
+        # And any "principal" can use the minted attach — no binding without a key.
     with as_principal("test", "bob"):
-        w.catalog_schemas(b"readonly-catalog-")
+        w.catalog_schemas(envelope)
 
 
 def test_error_parity_across_failure_modes(http_worker: ExampleWorker) -> None:

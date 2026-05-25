@@ -2072,7 +2072,6 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         All registry keys are lowercase for case-insensitive lookups.
         Raises ValueError if duplicate names detected within same schema.
         """
-
         # Import here to avoid circular imports
         from vgi.catalog.descriptors import Schema
 

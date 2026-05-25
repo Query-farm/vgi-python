@@ -58,7 +58,7 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
-from vgi.function_storage import BoundStorage
+from vgi.function_storage import BoundStorage, attach_catalog_bytes
 from vgi.invocation import BindResponse, FunctionType, GlobalInitResponse
 from vgi.otel import VgiTracer, _batch_bytes, _timed_exchange, get_noop_tracer
 from vgi.scalar_function import ScalarFunctionGenerator
@@ -468,6 +468,11 @@ class ScalarExchangeState(ExchangeState):
 
     _init_call: Annotated[InitRequest, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
     _init_response: Annotated[GlobalInitResponse, ArrowType(pa.binary())] = field(default=None, repr=False)  # type: ignore[assignment]
+    # Full framework attach plaintext (uuid||catalog_bytes) persisted through
+    # serialization so each exchange can shard storage on its UUID without
+    # re-unwrapping (the auth-scoped seal can't be reopened, and ctx.implementation
+    # is the MetaWorker under subprocess transport).
+    _plaintext_attach: bytes | None = field(default=None, repr=False)
     _func_cls: Annotated[type[ScalarFunctionGenerator], Transient()] = field(default=None, repr=False)  # type: ignore[assignment]
     _vgi_tracer: Annotated[VgiTracer, Transient()] = field(default_factory=get_noop_tracer, repr=False)
 
@@ -506,9 +511,10 @@ class ScalarExchangeState(ExchangeState):
                 batch=batch,
                 init_call=self._init_call,
                 init_response=self._init_response,
+                # Shard on the UUID of the full attach plaintext persisted at init.
                 storage=BoundStorage(
                     cls.storage, self._init_response.execution_id,
-                    request=self._init_call, auth=ctx.auth,
+                    attach_plaintext=self._plaintext_attach,
                 ),
                 auth_context=ctx.auth,
             )
@@ -995,11 +1001,14 @@ class TableProducerState(ProducerState):
             output_schema=output_schema,
             settings=_batch_to_scalar_dict(self._init_call.bind_call.settings),
             secrets=SecretsAccessor(self._init_call.bind_call.secrets).to_dict(),
+            # Rehydrated tick: the auth-scoped seal can't be reopened here, so we
+            # shard storage on the full plaintext (uuid||catalog_bytes) the init
+            # state persisted; the body sees only the stripped catalog bytes.
             storage=BoundStorage(
                 func_cls.storage, self._init_response.execution_id,
-                request=self._init_call, auth=None,
+                attach_plaintext=self._plaintext_attach,
             ),
-            attach_opaque_data=self._plaintext_attach,
+            attach_opaque_data=attach_catalog_bytes(self._plaintext_attach),
         )
         # Restore _user_state from serialized bytes if available
         if self._user_state_bytes is not None:
@@ -1157,11 +1166,14 @@ class TableInOutExchangeState(ExchangeState):
             output_schema=output_schema,
             settings=_batch_to_scalar_dict(self._init_call.bind_call.settings),
             secrets=SecretsAccessor(self._init_call.bind_call.secrets).to_dict(),
+            # Rehydrated tick: shard storage on the full plaintext the init state
+            # persisted (the auth-scoped seal can't be reopened here); the body
+            # sees only the stripped catalog bytes.
             storage=BoundStorage(
                 func_cls.storage, self._init_response.execution_id,
-                request=self._init_call, auth=None,
+                attach_plaintext=self._plaintext_attach,
             ),
-            attach_opaque_data=self._plaintext_attach,
+            attach_opaque_data=attach_catalog_bytes(self._plaintext_attach),
         )
         # Restore _user_state from serialized bytes if available
         if self._user_state_bytes is not None:

@@ -125,6 +125,23 @@ def _parse_type(expr: str) -> pa.DataType:
         children = [_parse_field(p) for p in _split_top_level_comma(inside)]
         return pa.struct(children)
 
+    if expr.startswith("&arrow.TimestampType{") and expr.endswith("}"):
+        body = expr[len("&arrow.TimestampType{") : -1]
+        kv = {}
+        for part in _split_top_level_comma(body):
+            k, _, v = part.partition(":")
+            kv[k.strip()] = v.strip()
+        unit = {
+            "arrow.Second": "s",
+            "arrow.Millisecond": "ms",
+            "arrow.Microsecond": "us",
+            "arrow.Nanosecond": "ns",
+        }[kv["Unit"]]
+        tz = kv.get("TimeZone", "")
+        if tz.startswith('"') and tz.endswith('"'):
+            tz = tz[1:-1]
+        return cast(pa.DataType, pa.timestamp(unit, tz=tz or None))
+
     raise AssertionError(f"cannot parse generated Go type expression: {expr!r}")
 
 

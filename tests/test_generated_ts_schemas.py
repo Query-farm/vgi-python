@@ -51,7 +51,7 @@ def test_generator_is_deterministic() -> None:
 # Match one exported Schema const. Body (group 2) is empty for `new Schema([])`
 # or the inner Field list for non-empty schemas.
 _SCHEMA_RE = re.compile(
-    r"export const (\w+)Schema = new Schema\("
+    r"export const (\w+)Schema = schema\("
     r"(?:\[\]"
     r"|\[\n(.*?)\n\]"
     r")\);",
@@ -84,73 +84,71 @@ def _parse_type(expr: str) -> pa.DataType:
     expr = _strip_any_casts(expr).strip()
 
     simple: dict[str, pa.DataType] = {
-        "new Null()": pa.null(),
-        "new Bool()": pa.bool_(),
-        "new Int8()": pa.int8(),
-        "new Int16()": pa.int16(),
-        "new Int32()": pa.int32(),
-        "new Int64()": pa.int64(),
-        "new Uint8()": pa.uint8(),
-        "new Uint16()": pa.uint16(),
-        "new Uint32()": pa.uint32(),
-        "new Uint64()": pa.uint64(),
-        "new Float32()": pa.float32(),
-        "new Float64()": pa.float64(),
-        "new Utf8()": pa.string(),
-        "new Binary()": pa.binary(),
+        "null()": pa.null(),
+        "bool()": pa.bool_(),
+        "int8()": pa.int8(),
+        "int16()": pa.int16(),
+        "int32()": pa.int32(),
+        "int64()": pa.int64(),
+        "uint8()": pa.uint8(),
+        "uint16()": pa.uint16(),
+        "uint32()": pa.uint32(),
+        "uint64()": pa.uint64(),
+        "float16()": pa.float16(),
+        "float32()": pa.float32(),
+        "float64()": pa.float64(),
+        "utf8()": pa.string(),
+        "binary()": pa.binary(),
     }
     if expr in simple:
         return simple[expr]
 
-    # new List(new Field("item", T, nullable))
-    if expr.startswith("new List(") and expr.endswith(")"):
-        inner = expr[len("new List(") : -1]
-        field = _parse_field(inner)
-        return pa.list_(field)
+    # list(field("item", T, nullable))
+    if expr.startswith("list(") and expr.endswith(")"):
+        return pa.list_(_parse_field(expr[len("list(") : -1]))
 
-    # new Map_(new Field("entries", new Struct([key,value]), false), <keys_sorted>)
-    if expr.startswith("new Map_(") and expr.endswith(")"):
-        inside = expr[len("new Map_(") : -1]
-        parts = _split_top_level_comma(inside)
-        entries_field = _parse_field(parts[0])
-        keys_sorted = False
-        if len(parts) >= 2:
-            keys_sorted = parts[1].strip() == "true"
-        struct_type = entries_field.type
-        assert isinstance(struct_type, pa.StructType)
-        key_field = struct_type.field(0)
-        value_field = struct_type.field(1)
-        if keys_sorted:
-            return cast(pa.DataType, pa.map_(key_field.type, value_field.type, True))
-        return cast(pa.DataType, pa.map_(key_field.type, value_field.type))
+    # map(field("key", K, n), field("value", V, n), keysSorted)
+    if expr.startswith("map(") and expr.endswith(")"):
+        parts = _split_top_level_comma(expr[len("map(") : -1])
+        key_field = _parse_field(parts[0])
+        value_field = _parse_field(parts[1])
+        keys_sorted = len(parts) >= 3 and parts[2].strip() == "true"
+        return cast(pa.DataType, pa.map_(key_field.type, value_field.type, keys_sorted))
 
-    # new Dictionary(valueType, indexType[, id, ordered])
-    if expr.startswith("new Dictionary(") and expr.endswith(")"):
-        inside = expr[len("new Dictionary(") : -1]
-        parts = _split_top_level_comma(inside)
+    # dictionary(valueType, indexType)
+    if expr.startswith("dictionary(") and expr.endswith(")"):
+        parts = _split_top_level_comma(expr[len("dictionary(") : -1])
         value = _parse_type(parts[0])
         index = _parse_type(parts[1])
-        ordered = False
-        if len(parts) >= 4:
-            ordered = parts[3].strip() == "true"
-        return cast(
-            pa.DataType,
-            pa.dictionary(index, value, ordered=ordered),
-        )
+        return cast(pa.DataType, pa.dictionary(index, value))
 
-    # new Struct([...fields])
-    if expr.startswith("new Struct(") and expr.endswith(")"):
-        inside = expr[len("new Struct(") : -1]
+    # struct([field(...), ...])
+    if expr.startswith("struct(") and expr.endswith(")"):
+        inside = expr[len("struct(") : -1]
         if inside.startswith("[") and inside.endswith("]"):
             inside = inside[1:-1]
         children = [_parse_field(p) for p in _split_top_level_comma(inside)]
         return pa.struct(children)
 
+    # timestamp(TimeUnit.MICROSECOND[, "tz"])
+    if expr.startswith("timestamp(") and expr.endswith(")"):
+        parts = _split_top_level_comma(expr[len("timestamp(") : -1])
+        unit = {
+            "TimeUnit.SECOND": "s",
+            "TimeUnit.MILLISECOND": "ms",
+            "TimeUnit.MICROSECOND": "us",
+            "TimeUnit.NANOSECOND": "ns",
+        }[parts[0].strip()]
+        tz = parts[1].strip() if len(parts) >= 2 else ""
+        if tz.startswith('"') and tz.endswith('"'):
+            tz = tz[1:-1]
+        return cast(pa.DataType, pa.timestamp(unit, tz=tz or None))
+
     raise AssertionError(f"cannot parse generated type expression: {expr!r}")
 
 
 _FIELD_RE = re.compile(
-    r'new Field\(\s*"(?P<name>[^"]+)"\s*,\s*(?P<type>.+)\s*,\s*(?P<nullable>true|false)\s*\)',
+    r'field\(\s*"(?P<name>[^"]+)"\s*,\s*(?P<type>.+)\s*,\s*(?P<nullable>true|false)\s*\)',
     re.DOTALL,
 )
 

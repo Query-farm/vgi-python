@@ -34,7 +34,8 @@ class TestClientCatalogStatelessOperations:
         result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
         assert result.attach_opaque_data is not None
-        assert len(result.attach_opaque_data) == 16  # UUID bytes
+        # 16-byte framework shard UUID + the catalog's own 16-byte UUID.
+        assert len(result.attach_opaque_data) == 32
         assert result.supports_transactions is False
 
     def test_catalogs_works_without_start(self) -> None:

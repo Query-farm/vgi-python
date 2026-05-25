@@ -60,7 +60,7 @@ from vgi.arguments import (
     SecretLookupEntry,
     _extract_setting_secret_params,
 )
-from vgi.function_storage import BoundStorage
+from vgi.function_storage import BoundStorage, attach_catalog_bytes
 from vgi.invocation import (
     BaseInitResponse,
     BindResponse,
@@ -613,9 +613,10 @@ class ScalarFunctionGenerator(vgi.function.Function):
             input.settings,
             secrets_accessor,
             auth,
-            # Plaintext attach for bodies (input.attach_opaque_data stays sealed
-            # for storage sharding); transaction_opaque_data is already sealed.
-            attach_plaintext,
+            # ``attach_plaintext`` is the full framework plaintext (uuid||catalog
+            # bytes); the body sees only the catalog bytes. transaction_opaque_data
+            # is already sealed.
+            attach_catalog_bytes(attach_plaintext),
             input.transaction_opaque_data,
         )
         result = cls.on_bind(bind_params)
@@ -678,17 +679,15 @@ class ScalarFunctionGenerator(vgi.function.Function):
         Deserializes the wrapped bind data, calls on_init(), and
         wraps the result for transmission to process().
 
-        ``input`` carries the SEALED attach; storage shards on it via
-        ``request=`` (the request is never unwrapped in place). ``attach_plaintext``
-        is accepted for a uniform worker dispatch; scalar ``on_init`` does not
-        expose the attach to bodies, so it is unused here.
+        ``attach_plaintext`` is the full framework plaintext (uuid||catalog
+        bytes) the worker unwrapped; storage shards on its UUID. Scalar
+        ``on_init`` does not expose the attach to bodies, so only storage uses it.
         """
-        del attach_plaintext  # uniform-dispatch param; scalar on_init has no attach view
         execution_id = uuid.uuid4().bytes
         result = cls.on_init(
             bind_call=input.bind_call,
             opaque_data=input.bind_opaque_data,
-            storage=BoundStorage(cls.storage, execution_id, request=input, auth=None),
+            storage=BoundStorage(cls.storage, execution_id, request=input, attach_plaintext=attach_plaintext),
         )
 
         return GlobalInitResponse(

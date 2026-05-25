@@ -24,6 +24,7 @@ import logging
 import os
 import threading
 import time
+from typing import Any
 
 _PROFILE_ON = os.environ.get("VGI_STORAGE_PROFILE") == "1"
 _profile_logger = logging.getLogger("vgi.storage.profile")
@@ -118,7 +119,7 @@ def _byte_size(obj: object) -> int:
     return 0
 
 
-def io_call_bytes(args: tuple, kwargs: dict, result: object) -> int:
+def io_call_bytes(args: tuple[Any, ...], kwargs: dict[str, Any], result: object) -> int:
     """Largest single-direction HTTP body for one BoundStorage call.
 
     Writes carry the payload in the args (items / value / appended item);

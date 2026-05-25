@@ -87,15 +87,24 @@ def _strip_extension(x: Any) -> Any:
 def _normalize_for_compare(col: Any, val: Any) -> tuple[Any, Any]:
     """Bring a (column, scalar) pair into a shape pyarrow.compute can compare.
 
-    Two transforms in order:
+    Three transforms in order:
       1. Strip canonical Arrow extension wrappers from both sides.
-      2. If the resulting types still differ (e.g. column is plain
+      2. Decode a dictionary-encoded column to its value type. The
+         compute kernels (``is_in``, ``equal``, …) accept a dictionary
+         column paired with a plain literal, but throw if the literal is
+         *also* dictionary-encoded — so decoding the column (rather than
+         casting the literal up to a dictionary) is the path that
+         resolves. See ``ArrowTypeError: Array type doesn't match type
+         of values set``.
+      3. If the resulting types still differ (e.g. column is plain
          ``bool_`` while the literal came over the wire as
          ``arrow.bool8`` and stripped to ``int8``), cast the literal to
          the column's type so the kernel resolves.
     """
     col = _strip_extension(col)
     val = _strip_extension(val)
+    if pa.types.is_dictionary(col.type):
+        col = col.cast(col.type.value_type)
     if val.type != col.type:
         val = val.cast(col.type)
     return col, val

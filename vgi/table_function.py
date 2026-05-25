@@ -39,7 +39,7 @@ from vgi.arguments import (
     _accepts_none,
     _extract_setting_secret_params,
 )
-from vgi.function_storage import BoundStorage, TransactionBoundStorage
+from vgi.function_storage import BoundStorage, TransactionBoundStorage, attach_catalog_bytes
 from vgi.invocation import (
     BaseInitResponse,
     BindResponse,
@@ -318,9 +318,10 @@ class BindParams[TArgs]:
     # execution_id).
     storage: BoundStorage | None = None
     auth_context: AuthContext = AuthContext.anonymous()
-    # Plaintext (unwrapped) attach for bodies that read it as user data; the
-    # framework unwraps once and sets it. Storage shards on the SEALED form (via
-    # the request), never this. None when there is no attach.
+    # The catalog's attach bytes, unwrapped by the framework (encryption is the
+    # framework's concern, not the user's). This is what the catalog returned at
+    # ``catalog_attach`` — the framework shard-UUID prefix is already stripped.
+    # None when invoked without an ATTACH. Storage shards on that UUID separately.
     attach_opaque_data: bytes | None = None
 
 
@@ -343,9 +344,8 @@ class InitParams[TArgs]:
 
     storage: BoundStorage
     auth_context: AuthContext = AuthContext.anonymous()
-    # Plaintext (unwrapped) attach for bodies that read it as user data; the
-    # framework unwraps once and sets it. Storage shards on the SEALED form (via
-    # the request / init_call), never this. None when there is no attach.
+    # Catalog's attach bytes, unwrapped by the framework (uuid prefix stripped);
+    # None without an ATTACH. See ``BindParams``.
     attach_opaque_data: bytes | None = None
 
 
@@ -380,9 +380,8 @@ class ProcessParams[TArgs]:
     # order under parallel ingest. None for every other call path.
     batch_index: int | None = None
 
-    # Plaintext (unwrapped) attach for bodies that read it as user data; the
-    # framework unwraps once and sets it. Storage shards on the SEALED form (via
-    # the init_call), never this. None when there is no attach.
+    # Catalog's attach bytes, unwrapped by the framework (uuid prefix stripped);
+    # None without an ATTACH. See ``BindParams``.
     attach_opaque_data: bytes | None = None
 
 
@@ -639,27 +638,26 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         a ``BoundStorage`` view keyed by it.
         """
         txn_id = input.transaction_opaque_data
+        # ``attach_plaintext`` is the full framework plaintext (``uuid(16) ||
+        # catalog_bytes``) the worker unwrapped. Storage shards on its UUID;
+        # bodies see only the catalog bytes via ``attach_opaque_data``.
         return BindParams[TArgs](
             args=cls._parse_arguments(cls.FunctionArguments, input.arguments),
             bind_call=input,
             settings=_batch_to_scalar_dict(input.settings),
             secrets=SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided),
-            # Storage shards on the SEALED attach carried in ``input`` (the
-            # request is never unwrapped in place). ``attach_plaintext`` is the
-            # unwrapped form, exposed only via ``BindParams.attach_opaque_data``
-            # for bodies that read the attach as user data.
             transaction_storage=TransactionBoundStorage(
-                cls.storage, txn_id, request=input, auth=auth_context,
+                cls.storage, txn_id, request=input, attach_plaintext=attach_plaintext,
             )
             if txn_id
             else None,
             storage=BoundStorage(
-                cls.storage, execution_id, request=input, auth=auth_context,
+                cls.storage, execution_id, request=input, attach_plaintext=attach_plaintext,
             )
             if execution_id
             else None,
             auth_context=auth_context if auth_context is not None else AuthContext.anonymous(),
-            attach_opaque_data=attach_plaintext,
+            attach_opaque_data=attach_catalog_bytes(attach_plaintext),
         )
 
     # ------------------------------------------------------------------
@@ -761,11 +759,11 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             settings=_batch_to_scalar_dict(input.bind_call.settings),
             secrets=SecretsAccessor(input.bind_call.secrets).to_dict(),
             execution_id=execution_id,
-            # Storage shards on the SEALED attach in ``input`` (never unwrapped in
-            # place); ``attach_plaintext`` is exposed only via attach_opaque_data.
-            storage=BoundStorage(cls.storage, execution_id, request=input, auth=auth),
+            # ``attach_plaintext`` is the full framework plaintext (uuid||catalog
+            # bytes); storage shards on its UUID, the body sees the catalog bytes.
+            storage=BoundStorage(cls.storage, execution_id, request=input, attach_plaintext=attach_plaintext),
             auth_context=auth,
-            attach_opaque_data=attach_plaintext,
+            attach_opaque_data=attach_catalog_bytes(attach_plaintext),
         )
 
         result = cls.on_init(params)

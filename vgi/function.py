@@ -41,11 +41,24 @@ from vgi.metadata import MetadataMixin, ResolvedMetadata
 def _resolve_storage() -> FunctionStorage:
     """Resolve the default FunctionStorage backend from environment."""
     backend = os.environ.get("VGI_WORKER_SHARED_STORAGE", "sqlite").lower()
+    if backend == "memory":
+        # In-process tier: SQLite at ":memory:" (shared-cache, process-local).
+        # Ignores VGI_WORKER_SQLITE_PATH by design — "memory" always means a
+        # process-local store with no cross-process coordination. Correct only
+        # for single-process deployments; use "sqlite" (file) for multi-process
+        # on one machine, "cloudflare-do" for cross-machine.
+        return FunctionStorageSqlite(db_path=":memory:")
     if backend == "sqlite":
         # VGI_WORKER_SQLITE_PATH=":memory:" picks the in-process shared-cache
         # in-memory backend. Used by single-process test fixtures (notably
         # the test fixture HTTP server) to avoid per-op WAL fsync cost.
         db_path = os.environ.get("VGI_WORKER_SQLITE_PATH") or None
+        if os.environ.get("VGI_SQLITE_SHARD") == "1":
+            # Debug: partition sqlite by shard_key to reproduce cloudflare-do
+            # per-DO isolation locally (surfaces shard-routing bugs sqlite hides).
+            from vgi.function_storage import ShardedSqliteStorage
+
+            return ShardedSqliteStorage(db_path)
         return FunctionStorageSqlite(db_path=db_path)
     if backend == "azure-sql":
         from vgi.function_storage_azure_sql import FunctionStorageAzureSql
@@ -56,7 +69,7 @@ def _resolve_storage() -> FunctionStorage:
 
         return FunctionStorageCfDo.from_env()
     raise ValueError(
-        f"Unknown VGI_WORKER_SHARED_STORAGE backend: {backend!r}. Supported: 'sqlite', 'azure-sql', 'cloudflare-do'"
+        f"Unknown VGI_WORKER_SHARED_STORAGE backend: {backend!r}. Supported: 'memory', 'sqlite', 'azure-sql', 'cloudflare-do'"
     )
 
 

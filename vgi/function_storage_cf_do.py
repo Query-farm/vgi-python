@@ -38,12 +38,10 @@ Workflow contract:
 
 """
 
-import atexit
 import base64
 import json
 import logging
 import os
-import threading
 import time
 import uuid
 from collections.abc import Iterator
@@ -96,6 +94,11 @@ class FunctionStorageCfDo:
     # This backend self-profiles at the transport layer (``_post``), so the
     # BoundStorage facade defers to avoid double-counting. See _storage_profile.
     _profiles_at_transport = True
+
+    # Remote-sharding backend: every request must carry a valid shard_key, so a
+    # BoundStorage built without a sealed attach is a hard error rather than a
+    # silent collapse onto one DO. See _resolve_shard_key in function_storage.py.
+    requires_shard_key = True
 
     # Connection-level retries (DNS / TCP / TLS handshake failures).
     # Status- and read-level retries are layered on top in ``_post`` so

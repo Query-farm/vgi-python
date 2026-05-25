@@ -19,7 +19,6 @@ Implementations:
 
 import enum
 import functools
-import hashlib
 import logging
 import os
 import sqlite3
@@ -125,25 +124,40 @@ def _coerce_ns(ns: "bytes | FrameworkNS") -> bytes:
     return ns_bytes
 
 
-def _derive_shard_key(*, attach_opaque_data: bytes | None, auth: Any, _origin: str = "?") -> str:
+# Width of the framework UUID at the head of every unwrapped attach plaintext
+# (``uuid(16) || catalog_bytes``). Mirrors ``worker._ATTACH_UUID_LEN``.
+_ATTACH_UUID_LEN = 16
+
+
+def attach_catalog_bytes(attach_plaintext: bytes | None) -> bytes | None:
+    """Strip the framework shard-UUID prefix from a full attach plaintext.
+
+    The framework unwraps an attach to ``uuid(16) || catalog_bytes``; function
+    bodies see only ``catalog_bytes`` (what the catalog returned). Returns None
+    when there is no attach.
+    """
+    return attach_plaintext[_ATTACH_UUID_LEN:] if attach_plaintext else None
+
+
+def _derive_shard_key(*, attach_uuid: bytes | None, _origin: str = "?") -> str:
     """Return the routing key for the ``FunctionStorageCfDo`` Durable Object.
 
     Server-derived inside the trusted worker process. The CF DO routes by
     this key (``idFromName(shard_key)``), so one DO instance hosts every
-    storage op carrying the same shard_key. Precedence:
+    storage op carrying the same shard_key.
 
-      1. ``attach_opaque_data`` (worker-vended bytes from ``catalog_attach``) — one
-         DO per logical ATTACH. Best amortization for ATTACH-ed catalogs.
-         Note: workers are NOT required to make attach_opaque_data values globally unique,
-         so collisions across processes are possible. MetaWorker prepends
-         a 1-byte sub-worker index, which keeps shards distinct *within*
-         one DuckDB session.
-      2. Hash of ``(auth.domain, auth.principal)`` — HTTP transport,
-         authenticated, no ATTACH. One DO per (user, deployment).
-      3. ``"loc-anon"`` — anonymous, no-ATTACH callers. Single shared DO
-         for this entire class of traffic. Reintroduces a per-class
-         single-DO bottleneck, accepted because anonymous workloads
-         (subprocess transport, local CLIs) are typically dev/test.
+    Single rule: ``"att-" + attach_uuid.hex()`` where ``attach_uuid`` is the
+    framework-minted 16-byte UUID at the head of the **unwrapped** attach
+    (``catalog_attach`` prepends it; see ``_AttachUnwrapper`` in worker.py).
+    One DO per logical ATTACH. We shard on the UUID — not the sealed bytes —
+    because the seal uses a random nonce (re-sealing the same attach would
+    otherwise scatter its state across DOs) and the catalog-vended plaintext
+    isn't guaranteed unique (distinct attaches would otherwise collide). The
+    UUID is stable across re-seals and globally unique; 36-char key, ≤128.
+
+    ``attach_uuid`` must be exactly 16 bytes: the storage path is always bound
+    to a logical ATTACH, so a missing/short value is a programming error and
+    raises rather than collapsing traffic onto a single fallback DO.
 
     No-op for non-CfDo backends — they ignore the value.
 
@@ -151,24 +165,42 @@ def _derive_shard_key(*, attach_opaque_data: bytes | None, auth: Any, _origin: s
     Emitted as a ``vgi.storage.shard`` debug log for cross-referencing
     storage-routing bugs with MetaWorker dispatch logs.
     """
-    if attach_opaque_data is not None:
-        key = "att-" + attach_opaque_data.hex()
-    elif auth is not None and getattr(auth, "authenticated", False):
-        domain = getattr(auth, "domain", "")
-        principal = getattr(auth, "principal", "")
-        digest = hashlib.sha256(f"{domain}\0{principal}".encode()).hexdigest()
-        key = "prn-" + digest[:32]
-    else:
-        key = "loc-anon"
-    if _shard_logger.isEnabledFor(logging.DEBUG):
-        _shard_logger.debug(
-            "shard derived origin=%s attach_opaque_data=%s authed=%d key=%s",
-            _origin,
-            attach_opaque_data.hex()[:16] if attach_opaque_data else "-",
-            int(bool(auth is not None and getattr(auth, "authenticated", False))),
-            key,
+    if not attach_uuid or len(attach_uuid) != 16:
+        raise ValueError(
+            f"cannot derive shard_key without a 16-byte attach uuid (origin={_origin}, "
+            f"got {len(attach_uuid) if attach_uuid else 0} bytes); the storage path "
+            "must be bound to a logical ATTACH"
         )
+    key = "att-" + attach_uuid.hex()
+    if _shard_logger.isEnabledFor(logging.DEBUG):
+        _shard_logger.debug("shard derived origin=%s uuid=%s key=%s", _origin, attach_uuid.hex(), key)
     return key
+
+
+def _resolve_shard_key(backend: Any, attach_plaintext: bytes | None, _origin: str) -> str:
+    """Compute the shard_key for a ``BoundStorage`` over ``backend``.
+
+    ``attach_plaintext`` is the framework-unwrapped attach, laid out as
+    ``uuid(16) || catalog_bytes`` (the worker unwraps and threads it in; see
+    ``_AttachUnwrapper``-free flow in worker.py), or None when there is no
+    ATTACH. We shard on the leading UUID for any backend (so the debug
+    ``ShardedSqliteStorage`` partitions too). When there is no attach, only a
+    remote-sharding backend (``requires_shard_key``, i.e. CfDo) treats it as a
+    hard error; everything else gets an empty key — local / subprocess
+    executions are routinely not bound to an ATTACH and ignore the value anyway.
+    """
+    uuid = (
+        attach_plaintext[:_ATTACH_UUID_LEN]
+        if attach_plaintext and len(attach_plaintext) >= _ATTACH_UUID_LEN
+        else None
+    )
+    if uuid:
+        return _derive_shard_key(attach_uuid=uuid, _origin=_origin)
+    if getattr(backend, "requires_shard_key", False):
+        # Remote-sharding backend with no attach: refuse rather than collapse
+        # onto a single hot DO.
+        return _derive_shard_key(attach_uuid=uuid, _origin=_origin)
+    return ""
 
 
 def _scan_worker_stream_id() -> bytes:
@@ -235,21 +267,27 @@ class FunctionStorage(Protocol):
     workers atomically claim. Distinct from state_* (destructive consume,
     not key-addressable).
 
-    Idempotency: backends generate ``attempt_id`` per call internally
-    (CfDo before its HTTP retry loop, SQLite/Azure SQL fresh per call)
-    and use it to detect replays. ``state_put_many`` retries silent
-    no-op; ``state_drain`` retries return prior tombstoned values
-    byte-identically.
+    Idempotency: a concern of the remote (HTTP) tier only. The CfDo backend
+    generates an internal ``attempt_id`` per call so a retried ``state_put_many``
+    is a silent no-op and a retried ``state_drain`` returns the prior values.
+    The local SQLite tier is a single connection per process with no network
+    retries, so it carries no replay-detection (and no idempotency columns).
 
     """
+
+    # Note: backends that route remotely on ``shard_key`` (CfDo) set a
+    # ``requires_shard_key = True`` class attribute; ``_resolve_shard_key`` reads
+    # it via ``getattr(.., False)``. It is intentionally NOT declared here as a
+    # Protocol member so the in-process backends (SQLite / Azure), which ignore
+    # shard_key, still structurally satisfy ``FunctionStorage`` without it.
 
     # --- Work Queue (distributed work items) ---
 
     def queue_push(self, execution_id: bytes, items: list[bytes], *, shard_key: str = "") -> int:
-        """Add work items to the queue and register the invocation.
+        """Append work items to the queue.
 
-        This method registers the execution_id as valid, allowing subsequent
-        queue_pop calls. Even if items is empty, the invocation is registered.
+        There is no registration step — the queue tracks only the items
+        themselves (matching the Durable Object).
 
         Args:
             execution_id: Unique identifier for the function invocation.
@@ -274,18 +312,16 @@ class FunctionStorage(Protocol):
                 from the caller's attach_opaque_data / auth context.
 
         Returns:
-            Serialized work item bytes, or None if the queue is empty or
-            the execution_id was never registered. The protocol contract
-            says ids are never reused and clients always push before pop,
-            so a None result on a never-registered id indicates a buggy
-            client; the backend does not distinguish that case from a
-            drained queue.
+            Serialized work item bytes, or None if the queue is empty or the
+            execution_id was never pushed. There is no registration, so the
+            backend does not distinguish a never-pushed id from a drained
+            queue — both return None (matching the Durable Object).
 
         """
         ...
 
     def queue_clear(self, execution_id: bytes, *, shard_key: str = "") -> int:
-        """Clear all remaining work items and unregister the invocation.
+        """Clear all remaining work items for the execution.
 
         Args:
             execution_id: Unique identifier for the function invocation.
@@ -317,12 +353,11 @@ class FunctionStorage(Protocol):
     # the caller (e.g. ``b"agg"`` for aggregate state, ``b"buf"`` for buffered
     # accumulators); the storage doesn't interpret it.
     #
-    # Idempotency: the public API does not expose ``attempt_id``. Each backend
-    # generates its own ``attempt_id = uuid.uuid4().bytes`` per call and uses
-    # it for replay-detection (silent no-op for ``state_put_many`` retries,
-    # read-back for ``state_drain`` retries). The CfDo HTTP client splices
-    # the same id into retries within its ``_post()`` retry loop so server-
-    # side replay-detection works across the network.
+    # Idempotency: the public API does not expose ``attempt_id``. It is an
+    # HTTP-tier concern — the CfDo client generates one per call and splices the
+    # same id into retries within its ``_post()`` loop so the Durable Object can
+    # detect a replay across the network. The local SQLite tier has no network
+    # retries and carries no replay-detection (nor the idempotency columns).
 
     def state_get_many(
         self,
@@ -365,10 +400,10 @@ class FunctionStorage(Protocol):
         in the batch is written, or none are. Existing values for the same
         ``(scope_id, ns, key)`` are overwritten.
 
-        Internally generates an ``attempt_id`` for backend replay-detection;
-        a retried call (e.g. CfDo HTTP retry on transport failure) carrying
-        the same id is detected as a replay and silently no-ops (the
-        prior successful call's result is the ground truth).
+        Remote backends (CfDo) carry an internal ``attempt_id`` so an HTTP
+        retry is detected as a replay and silently no-ops. Local backends
+        (SQLite) are a single connection per process with no network retries,
+        so they need no replay-detection.
         """
         ...
 
@@ -399,12 +434,11 @@ class FunctionStorage(Protocol):
     ) -> Iterable[tuple[bytes, bytes]]:
         """Atomically scan-and-delete every ``(key, value)`` in one namespace.
 
-        Returns an iterable of ``(key, value)`` ordered by key. Tombstones the
-        rows internally for replay-detection: a retried call with the same
-        internal ``attempt_id`` returns the same drained values without
-        re-deleting. The ``cloudflare-do`` backend streams the result in pages
-        but the drain is atomic — beginning to iterate claims the whole
-        namespace, so always consume the iterable fully.
+        Returns an iterable of ``(key, value)`` ordered by key. Remote backends
+        (CfDo) tombstone the rows for HTTP replay-detection (a retried drain
+        returns the same values without re-deleting) and stream the result in
+        pages; local backends delete outright. The drain is atomic — beginning
+        to iterate claims the whole namespace, so always consume it fully.
         """
         ...
 
@@ -460,13 +494,12 @@ class FunctionStorage(Protocol):
         append order. Concurrent appenders to the *same* key get distinct
         ordinals but interleaving across writers is undefined.
 
-        **Idempotency scope.** The internal ``attempt_id`` covers
-        *transport-layer* retries within a single backend call: an HTTP
-        retry on CfDo carries the same id and replays correctly; a
-        pymssql ``OperationalError`` retry on Azure SQL replays correctly.
-        **Caller-level retries** (re-invoking ``state_append`` for the
-        same logical record after the call already returned) generate a
-        fresh id and produce duplicate rows. If you need caller-level
+        **Idempotency scope.** Remote backends carry an internal
+        ``attempt_id`` covering *transport-layer* retries within a single
+        backend call (an HTTP retry on CfDo replays correctly); local SQLite
+        has no retry layer. **Caller-level retries** (re-invoking
+        ``state_append`` for the same logical record after the call already
+        returned) always produce duplicate rows. If you need caller-level
         idempotency, dedupe on the caller side — e.g., check
         ``state_log_scan`` before appending, or key your namespace on a
         stable content hash.
@@ -511,25 +544,21 @@ class TransactionBoundStorage:
         transaction_opaque_data: bytes,
         *,
         request: Any = None,
-        attach_opaque_data: bytes | None = None,
-        auth: Any = None,
+        attach_plaintext: bytes | None = None,
         shard_key: str | None = None,
     ) -> None:
         self._base = storage
         self._transaction_opaque_data = transaction_opaque_data
-        # Caller may pass shard_key directly (e.g. inherited from a parent
-        # BoundStorage), or pass request= / attach_opaque_data= / auth= and let us
-        # derive. See BoundStorage for the request= polymorphism.
+        # ``attach_plaintext`` is the framework-unwrapped attach
+        # (``uuid(16) || catalog_bytes``); we shard on its leading UUID. Callers
+        # may instead pass an already-resolved ``shard_key=`` (e.g. inherited
+        # from a parent BoundStorage). ``request=`` only labels the origin.
         if shard_key is None:
-            origin = "TransactionBoundStorage"
-            if attach_opaque_data is None and request is not None:
-                attach_opaque_data = getattr(request, "attach_opaque_data", None)
-                if attach_opaque_data is None:
-                    bind_call = getattr(request, "bind_call", None)
-                    if bind_call is not None:
-                        attach_opaque_data = getattr(bind_call, "attach_opaque_data", None)
-                origin = f"TransactionBoundStorage({type(request).__name__})"
-            shard_key = _derive_shard_key(attach_opaque_data=attach_opaque_data, auth=auth, _origin=origin)
+            origin = (
+                f"TransactionBoundStorage({type(request).__name__})" if request is not None
+                else "TransactionBoundStorage"
+            )
+            shard_key = _resolve_shard_key(storage, attach_plaintext, origin)
         self._shard_key = shard_key
 
     # Backed by the unified state_* API: scope_id = transaction_opaque_data,
@@ -585,26 +614,18 @@ class BoundStorage:
         execution_id: bytes,
         *,
         request: Any = None,
-        attach_opaque_data: bytes | None = None,
-        auth: Any = None,
+        attach_plaintext: bytes | None = None,
     ):
         self._base = storage
         self._execution_id = execution_id
-        # ``request=`` is a convenience for the worker sites that already
-        # have a BindRequest / InitRequest / AggregateBindRequest in scope:
-        # we pull attach_opaque_data off either ``request.attach_opaque_data`` (Bind variants)
-        # or ``request.bind_call.attach_opaque_data`` (InitRequest). Callers may
-        # alternatively pass ``attach_opaque_data=`` directly; anonymous callers
-        # fall through to "loc-anon".
-        origin = "BoundStorage"
-        if attach_opaque_data is None and request is not None:
-            attach_opaque_data = getattr(request, "attach_opaque_data", None)
-            if attach_opaque_data is None:
-                bind_call = getattr(request, "bind_call", None)
-                if bind_call is not None:
-                    attach_opaque_data = getattr(bind_call, "attach_opaque_data", None)
-            origin = f"BoundStorage({type(request).__name__})"
-        self._shard_key = _derive_shard_key(attach_opaque_data=attach_opaque_data, auth=auth, _origin=origin)
+        # ``attach_plaintext`` is the framework-unwrapped attach
+        # (``uuid(16) || catalog_bytes``); we shard on its leading UUID. The
+        # worker unwraps once and threads it in. ``request=`` only labels the
+        # derivation origin for debug logs.
+        origin = (
+            f"BoundStorage({type(request).__name__})" if request is not None else "BoundStorage"
+        )
+        self._shard_key = _resolve_shard_key(storage, attach_plaintext, origin)
 
     def transaction(self, transaction_opaque_data: bytes) -> TransactionBoundStorage:
         """Return a transaction-scoped storage view.
@@ -613,8 +634,8 @@ class BoundStorage:
         multiple statements in one SQL transaction (e.g. Kafka topic
         watermarks, for snapshot-isolation reads).
         """
-        # Inherit our shard_key directly — both views are part of the
-        # same logical attach.
+        # Inherit our resolved shard_key directly — both views are part of the
+        # same logical attach and shard identically.
         return TransactionBoundStorage(
             self._base,
             transaction_opaque_data,
@@ -790,12 +811,13 @@ class FunctionStorageSqlite:
     """SQLite-backed storage for VGI function state.
 
     This implementation uses SQLite with WAL mode to allow multiple worker
-    processes to share state. It manages these tables:
+    processes to share state. It manages the three unified tables (the same
+    shape every backend uses):
 
-    - global_state_storage: Key-value store for init data
-    - worker_state: Per-worker partial state keyed by (execution_id, worker_id)
-    - work_queue: FIFO queue of work items per invocation
-    - aggregate_state: Per-group-id state for aggregate functions
+    - function_state: composite-key K/V over (scope_id, ns, key) — the single
+      home for per-execution / per-transaction / per-group / per-pid state
+    - function_state_log: append-only log keyed by (scope_id, ns, key)
+    - work_queue: FIFO queue of work items per execution
 
     """
 
@@ -882,100 +904,70 @@ class FunctionStorageSqlite:
         """
         conn = self._connect()
         try:
-            # Drop tables with stale schema (e.g. invocation_id instead of
-            # execution_id, or a pre-replay function_state missing
-            # last_attempt_id). The data here is ephemeral in-progress worker
-            # state, so dropping + recreating is safe and self-heals an older
-            # on-disk DB across an upgrade.
-            for table, required_col in [
-                ("worker_state", "execution_id"),
-                ("work_queue", "execution_id"),
-                ("invocation_registry", "execution_id"),
+            # Self-heal an older on-disk DB to the unified minimal schema. The
+            # local SQLite tier is single-connection-per-process with no network
+            # retries, so it carries none of the DO's HTTP idempotency machinery
+            # (last_attempt_id / drained_* / attempt_id / created_at). Drop any
+            # table left over with the old idempotency columns so the CREATEs
+            # below recreate the minimal shape. All of this state is ephemeral
+            # in-progress worker state, so dropping + recreating is safe.
+            for table, stale_col in [
                 ("function_state", "last_attempt_id"),
                 ("function_state_log", "attempt_id"),
+                ("work_queue", "created_at"),
             ]:
-                cursor = conn.execute(f"PRAGMA table_info({table})")  # noqa: S608
-                columns = {row[1] for row in cursor.fetchall()}
-                if columns and required_col not in columns:
+                cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}  # noqa: S608
+                if stale_col in cols:
                     conn.execute(f"DROP TABLE IF EXISTS {table}")  # noqa: S608
+            # Tables eliminated by the unified schema: worker collect now rides
+            # function_state + state_drain, and the queue carries no registration
+            # (matching the Durable Object — pop on an unknown id returns None).
+            for dead in ("global_state_storage", "worker_state", "invocation_registry", "init_storage"):
+                conn.execute(f"DROP TABLE IF EXISTS {dead}")  # noqa: S608
 
-            # Also drop old table names from previous versions
-            conn.execute("DROP TABLE IF EXISTS init_storage")
-
-            # Global state table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS global_state_storage (
-                    key BLOB PRIMARY KEY,
-                    value BLOB NOT NULL,
-                    created_at REAL DEFAULT (julianday('now'))
-                )
-            """)
-            # Work queue table
+            # ----------------------------------------------------------------
+            # Unified schema — the same three tables every backend uses (the
+            # Durable Object adds an HTTP-idempotency column layer on top).
+            #   work_queue          — FIFO work items, destructive pop.
+            #   function_state      — composite-key K/V over (scope_id, ns, key);
+            #                          the single home for per-execution /
+            #                          per-transaction / per-group / per-pid
+            #                          state. Caller picks ``ns``; storage
+            #                          doesn't interpret it.
+            #   function_state_log  — append-only log keyed by (scope, ns, key);
+            #                          the AUTOINCREMENT id is the scan cursor.
+            # ----------------------------------------------------------------
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS work_queue (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     execution_id BLOB NOT NULL,
-                    work_item BLOB NOT NULL,
-                    created_at REAL DEFAULT (julianday('now'))
+                    work_item BLOB NOT NULL
                 )
             """)
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_work_queue_invocation
-                ON work_queue(execution_id)
+                CREATE INDEX IF NOT EXISTS idx_work_queue_execution
+                ON work_queue(execution_id, id)
             """)
-            # Invocation registry - tracks valid invocation IDs for queue operations
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS invocation_registry (
-                    execution_id BLOB PRIMARY KEY,
-                    created_at REAL DEFAULT (julianday('now'))
-                )
-            """)
-            # ----------------------------------------------------------------
-            # Unified state_* tables — composite-key K/V over (scope_id, ns,
-            # key). The single home for per-execution / per-transaction /
-            # per-group / per-pid state. Caller chooses the namespace via
-            # the ``ns`` column; storage doesn't interpret it.
-            #
-            # last_attempt_id powers internal replay-detection: a retried
-            # state_put_many with the same id is a silent no-op; a retried
-            # state_drain returns the prior tombstoned values. CfDo client
-            # generates the id (per-HTTP-call); SQLite generates per-call too
-            # so the semantic is uniform across backends.
-            #
-            # Tombstone columns drained_at / drained_by_attempt mark rows
-            # that state_drain has consumed; rows linger until cleanup_old_entries
-            # sweeps them past the retention horizon.
-            # ----------------------------------------------------------------
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS function_state (
-                    scope_id           BLOB NOT NULL,
-                    ns                 BLOB NOT NULL,
-                    key                BLOB NOT NULL,
-                    value              BLOB NOT NULL,
-                    last_attempt_id    BLOB NOT NULL,
-                    drained_at         REAL DEFAULT NULL,
-                    drained_by_attempt BLOB DEFAULT NULL,
-                    created_at         REAL DEFAULT (julianday('now')),
+                    scope_id BLOB NOT NULL,
+                    ns       BLOB NOT NULL,
+                    key      BLOB NOT NULL,
+                    value    BLOB NOT NULL,
                     PRIMARY KEY (scope_id, ns, key)
                 )
             """)
-            # function_state_log: append-only log keyed by (scope_id, ns, key).
-            # Each (scope, ns, key, attempt_id) is unique so a retried
-            # state_append (Step 2) maps back to the prior ordinal.
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS function_state_log (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    scope_id    BLOB NOT NULL,
-                    ns          BLOB NOT NULL,
-                    key         BLOB NOT NULL,
-                    value       BLOB NOT NULL,
-                    attempt_id  BLOB NOT NULL,
-                    created_at  REAL DEFAULT (julianday('now')),
-                    UNIQUE (scope_id, ns, key, attempt_id)
+                    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scope_id BLOB NOT NULL,
+                    ns       BLOB NOT NULL,
+                    key      BLOB NOT NULL,
+                    value    BLOB NOT NULL
                 )
             """)
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS function_state_log_lookup_idx
+                CREATE INDEX IF NOT EXISTS idx_function_state_log_lookup
                     ON function_state_log(scope_id, ns, key, id)
             """)
             conn.commit()
@@ -985,14 +977,8 @@ class FunctionStorageSqlite:
     # --- Work Queue ---
 
     def queue_push(self, execution_id: bytes, items: list[bytes], *, shard_key: str = "") -> int:
-        """Add work items to the queue and register the invocation."""
+        """Append work items to the queue."""
         conn = self._conn()
-        # Register the execution_id (idempotent)
-        conn.execute(
-            "INSERT OR IGNORE INTO invocation_registry (execution_id) VALUES (?)",
-            (execution_id,),
-        )
-        # Add work items if any
         if items:
             conn.executemany(
                 """
@@ -1007,8 +993,8 @@ class FunctionStorageSqlite:
     def queue_pop(self, execution_id: bytes, *, shard_key: str = "") -> bytes | None:
         """Atomically claim one work item from the queue.
 
-        Returns None when the queue is empty *or* the execution_id was
-        never pushed — see the base-class docstring.
+        Returns None when the queue is empty or the execution_id was never
+        pushed — there is no registration, matching the Durable Object.
         """
         conn = self._conn()
         cursor = conn.execute(
@@ -1029,15 +1015,10 @@ class FunctionStorageSqlite:
         return row[0] if row else None
 
     def queue_clear(self, execution_id: bytes, *, shard_key: str = "") -> int:
-        """Clear all remaining work items and unregister the invocation."""
+        """Clear all remaining work items for the execution."""
         conn = self._conn()
         cursor = conn.execute(
             "DELETE FROM work_queue WHERE execution_id = ?",
-            (execution_id,),
-        )
-        # Unregister the invocation
-        conn.execute(
-            "DELETE FROM invocation_registry WHERE execution_id = ?",
             (execution_id,),
         )
         conn.commit()
@@ -1047,13 +1028,10 @@ class FunctionStorageSqlite:
     # Unified state_* implementation
     # ========================================================================
     #
-    # See FunctionStorage protocol docstrings + plan file for contracts.
-    # Idempotency: every mutating call generates ``attempt_id = uuid.uuid4().bytes``
-    # internally. SQLite is single-process (modulo WAL cross-process), so
-    # retries within one Python process don't actually happen — but
-    # implementing the same replay-detection pattern as the CfDo backend
-    # keeps the semantic uniform across backends and protects multi-process
-    # subprocess workers retrying after a crash.
+    # See FunctionStorage protocol docstrings for contracts. No idempotency /
+    # replay-detection here: that exists only on the HTTP tier (the Durable
+    # Object) to dedup network retries. A local SQLite connection has no retry
+    # layer above these methods, so mutations are plain writes.
 
     def state_get_many(
         self,
@@ -1068,14 +1046,11 @@ class FunctionStorageSqlite:
         if not keys:
             return []
         conn = self._conn()
-        # Returns rows in key-list order via a CASE, so callers don't have to
-        # re-sort. Tombstoned rows (drained_at IS NOT NULL) are invisible.
         placeholders = ",".join("?" for _ in keys)
         rows = conn.execute(
             f"""
             SELECT key, value FROM function_state
             WHERE scope_id = ? AND ns = ? AND key IN ({placeholders})
-              AND drained_at IS NULL
             """,
             (scope_id, ns, *keys),
         ).fetchall()
@@ -1090,46 +1065,19 @@ class FunctionStorageSqlite:
         *,
         shard_key: str = "",
     ) -> None:
-        """Atomic batched upsert. First-key replay-detection on attempt_id."""
+        """Atomic batched upsert by (scope_id, ns, key)."""
         del shard_key
         if not items:
             return
-        import uuid
-
-        attempt_id = uuid.uuid4().bytes
-        # Replay-detection: check whether the FIRST item is already present
-        # with this attempt_id. Mirrors today's CfDo aggregate_state_put
-        # check (`index.ts:618`); first-key check is sufficient because
-        # state_put_many is atomic per call (all-or-none under SQLite's
-        # statement isolation), so seeing the first key persisted with our
-        # attempt_id means the whole batch was persisted.
-        first_key, _ = items[0]
         conn = self._conn()
-        prior_row = conn.execute(
-            """
-            SELECT 1 FROM function_state
-            WHERE scope_id = ? AND ns = ? AND key = ? AND last_attempt_id = ?
-            """,
-            (scope_id, ns, first_key, attempt_id),
-        ).fetchone()
-        # Per-process attempt_id collision is astronomically rare (UUID4),
-        # but we check anyway for symmetry with CfDo.
-        if prior_row is not None:
-            return
         conn.executemany(
             """
-            INSERT INTO function_state
-                (scope_id, ns, key, value, last_attempt_id, created_at,
-                 drained_at, drained_by_attempt)
-            VALUES (?, ?, ?, ?, ?, julianday('now'), NULL, NULL)
+            INSERT INTO function_state (scope_id, ns, key, value)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(scope_id, ns, key) DO UPDATE SET
-                value = excluded.value,
-                last_attempt_id = excluded.last_attempt_id,
-                created_at = julianday('now'),
-                drained_at = NULL,
-                drained_by_attempt = NULL
+                value = excluded.value
             """,
-            [(scope_id, ns, k, v, attempt_id) for k, v in items],
+            [(scope_id, ns, k, v) for k, v in items],
         )
         conn.commit()
 
@@ -1140,13 +1088,13 @@ class FunctionStorageSqlite:
         *,
         shard_key: str = "",
     ) -> list[tuple[bytes, bytes]]:
-        """Non-destructive scan of all live (key, value) in a namespace."""
+        """Non-destructive scan of all (key, value) in a namespace."""
         del shard_key
         conn = self._conn()
         rows = conn.execute(
             """
             SELECT key, value FROM function_state
-            WHERE scope_id = ? AND ns = ? AND drained_at IS NULL
+            WHERE scope_id = ? AND ns = ?
             """,
             (scope_id, ns),
         ).fetchall()
@@ -1159,38 +1107,20 @@ class FunctionStorageSqlite:
         *,
         shard_key: str = "",
     ) -> list[tuple[bytes, bytes]]:
-        """Destructive scan-and-tombstone. Replay returns prior tombstoned values."""
+        """Atomic destructive scan: read all (key, value) in a namespace and delete them."""
         del shard_key
-        import uuid
-
-        attempt_id = uuid.uuid4().bytes
         conn = self._conn()
-        # Replay: if any rows are already tombstoned with this attempt_id,
-        # return them without re-tombstoning. Mirrors CfDo's worker_collect
-        # read-back replay (`index.ts:368`).
-        replay_rows = conn.execute(
-            """
-            SELECT key, value FROM function_state
-            WHERE scope_id = ? AND ns = ? AND drained_by_attempt = ?
-            ORDER BY key
-            """,
-            (scope_id, ns, attempt_id),
-        ).fetchall()
-        if replay_rows:
-            return [(bytes(k), bytes(v)) for k, v in replay_rows]
-        # Fresh drain: tombstone live rows for this attempt_id, then read
-        # them back. UPDATE ... RETURNING is SQLite ≥3.35; available in
-        # all supported Python builds. Two-statement is also fine —
-        # SQLite serializes within one connection.
+        # DELETE ... RETURNING (SQLite ≥3.35) reads and removes in one
+        # statement; the connection serializes it. No tombstone/replay layer —
+        # that exists only on the HTTP tier (the Durable Object) for retry
+        # safety, which a single local connection doesn't face.
         rows = conn.execute(
             """
-            UPDATE function_state
-            SET drained_at = julianday('now'),
-                drained_by_attempt = ?
-            WHERE scope_id = ? AND ns = ? AND drained_at IS NULL
+            DELETE FROM function_state
+            WHERE scope_id = ? AND ns = ?
             RETURNING key, value
             """,
-            (attempt_id, scope_id, ns),
+            (scope_id, ns),
         ).fetchall()
         conn.commit()
         return [(bytes(k), bytes(v)) for k, v in rows]
@@ -1254,37 +1184,18 @@ class FunctionStorageSqlite:
         *,
         shard_key: str = "",
     ) -> int:
-        """Append item; return ordinal. Defensive against transport-layer replay only."""
+        """Append item to the (scope_id, ns, key) log; return its ordinal (the row id)."""
         del shard_key
-        import uuid
-
-        attempt_id = uuid.uuid4().bytes
         conn = self._conn()
-        # INSERT OR IGNORE + SELECT-by-attempt_id is structurally a replay
-        # primitive but currently has no path to fire: SQLite has no retry
-        # layer above this method, and the public state_append signature
-        # generates a fresh UUID4 per call (no caller-supplied attempt_id).
-        # The pattern is here for symmetry with the Azure SQL / CfDo
-        # implementations and to leave the door open for future exposure
-        # of caller-level attempt_id. Could be simplified to
-        # `INSERT ... RETURNING id` (SQLite ≥3.35) if we commit to never
-        # exposing that contract — would save one SQL round-trip per call.
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO function_state_log
-                (scope_id, ns, key, value, attempt_id)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (scope_id, ns, key, item, attempt_id),
-        )
-        conn.commit()
         row = conn.execute(
             """
-            SELECT id FROM function_state_log
-            WHERE scope_id = ? AND ns = ? AND key = ? AND attempt_id = ?
+            INSERT INTO function_state_log (scope_id, ns, key, value)
+            VALUES (?, ?, ?, ?)
+            RETURNING id
             """,
-            (scope_id, ns, key, attempt_id),
+            (scope_id, ns, key, item),
         ).fetchone()
+        conn.commit()
         return int(row[0])
 
     def state_log_scan(
@@ -1313,35 +1224,6 @@ class FunctionStorageSqlite:
             sql, (scope_id, ns, key, after_id, sqlite_limit),
         ).fetchall()
         return [(int(rid), bytes(v)) for (rid, v) in rows]
-
-    # --- Maintenance (not part of protocol) ---
-
-    def cleanup_old_entries(self, max_age_days: float = 1.0) -> int:
-        """Remove entries older than the specified age from all tables.
-
-        Args:
-            max_age_days: Maximum age in days for entries to keep.
-
-        Returns:
-            Total number of entries deleted.
-
-        """
-        conn = self._conn()
-        total = 0
-        for table in (
-            "global_state_storage",
-            "work_queue",
-            "invocation_registry",
-            "function_state",
-            "function_state_log",
-        ):
-            cursor = conn.execute(
-                f"DELETE FROM {table} WHERE julianday('now') - created_at > ?",  # noqa: S608
-                (max_age_days,),
-            )
-            total += int(cursor.rowcount)
-        conn.commit()
-        return total
 
 
 class ShardedSqliteStorage:

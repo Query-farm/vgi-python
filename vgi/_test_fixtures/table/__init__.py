@@ -39,6 +39,7 @@ from vgi._test_fixtures.table.catalog_scans import (
     ProjectsScanFunction,
 )
 from vgi._test_fixtures.table.filters import (
+    DictFilterEchoFunction,
     DynamicFilterEchoFunction,
     ExpressionFilterTestFunction,
     FilterEchoFunction,
@@ -133,6 +134,7 @@ __all__ = [
     "CountryPartitionedSalesFunction",
     "DisjointRangePartitionedFunction",
     "DepartmentsScanFunction",
+    "DictFilterEchoFunction",
     "DoubleSequenceFunction",
     "DynamicFilterEchoFunction",
     "EmployeesScanFunction",

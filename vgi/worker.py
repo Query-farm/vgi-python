@@ -102,7 +102,7 @@ from vgi.catalog.setting import SettingSpec, extract_setting_specs
 from vgi.function import (
     Function,
 )
-from vgi.function_storage import BoundStorage, FrameworkNS
+from vgi.function_storage import BoundStorage, FrameworkNS, attach_catalog_bytes
 from vgi.invocation import (
     BindResponse,
     GlobalInitResponse,
@@ -464,27 +464,26 @@ _STREAMING_FINALIZE_KEY = b""
 
 def _build_bound_storage_from_fields(
     execution_id: bytes,
-    attach_opaque_data: bytes | None,
+    attach_plaintext: bytes | None,
     ctx: CallContext,
 ) -> BoundStorage:
-    """Cold-build a BoundStorage from (execution_id, attach_opaque_data, ctx).
+    """Cold-build a BoundStorage from (execution_id, attach_plaintext, ctx).
 
     Called by ``BufferedFinalizeState.produce()`` per tick. The storage
     backend is process-singleton (resolved via the same
     ``_resolve_storage()`` path that ``Function.storage`` uses), so this
     is a thin wrapper construction — no registry walk, no auth
-    handshake. ``attach_opaque_data`` and ``ctx.auth`` are forwarded
-    so backends that derive a per-attach shard_key (CfDo) route to
-    the right Durable Object.
+    handshake. ``attach_plaintext`` is the **full** unwrapped attach
+    (``uuid(16) || catalog_bytes``) the rehydrated state persisted (the
+    auth-scoped seal can't be reopened here); ``BoundStorage`` shards on
+    its leading UUID so CfDo routes to the right Durable Object.
     """
     from vgi.function import _resolve_storage
 
     return BoundStorage(
         _resolve_storage(),
         execution_id,
-        request=None,
-        attach_opaque_data=attach_opaque_data,
-        auth=ctx.auth,
+        attach_plaintext=attach_plaintext,
     )
 
 
@@ -928,8 +927,14 @@ def _build_batch_result(
 
 _ATTACH_AAD_PREFIX = b"vgi.attach_opaque_data.v1\x00"
 _TRANSACTION_AAD_PREFIX = b"vgi.transaction_opaque_data.v1\x00"
-_ATTACH_ENVELOPE_VERSION = 1
+# v2: the inner attach plaintext is ``uuid(16) || catalog_bytes`` — catalog_attach
+# prepends a framework-minted 16-byte UUID that storage shards on (see
+# ``_AttachUnwrapper``). Bumped from 1 so a stale v1 token (no uuid prefix) is
+# cleanly rejected at open rather than mis-parsed as ``uuid=catalog_bytes[:16]``.
+_ATTACH_ENVELOPE_VERSION = 2
 _TRANSACTION_ENVELOPE_VERSION = 2
+# Width of the framework UUID prepended to every attach plaintext.
+_ATTACH_UUID_LEN = 16
 
 
 def _identity_tail(auth: AuthContext | None) -> bytes:
@@ -1974,30 +1979,81 @@ class Worker:
             crypto.seal_bytes(plaintext, key, aad=_attach_aad(current_auth()), version=_ATTACH_ENVELOPE_VERSION)
         )
 
-    @overload
-    def _unwrap_attach(self, envelope: bytes) -> AttachOpaqueData: ...
-    @overload
-    def _unwrap_attach(self, envelope: None) -> None: ...
-    def _unwrap_attach(self, envelope: bytes | None) -> AttachOpaqueData | None:
-        """Open an ``attach_opaque_data`` envelope, returning the plaintext.
+    def _unwrap_attach_full_with_auth(self, envelope: bytes | None, auth: AuthContext | None) -> bytes | None:
+        """Open an attach envelope under an explicit ``auth``, returning the full plaintext.
 
-        Pass-through when there is no signing key. Raises the uniform
+        The full framework plaintext is ``uuid(16) || catalog_bytes``. Pass-through
+        when there is no signing key. Raises the uniform
         :meth:`_opaque_data_rejected` error on any open failure.
         """
         if envelope is None:
             return None
         key = self._signing_key
         if key is None:
-            return AttachOpaqueData(envelope)
+            return bytes(envelope)
         from vgi_rpc import crypto
 
         try:
-            plaintext = crypto.open_bytes(
-                envelope, key, aad=_attach_aad(current_auth()), version=_ATTACH_ENVELOPE_VERSION
+            return crypto.open_bytes(
+                envelope, key, aad=_attach_aad(auth), version=_ATTACH_ENVELOPE_VERSION
             )
         except crypto.SealError as exc:
             raise self._opaque_data_rejected("attach_opaque_data") from exc
-        return AttachOpaqueData(plaintext)
+
+    @overload
+    def _unwrap_attach(self, envelope: bytes) -> AttachOpaqueData: ...
+    @overload
+    def _unwrap_attach(self, envelope: None) -> None: ...
+    def _unwrap_attach(self, envelope: bytes | None) -> AttachOpaqueData | None:
+        """Open an ``attach_opaque_data`` envelope, returning the catalog's plaintext.
+
+        The framework UUID prefix is stripped off — this is what every catalog_*
+        method and function resolver wants: the bytes the catalog returned at
+        ``catalog_attach``, never the shard UUID. Storage routing uses
+        :meth:`_unwrap_attach_full` to reach the UUID instead. Pass-through (minus
+        the strip) when there is no signing key.
+        """
+        if envelope is None:
+            return None
+        full = self._unwrap_attach_full_with_auth(envelope, current_auth())
+        assert full is not None  # a non-None envelope always yields plaintext
+        return AttachOpaqueData(bytes(full[_ATTACH_UUID_LEN:]))
+
+    def _unwrap_attach_full(self, envelope: bytes | None) -> bytes | None:
+        """Open an attach envelope returning the full plaintext (not stripped).
+
+        The full framework plaintext is ``uuid(16) || catalog_bytes``. Storage
+        shards on the leading UUID, so the function-execution paths thread this
+        full form to ``BoundStorage`` / params (which strips the UUID for the
+        user-facing ``attach_opaque_data``).
+        """
+        return self._unwrap_attach_full_with_auth(envelope, current_auth())
+
+    def _unwrap_attach_full_for(self, request: Any) -> bytes | None:
+        """Like :meth:`_unwrap_attach_full`, reading the sealed attach off a request.
+
+        Accepts the attach on either ``attach_opaque_data`` or
+        ``bind_call.attach_opaque_data``.
+        """
+        sealed = getattr(request, "attach_opaque_data", None)
+        if sealed is None:
+            bind_call = getattr(request, "bind_call", None)
+            if bind_call is not None:
+                sealed = getattr(bind_call, "attach_opaque_data", None)
+        return self._unwrap_attach_full(sealed)
+
+    def _bound(self, storage: Any, execution_id: bytes, request: Any) -> BoundStorage:
+        """Build a ``BoundStorage`` for ``request``, sharding on its unwrapped attach UUID.
+
+        The worker unwraps the request's sealed attach to ``uuid(16) || catalog_bytes``
+        and threads it in; storage shards on the leading UUID. Centralizes the
+        per-handler construction so each call site stays a one-liner.
+        """
+        return BoundStorage(
+            storage, execution_id,
+            request=request,
+            attach_plaintext=self._unwrap_attach_full_for(request),
+        )
 
     def _seal_transaction(self, plaintext: bytes, attach_envelope: bytes) -> bytes:
         """Seal a plaintext ``transaction_opaque_data`` value into an AEAD envelope.
@@ -2101,12 +2157,11 @@ class Worker:
         # vgi.attach_opaque_data / vgi.transaction_opaque_data are auto-tagged by vgi-rpc's
         # Sentry dispatch hook (short-hash form) on every method that
         # carries them.
-        # The request carries the SEALED attach end-to-end — storage shards on it
-        # (BoundStorage(request=...) -> _derive_shard_key), so we never unwrap in
-        # place. Resolution is attach-independent. Function bodies that read the
-        # attach as user data get the plaintext via params.attach_opaque_data;
-        # unwrap once here (the worker holds the signing key) and thread it down.
-        attach_plaintext = self._unwrap_attach(getattr(request, "attach_opaque_data", None))
+        # The request carries the SEALED attach; the worker holds the signing key,
+        # so unwrap once here to the full framework plaintext (uuid||catalog_bytes)
+        # and thread it down. Storage shards on the leading UUID; function bodies
+        # get the catalog bytes (uuid stripped) via params.attach_opaque_data.
+        attach_plaintext = self._unwrap_attach_full(getattr(request, "attach_opaque_data", None))
         func_cls = self._resolve_function(request)
         self._validate_required_settings(func_cls, request)
         instance = func_cls(logger=_logger)
@@ -2119,7 +2174,7 @@ class Worker:
 
         Implements VgiProtocol.table_function_cardinality().
         """
-        attach_plaintext = self._unwrap_attach(getattr(request.bind_call, "attach_opaque_data", None))
+        attach_plaintext = self._unwrap_attach_full(getattr(request.bind_call, "attach_opaque_data", None))
         func_cls = self._resolve_function(request.bind_call)
         if not issubclass(func_cls, TableFunctionGenerator):
             raise ValueError(
@@ -2137,7 +2192,7 @@ class Worker:
         of the serialized ColumnStatistics batch (same wire shape as
         catalog_table_column_statistics_get), or None when stats are unknown.
         """
-        attach_plaintext = self._unwrap_attach(getattr(request.bind_call, "attach_opaque_data", None))
+        attach_plaintext = self._unwrap_attach_full(getattr(request.bind_call, "attach_opaque_data", None))
         func_cls = self._resolve_function(request.bind_call)
         if not issubclass(func_cls, TableFunctionGenerator):
             return None
@@ -2160,7 +2215,7 @@ class Worker:
         """
         empty = TableFunctionDynamicToStringResponse(keys=[], values=[])
         try:
-            attach_plaintext = self._unwrap_attach(getattr(request.bind_call, "attach_opaque_data", None))
+            attach_plaintext = self._unwrap_attach_full(getattr(request.bind_call, "attach_opaque_data", None))
             func_cls = self._resolve_function(request.bind_call)
         except Exception:
             _logger.exception("dynamic_to_string: failed to resolve function class")
@@ -2282,7 +2337,7 @@ class Worker:
         # Store const arguments in FunctionStorage for later callbacks
         # (synthetic group_id=-2 in namespace FrameworkNS.AGGREGATE_STATE).
         if request.arguments and request.arguments.positional:
-            storage = BoundStorage(func_cls.storage, execution_id, request=request, auth=ctx.auth)
+            storage = self._bound(func_cls.storage, execution_id, request)
             storage.state_put(FrameworkNS.AGGREGATE_STATE, BoundStorage.pack_int_key(-2),
                               request.arguments.serialize_to_bytes())
 
@@ -2307,7 +2362,7 @@ class Worker:
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
         batch = pa.ipc.open_stream(request.input_batch).read_next_batch()
-        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
+        storage = self._bound(func_cls.storage, request.execution_id, request)
 
         # Strip __vgi_group_id and extract group_ids
         gid_col_idx = batch.schema.get_field_index(GROUP_COLUMN_NAME)
@@ -2418,7 +2473,7 @@ class Worker:
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
         merge_batch = pa.ipc.open_stream(request.merge_batch).read_next_batch()
-        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
+        storage = self._bound(func_cls.storage, request.execution_id, request)
 
         if merge_batch.num_rows == 0:
             return AggregateCombineResponse()
@@ -2493,7 +2548,7 @@ class Worker:
         group_ids: pa.Int64Array = group_ids_batch.column("group_id").cast(pa.int64())  # type: ignore[assignment]
         gid_list: list[int] = group_ids.to_pylist()  # type: ignore[assignment]
 
-        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
+        storage = self._bound(func_cls.storage, request.execution_id, request)
 
         if func_cls.state_class is None:
             raise ValueError(f"Aggregate function '{request.function_name}' has no state_class defined")
@@ -2556,7 +2611,7 @@ class Worker:
         # member plus any user-chosen namespaces under b"buf"/etc.) for this
         # execution_id in one call — subsumes the per-family clears we used to
         # need.
-        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
+        storage = self._bound(func_cls.storage, request.execution_id, request)
         storage.execution_clear()
         _window_partition_cache.clear_execution(request.execution_id)
         _aggregate_const_args_cache.clear_execution(storage._shard_key, request.execution_id)
@@ -2594,9 +2649,15 @@ class Worker:
                 transaction_id = getattr(
                     request.bind_call, "transaction_opaque_data", None,
                 )
-        attach_unwrapped = attach if attach_already_unwrapped else self._unwrap_attach(attach)
+        # ``attach_full`` is the framework plaintext ``uuid(16) || catalog_bytes``.
+        # Already-unwrapped callers (buffering finalize/cancel) pass it directly —
+        # the auth-scoped seal can't be reopened on their turn; everyone else
+        # unwraps the sealed attach here. Storage shards on the UUID; the function
+        # resolver and the user field see only the catalog bytes.
+        attach_full = attach if attach_already_unwrapped else self._unwrap_attach_full(attach)
+        catalog_bytes = attach_catalog_bytes(attach_full)
         func_cls = self._resolve_function_by_name(
-            function_name, attach_unwrapped, function_type=TableBufferingFunction,
+            function_name, catalog_bytes, function_type=TableBufferingFunction,
         )
         if not issubclass(func_cls, TableBufferingFunction):
             raise TypeError(
@@ -2604,7 +2665,7 @@ class Worker:
                 f"(got {func_cls.__name__})"
             )
         cold_storage = BoundStorage(
-            func_cls.storage, request.execution_id, request=request, auth=ctx.auth,
+            func_cls.storage, request.execution_id, request=request, attach_plaintext=attach_full,
         )
         payload = cold_storage.state_get(
             FrameworkNS.BUFFERING_INIT, BoundStorage.pack_int_key(_TABLE_BUFFERING_INIT_KEY),
@@ -2618,7 +2679,7 @@ class Worker:
         init_call, init_response = _decode_table_buffering_init(payload)
         # AttachOpaqueData is a NewType over bytes; just pass the bytes
         # through. Empty when the catalog doesn't seal attaches.
-        attach_id = bytes(attach_unwrapped or b"")
+        attach_id = bytes(catalog_bytes or b"")
         params = TableBufferingParams(
             args=func_cls._parse_arguments(
                 func_cls.FunctionArguments, init_call.bind_call.arguments,
@@ -2630,7 +2691,7 @@ class Worker:
             secrets=SecretsAccessor(init_call.bind_call.secrets).to_dict(),
             storage=cold_storage,
             auth_context=ctx.auth,
-            attach_opaque_data=attach_unwrapped,
+            attach_opaque_data=catalog_bytes,
             execution_id=request.execution_id,
             attach_id=attach_id,
             transaction_id=transaction_id,
@@ -2703,9 +2764,7 @@ class Worker:
                 self._unwrap_attach(request.attach_opaque_data),
                 function_type=TableBufferingFunction,
             )
-            storage = BoundStorage(
-                func_cls.storage, request.execution_id, request=request, auth=ctx.auth,
-            )
+            storage = self._bound(func_cls.storage, request.execution_id, request)
             storage.execution_clear()
         except Exception:
             _logger.exception(
@@ -2731,7 +2790,7 @@ class Worker:
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
-        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
+        storage = self._bound(func_cls.storage, request.execution_id, request)
         const_args = self._load_aggregate_const_args(func_cls, storage)
         params = ProcessParams(
             args=const_args,
@@ -2826,7 +2885,7 @@ class Worker:
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
-        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
+        storage = self._bound(func_cls.storage, request.execution_id, request)
         cached = self._load_cached_window_partition(
             func_cls, request.execution_id, request.partition_id, storage, request.function_name
         )
@@ -2945,7 +3004,7 @@ class Worker:
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
-        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
+        storage = self._bound(func_cls.storage, request.execution_id, request)
         cached = self._load_cached_window_partition(
             func_cls, request.execution_id, request.partition_id, storage, request.function_name
         )
@@ -3023,7 +3082,7 @@ class Worker:
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
 
-        storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
+        storage = self._bound(func_cls.storage, request.execution_id, request)
         storage.state_delete(FrameworkNS.AGGREGATE_WINDOW_PARTITION, [BoundStorage.pack_int_key(request.partition_id)])
         _window_partition_cache.delete(request.execution_id, request.partition_id)
         return AggregateWindowDestructorResponse()
@@ -3048,11 +3107,11 @@ class Worker:
         # can rehydrate them via _load_aggregate_const_args if the function
         # declares const params.
         if request.arguments and request.arguments.positional:
-            storage = BoundStorage(func_cls.storage, execution_id, request=request, auth=ctx.auth)
+            storage = self._bound(func_cls.storage, execution_id, request)
             storage.state_put(FrameworkNS.AGGREGATE_STATE, BoundStorage.pack_int_key(-2),
                               request.arguments.serialize_to_bytes())
 
-        storage = BoundStorage(func_cls.storage, execution_id, request=request, auth=ctx.auth)
+        storage = self._bound(func_cls.storage, execution_id, request)
         const_args = self._load_aggregate_const_args(func_cls, storage)
         params = ProcessParams(
             args=const_args,
@@ -3103,7 +3162,7 @@ class Worker:
                 raise TypeError(
                     f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})"
                 )
-            cold_storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
+            cold_storage = self._bound(func_cls.storage, request.execution_id, request)
             import time as _t
 
             t_get_start = _t.perf_counter()
@@ -3124,7 +3183,7 @@ class Worker:
 
         chunk = pa.ipc.open_stream(request.input_batch).read_next_batch()
 
-        storage = BoundStorage(session.func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
+        storage = self._bound(session.func_cls.storage, request.execution_id, request)
         const_args = self._load_aggregate_const_args(session.func_cls, storage)
         params = ProcessParams(
             args=const_args,
@@ -3202,7 +3261,7 @@ class Worker:
             except Exception:  # noqa: BLE001
                 func_cls = None
             if func_cls is not None and issubclass(func_cls, AggregateFunction):
-                cold_storage = BoundStorage(func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
+                cold_storage = self._bound(func_cls.storage, request.execution_id, request)
                 payload = cold_storage.state_get(
                     FrameworkNS.STREAMING_SESSION,
                     BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY),
@@ -3217,7 +3276,7 @@ class Worker:
                 # Idempotent: nothing to clean up.
                 return AggregateStreamingCloseResponse()
 
-        storage = BoundStorage(session.func_cls.storage, request.execution_id, request=request, auth=ctx.auth)
+        storage = self._bound(session.func_cls.storage, request.execution_id, request)
         const_args = self._load_aggregate_const_args(session.func_cls, storage)
         params = ProcessParams(
             args=const_args,
@@ -3298,25 +3357,15 @@ class Worker:
         # vgi.attach_opaque_data / vgi.transaction_opaque_data are auto-tagged by vgi-rpc's
         # Sentry dispatch hook (short-hash form) on every method that
         # carries them — including this one (descends bind_call).
-        # Unwrap the sealed attach envelope so the function body (and the
-        # init_call carried into per-turn ProcessParams) sees plaintext.
         #
-        # Capture the SEALED attach BEFORE unwrapping: storage sharding must use
-        # it, because the per-turn requests (process/combine/destructor, produce
-        # ticks) carry the sealed envelope and shard on it. Sharding the init
-        # write on the *unwrapped* form instead lands buffering/finalize state on
-        # a different DO than later turns read (only bites the cloudflare-do
-        # backend, which truly shards; sqlite ignores shard_key). The sealed
-        # bytes are identical across every turn of one attach, so this also
-        # preserves per-attach DO locality.
-        # Do NOT unwrap in place: the request carries the SEALED attach so storage
-        # shards on it everywhere (BoundStorage(request=...) / _init_call). The
-        # framework finalize-streamer states shard on ``sealed_bind_attach``
-        # explicitly (they have no request to derive from). ``attach_plaintext``
-        # is the unwrapped form for the few bodies that read it, exposed only via
-        # params.attach_opaque_data.
-        sealed_bind_attach = getattr(request.bind_call, "attach_opaque_data", None)
-        attach_plaintext = self._unwrap_attach(sealed_bind_attach)
+        # Unwrap once to the full framework plaintext ``uuid(16) || catalog_bytes``.
+        # Storage shards on the leading UUID; function bodies get the catalog
+        # bytes (uuid stripped) via params.attach_opaque_data. The streaming /
+        # buffering states below persist this **full** plaintext into their
+        # serialized tokens (the auth-scoped seal can't be reopened on a later,
+        # possibly different-auth, produce/finalize turn — so we can't re-unwrap
+        # then), and shard their cold-built storage on its UUID.
+        attach_plaintext = self._unwrap_attach_full(getattr(request.bind_call, "attach_opaque_data", None))
         func_cls = self._resolve_function(request.bind_call)
         instance = func_cls(logger=_logger)
 
@@ -3361,6 +3410,7 @@ class Worker:
                 _func_cls=type(instance),
                 _init_call=request,
                 _init_response=init_response,
+                _plaintext_attach=attach_plaintext,
                 _vgi_tracer=self._vgi_tracer,
             )
             input_schema = request.bind_call.input_schema
@@ -3371,12 +3421,12 @@ class Worker:
             # values (renaming the phase strings is in task #6).
             cold_storage = BoundStorage(
                 type(instance).storage, init_response.execution_id,
-                request=request, auth=ctx.auth,
+                request=request, attach_plaintext=self._unwrap_attach_full_for(request),
             )
             # ``attach_id`` is the user-facing plaintext attach identity (used to
-            # pin attach-time config lookups). request.bind_call carries the
-            # SEALED attach now; use the unwrapped plaintext.
-            attach_id = bytes(attach_plaintext or b"")
+            # pin attach-time config lookups) — the catalog's bytes with the
+            # framework UUID prefix stripped.
+            attach_id = bytes(attach_catalog_bytes(attach_plaintext) or b"")
             # Widen to ProcessParams so the later TableInOutGenerator /
             # TableFunctionGenerator branches can rebind `params` without
             # tripping mypy's local-type narrowing.
@@ -3393,7 +3443,7 @@ class Worker:
                 secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
                 storage=cold_storage,
                 auth_context=ctx.auth,
-                attach_opaque_data=attach_plaintext,
+                attach_opaque_data=attach_catalog_bytes(attach_plaintext),
                 execution_id=init_response.execution_id,
                 attach_id=attach_id,
                 transaction_id=getattr(
@@ -3414,7 +3464,7 @@ class Worker:
                     execution_id=init_response.execution_id,
                     ns=FrameworkNS.BUFFERING_INIT,
                     key=b"__never_written__",
-                    attach_opaque_data=sealed_bind_attach,
+                    attach_opaque_data=attach_plaintext,
                 )
                 input_schema = None
             elif request.phase == TableInOutFunctionInitPhase.TABLE_BUFFERING_FINALIZE:
@@ -3429,7 +3479,7 @@ class Worker:
                         request.bind_call, "transaction_opaque_data", None,
                     ),
                     finalize_state_id=bytes(request.finalize_state_id),
-                    attach_opaque_data=sealed_bind_attach,
+                    attach_opaque_data=attach_plaintext,
                     # Thread pushdown info from the InitRequest onto the producer
                     # state so it survives HTTP rehydration. The state is wire-
                     # serialized between produce() ticks; carrying projection_ids
@@ -3457,10 +3507,10 @@ class Worker:
                 secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
                 storage=BoundStorage(
                     type(instance).storage, init_response.execution_id,
-                    request=request, auth=ctx.auth,
+                    request=request, attach_plaintext=self._unwrap_attach_full_for(request),
                 ),
                 auth_context=ctx.auth,
-                attach_opaque_data=attach_plaintext,
+                attach_opaque_data=attach_catalog_bytes(attach_plaintext),
             )
 
             if request.phase == TableInOutFunctionInitPhase.INPUT:
@@ -3496,7 +3546,7 @@ class Worker:
                     execution_id=init_response.execution_id,
                     ns=FrameworkNS.STREAMING_FINALIZE,
                     key=_STREAMING_FINALIZE_KEY,
-                    attach_opaque_data=sealed_bind_attach,
+                    attach_opaque_data=attach_plaintext,
                 )
                 input_schema = None  # Producer — no input
             else:
@@ -3513,10 +3563,10 @@ class Worker:
                 secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
                 storage=BoundStorage(
                     type(instance).storage, init_response.execution_id,
-                    request=request, auth=ctx.auth,
+                    request=request, attach_plaintext=self._unwrap_attach_full_for(request),
                 ),
                 auth_context=ctx.auth,
-                attach_opaque_data=attach_plaintext,
+                attach_opaque_data=attach_catalog_bytes(attach_plaintext),
             )
             user_state = type(instance).initial_state(params)
             state = TableProducerState(
@@ -3623,10 +3673,15 @@ class Worker:
             implementation_version=request.implementation_version,
             ctx=ctx,
         )
-        # Seal the implementation's plaintext attach value into an AEAD
-        # envelope bound to the caller's identity before it leaves the worker.
+        # Mint the shard identity: prepend a fresh framework UUID to the
+        # catalog's plaintext (``uuid(16) || catalog_bytes``), then seal. Storage
+        # shards on this UUID — stable across re-seals and globally unique, unlike
+        # the random-nonce ciphertext or the (possibly non-unique) catalog bytes.
+        # ``_unwrap_attach`` strips the UUID back off, so the catalog only ever
+        # sees its own bytes. See ``_AttachUnwrapper``.
         if result.attach_opaque_data is not None:
-            result = _dataclass_replace(result, attach_opaque_data=self._seal_attach(result.attach_opaque_data))
+            minted = uuid.uuid4().bytes + bytes(result.attach_opaque_data)
+            result = _dataclass_replace(result, attach_opaque_data=self._seal_attach(minted))
         loggable = dict(cat.loggable_attach_options(options))
         self._log_catalog_lifecycle(
             "catalog.attach",

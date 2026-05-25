@@ -222,7 +222,7 @@ def main() -> None:
         if compression_choice not in {"none", "zstd", "gzip"}:
             raise typer.BadParameter("externalize-compression must be one of: none, zstd, gzip")
 
-        def _make_compression() -> "Compression | None":
+        def _make_compression() -> Compression | None:
             if compression_choice == "none":
                 return None
             # ``Compression.level`` historically defaults to 3 (zstd-tuned);

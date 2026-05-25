@@ -379,27 +379,6 @@ Set `SENTRY_DSN` (and install `vgi[sentry]`) to forward unhandled exceptions to 
 
 The same enrichment applies to OTel spans when `VGI_OTEL_ENABLED=1` — both backends read from the same `VgiTracer.set_current_span_attributes()` call sites in `vgi/otel.py`. Either, neither, or both can be active in a process.
 
-### Type Inference Rules
-
-| Annotation | Inferred Type | Notes |
-|------------|---------------|-------|
-| `pa.Int64Array` | `pa.int64()` | All integer array types supported |
-| `pa.StringArray` | `pa.string()` | Also `pa.LargeStringArray` → `pa.large_string()` |
-| `pa.DoubleArray` | `pa.float64()` | `pa.FloatArray` → `pa.float32()` |
-| `pa.BooleanArray` | `pa.bool_()` | |
-| `pa.Date32Array` | `pa.date32()` | `pa.Date64Array` → `pa.date64()` |
-| `pa.BinaryArray` | `pa.binary()` | |
-| `pa.Array` | AnyArrow | Dynamic type, requires `bind()` |
-| `pa.StructArray` | Error | Must specify `arrow_type=...` |
-| `pa.ListArray` | Error | Must specify `arrow_type=...` |
-| `pa.TimestampArray` | Error | Must specify `arrow_type=...` (needs unit) |
-
-**Explicit types always override inference:**
-```python test="skip"
-# Override inference with explicit arrow_type
-column: Annotated[pa.Int64Array, Param(arrow_type=pa.int32(), doc="...")]
-```
-
 ### Key Constraints for Scalar Functions:
 - **1:1 row mapping**: Output must have exactly the same number of rows as input
 - **Single column output**: Output schema has exactly one column named "result"

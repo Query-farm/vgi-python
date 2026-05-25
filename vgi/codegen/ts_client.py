@@ -45,6 +45,7 @@ in `_ENUM_VALUE_OVERRIDES` (empty today; audit per-enum as the need arises).
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import enum
 import io
 import sys
@@ -194,6 +195,10 @@ def _emit_type(t: typing.Any, ctx: _Ctx) -> str:
             return "boolean"
         if t is bytes:
             return "Uint8Array"
+        # timestamp[us]/etc. are stored as Int64 in the Arrow facade and
+        # carried as BigInt on the TS side (see impl-arrowjs/build.ts).
+        if t is datetime.datetime:
+            return "bigint"
         if t is type(None):
             return "null"
         if t is typing.Any:

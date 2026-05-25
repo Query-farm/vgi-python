@@ -253,7 +253,7 @@ class TestCfDoStateUnified:
             {"key": _b64(b"k"), "value": _b64(b"v")},
         ]})
         result = storage.state_scan(b"exec1", b"agg")
-        assert result == [(b"k", b"v")]
+        assert list(result) == [(b"k", b"v")]
         body = _body(mock_transport.requests[0])
         assert "attempt_id" not in body
 

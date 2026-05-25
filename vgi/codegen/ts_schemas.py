@@ -77,6 +77,14 @@ _SCALAR_MAP: dict[Any, tuple[str, str]] = {
     pa.binary(): ("binary()", "binary"),
 }
 
+# pyarrow timestamp unit -> facade TimeUnit member.
+_TIMESTAMP_UNIT: dict[str, str] = {
+    "s": "TimeUnit.SECOND",
+    "ms": "TimeUnit.MILLISECOND",
+    "us": "TimeUnit.MICROSECOND",
+    "ns": "TimeUnit.NANOSECOND",
+}
+
 # Track which facade symbols the emitter used, so the output's import
 # statement only pulls in what's actually referenced.
 _IMPORTS_IN_USE: set[str] = set()
@@ -132,6 +140,19 @@ def _emit_type(dtype: pa.DataType, *, origin: str) -> str:
         if dtype.ordered:
             return f"dictionary({value_type}, {index_type}, true)"
         return f"dictionary({value_type}, {index_type})"
+
+    if pa.types.is_timestamp(dtype):
+        _use("timestamp")
+        _use("TimeUnit")
+        unit_sym = _TIMESTAMP_UNIT.get(dtype.unit)
+        if unit_sym is None:
+            raise GeneratorError(
+                f"Unsupported timestamp unit {dtype.unit!r} at {origin}.",
+            )
+        # facade: `timestamp(unit, timezone?)`.
+        if dtype.tz is None:
+            return f"timestamp({unit_sym})"
+        return f'timestamp({unit_sym}, "{dtype.tz}")'
 
     if pa.types.is_struct(dtype):
         _use("struct")
