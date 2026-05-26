@@ -895,8 +895,11 @@ class PushdownFilters:
             The constant value if an equality filter exists, None otherwise.
 
         """
-        for f in self.filters:
-            if f.column_name == column_name and isinstance(f, ConstantFilter) and f.op == ComparisonOp.EQ:
+        # Descend one level into AndFilter children (consistent with
+        # get_column_bounds): DuckDB commonly pushes `col = v` / `col IN (...)`
+        # conjoined with derived range bounds as a single AndFilter.
+        for f in self._collect_column_filters(column_name):
+            if isinstance(f, ConstantFilter) and f.op == ComparisonOp.EQ:
                 return f.value
         return None
 
@@ -912,8 +915,11 @@ class PushdownFilters:
             Arrow array of IN values if an IN filter exists, None otherwise.
 
         """
-        for f in self.filters:
-            if f.column_name == column_name and isinstance(f, InFilter):
+        # Descend one level into AndFilter children (consistent with
+        # get_column_bounds): an `IN (...)` predicate is frequently pushed as
+        # AndFilter(InFilter, >=min, <=max).
+        for f in self._collect_column_filters(column_name):
+            if isinstance(f, InFilter):
                 return f.values
         return None
 
@@ -932,15 +938,63 @@ class PushdownFilters:
             Arrow array of discrete values if available, None otherwise.
 
         """
-        for f in self.filters:
-            if f.column_name == column_name:
-                if isinstance(f, ConstantFilter) and f.op == ComparisonOp.EQ:
-                    # Wrap single value in array for consistent return type
-                    arr: pa.Array[Any] = pa.array([f.value.as_py()], type=f.value.type)
-                    return arr
-                elif isinstance(f, InFilter):
-                    return f.values
+        # Descend one level into AndFilter children (consistent with
+        # get_column_bounds). DuckDB pushes `col = v` / `col IN (...)` conjoined
+        # with derived range bounds as a single AndFilter; without this descent
+        # the discrete-value fast path silently misses those and callers fall
+        # back to scanning every partition.
+        for f in self._collect_column_filters(column_name):
+            if isinstance(f, ConstantFilter) and f.op == ComparisonOp.EQ:
+                # Wrap single value in array for consistent return type
+                arr: pa.Array[Any] = pa.array([f.value.as_py()], type=f.value.type)
+                return arr
+            elif isinstance(f, InFilter):
+                return f.values
+            elif isinstance(f, OrFilter):
+                # `col = a OR col = b`, `col IN (...) OR col = c`, etc. The
+                # column's possible values are the UNION of the branches — but
+                # only when *every* branch pins this column to discrete values.
+                # If any branch is a range/IS NULL, or constrains a different
+                # column (so this column is unbounded in that branch), the set
+                # is not enumerable and we must fall through to None. Unlike the
+                # AND case, returning one branch's values would be an unsafe
+                # subset (a pruning caller would skip the other branches' rows).
+                union = self._or_discrete_values(f, column_name)
+                if union is not None:
+                    return union
         return None
+
+    def _or_discrete_values(self, or_filter: OrFilter, column_name: str) -> pa.Array[Any] | None:
+        """Union of discrete values for ``column_name`` across all OR branches.
+
+        Returns the deduplicated union iff every child constrains ``column_name``
+        to discrete values (``=`` or ``IN``); otherwise None (the column could
+        take any value through a non-discrete branch, so it cannot be enumerated).
+        Descends one level into ``OrFilter`` children, consistent with the
+        single-level descent used elsewhere; deeper nesting yields None.
+        """
+        values: list[Any] = []
+        for child in or_filter.children:
+            if child.column_name != column_name:
+                # A branch that constrains some other column (or none) leaves
+                # this column unbounded within that branch -> not enumerable.
+                return None
+            if isinstance(child, ConstantFilter) and child.op == ComparisonOp.EQ:
+                values.append(child.value.as_py())
+            elif isinstance(child, InFilter):
+                values.extend(child.values.to_pylist())
+            else:
+                return None
+        if not values:
+            return None
+        # Deduplicate, preserving first-seen order for stable output.
+        seen: set[Any] = set()
+        deduped: list[Any] = []
+        for v in values:
+            if v not in seen:
+                seen.add(v)
+                deduped.append(v)
+        return pa.array(deduped)
 
     def get_column_bounds(self, column_name: str) -> ColumnBounds | None:
         """Extract numeric bounds from comparison filters.

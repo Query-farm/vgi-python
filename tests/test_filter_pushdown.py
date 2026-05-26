@@ -193,6 +193,95 @@ class TestPushdownFiltersQuery:
         pf = _filters(_const("a", 0, ComparisonOp.GT, 5))
         assert pf.get_column_values("a") is None
 
+    def test_get_column_values_in_wrapped_in_and(self) -> None:
+        """get_column_values descends into AndFilter to find IN values.
+
+        DuckDB pushes `col IN (...)` conjoined with the IN list's derived
+        min/max bounds as a single AndFilter(InFilter, >=min, <=max). The
+        discrete-value fast path must see through that wrapper (consistent with
+        get_column_bounds), otherwise callers fall back to scanning every
+        partition. Regression for the trains worker fan-out/IndexError.
+        """
+        inf = InFilter(column_name="a", column_index=1, values=pa.array([10, 20, 30]))
+        and_f = AndFilter(
+            column_name="a",
+            column_index=1,
+            children=(
+                inf,
+                _const("a", 1, ComparisonOp.GE, 10),
+                _const("a", 1, ComparisonOp.LE, 30),
+            ),
+        )
+        pf = _filters(and_f)
+        result = pf.get_column_values("a")
+        assert result is not None
+        assert result.to_pylist() == [10, 20, 30]
+        # The dedicated IN accessor must agree.
+        in_result = pf.get_column_in_values("a")
+        assert in_result is not None
+        assert in_result.to_pylist() == [10, 20, 30]
+
+    def test_get_column_constant_wrapped_in_and(self) -> None:
+        """get_column_constant descends into AndFilter to find an EQ value."""
+        and_f = AndFilter(
+            column_name="a",
+            column_index=0,
+            children=(
+                _eq("a", 0, 42),
+                _const("a", 0, ComparisonOp.LE, 42),
+            ),
+        )
+        pf = _filters(and_f)
+        result = pf.get_column_constant("a")
+        assert result is not None
+        assert result.as_py() == 42
+
+    def test_get_column_values_or_of_equals(self) -> None:
+        """get_column_values unions OR branches when all are discrete (= / =)."""
+        or_f = OrFilter(
+            column_name="a",
+            column_index=0,
+            children=(_eq("a", 0, 1), _eq("a", 0, 2), _eq("a", 0, 3)),
+        )
+        result = _filters(or_f).get_column_values("a")
+        assert result is not None
+        assert result.to_pylist() == [1, 2, 3]
+
+    def test_get_column_values_or_mixed_eq_and_in(self) -> None:
+        """OR of an IN list and an equality unions (and deduplicates) values."""
+        inf = InFilter(column_name="a", column_index=0, values=pa.array([1, 2]))
+        or_f = OrFilter(
+            column_name="a",
+            column_index=0,
+            children=(inf, _eq("a", 0, 2), _eq("a", 0, 5)),
+        )
+        result = _filters(or_f).get_column_values("a")
+        assert result is not None
+        # 2 appears in both branches; deduped, first-seen order preserved.
+        assert result.to_pylist() == [1, 2, 5]
+
+    def test_get_column_values_or_with_range_branch_is_none(self) -> None:
+        """A non-discrete (range) OR branch makes the set non-enumerable -> None.
+
+        Returning a subset here would be a correctness bug: a pruning caller
+        would skip the partitions covered by the range branch.
+        """
+        or_f = OrFilter(
+            column_name="a",
+            column_index=0,
+            children=(_eq("a", 0, 1), _const("a", 0, ComparisonOp.GT, 100)),
+        )
+        assert _filters(or_f).get_column_values("a") is None
+
+    def test_get_column_values_or_other_column_branch_is_none(self) -> None:
+        """An OR branch on a different column leaves this column unbounded -> None."""
+        or_f = OrFilter(
+            column_name="a",
+            column_index=0,
+            children=(_eq("a", 0, 1), _eq("b", 1, 9)),
+        )
+        assert _filters(or_f).get_column_values("a") is None
+
     def test_get_column_bounds_range(self) -> None:
         """get_column_bounds extracts range from GE/LT filters."""
         pf = _filters(

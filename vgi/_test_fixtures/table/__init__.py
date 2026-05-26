@@ -45,6 +45,7 @@ from vgi._test_fixtures.table.filters import (
     FilterEchoFunction,
     FilterEchoPartitionedFunction,
     SpatialFilterExampleFunction,
+    ValuePruneFunction,
 )
 from vgi._test_fixtures.table.make_series import (
     MakeSeriesCountFunction,
@@ -142,6 +143,7 @@ __all__ = [
     "FilterEchoFunction",
     "FilterEchoPartitionedFunction",
     "GeneratorExceptionFunction",
+    "ValuePruneFunction",
     "LoggingGeneratorFunction",
     "MakePairsIntFunction",
     "MakePairsIntStrFunction",

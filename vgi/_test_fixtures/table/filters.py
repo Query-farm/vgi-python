@@ -182,6 +182,111 @@ class FilterEchoFunction(TableFunctionGenerator[FilterEchoFunctionArgs, FilterEc
 
 
 # ============================================================================
+# ValuePruneFunction — exercises PushdownFilters.get_column_values('n'), the
+# partition-pruning idiom (resolve the discrete value set up front, fetch only
+# those keys). filter_echo can't cover this: it auto-applies the predicate
+# row-by-row via Filter.evaluate, a different code path. Here the `resolved`
+# column echoes exactly what get_column_values returned, so a regression in the
+# AND/OR-descent of that accessor is directly observable — e.g. DuckDB pushing
+# `n IN (...) AND n >= min AND n <= max` (an AndFilter) or `n = a OR n = b` (an
+# OrFilter) must resolve to the discrete set, not collapse to "(scan)".
+# ============================================================================
+
+
+@dataclass(slots=True, frozen=True)
+class _ValuePruneArgs:
+    """Arguments for ValuePruneFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of candidate rows (keys 0..count-1)", ge=0)]
+    batch_size: Annotated[int, Arg("batch_size", default=2048, doc="Batch size for output", ge=1)]
+
+
+@dataclass(kw_only=True)
+class _ValuePruneState(ArrowSerializableDataclass):
+    """Resolved key set to emit plus the echoed get_column_values result.
+
+    Both fields are serialized (not Transient): the HTTP rehydrate path
+    deserializes state without re-running initial_state, so the resolution
+    must survive a state-token round-trip.
+    """
+
+    values: list[int]
+    resolved: str
+    cursor: int = 0
+
+
+@init_single_worker
+@bind_fixed_schema
+@_cardinality_from_count
+class ValuePruneFunction(TableFunctionGenerator[_ValuePruneArgs, _ValuePruneState]):
+    """Emits only the keys that ``get_column_values('n')`` resolves to.
+
+    The ``resolved`` column carries the sorted, comma-joined discrete set the
+    accessor returned (or ``"(scan)"`` when it returned None, i.e. the predicate
+    is not enumerable — no filter, a bare range, or an OR with a non-discrete
+    branch). Assert on ``resolved`` to verify the accessor end-to-end,
+    independent of any residual filtering.
+    """
+
+    class Meta:
+        """Metadata for ValuePruneFunction."""
+
+        name = "value_prune"
+        description = "Prunes the key set via get_column_values('n'); echoes the resolved discrete values"
+        categories = ["generator", "diagnostic"]
+        filter_pushdown = True
+        auto_apply_filters = True
+        projection_pushdown = True
+        examples = [
+            FunctionExample(
+                sql="SELECT DISTINCT resolved FROM value_prune(100) WHERE n IN (5, 50, 95)",
+                description="Resolve a discrete key set from an IN predicate",
+            ),
+        ]
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema({"n": pa.int64(), "resolved": pa.utf8()})
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_ValuePruneArgs]) -> _ValuePruneState:
+        """Resolve the discrete key set for `n` from the pushed-down filters."""
+        assert params.init_call is not None
+        count = params.args.count
+        pf = params.init_call.pushdown_filters
+        jk = params.init_call.join_keys
+        filters = cls.pushdown_filters(pf, join_keys=jk) if pf is not None else None
+        discrete = filters.get_column_values("n") if filters is not None else None
+        if discrete is not None:
+            resolved_vals = sorted(v for v in discrete.to_pylist() if v is not None)
+            resolved = ",".join(str(v) for v in resolved_vals)
+            emit = [v for v in resolved_vals if 0 <= v < count]
+        else:
+            resolved = "(scan)"
+            emit = list(range(count))
+        return _ValuePruneState(values=emit, resolved=resolved)
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_ValuePruneArgs],
+        state: _ValuePruneState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit the resolved keys (with the echoed `resolved` diagnostic)."""
+        if state.cursor >= len(state.values):
+            out.finish()
+            return
+        size = min(len(state.values) - state.cursor, params.args.batch_size)
+        chunk = state.values[state.cursor : state.cursor + size]
+        out.emit(
+            pa.RecordBatch.from_pydict(
+                {"n": chunk, "resolved": [state.resolved] * len(chunk)},
+                schema=params.output_schema,
+            )
+        )
+        state.cursor += size
+
+
+# ============================================================================
 # DictFilterEchoFunction — output column declared as a *dictionary* Arrow type
 # (dictionary<int8, utf8>) with no ENUM metadata. DuckDB maps such a column to
 # plain VARCHAR, so a `WHERE s = 'x'` / `s IN (...)` predicate pushes a VARCHAR
