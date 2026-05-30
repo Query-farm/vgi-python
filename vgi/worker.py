@@ -470,18 +470,21 @@ def _build_bound_storage_from_fields(
     """Cold-build a BoundStorage from (execution_id, attach_plaintext, ctx).
 
     Called by ``BufferedFinalizeState.produce()`` per tick. The storage
-    backend is process-singleton (resolved via the same
-    ``_resolve_storage()`` path that ``Function.storage`` uses), so this
-    is a thin wrapper construction — no registry walk, no auth
-    handshake. ``attach_plaintext`` is the **full** unwrapped attach
-    (``uuid(16) || catalog_bytes``) the rehydrated state persisted (the
-    auth-scoped seal can't be reopened here); ``BoundStorage`` shards on
-    its leading UUID so CfDo routes to the right Durable Object.
+    backend is process-singleton: we read it through ``Function.storage``
+    so we hit the cached ``_DefaultStorageDescriptor`` instance instead
+    of calling ``_resolve_storage()`` (which constructs a fresh backend
+    every call — for the ``:memory:`` sqlite backend each construction
+    is a *different* in-memory database, so the appended finalize batch
+    never reaches the produce()-side read). ``attach_plaintext`` is the
+    **full** unwrapped attach (``uuid(16) || catalog_bytes``) the
+    rehydrated state persisted (the auth-scoped seal can't be reopened
+    here); ``BoundStorage`` shards on its leading UUID so CfDo routes
+    to the right Durable Object.
     """
-    from vgi.function import _resolve_storage
+    from vgi.function import Function
 
     return BoundStorage(
-        _resolve_storage(),
+        Function.storage,
         execution_id,
         attach_plaintext=attach_plaintext,
     )
