@@ -382,6 +382,13 @@ class ResolvedMetadata:
     projection_pushdown: bool = False
     filter_pushdown: bool = False
     sampling_pushdown: bool = False
+    # When True, the table function participates in DuckDB's late-materialization
+    # optimizer: TOP_N/LIMIT/SAMPLE over the scan is rewritten into a SEMI join on
+    # the rowid virtual column, and surviving rowids are pushed back to the wide
+    # scan as a filter. Requires a unique, deterministic, snapshot-stable rowid
+    # column (is_row_id) plus projection_pushdown + filter_pushdown. See the C++
+    # extension's late-materialization gating for the worker contract.
+    late_materialization: bool = False
     supported_expression_filters: list[str] = field(default_factory=list)
     preserves_order: OrderPreservation = OrderPreservation.PRESERVES_ORDER
     max_workers: int | None = None
@@ -441,6 +448,7 @@ class ResolvedMetadata:
             "projection_pushdown": self.projection_pushdown,
             "filter_pushdown": self.filter_pushdown,
             "sampling_pushdown": self.sampling_pushdown,
+            "late_materialization": self.late_materialization,
             "supported_expression_filters": self.supported_expression_filters,
             "preserves_order": self.preserves_order.name,
             "max_workers": self.max_workers,
@@ -475,6 +483,7 @@ class ResolvedMetadata:
             projection_pushdown=d.get("projection_pushdown", False),
             filter_pushdown=d.get("filter_pushdown", False),
             sampling_pushdown=d.get("sampling_pushdown", False),
+            late_materialization=d.get("late_materialization", False),
             supported_expression_filters=d.get("supported_expression_filters", []),
             preserves_order=OrderPreservation[d.get("preserves_order", "PRESERVES_ORDER")],
             max_workers=d.get("max_workers"),
@@ -868,6 +877,7 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         "projection_pushdown",
         "filter_pushdown",
         "sampling_pushdown",
+        "late_materialization",  # Participate in DuckDB late-materialization rewrite
         "supported_expression_filters",
         "auto_apply_filters",  # Auto-apply pushdown filters to output batches
         "preserves_order",
@@ -1082,6 +1092,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         projection_pushdown=attrs.get("projection_pushdown", False),
         filter_pushdown=attrs.get("filter_pushdown", False),
         sampling_pushdown=attrs.get("sampling_pushdown", False),
+        late_materialization=bool(attrs.get("late_materialization", False)),
         supported_expression_filters=attrs.get("supported_expression_filters", []),
         preserves_order=attrs.get("preserves_order", OrderPreservation.PRESERVES_ORDER),
         max_workers=attrs.get("max_workers"),
@@ -1238,6 +1249,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("projection_pushdown", pa.bool_()),
         pa.field("filter_pushdown", pa.bool_()),
         pa.field("sampling_pushdown", pa.bool_()),
+        pa.field("late_materialization", pa.bool_()),
         pa.field("supported_expression_filters", pa.list_(pa.string())),
         pa.field("preserves_order", pa.string()),
         pa.field("max_workers", pa.int32(), nullable=True),

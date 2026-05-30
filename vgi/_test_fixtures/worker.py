@@ -33,7 +33,7 @@ except ImportError:
     _sys.exit("vgi-fixture-worker requires the test-fixtures extra. Install with: pip install 'vgi[test-fixtures]'")
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 import pyarrow as pa
 
@@ -121,6 +121,7 @@ from vgi._test_fixtures.table import (
     FilterEchoFunction,
     FilterEchoPartitionedFunction,
     GeneratorExceptionFunction,
+    LateMaterializationFunction,
     LoggingGeneratorFunction,
     MakePairsIntFunction,
     MakePairsIntStrFunction,
@@ -323,6 +324,7 @@ _EXAMPLE_CATALOG = Catalog(
                 FilterEchoFunction,
                 FilterEchoPartitionedFunction,
                 ValuePruneFunction,
+                LateMaterializationFunction,
                 DictFilterEchoFunction,
                 DoubleSequenceFunction,
                 DynamicFilterEchoFunction,
@@ -685,6 +687,43 @@ _EXAMPLE_CATALOG = Catalog(
                         value=pa.string(),
                     ),
                     comment="Table with struct row_id",
+                ),
+                # ----- Late-materialization tables (rowid + scrambled ord) -----
+                # Backed by the late_materialization scan function, which
+                # advertises Meta.late_materialization. The row_id is the row
+                # index (unique/deterministic/snapshot-stable); ord is a
+                # scrambled function of the index so a Top-N on ord yields
+                # scattered survivor rowids. pushed echoes the rowid filter the
+                # worker received. See late_materialization.test.
+                Table(
+                    name="late_mat",
+                    columns=schema(
+                        row_id=(pa.int64(), {b"is_row_id": b""}),
+                        ord=pa.int64(),
+                        payload=pa.string(),
+                        pushed=pa.string(),
+                    ),
+                    comment="Late-materialization table (1000 rows, unique rowid)",
+                ),
+                Table(
+                    name="late_mat_dup",
+                    columns=schema(
+                        row_id=(pa.int64(), {b"is_row_id": b""}),
+                        ord=pa.int64(),
+                        payload=pa.string(),
+                        pushed=pa.string(),
+                    ),
+                    comment="Late-materialization table with deliberately non-unique rowid (contract violation)",
+                ),
+                Table(
+                    name="late_mat_nulls",
+                    columns=schema(
+                        row_id=(pa.int64(), {b"is_row_id": b""}),
+                        ord=pa.int64(),
+                        payload=pa.string(),
+                        pushed=pa.string(),
+                    ),
+                    comment="Late-materialization table with NULLs in the ord column",
                 ),
                 # ----- Generated column example table -----
                 Table(
@@ -1228,6 +1267,21 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                     "layout": pa.scalar(opts["layout"]),
                     "row_id_type": pa.scalar(opts["row_id_type"]),
                 },
+            )
+
+        # Late-materialization tables → late_materialization scan function.
+        # 1000 rows is large enough that LIMIT k << count makes the rewrite a
+        # real win and that LIMIT 200 exceeds dynamic_or_filter_threshold (50).
+        late_mat_tables: dict[str, dict[str, Any]] = {
+            "late_mat": {},
+            "late_mat_dup": {"dup_row_id": pa.scalar(True)},
+            "late_mat_nulls": {"null_ord_stride": pa.scalar(7)},
+        }
+        if schema_name.lower() == "data" and name.lower() in late_mat_tables:
+            return ScanFunctionResult(
+                function_name="late_materialization",
+                positional_arguments=[pa.scalar(1000)],
+                named_arguments=late_mat_tables[name.lower()],
             )
 
         return super().table_scan_function_get(

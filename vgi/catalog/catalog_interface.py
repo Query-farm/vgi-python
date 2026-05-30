@@ -501,6 +501,11 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     projection_pushdown: bool | None = None
     filter_pushdown: bool | None = None
     sampling_pushdown: bool | None = None
+    # True if the table participates in DuckDB's late-materialization optimizer
+    # (Meta.late_materialization). The DuckDB extension only honours this when
+    # the table also exposes a rowid virtual column plus filter/projection
+    # pushdown — see GetScanFunctionImpl in the C++ vgi_table_entry.cpp.
+    late_materialization: bool | None = None
     supported_expression_filters: list[str] = field(default_factory=list)
     order_preservation: OrderPreservation | None = None
     # Use ArrowType to specify int32 instead of default int64
@@ -2698,6 +2703,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             projection_pushdown=None if is_scalar else meta.projection_pushdown,
             filter_pushdown=None if is_scalar else meta.filter_pushdown,
             sampling_pushdown=None if is_scalar else meta.sampling_pushdown,
+            late_materialization=None if is_scalar else meta.late_materialization,
             supported_expression_filters=[] if is_scalar else meta.supported_expression_filters,
             order_preservation=None if is_scalar else meta.preserves_order,
             max_workers=None if is_scalar else meta.max_workers,

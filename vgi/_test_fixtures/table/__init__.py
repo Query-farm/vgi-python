@@ -47,6 +47,9 @@ from vgi._test_fixtures.table.filters import (
     SpatialFilterExampleFunction,
     ValuePruneFunction,
 )
+from vgi._test_fixtures.table.late_materialization import (
+    LateMaterializationFunction,
+)
 from vgi._test_fixtures.table.make_series import (
     MakeSeriesCountFunction,
     MakeSeriesCsvFunction,
@@ -144,6 +147,7 @@ __all__ = [
     "FilterEchoPartitionedFunction",
     "GeneratorExceptionFunction",
     "ValuePruneFunction",
+    "LateMaterializationFunction",
     "LoggingGeneratorFunction",
     "MakePairsIntFunction",
     "MakePairsIntStrFunction",
