@@ -84,7 +84,7 @@ class TestExampleWorkerCatalog:
         result = client.catalog_attach(name="example", options={}, data_version_spec=None, implementation_version=None)
 
         assert result.attach_opaque_data is not None
-        assert result.supports_transactions is False
+        assert result.supports_transactions is True
         assert result.catalog_version_frozen is True
 
     def test_schema_contents_returns_functions(self) -> None:

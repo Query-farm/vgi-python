@@ -62,7 +62,7 @@ class TestCLICatalogAttach:
         attach_result = json.loads(result.output)
         assert "attach_opaque_data" in attach_result
         assert len(attach_result["attach_opaque_data"]) > 0
-        assert attach_result["supports_transactions"] is False
+        assert attach_result["supports_transactions"] is True
         assert attach_result["catalog_version_frozen"] is True
         # ReadOnlyCatalogInterface returns attach_opaque_data_required=False
         assert attach_result["attach_opaque_data_required"] is False
@@ -372,7 +372,8 @@ class TestCLISchemaContents:
         # Check known table functions (generators and table-in-out)
         assert by_name["echo"]["function_type"] == "table"
         assert by_name["sequence"]["function_type"] == "table"
-        assert by_name["sum_all_columns"]["function_type"] == "table"
+        # sum_all_columns is a TableBufferingFunction (Sink+Source).
+        assert by_name["sum_all_columns"]["function_type"] == "table_buffering"
 
     def test_varargs_function_shows_varargs_in_arguments(self, fixture_worker: str) -> None:
         """Varargs functions show varargs indicator in arguments."""

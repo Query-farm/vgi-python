@@ -21,6 +21,7 @@ from vgi.protocol import (
     BufferedFinalizeState,
     ProcessState,
     ScalarExchangeState,
+    TableBufferingFinalizeState,
     TableInOutExchangeState,
     TableProducerState,
     VgiProtocol,
@@ -299,6 +300,7 @@ class TestProtocolStateTyping:
             TableProducerState,
             TableInOutExchangeState,
             BufferedFinalizeState,
+            TableBufferingFinalizeState,
         }
         assert get_args(return_hint)[1].__name__ == "GlobalInitResponse"
         assert get_origin(return_hint) is Stream

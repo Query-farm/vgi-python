@@ -67,6 +67,7 @@ See Also
 from __future__ import annotations
 
 import io
+import itertools
 import logging
 import os
 import shlex
@@ -99,6 +100,9 @@ from vgi.invocation import (
 from vgi.protocol import (
     BindRequest,
     InitRequest,
+    TableBufferingCombineRequest,
+    TableBufferingDestructorRequest,
+    TableBufferingProcessRequest,
     VgiProtocol,
 )
 from vgi.table_function import TableInOutFunctionInitPhase
@@ -888,6 +892,7 @@ class Client(CatalogClientMixin):
         phase: TableInOutFunctionInitPhase | None = None,
         execution_id: bytes | None = None,
         init_opaque_data: bytes | None = None,
+        finalize_state_id: bytes | None = None,
     ) -> StreamSession:
         """Call init on a worker proxy and return a StreamSession.
 
@@ -902,6 +907,8 @@ class Client(CatalogClientMixin):
                 the primary worker's init response.
             init_opaque_data: For secondary init, the opaque data from
                 the primary worker's init response.
+            finalize_state_id: For ``TABLE_BUFFERING_FINALIZE`` init, the
+                opaque finalize partition key this producer stream serves.
 
         Returns:
             StreamSession for data exchange or production.
@@ -919,6 +926,7 @@ class Client(CatalogClientMixin):
             phase=phase,
             execution_id=execution_id,
             init_opaque_data=init_opaque_data,
+            finalize_state_id=finalize_state_id,
         )
         try:
             stream: StreamSession = proxy.init(request=init_request)  # type: ignore[assignment]
@@ -1492,6 +1500,185 @@ class Client(CatalogClientMixin):
                 f"The input iterator for function '{function_name}' was empty. "
                 f"Use table_function() for functions that generate data without input."
             )
+        except ClientError as e:
+            raise self._client_error_with_stderr(e) from e.__cause__
+
+    def table_buffering_function(
+        self,
+        *,
+        function_name: str,
+        input: Iterator[pa.RecordBatch],
+        arguments: Arguments | None = None,
+        bind_result_callback: Callable[[BindResponse], None] | None = None,
+        projection_ids: list[int] | None = None,
+        pushdown_filters: bytes | None = None,
+        settings: dict[str, Any] | None = None,
+        transaction_opaque_data: bytes | None = None,
+    ) -> Generator[pa.RecordBatch]:
+        """Invoke a ``TableBufferingFunction`` (Sink+Source) and stream results.
+
+        This mirrors the C++ ``PhysicalVgiTableBufferingFunction`` operator
+        rather than the streaming INPUT/FINALIZE path used by
+        :meth:`table_in_out_function`. The sequence is:
+
+        1. ``bind`` → ``init(phase=TABLE_BUFFERING)`` on the primary worker.
+           The sink init persists init metadata to cold storage so any pool
+           worker can serve subsequent process/combine RPCs; its stream
+           carries no data, so it is closed immediately after the header.
+        2. ``table_buffering_process`` (unary) per input batch — the worker
+           sinks the batch and returns an opaque ``state_id``.
+        3. ``table_buffering_combine`` (unary) once at end-of-input — the
+           worker hands all ``state_id``s to user ``combine()`` and returns
+           opaque ``finalize_state_id``s (the source-side partition keys).
+        4. ``init(phase=TABLE_BUFFERING_FINALIZE, finalize_state_id=...)`` per
+           finalize key — a producer stream driving user ``finalize()`` per
+           tick. Output batches are yielded in finalize-key order.
+        5. ``table_buffering_destructor`` (unary, best-effort) for cleanup.
+
+        Unlike :meth:`table_in_out_function` this driver runs entirely on the
+        primary worker connection (process/combine are unary RPCs); the
+        worker buffers all input regardless, so the aggregate result is
+        identical to the distributed C++ path.
+
+        Args:
+            function_name: Name of the ``TableBufferingFunction`` to invoke.
+            input: Iterator yielding input RecordBatches. May be empty —
+                buffering aggregations still produce a result for zero rows.
+            arguments: Optional Arguments container. Defaults to empty.
+            bind_result_callback: Optional callback invoked with the
+                BindResponse before processing begins.
+            projection_ids: Optional column indices for projection.
+            pushdown_filters: Optional serialized filter predicates.
+            settings: Optional settings/pragmas to pass to the function.
+            transaction_opaque_data: Optional DuckDB transaction identifier.
+
+        Yields:
+            Output RecordBatches produced by the finalize (source) phase.
+
+        Raises:
+            ClientError: If the client is not started or any RPC fails.
+
+        """
+        if arguments is None:
+            arguments = Arguments()
+
+        if self._primary is None:
+            raise ClientError("Client not started. Call start() or use context manager.")
+
+        proxy = self._primary.proxy
+        attach = self._attach_opaque_data
+        pushdown_filters_batch = self._deserialize_pushdown_filters(pushdown_filters)
+
+        try:
+            # Peek the first batch to learn the input schema for bind/init.
+            first_batch: pa.RecordBatch | None = None
+            for batch in input:
+                if not isinstance(batch, pa.RecordBatch):
+                    raise ClientError("Input iterator must yield RecordBatches")
+                first_batch = batch
+                break
+
+            input_schema = first_batch.schema if first_batch is not None else None
+
+            bind_request = self._make_bind_request(
+                function_name=function_name,
+                arguments=arguments,
+                function_type=FunctionType.TABLE_BUFFERING,
+                input_schema=input_schema,
+                settings=settings,
+                secrets=None,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+            bind_response = self._do_bind(proxy, bind_request, bind_result_callback)
+
+            # Sink init: persists init metadata; the stream carries no data.
+            sink_stream = self._do_init(
+                proxy,
+                bind_request,
+                bind_response,
+                projection_ids=projection_ids,
+                pushdown_filters_batch=pushdown_filters_batch,
+                phase=TableInOutFunctionInitPhase.TABLE_BUFFERING,
+            )
+            init_response = sink_stream.typed_header(GlobalInitResponse)
+            sink_stream.close()
+            execution_id = init_response.execution_id
+
+            try:
+                # Sink each input batch via the unary process RPC.
+                state_ids: list[bytes] = []
+                remaining: Iterator[pa.RecordBatch] = (
+                    itertools.chain([first_batch], input) if first_batch is not None else iter(())
+                )
+                for batch_index, batch in enumerate(remaining):
+                    if not isinstance(batch, pa.RecordBatch):
+                        raise ClientError("Input iterator must yield RecordBatches")
+                    try:
+                        process_response = proxy.table_buffering_process(
+                            request=TableBufferingProcessRequest(
+                                function_name=function_name,
+                                execution_id=execution_id,
+                                input_batch=self._serialize_batch_ipc(batch),
+                                attach_opaque_data=attach,
+                                transaction_id=transaction_opaque_data,
+                                batch_index=batch_index,
+                            )
+                        )
+                    except RpcError as e:
+                        raise ClientError.from_rpc_error(e) from e
+                    state_ids.append(process_response.state_id)
+
+                # End-of-input: combine → finalize partition keys.
+                try:
+                    combine_response = proxy.table_buffering_combine(
+                        request=TableBufferingCombineRequest(
+                            function_name=function_name,
+                            execution_id=execution_id,
+                            state_ids=state_ids,
+                            attach_opaque_data=attach,
+                            transaction_id=transaction_opaque_data,
+                        )
+                    )
+                except RpcError as e:
+                    raise ClientError.from_rpc_error(e) from e
+
+                # Source: one producer stream per finalize partition key.
+                for finalize_state_id in combine_response.finalize_state_ids:
+                    finalize_stream = self._do_init(
+                        proxy,
+                        bind_request,
+                        bind_response,
+                        projection_ids=projection_ids,
+                        pushdown_filters_batch=pushdown_filters_batch,
+                        phase=TableInOutFunctionInitPhase.TABLE_BUFFERING_FINALIZE,
+                        execution_id=execution_id,
+                        finalize_state_id=finalize_state_id,
+                    )
+                    try:
+                        while True:
+                            try:
+                                output = finalize_stream.tick()
+                            except StopIteration:
+                                break
+                            except RpcError as e:
+                                raise ClientError.from_rpc_error(e) from e
+                            if output.batch.num_rows > 0:
+                                yield output.batch
+                    finally:
+                        finalize_stream.close()
+            finally:
+                # Best-effort cleanup, mirroring the C++ destructor.
+                try:
+                    proxy.table_buffering_destructor(
+                        request=TableBufferingDestructorRequest(
+                            function_name=function_name,
+                            execution_id=execution_id,
+                            attach_opaque_data=attach,
+                            transaction_id=transaction_opaque_data,
+                        )
+                    )
+                except RpcError:
+                    _logger.debug("table_buffering_destructor failed (ignored)", exc_info=True)
         except ClientError as e:
             raise self._client_error_with_stderr(e) from e.__cause__
 

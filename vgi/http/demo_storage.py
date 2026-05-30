@@ -176,13 +176,25 @@ def localhost_only_validator(url: str) -> None:
 
 
 class MaxRequestBytesMiddleware:
-    """WSGI middleware that rejects requests exceeding a size limit with 413."""
+    """WSGI middleware that rejects RPC requests exceeding a size limit with 413.
+
+    The limit models ``VGI-Max-Request-Bytes`` — the cap that drives clients to
+    offload oversized batches through an upload URL. The blob upload endpoint
+    (``/__blobs__/``) is the escape hatch for exactly those oversized payloads,
+    so it is exempt: enforcing the limit there would 413 the very requests the
+    externalization protocol relies on it to accept.
+    """
 
     def __init__(self, app: Any, max_bytes: int) -> None:  # noqa: D107
         self._app = app
         self._max_bytes = max_bytes
 
     def __call__(self, environ: dict[str, Any], start_response: Any) -> Any:  # noqa: D102
+        path = environ.get("PATH_INFO", "")
+        if "/__blobs__/" in path:
+            # Upload/download endpoint — must accept payloads larger than the
+            # RPC request limit; that is its entire purpose.
+            return self._app(environ, start_response)
         content_length = environ.get("CONTENT_LENGTH", "")
         if content_length:
             try:

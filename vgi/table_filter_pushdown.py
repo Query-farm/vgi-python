@@ -994,7 +994,8 @@ class PushdownFilters:
             if v not in seen:
                 seen.add(v)
                 deduped.append(v)
-        return pa.array(deduped)
+        result: pa.Array[Any] = pa.array(deduped)
+        return result
 
     def get_column_bounds(self, column_name: str) -> ColumnBounds | None:
         """Extract numeric bounds from comparison filters.

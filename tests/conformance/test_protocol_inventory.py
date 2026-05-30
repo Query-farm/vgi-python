@@ -136,13 +136,31 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
             "integration/aggregate/* and tests/test_aggregate_function.py."
         ),
     ),
-    "buffered_table_destructor": NotExposed(
+    "aggregate_streaming_open": NotExposed(
         reason=(
-            "DuckDB-only. The C++ Sink+Source operator fires this from its "
-            "destructor; non-DuckDB clients have no equivalent. Covered by C++ "
-            "integration/table_in_out/buffered_*.test."
+            "DuckDB-only. The C++ extension drives the streaming-aggregate "
+            "open/chunk/close handshake; non-DuckDB clients have no equivalent. "
+            "Covered by C++ integration/aggregate/streaming.test."
         ),
     ),
+    "aggregate_streaming_chunk": NotExposed(
+        reason=(
+            "DuckDB-only. The C++ extension drives the streaming-aggregate "
+            "open/chunk/close handshake; non-DuckDB clients have no equivalent. "
+            "Covered by C++ integration/aggregate/streaming.test."
+        ),
+    ),
+    "aggregate_streaming_close": NotExposed(
+        reason=(
+            "DuckDB-only. The C++ extension drives the streaming-aggregate "
+            "open/chunk/close handshake; non-DuckDB clients have no equivalent. "
+            "Covered by C++ integration/aggregate/streaming.test."
+        ),
+    ),
+    # ---------- Table buffering (Sink+Source) ----------
+    "table_buffering_process": ("table_buffering_function",),
+    "table_buffering_combine": ("table_buffering_function",),
+    "table_buffering_destructor": ("table_buffering_function",),
     # ---------- Catalog lifecycle / transactions ----------
     "catalog_catalogs": ("catalogs",),
     "catalog_attach": ("catalog_attach",),
@@ -174,6 +192,14 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
     "catalog_table_create": ("table_create",),
     "catalog_table_drop": ("table_drop",),
     "catalog_table_scan_function_get": ("table_scan_function_get",),
+    "catalog_table_scan_branches_get": NotExposed(
+        reason=(
+            "DuckDB-only multi-branch scan planning. The C++ extension fetches "
+            "scan branches to route reads/writes across heterogeneous sources; "
+            "non-DuckDB clients scan via catalog_table_scan_function_get. Covered "
+            "by C++ integration/catalog/multi_branch_*.test."
+        )
+    ),
     "catalog_table_column_statistics_get": NotExposed(
         reason=(
             "DuckDB-only planner hint. Column stats feed the query optimizer. "

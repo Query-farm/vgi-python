@@ -23,7 +23,7 @@ class TestExceptionProcessFunction:
             pytest.raises(ClientError) as exc_info,
         ):
             list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="exception_process",
                     input=iter(numeric_batches),
                 )
@@ -43,7 +43,7 @@ class TestExceptionProcessFunction:
             pytest.raises(ClientError) as exc_info,
         ):
             list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="exception_process",
                     input=iter(numeric_batches),
                 )
@@ -66,7 +66,7 @@ class TestExceptionFinalizeFunction:
             pytest.raises(ClientError) as exc_info,
         ):
             list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="exception_finalize",
                     input=iter(numeric_batches),
                 )
@@ -85,7 +85,7 @@ class TestExceptionFinalizeFunction:
             pytest.raises(ClientError) as exc_info,
         ):
             list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="exception_finalize",
                     input=iter(numeric_batches),
                 )
@@ -108,7 +108,7 @@ class TestExceptionFinalizeFunction:
             pytest.raises(ClientError) as exc_info,
         ):
             list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="exception_finalize",
                     input=iter(numeric_batches),
                 )

@@ -19,7 +19,7 @@ class TestSumAllColumnsFunction:
         """Should sum all numeric columns across all batches."""
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="sum_all_columns",
                     input=iter(numeric_batches),
                 )
@@ -32,7 +32,7 @@ class TestSumAllColumnsFunction:
         """Should exclude non-numeric columns from output."""
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="sum_all_columns",
                     input=iter(simple_batches),
                 )
@@ -49,7 +49,7 @@ class TestSumAllColumnsFunction:
         """Should promote int32 to int64 and float32 to float64."""
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="sum_all_columns",
                     input=iter(numeric_batches),
                 )
@@ -75,7 +75,7 @@ class TestSumAllColumnsFunctionWithLogging:
         """Should produce the same sums as the non-logging version."""
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="sum_all_columns",
                     arguments=self._logging_args(),
                     input=iter(numeric_batches),
@@ -91,7 +91,7 @@ class TestSumAllColumnsFunctionWithLogging:
         """Should not crash when logging is enabled."""
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="sum_all_columns",
                     arguments=self._logging_args(),
                     input=iter(numeric_batches),
@@ -108,7 +108,7 @@ class TestSumAllColumnsFunctionWithLogging:
         single_batch = [numeric_batches[0]]
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="sum_all_columns",
                     arguments=self._logging_args(),
                     input=iter(single_batch),
@@ -148,7 +148,7 @@ class TestSumAllColumnsFunctionDistributed:
 
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="sum_all_columns",
                     input=iter(batches),
                 )
@@ -166,7 +166,7 @@ class TestSumAllColumnsFunctionDistributed:
         """Should exclude non-numeric columns from output."""
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="sum_all_columns",
                     input=iter(simple_batches),
                 )
@@ -186,7 +186,7 @@ class TestSumAllColumnsFunctionDistributed:
 
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="sum_all_columns",
                     input=iter([empty_batch]),
                 )

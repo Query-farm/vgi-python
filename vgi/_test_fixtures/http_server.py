@@ -231,6 +231,7 @@ def main() -> None:
             if compression_choice == "gzip":
                 return Compression(algorithm="gzip", level=6)
             return Compression(algorithm="zstd")
+
         if bucket and demo_storage:
             raise typer.BadParameter("--s3-bucket and --demo-storage are mutually exclusive")
         if bucket:
@@ -334,17 +335,31 @@ def main() -> None:
 
             add_blob_routes(wsgi_app, demo_blob_storage, prefix=prefix)
 
+            # vgi_rpc's make_wsgi_app installs a Falcon middleware that 413s
+            # any request body over max_request_bytes, exempting only the
+            # capability/upload-URL routes. The demo blob endpoint
+            # (``/__blobs__/``) serves the *externalized* payloads — bodies
+            # that are intentionally larger than max_request_bytes — so it
+            # must be exempt too, or auto-externalization can never land its
+            # upload. Real deployments point upload URLs at S3, so vgi_rpc has
+            # no built-in exemption for it; we add one here for the in-process
+            # demo store.
+            for mw in getattr(wsgi_app, "_unprepared_middleware", []):
+                if type(mw).__name__ == "_MaxRequestBytesMiddleware":
+                    mw._exempt_prefixes = (*mw._exempt_prefixes, f"{prefix}/__blobs__")
+
         if describe:
             from vgi.http.worker_page import WorkerPageResource
 
             wsgi_app.add_route(f"{prefix}/worker", WorkerPageResource(ExampleWorker, prefix))
 
-        # Wrap with 413 middleware after all Falcon routes are registered.
+        # vgi_rpc's make_wsgi_app already advertises VGI-Max-Request-Bytes and
+        # installs a Falcon middleware enforcing it with a structured 413 that
+        # the client recognizes as the externalize-and-retry signal (and which
+        # we exempted for /__blobs__/ above). A second WSGI-level wrapper here
+        # would only re-413 with a plain-text body the client can't parse, so
+        # we serve the Falcon app directly.
         serving_app: Any = wsgi_app
-        if demo_storage:
-            from vgi.http.demo_storage import MaxRequestBytesMiddleware
-
-            serving_app = MaxRequestBytesMiddleware(wsgi_app, max_upload_bytes)
 
         if port_file is not None:
             # Atomic side-channel publication so test harnesses can watch

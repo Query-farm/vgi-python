@@ -125,36 +125,41 @@ class TestFunctionOverloading:
         )
 
     def test_match_with_optional_args(self) -> None:
-        """Match considers optional arguments with defaults."""
+        """Match considers optional arguments with defaults.
+
+        Optional arguments must be *named* — positional args cannot carry a
+        default (DuckDB's binder always supplies them), so the matcher's
+        optional handling is exercised through a named ``count`` argument.
+        """
 
         class RequiredFunc(TableInOutFunction):  # type: ignore[type-arg]
-            """Required arg."""
+            """Required named arg."""
 
             class Meta:
                 name = "func"
 
-            count = Arg[int](0, doc="Count")
-            data: TableInput = Arg[TableInput](1, doc="Input")  # type: ignore[assignment]
+            data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
+            count = Arg[int]("count", doc="Count")
 
         class OptionalFunc(TableInOutFunction):  # type: ignore[type-arg]
-            """Optional arg."""
+            """Optional named arg."""
 
             class Meta:
                 name = "func"
 
-            count = Arg[int](0, default=10, doc="Count")
-            data: TableInput = Arg[TableInput](1, doc="Input")  # type: ignore[assignment]
+            data: TableInput = Arg[TableInput](0, doc="Input")  # type: ignore[assignment]
+            count = Arg[int]("count", default=10, doc="Count")
 
-        # With argument provided, both match (ambiguous)
+        # With the named argument provided, both match (ambiguous)
         with pytest.raises(ValueError, match="Ambiguous"):
             Worker._match_function_arguments(
                 function_name="func",
-                arguments=Arguments(positional=(pa.scalar(5),)),
+                arguments=Arguments(positional=(), named={"count": pa.scalar(5)}),
                 input_schema=pa.schema([]),
                 candidates=[RequiredFunc, OptionalFunc],
             )
 
-        # Without argument, only OptionalFunc matches
+        # Without the argument, only OptionalFunc matches (count defaults)
         result = Worker._match_function_arguments(
             function_name="func",
             arguments=Arguments(positional=()),

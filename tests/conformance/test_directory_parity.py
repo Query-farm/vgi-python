@@ -24,7 +24,36 @@ _CONFORMANCE_DIR = pathlib.Path(__file__).parent
 
 # Areas the Python conformance suite intentionally does not mirror. Each entry
 # must cite a reason — leaving an empty reason defeats the purpose of the test.
-_EXEMPTIONS: dict[str, str] = {}
+_EXEMPTIONS: dict[str, str] = {
+    "catalog": (
+        "Multi-branch scan planning (multi_branch_*) is DuckDB-only — the C++ "
+        "extension drives catalog_table_scan_branches_get to route scans across "
+        "heterogeneous sources, an RPC the Python client deliberately does not "
+        "wrap (see NotExposed in test_protocol_inventory.py). Catalog "
+        "lifecycle/schema/table surfaces are mirrored by test_attach.py, "
+        "test_table.py, test_view.py, and test_macro.py."
+    ),
+    "filter_pushdown": (
+        "Per-type filter-pushdown coverage is mirrored by tests/test_filter_pushdown.py "
+        "and tests/test_filter_pushdown_extension.py, which drive the same predicate "
+        "types through the Client's pushdown_filters path."
+    ),
+    "http": (
+        "HTTP transport conformance is mirrored by test_http_client.py, "
+        "test_http_external_location.py, test_http_upload_url.py (this directory) "
+        "and tests/test_http_demo_storage.py."
+    ),
+    "launcher": (
+        "Worker-launch CLI option parsing/validation is a C++-extension concern "
+        "(it spawns the Python worker as a subprocess); the Python client never "
+        "exercises the launcher surface."
+    ),
+    "simple_writable": (
+        "INSERT/UPDATE/DELETE/RETURNING write paths are mirrored by "
+        "test_writable.py, which drives the same operations against the writable "
+        "fixture catalog."
+    ),
+}
 
 
 def _cpp_integration_subdirs() -> list[str]:

@@ -228,7 +228,11 @@ def test_demo_output_offload_large_response(compression: str, expected_extension
     from vgi_rpc.metadata import LOCATION_FETCH_MS_KEY, LOCATION_SOURCE_KEY
     from vgi_rpc.rpc import AnnotatedBatch
 
-    threshold_bytes = 4 * 1024
+    # Must exceed the per-exchange protocol overhead (the sealed state token
+    # rides on every /exchange request). max_request_bytes is set to this
+    # threshold, so a value below the state-token size would 413 every
+    # exchange before any user payload is even considered.
+    threshold_bytes = 16 * 1024
     payload_bytes = threshold_bytes + 1024
     seed = 12345
 
@@ -305,7 +309,11 @@ def test_demo_input_upload_url_then_exchange(compression: str) -> None:
     from vgi_rpc.metadata import LOCATION_KEY
     from vgi_rpc.rpc import AnnotatedBatch
 
-    threshold_bytes = 4 * 1024
+    # Must exceed the per-exchange protocol overhead (the sealed state token
+    # rides on every /exchange request). max_request_bytes is set to this
+    # threshold, so a value below the state-token size would 413 every
+    # exchange before any user payload is even considered.
+    threshold_bytes = 16 * 1024
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
 

@@ -15,7 +15,7 @@ class TestBufferInputFunction:
         """Buffer should emit all batches during finalization."""
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="buffer_input",
                     input=iter(simple_batches),
                 )
@@ -29,7 +29,7 @@ class TestBufferInputFunction:
         """Buffer should emit batches in the order they were received."""
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="buffer_input",
                     input=iter(simple_batches),
                 )

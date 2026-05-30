@@ -301,7 +301,7 @@ class ValuePruneFunction(TableFunctionGenerator[_ValuePruneArgs, _ValuePruneStat
 
 
 _DICT_FILTER_ECHO_SCHEMA = pa.schema(
-    [  # type: ignore[arg-type]  # pyarrow stubs: mixed-type fields
+    [
         pa.field("n", pa.int64()),
         pa.field("s", pa.dictionary(pa.int8(), pa.utf8())),
     ]

@@ -96,7 +96,7 @@ class TestEdgeCases:
 
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="sum_all_columns",
                     input=iter([empty_batch]),
                 )
