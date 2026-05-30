@@ -598,6 +598,10 @@ class View:
         name: View name.
         definition: SQL definition of the view.
         comment: Optional view comment.
+        column_comments: Optional mapping of view output column name to comment.
+            The extension aligns these by name against the columns DuckDB binds
+            from the view's query, so only the names that actually appear in the
+            result need entries; unmatched names are ignored.
         tags: Optional metadata tags.
 
     """
@@ -605,6 +609,7 @@ class View:
     name: str
     definition: str
     comment: str | None = None
+    column_comments: dict[str, str] = field(default_factory=dict)
     tags: dict[str, str] = field(default_factory=dict)
 
     def to_view_info(self, schema_name: str) -> ViewInfo:
@@ -614,6 +619,7 @@ class View:
             schema_name=schema_name,
             definition=self.definition,
             comment=self.comment,
+            column_comments=dict(self.column_comments),
             tags=dict(self.tags),
         )
 

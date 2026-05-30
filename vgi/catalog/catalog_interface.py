@@ -361,6 +361,15 @@ class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     # The definition of the view which is a SQL query string.
     definition: str
 
+    # Per-column comments, keyed by the view's output column name. Unlike tables
+    # (whose column comments ride along as Arrow field metadata on the serialized
+    # ``columns`` schema), a view ships only its SQL ``definition`` — DuckDB binds
+    # that query to derive the columns — so view column comments need their own
+    # channel. The C++ extension aligns these by name against the bound output
+    # columns and feeds them into ``CreateViewInfo.column_comments_map``; names
+    # that don't match a bound column are ignored.
+    column_comments: dict[str, str] = field(default_factory=dict)
+
 
 @dataclass(frozen=True)
 class MacroInfo(CatalogSchemaObject, ArrowSerializableDataclass):

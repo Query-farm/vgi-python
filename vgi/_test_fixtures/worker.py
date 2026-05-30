@@ -451,6 +451,8 @@ _EXAMPLE_CATALOG = Catalog(
                     name="first_ten",
                     definition="SELECT * FROM sequence(10)",
                     comment="First 10 integers",
+                    column_comments={"n": "Sequence index 0..9"},
+                    tags={"layer": "demo", "origin": "sequence"},
                 ),
                 View(
                     name="even_numbers",
@@ -820,6 +822,7 @@ _EXAMPLE_CATALOG = Catalog(
                     name="small_numbers",
                     definition="SELECT * FROM numbers WHERE value < 10",
                     comment="Numbers less than 10",
+                    column_comments={"value": "Single-digit value 0..9"},
                 ),
             ],
             indexes=[
