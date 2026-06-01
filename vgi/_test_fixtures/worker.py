@@ -153,11 +153,13 @@ from vgi._test_fixtures.table import (
     RFF_MULTI_COLUMNS,
     RFF_NESTED_COLUMNS,
     RFF_NONE_COLUMNS,
+    RFF_ROWID_COLUMNS,
     RFF_SIMPLE_COLUMNS,
     RFF_STRUCT_COLUMNS,
     RffMultiScanFunction,
     RffNestedScanFunction,
     RffNoneScanFunction,
+    RffRowidScanFunction,
     RffSimpleScanFunction,
     RffStructScanFunction,
     RowIdSequenceFunction,
@@ -405,6 +407,7 @@ _EXAMPLE_CATALOG = Catalog(
                 RffMultiScanFunction,
                 RffNestedScanFunction,
                 RffNoneScanFunction,
+                RffRowidScanFunction,
                 RffSimpleScanFunction,
                 RffStructScanFunction,
                 # ScalarFunctionGenerator - transform to single-column output
@@ -883,6 +886,113 @@ _EXAMPLE_CATALOG = Catalog(
                     columns=RFF_NONE_COLUMNS,
                     comment="rff_none — control table with no required_field_filter_paths (opt-out fast path).",
                 ),
+                Table(
+                    name="rff_rowid",
+                    columns=RFF_ROWID_COLUMNS,
+                    required_field_filter_paths=(
+                        "bbox.xmin",
+                        "bbox.xmax",
+                        "bbox.ymin",
+                        "bbox.ymax",
+                    ),
+                    comment="rff_rowid — row_id virtual column + required bbox.* filters.",
+                ),
+                # rff_parquet — native read_parquet delegation + required_field_filter_paths
+                # on a FLOAT bbox struct (mirrors Overture transportation.segment).
+                Table(
+                    name="rff_parquet",
+                    columns=pa.schema(
+                        [
+                            pa.field(
+                                "bbox",
+                                pa.struct(
+                                    [
+                                        pa.field("xmin", pa.float32()),
+                                        pa.field("ymin", pa.float32()),
+                                        pa.field("xmax", pa.float32()),
+                                        pa.field("ymax", pa.float32()),
+                                    ]
+                                ),
+                            ),
+                            pa.field("other", pa.int64()),
+                        ]
+                    ),
+                    required_field_filter_paths=(
+                        "bbox.xmin",
+                        "bbox.xmax",
+                        "bbox.ymin",
+                        "bbox.ymax",
+                    ),
+                    comment="rff_parquet — native read_parquet delegation with bbox.* required filters.",
+                ),
+                # rff_hive — native read_parquet over a Hive-partitioned glob
+                # (theme/type partition columns), bbox at a non-zero index —
+                # closely mirrors Overture transportation.segment.
+                Table(
+                    name="rff_hive",
+                    columns=pa.schema(
+                        [
+                            pa.field("id", pa.string()),
+                            pa.field(
+                                "bbox",
+                                pa.struct(
+                                    [
+                                        pa.field("xmin", pa.float32()),
+                                        pa.field("ymin", pa.float32()),
+                                        pa.field("xmax", pa.float32()),
+                                        pa.field("ymax", pa.float32()),
+                                    ]
+                                ),
+                            ),
+                            pa.field("name", pa.string()),
+                            pa.field("num", pa.int64()),
+                            pa.field("theme", pa.string()),
+                            pa.field("type", pa.string()),
+                        ]
+                    ),
+                    required_field_filter_paths=(
+                        "bbox.xmin",
+                        "bbox.xmax",
+                        "bbox.ymin",
+                        "bbox.ymax",
+                    ),
+                    comment="rff_hive — native read_parquet over Hive glob with bbox.* required filters.",
+                ),
+                # rff_hive_mixed — same Hive layout as rff_hive but a MIXED
+                # requirement: a top-level field ('id') plus the struct corners.
+                # Exercises the flat-field branch of the path walker over native
+                # delegation, where 'id' sits at a permuted column_ids slot.
+                Table(
+                    name="rff_hive_mixed",
+                    columns=pa.schema(
+                        [
+                            pa.field("id", pa.string()),
+                            pa.field(
+                                "bbox",
+                                pa.struct(
+                                    [
+                                        pa.field("xmin", pa.float32()),
+                                        pa.field("ymin", pa.float32()),
+                                        pa.field("xmax", pa.float32()),
+                                        pa.field("ymax", pa.float32()),
+                                    ]
+                                ),
+                            ),
+                            pa.field("name", pa.string()),
+                            pa.field("num", pa.int64()),
+                            pa.field("theme", pa.string()),
+                            pa.field("type", pa.string()),
+                        ]
+                    ),
+                    required_field_filter_paths=(
+                        "id",
+                        "bbox.xmin",
+                        "bbox.xmax",
+                        "bbox.ymin",
+                        "bbox.ymax",
+                    ),
+                    comment="rff_hive_mixed — native read_parquet, top-level 'id' + bbox.* required filters.",
+                ),
                 # Time-travel constraint evolution table
                 Table(
                     name="versioned_constraints",
@@ -1256,6 +1366,24 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 named_arguments={},
             )
 
+        # rff_parquet — single-branch native read_parquet delegation.
+        if schema_name.lower() == "data" and name.lower() == "rff_parquet":
+            return ScanFunctionResult(
+                function_name="read_parquet",
+                positional_arguments=[pa.scalar("/tmp/rff_seg.parquet", pa.string())],
+                named_arguments={},
+            )
+
+        # rff_hive / rff_hive_mixed — native read_parquet over a Hive glob.
+        if schema_name.lower() == "data" and name.lower() in ("rff_hive", "rff_hive_mixed"):
+            return ScanFunctionResult(
+                function_name="read_parquet",
+                positional_arguments=[
+                    pa.scalar("/tmp/rff_hive/*/*/*.parquet", pa.string())
+                ],
+                named_arguments={"hive_partitioning": pa.scalar(True)},
+            )
+
         # Reject AT clause on tables that don't support time travel
         if at_unit:
             raise ValueError(f"Table '{schema_name}.{name}' does not support time travel queries")
@@ -1298,6 +1426,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             "rff_nested": "rff_nested_scan",
             "rff_multi": "rff_multi_scan",
             "rff_none": "rff_none_scan",
+            "rff_rowid": "rff_rowid_scan",
         }
         if schema_name.lower() == "data" and name.lower() in _static_scan_tables:
             return ScanFunctionResult(
