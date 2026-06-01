@@ -353,6 +353,18 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     # known to be stable.
     bind_result: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
+    # Dotted-path column references that the VGI extension's optimizer pass
+    # must verify appear in any scan's WHERE expression (top-level column
+    # names like ``"country"`` or struct subfields like ``"bbox.xmin"``,
+    # ``"nested.outer.inner"``). Empty (default) means no enforcement — the
+    # zero-cost fast path for every existing table.
+    #
+    # Satisfaction is prefix-based: a present filter on a shorter dotted path
+    # satisfies any required path it's a prefix of. A whole-struct filter on
+    # ``bbox`` therefore satisfies every required ``"bbox.*"`` path. The C++
+    # extension throws ``BinderException`` listing any unsatisfied paths.
+    required_field_filter_paths: list[str] = field(default_factory=list)
+
 
 @dataclass(frozen=True)
 class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):

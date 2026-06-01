@@ -92,6 +92,18 @@ from vgi._test_fixtures.table.partition_columns_broken import (
 from vgi._test_fixtures.table.profiling_example import (
     ProfilingDemoFunction,
 )
+from vgi._test_fixtures.table.required_filters import (
+    RFF_MULTI_COLUMNS,
+    RFF_NESTED_COLUMNS,
+    RFF_NONE_COLUMNS,
+    RFF_SIMPLE_COLUMNS,
+    RFF_STRUCT_COLUMNS,
+    RffMultiScanFunction,
+    RffNestedScanFunction,
+    RffNoneScanFunction,
+    RffSimpleScanFunction,
+    RffStructScanFunction,
+)
 from vgi._test_fixtures.table.sequence import (
     DoubleSequenceFunction,
     NamedParamsEchoFunction,
@@ -176,6 +188,16 @@ __all__ = [
     "RegionYearPartitionedFunction",
     "RepeatValueIntFunction",
     "RepeatValueStrFunction",
+    "RFF_MULTI_COLUMNS",
+    "RFF_NESTED_COLUMNS",
+    "RFF_NONE_COLUMNS",
+    "RFF_SIMPLE_COLUMNS",
+    "RFF_STRUCT_COLUMNS",
+    "RffMultiScanFunction",
+    "RffNestedScanFunction",
+    "RffNoneScanFunction",
+    "RffSimpleScanFunction",
+    "RffStructScanFunction",
     "RowIdSequenceFunction",
     "SampleEchoFunction",
     "ScopedSecretDemoFunction",

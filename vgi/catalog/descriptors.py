@@ -228,6 +228,17 @@ class Table:
         column_comments: Dict mapping column names to comment strings.
             Comments are transported as Arrow field metadata and visible
             via ``duckdb_columns()`` in DuckDB.
+        required_field_filter_paths: Dotted-path column references that MUST
+            appear in a WHERE expression for any scan of this table. Top-level
+            names (``"country"``) or struct subfields (``"bbox.xmin"``,
+            ``"nested.outer.inner"``). Empty (default) means no enforcement.
+            Satisfaction is prefix-based: a present filter on a shorter path
+            satisfies any required path it is a prefix of. So a whole-struct
+            filter on ``bbox`` satisfies all of ``bbox.xmin`` / ``.xmax`` /
+            ``.ymin`` / ``.ymax`` — the wider filter is at least as
+            constraining as the four individual ones. The VGI DuckDB
+            extension's optimizer pass consults this list at bind time and
+            throws ``BinderException`` listing any unsatisfied paths.
         comment: Optional table comment.
         tags: Optional metadata tags.
 
@@ -249,6 +260,7 @@ class Table:
     defaults: dict[str, DefaultValue] = field(default_factory=dict)
     generated_columns: dict[str, str] = field(default_factory=dict)
     column_comments: dict[str, str] = field(default_factory=dict)
+    required_field_filter_paths: tuple[str, ...] = ()
     statistics: dict[str, ColumnStatisticsInput] = field(default_factory=dict)
     statistics_cache_max_age_seconds: int | None = None
     # Optional inlined cardinality. When set, the C++ extension uses these
@@ -389,6 +401,22 @@ class Table:
                 raise ValueError(
                     f"Table '{self.name}': column_comments column '{col}' not found "
                     f"in schema. Available columns: {sorted(column_names)}"
+                )
+
+        # Validate required_field_filter_paths: the leading dotted segment of
+        # each path must be a real column on this table. Struct subfield
+        # validity is not checked here — DuckDB's binder catches typos at
+        # scan time, and the descriptor doesn't unpack STRUCT subfields.
+        for path in self.required_field_filter_paths:
+            if not path:
+                raise ValueError(
+                    f"Table '{self.name}': required_field_filter_paths must not contain empty strings"
+                )
+            head = path.split(".", 1)[0]
+            if head not in column_names:
+                raise ValueError(
+                    f"Table '{self.name}': required_field_filter_paths path '{path}' references "
+                    f"unknown column '{head}'. Available columns: {sorted(column_names)}"
                 )
 
         # Validate statistics column names
@@ -566,6 +594,7 @@ class Table:
             cardinality_estimate=self.cardinality_estimate,
             cardinality_max=self.cardinality_max,
             column_statistics=column_statistics_blob,
+            required_field_filter_paths=list(self.required_field_filter_paths),
         )
 
     def resolve_column_statistics(self) -> TableColumnStatisticsResult | None:

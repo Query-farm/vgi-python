@@ -150,6 +150,16 @@ from vgi._test_fixtures.table import (
     RegionYearPartitionedFunction,
     RepeatValueIntFunction,
     RepeatValueStrFunction,
+    RFF_MULTI_COLUMNS,
+    RFF_NESTED_COLUMNS,
+    RFF_NONE_COLUMNS,
+    RFF_SIMPLE_COLUMNS,
+    RFF_STRUCT_COLUMNS,
+    RffMultiScanFunction,
+    RffNestedScanFunction,
+    RffNoneScanFunction,
+    RffSimpleScanFunction,
+    RffStructScanFunction,
     RowIdSequenceFunction,
     SampleEchoFunction,
     ScopedSecretDemoFunction,
@@ -390,6 +400,13 @@ _EXAMPLE_CATALOG = Catalog(
                 ProductsScanFunction,
                 ProjectsScanFunction,
                 VersionedConstraintsScanFunction,
+                # rff_* scan functions back the Tables exercised by the
+                # vgi_required_filters_*.test sqllogictest matrix.
+                RffMultiScanFunction,
+                RffNestedScanFunction,
+                RffNoneScanFunction,
+                RffSimpleScanFunction,
+                RffStructScanFunction,
                 # ScalarFunctionGenerator - transform to single-column output
                 AddValuesFunction,
                 BernoulliFunction,
@@ -833,6 +850,39 @@ _EXAMPLE_CATALOG = Catalog(
                     ),
                     comment="Projects with composite PK and FK to departments",
                 ),
+                # ----- required_field_filter_paths fixtures -----
+                # Exercised by ~/Development/vgi/test/sql/vgi_required_filters_*.test
+                # to verify the C++ optimizer extension that enforces the new
+                # Table.required_field_filter_paths field.
+                Table(
+                    name="rff_simple",
+                    columns=RFF_SIMPLE_COLUMNS,
+                    required_field_filter_paths=("a",),
+                    comment="rff_simple — requires a filter referencing column 'a'.",
+                ),
+                Table(
+                    name="rff_struct",
+                    columns=RFF_STRUCT_COLUMNS,
+                    required_field_filter_paths=("s.a", "s.b"),
+                    comment="rff_struct — requires filters on both struct subfields s.a and s.b.",
+                ),
+                Table(
+                    name="rff_nested",
+                    columns=RFF_NESTED_COLUMNS,
+                    required_field_filter_paths=("wrapper.mid.leaf",),
+                    comment="rff_nested — requires a filter on the 3-deep nested path wrapper.mid.leaf.",
+                ),
+                Table(
+                    name="rff_multi",
+                    columns=RFF_MULTI_COLUMNS,
+                    required_field_filter_paths=("top", "s.a"),
+                    comment="rff_multi — mixed top-level + struct subfield requirements.",
+                ),
+                Table(
+                    name="rff_none",
+                    columns=RFF_NONE_COLUMNS,
+                    comment="rff_none — control table with no required_field_filter_paths (opt-out fast path).",
+                ),
                 # Time-travel constraint evolution table
                 Table(
                     name="versioned_constraints",
@@ -1242,6 +1292,12 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             "employees": "employees_scan",
             "products": "products_scan",
             "projects": "projects_scan",
+            # rff_* — required_field_filter_paths fixtures.
+            "rff_simple": "rff_simple_scan",
+            "rff_struct": "rff_struct_scan",
+            "rff_nested": "rff_nested_scan",
+            "rff_multi": "rff_multi_scan",
+            "rff_none": "rff_none_scan",
         }
         if schema_name.lower() == "data" and name.lower() in _static_scan_tables:
             return ScanFunctionResult(
