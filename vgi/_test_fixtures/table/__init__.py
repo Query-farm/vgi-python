@@ -44,6 +44,7 @@ from vgi._test_fixtures.table.filters import (
     ExpressionFilterTestFunction,
     FilterEchoFunction,
     FilterEchoPartitionedFunction,
+    FilterEchoTableScanFunction,
     SpatialFilterExampleFunction,
     ValuePruneFunction,
 )
@@ -159,6 +160,7 @@ __all__ = [
     "ExpressionFilterTestFunction",
     "FilterEchoFunction",
     "FilterEchoPartitionedFunction",
+    "FilterEchoTableScanFunction",
     "GeneratorExceptionFunction",
     "ValuePruneFunction",
     "LateMaterializationFunction",

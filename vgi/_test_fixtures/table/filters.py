@@ -15,6 +15,7 @@ from vgi_rpc.rpc import OutputCollector
 
 from vgi._test_fixtures.table._common import (
     _cardinality_from_count,
+    _EmptyArgs,
 )
 from vgi.arguments import Arg
 from vgi.invocation import GlobalInitResponse
@@ -904,3 +905,101 @@ class FilterEchoPartitionedFunction(TableFunctionGenerator[_FilterEchoPartitione
         )
 
         state.current_idx = batch_end_idx
+
+
+# ============================================================================
+# FilterEchoTableScanFunction — catalog *table* (not table function) backing for
+# example.data.filter_echo_table. Mirrors FilterEchoFunction's pushed_filters
+# echo, but is invoked with no positional args (the catalog scan route in the
+# fixture worker passes none) so a `SELECT ... FROM example.data.filter_echo_table`
+# — and a VIEW over it — can be characterized for filter pushdown. Crucially it
+# declares supported_expression_filters so a `col LIKE 'abc%'` predicate (which
+# DuckDB lowers to a prefix/starts_with expression filter) actually reaches the
+# worker and shows up in the pushed_filters column. See
+# test/sql/integration/table/filter_pushdown_through_view.test.
+# ============================================================================
+
+
+_FILTER_ECHO_TABLE_SCHEMA = schema({"n": pa.int64(), "s": pa.utf8(), "pushed_filters": pa.utf8()})
+
+# Fixed 100-row dataset: n in 0..99, s = "row_<n>". The "row_" prefix makes
+# LIKE 'row_1%' meaningful (matches row_1 and row_10..row_19).
+_FILTER_ECHO_TABLE_ROWS = 100
+
+
+@dataclass(kw_only=True)
+class _FilterEchoTableState(ArrowSerializableDataclass):
+    """One-shot state carrying the captured pushed-filter string.
+
+    ``filter_str`` is serialized (not Transient): the framework's HTTP
+    rehydrate path deserializes user state but does not re-invoke
+    ``initial_state``, so a Transient filter string would silently revert
+    to ``"(none)"`` after the first state-token round-trip.
+    """
+
+    done: bool = False
+    filter_str: str = "(none)"
+
+
+@init_single_worker
+@bind_fixed_schema
+class FilterEchoTableScanFunction(TableFunctionGenerator[_EmptyArgs, _FilterEchoTableState]):
+    """Catalog-table scan that echoes the pushed-down filters it received.
+
+    Backs ``example.data.filter_echo_table``. Like :class:`FilterEchoFunction`
+    the ``pushed_filters`` column shows the SQL-like representation of whatever
+    DuckDB pushed down; the framework auto-applies the filters so the result set
+    stays correct. Unlike ``filter_echo`` it is a no-arg *table* scan and opts
+    into expression-filter pushdown, so a ``LIKE 'prefix%'`` predicate is
+    observable here (and through a view over this table).
+
+    SCHEMA
+    ------
+    Output: {"n": int64, "s": string, "pushed_filters": string}, 100 rows
+    (n in 0..99, s = "row_<n>").
+    """
+
+    class Meta:
+        """Metadata for FilterEchoTableScanFunction."""
+
+        name = "filter_echo_table_scan"
+        description = "Catalog-table scan echoing pushed-down filters (backs example.data.filter_echo_table)"
+        categories = ["generator", "diagnostic", "testing"]
+        filter_pushdown = True
+        auto_apply_filters = True
+        projection_pushdown = True
+        supported_expression_filters = ["prefix", "starts_with"]
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = _FILTER_ECHO_TABLE_SCHEMA
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_EmptyArgs]) -> _FilterEchoTableState:
+        """Capture the pushed-filter string for echoing."""
+        assert params.init_call is not None
+        pf = params.init_call.pushdown_filters
+        jk = params.init_call.join_keys
+        filters = cls.pushdown_filters(pf, join_keys=jk) if pf is not None else None
+        return _FilterEchoTableState(filter_str=_format_pushed_filters(filters))
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_EmptyArgs],
+        state: _FilterEchoTableState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit the fixed dataset once, projecting to the requested columns."""
+        if state.done:
+            out.finish()
+            return
+        state.done = True
+
+        ns = list(range(_FILTER_ECHO_TABLE_ROWS))
+        full: dict[str, list[object]] = {
+            "n": ns,
+            "s": [f"row_{i}" for i in ns],
+            "pushed_filters": [state.filter_str] * _FILTER_ECHO_TABLE_ROWS,
+        }
+        # projection_pushdown=True: emit only the requested columns.
+        columns = {f.name: full[f.name] for f in params.output_schema}
+        out.emit(pa.RecordBatch.from_pydict(columns, schema=params.output_schema))

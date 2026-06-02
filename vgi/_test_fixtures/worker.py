@@ -120,6 +120,7 @@ from vgi._test_fixtures.table import (
     ExpressionFilterTestFunction,
     FilterEchoFunction,
     FilterEchoPartitionedFunction,
+    FilterEchoTableScanFunction,
     GeneratorExceptionFunction,
     LateMaterializationFunction,
     LoggingGeneratorFunction,
@@ -180,6 +181,7 @@ from vgi._test_fixtures.table import (
 )
 from vgi._test_fixtures.table_in_out import (
     BatchIndexBufferInputFunction,
+    BufferEmitWideFunction,
     BufferInputFunction,
     CrashOnCombineFunction,
     CrashOnFinalizeFunction,
@@ -329,12 +331,14 @@ _EXAMPLE_CATALOG = Catalog(
                 OrderedSourceFunction,
                 BatchIndexBufferInputFunction,
                 EchoBufferingFunction,
+                BufferEmitWideFunction,
                 SlowCancellableBufferingFunction,
                 # TableFunctionGenerator - generate output without input
                 ConstantColumnsFunction,
                 SlowCancellableFunction,
                 FilterEchoFunction,
                 FilterEchoPartitionedFunction,
+                FilterEchoTableScanFunction,
                 ValuePruneFunction,
                 LateMaterializationFunction,
                 DictFilterEchoFunction,
@@ -852,6 +856,17 @@ _EXAMPLE_CATALOG = Catalog(
                         ),
                     ),
                     comment="Projects with composite PK and FK to departments",
+                ),
+                # filter_echo_table — catalog table that echoes the pushed-down
+                # filters it received (pushed_filters column). Backs
+                # ~/Development/vgi/test/sql/integration/table/filter_pushdown_through_view.test,
+                # which characterizes filter pushdown directly and through a VIEW.
+                # The backing scan opts into expression-filter pushdown so a
+                # `LIKE 'prefix%'` predicate is observable here.
+                Table(
+                    name="filter_echo_table",
+                    columns=schema(n=pa.int64(), s=pa.utf8(), pushed_filters=pa.utf8()),
+                    comment="Catalog table echoing pushed-down filters (filter-pushdown-through-view tests).",
                 ),
                 # ----- required_field_filter_paths fixtures -----
                 # Exercised by ~/Development/vgi/test/sql/vgi_required_filters_*.test
@@ -1420,6 +1435,8 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             "employees": "employees_scan",
             "products": "products_scan",
             "projects": "projects_scan",
+            # filter-pushdown-through-view fixture.
+            "filter_echo_table": "filter_echo_table_scan",
             # rff_* — required_field_filter_paths fixtures.
             "rff_simple": "rff_simple_scan",
             "rff_struct": "rff_struct_scan",

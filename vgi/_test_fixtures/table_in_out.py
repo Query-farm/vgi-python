@@ -94,6 +94,7 @@ __all__ = [
     "OrderedBufferInputFunction",
     "BatchIndexBufferInputFunction",
     "OrderedSourceFunction",
+    "BufferEmitWideFunction",
 ]
 
 
@@ -1297,4 +1298,85 @@ class OrderedSourceFunction(TableBufferingFunction[SingleTableArguments, _OneSho
                 [{"v": state.value}], schema=params.output_schema
             )
         )
+        state.emitted = True
+
+
+# ---------------------------------------------------------------------------
+# Repro fixture: emit a single large finalize batch from a buffering function.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class BufferEmitWideArguments:
+    """Arguments for BufferEmitWideFunction."""
+
+    rows: Annotated[int, Arg(0, doc="Number of rows to emit in one finalize batch", ge=0)]
+    data: Annotated[TableInput, Arg(1, doc="Input table (content ignored)")]
+
+
+@dataclass
+class _EmitOnceState(ArrowSerializableDataclass):
+    """Whether the single finalize batch has been emitted."""
+
+    emitted: bool = False
+
+
+_BUFFER_EMIT_WIDE_SCHEMA = schema(n=pa.int64())
+
+
+class BufferEmitWideFunction(TableBufferingFunction[BufferEmitWideArguments, _EmitOnceState]):
+    """Buffering function whose Source phase emits ONE batch of ``rows`` rows.
+
+    Unlike BufferInputFunction (which echoes input batches, each already
+    capped at DuckDB's standard vector size), this emits a single, arbitrarily
+    large output batch from ``finalize``. It is a minimal repro for whether the
+    buffering Source path supports output batches larger than the standard
+    vector size (2048 rows) — a regular TableFunctionGenerator (e.g. sequence)
+    does support this.
+    """
+
+    class Meta:
+        """Metadata for BufferEmitWideFunction."""
+
+        name = "buffer_emit_wide"
+        description = "Emit a single finalize batch of N rows (vector-size repro)"
+        categories = ["test", "buffer"]
+        examples = [
+            FunctionExample(
+                sql="SELECT count(*) FROM buffer_emit_wide((SELECT 1), 10000)",
+                description="Emit a single 10000-row batch from the Source phase",
+            )
+        ]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[BufferEmitWideArguments]) -> BindResponse:
+        return BindResponse(output_schema=_BUFFER_EMIT_WIDE_SCHEMA)
+
+    @classmethod
+    def process(cls, batch: pa.RecordBatch, params: TableBufferingParams[BufferEmitWideArguments]) -> bytes:
+        return params.execution_id
+
+    @classmethod
+    def combine(cls, state_ids: list[bytes], params: TableBufferingParams[BufferEmitWideArguments]) -> list[bytes]:
+        return [params.execution_id]
+
+    @classmethod
+    def initial_finalize_state(
+        cls, finalize_state_id: bytes, params: TableBufferingParams[BufferEmitWideArguments]
+    ) -> _EmitOnceState:
+        return _EmitOnceState(emitted=False)
+
+    @classmethod
+    def finalize(
+        cls,
+        params: TableBufferingParams[BufferEmitWideArguments],
+        finalize_state_id: bytes,
+        state: _EmitOnceState,
+        out: OutputCollector,
+    ) -> None:
+        if state.emitted:
+            out.finish()
+            return
+        n = params.args.rows
+        out.emit(pa.RecordBatch.from_pydict({"n": list(range(n))}, schema=_BUFFER_EMIT_WIDE_SCHEMA))
         state.emitted = True
