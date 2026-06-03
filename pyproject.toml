@@ -6,7 +6,20 @@ readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Rusty Conover", email = "rusty@query.farm" }]
 maintainers = [{ name = "Query Farm LLC", email = "hello@query.farm" }]
-classifiers = ["License :: Other/Proprietary License"]
+classifiers = [
+    "License :: Other/Proprietary License",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Database",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
 requires-python = ">=3.13"
 dependencies = [
     "click",
@@ -53,6 +66,12 @@ vgi-transactor = "vgi.transactor.server:main"
 # they don't ship in the public wheel / pollute end-user PATH. They are provided
 # by the dev-only sidecar distribution in packages/vgi-fixtures (see its
 # pyproject.toml), which is installed via the uv workspace for tests.
+
+[project.urls]
+Homepage = "https://query.farm"
+Repository = "https://github.com/Query-farm/vgi-python"
+Documentation = "https://github.com/Query-farm/vgi-python/tree/main/docs"
+Issues = "https://github.com/Query-farm/vgi-python/issues"
 
 [build-system]
 requires = ["hatchling"]
