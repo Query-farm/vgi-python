@@ -510,6 +510,19 @@ class ScalarFunctionGenerator(vgi.function.Function):
         """
         return BindResult(cls.output_type(params))
 
+    @classmethod
+    def catalog_output_schema(cls) -> pa.Schema:
+        """Return output schema for catalog introspection.
+
+        A generator-style scalar function computes its output type at bind
+        time, so no static type is known here. Report a single dynamic
+        ``result`` column (``null()`` tagged ``vgi:any``) so catalog
+        consumers treat the type as resolved-at-bind. ScalarFunction
+        overrides this when a static ``Returns()`` type is available.
+        """
+        field = pa.field("result", pa.null(), metadata={b"vgi:any": b"true"})
+        return pa.schema([field])
+
     @final
     @classmethod
     def _validate_param_type_bounds(cls, input_schema: pa.Schema) -> None:
