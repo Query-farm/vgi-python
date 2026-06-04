@@ -324,6 +324,19 @@ class BindParams[TArgs]:
     # None when invoked without an ATTACH. Storage shards on that UUID separately.
     attach_opaque_data: bytes | None = None
 
+    @property
+    def at_unit(self) -> str | None:
+        """The AT (TIMESTAMP|VERSION) unit for this scan, or None when there is no
+        AT clause. NOTE: for inline-bound (function-backed) tables on_bind runs once
+        at attach with no AT, so this is None here — read AT at init/process via
+        ``ProcessParams.at_value``. See ``BindRequest.at_unit``."""
+        return self.bind_call.at_unit
+
+    @property
+    def at_value(self) -> str | None:
+        """The AT (TIMESTAMP|VERSION) value for this scan, or None. See ``at_unit``."""
+        return self.bind_call.at_value
+
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class InitParams[TArgs]:
@@ -347,6 +360,17 @@ class InitParams[TArgs]:
     # Catalog's attach bytes, unwrapped by the framework (uuid prefix stripped);
     # None without an ATTACH. See ``BindParams``.
     attach_opaque_data: bytes | None = None
+
+    @property
+    def at_unit(self) -> str | None:
+        """AT (TIMESTAMP|VERSION) unit for this scan, or None. Carried on the
+        per-scan bind embedded in the init request. See ``BindRequest.at_unit``."""
+        return self.init_call.bind_call.at_unit
+
+    @property
+    def at_value(self) -> str | None:
+        """AT (TIMESTAMP|VERSION) value for this scan, or None. See ``at_unit``."""
+        return self.init_call.bind_call.at_value
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -383,6 +407,18 @@ class ProcessParams[TArgs]:
     # Catalog's attach bytes, unwrapped by the framework (uuid prefix stripped);
     # None without an ATTACH. See ``BindParams``.
     attach_opaque_data: bytes | None = None
+
+    @property
+    def at_unit(self) -> str | None:
+        """AT (TIMESTAMP|VERSION) unit for this scan, or None. Carried on the
+        per-scan bind embedded in the init request; None for aggregate functions
+        (no init_call). See ``BindRequest.at_unit``."""
+        return self.init_call.bind_call.at_unit if self.init_call is not None else None
+
+    @property
+    def at_value(self) -> str | None:
+        """AT (TIMESTAMP|VERSION) value for this scan, or None. See ``at_unit``."""
+        return self.init_call.bind_call.at_value if self.init_call is not None else None
 
 
 class TableFunctionBase[TArgs](vgi.function.Function):

@@ -136,6 +136,16 @@ class BindRequest(ArrowSerializableDataclass):
     transaction_opaque_data: bytes | None = None
     resolved_secrets_provided: bool = False
 
+    # Time travel: the AT (TIMESTAMP|VERSION ...) clause for this scan, threaded
+    # through from DuckDB's per-reference bind. Both None when the scan has no AT
+    # clause. NOTE: for inline-bound (function-backed) tables the *actual* on_bind
+    # RPC runs once at attach with no AT, so these are None there; the per-scan AT
+    # is carried on the bind request embedded in each InitRequest, so functions
+    # should read it at init via ``params.init_call.bind_call.at_value`` (or the
+    # ``ProcessParams.at_value`` accessor), not at on_bind.
+    at_unit: str | None = None
+    at_value: str | None = None
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class InitRequest(ArrowSerializableDataclass):

@@ -179,6 +179,12 @@ from vgi._test_fixtures.table import (
     resolve_version,
     resolve_versioned_constraints_version,
 )
+from vgi._test_fixtures.table.tt_pushdown import (
+    _TT_SCHEMA,
+    TimeTravelPushdownFunction,
+    TtPushdownColsScanFunction,
+    resolve_tt_version,
+)
 from vgi._test_fixtures.table_in_out import (
     BatchIndexBufferInputFunction,
     BufferEmitWideFunction,
@@ -399,6 +405,10 @@ _EXAMPLE_CATALOG = Catalog(
                 TenThousandFunction,
                 TxCachedValueFunction,
                 VersionedDataFunction,
+                # Time-travel + filter-pushdown fixtures (one function-backed, one
+                # columns-based) — back time_travel_pushdown.test.
+                TimeTravelPushdownFunction,
+                TtPushdownColsScanFunction,
                 # Static data scan functions for constraint-backed tables
                 ColorsScanFunction,
                 DepartmentsScanFunction,
@@ -556,6 +566,21 @@ _EXAMPLE_CATALOG = Catalog(
                     columns=schema(id=pa.int64(), score=pa.float64()),
                     supports_time_travel=True,
                     comment="Versioned data table demonstrating time travel with schema evolution",
+                ),
+                # Time travel + filter pushdown together. tt_pushdown_fn is
+                # function-backed (reads AT at init); tt_pushdown_cols is
+                # columns-based (AT → version arg via table_scan_function_get).
+                Table(
+                    name="tt_pushdown_fn",
+                    function=TimeTravelPushdownFunction,
+                    supports_time_travel=True,
+                    comment="Function-backed: prunes by filter AND time-travels (AT read at init).",
+                ),
+                Table(
+                    name="tt_pushdown_cols",
+                    columns=_TT_SCHEMA,
+                    supports_time_travel=True,
+                    comment="Columns-based: prunes by filter AND time-travels (AT → version arg).",
                 ),
                 # Explicit columns table with statistics extracted from DuckDB
                 # via statistics_from_duckdb() — demonstrates the helper workflow
@@ -1368,6 +1393,16 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             version = resolve_version(at_unit, at_value)
             return ScanFunctionResult(
                 function_name="versioned_data_scan",
+                positional_arguments=[pa.scalar(version)],
+                named_arguments={},
+            )
+
+        # Columns-based time-travel + pushdown: resolve AT → version and pass it
+        # as a scan-function argument (the native columns-based AT mechanism).
+        if schema_name.lower() == "data" and name.lower() == "tt_pushdown_cols":
+            version = resolve_tt_version(at_unit, at_value)
+            return ScanFunctionResult(
+                function_name="tt_pushdown_cols_scan",
                 positional_arguments=[pa.scalar(version)],
                 named_arguments={},
             )
