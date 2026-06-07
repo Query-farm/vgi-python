@@ -42,6 +42,10 @@ azure = [
 ]
 test-fixtures = ["numpy>=2.4.1"]
 transactor = ["sqlglot"]
+# Convenience extra: pulls the companion `vgi-fixtures` distribution, which
+# restores vgi/_test_fixtures + the vgi-fixture-* worker commands for users who
+# want the example/test workers from a traditional install.
+fixtures = ["vgi-fixtures"]
 test-fixtures-writable = [
     "vgi[test-fixtures]",
     "vgi[transactor]",
@@ -60,6 +64,7 @@ dev = [
 ]
 [project.scripts]
 vgi-serve = "vgi.serve:main"
+vgi-secret-serve = "vgi.secret_service:main"
 vgi-client = "vgi.client.cli:main"
 vgi-transactor = "vgi.transactor.server:main"
 # The vgi-fixture-* worker commands are intentionally NOT registered here so
@@ -78,7 +83,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-exclude = ["vgi/codegen"]
+# vgi/_test_fixtures is shipped by the separate `vgi-fixtures` companion wheel
+# (see packages/vgi-fixtures), not the public `vgi` wheel. Install it on demand
+# via `pip install vgi[fixtures]` or `pip install vgi-fixtures`.
+exclude = ["vgi/codegen", "vgi/_test_fixtures"]
 
 [tool.hatch.build.targets.sdist]
 exclude = []

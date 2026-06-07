@@ -22,15 +22,18 @@ Usage:
     vgi-fixture-worker
 """
 
-# Friendly error if the test-fixtures extra is missing. Several fixture
-# modules below depend on numpy, so we surface a clear install message
-# instead of a raw ImportError.
+# Friendly error if numpy is missing. Several fixture modules below depend on
+# numpy, which the `vgi-fixtures` distribution installs; surface a clear install
+# message instead of a raw ImportError.
 try:
     import numpy  # noqa: F401
 except ImportError:
     import sys as _sys
 
-    _sys.exit("vgi-fixture-worker requires the test-fixtures extra. Install with: pip install 'vgi[test-fixtures]'")
+    _sys.exit(
+        "vgi-fixture-worker requires numpy. Install the fixtures distribution with: "
+        "pip install vgi-fixtures (or pip install 'vgi[fixtures]')"
+    )
 
 import uuid
 from typing import Annotated, Any

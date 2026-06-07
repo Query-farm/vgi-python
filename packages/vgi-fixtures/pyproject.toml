@@ -1,16 +1,21 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 #
-# Dev-only sidecar distribution. This package ships NO modules of its own — it
-# exists solely to register the vgi-fixture-* console commands that the test and
-# integration suites invoke. The fixture *modules* live in the main package at
-# vgi/_test_fixtures/; keeping the entry points here keeps them out of the public
-# `vgi` wheel and off end-user PATH. Installed via the uv workspace for dev/CI.
+# Companion distribution for the example/test VGI workers. The base `vgi` wheel
+# excludes vgi/_test_fixtures; this package ships that subtree back into the
+# installed `vgi/` package directory and registers the vgi-fixture-* console
+# commands. Install on demand via `pip install vgi-fixtures` or `vgi[fixtures]`.
+# Source lives at the repo root in vgi/_test_fixtures/ so the dev/CI workspace
+# and the conformance suite import it by its normal `vgi._test_fixtures` path.
 [project]
 name = "vgi-fixtures"
 version = "0.8.0"
-description = "Development-only VGI test/demo worker entry points (not for production use)"
+description = "Example/test VGI worker modules and entry points (not for production use)"
+readme = "README.md"
+license = { file = "../../LICENSE" }
 requires-python = ">=3.13"
-dependencies = ["vgi"]
+# The fixture modules import numpy (test-fixtures) and sqlglot (transactor, used
+# by the writable workers); test-fixtures-writable pulls both transitively.
+dependencies = ["vgi[test-fixtures-writable]"]
 
 [project.scripts]
 vgi-fixture-worker = "vgi._test_fixtures.worker:main"
@@ -29,6 +34,17 @@ vgi = { workspace = true }
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# PUBLISH WHEEL ONLY. The fixture source lives at the repo root in
+# vgi/_test_fixtures/, outside this package's root. hatchling's force-include can
+# pull it into the *wheel* (a flat install image), but an sdist is rooted at the
+# package dir and cannot reach `../../` — building from such an sdist yields a
+# silently empty wheel. Since this is a pure-python `py3-none-any` wheel that
+# installs everywhere, the wheel alone is sufficient. The release workflow builds
+# `--wheel` only for this package; do not publish its sdist.
 [tool.hatch.build.targets.wheel]
-# This distribution intentionally contains no Python modules.
+# Ship the fixture subtree (which lives at the repo root) into the installed
+# `vgi/` package directory. The base `vgi` wheel excludes this path, so the two
+# wheels overlay cleanly: `vgi` owns the runtime modules, this owns _test_fixtures.
 bypass-selection = true
+[tool.hatch.build.targets.wheel.force-include]
+"../../vgi/_test_fixtures" = "vgi/_test_fixtures"

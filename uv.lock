@@ -1660,6 +1660,9 @@ dev = [
     { name = "sqlglot" },
     { name = "vgi-rpc", extra = ["conformance", "external", "http", "oauth", "otel", "sentry"] },
 ]
+fixtures = [
+    { name = "vgi-fixtures" },
+]
 http = [
     { name = "vgi-rpc", extra = ["http"] },
 ]
@@ -1714,6 +1717,7 @@ requires-dist = [
     { name = "vgi", extras = ["test-fixtures"], marker = "extra == 'test-fixtures-writable'" },
     { name = "vgi", extras = ["test-fixtures", "test-fixtures-writable", "http", "oauth", "otel", "sentry", "azure"], marker = "extra == 'dev'" },
     { name = "vgi", extras = ["transactor"], marker = "extra == 'test-fixtures-writable'" },
+    { name = "vgi-fixtures", marker = "extra == 'fixtures'", editable = "packages/vgi-fixtures" },
     { name = "vgi-rpc", specifier = ">=0.18.1" },
     { name = "vgi-rpc", extras = ["conformance", "external", "http", "oauth", "otel", "sentry"], marker = "extra == 'dev'" },
     { name = "vgi-rpc", extras = ["http"], marker = "extra == 'http'" },
@@ -1721,7 +1725,7 @@ requires-dist = [
     { name = "vgi-rpc", extras = ["otel"], marker = "extra == 'otel'" },
     { name = "vgi-rpc", extras = ["sentry"], marker = "extra == 'sentry'" },
 ]
-provides-extras = ["http", "oauth", "otel", "sentry", "azure", "test-fixtures", "transactor", "test-fixtures-writable", "dev"]
+provides-extras = ["http", "oauth", "otel", "sentry", "azure", "test-fixtures", "transactor", "fixtures", "test-fixtures-writable", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1736,11 +1740,11 @@ name = "vgi-fixtures"
 version = "0.8.0"
 source = { editable = "packages/vgi-fixtures" }
 dependencies = [
-    { name = "vgi" },
+    { name = "vgi", extra = ["test-fixtures-writable"] },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "vgi", editable = "." }]
+requires-dist = [{ name = "vgi", extras = ["test-fixtures-writable"], editable = "." }]
 
 [[package]]
 name = "vgi-rpc"

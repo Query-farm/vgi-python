@@ -1,0 +1,90 @@
+name: Release
+
+# Publishes both distributions to PyPI when a GitHub Release is published:
+#   - vgi            (sdist + universal wheel)        — the public package
+#   - vgi-fixtures   (universal wheel only)           — example/test workers
+#
+# vgi-fixtures is wheel-only on purpose: its source lives at the repo root in
+# vgi/_test_fixtures/, which the wheel force-includes but an sdist cannot reach
+# (see packages/vgi-fixtures/pyproject.toml). It is a pure-python py3-none-any
+# wheel, so the wheel alone installs everywhere.
+#
+# Auth is PyPI Trusted Publishing (OIDC) — no API tokens. Before the first run,
+# configure a Trusted Publisher on PyPI for BOTH projects pointing at:
+#   owner:       Query-farm
+#   repository:  vgi-python
+#   workflow:    release.yml
+#   environment: pypi
+# The `vgi` and `vgi-fixtures` versions must match the released tag.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Build vgi (sdist + wheel)
+        run: uv build --sdist --wheel --out-dir dist-vgi .
+
+      - name: Build vgi-fixtures (wheel only)
+        run: uv build --wheel --out-dir dist-fixtures packages/vgi-fixtures
+
+      - name: Validate metadata
+        run: uvx twine check dist-vgi/* dist-fixtures/*
+
+      - name: Upload vgi artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-vgi
+          path: dist-vgi/
+
+      - name: Upload vgi-fixtures artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-fixtures
+          path: dist-fixtures/
+
+  publish-vgi:
+    name: Publish vgi to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # required for Trusted Publishing
+    steps:
+      - name: Download vgi artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-vgi
+          path: dist/
+
+      - name: Publish vgi
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-vgi-fixtures:
+    name: Publish vgi-fixtures to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # required for Trusted Publishing
+    steps:
+      - name: Download vgi-fixtures artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-fixtures
+          path: dist/
+
+      - name: Publish vgi-fixtures
+        uses: pypa/gh-action-pypi-publish@release/v1
