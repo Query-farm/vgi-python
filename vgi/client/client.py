@@ -137,6 +137,52 @@ class ClientError(Exception):
         return cls("\n\n".join(parts))
 
 
+class ResumeUnsupported(ClientError):
+    """Raised when a resumable scan is requested on a non-resumable transport.
+
+    Only the HTTP transport round-trips producer state in continuation tokens,
+    so only HTTP clients can drive :meth:`Client.table_scan_resumable`. On the
+    pipe/subprocess transport the stream is a live connection with no
+    serializable resume point; the caller must keep the live stream in-process
+    instead.
+    """
+
+
+class ResumableTableScan:
+    """A resumable, one-batch-at-a-time handle on an upstream table-function scan.
+
+    Unlike :meth:`Client.table_function` (a live generator that hides the
+    server's continuation token), each :meth:`next` returns ``(batch, token)``
+    where ``token`` is the worker's serialized producer state AFTER ``batch``.
+    A stateless client (e.g. a load-balanced proxy) can persist ``token``, drop
+    the connection, and resume on another node via
+    ``Client.table_scan_resumable(resume_token=token, ...)``.
+
+    Single-worker: reads the primary stream only (parallel ``max_workers>1``
+    reads are unordered and not resumable from a single token).
+    """
+
+    def __init__(self, client: Client, stream: StreamSession) -> None:
+        """Wrap a started single-worker stream as a resumable cursor."""
+        self._client = client
+        self._stream = stream
+
+    def next(self) -> tuple[pa.RecordBatch | None, bytes | None]:
+        """Return ``(batch, resume_token)``; ``(None, None)`` at end-of-stream.
+
+        ``resume_token`` resumes the scan AFTER ``batch`` on any node.
+        """
+        try:
+            ab, token = self._stream.next_with_token()  # type: ignore[attr-defined]
+        except RpcError as e:
+            raise ClientError.from_rpc_error(e) from e
+        return (ab.batch if ab is not None else None), token
+
+    def close(self) -> None:
+        """Release the underlying stream (no-op over HTTP — stateless)."""
+        self._stream.close()
+
+
 # Module-level worker pool shared across all Client instances.
 # Reuses idle worker subprocesses between Client sessions, avoiding
 # repeated spawn/teardown overhead (especially valuable in tests).
@@ -1805,6 +1851,137 @@ class Client(CatalogClientMixin):
 
             # Read output from all workers in parallel
             yield from self._table_function_parallel()
+        except ClientError as e:
+            raise self._client_error_with_stderr(e) from e.__cause__
+
+    @property
+    def supports_resumable_scan(self) -> bool:
+        """Whether this client's transport can drive :meth:`table_scan_resumable`.
+
+        True only for HTTP, whose producer streams round-trip state in
+        continuation tokens. The pipe/subprocess transport holds a live stream
+        with no serializable resume point.
+        """
+        return self._transport == "http"
+
+    def table_scan_resumable(
+        self,
+        *,
+        function_name: str,
+        arguments: Arguments | None = None,
+        projection_ids: list[int] | None = None,
+        pushdown_filters: bytes | None = None,
+        settings: dict[str, Any] | None = None,
+        transaction_opaque_data: bytes | None = None,
+        resume_token: bytes | None = None,
+    ) -> ResumableTableScan:
+        """Open (or resume) a resumable table-function scan.
+
+        Resumable variant of :meth:`table_function`: the returned
+        :class:`ResumableTableScan` yields ``(batch, token)`` one batch at a
+        time, surfacing the worker's continuation token so a stateless caller
+        can persist it and resume on another process/node.
+
+        When ``resume_token`` is given, the scan continues from that token
+        (the bind/init is still issued — the upstream's first turn is produced
+        and discarded — so the same ``function_name``/projection/filters must
+        be supplied). When ``None``, a fresh scan starts.
+
+        Raises:
+            ResumeUnsupported: If the transport is not HTTP.
+            ClientError: If the client is not started or the worker errors.
+
+        """
+        if not self.supports_resumable_scan:
+            raise ResumeUnsupported(
+                f"table_scan_resumable requires the HTTP transport; this client uses {self._transport!r}. "
+                "Use table_function() and keep the live stream in-process."
+            )
+        if arguments is None:
+            arguments = Arguments()
+        if self._primary is None:
+            raise ClientError("Client not started. Call start() or use context manager.")
+
+        try:
+            pushdown_filters_batch = self._deserialize_pushdown_filters(pushdown_filters)
+            # Bind + init against the PRIMARY only — a resumable scan is single-worker
+            # (parallel max_workers>1 reads are unordered and not token-resumable).
+            bind_request = self._make_bind_request(
+                function_name=function_name,
+                arguments=arguments,
+                function_type=FunctionType.TABLE,
+                input_schema=None,
+                settings=settings,
+                secrets=None,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+            bind_response = self._do_bind(self._primary.proxy, bind_request, None)
+            stream = self._do_init(
+                self._primary.proxy,
+                bind_request,
+                bind_response,
+                projection_ids=projection_ids,
+                pushdown_filters_batch=pushdown_filters_batch,
+                phase=None,
+            )
+            self._primary.stream = stream
+            stream.typed_header(GlobalInitResponse)  # consume the init header
+            if resume_token is not None:
+                # Discard the freshly-produced first turn and continue from the token.
+                stream.seek_to_token(resume_token)  # type: ignore[attr-defined]
+            return ResumableTableScan(self, stream)
+        except ClientError as e:
+            raise self._client_error_with_stderr(e) from e.__cause__
+
+    def table_scan_continue(
+        self,
+        *,
+        resume_token: bytes,
+        output_schema: pa.Schema | None = None,
+    ) -> ResumableTableScan:
+        """Resume a producer table scan from a continuation token WITHOUT re-binding.
+
+        The cheap counterpart to ``table_scan_resumable(resume_token=...)``: a continuation
+        token is a signed, self-describing snapshot of the worker's producer state, so the
+        server recovers state + schemas + function identity from the token alone. This skips
+        the ``bind``/``init`` round-trip (and the discarded first turn) that
+        ``table_scan_resumable`` pays — the right primitive for a stateless relay that holds
+        a per-batch token and resumes on any node every batch.
+
+        The client must be started and connected to a worker that honours the token (the
+        token is verified against the caller's auth identity, and routed by the same
+        ``init`` stream method that minted it). HTTP transport only.
+
+        Args:
+            resume_token: A token previously returned by ``ResumableTableScan.next()``.
+            output_schema: Unused on the producer-continuation path (each response carries
+                its own schema); accepted for symmetry with ``table_scan_resumable``.
+
+        Returns:
+            A ``ResumableTableScan`` positioned AFTER the token; ``next()`` continues the
+            stream, yielding ``(batch, token)`` per call.
+
+        Raises:
+            ResumeUnsupported: If the transport is not HTTP.
+            ClientError: If the client is not started.
+
+        """
+        if not self.supports_resumable_scan:
+            raise ResumeUnsupported(
+                f"table_scan_continue requires the HTTP transport; this client uses {self._transport!r}. "
+                "Use table_function() and keep the live stream in-process."
+            )
+        if self._primary is None:
+            raise ClientError("Client not started. Call start() or use context manager.")
+        try:
+            # ``init`` is the VgiProtocol stream method that mints producer continuation
+            # tokens; continuations resume at ``POST /init/exchange``. The server is
+            # stateless per token, so no prior bind/init on this connection is required.
+            stream = self._primary.proxy.resume_stream(  # type: ignore[attr-defined]
+                "init", resume_token, output_schema=output_schema
+            )
+            self._primary.stream = stream
+            return ResumableTableScan(self, stream)
         except ClientError as e:
             raise self._client_error_with_stderr(e) from e.__cause__
 
