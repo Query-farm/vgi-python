@@ -331,10 +331,21 @@ def _params_method_name(es: EmittedSchema) -> str | None:
     return rest[: -len("' params")]
 
 
-def emit(out: TextIO) -> None:
-    """Emit the generated C++ request-builder header to *out*."""
-    schemas = collect_schemas()
+def emit_builders(
+    out: TextIO,
+    schemas: list[EmittedSchema],
+    *,
+    generator_module: str,
+    generator_command: str,
+    regen_command_lines: list[str],
+    schemas_include: str = "vgi_protocol_schemas.hpp",
+) -> None:
+    """Render request-builder functions for a set of params schemas as a C++ header.
 
+    Shared by the main protocol generator and the secret protocol generator;
+    only the schema set, the schema-factory include, and the provenance banner
+    differ.
+    """
     body = io.StringIO()
     body.write("#pragma once\n\n")
     body.write("// Generated builders depend on helpers + the schema factories.\n")
@@ -343,7 +354,7 @@ def emit(out: TextIO) -> None:
     body.write("// a sibling in src/generated/ and resolves via this quoted include's\n")
     body.write("// relative-path search.\n")
     body.write('#include "vgi_rpc_types.hpp"\n')
-    body.write('#include "vgi_protocol_schemas.hpp"\n\n')
+    body.write(f'#include "{schemas_include}"\n\n')
     body.write("#include <cstdint>\n")
     body.write("#include <optional>\n")
     body.write("#include <string>\n")
@@ -384,13 +395,10 @@ def emit(out: TextIO) -> None:
     out.write("// ============================================================================\n")
     out.write(
         provenance_comment(
-            generator_module="vgi.codegen.cpp_request_builders",
-            generator_command="vgi-gen-cpp-request-builders",
+            generator_module=generator_module,
+            generator_command=generator_command,
             generator_version=GENERATOR_VERSION,
-            regen_command_lines=[
-                "uv run --project ~/Development/vgi-python vgi-gen-cpp-request-builders \\",
-                "  > ~/Development/vgi/src/generated/vgi_request_builders.hpp",
-            ],
+            regen_command_lines=regen_command_lines,
             body=body.getvalue(),
         )
     )
@@ -406,6 +414,21 @@ def emit(out: TextIO) -> None:
     out.write("// ============================================================================\n")
     out.write("\n")
     out.write(body.getvalue())
+
+
+def emit(out: TextIO) -> None:
+    """Emit the generated C++ request-builder header to *out*."""
+    emit_builders(
+        out,
+        collect_schemas(),
+        generator_module="vgi.codegen.cpp_request_builders",
+        generator_command="vgi-gen-cpp-request-builders",
+        regen_command_lines=[
+            "uv run --project ~/Development/vgi-python vgi-gen-cpp-request-builders \\",
+            "  > ~/Development/vgi/src/generated/vgi_request_builders.hpp",
+        ],
+        schemas_include="vgi_protocol_schemas.hpp",
+    )
 
 
 def main() -> None:

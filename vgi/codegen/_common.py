@@ -131,36 +131,50 @@ def _resolve_inner_schema(result_type: object, method_name: str) -> pa.Schema | 
     )
 
 
-def collect_schemas() -> list[EmittedSchema]:
+def collect_schemas(
+    protocol_cls: type = VgiProtocol,
+    *,
+    info_types: tuple[type, ...] = INFO_TYPES,
+    extra_response_types: tuple[type, ...] = EXTRA_RESPONSE_TYPES,
+    check_info_subclasses: bool = True,
+) -> list[EmittedSchema]:
     """Enumerate every schema the C++ or TS emitter needs, deduped by name.
 
-    Ordering: info types first (alphabetical by definition order in INFO_TYPES),
+    Ordering: info types first (alphabetical by definition order in ``info_types``),
     then per-method result schemas (alphabetical by method name), then per-method
     params schemas (alphabetical). Stable across runs — both emitters rely on
     this for drift tests.
+
+    Parametrized by protocol class so a second protocol (e.g.
+    :class:`vgi.secret_protocol.VgiSecretProtocol`) can reuse the same machinery.
+    The defaults reproduce the original ``VgiProtocol`` behavior byte-for-byte.
+    A protocol with no catalog-object info types passes ``info_types=()``,
+    ``extra_response_types=()`` and ``check_info_subclasses=False`` (the
+    CatalogObject completeness net only applies to the catalog protocol).
     """
     out: list[EmittedSchema] = []
     seen_names: set[str] = set()
 
     # Safety net: every subclass of CatalogObject with its own ARROW_SCHEMA
-    # must be in INFO_TYPES. Intermediate ABCs like CatalogSchemaObject are
-    # skipped automatically.
-    declared = set(INFO_TYPES)
-    missing = {
-        c
-        for c in _all_info_subclasses()
-        if hasattr(c, "ARROW_SCHEMA") and isinstance(getattr(c, "ARROW_SCHEMA", None), pa.Schema)
-    } - declared
-    if missing:
-        names = sorted(c.__name__ for c in missing)
-        raise GeneratorError(
-            f"Info dataclasses {names} inherit from CatalogObject and have ARROW_SCHEMA "
-            "but are not in INFO_TYPES in vgi/codegen/_common.py. Add them to keep "
-            "inner-item validation in sync.",
-        )
+    # must be in info_types. Intermediate ABCs like CatalogSchemaObject are
+    # skipped automatically. Only meaningful for the catalog protocol.
+    if check_info_subclasses:
+        declared = set(info_types)
+        missing = {
+            c
+            for c in _all_info_subclasses()
+            if hasattr(c, "ARROW_SCHEMA") and isinstance(getattr(c, "ARROW_SCHEMA", None), pa.Schema)
+        } - declared
+        if missing:
+            names = sorted(c.__name__ for c in missing)
+            raise GeneratorError(
+                f"Info dataclasses {names} inherit from CatalogObject and have ARROW_SCHEMA "
+                "but are not in INFO_TYPES in vgi/codegen/_common.py. Add them to keep "
+                "inner-item validation in sync.",
+            )
 
     # 1) Info-type schemas + extra standalone dataclasses.
-    for cls in (*INFO_TYPES, *EXTRA_RESPONSE_TYPES):
+    for cls in (*info_types, *extra_response_types):
         name = sanitize_name(cls.__name__)
         if name in seen_names:
             continue
@@ -169,7 +183,7 @@ def collect_schemas() -> list[EmittedSchema]:
         out.append(EmittedSchema(name=name, schema=schema, origin=cls.__name__))
 
     # 2) Per-method unary response schemas (inner dataclass, not the outer envelope).
-    methods = rpc_methods(VgiProtocol)
+    methods = rpc_methods(protocol_cls)
     for method_name in sorted(methods.keys()):
         info = methods[method_name]
         if info.method_type != MethodType.UNARY:

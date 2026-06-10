@@ -38,9 +38,20 @@ if TYPE_CHECKING:
 GENERATOR_VERSION = "1"
 
 
-def emit(out: TextIO) -> None:
-    """Emit ``vgi_protocol_version.hpp`` to *out*."""
-    proto_version = current_protocol_version()
+def emit_version_header(
+    out: TextIO,
+    proto_version: str,
+    *,
+    constant_name: str,
+    source_description: str,
+    generator_module: str,
+    generator_command: str,
+    regen_command_lines: list[str],
+) -> None:
+    """Render a one-constant ``std::string_view`` protocol-version header.
+
+    Shared by the main protocol generator and the secret protocol generator.
+    """
     # The value is canonical semver — ASCII-only by SEMVER_REGEX construction.
     # Reject anything else loudly so we never silently emit a malformed literal.
     if not all(0x20 <= ord(c) < 0x7F for c in proto_version):
@@ -52,12 +63,12 @@ def emit(out: TextIO) -> None:
     body.write("namespace duckdb {\n")
     body.write("namespace vgi {\n")
     body.write("namespace generated {\n\n")
-    body.write("// Application protocol surface version declared by VgiProtocol.\n")
+    body.write(f"// Application protocol surface version declared by {source_description}.\n")
     body.write("// Canonical semver MAJOR.MINOR.PATCH; emitted on every request batch's\n")
     body.write("// custom_metadata under `vgi_rpc.protocol_version` so the server can\n")
     body.write("// enforce an exact major+minor match at the dispatch boundary.\n")
-    body.write("// Sourced from VgiProtocol.protocol_version (vgi-python).\n")
-    body.write(f'inline constexpr std::string_view VGI_PROTOCOL_VERSION = "{proto_version}";\n\n')
+    body.write(f"// Sourced from {source_description}.protocol_version (vgi-python).\n")
+    body.write(f'inline constexpr std::string_view {constant_name} = "{proto_version}";\n\n')
     body.write("} // namespace generated\n")
     body.write("} // namespace vgi\n")
     body.write("} // namespace duckdb\n")
@@ -65,19 +76,32 @@ def emit(out: TextIO) -> None:
     out.write("// ============================================================================\n")
     out.write(
         provenance_comment(
-            generator_module="vgi.codegen.cpp_protocol_version",
-            generator_command="python -m vgi.codegen.cpp_protocol_version",
+            generator_module=generator_module,
+            generator_command=generator_command,
             generator_version=GENERATOR_VERSION,
-            regen_command_lines=[
-                "uv run --project ~/Development/vgi-python python -m vgi.codegen.cpp_protocol_version \\",
-                "  > ~/Development/vgi/src/generated/vgi_protocol_version.hpp",
-            ],
+            regen_command_lines=regen_command_lines,
             body=body.getvalue(),
         )
     )
     out.write("// ============================================================================\n")
     out.write("\n")
     out.write(body.getvalue())
+
+
+def emit(out: TextIO) -> None:
+    """Emit ``vgi_protocol_version.hpp`` to *out*."""
+    emit_version_header(
+        out,
+        current_protocol_version(),
+        constant_name="VGI_PROTOCOL_VERSION",
+        source_description="VgiProtocol",
+        generator_module="vgi.codegen.cpp_protocol_version",
+        generator_command="python -m vgi.codegen.cpp_protocol_version",
+        regen_command_lines=[
+            "uv run --project ~/Development/vgi-python python -m vgi.codegen.cpp_protocol_version \\",
+            "  > ~/Development/vgi/src/generated/vgi_protocol_version.hpp",
+        ],
+    )
 
 
 def main() -> None:

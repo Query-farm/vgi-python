@@ -172,10 +172,19 @@ _ = cast  # keep cast import used for older test compatibility
 GENERATOR_VERSION = "1"
 
 
-def emit(out: TextIO) -> None:
-    """Emit the generated C++ schemas header to *out*."""
-    schemas = collect_schemas()
+def emit_schemas(
+    out: TextIO,
+    schemas: list[EmittedSchema],
+    *,
+    generator_module: str,
+    generator_command: str,
+    regen_command_lines: list[str],
+) -> None:
+    """Render a list of EmittedSchema records as a C++ schema-factory header.
 
+    Shared by the main protocol generator and the secret protocol generator;
+    only the schema set and the provenance banner differ.
+    """
     body = io.StringIO()
     body.write("#pragma once\n\n")
     body.write("#include <arrow/api.h>\n")
@@ -195,19 +204,30 @@ def emit(out: TextIO) -> None:
     out.write("// ============================================================================\n")
     out.write(
         provenance_comment(
-            generator_module="vgi.codegen.cpp_schemas",
-            generator_command="vgi-gen-cpp-schemas",
+            generator_module=generator_module,
+            generator_command=generator_command,
             generator_version=GENERATOR_VERSION,
-            regen_command_lines=[
-                "uv run --project ~/Development/vgi-python vgi-gen-cpp-schemas \\",
-                "  > ~/Development/vgi/src/generated/vgi_protocol_schemas.hpp",
-            ],
+            regen_command_lines=regen_command_lines,
             body=body.getvalue(),
         )
     )
     out.write("// ============================================================================\n")
     out.write("\n")
     out.write(body.getvalue())
+
+
+def emit(out: TextIO) -> None:
+    """Emit the generated C++ schemas header to *out*."""
+    emit_schemas(
+        out,
+        collect_schemas(),
+        generator_module="vgi.codegen.cpp_schemas",
+        generator_command="vgi-gen-cpp-schemas",
+        regen_command_lines=[
+            "uv run --project ~/Development/vgi-python vgi-gen-cpp-schemas \\",
+            "  > ~/Development/vgi/src/generated/vgi_protocol_schemas.hpp",
+        ],
+    )
 
 
 def main() -> None:
