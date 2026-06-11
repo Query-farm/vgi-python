@@ -258,6 +258,21 @@ class FunctionStorageAzureSql:
             IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_function_state_log_replay')
             CREATE UNIQUE INDEX idx_function_state_log_replay
                 ON function_state_log(scope_id, ns, [key], attempt_id);
+
+            -- function_counter: atomic int64 counters, a typed numeric facet
+            -- kept apart from the opaque function_state K/V (VARBINARY(MAX)
+            -- can't do arithmetic). last_attempt_id powers replay-detection so
+            -- a connection-level retry of state_counter_add doesn't double-add.
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'function_counter')
+            CREATE TABLE function_counter (
+                scope_id VARBINARY(255) NOT NULL,
+                ns VARBINARY(255) NOT NULL,
+                [key] VARBINARY(255) NOT NULL,
+                n BIGINT NOT NULL,
+                last_attempt_id VARBINARY(16) DEFAULT NULL,
+                created_at DATETIME2 DEFAULT GETUTCDATE(),
+                PRIMARY KEY (scope_id, ns, [key])
+            );
         """)
         conn.commit()
         elapsed_ms = (time.monotonic() - t0) * 1000
@@ -382,7 +397,7 @@ class FunctionStorageAzureSql:
             cursor = conn.cursor()
             total = 0
             for table in ("work_queue", "invocation_registry",
-                          "function_state", "function_state_log"):
+                          "function_state", "function_state_log", "function_counter"):
                 cursor.execute(
                     f"DELETE FROM {table} WHERE DATEDIFF(SECOND, created_at, GETUTCDATE()) > %s",  # noqa: S608
                     (max_age_seconds,),
@@ -508,19 +523,42 @@ class FunctionStorageAzureSql:
         scope_id: bytes,
         ns: bytes,
         *,
+        start: bytes | None = None,
+        end: bytes | None = None,
+        reverse: bool = False,
+        limit: int | None = None,
         shard_key: str = "",
     ) -> list[tuple[bytes, bytes]]:
-        """Non-destructive scan of all live (key, value) in a namespace."""
+        """Non-destructive scan of live (key, value) in a namespace.
+
+        Ordered by key bytes (VARBINARY compares bytewise), descending when
+        ``reverse``, bounded to ``[start, end)`` and capped at ``limit``.
+        """
         del shard_key
 
         def _do(conn: pymssql.Connection) -> list[tuple[bytes, bytes]]:
             cursor = conn.cursor()
+            params: list[object] = [scope_id, ns]
+            clauses = ""
+            if start is not None:
+                clauses += " AND [key] >= %s"
+                params.append(start)
+            if end is not None:
+                clauses += " AND [key] < %s"
+                params.append(end)
+            order = "DESC" if reverse else "ASC"
+            fetch = ""
+            if limit is not None:
+                fetch = "OFFSET 0 ROWS FETCH NEXT %s ROWS ONLY"
+                params.append(int(limit))
             cursor.execute(
-                """
+                f"""
                 SELECT [key], value FROM function_state
-                WHERE scope_id = %s AND ns = %s AND drained_at IS NULL
-                """,
-                (scope_id, ns),
+                WHERE scope_id = %s AND ns = %s AND drained_at IS NULL{clauses}
+                ORDER BY [key] {order}
+                {fetch}
+                """,  # noqa: S608 — order is a fixed ASC/DESC literal; values are bound params
+                tuple(params),
             )
             return [(bytes(cast(Any, k)), bytes(cast(Any, v))) for k, v in cursor.fetchall()]
 
@@ -579,19 +617,21 @@ class FunctionStorageAzureSql:
         ns: bytes,
         keys: list[bytes] | None = None,
         *,
+        start: bytes | None = None,
+        end: bytes | None = None,
         shard_key: str = "",
     ) -> int:
-        """Delete by key list, or whole namespace if keys is None. Returns count deleted."""
+        """Delete by key list, by ``[start, end)`` range, or whole namespace.
+
+        ``keys`` and the range are mutually exclusive. Returns count deleted.
+        """
         del shard_key
+        if keys is not None and (start is not None or end is not None):
+            raise ValueError("state_delete: keys and start/end are mutually exclusive")
 
         def _do(conn: pymssql.Connection) -> int:
             cursor = conn.cursor()
-            if keys is None:
-                cursor.execute(
-                    "DELETE FROM function_state WHERE scope_id = %s AND ns = %s",
-                    (scope_id, ns),
-                )
-            else:
+            if keys is not None:
                 if not keys:
                     return 0
                 placeholders = ",".join("%s" for _ in keys)
@@ -601,6 +641,19 @@ class FunctionStorageAzureSql:
                     WHERE scope_id = %s AND ns = %s AND [key] IN ({placeholders})
                     """,  # noqa: S608
                     (scope_id, ns, *keys),
+                )
+            else:
+                params: list[object] = [scope_id, ns]
+                clauses = ""
+                if start is not None:
+                    clauses += " AND [key] >= %s"
+                    params.append(start)
+                if end is not None:
+                    clauses += " AND [key] < %s"
+                    params.append(end)
+                cursor.execute(
+                    f"DELETE FROM function_state WHERE scope_id = %s AND ns = %s{clauses}",  # noqa: S608
+                    tuple(params),
                 )
             count = int(cursor.rowcount)
             conn.commit()
@@ -614,7 +667,7 @@ class FunctionStorageAzureSql:
         *,
         shard_key: str = "",
     ) -> int:
-        """Wipe all state and log rows for scope_id across every namespace."""
+        """Wipe all state, log, and counter rows for scope_id across every namespace."""
         del shard_key
 
         def _do(conn: pymssql.Connection) -> int:
@@ -623,8 +676,10 @@ class FunctionStorageAzureSql:
             n1 = int(cursor.rowcount)
             cursor.execute("DELETE FROM function_state_log WHERE scope_id = %s", (scope_id,))
             n2 = int(cursor.rowcount)
+            cursor.execute("DELETE FROM function_counter WHERE scope_id = %s", (scope_id,))
+            n3 = int(cursor.rowcount)
             conn.commit()
-            return n1 + n2
+            return n1 + n2 + n3
 
         return self._execute_with_retry(_do)
 
@@ -720,6 +775,118 @@ class FunctionStorageAzureSql:
             ]
 
         return self._execute_with_retry(_do)
+
+    # --- Atomic int64 counters (function_counter) ---
+
+    def state_counter_get(
+        self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = ""
+    ) -> int:
+        """Read the int64 counter; 0 if absent."""
+        del shard_key
+
+        def _do(conn: pymssql.Connection) -> int:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT n FROM function_counter WHERE scope_id = %s AND ns = %s AND [key] = %s",
+                (scope_id, ns, key),
+            )
+            row = cursor.fetchone()
+            return int(cast(Any, row[0])) if row is not None else 0
+
+        return self._execute_with_retry(_do)
+
+    def state_counter_add(
+        self, scope_id: bytes, ns: bytes, key: bytes, delta: int, *, shard_key: str = ""
+    ) -> int:
+        """Atomically add ``delta``; return the new value. Replay-safe on retry."""
+        del shard_key
+        import uuid
+
+        attempt_id = uuid.uuid4().bytes
+
+        def _do(conn: pymssql.Connection) -> int:
+            cursor = conn.cursor()
+            # Replay-detection: a connection-level retry of this same logical
+            # add would carry the same attempt_id; if it already landed, return
+            # the stored value rather than adding twice.
+            cursor.execute(
+                """
+                SELECT n FROM function_counter
+                WHERE scope_id = %s AND ns = %s AND [key] = %s AND last_attempt_id = %s
+                """,
+                (scope_id, ns, key, attempt_id),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                return int(cast(Any, row[0]))
+            cursor.execute(
+                """
+                MERGE function_counter AS t
+                USING (VALUES (CAST(%s AS VARBINARY(255)),
+                               CAST(%s AS VARBINARY(255)),
+                               CAST(%s AS VARBINARY(255)),
+                               CAST(%s AS BIGINT),
+                               CAST(%s AS VARBINARY(16))))
+                    AS s(scope_id, ns, [key], delta, attempt_id)
+                ON t.scope_id = s.scope_id AND t.ns = s.ns AND t.[key] = s.[key]
+                WHEN MATCHED THEN
+                    UPDATE SET n = t.n + s.delta, last_attempt_id = s.attempt_id
+                WHEN NOT MATCHED THEN
+                    INSERT (scope_id, ns, [key], n, last_attempt_id)
+                    VALUES (s.scope_id, s.ns, s.[key], s.delta, s.attempt_id)
+                OUTPUT inserted.n;
+                """,
+                (scope_id, ns, key, int(delta), attempt_id),
+            )
+            out = cursor.fetchone()
+            assert out is not None, "MERGE ... OUTPUT inserted.n returned no row"
+            conn.commit()
+            return int(cast(Any, out[0]))
+
+        return self._execute_with_retry(_do)
+
+    def state_counter_set(
+        self, scope_id: bytes, ns: bytes, key: bytes, value: int, *, shard_key: str = ""
+    ) -> None:
+        """Overwrite the counter with ``value`` (idempotent — no attempt_id)."""
+        del shard_key
+
+        def _do(conn: pymssql.Connection) -> None:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                MERGE function_counter AS t
+                USING (VALUES (CAST(%s AS VARBINARY(255)),
+                               CAST(%s AS VARBINARY(255)),
+                               CAST(%s AS VARBINARY(255)),
+                               CAST(%s AS BIGINT)))
+                    AS s(scope_id, ns, [key], n)
+                ON t.scope_id = s.scope_id AND t.ns = s.ns AND t.[key] = s.[key]
+                WHEN MATCHED THEN UPDATE SET n = s.n, last_attempt_id = NULL
+                WHEN NOT MATCHED THEN
+                    INSERT (scope_id, ns, [key], n) VALUES (s.scope_id, s.ns, s.[key], s.n);
+                """,
+                (scope_id, ns, key, int(value)),
+            )
+            conn.commit()
+
+        self._execute_with_retry(_do)
+
+    def state_counter_delete(
+        self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = ""
+    ) -> None:
+        """Delete the counter (no-op if absent)."""
+        del shard_key
+
+        def _do(conn: pymssql.Connection) -> None:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM function_counter WHERE scope_id = %s AND ns = %s AND [key] = %s",
+                (scope_id, ns, key),
+            )
+            conn.commit()
+
+        self._execute_with_retry(_do)
 
     # --- Factory ---
 

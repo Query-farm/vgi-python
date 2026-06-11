@@ -273,6 +273,22 @@ class FunctionStorage(Protocol):
     The local SQLite tier is a single connection per process with no network
     retries, so it carries no replay-detection (and no idempotency columns).
 
+    Eviction / lifecycle. Every scope-keyed table (``function_state``,
+    ``function_state_log``, ``function_counter``) is reclaimed for a scope by
+    ``execution_clear`` — called at operator teardown for execution-scoped state
+    and on commit/rollback for transaction-scoped state. Beyond that, each
+    backend differs: the **CfDo** DO self-evicts via an orphan-horizon alarm
+    (idle DO → ``deleteAll``); **Azure SQL** relies on ``cleanup_old_entries``,
+    an age-based sweep over the ``created_at`` column that must be scheduled
+    externally (so every age-managed table needs a ``created_at``); the local
+    **SQLite** tier is durable with no auto-eviction — long-lived, attach-scoped
+    data (e.g. an accumulate collection) is the consumer's responsibility to
+    bound (``ttl`` / ``max_row_size`` / explicit clear). The
+    ``test_execution_clear_covers_all_scope_keyed_tables`` audit pins that every
+    scope-keyed table is wiped by ``execution_clear``. (Follow-up: some
+    ``worker.py`` teardown paths call ``execution_clear`` without a try/except,
+    so a cleanup exception there can still leak — to be hardened separately.)
+
     """
 
     # Note: backends that route remotely on ``shard_key`` (CfDo) set a
@@ -412,16 +428,23 @@ class FunctionStorage(Protocol):
         scope_id: bytes,
         ns: bytes,
         *,
+        start: bytes | None = None,
+        end: bytes | None = None,
+        reverse: bool = False,
+        limit: int | None = None,
         shard_key: str = "",
     ) -> Iterable[tuple[bytes, bytes]]:
-        """Non-destructive scan of every ``(key, value)`` in one namespace.
+        """Non-destructive scan of ``(key, value)`` in one namespace.
 
-        Returns an iterable of ``(key, value)`` ordered by key. Large result
-        sets may be streamed in pages by the backend (the ``cloudflare-do``
-        backend pages under the hood), so callers should iterate rather than
-        assume a materialized list. Use when you need to enumerate an unknown
-        key set (e.g. drainer-side discovery of which sink threads produced
-        state).
+        Returns an iterable of ``(key, value)`` ordered by key bytes (unsigned
+        lexicographic / memcmp). ``reverse=True`` orders descending. The scan is
+        bounded to the half-open key range ``[start, end)`` (either bound
+        ``None`` is open) and capped at ``limit`` rows (``None`` = unbounded).
+        Large result sets may be streamed in pages by the backend (the
+        ``cloudflare-do`` backend pages under the hood), so callers should
+        iterate rather than assume a materialized list. Use when you need to
+        enumerate an unknown key set (e.g. drainer-side discovery of which sink
+        threads produced state).
         """
         ...
 
@@ -448,11 +471,18 @@ class FunctionStorage(Protocol):
         ns: bytes,
         keys: list[bytes] | None = None,
         *,
+        start: bytes | None = None,
+        end: bytes | None = None,
         shard_key: str = "",
     ) -> int:
-        """Delete by key list, or wipe the entire namespace if ``keys is None``.
+        """Delete by key list, by key range, or wipe the entire namespace.
 
-        Naturally idempotent — deleting an already-deleted row is a no-op.
+        ``keys=[...]`` deletes those keys. ``keys is None`` with a ``start``
+        and/or ``end`` deletes the half-open key range ``[start, end)`` (either
+        bound ``None`` is open). ``keys is None`` with no range wipes the whole
+        namespace. ``keys`` and the range are mutually exclusive.
+
+        Naturally idempotent — deleting an already-deleted key/range is a no-op.
         Returns the count of rows actually removed. Replaces today's
         per-family ``*_clear`` methods.
         """
@@ -464,11 +494,11 @@ class FunctionStorage(Protocol):
         *,
         shard_key: str = "",
     ) -> int:
-        """Wipe ALL state and log rows for ``scope_id`` across every namespace.
+        """Wipe ALL state, log, and counter rows for ``scope_id`` across every namespace.
 
         Used as a safety-sweep at end-of-execution / on crash recovery.
-        Naturally idempotent. Returns total row count deleted across both
-        ``function_state`` and ``function_state_log`` tables.
+        Naturally idempotent. Returns total row count deleted across the
+        ``function_state``, ``function_state_log``, and ``function_counter`` tables.
 
         Does NOT touch ``queue_*`` rows.
         """
@@ -527,6 +557,67 @@ class FunctionStorage(Protocol):
         Non-destructive. Repeat calls with the same parameters return
         identical results until ``execution_clear`` wipes the log rows.
         """
+        ...
+
+    # --- Atomic int64 counters (separate ``function_counter`` table) ---
+    #
+    # A typed numeric facet kept apart from the opaque ``function_state`` K/V so
+    # the value column never has to carry numeric semantics. Keyed by the same
+    # ``(scope_id, ns, key)`` shape. ``state_counter_add`` is an atomic
+    # read-add-return in one statement (no caller-side CAS loop); the others are
+    # plain upsert / select / delete.
+
+    def state_counter_get(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        *,
+        shard_key: str = "",
+    ) -> int:
+        """Return the int64 counter at ``(scope_id, ns, key)``; 0 if absent."""
+        ...
+
+    def state_counter_add(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        delta: int,
+        *,
+        shard_key: str = "",
+    ) -> int:
+        """Atomically add ``delta`` and return the new value (init 0 if absent).
+
+        Single-statement upsert — no read-modify-write race, no caller loop.
+        Not idempotent: a retried add double-applies. Remote/cloud backends
+        carry an internal ``attempt_id`` (as ``state_put_many`` does) so a
+        transport retry replays the prior result instead of re-adding; the
+        local SQLite tier has no retry layer.
+        """
+        ...
+
+    def state_counter_set(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        value: int,
+        *,
+        shard_key: str = "",
+    ) -> None:
+        """Overwrite the counter at ``(scope_id, ns, key)`` with ``value``."""
+        ...
+
+    def state_counter_delete(
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        *,
+        shard_key: str = "",
+    ) -> None:
+        """Delete the counter at ``(scope_id, ns, key)`` (no-op if absent)."""
         ...
 
 
@@ -717,13 +808,25 @@ class BoundStorage:
         )
 
     @_profiled("state_scan")
-    def state_scan(self, ns: "bytes | FrameworkNS") -> Iterable[tuple[bytes, bytes]]:
-        """Non-destructive scan of every (key, value) in one namespace.
+    def state_scan(
+        self,
+        ns: "bytes | FrameworkNS",
+        *,
+        start: bytes | None = None,
+        end: bytes | None = None,
+        reverse: bool = False,
+        limit: int | None = None,
+    ) -> Iterable[tuple[bytes, bytes]]:
+        """Non-destructive scan of (key, value) in one namespace.
 
-        Returns an iterable (the cloudflare-do backend streams it in pages).
+        Ordered by key bytes (``reverse=True`` for descending), bounded to the
+        half-open range ``[start, end)`` and capped at ``limit``. Returns an
+        iterable (the cloudflare-do backend streams it in pages).
         """
         return self._base.state_scan(
-            self._execution_id, _coerce_ns(ns), shard_key=self._shard_key
+            self._execution_id, _coerce_ns(ns),
+            start=start, end=end, reverse=reverse, limit=limit,
+            shard_key=self._shard_key,
         )
 
     @_profiled("state_drain")
@@ -738,10 +841,22 @@ class BoundStorage:
         )
 
     @_profiled("state_delete")
-    def state_delete(self, ns: "bytes | FrameworkNS", keys: list[bytes] | None = None) -> int:
-        """Delete by key list, or wipe entire namespace if keys is None."""
+    def state_delete(
+        self,
+        ns: "bytes | FrameworkNS",
+        keys: list[bytes] | None = None,
+        *,
+        start: bytes | None = None,
+        end: bytes | None = None,
+    ) -> int:
+        """Delete by key list, by half-open ``[start, end)`` range, or wipe all.
+
+        ``keys`` and the range are mutually exclusive. See
+        ``FunctionStorage.state_delete`` for the full contract.
+        """
         return self._base.state_delete(
-            self._execution_id, _coerce_ns(ns), keys, shard_key=self._shard_key
+            self._execution_id, _coerce_ns(ns), keys,
+            start=start, end=end, shard_key=self._shard_key,
         )
 
     @_profiled("execution_clear")
@@ -781,6 +896,36 @@ class BoundStorage:
         return self._base.state_log_scan(
             self._execution_id, _coerce_ns(ns), key,
             after_id=after_id, limit=limit, shard_key=self._shard_key,
+        )
+
+    # --- Atomic int64 counters (function_counter table) ---
+
+    @_profiled("state_counter_get")
+    def counter_get(self, ns: "bytes | FrameworkNS", key: bytes) -> int:
+        """Read the int64 counter (0 if absent)."""
+        return self._base.state_counter_get(
+            self._execution_id, _coerce_ns(ns), key, shard_key=self._shard_key
+        )
+
+    @_profiled("state_counter_add")
+    def counter_add(self, ns: "bytes | FrameworkNS", key: bytes, delta: int) -> int:
+        """Atomically add ``delta``; return the new value. See FunctionStorage."""
+        return self._base.state_counter_add(
+            self._execution_id, _coerce_ns(ns), key, delta, shard_key=self._shard_key
+        )
+
+    @_profiled("state_counter_set")
+    def counter_set(self, ns: "bytes | FrameworkNS", key: bytes, value: int) -> None:
+        """Overwrite the counter with ``value``."""
+        self._base.state_counter_set(
+            self._execution_id, _coerce_ns(ns), key, value, shard_key=self._shard_key
+        )
+
+    @_profiled("state_counter_delete")
+    def counter_delete(self, ns: "bytes | FrameworkNS", key: bytes) -> None:
+        """Delete the counter (no-op if absent)."""
+        self._base.state_counter_delete(
+            self._execution_id, _coerce_ns(ns), key, shard_key=self._shard_key
         )
 
     @staticmethod
@@ -970,6 +1115,18 @@ class FunctionStorageSqlite:
                 CREATE INDEX IF NOT EXISTS idx_function_state_log_lookup
                     ON function_state_log(scope_id, ns, key, id)
             """)
+            # function_counter — atomic int64 counters, a typed numeric facet
+            # kept apart from the opaque function_state K/V. No idempotency
+            # columns: the local SQLite tier has no network retry layer.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS function_counter (
+                    scope_id BLOB NOT NULL,
+                    ns       BLOB NOT NULL,
+                    key      BLOB NOT NULL,
+                    n        INTEGER NOT NULL,
+                    PRIMARY KEY (scope_id, ns, key)
+                )
+            """)
             conn.commit()
         finally:
             conn.close()
@@ -1086,17 +1243,37 @@ class FunctionStorageSqlite:
         scope_id: bytes,
         ns: bytes,
         *,
+        start: bytes | None = None,
+        end: bytes | None = None,
+        reverse: bool = False,
+        limit: int | None = None,
         shard_key: str = "",
     ) -> list[tuple[bytes, bytes]]:
-        """Non-destructive scan of all (key, value) in a namespace."""
+        """Non-destructive scan of (key, value) in a namespace.
+
+        Ordered by key bytes (BLOB compares bytewise / memcmp), descending when
+        ``reverse``, bounded to ``[start, end)`` and capped at ``limit``.
+        """
         del shard_key
         conn = self._conn()
+        params: list[object] = [scope_id, ns]
+        clauses = ""
+        if start is not None:
+            clauses += " AND key >= ?"
+            params.append(start)
+        if end is not None:
+            clauses += " AND key < ?"
+            params.append(end)
+        order = "DESC" if reverse else "ASC"
+        params.append(-1 if limit is None else int(limit))
         rows = conn.execute(
-            """
+            f"""
             SELECT key, value FROM function_state
-            WHERE scope_id = ? AND ns = ?
-            """,
-            (scope_id, ns),
+            WHERE scope_id = ? AND ns = ?{clauses}
+            ORDER BY key {order}
+            LIMIT ?
+            """,  # noqa: S608 — order is a fixed ASC/DESC literal, not user input
+            tuple(params),
         ).fetchall()
         return [(bytes(k), bytes(v)) for k, v in rows]
 
@@ -1131,17 +1308,19 @@ class FunctionStorageSqlite:
         ns: bytes,
         keys: list[bytes] | None = None,
         *,
+        start: bytes | None = None,
+        end: bytes | None = None,
         shard_key: str = "",
     ) -> int:
-        """Delete by key list, or whole namespace if keys is None. Returns count deleted."""
+        """Delete by key list, by ``[start, end)`` range, or whole namespace.
+
+        ``keys`` and the range are mutually exclusive. Returns count deleted.
+        """
         del shard_key
+        if keys is not None and (start is not None or end is not None):
+            raise ValueError("state_delete: keys and start/end are mutually exclusive")
         conn = self._conn()
-        if keys is None:
-            cur = conn.execute(
-                "DELETE FROM function_state WHERE scope_id = ? AND ns = ?",
-                (scope_id, ns),
-            )
-        else:
+        if keys is not None:
             if not keys:
                 return 0
             placeholders = ",".join("?" for _ in keys)
@@ -1149,8 +1328,21 @@ class FunctionStorageSqlite:
                 f"""
                 DELETE FROM function_state
                 WHERE scope_id = ? AND ns = ? AND key IN ({placeholders})
-                """,
+                """,  # noqa: S608 — placeholders are bound '?' params, not interpolated values
                 (scope_id, ns, *keys),
+            )
+        else:
+            params: list[object] = [scope_id, ns]
+            clauses = ""
+            if start is not None:
+                clauses += " AND key >= ?"
+                params.append(start)
+            if end is not None:
+                clauses += " AND key < ?"
+                params.append(end)
+            cur = conn.execute(
+                f"DELETE FROM function_state WHERE scope_id = ? AND ns = ?{clauses}",  # noqa: S608
+                tuple(params),
             )
         conn.commit()
         return int(cur.rowcount)
@@ -1161,7 +1353,7 @@ class FunctionStorageSqlite:
         *,
         shard_key: str = "",
     ) -> int:
-        """Wipe all state and log rows for scope_id across every namespace."""
+        """Wipe all state, log, and counter rows for scope_id across every namespace."""
         del shard_key
         conn = self._conn()
         c1 = conn.execute(
@@ -1172,8 +1364,12 @@ class FunctionStorageSqlite:
             "DELETE FROM function_state_log WHERE scope_id = ?",
             (scope_id,),
         )
+        c3 = conn.execute(
+            "DELETE FROM function_counter WHERE scope_id = ?",
+            (scope_id,),
+        )
         conn.commit()
-        return int(c1.rowcount) + int(c2.rowcount)
+        return int(c1.rowcount) + int(c2.rowcount) + int(c3.rowcount)
 
     def state_append(
         self,
@@ -1224,6 +1420,66 @@ class FunctionStorageSqlite:
             sql, (scope_id, ns, key, after_id, sqlite_limit),
         ).fetchall()
         return [(int(rid), bytes(v)) for (rid, v) in rows]
+
+    # --- Atomic int64 counters (function_counter) ---
+    # No idempotency layer: a local single-connection backend has no retries.
+
+    def state_counter_get(
+        self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = ""
+    ) -> int:
+        """Read the int64 counter; 0 if absent."""
+        del shard_key
+        row = self._conn().execute(
+            "SELECT n FROM function_counter WHERE scope_id = ? AND ns = ? AND key = ?",
+            (scope_id, ns, key),
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def state_counter_add(
+        self, scope_id: bytes, ns: bytes, key: bytes, delta: int, *, shard_key: str = "",
+    ) -> int:
+        """Atomically add ``delta`` and return the new value (init 0 if absent)."""
+        del shard_key
+        conn = self._conn()
+        row = conn.execute(
+            """
+            INSERT INTO function_counter (scope_id, ns, key, n)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(scope_id, ns, key) DO UPDATE SET n = n + excluded.n
+            RETURNING n
+            """,
+            (scope_id, ns, key, int(delta)),
+        ).fetchone()
+        conn.commit()
+        return int(row[0])
+
+    def state_counter_set(
+        self, scope_id: bytes, ns: bytes, key: bytes, value: int, *, shard_key: str = "",
+    ) -> None:
+        """Overwrite the counter with ``value``."""
+        del shard_key
+        conn = self._conn()
+        conn.execute(
+            """
+            INSERT INTO function_counter (scope_id, ns, key, n)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(scope_id, ns, key) DO UPDATE SET n = excluded.n
+            """,
+            (scope_id, ns, key, int(value)),
+        )
+        conn.commit()
+
+    def state_counter_delete(
+        self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = ""
+    ) -> None:
+        """Delete the counter (no-op if absent)."""
+        del shard_key
+        conn = self._conn()
+        conn.execute(
+            "DELETE FROM function_counter WHERE scope_id = ? AND ns = ? AND key = ?",
+            (scope_id, ns, key),
+        )
+        conn.commit()
 
 
 class ShardedSqliteStorage:
@@ -1288,19 +1544,29 @@ class ShardedSqliteStorage:
         self._dbg("state_put_many", shard_key, scope_id)
         self._inner.state_put_many(self._p(shard_key, scope_id), ns, items)
 
-    def state_scan(self, scope_id: bytes, ns: bytes, *, shard_key: str = "") -> list[tuple[bytes, bytes]]:
+    def state_scan(
+        self, scope_id: bytes, ns: bytes, *, start: bytes | None = None,
+        end: bytes | None = None, reverse: bool = False, limit: int | None = None,
+        shard_key: str = "",
+    ) -> list[tuple[bytes, bytes]]:
         self._dbg("state_scan", shard_key, scope_id)
-        return self._inner.state_scan(self._p(shard_key, scope_id), ns)
+        return self._inner.state_scan(
+            self._p(shard_key, scope_id), ns,
+            start=start, end=end, reverse=reverse, limit=limit,
+        )
 
     def state_drain(self, scope_id: bytes, ns: bytes, *, shard_key: str = "") -> list[tuple[bytes, bytes]]:
         self._dbg("state_drain", shard_key, scope_id)
         return self._inner.state_drain(self._p(shard_key, scope_id), ns)
 
     def state_delete(
-        self, scope_id: bytes, ns: bytes, keys: list[bytes] | None = None, *, shard_key: str = ""
+        self, scope_id: bytes, ns: bytes, keys: list[bytes] | None = None, *,
+        start: bytes | None = None, end: bytes | None = None, shard_key: str = "",
     ) -> int:
         self._dbg("state_delete", shard_key, scope_id)
-        return self._inner.state_delete(self._p(shard_key, scope_id), ns, keys)
+        return self._inner.state_delete(
+            self._p(shard_key, scope_id), ns, keys, start=start, end=end
+        )
 
     def execution_clear(self, scope_id: bytes, *, shard_key: str = "") -> int:
         self._dbg("execution_clear", shard_key, scope_id)
@@ -1316,6 +1582,27 @@ class ShardedSqliteStorage:
     ) -> list[tuple[int, bytes]]:
         self._dbg("state_log_scan", shard_key, scope_id)
         return self._inner.state_log_scan(self._p(shard_key, scope_id), ns, key, after_id=after_id, limit=limit)
+
+    # --- Atomic int64 counters ---
+    def state_counter_get(self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = "") -> int:
+        self._dbg("state_counter_get", shard_key, scope_id)
+        return self._inner.state_counter_get(self._p(shard_key, scope_id), ns, key)
+
+    def state_counter_add(
+        self, scope_id: bytes, ns: bytes, key: bytes, delta: int, *, shard_key: str = "",
+    ) -> int:
+        self._dbg("state_counter_add", shard_key, scope_id)
+        return self._inner.state_counter_add(self._p(shard_key, scope_id), ns, key, delta)
+
+    def state_counter_set(
+        self, scope_id: bytes, ns: bytes, key: bytes, value: int, *, shard_key: str = "",
+    ) -> None:
+        self._dbg("state_counter_set", shard_key, scope_id)
+        self._inner.state_counter_set(self._p(shard_key, scope_id), ns, key, value)
+
+    def state_counter_delete(self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = "") -> None:
+        self._dbg("state_counter_delete", shard_key, scope_id)
+        self._inner.state_counter_delete(self._p(shard_key, scope_id), ns, key)
 
     def close(self) -> None:
         self._inner.close()

@@ -417,30 +417,47 @@ class FunctionStorageCfDo:
         scope_id: bytes,
         ns: bytes,
         *,
+        start: bytes | None = None,
+        end: bytes | None = None,
+        reverse: bool = False,
+        limit: int | None = None,
         shard_key: str = "",
     ) -> Iterator[tuple[bytes, bytes]]:
-        """Stream every (key, value) in one namespace, paging under the hood.
+        """Stream (key, value) in one namespace, paging under the hood.
 
-        The server returns key-ordered pages bounded by a byte budget plus a
-        ``next_after`` cursor, so an arbitrarily large namespace never builds an
-        oversized response. Yields lazily; consumers should iterate.
+        Ordered by key (``reverse=True`` descending), bounded to ``[start, end)``
+        and capped at ``limit`` rows. The server returns ordered pages bounded by
+        a byte budget plus a ``next_after`` continuation cursor (interpreted
+        server-side per ``reverse``), so an arbitrarily large range never builds
+        an oversized response. Yields lazily; consumers should iterate.
         """
         t0 = time.monotonic()
         after_key: str | None = None
         n = 0
+        remaining = limit
         while True:
             body: dict[str, object] = {
                 "scope_id": base64.b64encode(scope_id).decode(),
                 "ns": base64.b64encode(ns).decode(),
             }
+            if start is not None:
+                body["start"] = base64.b64encode(start).decode()
+            if end is not None:
+                body["end"] = base64.b64encode(end).decode()
+            if reverse:
+                body["reverse"] = True
+            if remaining is not None:
+                body["limit"] = int(remaining)
             if after_key is not None:
                 body["after_key"] = after_key
             data = self._post("state_scan", body, shard_key=shard_key)
             for r in data["rows"]:
                 yield (base64.b64decode(r["key"]), base64.b64decode(r["value"]))
                 n += 1
+                if remaining is not None:
+                    remaining -= 1
             after_key = data.get("next_after")
-            if not after_key:
+            if not after_key or (remaining is not None and remaining <= 0):
                 break
         _logger.debug(
             "state_scan scope=%s ns=%s rows=%d elapsed_ms=%.1f",
@@ -495,20 +512,33 @@ class FunctionStorageCfDo:
         ns: bytes,
         keys: list[bytes] | None = None,
         *,
+        start: bytes | None = None,
+        end: bytes | None = None,
         shard_key: str = "",
     ) -> int:
-        """Delete by key list, or wipe the entire namespace if ``keys is None``.
+        """Delete by key list, by ``[start, end)`` range, or wipe the namespace.
 
-        Naturally idempotent — an attempt_id is sent for audit but server
-        doesn't gate on it (delete-of-already-deleted is a no-op).
+        ``keys`` and the range are mutually exclusive. Naturally idempotent — an
+        attempt_id is sent for audit but the server doesn't gate on it
+        (delete-of-already-deleted is a no-op).
         """
+        if keys is not None and (start is not None or end is not None):
+            raise ValueError("state_delete: keys and start/end are mutually exclusive")
         t0 = time.monotonic()
         body: dict[str, object] = {
             "scope_id": base64.b64encode(scope_id).decode(),
             "ns": base64.b64encode(ns).decode(),
         }
+        mode = "all"
         if keys is not None:
             body["keys"] = [base64.b64encode(k).decode() for k in keys]
+            mode = f"n_keys={len(keys)}"
+        elif start is not None or end is not None:
+            if start is not None:
+                body["start"] = base64.b64encode(start).decode()
+            if end is not None:
+                body["end"] = base64.b64encode(end).decode()
+            mode = "range"
         data = self._post(
             "state_delete",
             body,
@@ -518,8 +548,7 @@ class FunctionStorageCfDo:
         deleted = int(data["deleted"])
         _logger.debug(
             "state_delete scope=%s ns=%s mode=%s deleted=%d elapsed_ms=%.1f",
-            scope_id.hex()[:8], ns.hex()[:8],
-            "all" if keys is None else f"n_keys={len(keys)}",
+            scope_id.hex()[:8], ns.hex()[:8], mode,
             deleted, (time.monotonic() - t0) * 1000,
         )
         return deleted
@@ -611,6 +640,75 @@ class FunctionStorageCfDo:
             after_id, len(rows), (time.monotonic() - t0) * 1000,
         )
         return rows
+
+    # --- Atomic int64 counters (function_counter) ---
+
+    def state_counter_get(
+        self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = ""
+    ) -> int:
+        """Read the int64 counter; 0 if absent."""
+        data = self._post(
+            "state_counter_get",
+            {
+                "scope_id": base64.b64encode(scope_id).decode(),
+                "ns": base64.b64encode(ns).decode(),
+                "key": base64.b64encode(key).decode(),
+            },
+            shard_key=shard_key,
+        )
+        return int(data["n"])
+
+    def state_counter_add(
+        self, scope_id: bytes, ns: bytes, key: bytes, delta: int, *, shard_key: str = ""
+    ) -> int:
+        """Atomically add ``delta`` and return the new value.
+
+        Carries an ``attempt_id`` so an HTTP retry replays the prior result on
+        the server instead of double-adding.
+        """
+        data = self._post(
+            "state_counter_add",
+            {
+                "scope_id": base64.b64encode(scope_id).decode(),
+                "ns": base64.b64encode(ns).decode(),
+                "key": base64.b64encode(key).decode(),
+                "delta": int(delta),
+            },
+            attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
+        )
+        return int(data["n"])
+
+    def state_counter_set(
+        self, scope_id: bytes, ns: bytes, key: bytes, value: int, *, shard_key: str = ""
+    ) -> None:
+        """Overwrite the counter with ``value`` (idempotent)."""
+        self._post(
+            "state_counter_set",
+            {
+                "scope_id": base64.b64encode(scope_id).decode(),
+                "ns": base64.b64encode(ns).decode(),
+                "key": base64.b64encode(key).decode(),
+                "value": int(value),
+            },
+            attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
+        )
+
+    def state_counter_delete(
+        self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = ""
+    ) -> None:
+        """Delete the counter (no-op if absent)."""
+        self._post(
+            "state_counter_delete",
+            {
+                "scope_id": base64.b64encode(scope_id).decode(),
+                "ns": base64.b64encode(ns).decode(),
+                "key": base64.b64encode(key).decode(),
+            },
+            attempt_id=uuid.uuid4().hex,
+            shard_key=shard_key,
+        )
 
     # --- Factory ---
 

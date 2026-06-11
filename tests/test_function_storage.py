@@ -401,6 +401,70 @@ class TestFunctionStorageSqlite:
         # Cursor-based: after_id + limit also work through the facade.
         assert bs.state_log_scan(b"buf", b"k", after_id=ord1, limit=1) == [(ord2, b"b")]
 
+    def test_counter_add_no_lost_updates_under_threads(
+        self, storage: FunctionStorageSqlite
+    ) -> None:
+        """Concurrent state_counter_add increments never lose an update.
+
+        This is the property the accumulate worker's old ``_LOCK`` used to
+        provide for its stats RMW — now delivered by the single-statement
+        atomic add. Each thread has its own connection (thread-local), and
+        WAL + busy_timeout serializes the writes.
+        """
+        import threading
+
+        threads_n = 8
+        per_thread = 200
+        barrier = threading.Barrier(threads_n)
+
+        def worker() -> None:
+            barrier.wait()  # maximize contention
+            for _ in range(per_thread):
+                storage.state_counter_add(b"s", b"ns", b"k", 1)
+
+        threads = [threading.Thread(target=worker) for _ in range(threads_n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert storage.state_counter_get(b"s", b"ns", b"k") == threads_n * per_thread
+
+    def test_execution_clear_covers_all_scope_keyed_tables(
+        self, storage: FunctionStorageSqlite
+    ) -> None:
+        """Audit invariant: every scope_id-keyed table is known and execution_clear wipes it.
+
+        Discovers scope-keyed tables from the live schema, so a NEW one added
+        without updating this set (and wiring execution_clear) trips here —
+        closing the gap that let ``function_counter`` slip the Azure sweep.
+        """
+        conn = storage._conn()
+        names = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()]
+        scope_tables = [
+            t for t in names
+            if "scope_id" in {c[1] for c in conn.execute(f"PRAGMA table_info({t})").fetchall()}  # noqa: S608
+        ]
+        # work_queue is execution_id-keyed (cleared by queue_clear), so it has no
+        # scope_id column and is naturally excluded.
+        assert set(scope_tables) == {
+            "function_state", "function_state_log", "function_counter"
+        }
+
+        scope = b"audit-scope"
+        storage.state_put_many(scope, b"ns", [(b"k", b"v")])
+        storage.state_append(scope, b"ns", b"k", b"item")
+        storage.state_counter_add(scope, b"ns", b"c", 1)
+        for t in scope_tables:  # sanity: each table actually holds a row for the scope
+            n = conn.execute(f"SELECT COUNT(*) FROM {t} WHERE scope_id = ?", (scope,)).fetchone()[0]  # noqa: S608
+            assert n > 0, t
+
+        storage.execution_clear(scope)
+        for t in scope_tables:
+            n = conn.execute(f"SELECT COUNT(*) FROM {t} WHERE scope_id = ?", (scope,)).fetchone()[0]  # noqa: S608
+            assert n == 0, f"{t} not wiped by execution_clear"
+
 
 class TestShardKeyDerivation:
     """The single-rule shard key: att- + hex of the attach UUID.

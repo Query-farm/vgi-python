@@ -195,13 +195,24 @@ class TestFunctionStorageAzureSql:
         deleted = storage.cleanup_old_entries(max_age_days=1.0)
         assert deleted >= 0
 
-        # Verify every state-bearing table was cleaned: queue/registry plus
-        # the unified state_* pair.
+        # Verify every age-managed table was cleaned: queue/registry, the
+        # unified state_* pair, and the counter table (which must carry
+        # created_at so this DATEDIFF sweep can reach it).
         delete_calls = [sql for sql, _ in mock_cursor.executed if "DELETE FROM" in sql]
-        assert len(delete_calls) == 4
+        assert len(delete_calls) == 5
         tables = {sql.split("DELETE FROM ")[1].split(" ")[0] for sql, _ in mock_cursor.executed if "DELETE FROM" in sql}
         assert tables == {"work_queue", "invocation_registry",
-                          "function_state", "function_state_log"}
+                          "function_state", "function_state_log", "function_counter"}
+
+    def test_ensure_tables_function_counter_has_created_at(
+        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor
+    ) -> None:
+        """function_counter must carry created_at so cleanup_old_entries can sweep it."""
+        storage.ensure_tables()
+        ddl = "\n".join(sql for sql, _ in mock_cursor.executed)
+        # The counter table is created with a created_at column.
+        counter_block = ddl.split("CREATE TABLE function_counter")[1]
+        assert "created_at" in counter_block.split(");")[0]
 
     # --- Factory Tests ---
 
@@ -393,17 +404,18 @@ class TestFunctionStorageAzureSqlStateUnified:
         assert sql == "DELETE FROM function_state WHERE scope_id = %s AND ns = %s"
         assert params == (b"exec1", b"agg")
 
-    def test_execution_clear_wipes_both_tables(
+    def test_execution_clear_wipes_all_three_tables(
         self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
     ) -> None:
-        """execution_clear deletes from both function_state and function_state_log."""
+        """execution_clear deletes from function_state, _log, and _counter."""
         mock_cursor.rowcount = 3
         deleted = storage.execution_clear(b"exec1")
-        # Two DELETEs, each reports rowcount 3 → 6 total.
-        assert deleted == 6
+        # Three DELETEs, each reports rowcount 3 → 9 total.
+        assert deleted == 9
         sqls = [s for s, _ in mock_cursor.executed]
         assert any("DELETE FROM function_state " in s for s in sqls)
         assert any("DELETE FROM function_state_log " in s for s in sqls)
+        assert any("DELETE FROM function_counter " in s for s in sqls)
 
     def test_state_append_replay_returns_prior_ordinal(
         self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
