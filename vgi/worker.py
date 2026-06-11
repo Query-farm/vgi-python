@@ -564,7 +564,9 @@ def run_table_buffering_finalize_tick(state: Any, out: Any, ctx: Any) -> None:
     # to the original sealer's auth — under HTTP, the rehydrated tick
     # runs in a different auth context and re-unwrap fails. Skip it.
     func_cls, params = worker._load_table_buffering_params(
-        stub, ctx, attach_already_unwrapped=True,
+        stub,
+        ctx,
+        attach_already_unwrapped=True,
     )
 
     # Narrow output_schema based on projection_ids carried on the state.
@@ -588,10 +590,7 @@ def run_table_buffering_finalize_tick(state: Any, out: Any, ctx: Any) -> None:
     # ``batch_index=`` through to the inner; only _TrackingOutputCollector
     # accepts that kwarg, so a raw OutputCollector wrap would TypeError.
     # Mirrors protocol.py:1176-1186.
-    auto_apply = (
-        state.pushdown_filters is not None
-        and func_cls._should_auto_apply_filters()
-    )
+    auto_apply = state.pushdown_filters is not None and func_cls._should_auto_apply_filters()
     effective_out = out
     if auto_apply:
         pushdown_obj = func_cls.pushdown_filters(state.pushdown_filters)
@@ -601,14 +600,12 @@ def run_table_buffering_finalize_tick(state: Any, out: Any, ctx: Any) -> None:
 
     if not state.state_initialized:
         user_state: Any = func_cls.initial_finalize_state(
-            state.finalize_state_id, params,
+            state.finalize_state_id,
+            params,
         )
         state.state_initialized = True
     else:
-        user_state = (
-            _deserialize_finalize_state(func_cls, state.state_blob)
-            if state.state_blob else None
-        )
+        user_state = _deserialize_finalize_state(func_cls, state.state_blob) if state.state_blob else None
 
     func_cls.finalize(params, state.finalize_state_id, user_state, effective_out)
 
@@ -689,10 +686,12 @@ def _decode_streaming_session(payload: bytes, func_cls: type[AggregateFunction[A
 
 
 def _encode_table_buffering_init(init_call: InitRequest, init_response: GlobalInitResponse) -> bytes:
-    return pickle.dumps({
-        "init_call_bytes": init_call.serialize_to_bytes(),
-        "init_response_bytes": init_response.serialize_to_bytes(),
-    })
+    return pickle.dumps(
+        {
+            "init_call_bytes": init_call.serialize_to_bytes(),
+            "init_response_bytes": init_response.serialize_to_bytes(),
+        }
+    )
 
 
 def _decode_table_buffering_init(payload: bytes) -> tuple[InitRequest, GlobalInitResponse]:
@@ -1997,9 +1996,7 @@ class Worker:
         from vgi_rpc import crypto
 
         try:
-            return crypto.open_bytes(
-                envelope, key, aad=_attach_aad(auth), version=_ATTACH_ENVELOPE_VERSION
-            )
+            return crypto.open_bytes(envelope, key, aad=_attach_aad(auth), version=_ATTACH_ENVELOPE_VERSION)
         except crypto.SealError as exc:
             raise self._opaque_data_rejected("attach_opaque_data") from exc
 
@@ -2053,7 +2050,8 @@ class Worker:
         per-handler construction so each call site stays a one-liner.
         """
         return BoundStorage(
-            storage, execution_id,
+            storage,
+            execution_id,
             request=request,
             attach_plaintext=self._unwrap_attach_full_for(request),
         )
@@ -2341,8 +2339,9 @@ class Worker:
         # (synthetic group_id=-2 in namespace FrameworkNS.AGGREGATE_STATE).
         if request.arguments and request.arguments.positional:
             storage = self._bound(func_cls.storage, execution_id, request)
-            storage.state_put(FrameworkNS.AGGREGATE_STATE, BoundStorage.pack_int_key(-2),
-                              request.arguments.serialize_to_bytes())
+            storage.state_put(
+                FrameworkNS.AGGREGATE_STATE, BoundStorage.pack_int_key(-2), request.arguments.serialize_to_bytes()
+            )
 
         return AggregateBindResponse(
             output_schema=result.output_schema,
@@ -2454,8 +2453,7 @@ class Worker:
         # user's ``update()`` explicitly wrote during this batch.
         gids_to_persist = existing_gids | states.written
         items: list[tuple[bytes, bytes]] = [
-            (BoundStorage.pack_int_key(gid), states[gid].serialize_to_bytes())
-            for gid in gids_to_persist
+            (BoundStorage.pack_int_key(gid), states[gid].serialize_to_bytes()) for gid in gids_to_persist
         ]
         if items:
             storage.state_put_many(FrameworkNS.AGGREGATE_STATE, items)
@@ -2621,12 +2619,14 @@ class Worker:
 
         return AggregateDestructorResponse()
 
-
     # ========== Table Sink+Source Function Methods (new buffered API) ==========
 
     def _load_table_buffering_params(
-        self, request: Any, ctx: CallContext,
-        *, attach_already_unwrapped: bool = False,
+        self,
+        request: Any,
+        ctx: CallContext,
+        *,
+        attach_already_unwrapped: bool = False,
     ) -> tuple[type[TableBufferingFunction[Any, Any]], TableBufferingParams[Any]]:
         """Cold-load buffering-table init metadata; build ``TableBufferingParams``.
 
@@ -2650,7 +2650,9 @@ class Worker:
                 attach = request.bind_call.attach_opaque_data
             if transaction_id is None:
                 transaction_id = getattr(
-                    request.bind_call, "transaction_opaque_data", None,
+                    request.bind_call,
+                    "transaction_opaque_data",
+                    None,
                 )
         # ``attach_full`` is the framework plaintext ``uuid(16) || catalog_bytes``.
         # Already-unwrapped callers (buffering finalize/cancel) pass it directly —
@@ -2660,18 +2662,21 @@ class Worker:
         attach_full = attach if attach_already_unwrapped else self._unwrap_attach_full(attach)
         catalog_bytes = attach_catalog_bytes(attach_full)
         func_cls = self._resolve_function_by_name(
-            function_name, catalog_bytes, function_type=TableBufferingFunction,
+            function_name,
+            catalog_bytes,
+            function_type=TableBufferingFunction,
         )
         if not issubclass(func_cls, TableBufferingFunction):
-            raise TypeError(
-                f"Function '{function_name}' is not a TableBufferingFunction "
-                f"(got {func_cls.__name__})"
-            )
+            raise TypeError(f"Function '{function_name}' is not a TableBufferingFunction (got {func_cls.__name__})")
         cold_storage = BoundStorage(
-            func_cls.storage, request.execution_id, request=request, attach_plaintext=attach_full,
+            func_cls.storage,
+            request.execution_id,
+            request=request,
+            attach_plaintext=attach_full,
         )
         payload = cold_storage.state_get(
-            FrameworkNS.BUFFERING_INIT, BoundStorage.pack_int_key(_TABLE_BUFFERING_INIT_KEY),
+            FrameworkNS.BUFFERING_INIT,
+            BoundStorage.pack_int_key(_TABLE_BUFFERING_INIT_KEY),
         )
         if payload is None:
             raise OSError(
@@ -2685,7 +2690,8 @@ class Worker:
         attach_id = bytes(catalog_bytes or b"")
         params = TableBufferingParams(
             args=func_cls._parse_arguments(
-                func_cls.FunctionArguments, init_call.bind_call.arguments,
+                func_cls.FunctionArguments,
+                init_call.bind_call.arguments,
             ),
             init_call=init_call,
             init_response=init_response,
@@ -2771,8 +2777,8 @@ class Worker:
             storage.execution_clear()
         except Exception:
             _logger.exception(
-                "table_buffering_destructor: storage cleanup failed "
-                "(execution_id=%s)", request.execution_id.hex(),
+                "table_buffering_destructor: storage cleanup failed (execution_id=%s)",
+                request.execution_id.hex(),
             )
         return TableBufferingDestructorResponse()
 
@@ -3111,8 +3117,9 @@ class Worker:
         # declares const params.
         if request.arguments and request.arguments.positional:
             storage = self._bound(func_cls.storage, execution_id, request)
-            storage.state_put(FrameworkNS.AGGREGATE_STATE, BoundStorage.pack_int_key(-2),
-                              request.arguments.serialize_to_bytes())
+            storage.state_put(
+                FrameworkNS.AGGREGATE_STATE, BoundStorage.pack_int_key(-2), request.arguments.serialize_to_bytes()
+            )
 
         storage = self._bound(func_cls.storage, execution_id, request)
         const_args = self._load_aggregate_const_args(func_cls, storage)
@@ -3423,8 +3430,10 @@ class Worker:
             # TABLE_BUFFERING (sink init) / TABLE_BUFFERING_FINALIZE (stream init) enum
             # values (renaming the phase strings is in task #6).
             cold_storage = BoundStorage(
-                type(instance).storage, init_response.execution_id,
-                request=request, attach_plaintext=self._unwrap_attach_full_for(request),
+                type(instance).storage,
+                init_response.execution_id,
+                request=request,
+                attach_plaintext=self._unwrap_attach_full_for(request),
             )
             # ``attach_id`` is the user-facing plaintext attach identity (used to
             # pin attach-time config lookups) — the catalog's bytes with the
@@ -3450,7 +3459,9 @@ class Worker:
                 execution_id=init_response.execution_id,
                 attach_id=attach_id,
                 transaction_id=getattr(
-                    request.bind_call, "transaction_opaque_data", None,
+                    request.bind_call,
+                    "transaction_opaque_data",
+                    None,
                 ),
                 function_name=request.bind_call.function_name,
                 worker_path=None,
@@ -3472,14 +3483,14 @@ class Worker:
                 input_schema = None
             elif request.phase == TableInOutFunctionInitPhase.TABLE_BUFFERING_FINALIZE:
                 if request.finalize_state_id is None:
-                    raise ValueError(
-                        "TABLE_BUFFERING_FINALIZE phase requires finalize_state_id"
-                    )
+                    raise ValueError("TABLE_BUFFERING_FINALIZE phase requires finalize_state_id")
                 state = TableBufferingFinalizeState(
                     function_name=request.bind_call.function_name,
                     execution_id=init_response.execution_id,
                     transaction_id=getattr(
-                        request.bind_call, "transaction_opaque_data", None,
+                        request.bind_call,
+                        "transaction_opaque_data",
+                        None,
                     ),
                     finalize_state_id=bytes(request.finalize_state_id),
                     attach_opaque_data=attach_plaintext,
@@ -3494,10 +3505,7 @@ class Worker:
                 )
                 input_schema = None
             else:
-                raise ValueError(
-                    f"Unsupported init phase for TableBufferingFunction: "
-                    f"{request.phase}"
-                )
+                raise ValueError(f"Unsupported init phase for TableBufferingFunction: {request.phase}")
 
         elif isinstance(instance, TableInOutGenerator):
             # Table-in-out function: separate INPUT and FINALIZE phases
@@ -3509,8 +3517,10 @@ class Worker:
                 settings=_batch_to_scalar_dict(request.bind_call.settings),
                 secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
                 storage=BoundStorage(
-                    type(instance).storage, init_response.execution_id,
-                    request=request, attach_plaintext=self._unwrap_attach_full_for(request),
+                    type(instance).storage,
+                    init_response.execution_id,
+                    request=request,
+                    attach_plaintext=self._unwrap_attach_full_for(request),
                 ),
                 auth_context=ctx.auth,
                 attach_opaque_data=attach_catalog_bytes(attach_plaintext),
@@ -3565,8 +3575,10 @@ class Worker:
                 settings=_batch_to_scalar_dict(request.bind_call.settings),
                 secrets=SecretsAccessor(request.bind_call.secrets).to_dict(),
                 storage=BoundStorage(
-                    type(instance).storage, init_response.execution_id,
-                    request=request, attach_plaintext=self._unwrap_attach_full_for(request),
+                    type(instance).storage,
+                    init_response.execution_id,
+                    request=request,
+                    attach_plaintext=self._unwrap_attach_full_for(request),
                 ),
                 auth_context=ctx.auth,
                 attach_opaque_data=attach_catalog_bytes(attach_plaintext),

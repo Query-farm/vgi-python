@@ -130,6 +130,7 @@ class ProfilingDemoFunction(TableFunctionGenerator[ProfilingDemoArgs, ProfilingS
             # namespace b"profile" — dynamic_to_string drains them all.
             elapsed_us = (time.monotonic_ns() - state.started_at_ns) // 1000
             import os as _os
+
             params.storage.state_put(
                 b"profile",
                 BoundStorage.pack_int_key(_os.getpid()),
@@ -156,6 +157,7 @@ class ProfilingDemoFunction(TableFunctionGenerator[ProfilingDemoArgs, ProfilingS
         # state_drain on dynamic_to_string sums one snapshot per worker pid.
         elapsed_us = (time.monotonic_ns() - state.started_at_ns) // 1000
         import os as _os
+
         params.storage.state_put(
             b"profile",
             BoundStorage.pack_int_key(_os.getpid()),

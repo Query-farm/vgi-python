@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import os
 
-from vgi.catalog import AttachOpaqueData, SchemaInfo
 from vgi._test_fixtures.catalog import CatalogData, InMemoryCatalog, SchemaData
+from vgi.catalog import AttachOpaqueData, SchemaInfo
 from vgi.worker import Worker
 
 

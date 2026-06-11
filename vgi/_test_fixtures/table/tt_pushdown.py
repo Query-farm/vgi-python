@@ -25,7 +25,7 @@ assert both signals at once. ``auto_apply_filters`` keeps the result set correct
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, ClassVar
+from typing import Annotated, Any, ClassVar
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
@@ -95,16 +95,14 @@ class _TtState(ArrowSerializableDataclass):
     done: bool = False
 
 
-def _emit_version(
-    params: ProcessParams[object], state: _TtState, out: OutputCollector
-) -> None:
+def _emit_version(params: ProcessParams[Any], state: _TtState, out: OutputCollector) -> None:
     """Emit one batch for ``state.seen_version``, projected to the output schema."""
     if state.done:
         out.finish()
         return
     state.done = True
     ids = _TT_VERSION_IDS[state.seen_version]
-    full: dict[str, list[object]] = {
+    full: dict[str, list[Any]] = {
         "id": ids,
         "val": [i * 10 for i in ids],
         "seen_version": [state.seen_version] * len(ids),
@@ -115,13 +113,11 @@ def _emit_version(
     out.emit(pa.RecordBatch.from_pydict(columns, schema=params.output_schema))
 
 
-def _pushed_filters_str(params: ProcessParams[object]) -> str:
+def _pushed_filters_str(params: ProcessParams[Any]) -> str:
     assert params.init_call is not None
     pf = params.init_call.pushdown_filters
     jk = params.init_call.join_keys
-    filters = (
-        TableFunctionGenerator.pushdown_filters(pf, join_keys=jk) if pf is not None else None
-    )
+    filters = TableFunctionGenerator.pushdown_filters(pf, join_keys=jk) if pf is not None else None
     return _format_pushed_filters(filters)
 
 
@@ -157,8 +153,11 @@ class TimeTravelPushdownFunction(TableFunctionGenerator[_EmptyArgs, _TtState]):
 
 @dataclass(slots=True, frozen=True)
 class _TtColsArgs:
-    """Argument for the columns-based scan: the resolved version (injected by the
-    worker's ``table_scan_function_get`` from the AT clause)."""
+    """Argument for the columns-based scan.
+
+    The resolved version (injected by the worker's
+    ``table_scan_function_get`` from the AT clause).
+    """
 
     version: Annotated[int, Arg(0, doc="Resolved data version")]
 

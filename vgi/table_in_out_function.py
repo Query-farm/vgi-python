@@ -50,6 +50,7 @@ __all__ = [
 # state_log id consumed; these helpers make that intent explicit at
 # call sites without coupling user code to struct layout.
 
+
 def pack_int_cursor(value: int) -> bytes:
     """Encode a signed int64 cursor (e.g., last log_id consumed)."""
     return value.to_bytes(8, "little", signed=True)
@@ -374,8 +375,7 @@ class TableInOutFunction[
         """
         if cls.state_class is not None and cls.state_class is not TableInOutFunctionStateNoOp:
             states = [
-                cls.state_class.deserialize_from_bytes(v)
-                for _k, v in params.storage.state_drain(FrameworkNS.TIO_STATE)
+                cls.state_class.deserialize_from_bytes(v) for _k, v in params.storage.state_drain(FrameworkNS.TIO_STATE)
             ]
         else:
             states = []

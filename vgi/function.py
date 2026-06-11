@@ -69,7 +69,8 @@ def _resolve_storage() -> FunctionStorage:
 
         return FunctionStorageCfDo.from_env()
     raise ValueError(
-        f"Unknown VGI_WORKER_SHARED_STORAGE backend: {backend!r}. Supported: 'memory', 'sqlite', 'azure-sql', 'cloudflare-do'"
+        f"Unknown VGI_WORKER_SHARED_STORAGE backend: {backend!r}. "
+        "Supported: 'memory', 'sqlite', 'azure-sql', 'cloudflare-do'"
     )
 
 

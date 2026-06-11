@@ -76,6 +76,7 @@ class _LogDrainState(ArrowSerializableDataclass):
     ns: bytes = b"buf"
     after_id: int = -1
 
+
 __all__ = [
     "EchoFunction",
     "EchoWitnessFunction",
@@ -194,10 +195,7 @@ class EchoWitnessFunction(TableInOutGenerator[SingleTableArguments]):
         out: OutputCollector,
     ) -> None:
         observed = len(params.output_schema)
-        cols = {
-            field.name: pa.array([observed] * batch.num_rows, type=field.type)
-            for field in params.output_schema
-        }
+        cols = {field.name: pa.array([observed] * batch.num_rows, type=field.type) for field in params.output_schema}
         out.emit(pa.RecordBatch.from_pydict(cols, schema=params.output_schema))
 
 
@@ -271,7 +269,10 @@ class BufferInputFunction(TableBufferingFunction[SingleTableArguments, _LogDrain
     ) -> None:
         """Emit one buffered batch per tick; finish at end-of-log."""
         rows = params.storage.state_log_scan(
-            state.ns, b"", after_id=state.after_id, limit=1,
+            state.ns,
+            b"",
+            after_id=state.after_id,
+            limit=1,
         )
         if not rows:
             out.finish()
@@ -356,7 +357,10 @@ class EchoBufferingFunction(TableBufferingFunction[SingleTableArguments, _LogDra
     ) -> None:
         """Emit one buffered batch per tick — framework narrows + filters."""
         rows = params.storage.state_log_scan(
-            state.ns, b"", after_id=state.after_id, limit=1,
+            state.ns,
+            b"",
+            after_id=state.after_id,
+            limit=1,
         )
         if not rows:
             out.finish()
@@ -611,9 +615,7 @@ class SumAllColumnsFunction(TableBufferingFunction[SumAllColumnsFunctionArgument
             output_fields[field.name] = out_type
 
         if not output_fields:
-            input_summary = ", ".join(
-                f"{f.name}: {f.type}" for f in params.bind_call.input_schema
-            )
+            input_summary = ", ".join(f"{f.name}: {f.type}" for f in params.bind_call.input_schema)
             raise ValueError(
                 "sum_all_columns requires at least one numeric (integer, "
                 "floating-point, or decimal) input column, got [" + input_summary + "]"
@@ -657,11 +659,13 @@ class SumAllColumnsFunction(TableBufferingFunction[SumAllColumnsFunctionArgument
                 sums[name] = col_sum
             else:
                 sums[name] = pa.scalar(
-                    0, type=params.output_schema.field(name).type,
+                    0,
+                    type=params.output_schema.field(name).type,
                 )
         partial = cls._scalars_to_single_row_batch(sums)
         params.storage.state_append(
-            b"partial", b"",
+            b"partial",
+            b"",
             SumAllColumnsState(partial_sums=partial).serialize_to_bytes(),
         )
         return params.execution_id
@@ -696,7 +700,9 @@ class SumAllColumnsFunction(TableBufferingFunction[SumAllColumnsFunctionArgument
         merged: dict[str, pa.Scalar[Any]] = {
             name: pa.scalar(0, type=field.type)
             for name, field in zip(
-                params.output_schema.names, params.output_schema, strict=True,
+                params.output_schema.names,
+                params.output_schema,
+                strict=True,
             )
         }
         for _log_id, blob in params.storage.state_log_scan(b"partial", b""):
@@ -727,7 +733,10 @@ class SumAllColumnsFunction(TableBufferingFunction[SumAllColumnsFunctionArgument
         out: OutputCollector,
     ) -> None:
         rows = params.storage.state_log_scan(
-            state.ns, b"", after_id=state.after_id, limit=1,
+            state.ns,
+            b"",
+            after_id=state.after_id,
+            limit=1,
         )
         if not rows:
             out.finish()
@@ -949,9 +958,7 @@ class CrashOnCombineFunction(BufferInputFunction):
         categories = ["test", "crash"]
 
     @classmethod
-    def combine(
-        cls, state_ids: list[bytes], params: TableBufferingParams[SingleTableArguments]
-    ) -> list[bytes]:
+    def combine(cls, state_ids: list[bytes], params: TableBufferingParams[SingleTableArguments]) -> list[bytes]:
         raise RuntimeError("Intentional exception during combine()")
 
 
@@ -1033,7 +1040,9 @@ class LargeStateFunction(TableBufferingFunction[SingleTableArguments, _LogDrainS
         scanning the log.
         """
         params.storage.state_append(
-            b"large", b"", b"\x00" * (1024 * 1024),
+            b"large",
+            b"",
+            b"\x00" * (1024 * 1024),
         )
         return params.execution_id
 
@@ -1044,9 +1053,7 @@ class LargeStateFunction(TableBufferingFunction[SingleTableArguments, _LogDrainS
         params: TableBufferingParams[SingleTableArguments],
     ) -> list[bytes]:
         """Materialize one output row carrying the total payload size."""
-        total = sum(
-            len(blob) for _log_id, blob in params.storage.state_log_scan(b"large", b"")
-        )
+        total = sum(len(blob) for _log_id, blob in params.storage.state_log_scan(b"large", b""))
         out_batch = pa.RecordBatch.from_pydict(
             {name: [total] for name in params.output_schema.names},
             schema=params.output_schema,
@@ -1074,7 +1081,10 @@ class LargeStateFunction(TableBufferingFunction[SingleTableArguments, _LogDrainS
         out: OutputCollector,
     ) -> None:
         rows = params.storage.state_log_scan(
-            state.ns, b"", after_id=state.after_id, limit=1,
+            state.ns,
+            b"",
+            after_id=state.after_id,
+            limit=1,
         )
         if not rows:
             out.finish()
@@ -1164,7 +1174,8 @@ class BatchIndexBufferInputFunction(TableBufferingFunction[SingleTableArguments,
         # Append-only — race-safe under concurrent Sink threads. combine()
         # collects and sorts globally by batch_index.
         params.storage.state_append(
-            b"unsorted", b"",
+            b"unsorted",
+            b"",
             _pack_indexed_batch(params.batch_index, sink.getvalue().to_pybytes()),
         )
         return params.execution_id
@@ -1177,8 +1188,7 @@ class BatchIndexBufferInputFunction(TableBufferingFunction[SingleTableArguments,
     ) -> list[bytes]:
         """Sort globally by batch_index and re-emit as a single ordered log."""
         all_pairs: list[tuple[int, bytes]] = [
-            _unpack_indexed_batch(v)
-            for _, v in params.storage.state_log_scan(b"unsorted", b"")
+            _unpack_indexed_batch(v) for _, v in params.storage.state_log_scan(b"unsorted", b"")
         ]
         all_pairs.sort(key=lambda p: p[0])
         for _idx, batch_bytes in all_pairs:
@@ -1202,7 +1212,10 @@ class BatchIndexBufferInputFunction(TableBufferingFunction[SingleTableArguments,
         out: OutputCollector,
     ) -> None:
         rows = params.storage.state_log_scan(
-            state.ns, b"", after_id=state.after_id, limit=1,
+            state.ns,
+            b"",
+            after_id=state.after_id,
+            limit=1,
         )
         if not rows:
             out.finish()
@@ -1242,10 +1255,7 @@ class OrderedSourceFunction(TableBufferingFunction[SingleTableArguments, _OneSho
 
     class Meta:
         name = "ordered_source"
-        description = (
-            "Emits a fixed 0..15 sequence via source_order_dependent=True; "
-            "input is ignored"
-        )
+        description = "Emits a fixed 0..15 sequence via source_order_dependent=True; input is ignored"
         categories = ["test", "ordering"]
         source_order_dependent = True
 
@@ -1293,11 +1303,7 @@ class OrderedSourceFunction(TableBufferingFunction[SingleTableArguments, _OneSho
         if state.emitted:
             out.finish()
             return
-        out.emit(
-            pa.RecordBatch.from_pylist(
-                [{"v": state.value}], schema=params.output_schema
-            )
-        )
+        out.emit(pa.RecordBatch.from_pylist([{"v": state.value}], schema=params.output_schema))
         state.emitted = True
 
 

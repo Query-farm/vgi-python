@@ -55,7 +55,7 @@ INFO_TYPES: tuple[type, ...] = (
 EXTRA_RESPONSE_TYPES: tuple[type, ...] = (
     ScanFunctionResult,  # catalog_table_{scan,insert,update,delete}_function_get
     ScanBranchesResult,  # catalog_table_scan_branches_get (top-level wrapper)
-    ScanBranch,          # one entry inside ScanBranchesResult.branches (binary blob)
+    ScanBranch,  # one entry inside ScanBranchesResult.branches (binary blob)
 )
 
 

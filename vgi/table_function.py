@@ -326,10 +326,12 @@ class BindParams[TArgs]:
 
     @property
     def at_unit(self) -> str | None:
-        """The AT (TIMESTAMP|VERSION) unit for this scan, or None when there is no
-        AT clause. NOTE: for inline-bound (function-backed) tables on_bind runs once
+        """The AT (TIMESTAMP|VERSION) unit for this scan, or None without an AT clause.
+
+        NOTE: for inline-bound (function-backed) tables on_bind runs once
         at attach with no AT, so this is None here — read AT at init/process via
-        ``ProcessParams.at_value``. See ``BindRequest.at_unit``."""
+        ``ProcessParams.at_value``. See ``BindRequest.at_unit``.
+        """
         return self.bind_call.at_unit
 
     @property
@@ -363,8 +365,11 @@ class InitParams[TArgs]:
 
     @property
     def at_unit(self) -> str | None:
-        """AT (TIMESTAMP|VERSION) unit for this scan, or None. Carried on the
-        per-scan bind embedded in the init request. See ``BindRequest.at_unit``."""
+        """AT (TIMESTAMP|VERSION) unit for this scan, or None.
+
+        Carried on the per-scan bind embedded in the init request.
+        See ``BindRequest.at_unit``.
+        """
         return self.init_call.bind_call.at_unit
 
     @property
@@ -410,9 +415,11 @@ class ProcessParams[TArgs]:
 
     @property
     def at_unit(self) -> str | None:
-        """AT (TIMESTAMP|VERSION) unit for this scan, or None. Carried on the
-        per-scan bind embedded in the init request; None for aggregate functions
-        (no init_call). See ``BindRequest.at_unit``."""
+        """AT (TIMESTAMP|VERSION) unit for this scan, or None.
+
+        Carried on the per-scan bind embedded in the init request; None for
+        aggregate functions (no init_call). See ``BindRequest.at_unit``.
+        """
         return self.init_call.bind_call.at_unit if self.init_call is not None else None
 
     @property
@@ -683,12 +690,18 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             settings=_batch_to_scalar_dict(input.settings),
             secrets=SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided),
             transaction_storage=TransactionBoundStorage(
-                cls.storage, txn_id, request=input, attach_plaintext=attach_plaintext,
+                cls.storage,
+                txn_id,
+                request=input,
+                attach_plaintext=attach_plaintext,
             )
             if txn_id
             else None,
             storage=BoundStorage(
-                cls.storage, execution_id, request=input, attach_plaintext=attach_plaintext,
+                cls.storage,
+                execution_id,
+                request=input,
+                attach_plaintext=attach_plaintext,
             )
             if execution_id
             else None,
@@ -780,7 +793,10 @@ class TableFunctionBase[TArgs](vgi.function.Function):
     @final
     @classmethod
     def global_init(
-        cls, input: InitRequest, *, ctx: CallContext | None = None,
+        cls,
+        input: InitRequest,
+        *,
+        ctx: CallContext | None = None,
         attach_plaintext: bytes | None = None,
     ) -> GlobalInitResponse:
         """Global init protocol entry point. Do not override; use ``on_init()``."""
@@ -790,7 +806,8 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             args=cls._parse_arguments(cls.FunctionArguments, input.bind_call.arguments),
             init_call=input,
             output_schema=project_schema(
-                _effective_projection_ids(cls, input.projection_ids), input.output_schema,
+                _effective_projection_ids(cls, input.projection_ids),
+                input.output_schema,
             ),
             settings=_batch_to_scalar_dict(input.bind_call.settings),
             secrets=SecretsAccessor(input.bind_call.secrets).to_dict(),

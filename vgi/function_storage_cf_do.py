@@ -255,8 +255,10 @@ class FunctionStorageCfDo:
                 # the actual serialized (base64-inflated) request payload.
                 req_len = len(resp.request.content) if resp.request is not None else 0
                 _profiler.record(
-                    str(body["shard_key"]), endpoint,
-                    time.monotonic() - t0, max(req_len, len(resp.content)),
+                    str(body["shard_key"]),
+                    endpoint,
+                    time.monotonic() - t0,
+                    max(req_len, len(resp.content)),
                 )
             return data
 
@@ -369,12 +371,12 @@ class FunctionStorageCfDo:
         )
         # Server returns rows as a list parallel to the input keys.
         rows = data["rows"]
-        result: list[bytes | None] = [
-            None if r is None else base64.b64decode(r["value"]) for r in rows
-        ]
+        result: list[bytes | None] = [None if r is None else base64.b64decode(r["value"]) for r in rows]
         _logger.debug(
             "state_get_many scope=%s ns=%s n_keys=%d hits=%d elapsed_ms=%.1f",
-            scope_id.hex()[:8], ns.hex()[:8], len(keys),
+            scope_id.hex()[:8],
+            ns.hex()[:8],
+            len(keys),
             sum(1 for r in result if r is not None),
             (time.monotonic() - t0) * 1000,
         )
@@ -398,9 +400,7 @@ class FunctionStorageCfDo:
                 "scope_id": base64.b64encode(scope_id).decode(),
                 "ns": base64.b64encode(ns).decode(),
                 "items": [
-                    {"key": base64.b64encode(k).decode(),
-                     "value": base64.b64encode(v).decode()}
-                    for k, v in items
+                    {"key": base64.b64encode(k).decode(), "value": base64.b64encode(v).decode()} for k, v in items
                 ],
             },
             attempt_id=uuid.uuid4().hex,
@@ -408,7 +408,9 @@ class FunctionStorageCfDo:
         )
         _logger.debug(
             "state_put_many scope=%s ns=%s n_items=%d elapsed_ms=%.1f",
-            scope_id.hex()[:8], ns.hex()[:8], len(items),
+            scope_id.hex()[:8],
+            ns.hex()[:8],
+            len(items),
             (time.monotonic() - t0) * 1000,
         )
 
@@ -461,7 +463,9 @@ class FunctionStorageCfDo:
                 break
         _logger.debug(
             "state_scan scope=%s ns=%s rows=%d elapsed_ms=%.1f",
-            scope_id.hex()[:8], ns.hex()[:8], n,
+            scope_id.hex()[:8],
+            ns.hex()[:8],
+            n,
             (time.monotonic() - t0) * 1000,
         )
 
@@ -491,9 +495,7 @@ class FunctionStorageCfDo:
             }
             if after_key is not None:
                 body["after_key"] = after_key
-            data = self._post(
-                "state_drain", body, attempt_id=attempt_id, shard_key=shard_key
-            )
+            data = self._post("state_drain", body, attempt_id=attempt_id, shard_key=shard_key)
             for r in data["rows"]:
                 yield (base64.b64decode(r["key"]), base64.b64decode(r["value"]))
                 n += 1
@@ -502,7 +504,9 @@ class FunctionStorageCfDo:
                 break
         _logger.debug(
             "state_drain scope=%s ns=%s rows=%d elapsed_ms=%.1f",
-            scope_id.hex()[:8], ns.hex()[:8], n,
+            scope_id.hex()[:8],
+            ns.hex()[:8],
+            n,
             (time.monotonic() - t0) * 1000,
         )
 
@@ -548,8 +552,11 @@ class FunctionStorageCfDo:
         deleted = int(data["deleted"])
         _logger.debug(
             "state_delete scope=%s ns=%s mode=%s deleted=%d elapsed_ms=%.1f",
-            scope_id.hex()[:8], ns.hex()[:8], mode,
-            deleted, (time.monotonic() - t0) * 1000,
+            scope_id.hex()[:8],
+            ns.hex()[:8],
+            mode,
+            deleted,
+            (time.monotonic() - t0) * 1000,
         )
         return deleted
 
@@ -570,7 +577,8 @@ class FunctionStorageCfDo:
         deleted = int(data["deleted"])
         _logger.debug(
             "execution_clear scope=%s deleted=%d elapsed_ms=%.1f",
-            scope_id.hex()[:8], deleted,
+            scope_id.hex()[:8],
+            deleted,
             (time.monotonic() - t0) * 1000,
         )
         return deleted
@@ -604,7 +612,10 @@ class FunctionStorageCfDo:
         ordinal = int(data["ordinal"])
         _logger.debug(
             "state_append scope=%s ns=%s key=%s ordinal=%d elapsed_ms=%.1f",
-            scope_id.hex()[:8], ns.hex()[:8], key.hex()[:8], ordinal,
+            scope_id.hex()[:8],
+            ns.hex()[:8],
+            key.hex()[:8],
+            ordinal,
             (time.monotonic() - t0) * 1000,
         )
         return ordinal
@@ -630,22 +641,21 @@ class FunctionStorageCfDo:
         if limit is not None:
             body["limit"] = int(limit)
         data = self._post("state_log_scan", body, shard_key=shard_key)
-        rows = [
-            (int(r["id"]), base64.b64decode(r["value"]))
-            for r in data["rows"]
-        ]
+        rows = [(int(r["id"]), base64.b64decode(r["value"])) for r in data["rows"]]
         _logger.debug(
             "state_log_scan scope=%s ns=%s key=%s after_id=%d rows=%d elapsed_ms=%.1f",
-            scope_id.hex()[:8], ns.hex()[:8], key.hex()[:8],
-            after_id, len(rows), (time.monotonic() - t0) * 1000,
+            scope_id.hex()[:8],
+            ns.hex()[:8],
+            key.hex()[:8],
+            after_id,
+            len(rows),
+            (time.monotonic() - t0) * 1000,
         )
         return rows
 
     # --- Atomic int64 counters (function_counter) ---
 
-    def state_counter_get(
-        self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = ""
-    ) -> int:
+    def state_counter_get(self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = "") -> int:
         """Read the int64 counter; 0 if absent."""
         data = self._post(
             "state_counter_get",
@@ -658,9 +668,7 @@ class FunctionStorageCfDo:
         )
         return int(data["n"])
 
-    def state_counter_add(
-        self, scope_id: bytes, ns: bytes, key: bytes, delta: int, *, shard_key: str = ""
-    ) -> int:
+    def state_counter_add(self, scope_id: bytes, ns: bytes, key: bytes, delta: int, *, shard_key: str = "") -> int:
         """Atomically add ``delta`` and return the new value.
 
         Carries an ``attempt_id`` so an HTTP retry replays the prior result on
@@ -679,9 +687,7 @@ class FunctionStorageCfDo:
         )
         return int(data["n"])
 
-    def state_counter_set(
-        self, scope_id: bytes, ns: bytes, key: bytes, value: int, *, shard_key: str = ""
-    ) -> None:
+    def state_counter_set(self, scope_id: bytes, ns: bytes, key: bytes, value: int, *, shard_key: str = "") -> None:
         """Overwrite the counter with ``value`` (idempotent)."""
         self._post(
             "state_counter_set",
@@ -695,9 +701,7 @@ class FunctionStorageCfDo:
             shard_key=shard_key,
         )
 
-    def state_counter_delete(
-        self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = ""
-    ) -> None:
+    def state_counter_delete(self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = "") -> None:
         """Delete the counter (no-op if absent)."""
         self._post(
             "state_counter_delete",

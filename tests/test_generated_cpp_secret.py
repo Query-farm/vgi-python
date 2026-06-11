@@ -53,9 +53,7 @@ def _emit(module) -> str:  # noqa: ANN001
 @pytest.mark.parametrize("module,filename,override_var", _CASES, ids=[c[1] for c in _CASES])
 def test_generator_is_deterministic(module, filename: str, override_var: str) -> None:  # noqa: ANN001, ARG001
     """Running each generator twice produces byte-identical output."""
-    assert _emit(module) == _emit(module), (
-        f"{module.__name__} is non-deterministic — collection order is unstable"
-    )
+    assert _emit(module) == _emit(module), f"{module.__name__} is non-deterministic — collection order is unstable"
 
 
 @pytest.mark.parametrize("module,filename,override_var", _CASES, ids=[c[1] for c in _CASES])

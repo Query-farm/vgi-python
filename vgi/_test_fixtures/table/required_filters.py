@@ -1,9 +1,9 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""Scan functions backing the ``rff_*`` Tables used by the
-``vgi_required_filters_*.test`` sqllogictest matrix.
+"""Scan functions backing the ``rff_*`` required-filter sqllogictest Tables.
 
-These fixtures exercise the new ``Table.required_field_filter_paths`` field +
+Used by the ``vgi_required_filters_*.test`` matrix. These fixtures exercise
+the ``Table.required_field_filter_paths`` field +
 the C++ optimizer extension that enforces it. The five tables form a small
 matrix:
 

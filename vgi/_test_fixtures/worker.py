@@ -106,6 +106,12 @@ from vgi._test_fixtures.scalar import (
 from vgi._test_fixtures.table import (
     _VERSIONED_CONSTRAINTS_SCHEMAS,
     _VERSIONED_SCHEMAS,
+    RFF_MULTI_COLUMNS,
+    RFF_NESTED_COLUMNS,
+    RFF_NONE_COLUMNS,
+    RFF_ROWID_COLUMNS,
+    RFF_SIMPLE_COLUMNS,
+    RFF_STRUCT_COLUMNS,
     BatchIndexOverflowFunction,
     BrokenMissingPartitionValuesFunction,
     BrokenPartitionColumnAbsentFromBatchFunction,
@@ -154,12 +160,6 @@ from vgi._test_fixtures.table import (
     RegionYearPartitionedFunction,
     RepeatValueIntFunction,
     RepeatValueStrFunction,
-    RFF_MULTI_COLUMNS,
-    RFF_NESTED_COLUMNS,
-    RFF_NONE_COLUMNS,
-    RFF_ROWID_COLUMNS,
-    RFF_SIMPLE_COLUMNS,
-    RFF_STRUCT_COLUMNS,
     RffMultiScanFunction,
     RffNestedScanFunction,
     RffNoneScanFunction,
@@ -672,7 +672,7 @@ _EXAMPLE_CATALOG = Catalog(
                 Table(
                     name="multi_branch_empty",
                     columns=schema(n=pa.int64()),
-                    comment="Multi-branch: worker returns empty branches list — used by multi_branch_empty_branches.test",
+                    comment="Multi-branch: empty branches list — used by multi_branch_empty_branches.test",
                 ),
                 # Parse-time rejection — worker returns two ScanBranch
                 # entries both with writable=True. ParseScanBranchesResult
@@ -1178,8 +1178,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         # and throws BinderException before any scan-function-get RPC fires.
         # Returning TableInfo here lets the C++ binding flow proceed far enough
         # to hit that guard with the documented error message.
-        if (schema_name.lower() == "data"
-            and name.lower() in ("multi_branch_numbers", "multi_branch_filtered_numbers")):
+        if schema_name.lower() == "data" and name.lower() in ("multi_branch_numbers", "multi_branch_filtered_numbers"):
             return super().table_get(
                 attach_opaque_data=attach_opaque_data,
                 transaction_opaque_data=transaction_opaque_data,
@@ -1269,9 +1268,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                     ),
                     ScanBranch(
                         function_name="read_parquet",
-                        positional_arguments=[
-                            pa.scalar("/tmp/vgi_hetero_branch.parquet", pa.string())
-                        ],
+                        positional_arguments=[pa.scalar("/tmp/vgi_hetero_branch.parquet", pa.string())],
                         named_arguments={},
                     ),
                 ],
@@ -1321,9 +1318,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                     ),
                     ScanBranch(
                         function_name="read_csv_auto",
-                        positional_arguments=[
-                            pa.scalar("/tmp/vgi_nopushdown_branch.csv", pa.string())
-                        ],
+                        positional_arguments=[pa.scalar("/tmp/vgi_nopushdown_branch.csv", pa.string())],
                         named_arguments={},
                     ),
                 ],
@@ -1340,23 +1335,17 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 branches=[
                     ScanBranch(
                         function_name="read_parquet",
-                        positional_arguments=[
-                            pa.scalar("/tmp/vgi_recon_a_b.parquet", pa.string())
-                        ],
+                        positional_arguments=[pa.scalar("/tmp/vgi_recon_a_b.parquet", pa.string())],
                         named_arguments={},
                     ),
                     ScanBranch(
                         function_name="read_parquet",
-                        positional_arguments=[
-                            pa.scalar("/tmp/vgi_recon_b_a.parquet", pa.string())
-                        ],
+                        positional_arguments=[pa.scalar("/tmp/vgi_recon_b_a.parquet", pa.string())],
                         named_arguments={},
                     ),
                     ScanBranch(
                         function_name="read_parquet",
-                        positional_arguments=[
-                            pa.scalar("/tmp/vgi_recon_a_only.parquet", pa.string())
-                        ],
+                        positional_arguments=[pa.scalar("/tmp/vgi_recon_a_only.parquet", pa.string())],
                         named_arguments={},
                     ),
                 ],
@@ -1431,9 +1420,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         if schema_name.lower() == "data" and name.lower() in ("rff_hive", "rff_hive_mixed"):
             return ScanFunctionResult(
                 function_name="read_parquet",
-                positional_arguments=[
-                    pa.scalar("/tmp/rff_hive/*/*/*.parquet", pa.string())
-                ],
+                positional_arguments=[pa.scalar("/tmp/rff_hive/*/*/*.parquet", pa.string())],
                 named_arguments={"hive_partitioning": pa.scalar(True)},
             )
 

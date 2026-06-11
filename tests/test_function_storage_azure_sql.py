@@ -201,8 +201,13 @@ class TestFunctionStorageAzureSql:
         delete_calls = [sql for sql, _ in mock_cursor.executed if "DELETE FROM" in sql]
         assert len(delete_calls) == 5
         tables = {sql.split("DELETE FROM ")[1].split(" ")[0] for sql, _ in mock_cursor.executed if "DELETE FROM" in sql}
-        assert tables == {"work_queue", "invocation_registry",
-                          "function_state", "function_state_log", "function_counter"}
+        assert tables == {
+            "work_queue",
+            "invocation_registry",
+            "function_state",
+            "function_state_log",
+            "function_counter",
+        }
 
     def test_ensure_tables_function_counter_has_created_at(
         self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor
@@ -326,13 +331,18 @@ class TestFunctionStorageAzureSqlStateUnified:
         """Storage instance with mocked pymssql.connect."""
         mock_conn = _MockConnection(mock_cursor)
         s = FunctionStorageAzureSql(
-            server="t.example", database="db", user="u", password="p",
+            server="t.example",
+            database="db",
+            user="u",
+            password="p",
         )
         s._connect = lambda: mock_conn  # type: ignore[assignment,return-value]
         return s
 
     def test_state_get_many_emits_in_clause(
-        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+        self,
+        storage: FunctionStorageAzureSql,
+        mock_cursor: _MockCursor,
     ) -> None:
         """state_get_many issues an IN-clause SELECT against function_state."""
         mock_cursor.set_results([(b"k1", b"v1"), (b"k2", b"v2")])
@@ -345,7 +355,9 @@ class TestFunctionStorageAzureSqlStateUnified:
         assert b"k1" in params and b"k2" in params and b"miss" in params
 
     def test_state_get_many_empty_keys_no_sql(
-        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+        self,
+        storage: FunctionStorageAzureSql,
+        mock_cursor: _MockCursor,
     ) -> None:
         """Empty key list short-circuits without touching SQL."""
         result = storage.state_get_many(b"exec1", b"agg", [])
@@ -353,7 +365,9 @@ class TestFunctionStorageAzureSqlStateUnified:
         assert mock_cursor.executed == []
 
     def test_state_put_many_uses_merge(
-        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+        self,
+        storage: FunctionStorageAzureSql,
+        mock_cursor: _MockCursor,
     ) -> None:
         """state_put_many issues one MERGE statement per item."""
         mock_cursor.set_results([])  # replay-detection SELECT misses → fresh write
@@ -362,7 +376,9 @@ class TestFunctionStorageAzureSqlStateUnified:
         assert len(merge_sqls) == 2  # one MERGE per item
 
     def test_state_put_many_replay_silent_no_op(
-        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+        self,
+        storage: FunctionStorageAzureSql,
+        mock_cursor: _MockCursor,
     ) -> None:
         """A replay (first item already present with our attempt_id) is silent."""
         mock_cursor.set_results([(1,)])
@@ -371,7 +387,9 @@ class TestFunctionStorageAzureSqlStateUnified:
         assert merge_sqls == []  # nothing written
 
     def test_state_drain_emits_update_with_output(
-        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+        self,
+        storage: FunctionStorageAzureSql,
+        mock_cursor: _MockCursor,
     ) -> None:
         """state_drain uses UPDATE..OUTPUT for atomic tombstone-and-read-back."""
         mock_cursor.set_results([])  # replay miss
@@ -383,7 +401,9 @@ class TestFunctionStorageAzureSqlStateUnified:
         assert "drained_by_attempt" in update_sqls[0]
 
     def test_state_delete_specific_keys(
-        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+        self,
+        storage: FunctionStorageAzureSql,
+        mock_cursor: _MockCursor,
     ) -> None:
         """state_delete with a key list emits an IN-clause DELETE."""
         mock_cursor.rowcount = 2
@@ -394,7 +414,9 @@ class TestFunctionStorageAzureSqlStateUnified:
         assert b"k1" in params and b"k2" in params
 
     def test_state_delete_namespace(
-        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+        self,
+        storage: FunctionStorageAzureSql,
+        mock_cursor: _MockCursor,
     ) -> None:
         """state_delete with keys=None wipes the whole namespace."""
         mock_cursor.rowcount = 7
@@ -405,7 +427,9 @@ class TestFunctionStorageAzureSqlStateUnified:
         assert params == (b"exec1", b"agg")
 
     def test_execution_clear_wipes_all_three_tables(
-        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+        self,
+        storage: FunctionStorageAzureSql,
+        mock_cursor: _MockCursor,
     ) -> None:
         """execution_clear deletes from function_state, _log, and _counter."""
         mock_cursor.rowcount = 3
@@ -418,7 +442,9 @@ class TestFunctionStorageAzureSqlStateUnified:
         assert any("DELETE FROM function_counter " in s for s in sqls)
 
     def test_state_append_replay_returns_prior_ordinal(
-        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+        self,
+        storage: FunctionStorageAzureSql,
+        mock_cursor: _MockCursor,
     ) -> None:
         """state_append: replay-detection SELECT hit returns prior ordinal — no INSERT."""
         mock_cursor.set_results([(42,)])  # replay-detection SELECT finds prior id=42
@@ -430,7 +456,9 @@ class TestFunctionStorageAzureSqlStateUnified:
         assert not any("INSERT INTO function_state_log" in s for s in sqls)
 
     def test_state_log_scan_emits_select_in_id_order(
-        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+        self,
+        storage: FunctionStorageAzureSql,
+        mock_cursor: _MockCursor,
     ) -> None:
         """state_log_scan SELECTs (id, value) for (scope, ns, key) ORDER BY id."""
         mock_cursor.set_results([(1, b"a"), (2, b"b"), (3, b"c")])
@@ -444,7 +472,9 @@ class TestFunctionStorageAzureSqlStateUnified:
         assert "FETCH NEXT" not in sql
 
     def test_state_log_scan_with_limit_emits_offset_fetch(
-        self, storage: FunctionStorageAzureSql, mock_cursor: _MockCursor,
+        self,
+        storage: FunctionStorageAzureSql,
+        mock_cursor: _MockCursor,
     ) -> None:
         """limit=N appends OFFSET/FETCH NEXT clause and threads N into params."""
         mock_cursor.set_results([(2, b"b")])
@@ -453,4 +483,3 @@ class TestFunctionStorageAzureSqlStateUnified:
         sql, params = mock_cursor.executed[0]
         assert "OFFSET 0 ROWS FETCH NEXT" in sql
         assert params == (b"exec1", b"buf", b"k", 1, 1)
-

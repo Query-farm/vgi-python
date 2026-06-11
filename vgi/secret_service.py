@@ -56,6 +56,7 @@ class ExampleOrchardSecretService:
     credential_lifetime_seconds: int = 30
 
     def secret_lookup(self, path: str, type: str) -> SecretLookupResponse:  # noqa: A002
+        """Return the canned credential for known test paths; empty otherwise."""
         if type == "s3" and path.startswith("s3://test-bucket"):
             # Heterogeneous typed values: string, int64, bool, and a nested struct
             # — exercising the full Arrow→DuckDB Value bridge, not just string→string.
@@ -113,8 +114,7 @@ def create_secret_app(
         from vgi_rpc.http import make_wsgi_app
     except ImportError:
         sys.stderr.write(
-            "Error: HTTP dependencies not installed.\n"
-            "Install with: pip install vgi[http]  (or: uv sync --extra http)\n"
+            "Error: HTTP dependencies not installed.\nInstall with: pip install vgi[http]  (or: uv sync --extra http)\n"
         )
         sys.exit(1)
 
@@ -211,11 +211,12 @@ def main() -> None:
         "impl",
         nargs="?",
         default="vgi.secret_service:ExampleOrchardSecretService",
-        help="Implementation reference: module:ClassName "
-        "(default: the built-in ExampleOrchardSecretService fixture).",
+        help="Implementation reference: module:ClassName (default: the built-in ExampleOrchardSecretService fixture).",
     )
     parser.add_argument("--host", default="0.0.0.0", help="HTTP bind address")
-    parser.add_argument("--port", "-p", type=int, default=None, help="HTTP port (default: $PORT or 8080; 0 = ephemeral)")
+    parser.add_argument(
+        "--port", "-p", type=int, default=None, help="HTTP port (default: $PORT or 8080; 0 = ephemeral)"
+    )
     parser.add_argument("--prefix", default="", help="URL prefix for RPC endpoints")
     parser.add_argument("--cors-origins", default="*", help="Allowed CORS origins")
     args = parser.parse_args()

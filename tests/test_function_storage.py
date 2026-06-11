@@ -401,9 +401,7 @@ class TestFunctionStorageSqlite:
         # Cursor-based: after_id + limit also work through the facade.
         assert bs.state_log_scan(b"buf", b"k", after_id=ord1, limit=1) == [(ord2, b"b")]
 
-    def test_counter_add_no_lost_updates_under_threads(
-        self, storage: FunctionStorageSqlite
-    ) -> None:
+    def test_counter_add_no_lost_updates_under_threads(self, storage: FunctionStorageSqlite) -> None:
         """Concurrent state_counter_add increments never lose an update.
 
         This is the property the accumulate worker's old ``_LOCK`` used to
@@ -430,9 +428,7 @@ class TestFunctionStorageSqlite:
 
         assert storage.state_counter_get(b"s", b"ns", b"k") == threads_n * per_thread
 
-    def test_execution_clear_covers_all_scope_keyed_tables(
-        self, storage: FunctionStorageSqlite
-    ) -> None:
+    def test_execution_clear_covers_all_scope_keyed_tables(self, storage: FunctionStorageSqlite) -> None:
         """Audit invariant: every scope_id-keyed table is known and execution_clear wipes it.
 
         Discovers scope-keyed tables from the live schema, so a NEW one added
@@ -440,17 +436,15 @@ class TestFunctionStorageSqlite:
         closing the gap that let ``function_counter`` slip the Azure sweep.
         """
         conn = storage._conn()
-        names = [r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()]
+        names = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()]
         scope_tables = [
-            t for t in names
+            t
+            for t in names
             if "scope_id" in {c[1] for c in conn.execute(f"PRAGMA table_info({t})").fetchall()}  # noqa: S608
         ]
         # work_queue is execution_id-keyed (cleared by queue_clear), so it has no
         # scope_id column and is naturally excluded.
-        assert set(scope_tables) == {
-            "function_state", "function_state_log", "function_counter"
-        }
+        assert set(scope_tables) == {"function_state", "function_state_log", "function_counter"}
 
         scope = b"audit-scope"
         storage.state_put_many(scope, b"ns", [(b"k", b"v")])

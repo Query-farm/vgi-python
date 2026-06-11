@@ -68,8 +68,7 @@ def test_checked_in_generated_hpp_matches_generator() -> None:
     path = _vgi_generated_path()
     if not path.exists():
         pytest.skip(
-            f"{path} not found; set VGI_GENERATED_PROTOCOL_VERSION_HPP "
-            "or check out the vgi repo next to vgi-python"
+            f"{path} not found; set VGI_GENERATED_PROTOCOL_VERSION_HPP or check out the vgi repo next to vgi-python"
         )
 
     checked_in = path.read_text()

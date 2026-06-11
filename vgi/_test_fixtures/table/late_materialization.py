@@ -136,9 +136,7 @@ class LateMaterializationState(ArrowSerializableDataclass):
 
 @init_single_worker
 @_cardinality_from_count
-class LateMaterializationFunction(
-    TableFunctionGenerator[LateMaterializationFunctionArgs, LateMaterializationState]
-):
+class LateMaterializationFunction(TableFunctionGenerator[LateMaterializationFunctionArgs, LateMaterializationState]):
     """Rowid-bearing generator that participates in late materialization.
 
     SCHEMA
@@ -149,6 +147,7 @@ class LateMaterializationFunction(
     Example:
     -------
     SELECT row_id, payload FROM late_materialization(100000) ORDER BY ord LIMIT 10
+
     """
 
     FunctionArguments = LateMaterializationFunctionArgs
@@ -174,7 +173,7 @@ class LateMaterializationFunction(
     def on_bind(cls, params: BindParams[LateMaterializationFunctionArgs]) -> BindResponse:
         """Build the rowid-bearing output schema."""
         rid_field = pa.field(_ROWID_NAME, pa.int64(), metadata={b"is_row_id": b""})
-        fields = [
+        fields: list[pa.Field[Any]] = [
             rid_field,
             pa.field("ord", pa.int64()),
             pa.field("payload", pa.utf8()),
@@ -183,9 +182,7 @@ class LateMaterializationFunction(
         return BindResponse(output_schema=pa.schema(fields))
 
     @classmethod
-    def initial_state(
-        cls, params: ProcessParams[LateMaterializationFunctionArgs]
-    ) -> LateMaterializationState:
+    def initial_state(cls, params: ProcessParams[LateMaterializationFunctionArgs]) -> LateMaterializationState:
         """Seed state and capture the init-time rowid filter into the witness.
 
         For the wide probe scan, the SEMI join's build side completes before the
@@ -239,8 +236,7 @@ class LateMaterializationFunction(
                     columns[_ROWID_NAME] = list(range(start, start + size))
             elif f.name == "ord":
                 columns["ord"] = [
-                    None if (stride > 0 and i % stride == 0) else _scramble_ord(i)
-                    for i in range(start, start + size)
+                    None if (stride > 0 and i % stride == 0) else _scramble_ord(i) for i in range(start, start + size)
                 ]
             elif f.name == "payload":
                 columns["payload"] = [f"payload_{i}" for i in range(start, start + size)]

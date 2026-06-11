@@ -45,7 +45,7 @@ def encode_secret_values(mapping: dict[str, Any]) -> pa.RecordBatch | None:
     """
     if not mapping:
         return None
-    columns: dict[str, pa.Array] = {}
+    columns: dict[str, pa.Array[Any]] = {}
     for key, value in mapping.items():
         columns[key] = value if isinstance(value, pa.Array) else pa.array([value])
     return pa.RecordBatch.from_pydict(columns)

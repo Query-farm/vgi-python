@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 import struct
 from dataclasses import dataclass
-from typing import Annotated, ClassVar
+from typing import Annotated, Any, ClassVar
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
@@ -995,7 +995,7 @@ class FilterEchoTableScanFunction(TableFunctionGenerator[_EmptyArgs, _FilterEcho
         state.done = True
 
         ns = list(range(_FILTER_ECHO_TABLE_ROWS))
-        full: dict[str, list[object]] = {
+        full: dict[str, list[Any]] = {
             "n": ns,
             "s": [f"row_{i}" for i in ns],
             "pushed_filters": [state.filter_str] * _FILTER_ECHO_TABLE_ROWS,

@@ -91,9 +91,7 @@ def test_resume_on_fresh_client_after_node_hop(http_base_url: str) -> None:
 
     # A brand-new client resumes from the serialized token alone.
     with Client.from_http(http_base_url) as client2:
-        cur2 = client2.table_scan_resumable(
-            function_name="sequence", arguments=_ARGS, resume_token=token
-        )
+        cur2 = client2.table_scan_resumable(function_name="sequence", arguments=_ARGS, resume_token=token)
         while True:
             batch, token = cur2.next()
             if batch is None:

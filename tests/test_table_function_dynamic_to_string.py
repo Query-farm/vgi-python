@@ -162,10 +162,7 @@ class TestTableFunctionDynamicToString:
             def dynamic_to_string(cls, params: BindParams[_Args], execution_id: bytes) -> Mapping[str, str]:
                 assert params.storage is not None
                 pairs = params.storage.state_scan(b"profile")
-                return {
-                    f"pid_{int.from_bytes(k, 'little', signed=True)}": v.decode()
-                    for k, v in sorted(pairs)
-                }
+                return {f"pid_{int.from_bytes(k, 'little', signed=True)}": v.decode() for k, v in sorted(pairs)}
 
             @classmethod
             def process(cls, params, state, out) -> None:  # type: ignore[no-untyped-def]
@@ -177,9 +174,9 @@ class TestTableFunctionDynamicToString:
         worker = _MyWorker()
         execution_id = b"\x01\x02\x03\x04\x05\x06\x07\x08"
         _StorageFunc.storage.state_put_many(
-            execution_id, b"profile",
-            [(BoundStorage.pack_int_key(10), b"hello"),
-             (BoundStorage.pack_int_key(20), b"world")],
+            execution_id,
+            b"profile",
+            [(BoundStorage.pack_int_key(10), b"hello"), (BoundStorage.pack_int_key(20), b"world")],
         )
 
         result = worker.table_function_dynamic_to_string(_request("with_storage"), _ctx())

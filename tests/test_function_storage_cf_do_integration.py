@@ -202,5 +202,3 @@ def test_health_check_get_is_rejected(storage: FunctionStorageCfDo) -> None:
     """
     resp = httpx.get(_URL or "")
     assert resp.status_code in (401, 405)
-
-

@@ -396,8 +396,13 @@ class FunctionStorageAzureSql:
             max_age_seconds = int(max_age_days * 86400)
             cursor = conn.cursor()
             total = 0
-            for table in ("work_queue", "invocation_registry",
-                          "function_state", "function_state_log", "function_counter"):
+            for table in (
+                "work_queue",
+                "invocation_registry",
+                "function_state",
+                "function_state_log",
+                "function_counter",
+            ):
                 cursor.execute(
                     f"DELETE FROM {table} WHERE DATEDIFF(SECOND, created_at, GETUTCDATE()) > %s",  # noqa: S608
                     (max_age_seconds,),
@@ -452,9 +457,7 @@ class FunctionStorageAzureSql:
             # pymssql cursor values are typed as a broad Any-equivalent
             # union; the columns we SELECT are VARBINARY (function_state.key,
             # function_state.value) so the runtime value is always bytes.
-            found: dict[bytes, bytes] = {
-                bytes(cast(Any, k)): bytes(cast(Any, v)) for k, v in cursor.fetchall()
-            }
+            found: dict[bytes, bytes] = {bytes(cast(Any, k)): bytes(cast(Any, v)) for k, v in cursor.fetchall()}
             return [found.get(bytes(k)) for k in keys]
 
         return self._execute_with_retry(_do)
@@ -538,7 +541,7 @@ class FunctionStorageAzureSql:
 
         def _do(conn: pymssql.Connection) -> list[tuple[bytes, bytes]]:
             cursor = conn.cursor()
-            params: list[object] = [scope_id, ns]
+            params: list[Any] = [scope_id, ns]
             clauses = ""
             if start is not None:
                 clauses += " AND [key] >= %s"
@@ -643,7 +646,7 @@ class FunctionStorageAzureSql:
                     (scope_id, ns, *keys),
                 )
             else:
-                params: list[object] = [scope_id, ns]
+                params: list[Any] = [scope_id, ns]
                 clauses = ""
                 if start is not None:
                     clauses += " AND [key] >= %s"
@@ -769,18 +772,13 @@ class FunctionStorageAzureSql:
                     """,
                     (scope_id, ns, key, after_id, int(limit)),
                 )
-            return [
-                (int(cast(Any, rid)), bytes(cast(Any, v)))
-                for (rid, v) in cursor.fetchall()
-            ]
+            return [(int(cast(Any, rid)), bytes(cast(Any, v))) for (rid, v) in cursor.fetchall()]
 
         return self._execute_with_retry(_do)
 
     # --- Atomic int64 counters (function_counter) ---
 
-    def state_counter_get(
-        self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = ""
-    ) -> int:
+    def state_counter_get(self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = "") -> int:
         """Read the int64 counter; 0 if absent."""
         del shard_key
 
@@ -795,9 +793,7 @@ class FunctionStorageAzureSql:
 
         return self._execute_with_retry(_do)
 
-    def state_counter_add(
-        self, scope_id: bytes, ns: bytes, key: bytes, delta: int, *, shard_key: str = ""
-    ) -> int:
+    def state_counter_add(self, scope_id: bytes, ns: bytes, key: bytes, delta: int, *, shard_key: str = "") -> int:
         """Atomically add ``delta``; return the new value. Replay-safe on retry."""
         del shard_key
         import uuid
@@ -845,9 +841,7 @@ class FunctionStorageAzureSql:
 
         return self._execute_with_retry(_do)
 
-    def state_counter_set(
-        self, scope_id: bytes, ns: bytes, key: bytes, value: int, *, shard_key: str = ""
-    ) -> None:
+    def state_counter_set(self, scope_id: bytes, ns: bytes, key: bytes, value: int, *, shard_key: str = "") -> None:
         """Overwrite the counter with ``value`` (idempotent — no attempt_id)."""
         del shard_key
 
@@ -872,9 +866,7 @@ class FunctionStorageAzureSql:
 
         self._execute_with_retry(_do)
 
-    def state_counter_delete(
-        self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = ""
-    ) -> None:
+    def state_counter_delete(self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = "") -> None:
         """Delete the counter (no-op if absent)."""
         del shard_key
 

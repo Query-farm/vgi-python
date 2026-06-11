@@ -593,7 +593,11 @@ class MetaWorker:
         return self._dispatch_aggregate(request, "table_buffering_destructor", ctx)
 
     def _load_table_buffering_params(
-        self, request: Any, ctx: CallContext, *, attach_already_unwrapped: bool = False,
+        self,
+        request: Any,
+        ctx: CallContext,
+        *,
+        attach_already_unwrapped: bool = False,
     ) -> Any:
         """Dispatch the finalize-tick driver's cold-load to the right worker.
 
@@ -611,7 +615,9 @@ class MetaWorker:
                 worker, original_id = self._unwrap_attach_opaque_data(request.attach_opaque_data)
                 request = dataclasses.replace(request, attach_opaque_data=original_id)
                 return worker._load_table_buffering_params(
-                    request, ctx, attach_already_unwrapped=attach_already_unwrapped,
+                    request,
+                    ctx,
+                    attach_already_unwrapped=attach_already_unwrapped,
                 )
             except (IndexError, KeyError):
                 pass
@@ -619,7 +625,9 @@ class MetaWorker:
             registry = type(w)._build_registry()
             if fn_name in registry:
                 return w._load_table_buffering_params(
-                    request, ctx, attach_already_unwrapped=attach_already_unwrapped,
+                    request,
+                    ctx,
+                    attach_already_unwrapped=attach_already_unwrapped,
                 )
         raise ValueError(f"Unknown table_buffering function '{fn_name}'")
 

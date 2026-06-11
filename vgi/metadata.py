@@ -993,18 +993,15 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
     # Cross-flag validation for the buffered table path.
     if attrs.get("source_order_dependent") and not is_buffering:
         raise TypeError(
-            f"{cls.__name__}: Meta.source_order_dependent is only meaningful on "
-            f"TableBufferingFunction subclasses"
+            f"{cls.__name__}: Meta.source_order_dependent is only meaningful on TableBufferingFunction subclasses"
         )
     if attrs.get("sink_order_dependent") and not is_buffering:
         raise TypeError(
-            f"{cls.__name__}: Meta.sink_order_dependent is only meaningful on "
-            f"TableBufferingFunction subclasses"
+            f"{cls.__name__}: Meta.sink_order_dependent is only meaningful on TableBufferingFunction subclasses"
         )
     if attrs.get("requires_input_batch_index") and not is_buffering:
         raise TypeError(
-            f"{cls.__name__}: Meta.requires_input_batch_index is only meaningful on "
-            f"TableBufferingFunction subclasses"
+            f"{cls.__name__}: Meta.requires_input_batch_index is only meaningful on TableBufferingFunction subclasses"
         )
     if attrs.get("sink_order_dependent") and attrs.get("requires_input_batch_index"):
         raise TypeError(

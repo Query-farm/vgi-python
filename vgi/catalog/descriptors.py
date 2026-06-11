@@ -409,9 +409,7 @@ class Table:
         # scan time, and the descriptor doesn't unpack STRUCT subfields.
         for path in self.required_field_filter_paths:
             if not path:
-                raise ValueError(
-                    f"Table '{self.name}': required_field_filter_paths must not contain empty strings"
-                )
+                raise ValueError(f"Table '{self.name}': required_field_filter_paths must not contain empty strings")
             head = path.split(".", 1)[0]
             if head not in column_names:
                 raise ValueError(
@@ -822,8 +820,7 @@ class Schema:
                 "scalar_function": function_counts[CatalogFunctionType.SCALAR],
                 "aggregate_function": function_counts[CatalogFunctionType.AGGREGATE],
                 "table_function": (
-                    function_counts[CatalogFunctionType.TABLE]
-                    + function_counts[CatalogFunctionType.TABLE_BUFFERING]
+                    function_counts[CatalogFunctionType.TABLE] + function_counts[CatalogFunctionType.TABLE_BUFFERING]
                 ),
                 "macro": len(self.macros),
                 "index": len(self.indexes),

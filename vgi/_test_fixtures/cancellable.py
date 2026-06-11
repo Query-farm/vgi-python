@@ -213,10 +213,12 @@ class SlowCancellableBufferingArgs:
     # requires the function to declare TableInput for subquery args.
     data: Annotated[TableInput, Arg(1, doc="Input table (rows ignored)")]
     count: Annotated[
-        int, Arg("count", default=1_000, doc="Total rows to emit during finalize", ge=1),
+        int,
+        Arg("count", default=1_000, doc="Total rows to emit during finalize", ge=1),
     ] = 1_000
     sleep_ms: Annotated[
-        int, Arg("sleep_ms", default=10, doc="Sleep per emitted row (ms)", ge=0),
+        int,
+        Arg("sleep_ms", default=10, doc="Sleep per emitted row (ms)", ge=0),
     ] = 10
 
 
@@ -255,14 +257,13 @@ class SlowCancellableBufferingFunction(
 
     class Meta:
         name = "slow_cancellable_buffering"
-        description = (
-            "Slow buffered table function with an on_cancel file probe (test fixture)"
-        )
+        description = "Slow buffered table function with an on_cancel file probe (test fixture)"
         categories = ["test"]
 
     @classmethod
     def on_bind(
-        cls, params: BindParams[SlowCancellableBufferingArgs],
+        cls,
+        params: BindParams[SlowCancellableBufferingArgs],
     ) -> BindResponse:
         # Emit a single-column INT64 output regardless of input schema;
         # the input is ignored (Sink absorbs but doesn't accumulate).
@@ -312,7 +313,8 @@ class SlowCancellableBufferingFunction(
         if params.args.sleep_ms > 0:
             time.sleep(params.args.sleep_ms / 1000.0)
         batch = pa.RecordBatch.from_pydict(
-            {"n": [state.emitted]}, schema=params.output_schema,
+            {"n": [state.emitted]},
+            schema=params.output_schema,
         )
         state.emitted += 1
         out.emit(batch)

@@ -46,6 +46,7 @@ class _StateB(ArrowSerializableDataclass):
 # Stub implementations that satisfy the abstractmethod requirements without
 # doing real work — these tests are purely about class-time resolution.
 
+
 def _stub_process(cls, batch, params):  # noqa: ARG001 - test stub
     return b""
 
@@ -70,6 +71,7 @@ def _attach_stub_methods(cls: type) -> type:
 # already handled correctly. Kept as a regression net.
 # ---------------------------------------------------------------------------
 
+
 @_attach_stub_methods
 class DirectChild(TableBufferingFunction[SingleTableArguments, _StateA]):
     """Baseline: direct generic parameterization at the leaf class."""
@@ -90,6 +92,7 @@ def test_direct_parameterization_resolves() -> None:
 # normal class-attribute lookup (we don't overwrite cls._finalize_state_class
 # when no __orig_bases__ binding is found, returning the _UNCHANGED sentinel).
 # ---------------------------------------------------------------------------
+
 
 @_attach_stub_methods
 class NonParameterizedGrandchild(DirectChild):
@@ -116,6 +119,7 @@ def test_subclass_without_reparameterization_inherits() -> None:
 # saw origin=Mid (a TBF subclass, not TBF itself), tried type_args[1] (out
 # of range, only one arg), bailed, and left _finalize_state_class as None.
 # ---------------------------------------------------------------------------
+
 
 @_attach_stub_methods
 class GenericMid[X: ArrowSerializableDataclass](TableBufferingFunction[SingleTableArguments, X]):
@@ -158,6 +162,7 @@ def test_generic_through_intermediate_resolves() -> None:
 #     class Leaf(Outer[State]):  ← Y → State, then X → Y → State.
 # ---------------------------------------------------------------------------
 
+
 @_attach_stub_methods
 class GenericOuter[Y: ArrowSerializableDataclass](GenericMid[Y]):
     """Two-level generic-through; rebinds the intermediate's TypeVar to its own."""
@@ -187,6 +192,7 @@ def test_two_level_generic_through_chain_resolves() -> None:
 # ---------------------------------------------------------------------------
 # Case 5: explicit ``None`` finalize state — preserved through the chain.
 # ---------------------------------------------------------------------------
+
 
 @_attach_stub_methods
 class NoStateFunc(TableBufferingFunction[SingleTableArguments, None]):
@@ -284,7 +290,11 @@ class _StubWorker:
         self._params = params
 
     def _load_table_buffering_params(  # noqa: ARG002 - signature mirrored
-        self, request, ctx, *, attach_already_unwrapped: bool = False,
+        self,
+        request,
+        ctx,
+        *,
+        attach_already_unwrapped: bool = False,
     ):
         return self._func_cls, self._params
 

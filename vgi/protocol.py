@@ -523,7 +523,8 @@ class ScalarExchangeState(ExchangeState):
                 init_response=self._init_response,
                 # Shard on the UUID of the full attach plaintext persisted at init.
                 storage=BoundStorage(
-                    cls.storage, self._init_response.execution_id,
+                    cls.storage,
+                    self._init_response.execution_id,
                     attach_plaintext=self._plaintext_attach,
                 ),
                 auth_context=ctx.auth,
@@ -1015,7 +1016,8 @@ class TableProducerState(ProducerState):
             # shard storage on the full plaintext (uuid||catalog_bytes) the init
             # state persisted; the body sees only the stripped catalog bytes.
             storage=BoundStorage(
-                func_cls.storage, self._init_response.execution_id,
+                func_cls.storage,
+                self._init_response.execution_id,
                 attach_plaintext=self._plaintext_attach,
             ),
             attach_opaque_data=attach_catalog_bytes(self._plaintext_attach),
@@ -1180,7 +1182,8 @@ class TableInOutExchangeState(ExchangeState):
             # persisted (the auth-scoped seal can't be reopened here); the body
             # sees only the stripped catalog bytes.
             storage=BoundStorage(
-                func_cls.storage, self._init_response.execution_id,
+                func_cls.storage,
+                self._init_response.execution_id,
                 attach_plaintext=self._plaintext_attach,
             ),
             attach_opaque_data=attach_catalog_bytes(self._plaintext_attach),
@@ -1262,7 +1265,7 @@ class BufferedFinalizeState(ProducerState):
     execution_id: bytes = b""
     ns: bytes = b""
     key: bytes = b""
-    cursor: bytes = b""                           # opaque, b"" = before-first
+    cursor: bytes = b""  # opaque, b"" = before-first
     attach_opaque_data: bytes | None = None
 
     def produce(self, out: OutputCollector, ctx: CallContext) -> None:
@@ -1276,14 +1279,19 @@ class BufferedFinalizeState(ProducerState):
         )
 
         storage = _build_bound_storage_from_fields(
-            self.execution_id, self.attach_opaque_data, ctx,
+            self.execution_id,
+            self.attach_opaque_data,
+            ctx,
         )
         last_id = unpack_int_cursor(self.cursor)
         # OutputCollector enforces one data batch per produce() tick, so
         # we read exactly one row per call. Framework loops the ticks
         # until out.finish() is called on EOS.
         rows = storage.state_log_scan(
-            self.ns, self.key, after_id=last_id, limit=1,
+            self.ns,
+            self.key,
+            after_id=last_id,
+            limit=1,
         )
         if not rows:
             out.finish()
@@ -1376,14 +1384,13 @@ class TableBufferingFinalizeState(ProducerState):
             return
         try:
             func_cls, params = worker._load_table_buffering_params(
-                stub, ctx, attach_already_unwrapped=True,
+                stub,
+                ctx,
+                attach_already_unwrapped=True,
             )
         except Exception:  # noqa: BLE001 — teardown path, swallow
             return
-        user_state = (
-            _deserialize_finalize_state(func_cls, self.state_blob)
-            if self.state_blob else None
-        )
+        user_state = _deserialize_finalize_state(func_cls, self.state_blob) if self.state_blob else None
         with contextlib.suppress(Exception):
             func_cls.on_cancel(params, self.finalize_state_id, user_state)
 
@@ -1854,19 +1861,22 @@ class VgiProtocol(Protocol):
     # ========== Table Sink+Source Function Methods ==========
 
     def table_buffering_process(
-        self, request: TableBufferingProcessRequest,
+        self,
+        request: TableBufferingProcessRequest,
     ) -> TableBufferingProcessResponse:
         """Sink one input batch; return the worker-chosen state_id."""
         ...
 
     def table_buffering_combine(
-        self, request: TableBufferingCombineRequest,
+        self,
+        request: TableBufferingCombineRequest,
     ) -> TableBufferingCombineResponse:
         """Once-per-query end-of-input signal. Returns finalize_state_ids."""
         ...
 
     def table_buffering_destructor(
-        self, request: TableBufferingDestructorRequest,
+        self,
+        request: TableBufferingDestructorRequest,
     ) -> TableBufferingDestructorResponse:
         """Best-effort end-of-query cleanup. Must not raise."""
         ...

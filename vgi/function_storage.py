@@ -59,14 +59,13 @@ def _profiled(op: str) -> Callable[[_F], _F]:
                 return fn(self, *args, **kwargs)
             t0 = time.monotonic()
             result = fn(self, *args, **kwargs)
-            _profiler.record(
-                self._shard_key, op, time.monotonic() - t0, io_call_bytes(args, kwargs, result)
-            )
+            _profiler.record(self._shard_key, op, time.monotonic() - t0, io_call_bytes(args, kwargs, result))
             return result
 
         return wrapper  # type: ignore[return-value]
 
     return deco
+
 
 __all__ = [
     "FrameworkNS",
@@ -111,9 +110,7 @@ def _coerce_ns(ns: "bytes | FrameworkNS") -> bytes:
     if isinstance(ns, FrameworkNS):
         return bytes(ns.value)
     if not isinstance(ns, (bytes, bytearray)):
-        raise TypeError(
-            f"namespace must be bytes or FrameworkNS, got {type(ns).__name__}"
-        )
+        raise TypeError(f"namespace must be bytes or FrameworkNS, got {type(ns).__name__}")
     ns_bytes = bytes(ns)
     if ns_bytes.startswith(_RESERVED_NS_PREFIX):
         raise ValueError(
@@ -190,9 +187,7 @@ def _resolve_shard_key(backend: Any, attach_plaintext: bytes | None, _origin: st
     executions are routinely not bound to an ATTACH and ignore the value anyway.
     """
     uuid = (
-        attach_plaintext[:_ATTACH_UUID_LEN]
-        if attach_plaintext and len(attach_plaintext) >= _ATTACH_UUID_LEN
-        else None
+        attach_plaintext[:_ATTACH_UUID_LEN] if attach_plaintext and len(attach_plaintext) >= _ATTACH_UUID_LEN else None
     )
     if uuid:
         return _derive_shard_key(attach_uuid=uuid, _origin=_origin)
@@ -646,7 +641,8 @@ class TransactionBoundStorage:
         # from a parent BoundStorage). ``request=`` only labels the origin.
         if shard_key is None:
             origin = (
-                f"TransactionBoundStorage({type(request).__name__})" if request is not None
+                f"TransactionBoundStorage({type(request).__name__})"
+                if request is not None
                 else "TransactionBoundStorage"
             )
             shard_key = _resolve_shard_key(storage, attach_plaintext, origin)
@@ -713,9 +709,7 @@ class BoundStorage:
         # (``uuid(16) || catalog_bytes``); we shard on its leading UUID. The
         # worker unwraps once and threads it in. ``request=`` only labels the
         # derivation origin for debug logs.
-        origin = (
-            f"BoundStorage({type(request).__name__})" if request is not None else "BoundStorage"
-        )
+        origin = f"BoundStorage({type(request).__name__})" if request is not None else "BoundStorage"
         self._shard_key = _resolve_shard_key(storage, attach_plaintext, origin)
 
     def transaction(self, transaction_opaque_data: bytes) -> TransactionBoundStorage:
@@ -781,31 +775,23 @@ class BoundStorage:
     @_profiled("state_get")
     def state_get(self, ns: "bytes | FrameworkNS", key: bytes) -> bytes | None:
         """Read one key's value (or None)."""
-        result = self._base.state_get_many(
-            self._execution_id, _coerce_ns(ns), [key], shard_key=self._shard_key
-        )
+        result = self._base.state_get_many(self._execution_id, _coerce_ns(ns), [key], shard_key=self._shard_key)
         return result[0]
 
     @_profiled("state_get_many")
     def state_get_many(self, ns: "bytes | FrameworkNS", keys: list[bytes]) -> list[bytes | None]:
         """Batched non-destructive read."""
-        return self._base.state_get_many(
-            self._execution_id, _coerce_ns(ns), keys, shard_key=self._shard_key
-        )
+        return self._base.state_get_many(self._execution_id, _coerce_ns(ns), keys, shard_key=self._shard_key)
 
     @_profiled("state_put")
     def state_put(self, ns: "bytes | FrameworkNS", key: bytes, value: bytes) -> None:
         """Upsert one (key, value)."""
-        self._base.state_put_many(
-            self._execution_id, _coerce_ns(ns), [(key, value)], shard_key=self._shard_key
-        )
+        self._base.state_put_many(self._execution_id, _coerce_ns(ns), [(key, value)], shard_key=self._shard_key)
 
     @_profiled("state_put_many")
     def state_put_many(self, ns: "bytes | FrameworkNS", items: list[tuple[bytes, bytes]]) -> None:
         """Batched atomic upsert."""
-        self._base.state_put_many(
-            self._execution_id, _coerce_ns(ns), items, shard_key=self._shard_key
-        )
+        self._base.state_put_many(self._execution_id, _coerce_ns(ns), items, shard_key=self._shard_key)
 
     @_profiled("state_scan")
     def state_scan(
@@ -824,8 +810,12 @@ class BoundStorage:
         iterable (the cloudflare-do backend streams it in pages).
         """
         return self._base.state_scan(
-            self._execution_id, _coerce_ns(ns),
-            start=start, end=end, reverse=reverse, limit=limit,
+            self._execution_id,
+            _coerce_ns(ns),
+            start=start,
+            end=end,
+            reverse=reverse,
+            limit=limit,
             shard_key=self._shard_key,
         )
 
@@ -836,9 +826,7 @@ class BoundStorage:
         Returns an iterable; consume it fully (beginning to iterate claims the
         whole namespace on the cloudflare-do backend).
         """
-        return self._base.state_drain(
-            self._execution_id, _coerce_ns(ns), shard_key=self._shard_key
-        )
+        return self._base.state_drain(self._execution_id, _coerce_ns(ns), shard_key=self._shard_key)
 
     @_profiled("state_delete")
     def state_delete(
@@ -855,16 +843,18 @@ class BoundStorage:
         ``FunctionStorage.state_delete`` for the full contract.
         """
         return self._base.state_delete(
-            self._execution_id, _coerce_ns(ns), keys,
-            start=start, end=end, shard_key=self._shard_key,
+            self._execution_id,
+            _coerce_ns(ns),
+            keys,
+            start=start,
+            end=end,
+            shard_key=self._shard_key,
         )
 
     @_profiled("execution_clear")
     def execution_clear(self) -> int:
         """Wipe ALL state and log rows for this execution across every namespace."""
-        return self._base.execution_clear(
-            self._execution_id, shard_key=self._shard_key
-        )
+        return self._base.execution_clear(self._execution_id, shard_key=self._shard_key)
 
     @_profiled("state_append")
     def state_append(self, ns: "bytes | FrameworkNS", key: bytes, item: bytes) -> int:
@@ -876,9 +866,7 @@ class BoundStorage:
         record after it returned — produce duplicate rows. See the
         underlying ``FunctionStorage.state_append`` for the full contract.
         """
-        return self._base.state_append(
-            self._execution_id, _coerce_ns(ns), key, item, shard_key=self._shard_key
-        )
+        return self._base.state_append(self._execution_id, _coerce_ns(ns), key, item, shard_key=self._shard_key)
 
     @_profiled("state_log_scan")
     def state_log_scan(
@@ -894,8 +882,12 @@ class BoundStorage:
         See ``FunctionStorage.state_log_scan`` for the full contract.
         """
         return self._base.state_log_scan(
-            self._execution_id, _coerce_ns(ns), key,
-            after_id=after_id, limit=limit, shard_key=self._shard_key,
+            self._execution_id,
+            _coerce_ns(ns),
+            key,
+            after_id=after_id,
+            limit=limit,
+            shard_key=self._shard_key,
         )
 
     # --- Atomic int64 counters (function_counter table) ---
@@ -903,30 +895,22 @@ class BoundStorage:
     @_profiled("state_counter_get")
     def counter_get(self, ns: "bytes | FrameworkNS", key: bytes) -> int:
         """Read the int64 counter (0 if absent)."""
-        return self._base.state_counter_get(
-            self._execution_id, _coerce_ns(ns), key, shard_key=self._shard_key
-        )
+        return self._base.state_counter_get(self._execution_id, _coerce_ns(ns), key, shard_key=self._shard_key)
 
     @_profiled("state_counter_add")
     def counter_add(self, ns: "bytes | FrameworkNS", key: bytes, delta: int) -> int:
         """Atomically add ``delta``; return the new value. See FunctionStorage."""
-        return self._base.state_counter_add(
-            self._execution_id, _coerce_ns(ns), key, delta, shard_key=self._shard_key
-        )
+        return self._base.state_counter_add(self._execution_id, _coerce_ns(ns), key, delta, shard_key=self._shard_key)
 
     @_profiled("state_counter_set")
     def counter_set(self, ns: "bytes | FrameworkNS", key: bytes, value: int) -> None:
         """Overwrite the counter with ``value``."""
-        self._base.state_counter_set(
-            self._execution_id, _coerce_ns(ns), key, value, shard_key=self._shard_key
-        )
+        self._base.state_counter_set(self._execution_id, _coerce_ns(ns), key, value, shard_key=self._shard_key)
 
     @_profiled("state_counter_delete")
     def counter_delete(self, ns: "bytes | FrameworkNS", key: bytes) -> None:
         """Delete the counter (no-op if absent)."""
-        self._base.state_counter_delete(
-            self._execution_id, _coerce_ns(ns), key, shard_key=self._shard_key
-        )
+        self._base.state_counter_delete(self._execution_id, _coerce_ns(ns), key, shard_key=self._shard_key)
 
     @staticmethod
     def pack_int_key(i: int) -> bytes:
@@ -1417,26 +1401,35 @@ class FunctionStorageSqlite:
         """
         sqlite_limit = -1 if limit is None else int(limit)
         rows = conn.execute(
-            sql, (scope_id, ns, key, after_id, sqlite_limit),
+            sql,
+            (scope_id, ns, key, after_id, sqlite_limit),
         ).fetchall()
         return [(int(rid), bytes(v)) for (rid, v) in rows]
 
     # --- Atomic int64 counters (function_counter) ---
     # No idempotency layer: a local single-connection backend has no retries.
 
-    def state_counter_get(
-        self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = ""
-    ) -> int:
+    def state_counter_get(self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = "") -> int:
         """Read the int64 counter; 0 if absent."""
         del shard_key
-        row = self._conn().execute(
-            "SELECT n FROM function_counter WHERE scope_id = ? AND ns = ? AND key = ?",
-            (scope_id, ns, key),
-        ).fetchone()
+        row = (
+            self._conn()
+            .execute(
+                "SELECT n FROM function_counter WHERE scope_id = ? AND ns = ? AND key = ?",
+                (scope_id, ns, key),
+            )
+            .fetchone()
+        )
         return int(row[0]) if row else 0
 
     def state_counter_add(
-        self, scope_id: bytes, ns: bytes, key: bytes, delta: int, *, shard_key: str = "",
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        delta: int,
+        *,
+        shard_key: str = "",
     ) -> int:
         """Atomically add ``delta`` and return the new value (init 0 if absent)."""
         del shard_key
@@ -1454,7 +1447,13 @@ class FunctionStorageSqlite:
         return int(row[0])
 
     def state_counter_set(
-        self, scope_id: bytes, ns: bytes, key: bytes, value: int, *, shard_key: str = "",
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        value: int,
+        *,
+        shard_key: str = "",
     ) -> None:
         """Overwrite the counter with ``value``."""
         del shard_key
@@ -1469,9 +1468,7 @@ class FunctionStorageSqlite:
         )
         conn.commit()
 
-    def state_counter_delete(
-        self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = ""
-    ) -> None:
+    def state_counter_delete(self, scope_id: bytes, ns: bytes, key: bytes, *, shard_key: str = "") -> None:
         """Delete the counter (no-op if absent)."""
         del shard_key
         conn = self._conn()
@@ -1545,14 +1542,24 @@ class ShardedSqliteStorage:
         self._inner.state_put_many(self._p(shard_key, scope_id), ns, items)
 
     def state_scan(
-        self, scope_id: bytes, ns: bytes, *, start: bytes | None = None,
-        end: bytes | None = None, reverse: bool = False, limit: int | None = None,
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        *,
+        start: bytes | None = None,
+        end: bytes | None = None,
+        reverse: bool = False,
+        limit: int | None = None,
         shard_key: str = "",
     ) -> list[tuple[bytes, bytes]]:
         self._dbg("state_scan", shard_key, scope_id)
         return self._inner.state_scan(
-            self._p(shard_key, scope_id), ns,
-            start=start, end=end, reverse=reverse, limit=limit,
+            self._p(shard_key, scope_id),
+            ns,
+            start=start,
+            end=end,
+            reverse=reverse,
+            limit=limit,
         )
 
     def state_drain(self, scope_id: bytes, ns: bytes, *, shard_key: str = "") -> list[tuple[bytes, bytes]]:
@@ -1560,13 +1567,17 @@ class ShardedSqliteStorage:
         return self._inner.state_drain(self._p(shard_key, scope_id), ns)
 
     def state_delete(
-        self, scope_id: bytes, ns: bytes, keys: list[bytes] | None = None, *,
-        start: bytes | None = None, end: bytes | None = None, shard_key: str = "",
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        keys: list[bytes] | None = None,
+        *,
+        start: bytes | None = None,
+        end: bytes | None = None,
+        shard_key: str = "",
     ) -> int:
         self._dbg("state_delete", shard_key, scope_id)
-        return self._inner.state_delete(
-            self._p(shard_key, scope_id), ns, keys, start=start, end=end
-        )
+        return self._inner.state_delete(self._p(shard_key, scope_id), ns, keys, start=start, end=end)
 
     def execution_clear(self, scope_id: bytes, *, shard_key: str = "") -> int:
         self._dbg("execution_clear", shard_key, scope_id)
@@ -1577,8 +1588,14 @@ class ShardedSqliteStorage:
         return self._inner.state_append(self._p(shard_key, scope_id), ns, key, item)
 
     def state_log_scan(
-        self, scope_id: bytes, ns: bytes, key: bytes, *, after_id: int = -1,
-        limit: int | None = None, shard_key: str = "",
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        *,
+        after_id: int = -1,
+        limit: int | None = None,
+        shard_key: str = "",
     ) -> list[tuple[int, bytes]]:
         self._dbg("state_log_scan", shard_key, scope_id)
         return self._inner.state_log_scan(self._p(shard_key, scope_id), ns, key, after_id=after_id, limit=limit)
@@ -1589,13 +1606,25 @@ class ShardedSqliteStorage:
         return self._inner.state_counter_get(self._p(shard_key, scope_id), ns, key)
 
     def state_counter_add(
-        self, scope_id: bytes, ns: bytes, key: bytes, delta: int, *, shard_key: str = "",
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        delta: int,
+        *,
+        shard_key: str = "",
     ) -> int:
         self._dbg("state_counter_add", shard_key, scope_id)
         return self._inner.state_counter_add(self._p(shard_key, scope_id), ns, key, delta)
 
     def state_counter_set(
-        self, scope_id: bytes, ns: bytes, key: bytes, value: int, *, shard_key: str = "",
+        self,
+        scope_id: bytes,
+        ns: bytes,
+        key: bytes,
+        value: int,
+        *,
+        shard_key: str = "",
     ) -> None:
         self._dbg("state_counter_set", shard_key, scope_id)
         self._inner.state_counter_set(self._p(shard_key, scope_id), ns, key, value)

@@ -71,13 +71,15 @@ class _StorageProfiler:
                 for op, e in sorted(ops.items(), key=lambda kv: -kv[1][1])
             }
             _profile_logger.warning(
-                json.dumps({
-                    "msg": "storage_profile",
-                    "shard": shard,
-                    "round_trips": round_trips,
-                    "storage_s": round(storage_s, 2),
-                    "ops": op_summary,
-                })
+                json.dumps(
+                    {
+                        "msg": "storage_profile",
+                        "shard": shard,
+                        "round_trips": round_trips,
+                        "storage_s": round(storage_s, 2),
+                        "ops": op_summary,
+                    }
+                )
             )
 
     def start(self, interval: float = 5.0) -> None:

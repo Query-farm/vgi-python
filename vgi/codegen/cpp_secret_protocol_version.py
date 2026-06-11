@@ -38,8 +38,7 @@ def current_secret_protocol_version() -> str:
     value = vars(VgiSecretProtocol).get("protocol_version")
     if not isinstance(value, str):
         raise TypeError(
-            f"VgiSecretProtocol.protocol_version must be a str declared as a ClassVar; "
-            f"got {type(value).__name__}"
+            f"VgiSecretProtocol.protocol_version must be a str declared as a ClassVar; got {type(value).__name__}"
         )
     return value
 

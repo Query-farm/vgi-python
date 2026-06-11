@@ -53,8 +53,12 @@ jobs:
       - name: Type check (mypy)
         run: uv run mypy vgi/
 
-      - name: Type check (ty)
+      # ty is pre-1.0 and its inference drifts release-to-release; keep it
+      # visible as a signal but don't gate CI on it (mypy is the blocking
+      # type gate).
+      - name: Type check (ty, non-blocking)
         run: uv run ty check vgi/
+        continue-on-error: true
 
   s3-offload-localstack:
     name: S3 Offload Tests (LocalStack)
