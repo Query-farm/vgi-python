@@ -39,7 +39,7 @@ Usage (CLI):
 from typing import TYPE_CHECKING, Any
 
 from vgi.client.catalog_mixin import CatalogClientMixin
-from vgi.client.client import Client, ClientError
+from vgi.client.client import Client, ClientError, ResumableTableScan, ResumeUnsupported
 
 if TYPE_CHECKING:
     from vgi.client.cli import OutputWriter, main
@@ -49,6 +49,8 @@ __all__ = [
     "Client",
     "ClientError",
     "OutputWriter",
+    "ResumableTableScan",
+    "ResumeUnsupported",
     "main",
 ]
 
