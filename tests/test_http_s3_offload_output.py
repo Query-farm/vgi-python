@@ -191,6 +191,7 @@ def test_http_output_offload_random_bytes_large_response(compression: str, expec
         source = output.custom_metadata.get(LOCATION_SOURCE_KEY)
         fetch_ms = output.custom_metadata.get(LOCATION_FETCH_MS_KEY)
         assert isinstance(source, bytes)
-        assert source.startswith(b"https://")
+        # Real S3 presigns https; LocalStack/MinIO presign http://localhost.
+        assert source.startswith((b"https://", b"http://127.0.0.1", b"http://localhost"))
         assert urlparse(source.decode()).path.endswith(expected_extension)
         assert fetch_ms is not None
