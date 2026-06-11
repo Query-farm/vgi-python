@@ -400,6 +400,7 @@ class TestStatisticsFromDuckDB:
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
         conn = duckdb.connect()
+        conn.execute("INSTALL spatial")
         conn.execute("LOAD spatial")
         conn.execute(
             "CREATE TABLE geo AS SELECT ST_Point(x::DOUBLE, y::DOUBLE)::GEOMETRY AS geom "
@@ -419,6 +420,7 @@ class TestStatisticsFromDuckDB:
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
         conn = duckdb.connect()
+        conn.execute("INSTALL spatial")
         conn.execute("LOAD spatial")
         conn.execute("CREATE TABLE geo (geom GEOMETRY)")
         conn.execute("INSERT INTO geo VALUES (NULL), (ST_Point(1.0, 2.0)), (ST_Point(3.0, 4.0))")

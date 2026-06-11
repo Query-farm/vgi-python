@@ -269,6 +269,9 @@ def _build_geo_stats() -> tuple[pa.Schema, dict[str, ColumnStatisticsInput]]:
     import duckdb
 
     conn = duckdb.connect()
+    # INSTALL is a no-op when the extension is already cached; fresh
+    # environments (CI runners) need the download before LOAD.
+    conn.execute("INSTALL spatial")
     conn.execute("LOAD spatial")
     conn.execute(
         "CREATE TABLE geo_points AS "
