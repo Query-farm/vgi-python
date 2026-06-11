@@ -27,11 +27,16 @@ dependencies = [
     "typer>=0.9",
     "platformdirs",
     "vgi-rpc>=0.20.0",
-    "duckdb>=1.5.3",
     "httpx>=0.24",
 ]
 
 [project.optional-dependencies]
+# A DuckDB-compatible engine is needed at runtime only for expression-filter
+# evaluation, the transactor, and the statistics fixtures. It is resolved
+# lazily in vgi/_duckdb.py: haybarn is preferred, stock duckdb is the
+# fallback. Neither is a hard dependency — install one via these extras.
+haybarn = ["haybarn>=1.5.3rc10"]
+duckdb = ["duckdb>=1.5.3"]
 http = ["vgi-rpc[http]"]
 oauth = ["vgi-rpc[oauth]"]
 otel = ["vgi-rpc[otel]"]
@@ -41,6 +46,10 @@ azure = [
     "azure-identity>=1.16.0",
 ]
 test-fixtures = ["numpy>=2.4.1"]
+# Note: actually *running* the transactor requires an engine build with the
+# VGI fork's subcursor() extension (see vgi/transactor/_duckdb_compat.py).
+# That code has not yet been merged into haybarn or upstreamed to duckdb,
+# so for now only local fork builds of duckdb-python provide it.
 transactor = ["sqlglot"]
 # Convenience extra: pulls the companion `vgi-fixtures` distribution, which
 # restores vgi/_test_fixtures + the vgi-fixture-* worker commands for users who
@@ -51,6 +60,7 @@ test-fixtures-writable = [
     "vgi[transactor]",
 ]
 dev = [
+    "duckdb>=1.5.3",
     "mypy",
     "pyarrow-stubs",
     "pytest",

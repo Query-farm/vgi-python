@@ -587,6 +587,28 @@ wheels = [
 ]
 
 [[package]]
+name = "haybarn"
+version = "1.5.3rc10"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e6/f2/4ae464af274a247f3dfb1308a2a5b3f0fee513c2c8fbce7facbb4734f6a4/haybarn-1.5.3rc10.tar.gz", hash = "sha256:12f949bbde433bb7de86d2a56d446b94038c220729660c3c3a40691aa1d19703", size = 18035070, upload-time = "2026-06-09T16:45:41.869Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f7/b5/04b5dc8d3822cb4321bf50e33d73dafad882f3b9324d97045082ed4e2d80/haybarn-1.5.3rc10-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:f52261a01673dc71a5a6aaa74430509ffa4fe031d951ccfeda43890c5b0ea843", size = 14173723, upload-time = "2026-06-09T16:44:38.889Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/26/baecb9ccfecbea46a61f8b2e8c7e43a26d38a10c886b03c32484ae8181c4/haybarn-1.5.3rc10-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9e476c57e3cc1b9072e0ca692e9209a9002da51f31c181fe38bff7732d625e8c", size = 19245368, upload-time = "2026-06-09T16:44:42.845Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/90/d5fa00519b58ecd3a86927a1a6d2bcb9f501aff89498aa424e8f569316dd/haybarn-1.5.3rc10-cp313-cp313-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:db126c2ecaaff59d859ca18361f2279cb7aeda7381303c301be0a9b31075fb5d", size = 21375678, upload-time = "2026-06-09T16:44:46.522Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/50/3d16a96103fb7dc15e76efab853c134659a0f0fc4e4df8ae0323f4efb14c/haybarn-1.5.3rc10-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:4599c62c3a7ed31703cf0733e646242b1677badee3cafc8a9c2f11ce455c4ce0", size = 21363459, upload-time = "2026-06-09T16:44:50.205Z" },
+    { url = "https://files.pythonhosted.org/packages/36/34/7f6455971847ef384955c63d1c8b8f45b665e97f2795d21c16bd89a39bc5/haybarn-1.5.3rc10-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:dadbf0d48b4155bc039d3ce2ab98b8d26897f19d726f9cd0720da769c1e33879", size = 23195050, upload-time = "2026-06-09T16:44:54.264Z" },
+    { url = "https://files.pythonhosted.org/packages/64/51/f1e030567a6d831e26543c6f429c45deb1981254254010a4ebc282496e75/haybarn-1.5.3rc10-cp313-cp313-win_amd64.whl", hash = "sha256:58c66dbcdfb3640693a124c857bd2d82b67bcb85427aedef6c900df801d46ba5", size = 13093702, upload-time = "2026-06-09T16:44:57.577Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/4d/80da830b71dae963b9c4828bdb4d7bdf3b7ce139feb23c21365a9c1bc9eb/haybarn-1.5.3rc10-cp313-cp313-win_arm64.whl", hash = "sha256:8da71d01c89c9fa4b820adc96ea841977b792a3cc88ef77158da214766e53af8", size = 13894789, upload-time = "2026-06-09T16:45:00.459Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/fc/b4859b5bf4cc9575e6d9883dfef4d05f4dbffa155ecb840249c4613b7f4e/haybarn-1.5.3rc10-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:731b4f78ee464b4b52b30a67b565618efb888db9ffbfdf8936fbd775ac107d82", size = 14179192, upload-time = "2026-06-09T16:45:03.584Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/cb/4176d6bb1978f95fe5a89eb4ce5ce4acecd81680e4a76d99eaaf7c5e8e1a/haybarn-1.5.3rc10-cp314-cp314-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:00ca9616e2f6376e108bbee341052b298b2c64b55949bb1950fc91d2c211afea", size = 19246194, upload-time = "2026-06-09T16:45:20.292Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/e8/827fa51f914ecef68c682619c12c0b67c209b3e7c164a26262c0c10a5435/haybarn-1.5.3rc10-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:41e0cbd4f94616d5a9dc8803855863e5eba80d3725b3a76d5bbc94d74d7489b7", size = 21376277, upload-time = "2026-06-09T16:45:24.093Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/63/ec3a02fc3533c36519c5a3e9b1ee619edfbf7f5ce1267253196d204ec2ab/haybarn-1.5.3rc10-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:07473d6668df2c2c549724373b35be192e68bd551a8c48cc09830304090d5eb9", size = 21368533, upload-time = "2026-06-09T16:45:27.902Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/54/96e28a52747f2d1194588c5c626b92ebd6433be81c65338b01fb9994e846/haybarn-1.5.3rc10-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:91f769882491e5a2fd429beea20440c9520ba809be2289319ec4b8c8aec00956", size = 23197328, upload-time = "2026-06-09T16:45:31.88Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/a2/b3d92bcb60975804dd923d2e455761b60842f30dab3323878f64edd29053/haybarn-1.5.3rc10-cp314-cp314-win_amd64.whl", hash = "sha256:9d9582cc5a6e123e38c8e6b44c3a6d0b9b7bd0c7d00a73079746bd2aba7b706b", size = 13617591, upload-time = "2026-06-09T16:45:35.279Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/b3/d06ed65c12f0c937db7c4b52482807c76a9254ccfbb8b1247c5c7c7ab928/haybarn-1.5.3rc10-cp314-cp314-win_arm64.whl", hash = "sha256:eea4d78a7e120e3afad464a7e4d608db7f0cf110537f116c790ca18036a47393", size = 14375206, upload-time = "2026-06-09T16:45:38.387Z" },
+]
+
+[[package]]
 name = "httpcore"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
@@ -1648,7 +1670,6 @@ version = "0.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
-    { name = "duckdb" },
     { name = "httpx" },
     { name = "platformdirs" },
     { name = "pyarrow" },
@@ -1663,6 +1684,7 @@ azure = [
 ]
 dev = [
     { name = "azure-identity" },
+    { name = "duckdb" },
     { name = "mypy" },
     { name = "numpy" },
     { name = "pyarrow-stubs" },
@@ -1676,8 +1698,14 @@ dev = [
     { name = "sqlglot" },
     { name = "vgi-rpc", extra = ["conformance", "external", "http", "oauth", "otel", "sentry"] },
 ]
+duckdb = [
+    { name = "duckdb" },
+]
 fixtures = [
     { name = "vgi-fixtures" },
+]
+haybarn = [
+    { name = "haybarn" },
 ]
 http = [
     { name = "vgi-rpc", extra = ["http"] },
@@ -1714,7 +1742,9 @@ dev = [
 requires-dist = [
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.16.0" },
     { name = "click" },
-    { name = "duckdb", specifier = ">=1.5.3" },
+    { name = "duckdb", marker = "extra == 'dev'", specifier = ">=1.5.3" },
+    { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=1.5.3" },
+    { name = "haybarn", marker = "extra == 'haybarn'", specifier = ">=1.5.3rc10" },
     { name = "httpx", specifier = ">=0.24" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "numpy", marker = "extra == 'test-fixtures'", specifier = ">=2.4.1" },
@@ -1741,7 +1771,7 @@ requires-dist = [
     { name = "vgi-rpc", extras = ["otel"], marker = "extra == 'otel'" },
     { name = "vgi-rpc", extras = ["sentry"], marker = "extra == 'sentry'" },
 ]
-provides-extras = ["http", "oauth", "otel", "sentry", "azure", "test-fixtures", "transactor", "fixtures", "test-fixtures-writable", "dev"]
+provides-extras = ["haybarn", "duckdb", "http", "oauth", "otel", "sentry", "azure", "test-fixtures", "transactor", "fixtures", "test-fixtures-writable", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1756,11 +1786,14 @@ name = "vgi-fixtures"
 version = "0.8.0"
 source = { editable = "packages/vgi-fixtures" }
 dependencies = [
-    { name = "vgi", extra = ["test-fixtures-writable"] },
+    { name = "vgi", extra = ["duckdb", "test-fixtures-writable"] },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "vgi", extras = ["test-fixtures-writable"], editable = "." }]
+requires-dist = [
+    { name = "vgi", extras = ["duckdb"], editable = "." },
+    { name = "vgi", extras = ["test-fixtures-writable"], editable = "." },
+]
 
 [[package]]
 name = "vgi-rpc"

@@ -15,7 +15,10 @@ license = { file = "../../LICENSE" }
 requires-python = ">=3.13"
 # The fixture modules import numpy (test-fixtures) and sqlglot (transactor, used
 # by the writable workers); test-fixtures-writable pulls both transitively.
-dependencies = ["vgi[test-fixtures-writable]"]
+# The fixture worker also builds statistics fixtures at import time, which
+# needs a DuckDB-compatible engine — vgi[duckdb] keeps the default dev env on
+# stock duckdb (the resolver prefers haybarn whenever it is installed too).
+dependencies = ["vgi[test-fixtures-writable]", "vgi[duckdb]"]
 
 [project.scripts]
 vgi-fixture-worker = "vgi._test_fixtures.worker:main"

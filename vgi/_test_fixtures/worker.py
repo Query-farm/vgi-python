@@ -248,9 +248,9 @@ def _build_numbers_stats() -> dict[str, ColumnStatisticsInput]:
     Demonstrates the ``statistics_from_duckdb()`` helper by creating the same
     data in a DuckDB in-memory table and pulling real statistics from it.
     """
-    import duckdb
+    from vgi._duckdb import connect as engine_connect
 
-    conn = duckdb.connect()
+    conn = engine_connect()
     conn.execute("CREATE TABLE numbers AS SELECT unnest(range(100)) AS value")
     stats = statistics_from_duckdb(conn, "numbers")
     conn.close()
@@ -266,9 +266,9 @@ def _build_geo_stats() -> tuple[pa.Schema, dict[str, ColumnStatisticsInput]]:
     Creates a 5x5 grid of points (0,0) to (4,4) with an integer ID.
     Demonstrates geometry statistics via ``statistics_from_duckdb()``.
     """
-    import duckdb
+    from vgi._duckdb import connect as engine_connect
 
-    conn = duckdb.connect()
+    conn = engine_connect()
     # INSTALL is a no-op when the extension is already cached; fresh
     # environments (CI runners) need the download before LOAD.
     conn.execute("INSTALL spatial")
@@ -295,9 +295,9 @@ def _build_enum_stats() -> dict[str, ColumnStatisticsInput]:
     dictionary-encoded min/max to actual string values rather than
     returning dictionary indices.
     """
-    import duckdb
+    from vgi._duckdb import connect as engine_connect
 
-    conn = duckdb.connect()
+    conn = engine_connect()
     conn.execute("CREATE TYPE color AS ENUM ('red', 'green', 'blue')")
     conn.execute(
         "CREATE TABLE colors AS "

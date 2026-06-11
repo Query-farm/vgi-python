@@ -598,9 +598,9 @@ def _get_expression_eval_connection() -> Any:
     if conn is not None:
         return conn
 
-    import duckdb
+    from vgi._duckdb import connect as engine_connect
 
-    conn = duckdb.connect()
+    conn = engine_connect()
     try:
         conn.load_extension("spatial")
     except Exception:
@@ -627,8 +627,9 @@ class ExpressionFilter(Filter):
         """Evaluate expression tree against batch using DuckDB.
 
         Uses a cached per-process DuckDB connection with spatial extension
-        pre-loaded (if available). DuckDB is imported lazily — workers that
-        don't use expression filters don't need it as a dependency.
+        pre-loaded (if available). The engine is imported lazily via
+        :mod:`vgi._duckdb` (haybarn preferred, duckdb fallback) — workers
+        that don't use expression filters don't need either installed.
         """
         conn = _get_expression_eval_connection()
         tbl = conn.from_arrow(batch)  # noqa: F841 (used in SQL below)

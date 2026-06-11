@@ -20,16 +20,19 @@ import os
 import sys
 import threading
 import uuid
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
-import duckdb
 import pyarrow as pa
 from vgi_rpc import AnnotatedBatch, OutputCollector, RpcServer
 from vgi_rpc.rpc import CallContext, ExchangeState, ProducerState, Stream, StreamState, serve_unix
 
+from vgi._duckdb import connect as engine_connect
 from vgi.schema_utils import schema
 from vgi.transactor._duckdb_compat import subcursor
 from vgi.transactor.protocol import TransactorProtocol
+
+if TYPE_CHECKING:
+    import duckdb
 
 logger = logging.getLogger("vgi.transactor")
 
@@ -105,7 +108,7 @@ class TransactorImpl:
     ) -> None:
         """Create a new database for this attach_opaque_data and run initial DDL."""
         db_path = os.path.join(self._db_dir, f"{attach_opaque_data.hex()}.duckdb")
-        conn = duckdb.connect(db_path)
+        conn = engine_connect(db_path)
         with self._lock:
             self._databases[attach_opaque_data] = conn
             self._catalog_names[attach_opaque_data] = catalog_name
