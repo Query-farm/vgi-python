@@ -66,7 +66,10 @@ def run_example_http_server(
             proc.kill()
             proc.wait(timeout=5)
 
-        if proc.returncode not in (0, -15):
+        # POSIX terminate() -> SIGTERM (-15); Windows terminate() is
+        # TerminateProcess(handle, 1), so a cleanly-stopped worker reports 1.
+        ok_codes = (0, 1) if sys.platform == "win32" else (0, -15)
+        if proc.returncode not in ok_codes:
             stderr = proc.stderr.read() if proc.stderr is not None else ""
             raise RuntimeError(f"example HTTP worker exited with code {proc.returncode}: {stderr}")
 
