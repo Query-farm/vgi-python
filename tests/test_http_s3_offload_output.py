@@ -128,6 +128,8 @@ def test_http_output_offload_random_bytes_large_response(compression: str, expec
     from vgi_rpc.metadata import LOCATION_FETCH_MS_KEY, LOCATION_SOURCE_KEY
     from vgi_rpc.rpc import AnnotatedBatch
 
+    from vgi.http.demo_storage import localhost_only_validator
+
     threshold_bytes = 4 * 1024 * 1024
     payload_bytes = threshold_bytes + 1024
     seed = 12345
@@ -151,7 +153,11 @@ def test_http_output_offload_random_bytes_large_response(compression: str, expec
         with http_connect(
             VgiProtocol,  # type: ignore[type-abstract]
             base_url=base_url,
-            external_location=ExternalLocationConfig(),
+            external_location=ExternalLocationConfig(
+                # LocalStack presigns http://127.0.0.1 URLs; the https-only
+                # default validator rejects them.
+                url_validator=localhost_only_validator,
+            ),
         ) as proxy:
             input_schema = pa.schema([("dummy", pa.int64())])
             input_batch = pa.RecordBatch.from_pydict({"dummy": [1]}, schema=input_schema)

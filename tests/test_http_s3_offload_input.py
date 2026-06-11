@@ -127,6 +127,8 @@ def test_http_input_upload_url_then_external_location_scalar_exchange(compressio
     from vgi_rpc.metadata import LOCATION_KEY
     from vgi_rpc.rpc import AnnotatedBatch
 
+    from vgi.http.demo_storage import localhost_only_validator
+
     threshold_bytes = 4 * 1024 * 1024
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
@@ -159,7 +161,11 @@ def test_http_input_upload_url_then_external_location_scalar_exchange(compressio
         with http_connect(
             VgiProtocol,  # type: ignore[type-abstract]
             base_url=base_url,
-            external_location=ExternalLocationConfig(),
+            external_location=ExternalLocationConfig(
+                # LocalStack presigns http://127.0.0.1 URLs; the https-only
+                # default validator rejects them.
+                url_validator=localhost_only_validator,
+            ),
         ) as proxy:
             bind_request = BindRequest(
                 function_name="double",

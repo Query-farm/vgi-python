@@ -242,10 +242,21 @@ def main() -> None:
                 endpoint_url=s3_endpoint_url,
             )
             compression = _make_compression()
+            _s3_kwargs: dict[str, Any] = {}
+            if s3_endpoint_url:
+                from urllib.parse import urlparse as _urlparse
+
+                if _urlparse(s3_endpoint_url).hostname in ("127.0.0.1", "localhost"):
+                    # Local S3 stand-ins (LocalStack/MinIO) presign http://
+                    # URLs that the https-only default validator rejects.
+                    from vgi.http.demo_storage import localhost_only_validator
+
+                    _s3_kwargs["url_validator"] = localhost_only_validator
             external_location = ExternalLocationConfig(
                 storage=storage,
                 externalize_threshold_bytes=externalize_threshold_bytes,
                 compression=compression,
+                **_s3_kwargs,
             )
             upload_url_provider = storage
             sys.stderr.write(
