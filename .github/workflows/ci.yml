@@ -88,28 +88,12 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          # Pin the venv interpreter — an unpinned `uv venv` picks the newest
-          # available CPython, which sdist-only deps may not support yet.
-          uv venv --python 3.13
-          uv pip install \
-            click \
-            pyarrow \
-            typer \
-            platformdirs \
-            numpy \
-            pytest \
-            pytest-mypy \
-            pytest-ruff \
-            mypy \
-            ruff \
-            httpx \
-            backports.zstd \
-            zstandard \
-            boto3 \
-            waitress \
-            aiohttp \
-            tenacity
-          uv pip install -e './vgi-rpc[http,s3,external]'
+          # Project env first (vgi + fixtures + dev tools), then overlay the
+          # local vgi-rpc checkout with the s3/external extras plus boto3.
+          # Subsequent uv run calls must pass --no-sync or uv re-syncs the
+          # env to the lockfile and drops the overlay.
+          uv sync --all-extras --python 3.13
+          uv pip install './vgi-rpc[http,s3,external]' boto3
 
       - name: Create test bucket in LocalStack
         env:
@@ -117,7 +101,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: test
           AWS_DEFAULT_REGION: us-east-1
         run: |
-          uv run python - <<'PY'
+          uv run --no-sync python - <<'PY'
           import time
           import boto3
           from botocore.exceptions import EndpointConnectionError
@@ -152,4 +136,4 @@ jobs:
           VGI_HTTP_S3_BUCKET: rusty-vgi-test
           VGI_HTTP_S3_ENDPOINT_URL: http://127.0.0.1:4566
           PYTHONPATH: ${{ github.workspace }}
-        run: uv run pytest tests/test_http_s3_offload_output.py tests/test_http_s3_offload_input.py -q
+        run: uv run --no-sync pytest tests/test_http_s3_offload_output.py tests/test_http_s3_offload_input.py -q

@@ -71,6 +71,7 @@ import itertools
 import logging
 import os
 import shlex
+import sys
 import subprocess
 import threading
 from collections.abc import Callable, Generator, Iterator
@@ -631,7 +632,7 @@ class Client(CatalogClientMixin):
         """
         if self._pool is not None:
             _logger.debug("borrowing_worker worker_index=%s", worker_index)
-            cmd = shlex.split(self.server_path)
+            cmd = shlex.split(self.server_path, posix=sys.platform != "win32")
             ctx = self._pool.connect(
                 VgiProtocol,  # type: ignore[type-abstract]
                 cmd,

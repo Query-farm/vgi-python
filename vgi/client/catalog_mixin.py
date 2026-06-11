@@ -39,6 +39,7 @@ Error Handling:
 from __future__ import annotations
 
 import shlex
+import sys
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any, Literal, overload
@@ -135,7 +136,7 @@ class CatalogClientMixin:
                 ) as proxy:
                     yield proxy
             else:
-                cmd = shlex.split(self.server_path)
+                cmd = shlex.split(self.server_path, posix=sys.platform != "win32")
                 with _catalog_pool.connect(VgiProtocol, cmd) as proxy:  # type: ignore[type-abstract]
                     yield proxy
         except RpcError as e:
