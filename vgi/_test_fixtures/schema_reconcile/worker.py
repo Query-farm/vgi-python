@@ -28,6 +28,7 @@ from __future__ import annotations
 import os
 import pickle
 import sqlite3
+import sys
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -185,6 +186,11 @@ def _db_path() -> str:
     # because ``uv run`` inserts an intermediate process per worker; PGID
     # propagates across fork/exec by default and stays stable for the
     # life of one test session.
+    if sys.platform == "win32":  # pragma: no cover - PGID is POSIX; PPID is the
+        # closest stable-per-session stand-in.
+        import tempfile
+
+        return os.path.join(tempfile.gettempdir(), f"vgi_schema_reconcile.{os.getppid()}.sqlite")
     return f"/tmp/vgi_schema_reconcile.{os.getpgrp()}.sqlite"
 
 

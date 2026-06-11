@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import os
 import signal
+import sys
 import time
 from dataclasses import dataclass
 from typing import Annotated, Any
@@ -945,7 +946,10 @@ class CrashOnProcessFunction(BufferInputFunction):
         batch: pa.RecordBatch,
         params: TableBufferingParams[SingleTableArguments],
     ) -> bytes:
-        os.kill(os.getpid(), signal.SIGKILL)
+        if sys.platform == "win32":  # pragma: no cover - hard-crash equivalent
+            os.kill(os.getpid(), signal.SIGABRT)
+        else:
+            os.kill(os.getpid(), signal.SIGKILL)
         return params.execution_id  # unreachable
 
 

@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -81,6 +82,9 @@ class TransactorClient:
         """Try to connect to an existing transactor socket."""
         import socket
 
+        if sys.platform == "win32":  # pragma: no cover - AF_UNIX transactor is POSIX-only
+            return False
+
         if not os.path.exists(self._socket_path):
             return False
 
@@ -88,7 +92,7 @@ class TransactorClient:
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.connect(self._socket_path)
             self._transport = UnixTransport(sock)
-            self._connection = RpcConnection(TransactorProtocol, self._transport)  # type: ignore[type-abstract]
+            self._connection = RpcConnection(TransactorProtocol, self._transport)  # type: ignore[type-abstract, unused-ignore]
             self._proxy = self._connection.__enter__()
             logger.info("Connected to transactor: %s", self._socket_path)
             return True

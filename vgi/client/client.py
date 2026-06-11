@@ -71,8 +71,8 @@ import itertools
 import logging
 import os
 import shlex
-import sys
 import subprocess
+import sys
 import threading
 from collections.abc import Callable, Generator, Iterator
 from contextlib import AbstractContextManager
@@ -616,6 +616,9 @@ class Client(CatalogClientMixin):
             base_url=self._base_url or "",
             follow_redirects=True,
             headers=headers,
+            # httpx's 5s default read timeout is too aggressive for RPC
+            # calls that do real server-side work (scans, cold workers).
+            timeout=httpx.Timeout(60.0, connect=10.0),
         )
         self._httpx_client_owned = True
         return self._httpx_client

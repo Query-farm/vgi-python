@@ -83,7 +83,11 @@ def load_worker_class(reference: str) -> type[Worker]:
     module_ref: str = reference
 
     if ":" in reference:
-        module_ref, class_name = reference.rsplit(":", 1)
+        head, tail = reference.rsplit(":", 1)
+        # A lone Windows drive-letter colon ("C:\path\worker.py") is part
+        # of the path, not a module:Class separator.
+        if not (len(head) == 1 and head.isalpha() and tail[:1] in ("\\", "/")):
+            module_ref, class_name = head, tail
 
     # Load the module
     module = _load_module(module_ref)
