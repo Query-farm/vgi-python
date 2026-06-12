@@ -1609,16 +1609,17 @@ def main() -> None:
     """Run the fixture worker process.
 
     Always serves the base ExampleWorker catalog plus the
-    ``projection_repro`` and ``schema_reconcile`` reproducer catalogs
-    (all depend on the ``vgi[test-fixtures]`` extra). Adds the writable
-    catalog when the ``vgi[test-fixtures-writable]`` extra is also
-    installed.
+    ``projection_repro``, ``schema_reconcile``, and ``accumulate``
+    fixture catalogs (all depend on the ``vgi[test-fixtures]`` extra).
+    Adds the writable catalog when the ``vgi[test-fixtures-writable]``
+    extra is also installed.
     """
+    from vgi._test_fixtures.accumulate.worker import AccumulateWorker
     from vgi._test_fixtures.projection_repro.worker import ProjReproWorker
     from vgi._test_fixtures.schema_reconcile.worker import SchemaReconcileWorker
     from vgi.meta_worker import MetaWorker
 
-    workers: list[type] = [ExampleWorker, ProjReproWorker, SchemaReconcileWorker]
+    workers: list[type] = [ExampleWorker, ProjReproWorker, SchemaReconcileWorker, AccumulateWorker]
     try:
         from vgi._test_fixtures.writable.worker import WritableWorker
     except ImportError:

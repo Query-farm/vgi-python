@@ -21,6 +21,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from vgi._test_fixtures.accumulate.worker import AccumulateWorker
 from vgi._test_fixtures.projection_repro.worker import ProjReproWorker
 from vgi._test_fixtures.schema_reconcile.worker import SchemaReconcileWorker
 from vgi._test_fixtures.worker import ExampleWorker
@@ -305,10 +306,10 @@ def main() -> None:
         from vgi.worker import _get_vgi_version
 
         # Match vgi-fixture-worker (subprocess transport): always serve the
-        # base ExampleWorker plus the projection_repro and schema_reconcile
-        # reproducer catalogs. Add the writable catalog when its extra is
-        # installed.
-        worker_classes: list[type] = [ExampleWorker, ProjReproWorker, SchemaReconcileWorker]
+        # base ExampleWorker plus the projection_repro, schema_reconcile,
+        # and accumulate fixture catalogs. Add the writable catalog when its
+        # extra is installed.
+        worker_classes: list[type] = [ExampleWorker, ProjReproWorker, SchemaReconcileWorker, AccumulateWorker]
         try:
             from vgi._test_fixtures.writable.worker import WritableWorker
         except ImportError:
