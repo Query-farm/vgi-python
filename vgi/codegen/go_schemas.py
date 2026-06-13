@@ -170,8 +170,7 @@ def emit(out: TextIO) -> None:
     schemas = collect_schemas()
 
     body = io.StringIO()
-    body.write("// © Copyright 2025-2026, Query.Farm LLC - https://query.farm\n")
-    body.write("// SPDX-License-Identifier: Apache-2.0\n")
+    body.write("// Copyright 2025, 2026 Query Farm LLC - https://query.farm\n")
     body.write("\n")
     body.write("package generated\n")
     body.write("\n")
