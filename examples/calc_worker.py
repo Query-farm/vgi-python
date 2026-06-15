@@ -29,6 +29,7 @@ from vgi.table_function import (
 )
 
 
+# --8<-- [start:scalar]
 class Double(ScalarFunction):
     """Double each input value (one row in, one row out)."""
 
@@ -41,6 +42,10 @@ class Double(ScalarFunction):
         return pc.multiply(value, 2)
 
 
+# --8<-- [end:scalar]
+
+
+# --8<-- [start:table]
 @dataclass(slots=True, frozen=True, kw_only=True)
 class SeriesArgs:
     """Arguments for :class:`Series` (one positional ``count``)."""
@@ -65,6 +70,9 @@ class Series(TableFunctionGenerator[SeriesArgs]):
         """Emit all rows at once, then signal completion."""
         out.emit(pa.RecordBatch.from_pydict({"n": list(range(params.args.count))}, schema=params.output_schema))
         out.finish()
+
+
+# --8<-- [end:table]
 
 
 class CalcWorker(Worker):

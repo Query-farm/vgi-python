@@ -18,15 +18,21 @@ Built by [🚜 Query.Farm](https://query.farm).
 
 ## See it in action
 
-A complete worker — a scalar function and a table function — in one file:
+A **scalar** function — one row in, one row out:
 
 ```python
---8<-- "examples/calc_worker.py"
+--8<-- "examples/calc_worker.py:scalar"
 ```
 
-The `# /// script` block is [inline script metadata](https://packaging.python.org/en/latest/specifications/inline-script-metadata/):
-`uv run calc_worker.py` provisions an isolated environment with `vgi-python` and runs the worker —
-no virtualenv to create.
+A **table** function — generate rows from an argument:
+
+```python
+--8<-- "examples/calc_worker.py:table"
+```
+
+Drop both into a `Worker`, add an [inline-script-metadata](https://packaging.python.org/en/latest/specifications/inline-script-metadata/)
+header, and `uv run` it — no virtualenv, nothing to `pip install`. (The
+[tutorial](tutorial/index.md) builds the complete file step by step.)
 
 ```sql
 INSTALL vgi FROM community;
