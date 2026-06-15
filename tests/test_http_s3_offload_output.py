@@ -23,7 +23,7 @@ from vgi.protocol import BindRequest, InitRequest, VgiProtocol
 RUN_S3_HTTP_TESTS_ENV = "VGI_RUN_S3_HTTP_TESTS"
 S3_BUCKET_ENV = "VGI_HTTP_S3_BUCKET"
 S3_ENDPOINT_ENV = "VGI_HTTP_S3_ENDPOINT_URL"
-DEFAULT_S3_BUCKET = "rusty-vgi-test"
+DEFAULT_S3_BUCKET = "vgi-offload-test"
 
 
 def _free_port() -> int:

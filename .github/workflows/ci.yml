@@ -7,6 +7,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Least-privilege default for all jobs — none need write access. (The release
+# workflow grants id-token: write per-job for OIDC publishing; CI needs read.)
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
@@ -18,10 +23,10 @@ jobs:
         python-version: ["3.13", "3.14"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v8
 
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
@@ -36,10 +41,10 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v8
 
       - name: Install dependencies
         run: uv sync --all-extras
@@ -72,16 +77,16 @@ jobs:
           SERVICES: s3
           AWS_DEFAULT_REGION: us-east-1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Checkout vgi-rpc
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: Query-farm/vgi-rpc-python
           path: vgi-rpc
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v8
 
       - name: Set up Python 3.13
         run: uv python install 3.13
@@ -124,7 +129,7 @@ jobs:
           else:
               raise RuntimeError("LocalStack S3 did not become ready in time")
 
-          s3.create_bucket(Bucket="rusty-vgi-test")
+          s3.create_bucket(Bucket="vgi-offload-test")
           PY
 
       - name: Run HTTP S3 offload tests
@@ -133,7 +138,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: test
           AWS_DEFAULT_REGION: us-east-1
           VGI_RUN_S3_HTTP_TESTS: "1"
-          VGI_HTTP_S3_BUCKET: rusty-vgi-test
+          VGI_HTTP_S3_BUCKET: vgi-offload-test
           VGI_HTTP_S3_ENDPOINT_URL: http://127.0.0.1:4566
           PYTHONPATH: ${{ github.workspace }}
         run: uv run --no-sync pytest tests/test_http_s3_offload_output.py tests/test_http_s3_offload_input.py -q
