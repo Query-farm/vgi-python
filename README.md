@@ -32,9 +32,11 @@ class Greeting(ScalarFunction):
         cls,
         name: Annotated[pa.StringArray, Param(doc="Column containing names")],
     ) -> Annotated[pa.StringArray, Returns()]:
-        return pc.binary_join_element_wise("Hello, ", name, "!")
+        # The final argument to binary_join_element_wise is the separator.
+        return pc.binary_join_element_wise("Hello, ", name, "!", "")
 
 class MyWorker(Worker):
+    catalog_name = "my_worker"
     functions = [Greeting]
 
 if __name__ == "__main__":
@@ -43,34 +45,56 @@ if __name__ == "__main__":
 
 ```sql
 -- First time only.
-INSTALL vgi FROM COMMUNITY;
+INSTALL vgi FROM community;
 LOAD vgi;
-ATTACH 'my_worker' (TYPE 'vgi', LOCATION './my_worker.py');
+ATTACH 'my_worker' (TYPE vgi, LOCATION './my_worker.py');
 
-SELECT greeting(name) FROM users;
+SELECT my_worker.greeting(name) FROM users;
 -- "Hello, Alice!"
 -- "Hello, Bob!"
 ```
 
-Or you can launch the DuckDB CLI with
+Or you can launch the [Haybarn](https://github.com/Query-farm-haybarn/haybarn)
+CLI and attach the worker in one step:
 
-`duckdb vgi:my_worker.py` to start a new session with the functions you just added.
+```bash
+uvx haybarn-cli "vgi:my_worker?location=./my_worker.py"
+```
 
-That's it. No C++ compilation, no extension versioning, no complex build process. Just a Python script that DuckDB can call.
+This starts a new session with the functions you just added (the catalog is
+named after the worker file — `my_worker` here).
+
+That's it. No C++ compilation, no extension versioning, no complex build process. Just a Python script that Haybarn (or DuckDB) can call.
 
 ---
 
 ## Installation
 
+Install the Python package that hosts your worker functions. It is published on
+PyPI as `vgi-python` (the `vgi` name was taken), but you still `import vgi` in
+code:
+
 ```bash
-pip install vgi
+pip install vgi-python
 ```
 
 Or with [uv](https://github.com/astral-sh/uv):
 
 ```bash
-uv add vgi
+uv add vgi-python
 ```
+
+You also need a DuckDB-compatible SQL engine to load the `vgi` extension and
+call your functions. These examples use [Haybarn](https://github.com/Query-farm-haybarn/haybarn),
+Query Farm's DuckDB distribution, which ships the `vgi` extension signed for its
+own catalog and runs with no install via `uvx`:
+
+```bash
+uvx haybarn-cli              # start an interactive SQL session
+```
+
+Stock `duckdb` works too — `INSTALL vgi FROM community; LOAD vgi;` resolves the
+extension from the DuckDB community repository instead.
 
 ---
 
@@ -131,24 +155,24 @@ if __name__ == "__main__":
     MyWorker().run()
 ```
 
-### Step 2: Use from DuckDB
+### Step 2: Use from SQL
 
 ```sql
--- Attach the worker as a catalog
-ATTACH 'my_funcs' (TYPE 'vgi', LOCATION './my_worker.py');
+-- Attach the worker as a catalog (its catalog_name is "my_funcs")
+ATTACH 'my_funcs' (TYPE vgi, LOCATION './my_worker.py');
 
--- Call your function
-SELECT upper_case(name) FROM users;
+-- Call your function (qualify with the catalog name, or run `USE my_funcs;` first)
+SELECT my_funcs.upper_case(name) FROM users;
 
 -- Use in complex queries
-SELECT id, upper_case(status) as status
+SELECT id, my_funcs.upper_case(status) as status
 FROM orders
 WHERE created_at > '2024-01-01';
 ```
 
 ### Step 3: There is no step 3
 
-Your function is now available in DuckDB. Ship the Python script to your team, and they can use it immediately.
+Your function is now available in any DuckDB-compatible engine. Ship the Python script to your team, and they can use it immediately.
 
 ---
 
@@ -299,7 +323,7 @@ VGI workers can expose more than just functions. A worker can provide a complete
 - **Functions** - Scalar, table, and table-in-out functions
 
 ```sql
-ATTACH 'external_db' (TYPE 'vgi', LOCATION './my_catalog_worker.py');
+ATTACH 'external_db' (TYPE vgi, LOCATION './my_catalog_worker.py');
 
 -- Query tables from the attached catalog
 SELECT * FROM external_db.main.users;
@@ -501,7 +525,7 @@ uv run mypy vgi/            # Type check
 
 - Python >= 3.12.4
 - pyarrow
-- DuckDB (for SQL integration)
+- A DuckDB-compatible engine for SQL integration — [Haybarn](https://github.com/Query-farm-haybarn/haybarn) (`uvx haybarn-cli`) or stock DuckDB
 
 ---
 

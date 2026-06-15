@@ -1125,6 +1125,59 @@ class TestSchemaDescriptor:
         assert info.estimated_object_count["table_function"] == 1
 
 
+class TestLegacyFunctionsListSchemaInfo:
+    """Regression tests for the legacy ``functions=[...]`` (no ``Catalog``) path.
+
+    A worker that sets ``catalog_name`` + ``functions`` (instead of a declarative
+    ``Catalog``) gets an auto-built ``ReadOnlyCatalogInterface`` whose synthesized
+    ``main`` schema must still report accurate ``estimated_object_count`` —
+    otherwise the C++ extension reads the ``0`` count as "no functions" and never
+    enumerates them, hiding every legacy function from ``ATTACH``.
+    """
+
+    def _interface(self) -> ReadOnlyCatalogInterface:
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+        from vgi.scalar_function import ScalarFunction
+
+        class _Greeting(ScalarFunction):
+            class Meta:
+                name = "greeting"
+
+            @classmethod
+            def compute(
+                cls, name: Annotated[pa.StringArray, Param(doc="names")]
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return pa.compute.utf8_upper(name)
+
+        class _LegacyCatalog(ReadOnlyCatalogInterface):
+            catalog_name = "my_worker"
+            functions = [_Greeting, UsersFunction]  # 1 scalar + 1 table
+
+        return _LegacyCatalog()
+
+    def test_schemas_reports_function_counts(self) -> None:
+        """The synthesized main schema counts its legacy functions."""
+        ci = self._interface()
+        schemas = ci.schemas(attach_opaque_data=AttachOpaqueData(b"x"), transaction_opaque_data=None)
+        assert len(schemas) == 1
+        counts = schemas[0].estimated_object_count
+        assert counts["scalar_function"] == 1
+        assert counts["table_function"] == 1
+
+    def test_schema_contents_returns_legacy_scalar(self) -> None:
+        """The scalar function is still enumerable via schema_contents."""
+        ci = self._interface()
+        contents = ci.schema_contents(
+            attach_opaque_data=AttachOpaqueData(b"x"),
+            transaction_opaque_data=None,
+            name="main",
+            type=SchemaObjectType.SCALAR_FUNCTION,
+        )
+        assert [c.name for c in contents] == ["greeting"]
+
+
 # =============================================================================
 # Catalog Descriptor Tests
 # =============================================================================

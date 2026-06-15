@@ -2155,8 +2155,13 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                 for index in schema.indexes:
                     _register_index(schema_key, index)
         else:
-            # Backward compat: create "main" schema from legacy `functions` list
-            main_schema = Schema(name="main", tables=(), views=(), functions=())
+            # Backward compat: create "main" schema from legacy `functions` list.
+            # The schema must carry the functions so its SchemaInfo reports
+            # accurate estimated_object_count — the C++ extension treats a
+            # zero count as a hard "no objects of this type" guarantee and
+            # skips the enumeration RPC entirely, so an empty schema here
+            # silently hides every legacy function from ATTACH.
+            main_schema = Schema(name="main", tables=(), views=(), functions=tuple(self.functions))
             self._schema_registry["main"] = main_schema
 
             for func_cls in self.functions:
