@@ -1,7 +1,7 @@
 # VGI (Vector Gateway Interface)
 
 <p align="center">
-  <img src="docs/vgi-logo.png" alt="VGI Logo" width="400">
+  <img src="docs/vgi-logo.png" alt="VGI Logo" width="480">
 </p>
 
 <p align="center">
