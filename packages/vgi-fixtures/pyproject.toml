@@ -11,8 +11,24 @@ name = "vgi-fixtures"
 version = "0.8.0"
 description = "Example/test VGI worker modules and entry points (not for production use)"
 readme = "README.md"
-license = { file = "../../LICENSE" }
+# Local copy of the repo-root LICENSE (kept in sync): the build can't reach
+# ../../LICENSE to ship it into the wheel's dist-info/licenses/.
+license = { file = "LICENSE" }
 requires-python = ">=3.13"
+classifiers = [
+    "License :: Other/Proprietary License",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Database",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
+]
 # The fixture modules import numpy (test-fixtures) and sqlglot (transactor, used
 # by the writable workers); test-fixtures-writable pulls both transitively.
 # The fixture worker also builds statistics fixtures at import time, which
