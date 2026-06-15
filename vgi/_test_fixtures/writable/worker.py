@@ -1138,7 +1138,7 @@ def main() -> None:
 
         _sys.exit(
             "vgi-fixture-writable-worker requires the test-fixtures-writable extra. "
-            "Install with: pip install 'vgi[test-fixtures-writable]'"
+            "Install with: pip install 'vgi-python[test-fixtures-writable]'"
         )
 
     WritableWorker.main()

@@ -715,7 +715,7 @@ def main() -> None:
     except ImportError:
         import sys as _sys
 
-        _sys.exit("vgi-transactor requires the transactor extra. Install with: pip install 'vgi[transactor]'")
+        _sys.exit("vgi-transactor requires the transactor extra. Install with: pip install 'vgi-python[transactor]'")
 
     parser = argparse.ArgumentParser(description="VGI db-transactor server")
     parser.add_argument("--db-dir", required=True, help="Directory for DuckDB database files")

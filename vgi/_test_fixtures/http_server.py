@@ -10,7 +10,7 @@ Usage::
     vgi-fixture-http --s3-bucket rusty-vgi-test
     vgi-fixture-http --demo-storage
 
-Requires the ``http`` extra: ``pip install vgi[http]``
+Requires the ``http`` extra: ``pip install vgi-python[http]``
 For S3 offload support, also install: ``pip install vgi-rpc[s3]``
 """
 
@@ -194,7 +194,7 @@ def main() -> None:
         except ImportError:
             sys.stderr.write(
                 "Error: HTTP dependencies not installed.\n"
-                "Install with: pip install vgi[http]  (or: uv sync --extra http)\n"
+                "Install with: pip install vgi-python[http]  (or: uv sync --extra http)\n"
             )
             sys.exit(1)
 
@@ -202,7 +202,8 @@ def main() -> None:
             import waitress  # type: ignore[import-untyped]
         except ImportError:
             sys.stderr.write(
-                "Error: waitress not installed.\nInstall with: pip install vgi[http]  (or: uv sync --extra http)\n"
+                "Error: waitress not installed.\n"
+                "Install with: pip install vgi-python[http]  (or: uv sync --extra http)\n"
             )
             sys.exit(1)
 

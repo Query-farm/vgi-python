@@ -97,10 +97,14 @@ build-backend = "hatchling.build"
 # name them explicitly so hatchling's name-based heuristic doesn't look for
 # a (nonexistent) `vgi_python/` directory.
 packages = ["vgi"]
-# vgi/_test_fixtures is shipped by the separate `vgi-fixtures` companion wheel
-# (see packages/vgi-fixtures), not the public `vgi-python` wheel. Install it on
-# demand via `pip install vgi-python[fixtures]` or `pip install vgi-fixtures`.
-exclude = ["vgi/codegen", "vgi/_test_fixtures"]
+# TEMPORARY: vgi/_test_fixtures is folded INTO this wheel while the separate
+# `vgi-fixtures` PyPI project is unavailable. It stays import-only — core vgi
+# never imports it, and its numpy/sqlglot deps remain behind the
+# `test-fixtures`/`transactor` extras, so a plain `pip install vgi-python`
+# is unaffected. To split it back out into the vgi-fixtures companion wheel,
+# re-add "vgi/_test_fixtures" to the exclude list below and publish
+# vgi-fixtures (see packages/vgi-fixtures).
+exclude = ["vgi/codegen"]
 
 [tool.hatch.build.targets.sdist]
 exclude = []

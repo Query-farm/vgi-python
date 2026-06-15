@@ -30,10 +30,7 @@ try:
 except ImportError:
     import sys as _sys
 
-    _sys.exit(
-        "vgi-fixture-worker requires numpy. Install the fixtures distribution with: "
-        "pip install vgi-fixtures (or pip install 'vgi[fixtures]')"
-    )
+    _sys.exit("vgi-fixture-worker requires numpy. Install it with: pip install 'vgi-python[test-fixtures]'")
 
 import uuid
 from typing import Annotated, Any
