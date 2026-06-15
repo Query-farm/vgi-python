@@ -4,7 +4,7 @@ description: "Build your first VGI worker — a scalar then a table function cal
 
 # Tutorial: build your first worker
 
-**What this is:** a two-step path from an empty file to custom functions callable from SQL.
+**What this is:** a two-step path from an empty file to custom functions callable from SQL.<br>
 **Who it's for:** anyone who wants to extend DuckDB with Python — no prior VGI knowledge assumed.
 Budget about **20 minutes** total.
 

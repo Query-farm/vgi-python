@@ -5,9 +5,9 @@ description: "How to expose a VGI worker as a DuckDB catalog: schemas, function 
 # Expose a catalog
 
 **What this is:** how a worker presents itself to DuckDB as a catalog — a named namespace of
-schemas, functions, tables, and views you reach with `ATTACH`. **Who it's for:** developers who've
-finished the [tutorial](../tutorial/index.md) and want to understand how their functions get
-qualified names, or who want to expose data (not just functions).
+schemas, functions, tables, and views you reach with `ATTACH`.<br>
+**Who it's for:** developers who've finished the [tutorial](../tutorial/index.md) and want to
+understand how their functions get qualified names, or who want to expose data (not just functions).
 
 ## Prerequisites
 

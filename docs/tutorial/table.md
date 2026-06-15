@@ -5,7 +5,8 @@ description: "Tutorial step 2: add a table function that generates rows, callabl
 # 2. Add a table function
 
 **What this is:** the second tutorial step — extend your worker with a **table** function that
-generates rows. **Who it's for:** anyone who's finished
+generates rows.<br>
+**Who it's for:** anyone who's finished
 [step 1](scalar.md). About **10 minutes**.
 
 A table function produces rows from its arguments (no input table):

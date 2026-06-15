@@ -5,7 +5,8 @@ description: "How VGI works: the worker process model, transports, the Apache Ar
 # Concepts
 
 **What this is:** the mental model behind VGI — enough to design workers correctly and debug them
-confidently. **Who it's for:** developers who want the "why," not just the "how." None of this is
+confidently.<br>
+**Who it's for:** developers who want the "why," not just the "how." None of this is
 required to ship your first worker; do the [tutorial](../tutorial/index.md) for that.
 
 ## The worker process model

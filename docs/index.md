@@ -14,7 +14,9 @@ Write a function, `uv run` the script, query it from SQL. Other languages work t
   <img src="assets/logo.png" alt="VGI logo" width="360">
 </p>
 
+<p align="center" markdown>
 Built by [🚜 Query.Farm](https://query.farm).
+</p>
 
 ## See it in action
 
@@ -85,13 +87,13 @@ custom ETL transforms, expose external data sources as queryable tables and view
 
 ## Function patterns
 
-| Type | Base class | SQL pattern | Use case |
+| Shape | Type | Base class | Use case |
 |---|---|---|---|
-| **Scalar** | `ScalarFunction` | `SELECT func(col) FROM t` | Per-row transforms (1:1) |
-| **Table** | `TableFunctionGenerator` | `SELECT * FROM func(args)` | Generate data |
-| **Table-in-out** | `TableInOutFunction` | `SELECT * FROM func((SELECT ...))` | Streaming transforms, filtering |
-| **Aggregate** | `AggregateFunction` | `SELECT func(col) ... GROUP BY` | Grouped accumulation |
-| **Buffering** | `TableBufferingFunction` | `SELECT * FROM func((SELECT ...))` | Sees every row first (sort, top-k) |
+| ![scalar shape](assets/kinds/scalar.svg){ height="32" } | **Scalar** | `ScalarFunction` | Per-row transforms (1:1) |
+| ![table shape](assets/kinds/table.svg){ height="32" } | **Table** | `TableFunctionGenerator` | Generate data |
+| ![table-in-out shape](assets/kinds/table-in-out.svg){ height="32" } | **Table-in-out** | `TableInOutFunction` | Streaming transforms, filtering |
+| ![aggregate shape](assets/kinds/aggregate.svg){ height="32" } | **Aggregate** | `AggregateFunction` | Grouped accumulation |
+| ![buffering shape](assets/kinds/buffering.svg){ height="32" } | **Buffering** | `TableBufferingFunction` | Sees every row first (sort, top-k) |
 
 See the [API Reference](api/index.md) for the full surface, or jump into the guides below.
 

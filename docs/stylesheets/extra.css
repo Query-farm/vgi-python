@@ -234,13 +234,11 @@
   transform: scale(1.05);
 }
 
-/* Header logo — bigger than default, clipped to circle */
+/* Header logo — slightly bigger than default, full logo at its natural aspect ratio */
 .md-header__button.md-logo img,
 .md-nav__button.md-logo img {
-  height: 3rem;
-  width: 3rem;
-  border-radius: 50%;
-  object-fit: cover;
+  height: 1.8rem;
+  width: auto;
 }
 
 /* ── D2 diagrams — constrain size and center ── */

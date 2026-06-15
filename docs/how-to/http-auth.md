@@ -5,8 +5,9 @@ description: "How to serve a VGI worker over HTTP and authenticate callers with 
 # Serve over HTTP with authentication
 
 **What this is:** how to run a worker over **HTTP** instead of a subprocess, and gate it with
-authentication. **Who it's for:** developers deploying a worker as a network service. **Requires:**
-`pip install vgi-python[http]` (and `[oauth]` for JWT).
+authentication.<br>
+**Who it's for:** developers deploying a worker as a network service.<br>
+**Requires:** `pip install vgi-python[http]` (and `[oauth]` for JWT).
 
 ## Prerequisites
 
@@ -26,7 +27,8 @@ DuckDB still attaches the worker over HTTP the usual way (`ATTACH ... (TYPE vgi,
 rather than from SQL — for tests, scripts, or another service. It connects with `transport="http"`
 instead of spawning a subprocess, and exposes the same call methods:
 
-```python test="skip"
+```python
+# illustrative — calling the worker from Python over HTTP
 from vgi.client import Client
 
 with Client(transport="http", base_url="http://localhost:8080", bearer_token="token1") as client:
@@ -47,7 +49,8 @@ Unauthenticated requests get HTTP 401. Authenticated requests carry the principa
 signature and the framework injects a per-call `CallContext` (auth, logging, transport info) — you
 don't pass it from SQL.
 
-```python test="skip"
+```python
+# illustrative — reading the injected ctx in a function
 class Secret(ScalarFunction):
     @classmethod
     def compute(cls, value, *, ctx) -> ...:

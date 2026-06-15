@@ -5,7 +5,7 @@ description: "How to integrate VGI table functions with DuckDB's optimizer: acce
 # Integrate with the optimizer
 
 **What this is:** how to make table functions cooperate with DuckDB's query optimizer — receiving
-pushed-down `WHERE` predicates and reporting column statistics so the planner can skip work.
+pushed-down `WHERE` predicates and reporting column statistics so the planner can skip work.<br>
 **Who it's for:** developers whose table functions back real data sources and want less data moved.
 
 ## Prerequisites
@@ -21,7 +21,8 @@ framework deserializes the predicates for you and exposes them on `params.curren
 as a `PushdownFilters` tree (or `None` when no filter applies), refreshed before each `process`
 call:
 
-```python test="skip"
+```python
+# illustrative — sketch using your own types
 class Events(TableFunctionGenerator[EventsArgs]):
     class Meta:
         filter_pushdown = True      # opt in to receiving WHERE predicates
@@ -29,7 +30,7 @@ class Events(TableFunctionGenerator[EventsArgs]):
     @classmethod
     def process(cls, params, state, out):
         filters = params.current_pushdown_filters   # PushdownFilters tree, or None
-        # apply `filters` while generating rows, then out.emit(...) / out.finish()
+        # apply the filters while generating rows, then out.emit(...) / out.finish()
 ```
 
 `PushdownFilters` is already decoded — you don't call `deserialize_filters` yourself (that helper is
@@ -43,7 +44,8 @@ When a table reports per-column min/max, null, and distinct-count statistics, Du
 can eliminate scans and order joins better. The declarative path is a `statistics` entry on the
 `Table` descriptor:
 
-```python test="skip"
+```python
+# illustrative — `schema` and the table stand in for your own catalog
 from vgi.catalog import Table
 from vgi.catalog.descriptors import ColumnStatisticsInput
 

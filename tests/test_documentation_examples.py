@@ -111,9 +111,17 @@ def _should_skip(example: CodeExample) -> bool:
     if settings.get("test") == "skip":
         return True
 
+    source = example.source
+
+    # Render-safe skip sentinel. pymdownx.superfences mishandles the
+    # ``test="skip"`` info string (it leaks the fence delimiters into the page),
+    # so illustrative sketches use a plain ```python fence plus a leading
+    # ``# illustrative`` comment to opt out of linting/execution here.
+    if "# illustrative" in source:
+        return True
+
     # Skip examples with intentionally invalid syntax
     # These are partial snippets that can't even be linted
-    source = example.source
     invalid_syntax_markers = [
         '"settings": (',  # Dict entry without dict context
         "attach_opaque_data=...,",  # Placeholder arguments with trailing comma

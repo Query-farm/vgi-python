@@ -5,7 +5,8 @@ description: "How to give VGI functions shared, persistent state across worker p
 # Persist state across workers
 
 **What this is:** how functions that span **multiple worker processes** (notably distributed
-aggregates) share and persist state. **Who it's for:** developers building aggregates or any
+aggregates) share and persist state.<br>
+**Who it's for:** developers building aggregates or any
 function that coordinates partial results across workers.
 
 ## Prerequisites

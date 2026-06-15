@@ -5,7 +5,8 @@ description: "How to write each of the four VGI function patterns: scalar, table
 # Function patterns
 
 **What this is:** a recipe showing each of the five VGI function patterns, with a complete,
-runnable worker for each. **Who it's for:** developers who've finished the
+runnable worker for each.<br>
+**Who it's for:** developers who've finished the
 [tutorial](../tutorial/index.md) and want to know which pattern fits their problem.
 
 ## Prerequisites

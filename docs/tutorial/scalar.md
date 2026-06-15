@@ -5,7 +5,8 @@ description: "Tutorial step 1: build and run a scalar VGI function callable from
 # 1. Your first scalar function
 
 **What this is:** the first tutorial step — build a worker with one **scalar** function and call
-it from SQL. **Who it's for:** first-time VGI users who've met the
+it from SQL.<br>
+**Who it's for:** first-time VGI users who've met the
 [prerequisites](index.md#prerequisites). About **10 minutes**.
 
 A scalar function maps one row to one row: `double(21)` → `42`.

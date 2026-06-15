@@ -4,9 +4,9 @@ description: "Task-oriented recipes for building VGI workers: function patterns,
 
 # How-to guides
 
-**What this is:** focused, task-oriented recipes for getting a specific thing done. **Who it's
-for:** developers who've finished the [tutorial](../tutorial/index.md) and want to build something
-real. Each guide assumes you can already write and run a basic worker.
+**What this is:** focused, task-oriented recipes for getting a specific thing done.<br>
+**Who it's for:** developers who've finished the [tutorial](../tutorial/index.md) and want to build
+something real. Each guide assumes you can already write and run a basic worker.
 
 ## Recipes
 
