@@ -259,8 +259,10 @@ class TestWorkerStderrCapture:
 
         while elapsed < timeout:
             stderr_output = client.get_worker_stderr()
-            # Check if we have the expected content
-            if "Debug: worker starting" in stderr_output:
+            # Poll for the LAST line written — the drain thread reads stderr
+            # line-by-line, so seeing the first line doesn't guarantee the
+            # second has been captured yet (a race that surfaced on Windows).
+            if "Error: something went wrong" in stderr_output:
                 break
             time.sleep(poll_interval)
             elapsed += poll_interval
