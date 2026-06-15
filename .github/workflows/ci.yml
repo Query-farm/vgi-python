@@ -65,6 +65,50 @@ jobs:
         run: uv run ty check vgi/
         continue-on-error: true
 
+  docs:
+    name: Docs (build + examples + prose)
+    runs-on: ubuntu-latest
+    env:
+      DISABLE_MKDOCS_2_WARNING: "true"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --all-extras --group docs
+
+      - name: Install d2
+        run: curl -fsSL https://d2lang.com/install.sh | sh -s --
+
+      - name: Build docs (strict)
+        run: uv run mkdocs build --strict
+
+      - name: Test documentation examples
+        run: uv run pytest tests/test_documentation_examples.py tests/test_examples_workers.py -q
+
+      # Prose lint. Runs on every PR as a signal. Kept non-blocking for now:
+      # the Google package + spelling check needs a vocabulary-tuning pass
+      # against a real run before it can gate without false positives. Flip
+      # fail_on_error to true (and drop continue-on-error) once the vocab in
+      # .github/styles/config/vocabularies/VGI/accept.txt is settled.
+      - name: Prose lint (Vale)
+        uses: errata-ai/vale-action@v2
+        continue-on-error: true
+        with:
+          files: docs
+          fail_on_error: true
+
+      - name: Link check (lychee)
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: "--no-progress --offline docs/**/*.md *.md"
+          fail: true
+
   s3-offload-localstack:
     name: S3 Offload Tests (LocalStack)
     runs-on: ubuntu-latest

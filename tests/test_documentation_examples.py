@@ -77,7 +77,11 @@ DOC_EXAMPLE_GLOBALS: dict[str, Any] = {
     "OrderPreservation": OrderPreservation,
 }
 
-# All documentation files to test
+# All documentation files to test. Directories are recursed by find_examples, so
+# the Diátaxis trees (tutorial/how-to/concepts) are covered wholesale. Worker code
+# is embedded in those pages via pymdownx snippets (``--8<--``); the snippet line
+# itself is skipped here and the embedded files are exercised directly by
+# test_examples_workers.py.
 DOC_FILES = [
     "CLAUDE.md",
     "README.md",
@@ -87,6 +91,10 @@ DOC_FILES = [
     "docs/lifecycle.md",
     "docs/metadata.md",
     "docs/cli.md",
+    "docs/contributing-docs.md",
+    "docs/tutorial",
+    "docs/how-to",
+    "docs/concepts",
 ]
 
 
@@ -112,6 +120,7 @@ def _should_skip(example: CodeExample) -> bool:
         "# ... implement",  # Placeholder comment instead of implementation
         "...,",  # Ellipsis with comma (placeholder in arg list)
         ") -> ...:",  # Ellipsis as return type placeholder
+        "--8<--",  # pymdownx snippet directive — the embedded file is tested directly
     ]
     return any(marker in source for marker in invalid_syntax_markers)
 
