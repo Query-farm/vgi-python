@@ -63,6 +63,21 @@ ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_worker.py');
 SELECT * FROM calc.series(3);
 ```
 
+### Streaming with state
+
+The tutorial's `series` emits every row in a single `process` call. That's fine for small results,
+but `process` is actually called *repeatedly* until you call `out.finish()` — so for large output
+you emit a bounded chunk per call and remember your place in a small **state** object. The state
+extends `ArrowSerializableDataclass` so it survives HTTP state round-trips:
+
+```python
+--8<-- "examples/series_streaming_worker.py"
+```
+
+```sql
+SELECT * FROM calc.series(1000000);   -- streamed CHUNK rows per process() call
+```
+
 ## Table-in-out
 
 Stream an input table through, batch by batch, emitting transformed output. `on_bind` declares the

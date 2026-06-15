@@ -71,6 +71,20 @@ def test_calc_worker_scalar_and_table() -> None:
     assert [v for b in rows for v in b.column("n").to_pylist()] == [0, 1, 2]
 
 
+def test_series_streaming_worker() -> None:
+    """The stateful streaming generator emits the full range across chunked calls."""
+    from vgi.arguments import Arguments
+
+    with _spawn("series_streaming_worker.py") as client:
+        rows = list(
+            client.table_function(
+                function_name="series",
+                arguments=Arguments(positional=(pa.scalar(5),)),
+            )
+        )
+    assert [v for b in rows for v in b.column("n").to_pylist()] == [0, 1, 2, 3, 4]
+
+
 def test_greeting_scalar_worker_string_example() -> None:
     """The string-scalar example (used in the function-patterns guide) still serves."""
     with _spawn("greeting_scalar_worker.py") as client:

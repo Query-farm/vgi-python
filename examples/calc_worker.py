@@ -17,7 +17,6 @@ from typing import Annotated, ClassVar
 
 import pyarrow as pa
 import pyarrow.compute as pc
-from vgi_rpc import ArrowSerializableDataclass
 
 from vgi import Arg, Param, Returns, ScalarFunction, Worker
 from vgi.catalog import Catalog, Schema
@@ -49,22 +48,12 @@ class SeriesArgs:
     count: Annotated[int, Arg(0, doc="How many numbers to generate", ge=0)]
 
 
-@dataclass(kw_only=True)
-class SeriesState(ArrowSerializableDataclass):
-    """Per-invocation cursor tracking how many rows we've emitted so far.
-
-    Extends ``ArrowSerializableDataclass`` so the cursor survives HTTP state
-    round-trips (the framework requires this for table-generator state).
-    """
-
-    emitted: int = 0
-
-
 @init_single_worker
 @bind_fixed_schema
-class Series(TableFunctionGenerator[SeriesArgs, SeriesState]):
+class Series(TableFunctionGenerator[SeriesArgs]):
     """Generate the integers ``0 .. count-1`` as a one-column table.
 
+    Stateless: it emits every row in a single ``process`` call, then finishes.
     ``@bind_fixed_schema`` derives the output schema from ``FIXED_SCHEMA``;
     ``@init_single_worker`` runs the generator in a single worker.
     """
@@ -72,25 +61,10 @@ class Series(TableFunctionGenerator[SeriesArgs, SeriesState]):
     FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([("n", pa.int64())])
 
     @classmethod
-    def initial_state(cls, params: ProcessParams[SeriesArgs]) -> SeriesState:
-        """Start a fresh cursor at zero."""
-        return SeriesState()
-
-    @classmethod
-    def process(
-        cls,
-        params: ProcessParams[SeriesArgs],
-        state: SeriesState,
-        out: OutputCollector,
-    ) -> None:
-        """Emit one batch per call; signal completion with ``out.finish()``."""
-        if state.emitted >= params.args.count:
-            out.finish()
-            return
-        batch_size = min(params.args.count - state.emitted, 1000)
-        values = list(range(state.emitted, state.emitted + batch_size))
-        out.emit(pa.RecordBatch.from_pydict({"n": values}, schema=params.output_schema))
-        state.emitted += batch_size
+    def process(cls, params: ProcessParams[SeriesArgs], state: None, out: OutputCollector) -> None:
+        """Emit all rows at once, then signal completion."""
+        out.emit(pa.RecordBatch.from_pydict({"n": list(range(params.args.count))}, schema=params.output_schema))
+        out.finish()
 
 
 class CalcWorker(Worker):

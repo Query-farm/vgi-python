@@ -24,19 +24,22 @@ The new pieces, compared to step 1:
 
 1. **`SeriesArgs`** — a typed arguments dataclass. `Arg(0, ...)` makes `count` the first positional
    SQL argument.
-2. **`SeriesState`** — a small cursor tracking how many rows we've emitted. It extends
-   `ArrowSerializableDataclass` so the same worker also works over the HTTP transport (the
-   framework requires serializable state for table generators).
-3. **`Series`** — the generator. `FIXED_SCHEMA` declares its output columns; `process` emits one
-   batch per call and signals completion with `out.finish()`. The `@bind_fixed_schema` and
-   `@init_single_worker` decorators wire up the bind/init lifecycle for the common single-worker
-   case.
+2. **`Series`** — the generator. `FIXED_SCHEMA` declares its output columns; `process` emits the
+   rows with `out.emit(...)` and signals completion with `out.finish()`. Here it emits everything
+   in one call — no state to track. The `@bind_fixed_schema` and `@init_single_worker` decorators
+   wire up the bind/init lifecycle for the common single-worker case.
 
 ??? info "Scalar vs. table — when do I use which?"
     Use a **scalar** function when output has exactly one row per input row (a transform). Use a
     **table** function when you generate rows independent of any input — a sequence, a data source,
     an API result set. There are two more shapes (table-in-out and aggregate) covered in the
     [how-to guides](../how-to/function-patterns.md).
+
+??? info "Generating a lot of rows? Stream with state"
+    `process` is actually called *repeatedly* until you call `out.finish()`. For large results you
+    don't build one giant batch — you emit a bounded chunk per call and remember your place in a
+    small **state** object. That's the next thing to learn:
+    [streaming with state](../how-to/function-patterns.md#streaming-with-state).
 
 ## Step 2 — Attach and call it
 
