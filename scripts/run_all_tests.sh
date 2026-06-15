@@ -21,6 +21,11 @@
 #   --show               print cached summaries WITHOUT re-running
 set -uo pipefail
 
+# Repo locations (override for non-default checkouts).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VGI_PYTHON_DIR="${VGI_PYTHON_DIR:-$REPO_ROOT}"
+VGI_CPP_DIR="${VGI_CPP_DIR:-$HOME/Development/vgi}"
+
 CACHE=/tmp/vgi-test-cache
 mkdir -p "$CACHE"
 
@@ -172,7 +177,7 @@ if [[ "$show_only" == 1 ]]; then
 fi
 
 run_pytest_job() {
-  cd /Users/rusty/Development/vgi-python || exit 99
+  cd "$VGI_PYTHON_DIR" || exit 99
   uv run pytest --no-cov -n auto >"$PY_LOG" 2>&1
   local rc=$?
   summarize_pytest "$PY_LOG" "$PY_SUMMARY" "$PY_FAILURES"
@@ -180,11 +185,11 @@ run_pytest_job() {
 }
 
 run_integration_job() {
-  cd /Users/rusty/Development/vgi || exit 99
+  cd "$VGI_CPP_DIR" || exit 99
   # `~[.]` excludes Catch2-hidden tests, i.e. `*.test_slow` files. These
   # tend to assert best-effort behavior (e.g. `on_cancel` firing) that
   # gets flaky under -j 8 contention; run them manually when needed.
-  VGI_TEST_WORKER="uv run --project /Users/rusty/Development/vgi-python vgi-fixture-worker" \
+  VGI_TEST_WORKER="uv run --project $VGI_PYTHON_DIR vgi-fixture-worker" \
     timeout 600 ./build/release/test/unittest -j 8 "test/sql/integration/*" "~[.]" >"$INT_LOG" 2>&1
   local rc=$?
   summarize_integration "$INT_LOG" "$INT_SUMMARY" "$INT_FAILURES"

@@ -12,10 +12,6 @@ Two functions that work as a pair:
   holding that axis's sorted, distinct coordinate values.
 - ``unnest_tensor(t)`` table function — inverts the aggregate, emitting one
   row per cell of the Cartesian product (including null-valued cells).
-
-See ``docs/nest_tensor.md`` (if it exists) and the plan at
-``/Users/rusty/.claude/plans/i-want-to-write-functional-rossum.md`` for full
-semantics.
 """
 
 from __future__ import annotations

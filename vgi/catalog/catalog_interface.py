@@ -715,11 +715,10 @@ WriteFunctionResult = ScanFunctionResult
 # implement it cause the C++ side to fall back to
 # ``catalog_table_scan_function_get`` and synthesise a one-branch result.
 #
-# See the design memo at
-# ``~/.claude/plans/right-now-vgi-and-partitioned-nebula.md`` for the
-# rewriter semantics, ``branch_filter`` model, and current scope
+# The rewriter semantics, ``branch_filter`` model, and current scope
 # decisions (INSERT-only on writable arm, UPDATE/DELETE/MERGE refused,
-# AT-clause refused, fail-fast error semantics).
+# AT-clause refused, fail-fast error semantics) are documented with the
+# relevant methods below.
 
 
 @dataclass(frozen=True)

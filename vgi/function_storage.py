@@ -350,8 +350,7 @@ class FunctionStorage(Protocol):
     # Unified state_* API (composite-key K/V over (scope_id, ns, key))
     # ========================================================================
     #
-    # See /Users/rusty/.claude/plans/yes-lets-make-a-elegant-sparrow.md for
-    # the full design rationale. This API replaces the four RMW families
+    # This API replaces the four RMW families
     # (``worker_*``, ``stream_state_*``, ``aggregate_state_*``,
     # ``aggregate_window_partition_*``) plus ``transaction_state_*`` with a
     # single composite-key shape:

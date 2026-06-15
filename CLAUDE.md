@@ -170,7 +170,7 @@ VGI_TEST_WORKER="/tmp/vgi-coverage-worker.sh" \
 
 # 4. Run DuckDB HTTP integration tests with coverage
 cd ~/Development/vgi
-VGI_PYTHON_DIR=/Users/rusty/Development/vgi-python \
+VGI_PYTHON_DIR=~/Development/vgi-python \
     ./test/run_http_integration_coverage.sh "test/sql/integration/*"
 
 # 5. Combine and report
@@ -187,7 +187,7 @@ coverage settings are found.
 Subprocess worker wrapper (`/tmp/vgi-coverage-worker.sh`):
 ```bash
 #!/bin/bash
-cd /Users/rusty/Development/vgi-python
+cd ~/Development/vgi-python
 exec uv run coverage run --parallel-mode -m vgi._test_fixtures.worker "$@"
 ```
 
@@ -244,7 +244,13 @@ VGI (Vector Gateway Interface) provides an Apache Arrow-based protocol for conne
 
 ## Architecture
 
-FIXME: complete this,.
+VGI runs user-defined functions in a separate process (or HTTP service) and
+streams Apache Arrow IPC between DuckDB and that process. The DuckDB-side VGI
+extension (a separate C++ repo) is the client; this package implements the
+Python worker, the protocol types, and a pure-Python ``Client`` for non-DuckDB
+callers. Subprocess transport speaks Arrow IPC over stdin/stdout; HTTP
+transport (via ``vgi-rpc``) adds auth, externalized payloads, and stateless
+stream resume.
 
 ### Key Components
 
@@ -256,7 +262,14 @@ FIXME: complete this,.
 
 ## Project Structure
 
-FIXME: complete this.
+- ``vgi/`` — the importable package: protocol types, ``Worker``, ``Client``,
+  function base classes, catalog support, and storage backends.
+- ``vgi/_test_fixtures/`` — example/test workers and functions; shipped
+  separately as the ``vgi-fixtures`` distribution (``packages/vgi-fixtures``),
+  not in the public ``vgi-python`` wheel.
+- ``tests/`` — unit and conformance tests; ``tests/conformance/`` mirrors the
+  C++ integration suite.
+- ``docs/`` — user and reference documentation.
 
 ## CLI Commands
 
@@ -291,7 +304,7 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-fixture-
 | `VGI_OTEL_DISABLE_METRICS` | Disable metrics only (`1`/`true`/`yes`) |
 | `SENTRY_DSN` | Enable Sentry error reporting (requires `[sentry]` extra). When set, `vgi-serve` calls `sentry_sdk.init()` before constructing the worker so vgi-rpc's auto-attach picks up RPC dispatch errors and VGI enriches with `vgi.function.name`, `vgi.attach_id`, `vgi.transaction_id`, etc. |
 | `SENTRY_ENVIRONMENT` | Environment tag passed to `sentry_sdk.init()` (e.g. `production`, `staging`) |
-| `SENTRY_RELEASE` | Release identifier passed to `sentry_sdk.init()` (e.g. git SHA). When unset, falls back to the installed `vgi` package version so every run is associated with a release; deploys should set this to a git SHA for commit tracking. |
+| `SENTRY_RELEASE` | Release identifier passed to `sentry_sdk.init()` (e.g. git SHA). When unset, falls back to the installed `vgi-python` package version so every run is associated with a release; deploys should set this to a git SHA for commit tracking. |
 | `SENTRY_TRACES_SAMPLE_RATE` | Float in `[0, 1]` for performance sampling (Sentry's standard knob) |
 | `VGI_WORKER_SHARED_STORAGE` | Storage backend: `sqlite` (default), `azure-sql` (requires `[azure]` extra), or `cloudflare-do` |
 | `VGI_AZURE_SQL_SERVER` | Azure SQL server hostname (required when `azure-sql`) |
@@ -375,7 +388,7 @@ Set `SENTRY_DSN` (and install `vgi[sentry]`) to forward unhandled exceptions to 
 
 **Attach options redaction:** by default *no* options are logged in the `catalog.attach` / `catalog.create` breadcrumbs because options routinely carry credentials. Implementers opt in via `CatalogInterface.loggable_attach_options(options) -> Mapping`, which returns a redacted, safe-to-log subset (host, region, bucket — never password/token/secret). When the override returns an empty mapping (the default), the `options` field is omitted from the breadcrumb entirely. See `docs/catalog-interface.md` for details.
 
-**Releases.** `vgi-serve` populates `release` from `SENTRY_RELEASE` if set, otherwise from `importlib.metadata.version("vgi")`. Production deploys should set `SENTRY_RELEASE=$(git rev-parse HEAD)` (or a tagged release identifier) so Sentry's commit-tracking and regression-detection features can correlate events to specific commits. Publishing GitHub releases makes the release-comparison UI more useful.
+**Releases.** `vgi-serve` populates `release` from `SENTRY_RELEASE` if set, otherwise from `importlib.metadata.version("vgi-python")`. Production deploys should set `SENTRY_RELEASE=$(git rev-parse HEAD)` (or a tagged release identifier) so Sentry's commit-tracking and regression-detection features can correlate events to specific commits. Publishing GitHub releases makes the release-comparison UI more useful.
 
 The same enrichment applies to OTel spans when `VGI_OTEL_ENABLED=1` — both backends read from the same `VgiTracer.set_current_span_attributes()` call sites in `vgi/otel.py`. Either, neither, or both can be active in a process.
 
@@ -455,16 +468,6 @@ with Client("vgi-fixture-worker") as client:
 ```
 
 ## Quick Reference
-
-### Imports
-
-### Parallel Execution and Worker State
-
-FIXME: complete this.
-
-### Method Override Summary
-
-FIXME: complete this.
 
 ### Pattern Decision Tree
 

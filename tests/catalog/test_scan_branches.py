@@ -9,9 +9,6 @@ The shim is the backwards-compatibility hook: workers that only override
 the legacy ``table_scan_function_get`` automatically gain a one-branch
 ``table_scan_branches_get`` for free. Workers that need real multi-branch
 behaviour override ``table_scan_branches_get`` themselves.
-
-See the design memo at
-``~/.claude/plans/right-now-vgi-and-partitioned-nebula.md`` for context.
 """
 
 from __future__ import annotations

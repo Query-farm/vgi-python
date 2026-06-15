@@ -179,7 +179,7 @@ directory = "htmlcov"
 members = ["packages/vgi-fixtures"]
 
 [tool.uv.sources]
-# duckdb = { path = "/Users/rusty/Development/duckdb-python/dist/duckdb-1.6.0.dev15-cp314-cp314-macosx_15_0_arm64.whl" }
+# duckdb = { path = "/path/to/duckdb-python/dist/duckdb-*.whl" }  # local engine-build override
 vgi-fixtures = { workspace = true }
 
 [dependency-groups]
