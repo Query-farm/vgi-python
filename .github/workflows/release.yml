@@ -1,7 +1,7 @@
 name: Release
 
 # Publishes both distributions to PyPI when a GitHub Release is published:
-#   - vgi            (sdist + universal wheel)        — the public package
+#   - vgi-python     (sdist + universal wheel)        — the public package
 #   - vgi-fixtures   (universal wheel only)           — example/test workers
 #
 # vgi-fixtures is wheel-only on purpose: its source lives at the repo root in
@@ -10,12 +10,13 @@ name: Release
 # wheel, so the wheel alone installs everywhere.
 #
 # Auth is PyPI Trusted Publishing (OIDC) — no API tokens. Before the first run,
-# configure a Trusted Publisher on PyPI for BOTH projects pointing at:
+# configure a Trusted Publisher on PyPI for BOTH projects (vgi-python,
+# vgi-fixtures) pointing at:
 #   owner:       Query-farm
 #   repository:  vgi-python
 #   workflow:    release.yml
 #   environment: pypi
-# The `vgi` and `vgi-fixtures` versions must match the released tag.
+# The `vgi-python` and `vgi-fixtures` versions must match the released tag.
 
 on:
   release:

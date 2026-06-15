@@ -12,8 +12,8 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "vgi",
     "vgi-fixtures",
+    "vgi-python",
 ]
 
 [[package]]
@@ -1665,7 +1665,21 @@ wheels = [
 ]
 
 [[package]]
-name = "vgi"
+name = "vgi-fixtures"
+version = "0.8.0"
+source = { editable = "packages/vgi-fixtures" }
+dependencies = [
+    { name = "vgi-python", extra = ["duckdb", "test-fixtures-writable"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "vgi-python", extras = ["duckdb"], editable = "." },
+    { name = "vgi-python", extras = ["test-fixtures-writable"], editable = "." },
+]
+
+[[package]]
+name = "vgi-python"
 version = "0.8.0"
 source = { editable = "." }
 dependencies = [
@@ -1760,10 +1774,10 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sqlglot", marker = "extra == 'transactor'" },
     { name = "typer", specifier = ">=0.9" },
-    { name = "vgi", extras = ["test-fixtures"], marker = "extra == 'test-fixtures-writable'" },
-    { name = "vgi", extras = ["test-fixtures", "test-fixtures-writable", "http", "oauth", "otel", "sentry", "azure"], marker = "extra == 'dev'" },
-    { name = "vgi", extras = ["transactor"], marker = "extra == 'test-fixtures-writable'" },
     { name = "vgi-fixtures", marker = "extra == 'fixtures'", editable = "packages/vgi-fixtures" },
+    { name = "vgi-python", extras = ["test-fixtures"], marker = "extra == 'test-fixtures-writable'" },
+    { name = "vgi-python", extras = ["test-fixtures", "test-fixtures-writable", "http", "oauth", "otel", "sentry", "azure"], marker = "extra == 'dev'" },
+    { name = "vgi-python", extras = ["transactor"], marker = "extra == 'test-fixtures-writable'" },
     { name = "vgi-rpc", specifier = ">=0.20.0" },
     { name = "vgi-rpc", extras = ["conformance", "external", "http", "oauth", "otel", "sentry"], marker = "extra == 'dev'" },
     { name = "vgi-rpc", extras = ["http"], marker = "extra == 'http'" },
@@ -1779,20 +1793,6 @@ dev = [
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "ty", specifier = ">=0.0.8" },
     { name = "vgi-fixtures", editable = "packages/vgi-fixtures" },
-]
-
-[[package]]
-name = "vgi-fixtures"
-version = "0.8.0"
-source = { editable = "packages/vgi-fixtures" }
-dependencies = [
-    { name = "vgi", extra = ["duckdb", "test-fixtures-writable"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "vgi", extras = ["duckdb"], editable = "." },
-    { name = "vgi", extras = ["test-fixtures-writable"], editable = "." },
 ]
 
 [[package]]

@@ -864,7 +864,7 @@ def build_worker_page(
         worker_doc = worker_cls.__doc__.strip().split("\n")[0]
 
     try:
-        vgi_version = _pkg_version("vgi")
+        vgi_version = _pkg_version("vgi-python")
     except Exception:
         vgi_version = "unknown"
 

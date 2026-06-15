@@ -621,7 +621,7 @@ def _maybe_init_sentry() -> None:
         try:
             from importlib.metadata import PackageNotFoundError, version
 
-            release = version("vgi")
+            release = version("vgi-python")
         except PackageNotFoundError:
             release = None
     if release:

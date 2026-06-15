@@ -3,7 +3,7 @@
 # Companion distribution for the example/test VGI workers. The base `vgi` wheel
 # excludes vgi/_test_fixtures; this package ships that subtree back into the
 # installed `vgi/` package directory and registers the vgi-fixture-* console
-# commands. Install on demand via `pip install vgi-fixtures` or `vgi[fixtures]`.
+# commands. Install on demand via `pip install vgi-fixtures` or `vgi-python[fixtures]`.
 # Source lives at the repo root in vgi/_test_fixtures/ so the dev/CI workspace
 # and the conformance suite import it by its normal `vgi._test_fixtures` path.
 [project]
@@ -18,7 +18,7 @@ requires-python = ">=3.13"
 # The fixture worker also builds statistics fixtures at import time, which
 # needs a DuckDB-compatible engine — vgi[duckdb] keeps the default dev env on
 # stock duckdb (the resolver prefers haybarn whenever it is installed too).
-dependencies = ["vgi[test-fixtures-writable]", "vgi[duckdb]"]
+dependencies = ["vgi-python[test-fixtures-writable]", "vgi-python[duckdb]"]
 
 [project.scripts]
 vgi-fixture-worker = "vgi._test_fixtures.worker:main"
@@ -31,7 +31,7 @@ vgi-fixture-writable-worker = "vgi._test_fixtures.writable.worker:main"
 vgi-fixture-simple-writable-worker = "vgi._test_fixtures.simple_writable:main"
 
 [tool.uv.sources]
-vgi = { workspace = true }
+vgi-python = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

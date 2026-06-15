@@ -220,7 +220,7 @@ def _get_vgi_version() -> str:
     global _vgi_version_cache  # noqa: PLW0603
     if _vgi_version_cache is None:
         try:
-            _vgi_version_cache = importlib.metadata.version("vgi")
+            _vgi_version_cache = importlib.metadata.version("vgi-python")
         except importlib.metadata.PackageNotFoundError:
             _vgi_version_cache = "unknown"
     return _vgi_version_cache
