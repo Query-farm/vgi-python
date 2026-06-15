@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 102 40" height="40" overflow="visible" role="img" aria-label="buffering function shape: stream into held state, then stream out">
+  <rect x="2" y="12" width="13" height="6" rx="3" fill="#e11d48"/>
+  <rect x="2" y="22" width="13" height="6" rx="3" fill="#e11d48"/>
+  <line x1="19" y1="20" x2="29" y2="20" stroke="#e11d48" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="24,15.5 29.5,20 24,24.5" fill="none" stroke="#e11d48" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="35" y="5" width="30" height="30" rx="5" fill="none" stroke="#e11d48" stroke-width="2.6"/>
+  <rect x="41" y="14" width="18" height="6" rx="3" fill="#e11d48"/>
+  <rect x="41" y="23" width="18" height="6" rx="3" fill="#e11d48"/>
+  <line x1="70" y1="20" x2="82" y2="20" stroke="#e11d48" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="77,15.5 82.5,20 77,24.5" fill="none" stroke="#e11d48" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="88" y="12" width="13" height="6" rx="3" fill="#e11d48"/>
+  <rect x="88" y="22" width="13" height="6" rx="3" fill="#e11d48"/>
+</svg>

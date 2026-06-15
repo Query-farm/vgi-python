@@ -85,6 +85,17 @@ def test_series_streaming_worker() -> None:
     assert [v for b in rows for v in b.column("n").to_pylist()] == [0, 1, 2, 3, 4]
 
 
+def test_row_count_worker_buffering() -> None:
+    """The buffering worker counts every input row across batches and emits one total."""
+    with _spawn("row_count_worker.py") as client:
+        batches = [
+            pa.record_batch({"x": pa.array([1, 2, 3], type=pa.int64())}),
+            pa.record_batch({"x": pa.array([4, 5], type=pa.int64())}),
+        ]
+        out = list(client.table_buffering_function(function_name="row_count", input=iter(batches)))
+    assert [v for b in out for v in b.column("count").to_pylist()] == [5]
+
+
 def test_greeting_scalar_worker_string_example() -> None:
     """The string-scalar example (used in the function-patterns guide) still serves."""
     with _spawn("greeting_scalar_worker.py") as client:

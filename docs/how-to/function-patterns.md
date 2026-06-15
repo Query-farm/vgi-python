@@ -15,12 +15,41 @@ runnable worker for each. **Who it's for:** developers who've finished the
 
 ## Which pattern do I need?
 
+<div class="kind-gallery">
+<a class="kind-gallery__card kind-gallery--scalar" href="#scalar">
+<img src="/assets/kinds/scalar.svg" alt="scalar shape">
+<span class="kind-gallery__name">Scalar</span>
+<code class="kind-gallery__formula">1 row → 1 value</code>
+</a>
+<a class="kind-gallery__card kind-gallery--table" href="#table">
+<img src="/assets/kinds/table.svg" alt="table shape">
+<span class="kind-gallery__name">Table</span>
+<code class="kind-gallery__formula">args → N rows</code>
+</a>
+<a class="kind-gallery__card kind-gallery--table-in-out" href="#table-in-out">
+<img src="/assets/kinds/table-in-out.svg" alt="table-in-out shape">
+<span class="kind-gallery__name">Table-in-out</span>
+<code class="kind-gallery__formula">N rows → M rows</code>
+</a>
+<a class="kind-gallery__card kind-gallery--aggregate" href="#aggregate">
+<img src="/assets/kinds/aggregate.svg" alt="aggregate shape">
+<span class="kind-gallery__name">Aggregate</span>
+<code class="kind-gallery__formula">N rows → 1 value</code>
+</a>
+<a class="kind-gallery__card kind-gallery--buffering" href="#buffering">
+<img src="/assets/kinds/buffering.svg" alt="buffering shape">
+<span class="kind-gallery__name">Buffering</span>
+<code class="kind-gallery__formula">stream → [state] → stream</code>
+</a>
+</div>
+
 | Pattern | Shape | Use it when… | SQL |
 |---|---|---|---|
 | **Scalar** | 1 row → 1 row | you transform each row independently | `SELECT f(col) FROM t` |
 | **Table** | args → N rows | you generate rows from arguments | `SELECT * FROM f(args)` |
 | **Table-in-out** | N rows → M rows | you reshape/filter a streamed table | `SELECT * FROM f((SELECT …))` |
 | **Aggregate** | grouped rows → 1 row/group | you accumulate per `GROUP BY` group | `SELECT f(col) FROM t GROUP BY k` |
+| **Buffering** | stream → [state] → stream | you must see *every* row first (sort, top-k, full reduction) | `SELECT * FROM f((SELECT …))` |
 
 ## Scalar
 
@@ -153,6 +182,40 @@ SELECT category, aggregates.vgi_sum(value) FROM t GROUP BY category;
     across parallel workers (aggregates) and HTTP round-trips, the framework requires it to extend
     `ArrowSerializableDataclass`. Annotate fields with `ArrowType(...)` so the wire type is
     explicit.
+
+## Buffering
+
+<div class="kind-banner kind-banner--buffering" markdown>
+![buffering shape](../assets/kinds/buffering.svg){ .kind-banner__glyph }
+<div class="kind-banner__text" markdown>
+`stream → [state] → stream`{ .kind-banner__formula }
+
+Holds every input row in state before emitting — the basis for sorts, top-k, and full-stream reductions.
+{ .kind-banner__desc }
+</div>
+</div>
+
+When a function must see the **whole** input before it can produce *any* output — a global sort,
+top-k, or a full reduction — use a buffering function. Unlike table-in-out (which emits per input
+batch), it runs in three phases: `process` (the **sink** — stash each batch, return a `state_id`),
+`combine` (reduce all the partials once), and `finalize` (the **source** — stream the result out).
+Because the phases can run in different worker processes, state lives in `params.storage` (shared
+storage scoped by `execution_id`), not in memory.
+
+```python
+--8<-- "examples/row_count_worker.py"
+```
+
+```sql
+ATTACH 'buffers' (TYPE vgi, LOCATION 'uv run row_count_worker.py');
+SELECT * FROM buffers.row_count((SELECT * FROM big_table));
+```
+
+??? info "Buffering vs. table-in-out"
+    Both consume a relation, but a **table-in-out** function emits *per input batch* and never
+    holds the whole input — use it for streaming transforms (filter, enrich, reshape). Reach for
+    **buffering** only when output genuinely depends on every row. See
+    [Persist state across workers](state-storage.md) for the storage backends `params.storage` uses.
 
 ## Next steps
 

@@ -323,3 +323,69 @@
 .md-typeset .kind-banner--table { --kind: #0d9488; }
 .md-typeset .kind-banner--table-in-out { --kind: #7c3aed; }
 .md-typeset .kind-banner--aggregate { --kind: #d97706; }
+.md-typeset .kind-banner--buffering { --kind: #e11d48; }
+
+/* ── Function-shape gallery ──
+   A strip of all five kinds laid out side by side so the shared shape language
+   is visible at a glance. Ported from the VGI Java docs' KindGallery. Markdown
+   usage (md_in_html + attr_list): a .kind-gallery div of .kind-gallery__card
+   anchors, each carrying a kind modifier class. */
+.md-typeset .kind-gallery {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 14px;
+  margin: 1.5rem 0 2rem;
+}
+.md-typeset .kind-gallery__card,
+.md-typeset .kind-gallery__card:hover {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 14px 16px;
+  text-align: center;
+  text-decoration: none;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--kind) 6%, var(--md-default-bg-color));
+  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+}
+.md-typeset .kind-gallery__card:hover {
+  border-color: var(--kind);
+  transform: translateY(-3px);
+  box-shadow: 0 10px 28px -18px var(--kind);
+}
+.md-typeset .kind-gallery__card img {
+  height: 40px;
+  width: auto;
+  margin: 0;
+  box-shadow: none;
+  background: none;
+}
+.md-typeset .kind-gallery__name {
+  font-weight: 700;
+  font-size: 0.8rem;
+  color: var(--md-default-fg-color);
+}
+.md-typeset .kind-gallery__formula {
+  max-width: 100%;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--kind);
+  background: color-mix(in srgb, var(--kind) 12%, transparent);
+  padding: 2px 8px;
+  border-radius: 6px;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+.md-typeset .kind-gallery--scalar { --kind: #2563eb; }
+.md-typeset .kind-gallery--table { --kind: #0d9488; }
+.md-typeset .kind-gallery--table-in-out { --kind: #7c3aed; }
+.md-typeset .kind-gallery--aggregate { --kind: #d97706; }
+.md-typeset .kind-gallery--buffering { --kind: #e11d48; }
+
+@media screen and (max-width: 60em) {
+  .md-typeset .kind-gallery {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+}
