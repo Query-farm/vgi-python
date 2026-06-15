@@ -19,8 +19,13 @@
 
 ```python
 # my_worker.py
+# /// script
+# requires-python = ">=3.13"
+# dependencies = ["vgi-python"]
+# ///
 from typing import Annotated
 from vgi import ScalarFunction, Param, Returns, Worker
+from vgi.catalog import Catalog, Schema
 import pyarrow as pa
 import pyarrow.compute as pc
 
@@ -36,18 +41,26 @@ class Greeting(ScalarFunction):
         return pc.binary_join_element_wise("Hello, ", name, "!", "")
 
 class MyWorker(Worker):
-    catalog_name = "my_worker"
-    functions = [Greeting]
+    catalog = Catalog(
+        name="my_worker",
+        schemas=[Schema(name="main", functions=[Greeting])],
+    )
 
 if __name__ == "__main__":
     MyWorker().run()
 ```
 
+The `# /// script` block is [inline script metadata](https://packaging.python.org/en/latest/specifications/inline-script-metadata/):
+`uv run my_worker.py` reads it, provisions an isolated environment with
+`vgi-python`, and runs the worker — no virtualenv to create or activate.
+
 ```sql
 -- First time only.
 INSTALL vgi FROM community;
 LOAD vgi;
-ATTACH 'my_worker' (TYPE vgi, LOCATION './my_worker.py');
+-- LOCATION is the command that launches the worker. `uv run` resolves the
+-- script's inline dependencies, so nothing needs to be installed first.
+ATTACH 'my_worker' (TYPE vgi, LOCATION 'uv run my_worker.py');
 
 SELECT my_worker.greeting(name) FROM users;
 -- "Hello, Alice!"
@@ -58,11 +71,11 @@ Or you can launch the [Haybarn](https://github.com/Query-farm-haybarn/haybarn)
 CLI and attach the worker in one step:
 
 ```bash
-uvx haybarn-cli "vgi:my_worker?location=./my_worker.py"
+uvx haybarn-cli "vgi:my_worker?location=uv run my_worker.py"
 ```
 
-This starts a new session with the functions you just added (the catalog is
-named after the worker file — `my_worker` here).
+This drops you into a session with the functions you just added, available as
+`my_worker.greeting(...)`.
 
 That's it. No C++ compilation, no extension versioning, no complex build process. Just a Python script that Haybarn (or DuckDB) can call.
 
@@ -70,18 +83,13 @@ That's it. No C++ compilation, no extension versioning, no complex build process
 
 ## Installation
 
-Install the Python package that hosts your worker functions. It is published on
-PyPI as `vgi-python` (the `vgi` name was taken), but you still `import vgi` in
-code:
+The Python package is published on PyPI as `vgi-python` (the `vgi` name was
+taken), but you still `import vgi` in code. The examples above don't install it
+explicitly — the worker script's inline `# /// script` metadata lets `uv run`
+provision it on demand. To add it to a project or environment directly:
 
 ```bash
-pip install vgi-python
-```
-
-Or with [uv](https://github.com/astral-sh/uv):
-
-```bash
-uv add vgi-python
+pip install vgi-python      # or: uv add vgi-python
 ```
 
 You also need a DuckDB-compatible SQL engine to load the `vgi` extension and
@@ -127,12 +135,16 @@ VGI lets you extend DuckDB with Python functions that run in separate processes,
 A worker is a Python script that defines one or more functions:
 
 ```python
-#!/usr/bin/env python
 # my_worker.py
+# /// script
+# requires-python = ">=3.13"
+# dependencies = ["vgi-python"]
+# ///
 from typing import Annotated
 import pyarrow as pa
 import pyarrow.compute as pc
 from vgi import ScalarFunction, Param, Returns, Worker
+from vgi.catalog import Catalog, Schema
 
 
 class UpperCase(ScalarFunction):
@@ -147,8 +159,10 @@ class UpperCase(ScalarFunction):
 
 
 class MyWorker(Worker):
-    catalog_name = "my_funcs"
-    functions = [UpperCase]
+    catalog = Catalog(
+        name="my_funcs",
+        schemas=[Schema(name="main", functions=[UpperCase])],
+    )
 
 
 if __name__ == "__main__":
@@ -158,8 +172,8 @@ if __name__ == "__main__":
 ### Step 2: Use from SQL
 
 ```sql
--- Attach the worker as a catalog (its catalog_name is "my_funcs")
-ATTACH 'my_funcs' (TYPE vgi, LOCATION './my_worker.py');
+-- Attach the worker as a catalog (its catalog name is "my_funcs")
+ATTACH 'my_funcs' (TYPE vgi, LOCATION 'uv run my_worker.py');
 
 -- Call your function (qualify with the catalog name, or run `USE my_funcs;` first)
 SELECT my_funcs.upper_case(name) FROM users;
@@ -323,7 +337,7 @@ VGI workers can expose more than just functions. A worker can provide a complete
 - **Functions** - Scalar, table, and table-in-out functions
 
 ```sql
-ATTACH 'external_db' (TYPE vgi, LOCATION './my_catalog_worker.py');
+ATTACH 'external_db' (TYPE vgi, LOCATION 'uv run my_catalog_worker.py');
 
 -- Query tables from the attached catalog
 SELECT * FROM external_db.main.users;
@@ -523,7 +537,7 @@ uv run mypy vgi/            # Type check
 
 ## Requirements
 
-- Python >= 3.12.4
+- Python >= 3.13
 - pyarrow
 - A DuckDB-compatible engine for SQL integration — [Haybarn](https://github.com/Query-farm-haybarn/haybarn) (`uvx haybarn-cli`) or stock DuckDB
 
