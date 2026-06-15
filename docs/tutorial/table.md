@@ -32,8 +32,8 @@ The new pieces, compared to step 1:
 ??? info "Scalar vs. table — when do I use which?"
     Use a **scalar** function when output has exactly one row per input row (a transform). Use a
     **table** function when you generate rows independent of any input — a sequence, a data source,
-    an API result set. There are two more shapes (table-in-out and aggregate) covered in the
-    [how-to guides](../how-to/function-patterns.md).
+    an API result set. There are three more patterns (table-in-out, aggregate, and buffering)
+    covered in the [how-to guides](../how-to/function-patterns.md).
 
 ??? info "Generating a lot of rows? Stream with state"
     `process` is actually called *repeatedly* until you call `out.finish()`. For large results you
@@ -64,10 +64,19 @@ SELECT * FROM calc.series(3);
 
 That's both function patterns running from SQL. 🎉
 
+??? success "It didn't work?"
+    - **`Binder Error: table function ... does not exist`** — the SQL name is the snake_case of the
+      class name (`Series` → `series`) and a table function is called in `FROM`, not `SELECT`:
+      `SELECT * FROM calc.series(3)`, not `SELECT calc.series(3)`.
+    - **The query hangs and never returns** — a table generator must call `out.finish()` when it has
+      no more rows. Without it the framework keeps calling `process` forever.
+    - **`ATTACH` errors after editing** — if `calc` is already attached from step 1, `DETACH calc;`
+      first (or attach under a new name).
+
 ## Next steps
 
-- **More function shapes** → [How-to: function patterns](../how-to/function-patterns.md) covers
-  table-in-out (streaming transforms), aggregates, and a string-valued scalar.
+- **More function patterns** → [How-to: function patterns](../how-to/function-patterns.md) covers
+  table-in-out (streaming transforms), aggregates, buffering, and a string-valued scalar.
 - **Understand what just happened** → [Concepts: worker lifecycle](../concepts/index.md) explains
   bind → init → process → finish and the transports.
 - **Look up the exact API** → the [API Reference](../api/index.md) documents every class and

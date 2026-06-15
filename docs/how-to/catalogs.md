@@ -60,6 +60,6 @@ constraints, generated columns, column comments, filter requirements — is cove
 
 ## Next steps
 
-- **Persist per-group state** → [State storage](../shared-storage.md).
-- **Full catalog options** (tables, views, constraints) → [Catalog Interface](../catalog-interface.md).
+- **Persist per-group state** → [State storage](state-storage.md).
+- **Full catalog options** (tables, views, constraints) → [Catalog Interface reference](../catalog-interface.md).
 - **Exact API** → [API Reference: Catalogs](../api/catalogs.md).

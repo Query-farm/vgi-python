@@ -20,11 +20,13 @@ real. Each guide assumes you can already write and run a basic worker.
   with bearer/JWT auth.
 - **[Integrate with the optimizer](pushdown-and-statistics.md)** — accept pushed-down filters and
   report column statistics.
-- **Describe your functions** — metadata for introspection: [Function Metadata](../metadata.md)
-- **Use the CLI** — invoke functions and inspect workers from the shell: [CLI](../cli.md)
+Each recipe ends with a **Next steps** section that links onward to a concept page and the full
+reference for that topic.
 
-Each recipe links to a deeper **reference** page (Function API, Catalog Interface, Shared Storage,
-Authentication, Filter Pushdown, Column Statistics) for the full contract.
+## Reference & tooling
+
+- **[Function Metadata](../metadata.md)** — describe your functions for introspection.
+- **[CLI](../cli.md)** — invoke functions and inspect workers from the shell.
 
 ## Next steps
 

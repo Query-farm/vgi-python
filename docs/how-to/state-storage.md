@@ -12,7 +12,12 @@ function that coordinates partial results across workers.
 
 - You've built an aggregate or multi-worker function (see
   [Function patterns → Aggregate](function-patterns.md#aggregate)).
-- For cloud backends: the relevant extra (`vgi-python[azure]`).
+- For the Azure backend: `pip install vgi-python[azure]`. SQLite and Cloudflare DO need no extra.
+
+!!! note "`vgi-serve`"
+    The commands below use `vgi-serve`, the CLI installed with `vgi-python` that runs a worker
+    module as a long-lived process (the production counterpart to the tutorial's `uv run`). The
+    `--http` flag serves it over HTTP instead of stdin/stdout.
 
 ## Two kinds of "state" — don't confuse them
 
@@ -51,7 +56,7 @@ VGI_WORKER_SHARED_STORAGE=cloudflare-do vgi-serve my_worker.py --http
 |---|---|---|---|
 | SQLite | `sqlite` (default) | local / subprocess | none (stdlib) |
 | Azure SQL | `azure-sql` | Azure deployments | `vgi-python[azure]` |
-| Cloudflare DO | `cloudflare-do` | edge / multi-cloud | none (stdlib) |
+| Cloudflare DO | `cloudflare-do` | edge / multi-cloud | none extra — uses `httpx`, which ships with `vgi-python`; needs a Worker endpoint + token |
 
 The per-backend setup (connection strings, credentials, table provisioning) is documented in the
 [Shared Storage reference](../shared-storage.md).

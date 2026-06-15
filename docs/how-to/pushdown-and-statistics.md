@@ -16,8 +16,10 @@ pushed-down `WHERE` predicates and reporting column statistics so the planner ca
 ## Filter pushdown
 
 A table function can receive the `WHERE` predicates DuckDB would otherwise apply *after* the scan,
-and apply them at the source. Opt in with `filter_pushdown = True` in the function's `Meta`, then
-read the decoded filters in `process` via `params`:
+and apply them at the source. Opt in with `filter_pushdown = True` in the function's `Meta`. The
+framework deserializes the predicates for you and exposes them on `params.current_pushdown_filters`
+as a `PushdownFilters` tree (or `None` when no filter applies), refreshed before each `process`
+call:
 
 ```python test="skip"
 class Events(TableFunctionGenerator[EventsArgs]):
@@ -26,13 +28,14 @@ class Events(TableFunctionGenerator[EventsArgs]):
 
     @classmethod
     def process(cls, params, state, out):
-        filters = params.pushdown_filters   # decoded predicate tree (or None)
+        filters = params.current_pushdown_filters   # PushdownFilters tree, or None
         # apply `filters` while generating rows, then out.emit(...) / out.finish()
 ```
 
-Filters arrive as a hybrid JSON + Arrow structure; decode and evaluate them with
-`deserialize_filters` (see [API: Filter Pushdown](../api/filters.md)). The wire format and a worked
-example are in the [Filter Pushdown reference](../filter-pushdown.md).
+`PushdownFilters` is already decoded — you don't call `deserialize_filters` yourself (that helper is
+for the raw wire bytes). To have the framework apply the filters to your output automatically,
+set `auto_apply_filters = True` in `Meta`. The node types and a worked example are in the
+[Filter Pushdown reference](../filter-pushdown.md) and [API: Filter Pushdown](../api/filters.md).
 
 ## Column statistics
 
@@ -56,7 +59,8 @@ Table(
 EXPLAIN SELECT * FROM mydb.data.departments WHERE id > 100;   -- Physical Plan: EMPTY_RESULT
 ```
 
-Full details — RPC-based dynamic statistics, TTLs, spatial bounds — are in the
+(The snippets above are illustrative — `schema` and the `departments` table stand in for your own
+catalog.) Full details — RPC-based dynamic statistics, TTLs, spatial bounds — are in the
 [Column Statistics reference](../column-statistics.md).
 
 ## Next steps

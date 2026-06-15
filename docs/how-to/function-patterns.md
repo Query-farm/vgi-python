@@ -4,7 +4,7 @@ description: "How to write each of the four VGI function patterns: scalar, table
 
 # Function patterns
 
-**What this is:** a recipe showing each of the four VGI function shapes, with a complete,
+**What this is:** a recipe showing each of the five VGI function patterns, with a complete,
 runnable worker for each. **Who it's for:** developers who've finished the
 [tutorial](../tutorial/index.md) and want to know which pattern fits their problem.
 
@@ -199,8 +199,9 @@ When a function must see the **whole** input before it can produce *any* output 
 top-k, or a full reduction — use a buffering function. Unlike table-in-out (which emits per input
 batch), it runs in three phases: `process` (the **sink** — stash each batch, return a `state_id`),
 `combine` (reduce all the partials once), and `finalize` (the **source** — stream the result out).
-Because the phases can run in different worker processes, state lives in `params.storage` (shared
-storage scoped by `execution_id`), not in memory.
+Because the phases can run in different worker processes, state can't live in memory — it goes in
+`params.storage`, a shared store keyed to this call (its `execution_id`). See
+[Persist state across workers](state-storage.md) for the backends behind it.
 
 ```python
 --8<-- "examples/row_count_worker.py"
@@ -219,8 +220,7 @@ SELECT * FROM buffers.row_count((SELECT * FROM big_table));
 
 ## Next steps
 
-- **Persist state across invocations** → [State storage](../shared-storage.md).
-- **Let the optimizer prune work** → [Filter pushdown](../filter-pushdown.md) and
-  [Column statistics](../column-statistics.md).
-- **Understand the call lifecycle** → [Concepts: lifecycle](../lifecycle.md).
+- **Persist state across workers** → [State storage](state-storage.md).
+- **Let the optimizer prune work** → [Integrate with the optimizer](pushdown-and-statistics.md).
+- **Understand the call lifecycle** → [Concepts](../concepts/index.md).
 - **Exact signatures** → [API Reference: Functions](../api/functions.md).

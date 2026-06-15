@@ -21,7 +21,10 @@ The same worker that runs over a subprocess also runs over HTTP — add `--http`
 vgi-serve my_worker.py --http
 ```
 
-The client connects with `transport="http"` instead of spawning a subprocess:
+DuckDB still attaches the worker over HTTP the usual way (`ATTACH ... (TYPE vgi, LOCATION
+'http://...')`). You only need the **Python `Client`** when you're calling the worker *from Python*
+rather than from SQL — for tests, scripts, or another service. It connects with `transport="http"`
+instead of spawning a subprocess, and exposes the same call methods:
 
 ```python test="skip"
 from vgi.client import Client
@@ -39,8 +42,10 @@ The quickest setup is static bearer tokens via an environment variable — comma
 VGI_BEARER_TOKENS="token1=alice,token2=bob" vgi-serve my_worker.py --http
 ```
 
-Unauthenticated requests get HTTP 401. Authenticated requests carry the principal in the
-`AuthContext` your function can read via the injected `ctx`:
+Unauthenticated requests get HTTP 401. Authenticated requests carry the principal in an
+`AuthContext`. Your function reads it through an optional `ctx` parameter: declare `ctx` in the
+signature and the framework injects a per-call `CallContext` (auth, logging, transport info) — you
+don't pass it from SQL.
 
 ```python test="skip"
 class Secret(ScalarFunction):

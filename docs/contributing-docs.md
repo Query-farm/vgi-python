@@ -28,8 +28,13 @@ Every tutorial, how-to, and concept page **must** contain, in order:
 2. **Prerequisites** — assumed knowledge, prior steps, and required extras (e.g.
    `pip install vgi-python[http]`), with links. Use a list or an admonition.
 3. **At least one complete, runnable example** — no `...` elisions in the primary example. It must
-   pass the documentation-example tests (see below).
-4. **A "Next steps" section** — links to the logical next page(s). No dead ends.
+   pass the documentation-example tests (see below). *Exception:* advanced pages whose feature
+   isn't exercisable from a self-contained snippet (HTTP serving, auth, optimizer pushdown) may
+   lead with an illustrative `test="skip"` sketch — but label it illustrative and point to a
+   runnable worker or the reference for the real thing.
+4. **A "Next steps" section** that advances the reader along the funnel: prefer a sibling **how-to**
+   or a **concept** page, then the **reference** for the full contract. Don't jump straight from a
+   how-to into auto-generated reference. No dead ends.
 
 ## Example rules
 

@@ -73,8 +73,12 @@ Stock `duckdb` works too — `INSTALL vgi FROM community; LOAD vgi;`.
 | C/C++ compilation required | Any language with an Apache Arrow library |
 | Tied to a DuckDB version | Version independent |
 | Complex build/release cycle | Ship a script or executable |
-| Runs in-process | Process isolation |
-| Single-threaded | Parallel workers |
+| Runs in DuckDB's process | Isolated worker process — a crash or a heavy dependency can't take DuckDB down |
+| Native code in DuckDB's threads | Your code, optionally fanned out across worker processes |
+
+**The tradeoff:** data crosses a process boundary as Apache Arrow IPC. That's fast and columnar,
+but not free — co-locate workers (subprocess transport) for latency-sensitive paths, and reach for
+VGI when the productivity and isolation win outweighs the hop.
 
 **Use cases:** call REST APIs from SQL, run ML inference, process data with pandas/numpy, build
 custom ETL transforms, expose external data sources as queryable tables and views.
@@ -87,6 +91,7 @@ custom ETL transforms, expose external data sources as queryable tables and view
 | **Table** | `TableFunctionGenerator` | `SELECT * FROM func(args)` | Generate data |
 | **Table-in-out** | `TableInOutFunction` | `SELECT * FROM func((SELECT ...))` | Streaming transforms, filtering |
 | **Aggregate** | `AggregateFunction` | `SELECT func(col) ... GROUP BY` | Grouped accumulation |
+| **Buffering** | `TableBufferingFunction` | `SELECT * FROM func((SELECT ...))` | Sees every row first (sort, top-k) |
 
 See the [API Reference](api/index.md) for the full surface, or jump into the guides below.
 
