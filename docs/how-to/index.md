@@ -18,8 +18,8 @@ real. Each guide assumes you can already write and run a basic worker.
 - **[Function patterns](function-patterns.md)** — scalar, table, table-in-out, and aggregate
   functions, with a runnable worker for each. *(Start here.)* Deeper reference:
   [Function API](../generator-api.md) · [Aggregate functions](../aggregate-functions.md)
-- **Expose a catalog** — surface schemas, tables, and views to DuckDB via `ATTACH`:
-  [Catalog Interface](../catalog-interface.md)
+- **[Expose a catalog](catalogs.md)** — surface schemas, functions, tables, and views to DuckDB
+  via `ATTACH`. Full options: [Catalog Interface reference](../catalog-interface.md)
 - **Persist state** — keep per-group state across invocations:
   [Shared Storage](../shared-storage.md)
 - **Run over HTTP with auth** — serve a worker over HTTP and authenticate callers:

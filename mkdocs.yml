@@ -122,7 +122,8 @@ nav:
     - Function patterns: how-to/function-patterns.md
     - Function API (advanced): generator-api.md
     - Aggregate Functions: aggregate-functions.md
-    - Catalog Interface: catalog-interface.md
+    - Expose a catalog: how-to/catalogs.md
+    - Catalog Interface (reference): catalog-interface.md
     - Shared Storage: shared-storage.md
     - Authentication: authentication.md
     - Filter Pushdown: filter-pushdown.md
