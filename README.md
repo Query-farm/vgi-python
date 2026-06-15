@@ -116,7 +116,7 @@ VGI lets you extend DuckDB with Python functions that run in separate processes,
 
 | Traditional Extensions | VGI Workers |
 |----------------------|-------------|
-| C/C++ compilation required | Any language but first Python and Typescript and Go |
+| C/C++ compilation required | Any language with an Apache Arrow library |
 | Tied to DuckDB version | Version independent |
 | Complex build/release cycle | Ship a script or executable |
 | Runs in-process | Process isolation |

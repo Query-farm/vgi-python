@@ -1,12 +1,14 @@
 ---
-description: "vgi-python: extend DuckDB with functions written in Python (or any language) over Apache Arrow — no C++ compilation, version-independent, process-isolated."
+description: "vgi-python: add scalar, table, and aggregate functions to DuckDB in pure Python over Apache Arrow — no C++ to compile, no extension to version, no build step."
 ---
 
 # vgi-python
 
-**Vector Gateway Interface** — extend DuckDB with functions written in Python (or any language),
-communicating over Apache Arrow IPC. No C++/Rust/Zig compilation, no linking, no extension
-versioning. Just ship a script.
+**Extend DuckDB in pure Python.** Add scalar, table, and aggregate functions that run in your own
+process and stream data to DuckDB over Apache Arrow — no C++ to compile, no extension to version,
+no build step.
+
+Write a function, `uv run` the script, query it from SQL. Other languages work too.
 
 <p align="center">
   <img src="assets/logo.png" alt="VGI logo" width="360">
@@ -16,51 +18,29 @@ Built by [🚜 Query.Farm](https://query.farm).
 
 ## See it in action
 
+A complete worker — a scalar function and a table function — in one file:
+
 ```python
-# my_worker.py
-# /// script
-# requires-python = ">=3.13"
-# dependencies = ["vgi-python"]
-# ///
-from typing import Annotated
-from vgi import ScalarFunction, Param, Returns, Worker
-from vgi.catalog import Catalog, Schema
-import pyarrow as pa
-import pyarrow.compute as pc
-
-class Greeting(ScalarFunction):
-    """Generate a greeting for each name."""
-
-    @classmethod
-    def compute(
-        cls,
-        name: Annotated[pa.StringArray, Param(doc="Column containing names")],
-    ) -> Annotated[pa.StringArray, Returns()]:
-        return pc.binary_join_element_wise("Hello, ", name, "!", "")
-
-class MyWorker(Worker):
-    catalog = Catalog(name="my_worker", schemas=[Schema(name="main", functions=[Greeting])])
-
-if __name__ == "__main__":
-    MyWorker().run()
+--8<-- "examples/calc_worker.py"
 ```
 
 The `# /// script` block is [inline script metadata](https://packaging.python.org/en/latest/specifications/inline-script-metadata/):
-`uv run my_worker.py` provisions an isolated environment with `vgi-python` and runs the worker — no
-virtualenv to create.
+`uv run calc_worker.py` provisions an isolated environment with `vgi-python` and runs the worker —
+no virtualenv to create.
 
 ```sql
 INSTALL vgi FROM community;
 LOAD vgi;
 -- LOCATION is the command that launches the worker.
-ATTACH 'my_worker' (TYPE vgi, LOCATION 'uv run my_worker.py');
+ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_worker.py');
 
-SELECT my_worker.greeting(name) FROM users;
--- "Hello, Alice!"
--- "Hello, Bob!"
+SELECT calc.double(21);          -- 42
+SELECT * FROM calc.series(3);     -- 0, 1, 2
 ```
 
 That's it. No compilation, no extension versioning, no build process.
+
+[Build this worker step by step in the tutorial →](tutorial/index.md){ .md-button }
 
 ## Installation
 
@@ -84,7 +64,7 @@ Stock `duckdb` works too — `INSTALL vgi FROM community; LOAD vgi;`.
 
 | Traditional extensions | VGI workers |
 |---|---|
-| C/C++ compilation required | Any language; Python, TypeScript, Go today |
+| C/C++ compilation required | Any language with an Apache Arrow library |
 | Tied to a DuckDB version | Version independent |
 | Complex build/release cycle | Ship a script or executable |
 | Runs in-process | Process isolation |

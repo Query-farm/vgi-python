@@ -21,24 +21,24 @@ namespaces (DuckDB's default is `main`), each holding functions — and optional
 You attach the catalog and address its contents by name:
 
 ```sql
-ATTACH 'greetings' (TYPE vgi, LOCATION 'uv run greeting_worker.py');
+ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_worker.py');
 
 -- catalog.function  (functions in `main` are reachable as catalog.name)
-SELECT greetings.greeting('Alice');
+SELECT calc.double(21);
 
 -- catalog.schema.object  (fully qualified)
-SELECT * FROM greetings.main.greeting_series(3);
+SELECT * FROM calc.main.series(3);
 ```
 
-The worker from the tutorial is exactly this — a catalog named `greetings` with a `main` schema
-holding the two functions:
+The worker from the tutorial is exactly this — a catalog named `calc` with a `main` schema holding
+the two functions:
 
 ```python
---8<-- "examples/greeting_worker.py"
+--8<-- "examples/calc_worker.py"
 ```
 
-The SQL name of a function is the snake_case of its class name (`Greeting` → `greeting`), unless
-you override it with a `Meta.name` (as `sum_worker.py` does for `vgi_sum`).
+The SQL name of a function is the snake_case of its class name (`Double` → `double`), unless you
+override it with a `Meta.name` (as `sum_worker.py` does for `vgi_sum`).
 
 ## Exposing data: tables and views
 
@@ -48,7 +48,7 @@ A catalog can expose more than functions:
 
     ```python
     from vgi.catalog import View
-    View(name="recent", definition="SELECT * FROM greetings.greeting_series(5)")
+    View(name="recent", definition="SELECT * FROM calc.series(5)")
     ```
 
 - **`Table`** — a queryable table. Define it with an explicit `columns` schema (you supply the

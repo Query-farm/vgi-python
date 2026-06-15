@@ -34,7 +34,7 @@ ALL_EXAMPLES = sorted(p.name for p in EXAMPLES_DIR.glob("*.py"))
 
 
 def _spawn(script: str) -> Client:
-    """A subprocess Client for an example worker, run with this interpreter."""
+    """Return a subprocess Client for an example worker, run with this interpreter."""
     return Client(f"{sys.executable} {EXAMPLES_DIR / script}", pool=None)
 
 
@@ -44,32 +44,39 @@ def test_example_imports(filename: str) -> None:
     __import__(filename.removesuffix(".py"))
 
 
-def test_greeting_scalar_worker() -> None:
-    """The stage-1 scalar-only tutorial worker greets each input row."""
-    with _spawn("greeting_scalar_worker.py") as client:
-        batch = pa.record_batch({"name": pa.array(["Alice", "Bob"])})
-        out = list(client.scalar_function(function_name="greeting", input=iter([batch])))
-    assert [v for b in out for v in b.column(0).to_pylist()] == ["Hello, Alice!", "Hello, Bob!"]
+def test_calc_scalar_worker() -> None:
+    """The stage-1 scalar-only tutorial worker doubles each input row."""
+    with _spawn("calc_scalar_worker.py") as client:
+        batch = pa.record_batch({"value": pa.array([21, 5], type=pa.int64())})
+        out = list(client.scalar_function(function_name="double", input=iter([batch])))
+    assert [v for b in out for v in b.column(0).to_pylist()] == [42, 10]
 
 
-def test_greeting_worker_scalar_and_table() -> None:
+def test_calc_worker_scalar_and_table() -> None:
     """The full tutorial worker serves both the scalar and the table function."""
-    with _spawn("greeting_worker.py") as client:
-        names = pa.record_batch({"name": pa.array(["Alice"])})
-        scalar = list(client.scalar_function(function_name="greeting", input=iter([names])))
-        assert scalar[0].column(0).to_pylist() == ["Hello, Alice!"]
+    with _spawn("calc_worker.py") as client:
+        values = pa.record_batch({"value": pa.array([21], type=pa.int64())})
+        scalar = list(client.scalar_function(function_name="double", input=iter([values])))
+        assert scalar[0].column(0).to_pylist() == [42]
 
-    with _spawn("greeting_worker.py") as client:
+    with _spawn("calc_worker.py") as client:
         from vgi.arguments import Arguments
 
         rows = list(
             client.table_function(
-                function_name="greeting_series",
+                function_name="series",
                 arguments=Arguments(positional=(pa.scalar(3),)),
             )
         )
-    greetings = [v for b in rows for v in b.column("greeting").to_pylist()]
-    assert greetings == ["Hello, friend #0!", "Hello, friend #1!", "Hello, friend #2!"]
+    assert [v for b in rows for v in b.column("n").to_pylist()] == [0, 1, 2]
+
+
+def test_greeting_scalar_worker_string_example() -> None:
+    """The string-scalar example (used in the function-patterns guide) still serves."""
+    with _spawn("greeting_scalar_worker.py") as client:
+        batch = pa.record_batch({"name": pa.array(["Alice", "Bob"])})
+        out = list(client.scalar_function(function_name="greeting", input=iter([batch])))
+    assert [v for b in out for v in b.column(0).to_pylist()] == ["Hello, Alice!", "Hello, Bob!"]
 
 
 def test_filter_worker_table_in_out() -> None:

@@ -28,11 +28,22 @@ One row in, one row out. Operate on the whole column with `pyarrow.compute`; the
 types are the schema.
 
 ```python
+--8<-- "examples/calc_scalar_worker.py"
+```
+
+```sql
+ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_scalar_worker.py');
+SELECT calc.double(n) FROM (VALUES (1), (2), (3)) AS t(n);
+```
+
+Scalars aren't just for numbers — any column type works. A string transform looks the same; here
+`compute` joins `Hello, ` + name + `!` across the column:
+
+```python
 --8<-- "examples/greeting_scalar_worker.py"
 ```
 
 ```sql
-ATTACH 'greetings' (TYPE vgi, LOCATION 'uv run greeting_scalar_worker.py');
 SELECT greetings.greeting(name) FROM (VALUES ('Alice'), ('Bob')) AS t(name);
 ```
 
@@ -40,15 +51,16 @@ SELECT greetings.greeting(name) FROM (VALUES ('Alice'), ('Bob')) AS t(name);
 
 Generate rows from arguments, no input table. Declare a typed args dataclass and a `FIXED_SCHEMA`;
 `process` emits batches until `out.finish()`. The `@bind_fixed_schema` / `@init_single_worker`
-decorators wire up the common single-worker lifecycle.
+decorators wire up the common single-worker lifecycle. (This is the full tutorial worker — the
+scalar `double` plus the `series` generator.)
 
 ```python
---8<-- "examples/greeting_worker.py"
+--8<-- "examples/calc_worker.py"
 ```
 
 ```sql
-ATTACH 'greetings' (TYPE vgi, LOCATION 'uv run greeting_worker.py');
-SELECT * FROM greetings.greeting_series(3);
+ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_worker.py');
+SELECT * FROM calc.series(3);
 ```
 
 ## Table-in-out

@@ -38,7 +38,7 @@ Every tutorial, how-to, and concept page **must** contain, in order:
 
   ```text
   ```python
-  --8<-- "examples/greeting_worker.py"
+  --8<-- "examples/calc_worker.py"
   ```
   ```
 

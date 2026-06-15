@@ -23,11 +23,11 @@ Budget about **20 minutes** total.
 
 ## What you'll build
 
-A worker exposing a catalog named `greetings` with two functions, one per step:
+A worker exposing a catalog named `calc` with two functions, one per step:
 
-1. **[Your first scalar function](scalar.md)** — `greeting(name)` maps one row to one row
-   (`"Alice"` → `"Hello, Alice!"`). *(~10 minutes, gets you a working query.)*
-2. **[Add a table function](table.md)** — `greeting_series(count)` generates `count` rows from an
-   argument. *(~10 minutes.)*
+1. **[Your first scalar function](scalar.md)** — `double(value)` maps one row to one row
+   (`21` → `42`). *(~10 minutes, gets you a working query.)*
+2. **[Add a table function](table.md)** — `series(count)` generates `count` rows from an argument.
+   *(~10 minutes.)*
 
 Start with step 1 → **[Your first scalar function](scalar.md)**.
