@@ -120,16 +120,19 @@ nav:
   - How-to guides:
     - how-to/index.md
     - Function patterns: how-to/function-patterns.md
-    - Function API (advanced): generator-api.md
-    - Aggregate Functions: aggregate-functions.md
     - Expose a catalog: how-to/catalogs.md
-    - Catalog Interface (reference): catalog-interface.md
-    - Shared Storage: shared-storage.md
-    - Authentication: authentication.md
-    - Filter Pushdown: filter-pushdown.md
-    - Column Statistics: column-statistics.md
+    - Persist state across workers: how-to/state-storage.md
+    - Serve over HTTP with auth: how-to/http-auth.md
+    - Integrate with the optimizer: how-to/pushdown-and-statistics.md
     - Function Metadata: metadata.md
     - CLI: cli.md
+    - "Reference: Function API": generator-api.md
+    - "Reference: Aggregate Functions": aggregate-functions.md
+    - "Reference: Catalog Interface": catalog-interface.md
+    - "Reference: Shared Storage": shared-storage.md
+    - "Reference: Authentication": authentication.md
+    - "Reference: Filter Pushdown": filter-pushdown.md
+    - "Reference: Column Statistics": column-statistics.md
   - Concepts:
     - concepts/index.md
     - Function Lifecycle: lifecycle.md

@@ -8,26 +8,23 @@ description: "Task-oriented recipes for building VGI workers: function patterns,
 for:** developers who've finished the [tutorial](../tutorial/index.md) and want to build something
 real. Each guide assumes you can already write and run a basic worker.
 
-!!! note "Under construction"
-    These guides are being reworked into the recipe format described in
-    [the docs contributor guide](../contributing-docs.md). Links below currently point to the
-    existing reference material while the rewrite is in progress.
-
 ## Recipes
 
 - **[Function patterns](function-patterns.md)** — scalar, table, table-in-out, and aggregate
-  functions, with a runnable worker for each. *(Start here.)* Deeper reference:
-  [Function API](../generator-api.md) · [Aggregate functions](../aggregate-functions.md)
+  functions, with a runnable worker for each. *(Start here.)*
 - **[Expose a catalog](catalogs.md)** — surface schemas, functions, tables, and views to DuckDB
-  via `ATTACH`. Full options: [Catalog Interface reference](../catalog-interface.md)
-- **Persist state** — keep per-group state across invocations:
-  [Shared Storage](../shared-storage.md)
-- **Run over HTTP with auth** — serve a worker over HTTP and authenticate callers:
-  [Authentication](../authentication.md)
-- **Integrate with the optimizer** — accept pushed-down filters and report statistics:
-  [Filter Pushdown](../filter-pushdown.md) · [Column Statistics](../column-statistics.md)
+  via `ATTACH`.
+- **[Persist state across workers](state-storage.md)** — shared, durable state for distributed
+  aggregates.
+- **[Serve over HTTP with auth](http-auth.md)** — run a worker as a network service and gate it
+  with bearer/JWT auth.
+- **[Integrate with the optimizer](pushdown-and-statistics.md)** — accept pushed-down filters and
+  report column statistics.
 - **Describe your functions** — metadata for introspection: [Function Metadata](../metadata.md)
 - **Use the CLI** — invoke functions and inspect workers from the shell: [CLI](../cli.md)
+
+Each recipe links to a deeper **reference** page (Function API, Catalog Interface, Shared Storage,
+Authentication, Filter Pushdown, Column Statistics) for the full contract.
 
 ## Next steps
 
