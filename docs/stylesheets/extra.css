@@ -262,3 +262,64 @@
 [data-md-color-scheme="slate"] .md-typeset hr {
   border-color: var(--farm-dark-border);
 }
+
+/* ── Function-kind banner ──
+   A header card for each function shape: the cardinality glyph alongside its
+   formula and a one-line gloss, tinted in the kind's colour. Ported from the
+   VGI Java docs' KindBanner. Markdown usage (md_in_html + attr_list):
+
+     <div class="kind-banner kind-banner--scalar" markdown>
+     ![scalar shape](../assets/kinds/scalar.svg){ .kind-banner__glyph }
+     <div class="kind-banner__text" markdown>
+     `1 row → 1 value`{ .kind-banner__formula }
+     One-line description of the shape.
+     { .kind-banner__desc }
+     </div>
+     </div>
+*/
+.md-typeset .kind-banner {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin: 1.25rem 0 2rem;
+  padding: 16px 20px;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-left: 4px solid var(--kind);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--kind) 7%, var(--md-default-bg-color));
+}
+.md-typeset .kind-banner > p {
+  margin: 0;
+  flex: none;
+}
+.md-typeset .kind-banner__glyph {
+  flex: none;
+  height: 48px;
+  width: auto;
+  margin: 0;
+  box-shadow: none;
+  background: none;
+}
+.md-typeset .kind-banner__text {
+  min-width: 0;
+}
+.md-typeset .kind-banner__formula {
+  display: inline-block;
+  font-weight: 700;
+  font-size: 0.78rem;
+  color: var(--kind);
+  background: color-mix(in srgb, var(--kind) 14%, transparent);
+  padding: 2px 9px;
+  border-radius: 6px;
+}
+.md-typeset .kind-banner__desc {
+  margin: 0.5rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--md-default-fg-color--light);
+}
+
+.md-typeset .kind-banner--scalar { --kind: #2563eb; }
+.md-typeset .kind-banner--table { --kind: #0d9488; }
+.md-typeset .kind-banner--table-in-out { --kind: #7c3aed; }
+.md-typeset .kind-banner--aggregate { --kind: #d97706; }

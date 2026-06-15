@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 40" height="40" overflow="visible" role="img" aria-label="scalar function shape: one row to one value">
+  <rect x="6" y="17" width="16" height="6" rx="3" fill="#2563eb"/>
+  <line x1="26" y1="20" x2="37" y2="20" stroke="#2563eb" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="32,15.5 37.5,20 32,24.5" fill="none" stroke="#2563eb" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="33" y="10" text-anchor="middle" fill="#2563eb" font-style="italic" font-weight="700" font-size="13" font-family="Georgia,serif">&#402;</text>
+  <rect x="43" y="17" width="16" height="6" rx="3" fill="#2563eb"/>
+</svg>

@@ -24,6 +24,16 @@ runnable worker for each. **Who it's for:** developers who've finished the
 
 ## Scalar
 
+<div class="kind-banner kind-banner--scalar" markdown>
+![scalar shape](../assets/kinds/scalar.svg){ .kind-banner__glyph }
+<div class="kind-banner__text" markdown>
+`1 row → 1 value`{ .kind-banner__formula }
+
+Runs on each row independently and returns a single value — a pure per-row transform.
+{ .kind-banner__desc }
+</div>
+</div>
+
 One row in, one row out. Operate on the whole column with `pyarrow.compute`; the `Annotated`
 types are the schema.
 
@@ -48,6 +58,16 @@ SELECT greetings.greeting(name) FROM (VALUES ('Alice'), ('Bob')) AS t(name);
 ```
 
 ## Table
+
+<div class="kind-banner kind-banner--table" markdown>
+![table shape](../assets/kinds/table.svg){ .kind-banner__glyph }
+<div class="kind-banner__text" markdown>
+`args → N rows`{ .kind-banner__formula }
+
+A table-valued source: scalar arguments in, a whole set of rows out.
+{ .kind-banner__desc }
+</div>
+</div>
 
 Generate rows from arguments, no input table. Declare a typed args dataclass and a `FIXED_SCHEMA`;
 `process` emits batches until `out.finish()`. The `@bind_fixed_schema` / `@init_single_worker`
@@ -80,6 +100,16 @@ SELECT * FROM calc.series(1000000);   -- streamed CHUNK rows per process() call
 
 ## Table-in-out
 
+<div class="kind-banner kind-banner--table-in-out" markdown>
+![table-in-out shape](../assets/kinds/table-in-out.svg){ .kind-banner__glyph }
+<div class="kind-banner__text" markdown>
+`N rows → M rows`{ .kind-banner__formula }
+
+Consumes a relation and streams a transformed relation back, batch by batch.
+{ .kind-banner__desc }
+</div>
+</div>
+
 Stream an input table through, batch by batch, emitting transformed output. `on_bind` declares the
 output schema; `process` receives each input `batch` and emits results. Here we keep only rows
 whose `value` column is positive.
@@ -94,6 +124,16 @@ SELECT * FROM filters.filter_positive((SELECT * FROM my_table));
 ```
 
 ## Aggregate
+
+<div class="kind-banner kind-banner--aggregate" markdown>
+![aggregate shape](../assets/kinds/aggregate.svg){ .kind-banner__glyph }
+<div class="kind-banner__text" markdown>
+`N rows → 1 value`{ .kind-banner__formula }
+
+Folds many rows down into a single value per group.
+{ .kind-banner__desc }
+</div>
+</div>
 
 Accumulate input rows into per-group state, then emit one row per group. Aggregates are driven by
 DuckDB's `GROUP BY` and run in three phases — `update` (fold a batch into per-group state),
