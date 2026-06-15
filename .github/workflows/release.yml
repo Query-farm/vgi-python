@@ -78,6 +78,12 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     environment: pypi
+    # Disabled until a Trusted Publisher exists for the `vgi-fixtures`
+    # project on PyPI (blocked on a PyPI new-project limit). The wheel is
+    # still built + metadata-checked above; only the upload is skipped, so
+    # vgi-python releases cleanly. Re-enable (delete this `if`) once the
+    # publisher is configured.
+    if: false
     permissions:
       id-token: write # required for Trusted Publishing
     steps:
