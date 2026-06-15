@@ -507,6 +507,20 @@ uv run mypy vgi/            # Type check
 
 ## License
 
-Copyright 2025-2026 Query.Farm LLC. All Rights Reserved.
+Copyright (c) 2025, 2026 Query Farm LLC.
 
-This code is currently restrictively licensed. Contact [Query.Farm](https://query.farm) for licensing information.
+Licensed under the **Query Farm Source-Available License, Version 1.0** — see
+[LICENSE](LICENSE) for the binding terms. In summary (the LICENSE text governs):
+
+- ✅ **Use, copy, modify, and redistribute** the code freely, **including in
+  production and for commercial purposes** — your own internal use, and building
+  products and services on top of VGI.
+- 🚫 Not permitted **without a separate commercial license**: offering a
+  *competing* VGI-equivalent product or service to third parties (hosted,
+  embedded, or as-a-service), or operating a commercial marketplace for such
+  services.
+- ⏳ Each released version converts to the **Apache License, Version 2.0**, ten
+  years after its public release.
+
+For a commercial license or any licensing questions, contact
+[hello@query.farm](mailto:hello@query.farm).
