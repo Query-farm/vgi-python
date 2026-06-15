@@ -42,3 +42,8 @@ test-data/v.parquet
 
 # Cloudflare Worker scaffolding
 cloudflare/vgi-storage/node_modules/
+
+# Local scratch / experiment artifacts (not part of the package)
+/test.json
+/client-tests/
+/docs/time-travel-init-plan.md

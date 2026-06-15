@@ -12,9 +12,11 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager
+from io import StringIO
 
 
 def free_port() -> int:
@@ -56,6 +58,29 @@ def run_example_http_server(
         stderr=subprocess.PIPE,
         text=True,
     )
+
+    # Continuously drain stdout/stderr in background threads. The server logs
+    # one or more lines per RPC; left undrained, a chatty run fills the OS pipe
+    # buffer and the server blocks on write() to stderr — freezing waitress's
+    # single I/O loop so every subsequent request hangs (ReadTimeout). Windows
+    # pipe buffers are small enough to hit this within one test file; POSIX's
+    # 64 KiB buffers usually hide it. Buffer stderr so the exit-code check below
+    # can still surface it.
+    captured_stderr = StringIO()
+
+    def _drain(pipe: object, sink: StringIO | None) -> None:
+        assert pipe is not None
+        for line in pipe:  # type: ignore[attr-defined]
+            if sink is not None:
+                sink.write(line)
+
+    drain_threads = [
+        threading.Thread(target=_drain, args=(proc.stdout, None), daemon=True),
+        threading.Thread(target=_drain, args=(proc.stderr, captured_stderr), daemon=True),
+    ]
+    for t in drain_threads:
+        t.start()
+
     try:
         yield
     finally:
@@ -65,13 +90,14 @@ def run_example_http_server(
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
+        for t in drain_threads:
+            t.join(timeout=5)
 
         # POSIX terminate() -> SIGTERM (-15); Windows terminate() is
         # TerminateProcess(handle, 1), so a cleanly-stopped worker reports 1.
         ok_codes = (0, 1) if sys.platform == "win32" else (0, -15)
         if proc.returncode not in ok_codes:
-            stderr = proc.stderr.read() if proc.stderr is not None else ""
-            raise RuntimeError(f"example HTTP worker exited with code {proc.returncode}: {stderr}")
+            raise RuntimeError(f"example HTTP worker exited with code {proc.returncode}: {captured_stderr.getvalue()}")
 
 
 def start_http_worker(
