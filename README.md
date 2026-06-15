@@ -13,6 +13,10 @@
   Created by <a href="https://query.farm">Query.Farm</a>
 </p>
 
+<p align="center">
+  📖 <strong>Documentation:</strong> <a href="https://vgi-python.query.farm/">vgi-python.query.farm</a>
+</p>
+
 ---
 
 ## See It in Action

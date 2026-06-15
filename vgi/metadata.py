@@ -199,11 +199,11 @@ class PartitionKind(Enum):
     over those columns."""
 
     OVERLAPPING_PARTITIONS = auto()
-    """Partitions overlap only at boundaries (bounds = [1,2][2,3][3,4]).
+    """Partitions overlap only at boundaries (bounds = ``[1,2] [2,3] [3,4]``).
     Wire-level declarable; DuckDB has no consumer today."""
 
     DISJOINT_PARTITIONS = auto()
-    """Partitions are pairwise disjoint (bounds = [1,2][3,4][5,6]).
+    """Partitions are pairwise disjoint (bounds = ``[1,2] [3,4] [5,6]``).
     Wire-level declarable; DuckDB has no consumer today."""
 
 

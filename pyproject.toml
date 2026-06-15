@@ -85,7 +85,7 @@ vgi-transactor = "vgi.transactor.server:main"
 [project.urls]
 Homepage = "https://query.farm"
 Repository = "https://github.com/Query-farm/vgi-python"
-Documentation = "https://github.com/Query-farm/vgi-python/tree/main/docs"
+Documentation = "https://vgi-python.query.farm/"
 Issues = "https://github.com/Query-farm/vgi-python/issues"
 
 [build-system]
@@ -188,3 +188,13 @@ vgi-fixtures = { workspace = true }
 
 [dependency-groups]
 dev = ["lxml>=6.0.2", "pytest-timeout>=2.4.0", "ty>=0.0.8", "vgi-fixtures"]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.27",
+    "mkdocs-section-index>=0.3",
+    "mkdocs-d2-plugin>=1.4",
+    "pygments>=2.20",
+    "pymdown-extensions>=10.21.2",
+    "ruff>=0.1",
+]

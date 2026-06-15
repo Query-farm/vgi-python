@@ -6,6 +6,11 @@ dist/
 wheels/
 *.egg-info
 
+# MkDocs build output
+/site/
+# MkDocs plugin caches (d2 diagram render cache)
+/.cache/
+
 # Virtual environments
 .venv
 
