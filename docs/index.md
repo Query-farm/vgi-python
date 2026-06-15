@@ -106,13 +106,13 @@ See the [API Reference](api/index.md) for the full surface, or jump into the gui
 
 ## Documentation
 
+- **[Tutorial](tutorial/index.md)** — build your first worker (scalar + table function callable
+  from DuckDB) in about 20 minutes. **Start here.**
+- **[How-to guides](how-to/index.md)** — task-oriented recipes: function patterns, catalogs,
+  state, auth/HTTP, and optimizer integration.
+- **[Concepts](concepts/index.md)** — how it works: the worker lifecycle, transports, and the
+  Arrow data model.
 - **[API Reference](api/index.md)** — auto-generated from the source, organized by module.
-- **Guides** — [Catalog Interface](catalog-interface.md), [Function API](generator-api.md),
-  [Lifecycle](lifecycle.md), [Aggregate Functions](aggregate-functions.md),
-  [Filter Pushdown](filter-pushdown.md), [Column Statistics](column-statistics.md),
-  [Metadata](metadata.md), [Authentication](authentication.md),
-  [Argument Serialization](argument-serialization.md), [Shared Storage](shared-storage.md),
-  and the [CLI](cli.md).
 
 ## Project links
 

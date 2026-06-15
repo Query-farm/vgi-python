@@ -113,6 +113,26 @@ plugins:
 
 nav:
   - Home: index.md
+  - Tutorial:
+    - tutorial/index.md
+    - 1. Scalar function: tutorial/scalar.md
+    - 2. Table function: tutorial/table.md
+  - How-to guides:
+    - how-to/index.md
+    - Function patterns: how-to/function-patterns.md
+    - Function API (advanced): generator-api.md
+    - Aggregate Functions: aggregate-functions.md
+    - Catalog Interface: catalog-interface.md
+    - Shared Storage: shared-storage.md
+    - Authentication: authentication.md
+    - Filter Pushdown: filter-pushdown.md
+    - Column Statistics: column-statistics.md
+    - Function Metadata: metadata.md
+    - CLI: cli.md
+  - Concepts:
+    - concepts/index.md
+    - Function Lifecycle: lifecycle.md
+    - Argument Serialization: argument-serialization.md
   - API Reference:
     - api/index.md
     - Functions: api/functions.md
@@ -128,15 +148,4 @@ nav:
     - HTTP: api/http.md
     - Transactor: api/transactor.md
     - Exceptions: api/exceptions.md
-  - Guides:
-    - Catalog Interface: catalog-interface.md
-    - Function API (Advanced): generator-api.md
-    - Function Lifecycle: lifecycle.md
-    - Aggregate Functions: aggregate-functions.md
-    - Filter Pushdown: filter-pushdown.md
-    - Column Statistics: column-statistics.md
-    - Function Metadata: metadata.md
-    - Argument Serialization: argument-serialization.md
-    - Authentication: authentication.md
-    - Shared Storage: shared-storage.md
-    - CLI: cli.md
+  - Contributing to docs: contributing-docs.md
