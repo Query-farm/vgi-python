@@ -265,7 +265,7 @@ class Table:
             constraining as the four individual ones. The VGI DuckDB
             extension's optimizer pass consults this list at bind time and
             throws ``BinderException`` listing any unsatisfied paths.
-        statistics: Mapping of column name to [`ColumnStatisticsInput`][]
+        statistics: Mapping of column name to ``ColumnStatisticsInput``
             providing inlined column statistics for the optimizer.
         statistics_cache_max_age_seconds: How long clients may cache the inlined
             statistics, in seconds. ``None`` means cache indefinitely.
