@@ -3,10 +3,10 @@
 """Declarative descriptor classes for catalog definition.
 
 This module provides classes for declaratively defining catalog structure:
-- Catalog: Top-level container for schemas
-- Schema: Groups tables, views, and functions
-- Table: Table definition with columns and constraints
-- View: View definition with SQL
+- [`Catalog`][]: Top-level container for schemas
+- [`Schema`][]: Groups tables, views, and functions
+- [`Table`][]: Table definition with columns and constraints
+- [`View`][]: View definition with SQL
 
 """
 
@@ -134,7 +134,7 @@ class ColumnStatisticsInput:
 def _default_to_sql(value: DefaultValue) -> str:
     """Convert a Python default value to a SQL expression string.
 
-    - ``Sql``: passed through verbatim (raw SQL)
+    - `[`Sql`][]`: passed through verbatim (raw SQL)
     - ``str``: quoted as a SQL string literal (``'hello'``)
     - ``int`` / ``float``: unquoted numeric literal
     - ``bool``: ``true`` / ``false``
@@ -210,17 +210,30 @@ class Table:
     Attributes:
         name: Table name.
         columns: Explicit PyArrow schema (mutually exclusive with function).
-        function: TableFunctionGenerator class to derive schema from
+        function: [`TableFunctionGenerator`][] class to derive schema from
             (mutually exclusive with columns).
         arguments: Arguments to pass when calling ``bind()`` on a
             function-backed table. Required when the function has
             mandatory parameters.
+        supports_time_travel: Whether this table supports time-travel
+            (AT-clause) queries.
+        insert_function: [`TableInOutGenerator`][] class backing INSERT. ``None``
+            means INSERT is unsupported.
+        update_function: [`TableInOutGenerator`][] class backing UPDATE. Requires
+            a scan ``function`` to provide row IDs. ``None`` means UPDATE is
+            unsupported.
+        delete_function: [`TableInOutGenerator`][] class backing DELETE. Requires
+            a scan ``function`` to provide row IDs. ``None`` means DELETE is
+            unsupported.
         not_null: Tuple of column names with NOT NULL constraints.
         unique: Tuple of column name tuples for UNIQUE constraints.
         check: Tuple of SQL expressions for CHECK constraints.
+        primary_key: Tuple of column-name tuples forming the primary key. At
+            most one primary-key constraint is allowed.
+        foreign_key: Tuple of [`ForeignKeyDef`][] foreign-key constraints.
         defaults: Dict mapping column names to default values. Accepts
             Python literals (str, int, float, bool, None) which are
-            auto-converted, or SqlExpression for raw SQL.
+            auto-converted, or `SqlExpression` for raw SQL.
         generated_columns: Dict mapping column names to SQL expressions
             for generated (virtual) columns. Generated columns are
             computed on read by DuckDB and are mutually exclusive with
@@ -239,6 +252,26 @@ class Table:
             constraining as the four individual ones. The VGI DuckDB
             extension's optimizer pass consults this list at bind time and
             throws ``BinderException`` listing any unsatisfied paths.
+        statistics: Mapping of column name to [`ColumnStatisticsInput`][]
+            providing inlined column statistics for the optimizer.
+        statistics_cache_max_age_seconds: How long clients may cache the inlined
+            statistics, in seconds. ``None`` means cache indefinitely.
+        cardinality_estimate: Optional inlined cardinality. When set, the C++
+            extension uses these values directly and skips the per-bind
+            ``table_function_cardinality`` RPC. Use for read-only or
+            slow-changing tables. Leave both this and ``cardinality_max`` as
+            ``None`` to keep the existing per-bind RPC behavior.
+        cardinality_max: Optional inlined maximum cardinality. Same caching
+            contract as ``cardinality_estimate``.
+        inline_bind: Opt into pre-binding the function during
+            ``schema_contents`` and inlining the result on
+            ``TableInfo.bind_result``; the C++ extension then skips the per-scan
+            ``bind`` RPC. Only valid when ``function`` is a
+            ``@bind_fixed_schema``-decorated ``TableFunctionGenerator`` subclass
+            — the decorator's contract (output is exactly ``cls.FIXED_SCHEMA``,
+            no per-call inputs) matches what's safe to freeze for the catalog
+            cache lifetime. Setting this on a descriptor whose function is not
+            decorated raises at descriptor build.
         comment: Optional table comment.
         tags: Optional metadata tags.
 
@@ -263,21 +296,8 @@ class Table:
     required_field_filter_paths: tuple[str, ...] = ()
     statistics: dict[str, ColumnStatisticsInput] = field(default_factory=dict)
     statistics_cache_max_age_seconds: int | None = None
-    # Optional inlined cardinality. When set, the C++ extension uses these
-    # values directly and skips the per-bind ``table_function_cardinality``
-    # RPC. Use for read-only or slow-changing tables. Leave both as ``None``
-    # to keep the existing per-bind RPC behavior.
     cardinality_estimate: int | None = None
     cardinality_max: int | None = None
-    # Opt into pre-binding the function during ``schema_contents`` and
-    # inlining the result on ``TableInfo.bind_result``. The C++ extension
-    # then skips the per-scan ``bind`` RPC.
-    #
-    # Only valid when ``function`` is a ``@bind_fixed_schema``-decorated
-    # ``TableFunctionGenerator`` subclass — the decorator's contract (output
-    # is exactly ``cls.FIXED_SCHEMA``, no per-call inputs) matches what's
-    # safe to freeze for the catalog cache lifetime. Setting this on a
-    # descriptor whose function is not decorated raises at descriptor build.
     inline_bind: bool = False
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
@@ -551,7 +571,7 @@ class Table:
         return schema
 
     def to_table_info(self, schema_name: str) -> TableInfo:
-        """Convert to TableInfo for catalog response."""
+        """Convert to [`TableInfo`][] for catalog response."""
         cols = self._apply_defaults_to_schema(self.resolved_columns)
         cols = self._apply_generated_columns_to_schema(cols)
         cols = self._apply_column_comments_to_schema(cols)
@@ -640,7 +660,7 @@ class View:
     tags: dict[str, str] = field(default_factory=dict)
 
     def to_view_info(self, schema_name: str) -> ViewInfo:
-        """Convert to ViewInfo for catalog response."""
+        """Convert to [`ViewInfo`][] for catalog response."""
         return ViewInfo(
             name=self.name,
             schema_name=schema_name,
@@ -659,7 +679,7 @@ class Macro:
         name: Macro name.
         macro_type: Whether this is a scalar or table macro.
         parameters: Ordered list of parameter names.
-        parameter_default_values: One-row RecordBatch where columns are parameter
+        parameter_default_values: One-row `RecordBatch` where columns are parameter
             names and values are typed defaults. None if no defaults.
             Example: pa.RecordBatch.from_pydict({"b": [5]}) for b := 5.
         definition: SQL expression (scalar) or query (table).
@@ -694,7 +714,7 @@ class Macro:
                     )
 
     def to_macro_info(self, schema_name: str) -> MacroInfo:
-        """Convert to MacroInfo for catalog response."""
+        """Convert to [`MacroInfo`][] for catalog response."""
         return MacroInfo(
             name=self.name,
             schema_name=schema_name,
@@ -744,7 +764,7 @@ class Index:
             raise ValueError(f"Index '{self.name}': must specify a table_name")
 
     def to_index_info(self, schema_name: str) -> IndexInfo:
-        """Convert to IndexInfo for catalog response."""
+        """Convert to [`IndexInfo`][] for catalog response."""
         return IndexInfo(
             name=self.name,
             schema_name=schema_name,
@@ -784,7 +804,7 @@ class Schema:
     indexes: Sequence[Index] = ()
 
     def to_schema_info(self, attach_opaque_data: AttachOpaqueData) -> SchemaInfo:
-        """Convert to SchemaInfo for catalog response.
+        """Convert to [`SchemaInfo`][] for catalog response.
 
         Populates ``estimated_object_count`` from the declared population so
         the C++ extension's eager-load gate can choose between bulk

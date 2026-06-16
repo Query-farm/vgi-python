@@ -123,22 +123,22 @@ class CatalogDataVersionRelease(ArrowSerializableDataclass):
 
     Long-form release notes do not live here — link to a CHANGELOG anchor,
     GitHub release page, PR, or migration guide via ``notes_url``.
+
+    Attributes:
+        version: Concrete version, not a spec. e.g. "1.0.0", "2.4.1". Semver
+            carries the breaking-change signal directly — major bumps are
+            breaking, minor/patch are not.
+        released_at: Release date (UTC). ``None`` when the worker doesn't
+            track dates.
+        summary: One-line human summary. Empty string when unknown.
+        notes_url: Optional per-release link to detailed notes. Distinct from
+            ``CatalogInfo.source_url`` (which points at the repo as a whole):
+            this points at what changed in *this* release.
     """
 
-    # Concrete version, not a spec. e.g. "1.0.0", "2.4.1". Semver carries
-    # the breaking-change signal directly — major bumps are breaking,
-    # minor/patch are not.
     version: str
-
-    # Release date (UTC). ``None`` when the worker doesn't track dates.
     released_at: Annotated[datetime | None, ArrowType(pa.timestamp("us", tz="UTC"))] = None
-
-    # One-line human summary. Empty string when unknown.
     summary: str = ""
-
-    # Optional per-release link to detailed notes. Distinct from
-    # ``CatalogInfo.source_url`` (which points at the repo as a whole):
-    # this points at what changed in *this* release.
     notes_url: str | None = None
 
 
@@ -146,136 +146,234 @@ class CatalogDataVersionRelease(ArrowSerializableDataclass):
 class CatalogInfo(ArrowSerializableDataclass):
     """Discovery record for a catalog exposed by a worker.
 
-    Returned by catalog_catalogs() so clients can inspect per-catalog version
+    Returned by `catalog_catalogs()` so clients can inspect per-catalog version
     metadata before attaching.
+
+    Attributes:
+        name: Catalog name — pass to catalog_attach() to open it.
+        implementation_version: Worker software version (singular per worker).
+            ``None`` = worker declares no implementation version.
+        data_version_spec: Semver range the catalog serves (e.g.
+            ">=1.0.0,<2.0.0"). ``None`` = worker declares no data-version
+            opinion.
+        attach_option_specs: Attach-time options the catalog accepts (distinct
+            from session settings). Each AttachOptionSpec is serialized as bytes
+            for Arrow compatibility. Enables pre-attach discovery via the
+            catalogs() RPC.
+        releases: Concrete published data versions, newest-first. Empty when the
+            worker doesn't track release history. See
+            ``CatalogDataVersionRelease`` for the per-entry ordering and
+            uniqueness contracts.
+        source_url: Where this worker's code lives — repo, build, docs. ``None``
+            when the worker doesn't advertise a source location.
     """
 
-    # Catalog name — pass to catalog_attach() to open it.
     name: str
-    # Worker software version (singular per worker). ``None`` = worker declares
-    # no implementation version.
     implementation_version: str | None
-    # Semver range the catalog serves (e.g. ">=1.0.0,<2.0.0"). ``None`` = worker
-    # declares no data-version opinion.
     data_version_spec: str | None
-    # Attach-time options the catalog accepts (distinct from session settings).
-    # Each AttachOptionSpec is serialized as bytes for Arrow compatibility.
-    # Enables pre-attach discovery via the catalogs() RPC.
     attach_option_specs: list[bytes] = field(default_factory=list)
-    # Concrete published data versions, newest-first. Empty when the worker
-    # doesn't track release history. See ``CatalogDataVersionRelease`` for
-    # the per-entry ordering and uniqueness contracts.
     releases: list[CatalogDataVersionRelease] = field(default_factory=list)
-    # Where this worker's code lives — repo, build, docs. ``None`` when
-    # the worker doesn't advertise a source location.
     source_url: str | None = None
 
 
 @dataclass(frozen=True)
 class CatalogAttachResult(ArrowSerializableDataclass):
-    """Result from attaching to a catalog."""
+    """Result from attaching to a catalog.
 
-    # The unique id for the attached catalog.
+    Attributes:
+        attach_opaque_data: The unique id for the attached catalog.
+        supports_transactions: Indicate if the worker supports transactions or
+            not. If false, all transaction related methods will not be called
+            and all transaction_opaque_data parameters will be None.
+        supports_time_travel: Indicate if tables support time travel.
+        catalog_version_frozen: Indicate that the catalog version id is frozen
+            and the schema and object information will not change.
+        catalog_version: The initial catalog version, it increments when
+            schemas, tables or other objects change.
+        attach_opaque_data_required: Indicate if the attach_opaque_data must be
+            persisted across commands. True: Catalog is stateful;
+            attach_opaque_data represents a session. False: Catalog is
+            stateless; CLI can auto-attach on each command.
+        default_schema: The name of the default schema for this catalog.
+        settings: Extension options (settings) exposed by this catalog/worker.
+            Each ExtensionOption is serialized as bytes for Arrow compatibility.
+        secret_types: Secret types registered with DuckDB's SecretManager. Each
+            SecretTypeSpec is serialized as bytes for Arrow compatibility.
+        comment: Optional comment describing this catalog/database.
+        tags: Optional key-value tags associated with this catalog/database.
+        supports_column_statistics: Whether any tables in this catalog can
+            provide column statistics. Global gate — if False, GetStatistics()
+            returns nullptr for all tables.
+        resolved_data_version: Concrete data version the worker resolved for
+            this attach. ``None`` = worker has no opinion or the request omitted
+            data_version_spec.
+        resolved_implementation_version: Concrete implementation version the
+            worker resolved for this attach. ``None`` = worker has no opinion or
+            the request omitted implementation_version.
+    """
+
     attach_opaque_data: AttachOpaqueData
-    # Indicate if the worker supports transactions or not.
-    # If false, all transaction related methods will not be called and all
-    # transaction_opaque_data parameters will be None.
     supports_transactions: bool
-    # Indicate if tables support time travel
     supports_time_travel: bool
-    # Indicate that the catalog version id is frozen and the schema
-    # and object information will not change.
     catalog_version_frozen: bool
-    # The initial catalog version, it increments when schemas, tables
-    # or other objects change.
     catalog_version: int
-    # Indicate if the attach_opaque_data must be persisted across commands.
-    # True: Catalog is stateful; attach_opaque_data represents a session
-    # False: Catalog is stateless; CLI can auto-attach on each command
     attach_opaque_data_required: bool = True
-    # The name of the default schema for this catalog.
     default_schema: str = "main"
-    # Extension options (settings) exposed by this catalog/worker.
-    # Each ExtensionOption is serialized as bytes for Arrow compatibility.
     settings: list[bytes] = field(default_factory=list)
-    # Secret types registered with DuckDB's SecretManager.
-    # Each SecretTypeSpec is serialized as bytes for Arrow compatibility.
     secret_types: list[bytes] = field(default_factory=list)
-    # Optional comment describing this catalog/database.
     comment: str | None = None
-    # Optional key-value tags associated with this catalog/database.
     tags: dict[str, str] = field(default_factory=dict)
-    # Whether any tables in this catalog can provide column statistics.
-    # Global gate — if False, GetStatistics() returns nullptr for all tables.
     supports_column_statistics: bool = False
-    # Concrete data version the worker resolved for this attach. ``None`` =
-    # worker has no opinion or the request omitted data_version_spec.
     resolved_data_version: str | None = field(kw_only=True)
-    # Concrete implementation version the worker resolved for this attach.
-    # ``None`` = worker has no opinion or the request omitted
-    # implementation_version.
     resolved_implementation_version: str | None = field(kw_only=True)
 
 
 @dataclass(frozen=True)
 class CatalogObject:
-    """All objects have the following common properties."""
+    """All objects have the following common properties.
 
-    # This is a generic comment about the object
+    Attributes:
+        comment: This is a generic comment about the object.
+        tags: These are key-value tags associated with the object.
+    """
+
     comment: str | None
-    # These are key-value tags associated with the object
     tags: dict[str, str]
 
 
 @dataclass(frozen=True)
 class CatalogSchemaObject(CatalogObject):
-    """Objects that exist within a schema have the following common properties."""
+    """Objects that exist within a schema have the following common properties.
 
-    # The name of the object
+    Attributes:
+        name: The name of the object.
+        schema_name: The name of the schema containing the object.
+    """
+
     name: str
-    # The name of the schema containing the object
     schema_name: str
 
 
 @dataclass(frozen=True)
 class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
-    """Information about a schema in a catalog."""
+    """Information about a schema in a catalog.
+
+    Attributes:
+        attach_opaque_data: The unique id for the attached catalog.
+        name: The name of the schema.
+        estimated_object_count: Approximate population per object kind, keyed by
+            the same names the C++ extension uses for its set-cache
+            instrumentation: ``"table"``, ``"view"``, ``"scalar_function"``,
+            ``"aggregate_function"``, ``"table_function"``, ``"macro"``,
+            ``"index"``. Used by the client to pick between bulk ``LoadEntries``
+            and per-name single-entry RPCs. Workers may omit the field entirely
+            or any individual key — the client treats absent counts as 1, so
+            unspecified populations bias toward eager bulk-load.
+
+            **The value 0 is a hard guarantee, not an estimate.** When a count
+            is exactly 0 the client skips the corresponding
+            ``catalog_schema_contents_*`` bulk RPC entirely and short-circuits
+            per-name lookups (``catalog_table_get`` / ``catalog_view_get`` /
+            ``catalog_index_get``). If a worker reports 0 for a kind that
+            actually has entries, ``SELECT … FROM s.x`` silently returns "not
+            found" — only declare 0 for kinds the worker knows are empty in its
+            current view of the schema. Cross-session DDL on the same catalog
+            (another connection creating a view in a schema this connection has
+            cached as zero-views) is handled the same way as any other stale
+            catalog cache: ``vgi_clear_cache()`` or re-attach. Time-travel
+            AT-clause queries do not honor the bypass — they always issue the
+            per-name RPC because a historical version may have had entries the
+            current view does not.
+    """
 
     attach_opaque_data: AttachOpaqueData
     name: str
-    # Approximate population per object kind, keyed by the same names the C++
-    # extension uses for its set-cache instrumentation: ``"table"``, ``"view"``,
-    # ``"scalar_function"``, ``"aggregate_function"``, ``"table_function"``,
-    # ``"macro"``, ``"index"``. Used by the client to pick between bulk
-    # ``LoadEntries`` and per-name single-entry RPCs. Workers may omit the
-    # field entirely or any individual key — the client treats absent counts
-    # as 1, so unspecified populations bias toward eager bulk-load.
-    #
-    # **The value 0 is a hard guarantee, not an estimate.** When a count is
-    # exactly 0 the client skips the corresponding ``catalog_schema_contents_*``
-    # bulk RPC entirely and short-circuits per-name lookups
-    # (``catalog_table_get`` / ``catalog_view_get`` / ``catalog_index_get``).
-    # If a worker reports 0 for a kind that actually has entries,
-    # ``SELECT … FROM s.x`` silently returns "not found" — only declare 0 for
-    # kinds the worker knows are empty in its current view of the schema.
-    # Cross-session DDL on the same catalog (another connection creating a
-    # view in a schema this connection has cached as zero-views) is handled
-    # the same way as any other stale catalog cache: ``vgi_clear_cache()`` or
-    # re-attach. Time-travel AT-clause queries do not honor the bypass — they
-    # always issue the per-name RPC because a historical version may have had
-    # entries the current view does not.
     estimated_object_count: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)
 class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
-    """Information about a table in a schema."""
+    """Information about a table in a schema.
 
-    # The columns of the table as a PyArrow schema
-    # that is serialized as bytes.
+    Attributes:
+        columns: The columns of the table as a PyArrow schema that is serialized
+            as bytes.
+        not_null_constraints: Column indices with a NOT NULL constraint. Uses
+            ArrowType to specify int32 instead of the default int64.
+        unique_constraints: Column-index groups with a UNIQUE constraint.
+        check_constraints: SQL CHECK constraint expressions.
+        primary_key_constraints: Column-index groups forming the primary key.
+        foreign_key_constraints: Serialized foreign-key constraint specs.
+        supports_insert: Write-support flag — whether the table supports INSERT.
+        supports_update: Write-support flag — whether the table supports UPDATE.
+        supports_delete: Write-support flag — whether the table supports DELETE.
+        supports_returning: When False (the default), the C++ extension rejects
+            INSERT/UPDATE/DELETE ... RETURNING at plan time with a
+            BinderException. Workers that can emit the affected rows from their
+            write functions must opt in by setting this to True.
+        supports_column_statistics: Statistics capability flag — indicates this
+            table can provide column statistics.
+        scan_function: Optional inlined function-discovery result. When
+            populated, the C++ extension uses the cached value and skips the
+            corresponding ``catalog_table_scan_function_get`` RPC. Bytes are the
+            IPC payload from ``ScanFunctionResult.serialize()``. Populating this
+            freezes the function args for the lifetime of the catalog cache
+            (until ``catalog_version`` bumps); workers whose function args change
+            more frequently than ``catalog_version`` (rotating credentials,
+            presigned URLs, per-transaction snapshots) MUST leave it null so the
+            per-bind RPC continues to fire.
+        insert_function: Optional inlined INSERT function-discovery result. Same
+            caching contract as ``scan_function``.
+        update_function: Optional inlined UPDATE function-discovery result. Same
+            caching contract as ``scan_function``.
+        delete_function: Optional inlined DELETE function-discovery result. Same
+            caching contract as ``scan_function``.
+        cardinality_estimate: Optional inlined cardinality estimate. When
+            populated, the C++ extension uses it directly and skips the
+            ``table_function_cardinality`` RPC — saving one round-trip per bind.
+            Use for read-only or slow-changing tables where cardinality is
+            statically known. Freezes the cardinality for the catalog cache
+            lifetime (until ``catalog_version`` bumps); workers whose cardinality
+            changes faster (e.g. live counters) MUST leave it null.
+        cardinality_max: Optional inlined maximum cardinality. Same caching
+            contract as ``cardinality_estimate``.
+        column_statistics: Optional inlined column statistics. When populated,
+            the C++ extension uses the cached value and skips the per-bind /
+            per-table ``catalog_table_column_statistics_get`` RPC and the
+            per-scan ``table_function_statistics`` RPC. Bytes are the IPC payload
+            from ``serialize_column_statistics(stats, cache_max_age_seconds)``.
+            Freezes the resolved stats for the catalog cache lifetime (until
+            ``catalog_version`` bumps); workers whose statistics change faster
+            than ``catalog_version`` (e.g. live counters, rapidly-mutating
+            dimensions) MUST leave this null so the on-demand RPC continues to
+            fire.
+        bind_result: Optional inlined bind result. Bytes are the IPC payload of
+            ``BindResponse.serialize_to_bytes()``. When populated, the C++
+            extension uses these bytes verbatim and skips the per-scan ``bind``
+            RPC, threading the deserialized BindResult straight into bind_data.
+            The catalog framework only populates this for tables marked
+            ``Table(inline_bind=True)`` whose function class is
+            ``@bind_fixed_schema``-decorated — the decorator's contract (output
+            is exactly ``cls.FIXED_SCHEMA``, no per-call inputs, no opaque_data)
+            matches what's safe to freeze for the catalog cache lifetime.
+            Functions with custom ``on_bind`` are not eligible via the framework
+            path; workers can still inline manually inside their own
+            ``schema_contents`` override when the bind output is independently
+            known to be stable.
+        required_field_filter_paths: Dotted-path column references that the VGI
+            extension's optimizer pass must verify appear in any scan's WHERE
+            expression (top-level column names like ``"country"`` or struct
+            subfields like ``"bbox.xmin"``, ``"nested.outer.inner"``). Empty
+            (default) means no enforcement — the zero-cost fast path for every
+            existing table. Satisfaction is prefix-based: a present filter on a
+            shorter dotted path satisfies any required path it's a prefix of. A
+            whole-struct filter on ``bbox`` therefore satisfies every required
+            ``"bbox.*"`` path. The C++ extension throws ``BinderException``
+            listing any unsatisfied paths.
+    """
+
     columns: SerializedSchema
 
-    # Use ArrowType to specify int32 instead of default int64
     not_null_constraints: Annotated[list[int], ArrowType(pa.list_(pa.int32()))]
     unique_constraints: Annotated[list[list[int]], ArrowType(pa.list_(pa.list_(pa.int32())))]
     check_constraints: list[str]
@@ -284,102 +382,45 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     )
     foreign_key_constraints: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
 
-    # Write support flags — indicate which DML operations the table supports.
     supports_insert: bool = False
     supports_update: bool = False
     supports_delete: bool = False
-    # When False (the default), the C++ extension rejects INSERT/UPDATE/DELETE
-    # ... RETURNING at plan time with a BinderException. Workers that can emit
-    # the affected rows from their write functions must opt in by setting this
-    # to True.
     supports_returning: bool = False
 
-    # Statistics capability flag — indicates this table can provide column statistics.
     supports_column_statistics: bool = False
 
-    # Optional inlined function-discovery results. When populated, the C++
-    # extension uses the cached value and skips the corresponding
-    # ``catalog_table_{scan,insert,update,delete}_function_get`` RPC. Bytes are
-    # the IPC payload from ``ScanFunctionResult.serialize()``.
-    #
-    # Populating these fields freezes the function args for the lifetime of the
-    # catalog cache (until ``catalog_version`` bumps). Workers whose function
-    # args change more frequently than ``catalog_version`` (rotating
-    # credentials, presigned URLs, per-transaction snapshots) MUST leave these
-    # null so the per-bind RPC continues to fire.
     scan_function: Annotated[bytes | None, ArrowType(pa.binary())] = None
     insert_function: Annotated[bytes | None, ArrowType(pa.binary())] = None
     update_function: Annotated[bytes | None, ArrowType(pa.binary())] = None
     delete_function: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
-    # Optional inlined cardinality. When populated, the C++ extension uses
-    # these values directly and skips the ``table_function_cardinality`` RPC
-    # — saving one round-trip per bind. Use for read-only or slow-changing
-    # tables where cardinality is statically known.
-    #
-    # Populating these fields freezes the cardinality for the lifetime of
-    # the catalog cache (until ``catalog_version`` bumps). Workers whose
-    # cardinality changes faster (e.g. live counters) MUST leave them null
-    # so the per-bind RPC continues to fire.
     cardinality_estimate: Annotated[int | None, ArrowType(pa.int64())] = None
     cardinality_max: Annotated[int | None, ArrowType(pa.int64())] = None
 
-    # Optional inlined column statistics. When populated, the C++ extension
-    # uses the cached value and skips the per-bind / per-table
-    # ``catalog_table_column_statistics_get`` RPC and the per-scan
-    # ``table_function_statistics`` RPC. Bytes are the IPC payload from
-    # ``serialize_column_statistics(stats, cache_max_age_seconds)``.
-    #
-    # Populating this field freezes the resolved stats for the lifetime of
-    # the catalog cache (until ``catalog_version`` bumps). Workers whose
-    # statistics change faster than ``catalog_version`` (e.g. live counters,
-    # rapidly-mutating dimensions) MUST leave this null so the on-demand
-    # RPC continues to fire.
     column_statistics: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
-    # Optional inlined bind result. Bytes are the IPC payload of
-    # ``BindResponse.serialize_to_bytes()``. When populated, the C++
-    # extension uses these bytes verbatim and skips the per-scan ``bind``
-    # RPC, threading the deserialized BindResult straight into bind_data.
-    #
-    # The catalog framework only populates this for tables marked
-    # ``Table(inline_bind=True)`` whose function class is
-    # ``@bind_fixed_schema``-decorated — the decorator's contract (output is
-    # exactly ``cls.FIXED_SCHEMA``, no per-call inputs, no opaque_data)
-    # matches what's safe to freeze for the catalog cache lifetime.
-    # Functions with custom ``on_bind`` are not eligible via the framework
-    # path; workers can still inline manually inside their own
-    # ``schema_contents`` override when the bind output is independently
-    # known to be stable.
     bind_result: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
-    # Dotted-path column references that the VGI extension's optimizer pass
-    # must verify appear in any scan's WHERE expression (top-level column
-    # names like ``"country"`` or struct subfields like ``"bbox.xmin"``,
-    # ``"nested.outer.inner"``). Empty (default) means no enforcement — the
-    # zero-cost fast path for every existing table.
-    #
-    # Satisfaction is prefix-based: a present filter on a shorter dotted path
-    # satisfies any required path it's a prefix of. A whole-struct filter on
-    # ``bbox`` therefore satisfies every required ``"bbox.*"`` path. The C++
-    # extension throws ``BinderException`` listing any unsatisfied paths.
     required_field_filter_paths: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):
-    """Information about a view in a schema."""
+    """Information about a view in a schema.
 
-    # The definition of the view which is a SQL query string.
+    Attributes:
+        definition: The definition of the view which is a SQL query string.
+        column_comments: Per-column comments, keyed by the view's output column
+            name. Unlike tables (whose column comments ride along as Arrow field
+            metadata on the serialized ``columns`` schema), a view ships only its
+            SQL ``definition`` — DuckDB binds that query to derive the columns —
+            so view column comments need their own channel. The C++ extension
+            aligns these by name against the bound output columns and feeds them
+            into ``CreateViewInfo.column_comments_map``; names that don't match a
+            bound column are ignored.
+    """
+
     definition: str
-
-    # Per-column comments, keyed by the view's output column name. Unlike tables
-    # (whose column comments ride along as Arrow field metadata on the serialized
-    # ``columns`` schema), a view ships only its SQL ``definition`` — DuckDB binds
-    # that query to derive the columns — so view column comments need their own
-    # channel. The C++ extension aligns these by name against the bound output
-    # columns and feeds them into ``CreateViewInfo.column_comments_map``; names
-    # that don't match a bound column are ignored.
     column_comments: dict[str, str] = field(default_factory=dict)
 
 
@@ -390,7 +431,7 @@ class MacroInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     Attributes:
         macro_type: Whether this is a scalar or table macro.
         parameters: Ordered list of parameter names.
-        parameter_default_values: One-row RecordBatch where column names are parameter
+        parameter_default_values: One-row `RecordBatch` where column names are parameter
             names and values are typed defaults. None if no defaults.
             Serialized as IPC bytes over the wire.
         definition: The SQL expression (scalar) or query (table).
@@ -485,104 +526,124 @@ class OnConflict(Enum):
 
 @dataclass(frozen=True)
 class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
-    """Information about a function in a schema."""
+    """Information about a function in a schema.
 
-    # the type of function from VGI
+    Attributes:
+        function_type: The type of function from VGI.
+        arguments: The arguments as a serialized Apache arrow schema using
+            ``schema.serialize().to_pybytes()``.
+        output_schema: The output schema as a serialized Apache arrow schema
+            using ``schema.serialize().to_pybytes()``.
+        stability: Scalar function behavior field (None for non-scalar
+            functions).
+        null_handling: Scalar function behavior field (None for non-scalar
+            functions).
+        description: Intrinsic documentation from function metadata
+            (``Meta.description``). The user-settable ``comment`` (via COMMENT ON
+            FUNCTION) is inherited from the base object.
+        examples: Usage examples for the function.
+        categories: Category labels for the function.
+        projection_pushdown: Table-function capability (None for scalar
+            functions).
+        filter_pushdown: Table-function capability (None for scalar functions).
+        sampling_pushdown: Table-function capability (None for scalar
+            functions).
+        late_materialization: True if the table participates in DuckDB's
+            late-materialization optimizer (``Meta.late_materialization``). The
+            DuckDB extension only honours this when the table also exposes a
+            rowid virtual column plus filter/projection pushdown — see
+            GetScanFunctionImpl in the C++ vgi_table_entry.cpp.
+        supported_expression_filters: Expression-filter classes the function can
+            accept pushed down.
+        order_preservation: Whether the function preserves input ordering.
+        max_workers: Maximum parallel workers. Uses ArrowType to specify int32
+            instead of the default int64.
+        supports_batch_index: True if the function opts in to per-batch
+            ``vgi_batch_index`` tagging: the worker emits an integer partition id
+            in each Arrow batch's KeyValueMetadata; the DuckDB extension threads
+            it through ``TableFunction::get_partition_data`` so ordered sinks
+            (BatchCollector, BatchInsert, BatchCopyToFile, Limit) can reassemble
+            parallel output in partition-id order. Opting in also skips the
+            FIXED_ORDER MaxThreads=1 clamp; the source stays parallel and the
+            sink does the ordering.
+        partition_kind: Partition shape declared by the function over its
+            ``vgi.partition_column``-annotated bind-schema fields. When
+            non-``NOT_PARTITIONED``, the DuckDB extension installs
+            ``TableFunction::get_partition_info`` returning the corresponding
+            ``TablePartitionInfo`` value so the planner can pick
+            ``PhysicalPartitionedAggregate`` for ``GROUP BY`` queries (today,
+            only ``SINGLE_VALUE_PARTITIONS`` materially changes planner
+            behavior). Per-column annotation lives in the bind schema's
+            field-level metadata — see ``vgi.schema_utils.partition_field``.
+        order_dependent: Aggregate function field (future).
+        distinct_dependent: Aggregate function field (future).
+        supports_window: True if the aggregate implements the window() callback.
+        streaming_partitioned: True if the aggregate opts into the
+            streaming-partitioned protocol — ``aggregate_streaming_open`` /
+            ``_chunk`` / ``_close``. The DuckDB extension's optimizer rule may
+            rewrite eligible LogicalWindow nodes to use this path.
+        has_finalize: True if a table-in-out function declares a finalize/finish
+            stage. The C++ extension uses this to conditionally register
+            ``in_out_function_final``; DuckDB rejects LATERAL with correlated
+            input on functions that register a finalize callback.
+        source_order_dependent: Only meaningful when ``function_type ==
+            FunctionType.TABLE_BUFFERING`` (i.e. the function is registered
+            through the Sink+Source path). When true, the source phase is
+            single-threaded and ``finalize_state_id``s drain in combine-returned
+            order. Default false enables parallel finalize.
+        sink_order_dependent: Only meaningful when ``function_type ==
+            FunctionType.TABLE_BUFFERING``. When true, the SINK phase runs
+            single-threaded — every process() call arrives in source order on one
+            worker. Mutually exclusive with ``requires_input_batch_index``.
+        requires_input_batch_index: Only meaningful when ``function_type ==
+            FunctionType.TABLE_BUFFERING``. When true, the C++ Sink operator
+            declares ``RequiredPartitionInfo()=BatchIndex()``; each process() RPC
+            carries a globally-unique monotonic batch_index from DuckDB's source.
+            Workers can sort by it in combine() to reconstruct source order under
+            parallel ingest. Mutually exclusive with ``sink_order_dependent``.
+        required_settings: Settings required by the function.
+        required_secrets: Secrets required by the function (each entry has
+            secret_type, optional secret_name, optional scope).
+    """
+
     function_type: FunctionType
 
-    # The arguments as a serialized Apache arrow schema using
-    # schema.serialize().to_pybytes()
     arguments: SerializedSchema
 
-    # The output schema as a serialized Apache arrow schema using
-    # schema.serialize().to_pybytes()
     output_schema: SerializedSchema
 
-    # Scalar function behavior fields (None for non-scalar functions)
     stability: FunctionStability | None = None
     null_handling: NullHandling | None = None
 
-    # Documentation fields
-    # description: intrinsic documentation from function metadata (Meta.description)
-    # comment: user-settable comment (via COMMENT ON FUNCTION, inherited from base)
     description: str = ""
     examples: list[CatalogExample] = field(default_factory=list)
     categories: list[str] = field(default_factory=list)
 
-    # Table function capabilities (None for scalar functions)
     projection_pushdown: bool | None = None
     filter_pushdown: bool | None = None
     sampling_pushdown: bool | None = None
-    # True if the table participates in DuckDB's late-materialization optimizer
-    # (Meta.late_materialization). The DuckDB extension only honours this when
-    # the table also exposes a rowid virtual column plus filter/projection
-    # pushdown — see GetScanFunctionImpl in the C++ vgi_table_entry.cpp.
     late_materialization: bool | None = None
     supported_expression_filters: list[str] = field(default_factory=list)
     order_preservation: OrderPreservation | None = None
-    # Use ArrowType to specify int32 instead of default int64
     max_workers: Annotated[int | None, ArrowType(pa.int32())] = None
-    # True if the function opts in to per-batch ``vgi_batch_index`` tagging:
-    # the worker emits an integer partition id in each Arrow batch's
-    # KeyValueMetadata; the DuckDB extension threads it through
-    # ``TableFunction::get_partition_data`` so ordered sinks (BatchCollector,
-    # BatchInsert, BatchCopyToFile, Limit) can reassemble parallel output in
-    # partition-id order. Opting in also skips the FIXED_ORDER MaxThreads=1
-    # clamp; the source stays parallel and the sink does the ordering.
     supports_batch_index: bool = False
-    # Partition shape declared by the function over its
-    # ``vgi.partition_column``-annotated bind-schema fields. When non-
-    # ``NOT_PARTITIONED``, the DuckDB extension installs
-    # ``TableFunction::get_partition_info`` returning the corresponding
-    # ``TablePartitionInfo`` value so the planner can pick
-    # ``PhysicalPartitionedAggregate`` for ``GROUP BY`` queries (today,
-    # only ``SINGLE_VALUE_PARTITIONS`` materially changes planner
-    # behavior). Per-column annotation lives in the bind schema's
-    # field-level metadata — see ``vgi.schema_utils.partition_field``.
     partition_kind: PartitionKind = PartitionKind.NOT_PARTITIONED
 
-    # Aggregate function fields (future)
     order_dependent: OrderDependence = OrderDependence.NOT_ORDER_DEPENDENT
     distinct_dependent: DistinctDependence = DistinctDependence.NOT_DISTINCT_DEPENDENT
-    # True if the aggregate implements the window() callback
     supports_window: bool = False
-    # True if the aggregate opts into the streaming-partitioned protocol —
-    # ``aggregate_streaming_open`` / ``_chunk`` / ``_close``. The DuckDB
-    # extension's optimizer rule may rewrite eligible LogicalWindow nodes to
-    # use this path.
     streaming_partitioned: bool = False
 
-    # True if a table-in-out function declares a finalize/finish stage.
-    # The C++ extension uses this to conditionally register
-    # ``in_out_function_final``; DuckDB rejects LATERAL with correlated input
-    # on functions that register a finalize callback.
     has_finalize: bool = False
 
-    # Only meaningful when ``function_type == FunctionType.TABLE_BUFFERING``
-    # (i.e. the function is registered through the Sink+Source path). When
-    # true, the source phase is single-threaded and ``finalize_state_id``s
-    # drain in combine-returned order. Default false enables parallel
-    # finalize.
     source_order_dependent: bool = False
 
-    # Only meaningful when ``function_type == FunctionType.TABLE_BUFFERING``.
-    # When true, the SINK phase runs single-threaded — every process() call
-    # arrives in source order on one worker. Mutually exclusive with
-    # requires_input_batch_index.
     sink_order_dependent: bool = False
 
-    # Only meaningful when ``function_type == FunctionType.TABLE_BUFFERING``.
-    # When true, the C++ Sink operator declares
-    # RequiredPartitionInfo()=BatchIndex(); each process() RPC carries a
-    # globally-unique monotonic batch_index from DuckDB's source. Workers
-    # can sort by it in combine() to reconstruct source order under parallel
-    # ingest. Mutually exclusive with sink_order_dependent.
     requires_input_batch_index: bool = False
 
-    # Settings required by the function
     required_settings: list[str] = field(default_factory=list)
 
-    # Secrets required by the function (each entry has secret_type, optional secret_name, optional scope)
     required_secrets: list[SecretLookupEntry] = field(default_factory=list)
 
 
@@ -603,17 +664,9 @@ class ScanFunctionResult:
 
     """
 
-    # The name of the duckdb function to call to obtain the data
-    # in the table.
     function_name: str
-
-    # The positional arguments to the include in the function call.
     positional_arguments: list[pa.Scalar]  # type: ignore[type-arg]
-
-    # The named arguments to include in the function call.
     named_arguments: dict[str, pa.Scalar]  # type: ignore[type-arg]
-
-    # A list of extensions to require to be loaded.
     required_extensions: list[str] = field(default_factory=list)
 
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
@@ -844,7 +897,7 @@ class ScanBranchesResult:
     and the rewriter unions their output.
 
     Attributes:
-        branches: One ``ScanBranch`` per physical source. Order is meaningful
+        branches: One `[`ScanBranch`][]` per physical source. Order is meaningful
             for stable diagnostic output (``vgi_table_branches()``) but not
             for query semantics (UNION ALL is unordered).
         required_extensions: Union of all DuckDB extensions needed across all
@@ -1123,7 +1176,7 @@ class CatalogInterface(ABC):
     API limitations:
         - Functions are not able to be created or dropped.
         - Tags are not able to be updated on catalog objects.
-        - Comments and tags are not updatable on schemas (SchemaInfo).
+        - Comments and tags are not updatable on schemas ([`SchemaInfo`][]).
         - Constraints cannot be added/dropped (except NOT NULL).
 
     A VGI worker will offer a single implementation of this interface to clients
@@ -1132,7 +1185,7 @@ class CatalogInterface(ABC):
 
     @property
     def interface_feature_flags(self) -> set[str]:
-        """Get the feature flags supported by this CatalogInterface.
+        """Get the feature flags supported by this [`CatalogInterface`][].
 
         Feature flags indicate optional capabilities of the implementation.
         The default implementation returns an empty set.
@@ -1250,7 +1303,7 @@ class CatalogInterface(ABC):
         enables setting a per-session routing cookie via ``ctx.set_cookie()``;
         over subprocess it may be ``None`` or have empty cookie support.
 
-        Returns a CatalogAttachResult containing the attach ID, other catalog
+        Returns a [`CatalogAttachResult`][] containing the attach ID, other catalog
         metadata, and the resolved concrete versions chosen by the worker.
         """
 
@@ -1396,17 +1449,17 @@ class CatalogInterface(ABC):
             attach_opaque_data: The attachment identifier.
             transaction_opaque_data: The transaction identifier, if any.
             name: The name of the schema.
-            type: The type of objects to return. Must be a SchemaObjectType enum:
-                - SchemaObjectType.TABLE: Return only tables
-                - SchemaObjectType.VIEW: Return only views
-                - SchemaObjectType.SCALAR_FUNCTION: Scalar functions
-                - SchemaObjectType.TABLE_FUNCTION: Table functions
-                - SchemaObjectType.SCALAR_MACRO: Scalar macros
-                - SchemaObjectType.TABLE_MACRO: Table macros
-                - SchemaObjectType.INDEX: Indexes
+            type: The type of objects to return. Must be a [`SchemaObjectType`][] enum:
+                - `SchemaObjectType.TABLE`: Return only tables
+                - `SchemaObjectType.VIEW`: Return only views
+                - `SchemaObjectType.SCALAR_FUNCTION`: Scalar functions
+                - `SchemaObjectType.TABLE_FUNCTION`: Table functions
+                - `SchemaObjectType.SCALAR_MACRO`: Scalar macros
+                - `SchemaObjectType.TABLE_MACRO`: Table macros
+                - `SchemaObjectType.INDEX`: Indexes
 
         Returns:
-            A list of TableInfo, ViewInfo, FunctionInfo, or MacroInfo objects
+            A list of [`TableInfo`][], [`ViewInfo`][], [`FunctionInfo`][], or [`MacroInfo`][] objects
             depending on the type parameter.
 
         """
@@ -1422,7 +1475,7 @@ class CatalogInterface(ABC):
     ) -> SchemaInfo | None:
         """Get information about the schema with the given name.
 
-        Returns a SchemaInfo object if the schema exists, or None if it does not.
+        Returns a [`SchemaInfo`][] object if the schema exists, or None if it does not.
         """
 
     @abstractmethod
@@ -1441,7 +1494,7 @@ class CatalogInterface(ABC):
         When ``at_unit`` / ``at_value`` are provided the implementation should
         return the table schema for the requested point in time (time travel).
 
-        Returns a TableInfo object if the table exists, or None if it does not.
+        Returns a [`TableInfo`][] object if the table exists, or None if it does not.
         """
 
     def table_create(
@@ -1653,7 +1706,7 @@ class CatalogInterface(ABC):
         at_unit: str | None,
         at_value: str | None,
     ) -> ScanFunctionResult:
-        """Get the ScanFunctionResult for scanning the table.
+        """Get the `ScanFunctionResult` for scanning the table.
 
         Returns information about the VGI table function to call when scanning
         this table. The at_unit and at_value support time travel queries.
@@ -1706,7 +1759,7 @@ class CatalogInterface(ABC):
 
         Returns:
             A :class:`ScanBranchesResult` carrying one or more
-            :class:`ScanBranch` entries plus the union of required
+            :class:[`ScanBranch`][] entries plus the union of required
             extensions across all branches.
 
         """
@@ -1760,7 +1813,7 @@ class CatalogInterface(ABC):
     ) -> ScanFunctionResult:
         """Get the write function for INSERT operations on the table.
 
-        Returns a ScanFunctionResult identifying the TableInOutGenerator function
+        Returns a `ScanFunctionResult` identifying the [`TableInOutGenerator`][] function
         to call for inserting rows into this table.
 
         ``writable_branch_function_name`` is set by the C++ extension when the
@@ -1783,7 +1836,7 @@ class CatalogInterface(ABC):
     ) -> ScanFunctionResult:
         """Get the write function for UPDATE operations on the table.
 
-        Returns a ScanFunctionResult identifying the TableInOutGenerator function
+        Returns a `ScanFunctionResult` identifying the [`TableInOutGenerator`][] function
         to call for updating rows in this table. Input batches will include a
         rowid column plus the columns being updated.
         """
@@ -1799,7 +1852,7 @@ class CatalogInterface(ABC):
     ) -> ScanFunctionResult:
         """Get the write function for DELETE operations on the table.
 
-        Returns a ScanFunctionResult identifying the TableInOutGenerator function
+        Returns a `ScanFunctionResult` identifying the [`TableInOutGenerator`][] function
         to call for deleting rows from this table. Input batches will contain
         a rowid column identifying the rows to delete.
         """
@@ -1855,7 +1908,7 @@ class CatalogInterface(ABC):
     ) -> ViewInfo | None:
         """Get information about the view with the given name.
 
-        Returns a ViewInfo object if the view exists, or None if it does not.
+        Returns a [`ViewInfo`][] object if the view exists, or None if it does not.
         """
 
     def view_comment_set(
@@ -1884,7 +1937,7 @@ class CatalogInterface(ABC):
     ) -> MacroInfo | None:
         """Get information about the macro with the given name.
 
-        Returns a MacroInfo object if the macro exists, or None if it does not.
+        Returns a [`MacroInfo`][] object if the macro exists, or None if it does not.
         """
 
     def macro_create(
@@ -1927,7 +1980,7 @@ class CatalogInterface(ABC):
     ) -> IndexInfo | None:
         """Get information about the index with the given name.
 
-        Returns an IndexInfo object if the index exists, or None if it does not.
+        Returns an [`IndexInfo`][] object if the index exists, or None if it does not.
         The default implementation returns None (no indexes).
         """
         return None
@@ -1964,12 +2017,12 @@ class CatalogInterface(ABC):
 
 
 def _read_only(operation: str) -> Any:
-    """Create a CatalogInterface method that raises CatalogReadOnlyError."""
+    """Create a [`CatalogInterface`][] method that raises [`CatalogReadOnlyError`][]."""
 
     def method(self: Any, **kwargs: Any) -> Any:
         raise CatalogReadOnlyError(f"Cannot {operation}: catalog is read-only")
 
-    method.__doc__ = "Not supported — raises CatalogReadOnlyError."
+    method.__doc__ = "Not supported — raises `CatalogReadOnlyError`."
     return method
 
 
@@ -2038,7 +2091,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     - table_scan_function_get() - Get scan function for tables
 
     All DDL operations (create, drop, rename, modify) will raise
-    CatalogReadOnlyError.
+    [`CatalogReadOnlyError`][].
 
     """
 
@@ -2358,7 +2411,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         schema_name: str,
         name: str,
     ) -> TableColumnStatisticsResult | None:
-        """Get column statistics from the Table descriptor's ``statistics`` dict.
+        """Get column statistics from the [`Table`][] descriptor's ``statistics`` dict.
 
         Automatically resolves plain Python values to typed PyArrow scalars
         using the column's Arrow type from the table schema.
@@ -2383,8 +2436,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     ) -> ScanFunctionResult:
         """Get scan function for a table.
 
-        For function-backed tables (Table.function is set), automatically returns
-        a ScanFunctionResult that invokes the linked function.
+        For function-backed tables (`Table.function` is set), automatically returns
+        a `ScanFunctionResult` that invokes the linked function.
 
         For tables with explicit columns, override this method in your Worker
         to provide scan functions.
@@ -2578,10 +2631,10 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             attach_opaque_data: The attachment identifier.
             transaction_opaque_data: The transaction identifier, if any.
             name: The name of the schema.
-            type: The type of objects to return. Must be a SchemaObjectType enum.
+            type: The type of objects to return. Must be a [`SchemaObjectType`][] enum.
 
         Returns:
-            A list of TableInfo, ViewInfo, FunctionInfo, MacroInfo, or IndexInfo objects.
+            A list of [`TableInfo`][], [`ViewInfo`][], [`FunctionInfo`][], [`MacroInfo`][], or [`IndexInfo`][] objects.
 
         """
         self._build_registries()
@@ -2657,7 +2710,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         return results
 
     def _function_to_info(self, func_cls: type, schema_name: str) -> FunctionInfo:
-        """Convert a function class to FunctionInfo."""
+        """Convert a function class to [`FunctionInfo`][]."""
         # Import here to avoid circular imports
         from vgi.argument_spec import (
             argument_specs_to_schema,

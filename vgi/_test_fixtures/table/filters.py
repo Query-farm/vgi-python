@@ -288,6 +288,129 @@ class ValuePruneFunction(TableFunctionGenerator[_ValuePruneArgs, _ValuePruneStat
 
 
 # ============================================================================
+# FilteredColumnsEchoFunction — echoes the column-introspection accessors on the
+# pushed-down filter set: filtered_columns(), has_filter_for_column(), and the
+# typed (string-capable) get_column_values(). A query's WHERE clause is reflected
+# back as diagnostic columns so each accessor is observable end-to-end.
+# ============================================================================
+
+
+@dataclass(slots=True, frozen=True)
+class _FilteredColumnsEchoArgs:
+    """Arguments for FilteredColumnsEchoFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+    batch_size: Annotated[int, Arg("batch_size", default=2048, doc="Batch size for output", ge=1)]
+
+
+@dataclass(kw_only=True)
+class _FilteredColumnsEchoState(ArrowSerializableDataclass):
+    """Resolved diagnostics (serialized so the HTTP rehydrate path preserves them)."""
+
+    count: int
+    filtered_cols: str
+    has_n: bool
+    has_tag: bool
+    tag_values: str
+    cursor: int = 0
+
+
+@init_single_worker
+@bind_fixed_schema
+@_cardinality_from_count
+class FilteredColumnsEchoFunction(
+    TableFunctionGenerator[_FilteredColumnsEchoArgs, _FilteredColumnsEchoState]
+):
+    """Report the columns referenced by pushed-down filters and ``tag``'s values.
+
+    Surfaces which columns the pushed-down filters reference and the discrete
+    value set resolved for the string column ``tag``.
+
+    ``filtered_cols`` is the sorted, comma-joined ``filtered_columns()`` set;
+    ``has_n`` / ``has_tag`` are ``has_filter_for_column()``; ``tag_values`` is
+    the sorted, comma-joined ``get_column_values('tag')`` result (``"(none)"``
+    when the predicate is not an enumerable equality/IN on ``tag``).
+    """
+
+    class Meta:
+        """Metadata for FilteredColumnsEchoFunction."""
+
+        name = "filtered_columns_echo"
+        description = "Echoes filtered_columns / has_filter_for_column / get_column_values_array"
+        categories = ["generator", "diagnostic"]
+        filter_pushdown = True
+        auto_apply_filters = True
+        projection_pushdown = True
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema(
+        {
+            "n": pa.int64(),
+            "tag": pa.utf8(),
+            "filtered_cols": pa.utf8(),
+            "has_n": pa.bool_(),
+            "has_tag": pa.bool_(),
+            "tag_values": pa.utf8(),
+        }
+    )
+
+    @classmethod
+    def initial_state(
+        cls, params: ProcessParams[_FilteredColumnsEchoArgs]
+    ) -> _FilteredColumnsEchoState:
+        """Resolve the filter-column diagnostics from the pushed-down filters."""
+        assert params.init_call is not None
+        pf = params.init_call.pushdown_filters
+        jk = params.init_call.join_keys
+        filters = cls.pushdown_filters(pf, join_keys=jk) if pf is not None else None
+        if filters is not None:
+            filtered_cols = ",".join(sorted(filters.filtered_columns))
+            has_n = filters.has_filter_for_column("n")
+            has_tag = filters.has_filter_for_column("tag")
+            tag_arr = filters.get_column_values("tag")
+            if tag_arr is not None:
+                tag_values = ",".join(sorted(str(v) for v in tag_arr.to_pylist() if v is not None))
+            else:
+                tag_values = "(none)"
+        else:
+            filtered_cols, has_n, has_tag, tag_values = "", False, False, "(none)"
+        return _FilteredColumnsEchoState(
+            count=params.args.count,
+            filtered_cols=filtered_cols,
+            has_n=has_n,
+            has_tag=has_tag,
+            tag_values=tag_values,
+        )
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_FilteredColumnsEchoArgs],
+        state: _FilteredColumnsEchoState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit the generated rows, each carrying the resolved diagnostics."""
+        if state.cursor >= state.count:
+            out.finish()
+            return
+        size = min(state.count - state.cursor, params.args.batch_size)
+        ns = list(range(state.cursor, state.cursor + size))
+        out.emit(
+            pa.RecordBatch.from_pydict(
+                {
+                    "n": ns,
+                    "tag": [f"t{i}" for i in ns],
+                    "filtered_cols": [state.filtered_cols] * size,
+                    "has_n": [state.has_n] * size,
+                    "has_tag": [state.has_tag] * size,
+                    "tag_values": [state.tag_values] * size,
+                },
+                schema=params.output_schema,
+            )
+        )
+        state.cursor += size
+
+
+# ============================================================================
 # DictFilterEchoFunction — output column declared as a *dictionary* Arrow type
 # (dictionary<int8, utf8>) with no ENUM metadata. DuckDB maps such a column to
 # plain VARCHAR, so a `WHERE s = 'x'` / `s IN (...)` predicate pushes a VARCHAR
