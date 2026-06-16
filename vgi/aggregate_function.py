@@ -2,10 +2,10 @@
 
 """Framework for implementing aggregate functions.
 
-AggregateFunction provides a batch-oriented API for DuckDB aggregate functions
+[`AggregateFunction`][] provides a batch-oriented API for DuckDB aggregate functions
 (e.g., ``SELECT my_agg(col) FROM t GROUP BY category``). The C++ side manages
 trivial per-group state (just an int64 group_id), while Python holds the real
-accumulation state in FunctionStorage.
+accumulation state in `FunctionStorage`.
 
 Three phases:
 - UPDATE: accumulate input rows into per-group state
@@ -46,7 +46,7 @@ __all__ = [
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class AggregateBindParams:
-    """Parameters passed to AggregateFunction.on_bind()."""
+    """Parameters passed to `AggregateFunction.on_bind()`."""
 
     args: Arguments | None
     input_schema: pa.Schema | None
@@ -63,7 +63,7 @@ class WindowPartition:
     and re-hydrated on every ``aggregate_window`` call via storage.
 
     Attributes:
-        inputs: The partition's input RecordBatch (all input columns, all rows).
+        inputs: The partition's input `RecordBatch` (all input columns, all rows).
         row_count: Total number of rows in the partition.
         filter_mask: Boolean mask from an optional ``FILTER (WHERE ...)`` clause.
             Length equals ``row_count``.
@@ -97,8 +97,8 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
     UPDATE, merge parallel worker states during COMBINE, and produce one
     result row per group during FINALIZE.
 
-    Input columns are declared via ``Param`` annotations on ``update()``,
-    and the output type via ``Returns`` annotation — the same pattern as
+    Input columns are declared via `[`Param`][]` annotations on ``update()``,
+    and the output type via `[`Returns`][]` annotation — the same pattern as
     ``ScalarFunction.compute()``.
 
     Type Parameters:
@@ -274,7 +274,7 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
     def on_bind(cls, params: AggregateBindParams, **kwargs: Any) -> BindResponse:
         """Override to provide output schema and optional bind-time logic.
 
-        Must return a ``BindResponse`` with an ``output_schema`` containing
+        Must return a `[`BindResponse`][]` with an ``output_schema`` containing
         exactly one field (the aggregate result column).
         """
         # Default: use Returns annotation if available
@@ -310,7 +310,7 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
     def update(cls, *args: Any, **kwargs: Any) -> None:
         """Accumulate input rows into per-group state.
 
-        Declare input columns as ``Param``-annotated parameters::
+        Declare input columns as `[`Param`][]`-annotated parameters::
 
             @classmethod
             def update(
@@ -347,7 +347,7 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
     def finalize(cls, *args: Any, **kwargs: Any) -> Any:
         """Produce results for the requested group_ids.
 
-        Annotate the return type with ``Returns``::
+        Annotate the return type with `[`Returns`][]`::
 
             @classmethod
             def finalize(
@@ -469,7 +469,7 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
                 defines that hook; otherwise the value returned by
                 ``window_init()`` (may be ``None``), wrapped in a
                 ``_WindowStatePlaceholder`` on cold reload.
-            params: Shared ``ProcessParams``.
+            params: Shared `[`ProcessParams`][]`.
 
         Returns:
             A Python scalar or Arrow-compatible value; the worker wraps it
@@ -579,7 +579,7 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
                 partition key.
             order_key_count: Number of columns following the partition key
                 that form the order key.
-            params: Shared ``ProcessParams``.
+            params: Shared `[`ProcessParams`][]`.
 
         Returns:
             Either a :class:`pa.Array` of length ``chunk.num_rows`` matching

@@ -47,6 +47,7 @@ def _iv_to_ms(iv: object) -> int:
     nanos = getattr(iv, "nanoseconds", 0)
     return months * 30 * 24 * 3600 * 1000 + days * 24 * 3600 * 1000 + nanos // 1_000_000
 
+
 TYPED_PROBE_SCHEMA = schema(
     idx=pa.uint64(),
     ts_us=pa.int64(),

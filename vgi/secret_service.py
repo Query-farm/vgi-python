@@ -6,11 +6,11 @@ Orchard's secret service is an *independently-deployed microservice* — separat
 from the worker/catalog ``vgi-serve`` deployable and speaking
 :class:`vgi.secret_protocol.VgiSecretProtocol`. This module provides:
 
-- :func:`create_secret_app` — build a WSGI app for any ``VgiSecretProtocol``
+- :func:`create_secret_app` — build a WSGI app for any `[`VgiSecretProtocol`][]`
   implementation (usable with gunicorn/waitress/uwsgi).
 - :func:`serve_secret_http` — run it under waitress (prints ``PORT:<n>`` for test
   harnesses, mirroring :mod:`vgi.serve`).
-- :class:`ExampleOrchardSecretService` — a reference implementation that returns a
+- :class:[`ExampleOrchardSecretService`][] — a reference implementation that returns a
   canned ``s3`` credential for ``s3://test-bucket*``; the C++ integration tests
   point ``vgi-secret-serve`` at this class.
 - :func:`main` — the ``vgi-secret-serve`` CLI entry point.
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
 
 class ExampleOrchardSecretService:
-    """Reference :class:`VgiSecretProtocol` implementation for tests/demos.
+    """Reference :class:[`VgiSecretProtocol`][] implementation for tests/demos.
 
     Returns a canned ``s3`` credential for any path under ``s3://test-bucket``
     with a short ``expires_at_unix`` (so the ``min(ttl, expiry)`` cache path is
@@ -104,7 +104,7 @@ def create_secret_app(
     authenticate: Callable[[falcon.Request], Any] | None = None,
     oauth_resource_metadata: Any = None,
 ) -> falcon.App[Any, Any]:
-    """Build a WSGI app serving *impl* over :class:`VgiSecretProtocol`.
+    """Build a WSGI app serving *impl* over :class:[`VgiSecretProtocol`][].
 
     *impl* is any object implementing ``secret_lookup(path, type)``. The default
     landing/describe pages are disabled — this is a credential endpoint, not a
@@ -182,7 +182,7 @@ def serve_secret_http(
 
 
 def _load_impl(reference: str) -> object:
-    """Instantiate a ``VgiSecretProtocol`` implementation from ``module:Class``."""
+    """Instantiate a `[`VgiSecretProtocol`][]` implementation from ``module:Class``."""
     if ":" not in reference:
         sys.stderr.write(f"Error: expected 'module:ClassName', got {reference!r}\n")
         sys.exit(1)

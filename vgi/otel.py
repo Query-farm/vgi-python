@@ -2,7 +2,7 @@
 
 """VGI application-level OpenTelemetry and Sentry instrumentation.
 
-Provides ``VgiTracer`` — a thin wrapper that enriches both OTel spans and
+Provides `[`VgiTracer`][]` — a thin wrapper that enriches both OTel spans and
 Sentry scopes with VGI-level attributes (function name, attach_opaque_data, etc.)
 and creates ``vgi.execute.*`` per-batch records (OTel spans + Sentry
 spans + Sentry breadcrumbs).
@@ -106,7 +106,7 @@ class VgiTracer:
 
     @staticmethod
     def create(otel_config: OtelConfig | None) -> VgiTracer:
-        """Create a VgiTracer from an OtelConfig.
+        """Create a [`VgiTracer`][] from an `OtelConfig`.
 
         When *otel_config* is ``None`` and Sentry is not initialised, returns
         the module-level noop tracer.  When Sentry is initialised, returns a
@@ -229,7 +229,7 @@ def get_noop_tracer() -> VgiTracer:
 
 
 def _batch_bytes(batch: Any) -> int:
-    """Return total buffer size of a RecordBatch, or 0 on failure."""
+    """Return total buffer size of a `RecordBatch`, or 0 on failure."""
     try:
         return int(batch.get_total_buffer_size())
     except Exception:

@@ -2,10 +2,10 @@
 
 """Framework for implementing streaming table-in-table-out functions.
 
-TableInOutGenerator processes input batches via a per-batch callback.
-Each call to process() emits one output batch via out.emit().
+[`TableInOutGenerator`][] processes input batches via a per-batch callback.
+Each call to `process()` emits one output batch via `out.emit()`.
 
-TableInOutFunction provides a simpler callback API (transform/finish)
+[`TableInOutFunction`][] provides a simpler callback API (transform/finish)
 with automatic state serialization for distributed processing.
 """
 
@@ -70,11 +70,11 @@ def unpack_int_cursor(cursor: bytes, default: int = -1) -> int:
 class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
     """Base class for streaming table functions that transform Arrow RecordBatches.
 
-    Each call to process() should emit exactly one output batch via out.emit().
-    Use TState to persist state between process() calls.
+    Each call to `process()` should emit exactly one output batch via `out.emit()`.
+    Use `TState` to persist state between `process()` calls.
 
     For functions that need a finalize phase (e.g., aggregation), override
-    finalize() to return the final output batches.
+    `finalize()` to return the final output batches.
 
     """
 
@@ -98,7 +98,7 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
           (explicit override — the declared value wins, even if it disagrees
           with the auto-detection).
         - Auto-detection finds a user subclass (one that is itself a
-          ``TableInOutGenerator`` subclass) strictly above the VGI bases in
+          `[`TableInOutGenerator`][]` subclass) strictly above the VGI bases in
           the MRO defining a callable ``finish`` or ``finalize`` attribute.
 
         The framework uses this to decide whether to advertise a finalize
@@ -148,10 +148,10 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
 
     @classmethod
     def initial_state(cls, params: ProcessParams[TArgs]) -> TState | None:
-        """Create initial processing state. Override when TState is used.
+        """Create initial processing state. Override when `TState` is used.
 
         Called once during init to create the state object that will be
-        passed to process() on each input batch.
+        passed to `process()` on each input batch.
 
         Args:
             params: Process parameters including arguments and schemas.
@@ -173,15 +173,15 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
         """Process one input batch.
 
         Called once per input batch during the INPUT phase. Must call
-        out.emit(batch) exactly once to produce output.
+        `out.emit(batch)` exactly once to produce output.
 
-        Use out.client_log(level, message) for in-band logging.
+        Use `out.client_log(level, message)` for in-band logging.
 
         Args:
             params: Process parameters including arguments and schemas.
             state: Mutable state persisted between calls. None if TState not used.
             batch: The input RecordBatch to process.
-            out: OutputCollector for emitting output and logging.
+            out: `OutputCollector` for emitting output and logging.
 
         """
         out.emit(batch)
@@ -227,7 +227,7 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class TableInOutFunctionStateNoOp(ArrowSerializableDataclass):
-    """No-op state class for TableInOutFunction when no state is needed."""
+    """No-op state class for [`TableInOutFunction`][] when no state is needed."""
 
 
 class TableInOutFunction[
@@ -237,13 +237,13 @@ class TableInOutFunction[
     """Simplified base class using transform/finish callbacks.
 
     This class provides a simpler API for common use cases where you don't need
-    to work directly with OutputCollector. Instead of implementing process()
-    directly, you override transform() and optionally finish() as regular methods.
+    to work directly with `OutputCollector`. Instead of implementing `process()`
+    directly, you override `transform()` and optionally `finish()` as regular methods.
 
-    TState is optional. If not provided, state management is disabled and
-    transform() will always receive state=None. When TState is an
-    ArrowSerializableDataclass, state is automatically saved to storage
-    after each transform() call for distributed processing.
+    `TState` is optional. If not provided, state management is disabled and
+    `transform()` will always receive state=None. When `TState` is an
+    `ArrowSerializableDataclass`, state is automatically saved to storage
+    after each `transform()` call for distributed processing.
 
     """
 
@@ -279,7 +279,7 @@ class TableInOutFunction[
 
         Args:
             batch: Input RecordBatch to transform.
-            params: ProcessParams containing arguments, schemas, and settings.
+            params: [`ProcessParams`][] containing arguments, schemas, and settings.
             state: Mutable state that should be updated and will be serialized as needed.
 
         Returns:
@@ -320,10 +320,10 @@ class TableInOutFunction[
         begins.
 
         Args:
-            params: ProcessParams containing arguments, schemas, and settings.
+            params: [`ProcessParams`][] containing arguments, schemas, and settings.
 
         Returns:
-            An instance of TState representing the initial state.
+            An instance of `TState` representing the initial state.
 
         """
         return None
@@ -337,9 +337,9 @@ class TableInOutFunction[
         batch: pa.RecordBatch,
         out: OutputCollector,
     ) -> None:
-        """Process input batches by calling transform(). Do not override.
+        """Process input batches by calling `transform()`. Do not override.
 
-        This method implements the exchange protocol by calling your transform()
+        This method implements the exchange protocol by calling your `transform()`
         method for each input batch. State is automatically saved to storage
         after each call for distributed processing.
 
@@ -367,10 +367,10 @@ class TableInOutFunction[
     @final
     @classmethod
     def finalize(cls, params: ProcessParams[TArgs]) -> list[pa.RecordBatch]:
-        """Emit final batches by calling finish(). Do not override.
+        """Emit final batches by calling `finish()`. Do not override.
 
         This method collects serialized states from all workers, deserializes
-        them, and passes them to your finish() method.
+        them, and passes them to your `finish()` method.
 
         """
         if cls.state_class is not None and cls.state_class is not TableInOutFunctionStateNoOp:

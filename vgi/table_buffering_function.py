@@ -24,7 +24,7 @@ per-thread, custom partitioning); the framework just round-trips them.
 
 INVARIANT: any state the worker stores in ``process()`` that ``finalize()``
 will need MUST live in cross-process storage scoped by
-``params.execution_id`` (``BoundStorage`` is the canonical choice). The
+``params.execution_id`` (`[`BoundStorage`][]` is the canonical choice). The
 Source phase may route a given ``finalize_state_id`` to a worker process
 that did NOT run the corresponding ``process()`` calls.
 """
@@ -136,8 +136,8 @@ class TableBufferingParams[TArgs](ProcessParams[TArgs]):
 
     Adds identity fields that the buffered API needs to scope worker-owned
     storage and coordinate cross-process state. Other function shapes
-    (``TableFunctionGenerator``, ``TableInOutGenerator``, aggregates) keep
-    using the plain ``ProcessParams`` they always have.
+    (`[`TableFunctionGenerator`][]`, `[`TableInOutGenerator`][]`, aggregates) keep
+    using the plain `[`ProcessParams`][]` they always have.
 
     Attributes:
         execution_id: Stable across coordinator + secondary workers for one
@@ -150,6 +150,15 @@ class TableBufferingParams[TArgs](ProcessParams[TArgs]):
             ``init_call.function_name``.
         worker_path: Subprocess path / ``unix://`` / ``launch:`` argv. For
             diagnostics.
+        client_log: In-band log sink — emits a 0-row log batch on the RPC
+            response stream, which DuckDB surfaces as a row in ``duckdb_logs()``
+            with ``type='VGI'``. Use this from ``process()`` and ``combine()``
+            (unary RPCs with no ``OutputCollector``); the streaming
+            ``finalize(... out)`` callback should use ``out.client_log(...)``
+            instead. The worker handler wires this to ``ctx.client_log`` before
+            invoking the user callback; the default no-op is a safety net for
+            unit-test callers that build ``TableBufferingParams`` outside the
+            RPC path.
 
     """
 
@@ -159,16 +168,6 @@ class TableBufferingParams[TArgs](ProcessParams[TArgs]):
     function_name: str
     worker_path: str | None = None
 
-    # In-band log sink — emits a 0-row log batch on the RPC response stream,
-    # which DuckDB surfaces as a row in ``duckdb_logs()`` with ``type='VGI'``.
-    # Use this from ``process()`` and ``combine()`` (which are unary RPCs and
-    # have no ``OutputCollector``). The streaming ``finalize(... out)``
-    # callback should use ``out.client_log(...)`` instead — it goes through
-    # the same wire mechanism but flows through the producer-mode stream.
-    #
-    # The worker handler wires this to ``ctx.client_log`` before invoking
-    # the user callback; the default no-op is a safety net for unit-test
-    # callers that build ``TableBufferingParams`` outside the RPC path.
     client_log: Callable[..., None] = field(
         default=lambda *_a, **_kw: None,
         repr=False,
@@ -195,7 +194,7 @@ class TableBufferingFunction[TArgs, TFinalizeState = None](TableFunctionBase[TAr
 
     Cross-process invariant: any state the worker writes during
     ``process()`` that ``finalize()`` will read MUST live in cross-process
-    storage scoped by ``params.execution_id`` — ``BoundStorage`` is the
+    storage scoped by ``params.execution_id`` — `[`BoundStorage`][]` is the
     canonical choice. The Source phase routes a given ``finalize_state_id``
     to whatever worker process the C++ scheduler picks; it is NOT
     guaranteed to be the same process that ran ``process()``.
@@ -216,7 +215,7 @@ class TableBufferingFunction[TArgs, TFinalizeState = None](TableFunctionBase[TAr
     _finalize_state_class: ClassVar[type[ArrowSerializableDataclass] | None] = None
 
     class Meta:
-        """Per-class metadata for TableBufferingFunction."""
+        """Per-class metadata for [`TableBufferingFunction`][]."""
 
         name: ClassVar[str]
         # Output schema declared via Meta.return_schema or via on_bind().
@@ -279,7 +278,7 @@ class TableBufferingFunction[TArgs, TFinalizeState = None](TableFunctionBase[TAr
         """Pass-through default — output schema is the input schema.
 
         Override to validate arguments, compute a dynamic output type, or
-        request secrets via ``SecretsAccessor``. See
+        request secrets via `[`SecretsAccessor`][]`. See
         ``TableFunctionBase.on_bind`` for the broader contract.
         """
         assert params.bind_call.input_schema is not None
@@ -300,7 +299,7 @@ class TableBufferingFunction[TArgs, TFinalizeState = None](TableFunctionBase[TAr
     ) -> bytes:
         """Ingest one input batch and return an opaque ``state_id``.
 
-        The worker chooses both *where* to store the batch (BoundStorage,
+        The worker chooses both *where* to store the batch ([`BoundStorage`][],
         external files, in-memory cross-process structures, etc.) and the
         *granularity* of state_ids (per-batch, per-thread, custom
         partitioning). The framework collects all returned state_ids and

@@ -2,8 +2,8 @@
 
 """Base classes for table functions with cardinality hints and callback-based processing.
 
-TableFunctionGenerator produces output batches via a per-tick callback. Each call
-to process() either emits a batch via out.emit() or signals completion via out.finish().
+[`TableFunctionGenerator`][] produces output batches via a per-tick callback. Each call
+to `process()` either emits a batch via `out.emit()` or signals completion via `out.finish()`.
 """
 
 from __future__ import annotations
@@ -267,7 +267,7 @@ def _effective_projection_ids(func_cls: Any, projection_ids: list[int] | None) -
 class TableInOutFunctionInitPhase(Enum):
     """Init-call phase for table functions.
 
-    ``INPUT`` / ``FINALIZE`` drive the streaming TableInOutGenerator path.
+    ``INPUT`` / ``FINALIZE`` drive the streaming [`TableInOutGenerator`][] path.
     ``TABLE_BUFFERING`` is the Sink+Source init phase for
     ``TableBufferingFunction`` — after init, traffic moves to
     ``table_buffering_process`` / ``_combine`` (unary) and
@@ -297,7 +297,7 @@ class OrderByNullOrder(Enum):
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class BindParams[TArgs]:
-    """Parameters passed to on_bind()."""
+    """Parameters passed to `on_bind()`."""
 
     args: TArgs
     bind_call: BindRequest
@@ -342,7 +342,7 @@ class BindParams[TArgs]:
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class InitParams[TArgs]:
-    """Parameters passed to on_init()."""
+    """Parameters passed to `on_init()`."""
 
     args: TArgs
     init_call: InitRequest
@@ -380,7 +380,7 @@ class InitParams[TArgs]:
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class ProcessParams[TArgs]:
-    """Parameters passed to process() and finalize()."""
+    """Parameters passed to `process()` and `finalize()`."""
 
     args: TArgs
     init_call: InitRequest | None  # None for aggregate functions
@@ -431,17 +431,17 @@ class ProcessParams[TArgs]:
 class TableFunctionBase[TArgs](vgi.function.Function):
     """Base class for table functions with cardinality and schema validation.
 
-    Extends Function with:
+    Extends `Function` with:
     - Cardinality hints for query optimization
     - Projection pushdown support
 
     This class is not meant to be used directly. Subclass either:
-    - TableFunctionGenerator: For simple generators that produce output
-    - TableInOutGenerator: For functions that transform input batches
+    - [`TableFunctionGenerator`][]: For simple generators that produce output
+    - [`TableInOutGenerator`][]: For functions that transform input batches
 
     See Also:
-        TableFunctionGenerator: Simple generator base class
-        TableInOutGenerator: Full streaming with input batches
+        `TableFunctionGenerator`: Simple generator base class
+        `TableInOutGenerator`: Full streaming with input batches
 
     """
 
@@ -678,7 +678,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         duplicating BindParams construction logic. ``execution_id`` is
         only populated on call paths that have one (currently just
         ``dynamic_to_string``); when provided, ``BindParams.storage`` is
-        a ``BoundStorage`` view keyed by it.
+        a `[`BoundStorage`][]` view keyed by it.
         """
         txn_id = input.transaction_opaque_data
         # ``attach_plaintext`` is the full framework plaintext (``uuid(16) ||
@@ -739,7 +739,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             params: Bind parameters including arguments and schema.
 
         Returns:
-            BindResponse with output_schema and optional opaque_data.
+            [`BindResponse`][] with output_schema and optional opaque_data.
 
         """
 
@@ -757,7 +757,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         Validates type bounds when an input schema is present (table-input
         functions), constructs BindParameters, calls ``on_bind()``, and
         wraps the result for transmission to global_init. If ``on_bind()``
-        triggered dynamic secret lookups via SecretsAccessor, returns a
+        triggered dynamic secret lookups via [`SecretsAccessor`][], returns a
         secret-scope request to trigger two-phase bind.
 
         Note: we do NOT auto-request secrets before ``on_bind()``. Table
@@ -835,7 +835,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         make better decisions about join ordering and memory allocation.
 
         Returns:
-            TableCardinality with estimate and/or max, or None if unknown.
+            [`TableCardinality`][] with estimate and/or max, or None if unknown.
 
         """
         return TableCardinality(estimate=None, max=None)
@@ -863,7 +863,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         query.
 
         Args:
-            params: Same ``BindParams`` ``cardinality`` and ``statistics``
+            params: Same `[`BindParams`][]` ``cardinality`` and ``statistics``
                 receive — function args, settings, secrets.
             execution_id: ``VgiTableFunctionGlobalState::global_execution_id``,
                 stable for the duration of the query.
@@ -872,7 +872,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             Ordered key/value pairs. Insertion order is preserved on the
             wire and re-emitted into the C++ profiler's
             ``InsertionOrderPreservingMap``. The C++ wrapper appends
-            intrinsic keys (``Worker``, ``Function``, ``Rows Read``,
+            intrinsic keys (`[`Worker`][]`, ``Function``, ``Rows Read``,
             ``Threads``) after this map; user keys override on conflict.
 
         """
@@ -892,7 +892,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         arguments.
 
         Returns:
-            A list of ColumnStatistics (one entry per column for which stats
+            A list of `ColumnStatistics` (one entry per column for which stats
             are known — columns not listed get unknown stats), or None when no
             stats are available (same effect as today: optimizer receives no
             column stats).
@@ -919,10 +919,10 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             join_keys: Optional list of single-column Arrow RecordBatches,
                 one per IN filter column. Available via
                 ``get_join_keys_batch()`` / ``get_join_keys_batches()``
-                on the returned ``PushdownFilters``.
+                on the returned `[`PushdownFilters`][]`.
 
         Returns:
-            PushdownFilters container with parsed filter AST, or None.
+            `PushdownFilters` container with parsed filter AST, or None.
 
         """
         if pushdown_filters is None:
@@ -966,7 +966,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
         Args:
             batch: RecordBatch to filter
-            pushdown_filters: The PushdownFilters to apply or None.
+            pushdown_filters: The [`PushdownFilters`][] to apply or None.
 
         Returns:
             Filtered batch, or original if no filters or batch is None/empty.
@@ -983,13 +983,13 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
     """Callback-based table function that produces output batches.
 
-    Each call to process() should either:
-    - Emit a batch via out.emit(batch)
-    - Signal completion via out.finish()
+    Each call to `process()` should either:
+    - Emit a batch via `out.emit(batch)`
+    - Signal completion via `out.finish()`
 
-    Use TState to persist state between process() calls.
+    Use `TState` to persist state between `process()` calls.
 
-    For functions that transform input batches, use TableInOutGenerator.
+    For functions that transform input batches, use [`TableInOutGenerator`][].
 
     """
 
@@ -999,10 +999,10 @@ class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
 
     @classmethod
     def initial_state(cls, params: ProcessParams[TArgs]) -> TState | None:
-        """Create initial processing state. Override when TState is used.
+        """Create initial processing state. Override when `TState` is used.
 
         Called once during init to create the state object that will be
-        passed to process() on each tick.
+        passed to `process()` on each tick.
 
         Args:
             params: Process parameters including arguments and schemas.
@@ -1024,15 +1024,15 @@ class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
         """Produce output for one tick.
 
         Called repeatedly by the framework. Each call should either:
-        - Call out.emit(batch) to produce one output batch
-        - Call out.finish() to signal that generation is complete
+        - Call `out.emit(batch)` to produce one output batch
+        - Call `out.finish()` to signal that generation is complete
 
-        Use out.client_log(level, message) for in-band logging.
+        Use `out.client_log(level, message)` for in-band logging.
 
         Args:
             params: Process parameters including arguments and schemas.
             state: Mutable state persisted between calls. None if TState not used.
-            out: OutputCollector for emitting batches, logging, and signaling finish.
+            out: `OutputCollector` for emitting batches, logging, and signaling finish.
 
         """
 
@@ -1064,7 +1064,7 @@ class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
 
 
 def init_single_worker[T: TableFunctionGenerator[Any, Any]](cls: type[T]) -> type[T]:
-    """Class decorator to set max_workers=1 for a TableFunctionGenerator subclass."""
+    """Class decorator to set max_workers=1 for a [`TableFunctionGenerator`][] subclass."""
     if "on_init" not in cls.__dict__:
 
         def on_init_impl(cls_: type[T], params: Any) -> GlobalInitResponse:
@@ -1081,7 +1081,7 @@ def init_single_worker[T: TableFunctionGenerator[Any, Any]](cls: type[T]) -> typ
 
 
 def bind_fixed_schema[T: TableFunctionGenerator[Any, Any]](cls: type[T]) -> type[T]:
-    """Class decorator to return FIXED_SCHEMA from on_bind for a TableFunctionGenerator subclass.
+    """Class decorator to return FIXED_SCHEMA from on_bind for a [`TableFunctionGenerator`][] subclass.
 
     Sets ``cls._inline_bind_safe = True`` *only when* the decorator actually
     installs its own ``on_bind``. The catalog framework reads this marker to

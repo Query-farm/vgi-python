@@ -380,7 +380,7 @@ def _attach_for_describe(
 
 
 def _build_dynamic_table_card(t: TableInfo) -> str:
-    """Render a TableInfo (from iface.schema_contents) as a card."""
+    """Render a [`TableInfo`][] (from `iface.schema_contents`) as a card."""
     import pyarrow as pa
 
     parts: list[str] = [
@@ -408,7 +408,7 @@ def _build_dynamic_table_card(t: TableInfo) -> str:
 
 
 def _build_dynamic_view_card(v: ViewInfo) -> str:
-    """Render a ViewInfo as a card."""
+    """Render a [`ViewInfo`][] as a card."""
     parts: list[str] = [
         '<div class="card">',
         '<div class="card-header">',
@@ -425,9 +425,9 @@ def _build_dynamic_view_card(v: ViewInfo) -> str:
 
 
 def _build_dynamic_function_card(fn: FunctionInfo) -> str:
-    """Render a FunctionInfo as a card.
+    """Render a [`FunctionInfo`][] as a card.
 
-    FunctionInfo doesn't preserve the table-vs-table-in-out distinction —
+    `FunctionInfo` doesn't preserve the table-vs-table-in-out distinction —
     the protocol-level ``function_type`` lumps them together. Use
     ``has_finalize`` as a heuristic for table-in-out so the badge stays
     accurate where possible.

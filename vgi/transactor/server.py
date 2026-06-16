@@ -40,7 +40,7 @@ _COUNT_SCHEMA = schema(count=pa.int64())
 
 
 class TransactorImpl:
-    """Implementation of the TransactorProtocol backed by DuckDB.
+    """Implementation of the [`TransactorProtocol`][] backed by DuckDB.
 
     Manages multiple databases (one per attach_opaque_data). Each transaction gets
     its own DuckDB cursor, allowing multiple concurrent transactions per

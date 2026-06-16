@@ -6,10 +6,10 @@ This module provides a storage protocol and implementation for persisting
 catalog attach_opaque_data and transaction_opaque_data state across worker processes.
 
 Protocol:
-    CatalogStorage: Protocol for catalog state persistence.
+    [`CatalogStorage`][]: Protocol for catalog state persistence.
 
 Implementation:
-    CatalogStorageSqlite: SQLite-backed storage implementation.
+    [`CatalogStorageSqlite`][]: SQLite-backed storage implementation.
 
 """
 
@@ -323,7 +323,7 @@ class CatalogStorageSqlite:
         """Generate a new unique attach_opaque_data.
 
         Returns:
-            A new AttachOpaqueData based on UUID4.
+            A new `AttachOpaqueData` based on UUID4.
 
         """
         return AttachOpaqueData(uuid.uuid4().bytes)
@@ -332,7 +332,7 @@ class CatalogStorageSqlite:
         """Generate a new unique transaction_opaque_data.
 
         Returns:
-            A new TransactionOpaqueData based on UUID4.
+            A new `TransactionOpaqueData` based on UUID4.
 
         """
         return TransactionOpaqueData(uuid.uuid4().bytes)

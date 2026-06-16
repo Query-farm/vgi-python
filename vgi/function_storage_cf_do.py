@@ -2,12 +2,12 @@
 
 """Cloudflare Durable Object storage for VGI function state.
 
-This module provides a FunctionStorage implementation backed by a Cloudflare
+This module provides a `FunctionStorage` implementation backed by a Cloudflare
 Worker + Durable Object. The DO runs SQLite internally, providing the same
-semantics as FunctionStorageSqlite but accessible over HTTP from any platform.
+semantics as `FunctionStorageSqlite` but accessible over HTTP from any platform.
 
 Implementation:
-    FunctionStorageCfDo: HTTP client for the Cloudflare DO storage backend.
+    `FunctionStorageCfDo`: HTTP client for the Cloudflare DO storage backend.
 
 Usage:
     Set ``VGI_WORKER_SHARED_STORAGE=cloudflare-do`` plus ``VGI_CF_DO_URL``
@@ -432,6 +432,18 @@ class FunctionStorageCfDo:
         a byte budget plus a ``next_after`` continuation cursor (interpreted
         server-side per ``reverse``), so an arbitrarily large range never builds
         an oversized response. Yields lazily; consumers should iterate.
+
+        Args:
+            scope_id: Storage scope identifier (tenant/catalog isolation).
+            ns: Namespace within the scope to scan.
+            start: Inclusive lower key bound; ``None`` leaves it unbounded.
+            end: Exclusive upper key bound; ``None`` leaves it unbounded.
+            reverse: Iterate descending by key when ``True``.
+            limit: Maximum number of rows to yield; ``None`` is unbounded.
+            shard_key: Routing key selecting the backing Durable Object shard.
+
+        Yields:
+            ``(key, value)`` byte tuples in key order.
         """
         t0 = time.monotonic()
         after_key: str | None = None
@@ -483,6 +495,14 @@ class FunctionStorageCfDo:
         first page tombstones the whole namespace, later pages read the
         tombstoned snapshot. A retried page (same attempt_id + cursor) replays
         identically. Beginning to iterate commits the drain, so consume fully.
+
+        Args:
+            scope_id: Storage scope identifier (tenant/catalog isolation).
+            ns: Namespace within the scope to drain.
+            shard_key: Routing key selecting the backing Durable Object shard.
+
+        Yields:
+            ``(key, value)`` byte tuples as each page is drained.
         """
         t0 = time.monotonic()
         attempt_id = uuid.uuid4().hex

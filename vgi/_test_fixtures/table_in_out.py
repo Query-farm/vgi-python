@@ -448,32 +448,14 @@ class RepeatsInputsFunctionArguments:
 class RepeatInputsFunction(TableInOutGenerator[RepeatsInputsFunctionArguments]):
     """Explosion function that duplicates each input batch N times.
 
-    USE CASE
-    --------
-    Data augmentation, testing with larger datasets, or any scenario where
-    you need multiple copies of each input record.
+    Useful for data augmentation, testing with larger datasets, or any
+    scenario needing multiple copies of each input record. The output schema
+    is the input schema unchanged; ``process()`` concatenates each input batch
+    ``repeat_count`` times into a single output batch.
 
-    Arguments:
-    ---------
-    repeat_count: Annotated[int, Arg(0)] (required)
-        Number of times to repeat each input batch.
-
-    BEHAVIOR
-    --------
-    - output_schema: Returns input schema unchanged
-    - process(): For each input, concatenates it N times into one output
-
-    SCHEMA TRANSFORMATION
-    ---------------------
-    Input:  any schema
-    Output: same schema (passthrough)
-
-    Example:
-    -------
-    With repeat_count=3:
-    Input:  [{"a": 1}]
-    Output: [{"a": 1}, {"a": 1}, {"a": 1}]
-
+    The one SQL argument ``repeat_count`` (``Annotated[int, Arg(0)]``,
+    required) sets the number of copies. For example, with ``repeat_count=3``,
+    input ``[{"a": 1}]`` yields ``[{"a": 1}, {"a": 1}, {"a": 1}]``.
     """
 
     class Meta:

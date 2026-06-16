@@ -17,7 +17,7 @@ Wire shape
 ``secret_lookup`` takes the requested ``path`` and ``type`` as direct scalar
 parameters (not a wrapped ``request`` dataclass), so the generated C++ builder
 ``BuildSecretLookupParams(path, type)`` is directly callable without a hand-coded
-inner serializer. The response is :class:`SecretLookupResponse`, IPC-serialized
+inner serializer. The response is :class:[`SecretLookupResponse`][], IPC-serialized
 into the unary ``result`` envelope and validated C++-side against
 ``SecretLookupResultSchema()``.
 
@@ -36,7 +36,7 @@ from vgi_rpc import ArrowSerializableDataclass, ArrowType
 
 
 def encode_secret_values(mapping: dict[str, Any]) -> pa.RecordBatch | None:
-    """Build the one-row ``values`` RecordBatch from a Python mapping.
+    """Build the one-row ``values`` `RecordBatch` from a Python mapping.
 
     Each key becomes a column; the cell at row 0 is the secret value. Types are
     inferred by pyarrow (str→utf8, int→int64, bool→bool, dict→struct, list→list,
@@ -55,7 +55,7 @@ def encode_secret_values(mapping: dict[str, Any]) -> pa.RecordBatch | None:
 class SecretLookupResponse(ArrowSerializableDataclass):
     """Response for :meth:`VgiSecretProtocol.secret_lookup`.
 
-    ``values`` is the secret's key→value map carried as a **one-row RecordBatch**
+    ``values`` is the secret's key→value map carried as a **one-row `RecordBatch`**
     (serialized to binary on the wire): each column is a secret key and its row-0
     cell is the value. This lets values be any Arrow/DuckDB type — string, int64,
     bool, struct, list, nested — not just strings. Build it with

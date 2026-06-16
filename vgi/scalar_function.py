@@ -18,14 +18,14 @@ Common use cases:
 
 This module provides two base classes:
 
-    ScalarFunction (recommended)
-        Declarative API using Param/ConstParam/Returns annotations on compute().
-        Also supports Setting, Secret, and OutputLength annotations.
-        Override output_type() only if the output type depends on input schema.
+    [`ScalarFunction`][] (recommended)
+        Declarative API using [`Param`][]/[`ConstParam`][]/[`Returns`][] annotations on `compute()`.
+        Also supports `Setting`, [`Secret`][], and [`OutputLength`][] annotations.
+        Override `output_type()` only if the output type depends on input schema.
 
-    ScalarFunctionGenerator (advanced)
+    [`ScalarFunctionGenerator`][] (advanced)
         Per-batch callback API for fine-grained control.
-        Override output_type() and process().
+        Override `output_type()` and `process()`.
 
 """
 
@@ -86,7 +86,7 @@ __all__ = [
 
 @dataclass(slots=True, frozen=True)
 class BindResult(ArrowSerializableDataclass):
-    """Result of calling bind() on a scalar function.
+    """Result of calling `bind()` on a scalar function.
 
     Unlike table functions which return a full schema, scalar functions
     return a single output type since they produce one value per row.
@@ -94,7 +94,7 @@ class BindResult(ArrowSerializableDataclass):
     Attributes:
         output_type: Arrow data type for the output value.
         opaque_data: Optional serialized data, opaque to the caller,
-            that will be passed to global_init() and process().
+            that will be passed to `global_init()` and `process()`.
 
     """
 
@@ -104,13 +104,13 @@ class BindResult(ArrowSerializableDataclass):
 
 @dataclass(slots=True, frozen=True)
 class BindParameters:
-    """Parameters passed to a scalar function's bind() method.
+    """Parameters passed to a scalar function's `bind()` method.
 
     Attributes:
         constant_arguments: Constant arguments provided at query planning time.
         arguments_schema: Schema describing the input columns.
-        settings: DuckDB settings as a single-row RecordBatch, or None.
-        secrets: SecretsAccessor for accessing resolved and dynamic secrets.
+        settings: DuckDB settings as a single-row `RecordBatch`, or None.
+        secrets: [`SecretsAccessor`][] for accessing resolved and dynamic secrets.
         auth_context: Authentication context for the current request.
         attach_opaque_data: Catalog attach ID, if the function was invoked through an ATTACHed catalog.
         transaction_opaque_data: Catalog transaction ID, if invoked inside a catalog transaction.
@@ -142,27 +142,27 @@ def _resolve_explicit_arrow_type(arrow_type: pa.DataType | type) -> pa.DataType:
     raise TypeError(
         f"Cannot convert type '{arrow_type}' to Arrow type. "
         f"Use pa.DataType, Python type (int/str/float/bool/bytes), "
-        f"or None for AnyArrow."
+        f"or None for `AnyArrow`."
     )
 
 
 def _param_to_arg(param: Param, base_type: type, position: int) -> Arg[Any]:
-    """Convert Param dataclass to internal Arg object with type inference.
+    """Convert [`Param`][] dataclass to internal [`Arg`][] object with type inference.
 
     Supports hybrid type inference:
-    1. Explicit arrow_type in Param() takes priority
+    1. Explicit arrow_type in `Param()` takes priority
     2. Simple array classes (pa.Int64Array, etc.) are inferred automatically
     3. Complex/parameterized types (pa.StructArray, etc.) require explicit arrow_type
-    4. pa.Array or pa.Array[Any] indicates AnyArrow (dynamic type)
+    4. pa.Array or pa.Array[Any] indicates [`AnyArrow`][] (dynamic type)
 
     Args:
-        param: The Param metadata from an Annotated type hint.
+        param: The `Param` metadata from an Annotated type hint.
         base_type: The type from the Annotated first argument (e.g., pa.Int64Array
             from Annotated[pa.Int64Array, Param(...)]).
-        position: The parameter's position in the compute() signature.
+        position: The parameter's position in the `compute()` signature.
 
     Returns:
-        Arg instance configured for columnar input.
+        `Arg` instance configured for columnar input.
 
     Raises:
         TypeError: If type cannot be determined (complex type without explicit
@@ -207,16 +207,16 @@ def _param_to_arg(param: Param, base_type: type, position: int) -> Arg[Any]:
 
 
 def _const_param_to_arg(const_param: ConstParam, base_type: type, position: int) -> Arg[Any]:
-    """Convert ConstParam dataclass to internal Arg object.
+    """Convert [`ConstParam`][] dataclass to internal [`Arg`][] object.
 
     Args:
-        const_param: The ConstParam metadata from an Annotated type hint.
+        const_param: The `ConstParam` metadata from an Annotated type hint.
         base_type: The type from the Annotated first argument (e.g., int from
             Annotated[int, ConstParam(...)]).
         position: The parameter's position in the const arguments.
 
     Returns:
-        Arg instance configured for constant (scalar) input.
+        `Arg` instance configured for constant (scalar) input.
 
     Raises:
         TypeError: If the Arrow type cannot be determined.
@@ -244,10 +244,10 @@ def _const_param_to_arg(const_param: ConstParam, base_type: type, position: int)
 
 
 class _ArgDescriptor:
-    """Descriptor for Param arguments.
+    """Descriptor for [`Param`][] arguments.
 
-    On class access, returns the Arg metadata (position, doc, type_bound, etc.).
-    On instance access, returns the resolved column value via Arg._resolve().
+    On class access, returns the [`Arg`][] metadata (position, doc, type_bound, etc.).
+    On instance access, returns the resolved column value via `Arg._resolve()`.
     """
 
     __slots__ = ("arg", "name")
@@ -265,14 +265,14 @@ class _ArgDescriptor:
 
 
 class _ConstArgDescriptor:
-    """Descriptor for constant-folded ConstParam arguments.
+    """Descriptor for constant-folded [`ConstParam`][] arguments.
 
     Provides access to the scalar value (not array) for const parameters.
     The value is resolved from invocation.arguments and converted to Python.
 
     These must be separate classes because their __get__ methods return different types.
-        - _ArgDescriptor returns the column value (array) for regular Param
-        - _ConstArgDescriptor returns the scalar value for ConstParam
+        - `_ArgDescriptor` returns the column value (array) for regular [`Param`][]
+        - `_ConstArgDescriptor` returns the scalar value for `ConstParam`
     """
 
     __slots__ = ("arg", "name")
@@ -292,7 +292,7 @@ class RowCountMismatchError(Exception):
     """Raised when scalar function output row count doesn't match input.
 
     Scalar functions must produce exactly one output row for each input row.
-    This error indicates the compute() method returned an array with the
+    This error indicates the `compute()` method returned an array with the
     wrong number of elements.
 
     Attributes:
@@ -369,7 +369,7 @@ class RowCountMismatchError(Exception):
 class TypeMismatchError(TypeError):
     """Raised when array type doesn't match declared parameter or return type.
 
-    This error indicates a mismatch between the declared type in Param() or Returns()
+    This error indicates a mismatch between the declared type in `Param()` or `Returns()`
     and the actual array type at runtime.
 
     Attributes:
@@ -436,7 +436,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
     """Per-batch callback base class for scalar functions.
 
     This is the advanced API for scalar functions. For most use cases,
-    use ScalarFunction instead, which provides a simpler compute() callback.
+    use [`ScalarFunction`][] instead, which provides a simpler `compute()` callback.
 
     Scalar functions have these constraints:
     - **1:1 row mapping**: Output row count must equal input row count
@@ -505,7 +505,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
             params: Bind parameters including arguments and schema.
 
         Returns:
-            BindResult with output_type and optional opaque_data.
+            [`BindResult`][] with output_type and optional opaque_data.
 
         """
         return BindResult(cls.output_type(params))
@@ -517,7 +517,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
         A generator-style scalar function computes its output type at bind
         time, so no static type is known here. Report a single dynamic
         ``result`` column (``null()`` tagged ``vgi:any``) so catalog
-        consumers treat the type as resolved-at-bind. ScalarFunction
+        consumers treat the type as resolved-at-bind. [`ScalarFunction`][]
         overrides this when a static ``Returns()`` type is available.
         """
         field = pa.field("result", pa.null(), metadata={b"vgi:any": b"true"})
@@ -526,13 +526,13 @@ class ScalarFunctionGenerator(vgi.function.Function):
     @final
     @classmethod
     def _validate_param_type_bounds(cls, input_schema: pa.Schema) -> None:
-        """Validate type bounds for AnyArrow Param parameters at bind time.
+        """Validate type bounds for [`AnyArrow`][] [`Param`][] parameters at bind time.
 
-        Checks each Param with type_bound against the input schema field types.
+        Checks each `Param` with type_bound against the input schema field types.
         This provides early error detection before any data is processed.
 
-        Only applies to ScalarFunction subclasses that define _compute_params
-        (via the Param/ConstParam annotation API). For ScalarFunctionGenerator
+        Only applies to [`ScalarFunction`][] subclasses that define _compute_params
+        (via the `Param`/[`ConstParam`][] annotation API). For [`ScalarFunctionGenerator`][]
         subclasses that don't use annotations, this is a no-op.
 
         Args:
@@ -591,11 +591,11 @@ class ScalarFunctionGenerator(vgi.function.Function):
         ctx: CallContext | None = None,
         attach_plaintext: bytes | None = None,
     ) -> BindResponse:
-        """Bind protocol entry point. Do not override; use on_bind() instead.
+        """Bind protocol entry point. Do not override; use `on_bind()` instead.
 
-        Constructs BindParameters, validates type bounds, calls on_bind(),
-        and wraps the result for transmission to global_init. If on_bind()
-        triggers dynamic secret lookups or if compute() declares Secret()
+        Constructs [`BindParameters`][], validates type bounds, calls `on_bind()`,
+        and wraps the result for transmission to global_init. If `on_bind()`
+        triggers dynamic secret lookups or if `compute()` declares `Secret()`
         annotations that haven't been resolved, returns a secret scope request.
 
         """
@@ -669,17 +669,17 @@ class ScalarFunctionGenerator(vgi.function.Function):
 
         Args:
             bind_call: The original BindCall with arguments and schema.
-            opaque_data: Bytes from on_bind()'s ``BindResult.opaque_data``
+            opaque_data: Bytes from `on_bind()`'s ``BindResult.opaque_data``
                 (after the framework's serialize-to-bytes shim), or None
                 if on_bind didn't set it. Reconstruct via
                 ``MyConcreteDataclass.deserialize_from_bytes(opaque_data)``
                 — the consumer always knows what concrete type to expect,
                 so explicit reconstruction is preferred over a framework-
                 level class-name registry.
-            storage: BoundStorage for storing data across calls.
+            storage: [`BoundStorage`][] for storing data across calls.
 
         Returns:
-            GlobalInitResponse with max_processes and optional opaque data.
+            [`GlobalInitResponse`][] with max_processes and optional opaque data.
 
         """
         return GlobalInitResponse()
@@ -687,7 +687,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
     @final
     @classmethod
     def global_init(cls, input: InitRequest, *, attach_plaintext: bytes | None = None) -> GlobalInitResponse:
-        """Global init protocol entry point. Do not override; use on_init() instead.
+        """Global init protocol entry point. Do not override; use `on_init()` instead.
 
         Deserializes the wrapped bind data, calls on_init(), and
         wraps the result for transmission to process().
@@ -723,18 +723,18 @@ class ScalarFunctionGenerator(vgi.function.Function):
         """Process one input batch.
 
         Override this method to implement your scalar transformation.
-        Must return an output RecordBatch with exactly the same number
+        Must return an output `RecordBatch` with exactly the same number
         of rows as the input batch.
 
         Args:
-            batch: The input RecordBatch to process.
+            batch: The input `RecordBatch` to process.
             init_call: The parameters from global_init.
             init_response: The response from the init call.
-            storage: BoundStorage for storing data across calls.
+            storage: [`BoundStorage`][] for storing data across calls.
             auth_context: Authentication context for the current request.
 
         Returns:
-            Output RecordBatch with same row count as input.
+            Output `RecordBatch` with same row count as input.
 
         """
         ...
@@ -744,20 +744,20 @@ class ScalarFunction(ScalarFunctionGenerator):
     """Base class for scalar functions (1:1 row mapping, single output column).
 
     Scalar functions transform each input row to exactly one output value.
-    Use Param/ConstParam/Returns annotations on compute() to declare types.
+    Use [`Param`][]/[`ConstParam`][]/[`Returns`][] annotations on `compute()` to declare types.
 
     Type Validation
     ---------------
     Input and output types are validated at runtime:
-    - Param types are checked against actual array types
-    - Returns type is checked against compute() result
-    - AnyArrow parameters skip validation
-    - TypeMismatchError is raised on mismatch
+    - `Param` types are checked against actual array types
+    - `Returns` type is checked against `compute()` result
+    - [`AnyArrow`][] parameters skip validation
+    - [`TypeMismatchError`][] is raised on mismatch
 
     Methods to Override
     -------------------
     compute(self, ...) -> pa.Array
-        Transform input arrays to output. Use Param/ConstParam annotations.
+        Transform input arrays to output. Use `Param`/`ConstParam` annotations.
 
     output_type(params) -> pa.DataType (classmethod)
         Override when output type depends on input schema or arguments.
@@ -768,7 +768,7 @@ class ScalarFunction(ScalarFunctionGenerator):
     if TYPE_CHECKING:
 
         def __getattr__(self, _name: str) -> Any:
-            """Allow dynamic attribute access for Param/ConstParam descriptors."""
+            """Allow dynamic attribute access for [`Param`][]/[`ConstParam`][] descriptors."""
             ...
 
     _compute_params: dict[str, Arg[Any]]  # Regular Param() arguments (arrays)
@@ -780,10 +780,10 @@ class ScalarFunction(ScalarFunctionGenerator):
     _returns_output_type: pa.DataType | None  # Output type from Returns()
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Extract annotations from compute() signature.
+        """Extract annotations from `compute()` signature.
 
-        Extracts Param, ConstParam, Setting, Secret, OutputLength, and
-        Returns type information from compute() parameter annotations.
+        Extracts [`Param`][], [`ConstParam`][], `Setting`, [`Secret`][], [`OutputLength`][], and
+        [`Returns`][] type information from `compute()` parameter annotations.
         """
         super().__init_subclass__(**kwargs)
 
@@ -960,7 +960,7 @@ class ScalarFunction(ScalarFunctionGenerator):
         """Return output schema for catalog introspection.
 
         Returns the output schema with a single "result" field using the
-        type from the Returns() annotation. If no explicit type was declared
+        type from the `Returns()` annotation. If no explicit type was declared
         (dynamic type), returns null() with metadata indicating "any" type.
         """
         returns_type = getattr(cls, "_returns_output_type", None)
@@ -974,7 +974,7 @@ class ScalarFunction(ScalarFunctionGenerator):
     def output_type(cls, params: BindParameters) -> pa.DataType:
         """Return the Arrow type for the output column.
 
-        Default implementation uses _returns_output_type from Returns()
+        Default implementation uses _returns_output_type from `Returns()`
         annotation. Override when the output type depends on input schema
         or arguments (use params.arguments_schema, params.constant_arguments).
 
@@ -1003,10 +1003,10 @@ class ScalarFunction(ScalarFunctionGenerator):
         bind_call: BindRequest,
         auth_context: AuthContext,
     ) -> dict[str, Any]:
-        """Extract columns/values for compute() parameters.
+        """Extract columns/values for `compute()` parameters.
 
         Returns dict[str, Any] because values are a mix of arrays, lists of
-        arrays, and scalar values, keyed by compute() parameter names.
+        arrays, and scalar values, keyed by `compute()` parameter names.
 
         Args:
             batch: Input RecordBatch.
@@ -1072,7 +1072,7 @@ class ScalarFunction(ScalarFunctionGenerator):
         decimal128→double), the array is cast to the expected type and returned.
 
         Args:
-            arg: The Arg metadata for the parameter.
+            arg: The [`Arg`][] metadata for the parameter.
             arr: The actual array to validate.
             display_name: Name used in error messages (e.g. "x" or "x[0]").
 
@@ -1105,11 +1105,11 @@ class ScalarFunction(ScalarFunctionGenerator):
     @final
     @classmethod
     def _validate_param_types(cls, kwargs: dict[str, Any]) -> None:
-        """Validate that input array types match declared Param types.
+        """Validate that input array types match declared [`Param`][] types.
 
-        For the Param/ConstParam API:
+        For the `Param`/[`ConstParam`][] API:
         - Validates exact type match for params with declared arrow_type
-        - Validates type_bound predicates for AnyArrow params with type_bound
+        - Validates type_bound predicates for [`AnyArrow`][] params with type_bound
 
         Args:
             kwargs: Dict of parameter names to arrays (from _extract_compute_kwargs).
@@ -1130,7 +1130,7 @@ class ScalarFunction(ScalarFunctionGenerator):
     @final
     @classmethod
     def _validate_output_type(cls, result: pa.Array[Any]) -> None:
-        """Validate that output array type matches declared Returns type.
+        """Validate that output array type matches declared [`Returns`][] type.
 
         Args:
             result: The output array from compute().
@@ -1163,10 +1163,10 @@ class ScalarFunction(ScalarFunctionGenerator):
                 settings, and secrets.
 
         Returns:
-            BindResult with output_type and optional opaque_data.
+            [`BindResult`][] with output_type and optional opaque_data.
 
         Note:
-            Constant arguments needed during process() are automatically
+            Constant arguments needed during `process()` are automatically
             serialized by the protocol. The opaque_data field is for
             additional bind-time state you need to pass forward.
 
@@ -1184,10 +1184,10 @@ class ScalarFunction(ScalarFunctionGenerator):
         storage: BoundStorage,
         auth_context: AuthContext,
     ) -> pa.RecordBatch:
-        """Convert compute() to per-batch callback.
+        """Convert `compute()` to per-batch callback.
 
-        This method calls your compute() method for the input batch.
-        Keyword-only parameters in compute() are automatically populated
+        This method calls your `compute()` method for the input batch.
+        Keyword-only parameters in `compute()` are automatically populated
         from the batch columns.
 
         """

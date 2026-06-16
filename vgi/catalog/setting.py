@@ -2,8 +2,8 @@
 
 """Setting descriptor for declarative worker settings.
 
-This module provides the Setting descriptor class for defining worker settings
-using Python's Annotated type hints, similar to how Arg works for function arguments.
+This module provides the `Setting` descriptor class for defining worker settings
+using Python's `Annotated` type hints, similar to how [`Arg`][] works for function arguments.
 
 """
 
@@ -38,7 +38,7 @@ __all__ = [
 class SettingSpec:
     """Extracted setting metadata for catalog serialization.
 
-    This is the resolved form of a Setting, with all types inferred and
+    This is the resolved form of a `Setting`, with all types inferred and
     ready for serialization.
 
     Attributes:
@@ -157,8 +157,8 @@ def _resolve_arrow_type(type_hint: type | pa.DataType) -> pa.DataType:
 class Setting:
     """Descriptor for declarative setting definitions using Annotated.
 
-    Use with Annotated type hints to declare settings in a Worker's Settings class.
-    The Arrow type is resolved from the base type in the Annotated hint.
+    Use with `Annotated` type hints to declare settings in a [`Worker`][]'s Settings class.
+    The Arrow type is resolved from the base type in the `Annotated` hint.
 
     Attributes:
         desc: Human-readable description of the setting.
@@ -189,16 +189,16 @@ class Setting:
 
 
 def extract_setting_specs(settings_cls: type) -> list[SettingSpec]:
-    """Extract SettingSpec objects from a Settings class.
+    """Extract [`SettingSpec`][] objects from a Settings class.
 
-    Parses a Settings class with Annotated type hints and extracts
-    SettingSpec objects for each setting definition.
+    Parses a Settings class with `Annotated` type hints and extracts
+    `SettingSpec` objects for each setting definition.
 
     Args:
-        settings_cls: A class with Annotated[type, Setting(...)] attributes.
+        settings_cls: A class with `Annotated[type, Setting(...)]` attributes.
 
     Returns:
-        List of SettingSpec objects extracted from the class.
+        List of `SettingSpec` objects extracted from the class.
 
     Raises:
         TypeError: If a setting's Arrow type cannot be resolved.

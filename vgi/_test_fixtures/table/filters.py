@@ -318,9 +318,7 @@ class _FilteredColumnsEchoState(ArrowSerializableDataclass):
 @init_single_worker
 @bind_fixed_schema
 @_cardinality_from_count
-class FilteredColumnsEchoFunction(
-    TableFunctionGenerator[_FilteredColumnsEchoArgs, _FilteredColumnsEchoState]
-):
+class FilteredColumnsEchoFunction(TableFunctionGenerator[_FilteredColumnsEchoArgs, _FilteredColumnsEchoState]):
     """Report the columns referenced by pushed-down filters and ``tag``'s values.
 
     Surfaces which columns the pushed-down filters reference and the discrete
@@ -354,9 +352,7 @@ class FilteredColumnsEchoFunction(
     )
 
     @classmethod
-    def initial_state(
-        cls, params: ProcessParams[_FilteredColumnsEchoArgs]
-    ) -> _FilteredColumnsEchoState:
+    def initial_state(cls, params: ProcessParams[_FilteredColumnsEchoArgs]) -> _FilteredColumnsEchoState:
         """Resolve the filter-column diagnostics from the pushed-down filters."""
         assert params.init_call is not None
         pf = params.init_call.pushdown_filters

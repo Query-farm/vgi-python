@@ -16,7 +16,7 @@ Users define a nested `Meta` class with attributes. No inheritance required:
 
 The system automatically:
 - Resolves metadata from the class hierarchy (inheritance works)
-- Extracts parameter info from Arg descriptors
+- Extracts parameter info from [`Arg`][] descriptors
 - Infers function name from class name if not specified
 - Uses docstring as description fallback
 
@@ -115,7 +115,7 @@ class CatalogFunctionType(Enum):
 class FunctionStability(Enum):
     """Function output stability classification.
 
-    Maps to DuckDB's FunctionStability enum.
+    Maps to DuckDB's [`FunctionStability`][] enum.
     """
 
     CONSISTENT = auto()
@@ -131,7 +131,7 @@ class FunctionStability(Enum):
 class NullHandling(Enum):
     """NULL input handling behavior.
 
-    Maps to DuckDB's FunctionNullHandling enum.
+    Maps to DuckDB's `FunctionNullHandling` enum.
     """
 
     DEFAULT = auto()
@@ -210,7 +210,7 @@ class PartitionKind(Enum):
 class OrderDependence(Enum):
     """Aggregate order sensitivity.
 
-    Maps to DuckDB's AggregateOrderDependent enum.
+    Maps to DuckDB's `AggregateOrderDependent` enum.
     """
 
     ORDER_DEPENDENT = auto()
@@ -223,7 +223,7 @@ class OrderDependence(Enum):
 class DistinctDependence(Enum):
     """Aggregate DISTINCT modifier sensitivity.
 
-    Maps to DuckDB's AggregateDistinctDependent enum.
+    Maps to DuckDB's `AggregateDistinctDependent` enum.
     """
 
     DISTINCT_DEPENDENT = auto()
@@ -242,19 +242,19 @@ class DistinctDependence(Enum):
 class ParameterInfo:
     """Metadata about a function parameter.
 
-    Automatically extracted from Arg descriptors.
+    Automatically extracted from [`Arg`][] descriptors.
 
     Attributes:
         name: Parameter name (attribute name from class).
         position: Positional index (int) or named key (str).
-        type_name: Type name as string (e.g., "int", "str", "TableInput").
-        description: Documentation from Arg.doc.
+        type_name: Type name as string (e.g., "int", "str", [`TableInput`][]).
+        description: Documentation from `Arg.doc`.
         required: True if no default value.
         default: Default value, or None if required.
         constraints: Validation constraints as dict.
         is_table_input: True if this is the table input parameter.
         is_varargs: True if this accepts multiple trailing values.
-        is_const: True if this is a constant parameter (ConstParam).
+        is_const: True if this is a constant parameter ([`ConstParam`][]).
 
     """
 
@@ -351,8 +351,8 @@ class FunctionExample:
 class ResolvedMetadata:
     """Fully resolved metadata for a function.
 
-    This is the result of resolving a Meta class hierarchy and extracting
-    parameter information from Arg descriptors.
+    This is the result of resolving a `Meta` class hierarchy and extracting
+    parameter information from [`Arg`][] descriptors.
 
     """
 
@@ -506,7 +506,7 @@ class ResolvedMetadata:
 
 
 def _get_arg_type_info(cls: type, attr_name: str) -> tuple[str | None, bool]:
-    """Extract type name and TableInput status from type hints for an Arg attribute.
+    """Extract type name and [`TableInput`][] status from type hints for an [`Arg`][] attribute.
 
     Returns:
         Tuple of (type_name, is_table_input).
@@ -540,7 +540,7 @@ def _get_arg_type_info(cls: type, attr_name: str) -> tuple[str | None, bool]:
 
 
 class TableInputValidationError(ValueError):
-    """Raised when TableInput parameter validation fails."""
+    """Raised when [`TableInput`][] parameter validation fails."""
 
 
 class VarargsValidationError(ValueError):
@@ -548,7 +548,7 @@ class VarargsValidationError(ValueError):
 
 
 def _build_constraints(arg: Arg[Any]) -> dict[str, Any]:
-    """Extract validation constraints from an Arg descriptor."""
+    """Extract validation constraints from an [`Arg`][] descriptor."""
     constraints: dict[str, Any] = {}
 
     # Numeric bounds
@@ -569,20 +569,20 @@ def _build_constraints(arg: Arg[Any]) -> dict[str, Any]:
 def extract_parameters(cls: type, *, validate_table_input: bool = True) -> list[ParameterInfo]:
     """Extract parameter information from Arg descriptors on a class.
 
-    Walks the class and its bases to find all Arg descriptors and converts
-    them to ParameterInfo objects. Also handles the new Param/ConstParam API
-    for ScalarFunction subclasses.
+    Walks the class and its bases to find all [`Arg`][] descriptors and converts
+    them to [`ParameterInfo`][] objects. Also handles the new [`Param`][]/[`ConstParam`][] API
+    for [`ScalarFunction`][] subclasses.
 
     Args:
         cls: The function class to extract parameters from.
-        validate_table_input: If True, validates TableInput requirements for
-            TableInOutFunction subclasses.
+        validate_table_input: If True, validates [`TableInput`][] requirements for
+            [`TableInOutFunction`][] subclasses.
 
     Returns:
-        List of ParameterInfo objects, sorted by position.
+        List of `ParameterInfo` objects, sorted by position.
 
     Raises:
-        TableInputValidationError: If TableInput validation fails.
+        TableInputValidationError: If `TableInput` validation fails.
 
     """
     # Import here to avoid circular imports
@@ -741,11 +741,11 @@ def extract_parameters(cls: type, *, validate_table_input: bool = True) -> list[
 
 
 def _validate_table_input(cls: type, parameters: list[ParameterInfo]) -> None:
-    """Validate TableInput parameter constraints.
+    """Validate [`TableInput`][] parameter constraints.
 
-    If a function has TableInput parameters, validates that:
-    - There is exactly one TableInput parameter
-    - The TableInput parameter is positional (not named)
+    If a function has `TableInput` parameters, validates that:
+    - There is exactly one `TableInput` parameter
+    - The `TableInput` parameter is positional (not named)
 
     Args:
         cls: The function class being validated.
@@ -785,7 +785,7 @@ def _validate_varargs(cls: type, parameters: list[ParameterInfo]) -> None:
     If a function has varargs parameters, validates that:
     - There is at most one varargs parameter
     - The varargs parameter is positional (not named) - enforced by Arg.__init__
-    - The varargs parameter is the last positional arg (before TableInput if present)
+    - The varargs parameter is the last positional arg (before [`TableInput`][] if present)
 
     Args:
         cls: The function class being validated.
@@ -840,7 +840,7 @@ def _validate_varargs(cls: type, parameters: list[ParameterInfo]) -> None:
 def _normalize_examples(
     examples: list[FunctionExample | str],
 ) -> list[FunctionExample]:
-    """Convert string examples to FunctionExample objects."""
+    """Convert string examples to [`FunctionExample`][] objects."""
     return [FunctionExample(sql=ex) if isinstance(ex, str) else ex for ex in examples]
 
 
@@ -939,8 +939,8 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
     Results are cached since class metadata doesn't change at runtime.
 
     This function:
-    1. Walks the class hierarchy to find and merge Meta classes
-    2. Extracts parameter info from Arg descriptors
+    1. Walks the class hierarchy to find and merge `Meta` classes
+    2. Extracts parameter info from [`Arg`][] descriptors
     3. Infers function name from class name if not specified
     4. Uses docstring as description fallback
 
@@ -948,7 +948,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         cls: The function class to resolve metadata for.
 
     Returns:
-        ResolvedMetadata with all resolved values.
+        [`ResolvedMetadata`][] with all resolved values.
 
     """
     # Collect all attributes from Meta classes in MRO
@@ -1294,13 +1294,13 @@ def _extract_arrow_row(columns: dict[str, list[Any]], index: int) -> dict[str, A
 
 
 def metadata_to_arrow(metadata: ResolvedMetadata) -> pa.RecordBatch:
-    """Serialize a single ResolvedMetadata to Arrow RecordBatch.
+    """Serialize a single [`ResolvedMetadata`][] to Arrow `RecordBatch`.
 
     Args:
         metadata: The metadata to serialize.
 
     Returns:
-        RecordBatch with one row containing the metadata.
+        `RecordBatch` with one row containing the metadata.
 
     """
     row = metadata.to_dict()
@@ -1310,13 +1310,13 @@ def metadata_to_arrow(metadata: ResolvedMetadata) -> pa.RecordBatch:
 
 
 def arrow_to_metadata(batch: pa.RecordBatch) -> ResolvedMetadata:
-    """Deserialize Arrow RecordBatch to ResolvedMetadata.
+    """Deserialize Arrow `RecordBatch` to [`ResolvedMetadata`][].
 
     Args:
-        batch: RecordBatch with one row containing metadata.
+        batch: `RecordBatch` with one row containing metadata.
 
     Returns:
-        Deserialized ResolvedMetadata.
+        Deserialized `ResolvedMetadata`.
 
     """
     if batch.num_rows != 1:
@@ -1328,13 +1328,13 @@ def arrow_to_metadata(batch: pa.RecordBatch) -> ResolvedMetadata:
 
 
 def metadatas_to_arrow(metadatas: Sequence[ResolvedMetadata]) -> pa.RecordBatch:
-    """Serialize multiple ResolvedMetadata objects to Arrow RecordBatch.
+    """Serialize multiple [`ResolvedMetadata`][] objects to Arrow `RecordBatch`.
 
     Args:
-        metadatas: Sequence of ResolvedMetadata objects to serialize.
+        metadatas: Sequence of `ResolvedMetadata` objects to serialize.
 
     Returns:
-        RecordBatch with one row per metadata object.
+        `RecordBatch` with one row per metadata object.
 
     """
     if not metadatas:
@@ -1352,29 +1352,29 @@ def metadatas_to_arrow(metadatas: Sequence[ResolvedMetadata]) -> pa.RecordBatch:
 
 
 def functions_to_arrow(function_classes: Sequence[type]) -> pa.RecordBatch:
-    """Serialize multiple function classes to Arrow RecordBatch.
+    """Serialize multiple function classes to Arrow `RecordBatch`.
 
     Convenience function that resolves metadata for each class, then serializes.
-    For pre-resolved metadata, use metadatas_to_arrow() directly.
+    For pre-resolved metadata, use `metadatas_to_arrow()` directly.
 
     Args:
         function_classes: Sequence of function classes to serialize.
 
     Returns:
-        RecordBatch with one row per function.
+        `RecordBatch` with one row per function.
 
     """
     return metadatas_to_arrow([resolve_metadata(cls) for cls in function_classes])
 
 
 def arrow_to_functions(batch: pa.RecordBatch) -> list[ResolvedMetadata]:
-    """Deserialize Arrow RecordBatch to list of ResolvedMetadata.
+    """Deserialize Arrow `RecordBatch` to list of [`ResolvedMetadata`][].
 
     Args:
-        batch: RecordBatch with one row per function.
+        batch: `RecordBatch` with one row per function.
 
     Returns:
-        List of deserialized ResolvedMetadata objects.
+        List of deserialized `ResolvedMetadata` objects.
 
     """
     columns = batch.to_pydict()

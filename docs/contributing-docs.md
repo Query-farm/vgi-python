@@ -59,6 +59,38 @@ Every tutorial, how-to, and concept page **must** contain, in order:
 - **Progressive disclosure for newcomers.** Put background that experts can skip inside a
   collapsible admonition (`??? info "New to X?"`).
 
+## Docstrings: type references and cross-links
+
+Docstrings are published verbatim into the API reference via mkdocstrings, so a bare type
+name like `Every TableInOutFunction must...` renders as plain prose — not code, not a link.
+Use this convention so referenced types render in code font and link to their reference entry.
+
+mkdocstrings has `relative_crossrefs` + `scoped_crossrefs` enabled, which means you can link a
+symbol by its short name alone — no dotted path needed:
+
+| Markup | Renders as | Use for |
+|---|---|---|
+| ``[`TableInOutFunction`][]`` | code font **and** a link | first mention of a VGI type in a docstring |
+| `` `TableInOutFunction` `` | code font, no link | repeat mentions in the same docstring |
+| `` `RecordBatch` ``, `` `process()` `` | code font, no link | external types (pyarrow, stdlib) and method/attr names |
+
+Rules:
+
+- **Link the first mention, backtick the rest.** One link per type per docstring is enough; extra
+  links to the same target just add noise. Subsequent mentions get plain backticks.
+- **Only link names that exist in the API reference.** The empty `[]` resolves against the
+  documented inventory; an unknown name fails the `--strict` build. When unsure, use plain backticks.
+- **A few names can't be linked by short name — backtick them.** When a symbol is re-exported and
+  therefore rendered on more than one API reference page (e.g. `Function`, `FunctionStorage`,
+  `FunctionStorageSqlite`/`AzureSql`/`CfDo`, `ScanFunctionResult`, `ScanBranchesResult`), autorefs
+  can't resolve the unqualified name and the `--strict` build fails with *"Could not find
+  cross-reference target"*. Use plain backticks for these. (Genuinely overloaded names like
+  `FunctionType` and `Setting`, which have two distinct definitions, are backtick-only for the same
+  reason.) Most catalog descriptor types — `Table`, `View`, `Schema`, `Index`, `Macro` — render on a
+  single page and link fine.
+- **Verify with the build.** `uv run --group docs mkdocs build --strict` fails on any unresolved or
+  ambiguous cross-reference, so a clean build is the check.
+
 ## Page template
 
 Copy this skeleton when starting a new how-to or concept page:

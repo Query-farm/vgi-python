@@ -1,6 +1,6 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""TransactorProtocol — RPC interface for the db-transactor.
+"""[`TransactorProtocol`][] — RPC interface for the db-transactor.
 
 Defines the Protocol class that both the server and client use.
 Uses ``vgi_rpc`` streaming patterns:

@@ -2,12 +2,12 @@
 
 """Azure SQL Database storage for VGI function state.
 
-This module provides a FunctionStorage implementation backed by Azure SQL
-Database (Serverless). It is a near-direct port of FunctionStorageSqlite
+This module provides a `FunctionStorage` implementation backed by Azure SQL
+Database (Serverless). It is a near-direct port of `FunctionStorageSqlite`
 to T-SQL via pymssql.
 
 Implementation:
-    FunctionStorageAzureSql: Azure SQL-backed storage implementation.
+    `FunctionStorageAzureSql`: Azure SQL-backed storage implementation.
 
 Usage:
     Set ``VGI_WORKER_SHARED_STORAGE=azure-sql`` plus ``VGI_AZURE_SQL_SERVER``
@@ -60,7 +60,7 @@ class FunctionStorageAzureSql:
     """Azure SQL Database-backed storage for VGI function state.
 
     This implementation uses Azure SQL Database with the same table schema
-    as FunctionStorageSqlite. It manages three tables:
+    as `FunctionStorageSqlite`. It manages three tables:
 
     - worker_state: Per-worker partial state keyed by (execution_id, process_id)
     - work_queue: FIFO queue of work items per invocation
@@ -149,7 +149,7 @@ class FunctionStorageAzureSql:
 
         On the first failure, the connection is dropped and a fresh one
         is created for the retry.  ``Invalid object name`` errors are
-        translated to :class:`MissingTablesError` with a helpful message.
+        translated to :class:[`MissingTablesError`][] with a helpful message.
         """
         for attempt in range(2):
             try:
@@ -171,7 +171,7 @@ class FunctionStorageAzureSql:
 
     @staticmethod
     def _check_missing_tables(exc: Exception) -> None:
-        """Raise MissingTablesError if the exception indicates missing tables."""
+        """Raise [`MissingTablesError`][] if the exception indicates missing tables."""
         if hasattr(exc, "args") and exc.args and exc.args[0] == _ERR_INVALID_OBJECT_NAME:
             raise MissingTablesError(
                 "Storage tables do not exist in the database. "

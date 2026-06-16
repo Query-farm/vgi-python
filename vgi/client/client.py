@@ -40,9 +40,9 @@ minimal port can ignore it and always use one connection.
 
 Key classes
 -----------
-    Client             — main entry point; ``Client.from_http(...)`` for HTTP
-    ClientError        — raised on communication errors
-    WorkerConnection   — internal; one per transport-level connection
+    [`Client`][]             — main entry point; ``Client.from_http(...)`` for HTTP
+    [`ClientError`][]    — raised on communication errors
+    [`WorkerConnection`][] — internal; one per transport-level connection
 
 Key methods
 -----------
@@ -55,7 +55,7 @@ Key methods
     client.table_in_out_function(...) — invoke a table-in-out function
     client.server_capabilities()  — HTTP only; upload-URL caps
 
-See Also
+See Also:
 --------
     vgi.protocol.VgiProtocol      — the RPC interface this client exercises
     vgi.protocol.BindRequest      — request types
@@ -125,7 +125,7 @@ class ClientError(Exception):
 
     @classmethod
     def from_rpc_error(cls, e: RpcError) -> ClientError:
-        """Create a ClientError from an RpcError, including remote traceback.
+        """Create a [`ClientError`][] from an `RpcError`, including remote traceback.
 
         Lead with the user's exception (``error_type: error_message``) so
         the most actionable line is first. The ``Remote traceback`` section
@@ -231,7 +231,7 @@ class Client(CatalogClientMixin):
       Ports don't need to mirror this.
 
     Catalog operations (``catalogs()``, ``schema_contents()``, etc.) are
-    provided by ``CatalogClientMixin`` and don't require ``start()``. They
+    provided by `[`CatalogClientMixin`][]` and don't require ``start()``. They
     open a short-lived connection per call (HTTP) or borrow a pooled
     subprocess worker.
 
@@ -252,7 +252,7 @@ class Client(CatalogClientMixin):
 
     @staticmethod
     def _combine_batches(batches: list[pa.RecordBatch]) -> pa.RecordBatch | None:
-        """Combine multiple RecordBatches into a single RecordBatch.
+        """Combine multiple `RecordBatch`es into a single `RecordBatch`.
 
         Converts the batches to a PyArrow Table, combines chunks, and converts
         back to a single batch. When all input batches have zero rows, PyArrow's
@@ -260,11 +260,11 @@ class Client(CatalogClientMixin):
         batch is returned to preserve the schema.
 
         Args:
-            batches: List of RecordBatches to combine. All batches must have
+            batches: List of `RecordBatch`es to combine. All batches must have
                 compatible schemas.
 
         Returns:
-            A single combined RecordBatch, or None if the input list is empty.
+            A single combined `RecordBatch`, or None if the input list is empty.
 
         """
         if not batches:
@@ -318,13 +318,13 @@ class Client(CatalogClientMixin):
 
     @staticmethod
     def _settings_to_batch(settings: dict[str, Any] | None) -> pa.RecordBatch | None:
-        """Convert settings dict to RecordBatch for protocol.
+        """Convert settings dict to `RecordBatch` for protocol.
 
         Args:
             settings: Dictionary of setting name to value pairs.
 
         Returns:
-            A single-row RecordBatch with one column per setting, or None.
+            A single-row `RecordBatch` with one column per setting, or None.
 
         """
         if settings is None:
@@ -333,14 +333,14 @@ class Client(CatalogClientMixin):
 
     @staticmethod
     def _secrets_to_batch(secrets: dict[str, Any] | None) -> pa.RecordBatch | None:
-        """Convert secrets dict to RecordBatch for protocol.
+        """Convert secrets dict to `RecordBatch` for protocol.
 
         Args:
             secrets: Dictionary of secret name to value pairs. Values can be
                 simple scalars or dicts (for struct-typed secrets).
 
         Returns:
-            A single-row RecordBatch with one column per secret, or None.
+            A single-row `RecordBatch` with one column per secret, or None.
 
         """
         if secrets is None:
@@ -349,13 +349,13 @@ class Client(CatalogClientMixin):
 
     @staticmethod
     def _deserialize_pushdown_filters(filters_bytes: bytes | None) -> pa.RecordBatch | None:
-        """Deserialize pushdown filter bytes to RecordBatch.
+        """Deserialize pushdown filter bytes to `RecordBatch`.
 
         Args:
-            filters_bytes: IPC-serialized RecordBatch bytes, or None.
+            filters_bytes: IPC-serialized `RecordBatch` bytes, or None.
 
         Returns:
-            Deserialized RecordBatch, or None.
+            Deserialized `RecordBatch`, or None.
 
         """
         if filters_bytes is None:
@@ -398,7 +398,7 @@ class Client(CatalogClientMixin):
             attach_opaque_data: Optional unique identifier for the DuckDB database
                 attachment. When VGI is used from an attached database, this
                 allows tracing calls back to that specific attachment.
-            pool: Subprocess-only. Optional WorkerPool for subprocess reuse.
+            pool: Subprocess-only. Optional `WorkerPool` for subprocess reuse.
                 Pass None to disable pooling and use direct subprocess
                 management.
             transport: Which transport to use. ``"subprocess"`` (default)
@@ -482,7 +482,7 @@ class Client(CatalogClientMixin):
         worker_limit: int | None = None,
         attach_opaque_data: bytes | None = None,
     ) -> Client:
-        """Create a ``Client`` bound to a remote HTTP VGI worker.
+        """Create a `[`Client`][]` bound to a remote HTTP VGI worker.
 
         Canonical entry point for non-DuckDB callers (e.g. a TypeScript port
         browsing catalog contents). Subprocess-specific kwargs are not
@@ -538,7 +538,7 @@ class Client(CatalogClientMixin):
             return b"".join(self._stderr_buffer).decode("utf-8", errors="replace")
 
     def _client_error_with_stderr(self, error: ClientError) -> ClientError:
-        """Enrich a ClientError with captured worker stderr, if available.
+        """Enrich a [`ClientError`][] with captured worker stderr, if available.
 
         When passthrough_stderr is enabled, stderr already went to the terminal
         so we return the error unchanged. Otherwise we append the last 50 lines
@@ -769,7 +769,7 @@ class Client(CatalogClientMixin):
         """Start the primary worker subprocess.
 
         Spawns the worker process using the server_path configured in __init__,
-        sets up RPC transport, and creates a typed VgiProtocol proxy for
+        sets up RPC transport, and creates a typed [`VgiProtocol`][] proxy for
         method calls.
 
         After this method returns, the client is ready to invoke functions via
@@ -781,7 +781,7 @@ class Client(CatalogClientMixin):
         previous runs is discarded.
 
         Raises:
-            ClientError: If the client is already started (call stop() first),
+            [`ClientError`][]: If the client is already started (call stop() first),
                 or if stdout/stderr pipes fail to be created.
 
         """
@@ -818,7 +818,7 @@ class Client(CatalogClientMixin):
             additional workers are logged but not returned.
 
         Raises:
-            ClientError: If the client was not started (call start() first).
+            [`ClientError`][]: If the client was not started (call start() first).
 
         """
         if self._primary is None:
@@ -906,19 +906,19 @@ class Client(CatalogClientMixin):
         bind_request: BindRequest,
         bind_result_callback: Callable[[BindResponse], None] | None = None,
     ) -> BindResponse:
-        """Call bind on a worker proxy and return BindResponse.
+        """Call bind on a worker proxy and return [`BindResponse`][].
 
         Args:
-            proxy: VgiProtocol proxy from RpcConnection.
+            proxy: [`VgiProtocol`][] proxy from `RpcConnection`.
             bind_request: The bind request to send.
             bind_result_callback: Optional callback invoked with the
-                BindResponse before returning.
+                `BindResponse` before returning.
 
         Returns:
-            BindResponse containing output_schema and opaque_data.
+            `BindResponse` containing output_schema and opaque_data.
 
         Raises:
-            ClientError: If the RPC call fails.
+            [`ClientError`][]: If the RPC call fails.
 
         """
         try:
@@ -944,10 +944,10 @@ class Client(CatalogClientMixin):
         init_opaque_data: bytes | None = None,
         finalize_state_id: bytes | None = None,
     ) -> StreamSession:
-        """Call init on a worker proxy and return a StreamSession.
+        """Call init on a worker proxy and return a `StreamSession`.
 
         Args:
-            proxy: VgiProtocol proxy from RpcConnection.
+            proxy: [`VgiProtocol`][] proxy from `RpcConnection`.
             bind_request: The original bind request.
             bind_response: The bind response containing output_schema.
             projection_ids: Optional column indices for projection.
@@ -961,10 +961,10 @@ class Client(CatalogClientMixin):
                 opaque finalize partition key this producer stream serves.
 
         Returns:
-            StreamSession for data exchange or production.
+            `StreamSession` for data exchange or production.
 
         Raises:
-            ClientError: If the RPC call fails.
+            [`ClientError`][]: If the RPC call fails.
 
         """
         init_request = InitRequest(
@@ -1004,11 +1004,11 @@ class Client(CatalogClientMixin):
         All three function entry points (``scalar_function``,
         ``table_function``, ``table_in_out_function``) share this shape:
 
-        1. Build a ``BindRequest`` from the user's call.
+        1. Build a `[`BindRequest`][]` from the user's call.
         2. ``bind`` against the primary worker proxy.
         3. ``init`` against the primary — stores ``StreamSession`` on the
            primary worker connection.
-        4. Read the ``GlobalInitResponse`` header (carries ``max_workers``
+        4. Read the `[`GlobalInitResponse`][]` header (carries ``max_workers``
            + ``execution_id`` for secondary workers).
         5. Spawn any additional workers and drive their ``init`` with the
            primary's execution identity.
@@ -1090,7 +1090,7 @@ class Client(CatalogClientMixin):
             phase: Table-in-out function phase (INPUT or FINALIZE).
 
         Raises:
-            ClientError: If any worker fails to initialize. The exception wraps
+            [`ClientError`][]: If any worker fails to initialize. The exception wraps
                 the first initialization error encountered.
 
         """
@@ -1239,14 +1239,14 @@ class Client(CatalogClientMixin):
 
         Args:
             worker: The worker connection to use. Must have stream initialized.
-            input_batch: The input RecordBatch to send to the worker.
+            input_batch: The input `RecordBatch` to send to the worker.
             batch_index: Index of this batch in the input sequence (for logging).
 
         Returns:
-            List of output RecordBatches produced by processing this input batch.
+            List of output `RecordBatch`es produced by processing this input batch.
 
         Raises:
-            ClientError: If worker.stream is None, or if the worker returns
+            [`ClientError`][]: If worker.stream is None, or if the worker returns
                 an unexpected status, or if the RPC call fails.
 
         """
@@ -1312,7 +1312,7 @@ class Client(CatalogClientMixin):
 
         Args:
             worker: The worker connection to use for processing batches.
-            input_queue: Thread-safe queue providing (batch_index, RecordBatch)
+            input_queue: Thread-safe queue providing (batch_index, `RecordBatch`)
                 tuples for processing. A None value signals end of input.
             output_queue: Thread-safe queue for results.
 
@@ -1352,12 +1352,12 @@ class Client(CatalogClientMixin):
             remaining_input: Iterator for remaining input batches.
 
         Yields:
-            Output RecordBatches from processing. When multiple batches are
+            Output `RecordBatch`es from processing. When multiple batches are
             returned for a single input (HAVE_MORE_OUTPUT), they are combined
             into one batch. Order is non-deterministic for multi-worker mode.
 
         Raises:
-            ClientError: If a worker thread fails with an exception.
+            [`ClientError`][]: If a worker thread fails with an exception.
 
         """
         num_workers = len(all_workers)
@@ -1460,12 +1460,12 @@ class Client(CatalogClientMixin):
         Args:
             function_name: Name of the function to invoke. Must exist in the
                 worker's registry.
-            input: Iterator yielding input RecordBatches. Must yield at least one
+            input: Iterator yielding input `RecordBatch`es. Must yield at least one
                 batch. The first batch's schema is used to initialize the IPC
-                stream. Raises ClientError if the iterator is empty.
-            arguments: Optional Arguments container with positional and named
-                arguments to pass to the function. Defaults to empty Arguments().
-            bind_result_callback: Optional callback invoked with the BindResponse
+                stream. Raises [`ClientError`][] if the iterator is empty.
+            arguments: Optional [`Arguments`][] container with positional and named
+                arguments to pass to the function. Defaults to empty `Arguments()`.
+            bind_result_callback: Optional callback invoked with the [`BindResponse`][]
                 before processing begins.
             projection_ids: Optional list of column indices for column projection.
             pushdown_filters: Optional byte string containing filter predicates
@@ -1475,14 +1475,14 @@ class Client(CatalogClientMixin):
             transaction_opaque_data: Optional unique identifier for the DuckDB transaction.
 
         Yields:
-            Output RecordBatches from the function. In single-worker mode, output
+            Output `RecordBatch`es from the function. In single-worker mode, output
             order corresponds to input order. In parallel mode (max_workers > 1),
             output order is non-deterministic due to round-robin distribution.
             Final output from finalize is always yielded last.
 
         Raises:
-            ClientError: If the client is not started, input iterator is empty,
-                input iterator yields non-RecordBatch objects, communication
+            `ClientError`: If the client is not started, input iterator is empty,
+                input iterator yields non-`RecordBatch` objects, communication
                 with the worker fails, or the worker returns an unexpected
                 status or exception.
 
@@ -1592,21 +1592,21 @@ class Client(CatalogClientMixin):
 
         Args:
             function_name: Name of the ``TableBufferingFunction`` to invoke.
-            input: Iterator yielding input RecordBatches. May be empty —
+            input: Iterator yielding input `RecordBatch`es. May be empty —
                 buffering aggregations still produce a result for zero rows.
-            arguments: Optional Arguments container. Defaults to empty.
+            arguments: Optional [`Arguments`][] container. Defaults to empty.
             bind_result_callback: Optional callback invoked with the
-                BindResponse before processing begins.
+                [`BindResponse`][] before processing begins.
             projection_ids: Optional column indices for projection.
             pushdown_filters: Optional serialized filter predicates.
             settings: Optional settings/pragmas to pass to the function.
             transaction_opaque_data: Optional DuckDB transaction identifier.
 
         Yields:
-            Output RecordBatches produced by the finalize (source) phase.
+            Output `RecordBatch`es produced by the finalize (source) phase.
 
         Raises:
-            ClientError: If the client is not started or any RPC fails.
+            [`ClientError`][]: If the client is not started or any RPC fails.
 
         """
         if arguments is None:
@@ -1752,10 +1752,10 @@ class Client(CatalogClientMixin):
                 the execution_id needed to access stored worker state.
 
         Yields:
-            Final output RecordBatches from the worker's finalize phase.
+            Final output `RecordBatch`es from the worker's finalize phase.
 
         Raises:
-            ClientError: If the RPC call fails.
+            [`ClientError`][]: If the RPC call fails.
 
         """
         assert self._primary is not None
@@ -1810,9 +1810,9 @@ class Client(CatalogClientMixin):
         Args:
             function_name: Name of the function to invoke. Must exist in the
                 worker's registry and be a table function (not table-in-out).
-            arguments: Optional Arguments container with positional and named
-                arguments to pass to the function. Defaults to empty Arguments().
-            bind_result_callback: Optional callback invoked with the BindResponse
+            arguments: Optional [`Arguments`][] container with positional and named
+                arguments to pass to the function. Defaults to empty `Arguments()`.
+            bind_result_callback: Optional callback invoked with the [`BindResponse`][]
                 before processing begins.
             projection_ids: Optional list of column indices for column projection.
             pushdown_filters: Optional byte string containing filter predicates
@@ -1822,11 +1822,11 @@ class Client(CatalogClientMixin):
             transaction_opaque_data: Optional unique identifier for the DuckDB transaction.
 
         Yields:
-            Output RecordBatches from the function. In parallel mode
+            Output `RecordBatch`es from the function. In parallel mode
             (max_workers > 1), output order is non-deterministic.
 
         Raises:
-            ClientError: If the client is not started, communication with the
+            [`ClientError`][]: If the client is not started, communication with the
                 worker fails, or the worker returns an exception.
 
         """
@@ -1882,7 +1882,7 @@ class Client(CatalogClientMixin):
         """Open (or resume) a resumable table-function scan.
 
         Resumable variant of :meth:`table_function`: the returned
-        :class:`ResumableTableScan` yields ``(batch, token)`` one batch at a
+        :class:[`ResumableTableScan`][] yields ``(batch, token)`` one batch at a
         time, surfacing the worker's continuation token so a stateless caller
         can persist it and resume on another process/node.
 
@@ -1891,9 +1891,21 @@ class Client(CatalogClientMixin):
         and discarded — so the same ``function_name``/projection/filters must
         be supplied). When ``None``, a fresh scan starts.
 
+        Args:
+            function_name: Name of the table function to scan.
+            arguments: Positional/named arguments for the function's bind.
+            projection_ids: Optional column indices to project (projection
+                pushdown). ``None`` selects all columns.
+            pushdown_filters: Optional serialized filter-pushdown payload.
+            settings: Optional DuckDB settings to apply for the scan.
+            transaction_opaque_data: Optional catalog transaction handle.
+            resume_token: Continuation token from a prior batch to resume from;
+                must be paired with the same ``function_name``/projection/
+                filters. ``None`` starts a fresh scan.
+
         Raises:
-            ResumeUnsupported: If the transport is not HTTP.
-            ClientError: If the client is not started or the worker errors.
+            [`ResumeUnsupported`][]: If the transport is not HTTP.
+            [`ClientError`][]: If the client is not started or the worker errors.
 
         """
         if not self.supports_resumable_scan:
@@ -1962,12 +1974,12 @@ class Client(CatalogClientMixin):
                 its own schema); accepted for symmetry with ``table_scan_resumable``.
 
         Returns:
-            A ``ResumableTableScan`` positioned AFTER the token; ``next()`` continues the
+            A `[`ResumableTableScan`][]` positioned AFTER the token; ``next()`` continues the
             stream, yielding ``(batch, token)`` per call.
 
         Raises:
-            ResumeUnsupported: If the transport is not HTTP.
-            ClientError: If the client is not started.
+            [`ResumeUnsupported`][]: If the transport is not HTTP.
+            [`ClientError`][]: If the client is not started.
 
         """
         if not self.supports_resumable_scan:
@@ -1997,10 +2009,10 @@ class Client(CatalogClientMixin):
         them to a shared output queue.
 
         Yields:
-            Output RecordBatches from all workers in non-deterministic order.
+            Output `RecordBatch`es from all workers in non-deterministic order.
 
         Raises:
-            ClientError: If a worker thread fails with an exception.
+            [`ClientError`][]: If a worker thread fails with an exception.
 
         """
         assert self._primary is not None
@@ -2103,12 +2115,12 @@ class Client(CatalogClientMixin):
         Args:
             function_name: Name of the function to invoke. Must exist in the
                 worker's registry.
-            input: Iterator yielding input RecordBatches. Must yield at least one
+            input: Iterator yielding input `RecordBatch`es. Must yield at least one
                 batch. The first batch's schema is used to initialize the IPC
-                stream. Raises ClientError if the iterator is empty.
-            arguments: Optional Arguments container with positional and named
-                arguments to pass to the function. Defaults to empty Arguments().
-            bind_result_callback: Optional callback invoked with the BindResponse
+                stream. Raises [`ClientError`][] if the iterator is empty.
+            arguments: Optional [`Arguments`][] container with positional and named
+                arguments to pass to the function. Defaults to empty `Arguments()`.
+            bind_result_callback: Optional callback invoked with the [`BindResponse`][]
                 before processing begins.
             settings: Optional dictionary of settings/pragmas to
                 pass to the function.
@@ -2117,14 +2129,14 @@ class Client(CatalogClientMixin):
             transaction_opaque_data: Optional unique identifier for the DuckDB transaction.
 
         Yields:
-            Output RecordBatches from the function. Each output batch has a single
+            Output `RecordBatch`es from the function. Each output batch has a single
             column and the same number of rows as its corresponding input batch.
             In single-worker mode, output order corresponds to input order.
             In parallel mode (max_workers > 1), output order is non-deterministic.
 
         Raises:
-            ClientError: If the client is not started, input iterator is empty,
-                input iterator yields non-RecordBatch objects, communication
+            `ClientError`: If the client is not started, input iterator is empty,
+                input iterator yields non-`RecordBatch` objects, communication
                 with the worker fails, or the worker returns an unexpected
                 status or exception.
 

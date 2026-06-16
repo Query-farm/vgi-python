@@ -6,13 +6,13 @@ This module provides a storage protocol and implementation for sharing state
 across worker processes in distributed VGI function execution.
 
 Protocol:
-    FunctionStorage: Unified protocol for all VGI state storage needs.
+    `FunctionStorage`: Unified protocol for all VGI state storage needs.
 
 Implementations:
-    FunctionStorageSqlite: SQLite-backed storage (local/subprocess transport).
-    FunctionStorageAzureSql: Azure SQL Database-backed storage (cloud deployments).
+    `FunctionStorageSqlite`: SQLite-backed storage (local/subprocess transport).
+    `FunctionStorageAzureSql`: Azure SQL Database-backed storage (cloud deployments).
         See ``vgi.function_storage_azure_sql`` for details.
-    FunctionStorageCfDo: Cloudflare Durable Object-backed storage (edge deployments).
+    `FunctionStorageCfDo`: Cloudflare Durable Object-backed storage (edge deployments).
         See ``vgi.function_storage_cf_do`` for details.
 
 """
@@ -40,7 +40,7 @@ _F = TypeVar("_F", bound=Callable[..., Any])
 
 
 def _profiled(op: str) -> Callable[[_F], _F]:
-    """Record a ``BoundStorage`` op to the shared per-shard profiler.
+    """Record a `[`BoundStorage`][]` op to the shared per-shard profiler.
 
     No-op (returns the method unchanged, zero overhead) unless
     ``VGI_STORAGE_PROFILE=1``. Backends that already self-profile at their
@@ -103,7 +103,7 @@ class FrameworkNS(bytes, enum.Enum):
 def _coerce_ns(ns: "bytes | FrameworkNS") -> bytes:
     """Validate the namespace and return plain bytes.
 
-    ``FrameworkNS`` members carry the reserved prefix legitimately and
+    `[`FrameworkNS`][]` members carry the reserved prefix legitimately and
     pass through. Caller-supplied bytes starting with ``_vgi/`` raise
     ``ValueError`` — that prefix is reserved for framework-owned state.
     """
@@ -175,13 +175,13 @@ def _derive_shard_key(*, attach_uuid: bytes | None, _origin: str = "?") -> str:
 
 
 def _resolve_shard_key(backend: Any, attach_plaintext: bytes | None, _origin: str) -> str:
-    """Compute the shard_key for a ``BoundStorage`` over ``backend``.
+    """Compute the shard_key for a `[`BoundStorage`][]` over ``backend``.
 
     ``attach_plaintext`` is the framework-unwrapped attach, laid out as
     ``uuid(16) || catalog_bytes`` (the worker unwraps and threads it in; see
     ``_AttachUnwrapper``-free flow in worker.py), or None when there is no
     ATTACH. We shard on the leading UUID for any backend (so the debug
-    ``ShardedSqliteStorage`` partitions too). When there is no attach, only a
+    `[`ShardedSqliteStorage`][]` partitions too). When there is no attach, only a
     remote-sharding backend (``requires_shard_key``, i.e. CfDo) treats it as a
     hard error; everything else gets an empty key — local / subprocess
     executions are routinely not bound to an ATTACH and ignore the value anyway.
@@ -304,7 +304,7 @@ class FunctionStorage(Protocol):
             execution_id: Unique identifier for the function invocation.
             items: List of serialized work item bytes.
             shard_key: Routing key for the CF DO backend; ignored by
-                SQLite / Azure backends. Set automatically by BoundStorage
+                SQLite / Azure backends. Set automatically by [`BoundStorage`][]
                 from the caller's attach_opaque_data / auth context.
 
         Returns:
@@ -319,7 +319,7 @@ class FunctionStorage(Protocol):
         Args:
             execution_id: Unique identifier for the function invocation.
             shard_key: Routing key for the CF DO backend; ignored by
-                SQLite / Azure backends. Set automatically by BoundStorage
+                SQLite / Azure backends. Set automatically by [`BoundStorage`][]
                 from the caller's attach_opaque_data / auth context.
 
         Returns:
@@ -337,7 +337,7 @@ class FunctionStorage(Protocol):
         Args:
             execution_id: Unique identifier for the function invocation.
             shard_key: Routing key for the CF DO backend; ignored by
-                SQLite / Azure backends. Set automatically by BoundStorage
+                SQLite / Azure backends. Set automatically by [`BoundStorage`][]
                 from the caller's attach_opaque_data / auth context.
 
         Returns:

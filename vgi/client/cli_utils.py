@@ -90,13 +90,13 @@ def hex_to_bytes(hex_string: str) -> bytes:
 
 
 def hex_to_attach_opaque_data(hex_string: str) -> AttachOpaqueData:
-    """Convert a hex string to AttachOpaqueData.
+    """Convert a hex string to `AttachOpaqueData`.
 
     Args:
         hex_string: Hexadecimal string (e.g., "deadbeef")
 
     Returns:
-        AttachOpaqueData
+        `AttachOpaqueData`
 
     Raises:
         click.ClickException: If hex string is invalid
@@ -106,13 +106,13 @@ def hex_to_attach_opaque_data(hex_string: str) -> AttachOpaqueData:
 
 
 def hex_to_transaction_opaque_data(hex_string: str) -> TransactionOpaqueData:
-    """Convert a hex string to TransactionOpaqueData.
+    """Convert a hex string to `TransactionOpaqueData`.
 
     Args:
         hex_string: Hexadecimal string (e.g., "deadbeef")
 
     Returns:
-        TransactionOpaqueData
+        `TransactionOpaqueData`
 
     Raises:
         click.ClickException: If hex string is invalid
@@ -142,7 +142,7 @@ def json_to_arrow_schema(columns: list[dict[str, str]]) -> pa.Schema:
             Example: [{"name": "id", "type": "int64"}]
 
     Returns:
-        PyArrow Schema
+        PyArrow [`Schema`][]
 
     Raises:
         click.ClickException: If type is unknown or column definition is invalid.
@@ -240,10 +240,10 @@ def parse_json_option(value: str, option_name: str) -> Any:
 
 
 def schema_info_to_dict(schema_info: SchemaInfo) -> dict[str, Any]:
-    """Convert SchemaInfo to a dictionary for JSON output.
+    """Convert [`SchemaInfo`][] to a dictionary for JSON output.
 
     Args:
-        schema_info: SchemaInfo object from catalog
+        schema_info: `SchemaInfo` object from catalog
 
     Returns:
         Dictionary representation
@@ -257,10 +257,10 @@ def schema_info_to_dict(schema_info: SchemaInfo) -> dict[str, Any]:
 
 
 def table_info_to_dict(table_info: TableInfo) -> dict[str, Any]:
-    """Convert TableInfo to a dictionary for JSON output.
+    """Convert [`TableInfo`][] to a dictionary for JSON output.
 
     Args:
-        table_info: TableInfo object from catalog
+        table_info: `TableInfo` object from catalog
 
     Returns:
         Dictionary representation
@@ -279,10 +279,10 @@ def table_info_to_dict(table_info: TableInfo) -> dict[str, Any]:
 
 
 def view_info_to_dict(view_info: ViewInfo) -> dict[str, Any]:
-    """Convert ViewInfo to a dictionary for JSON output.
+    """Convert [`ViewInfo`][] to a dictionary for JSON output.
 
     Args:
-        view_info: ViewInfo object from catalog
+        view_info: `ViewInfo` object from catalog
 
     Returns:
         Dictionary representation
@@ -298,10 +298,10 @@ def view_info_to_dict(view_info: ViewInfo) -> dict[str, Any]:
 
 
 def function_info_to_dict(function_info: FunctionInfo) -> dict[str, Any]:
-    """Convert FunctionInfo to a dictionary for JSON output.
+    """Convert [`FunctionInfo`][] to a dictionary for JSON output.
 
     Args:
-        function_info: FunctionInfo object from catalog
+        function_info: `FunctionInfo` object from catalog
 
     Returns:
         Dictionary representation
@@ -341,10 +341,10 @@ def function_info_to_dict(function_info: FunctionInfo) -> dict[str, Any]:
 
 
 def catalog_attach_result_to_dict(result: CatalogAttachResult) -> dict[str, Any]:
-    """Convert CatalogAttachResult to a dictionary for JSON output.
+    """Convert [`CatalogAttachResult`][] to a dictionary for JSON output.
 
     Args:
-        result: CatalogAttachResult object
+        result: `CatalogAttachResult` object
 
     Returns:
         Dictionary representation with attach_opaque_data as hex
@@ -365,14 +365,14 @@ def catalog_attach_result_to_dict(result: CatalogAttachResult) -> dict[str, Any]
 
 
 def scan_function_result_to_dict(result: ScanFunctionResult) -> dict[str, Any]:
-    """Convert ScanFunctionResult to a dictionary for JSON output.
+    """Convert `ScanFunctionResult` to a dictionary for JSON output.
 
-    ScanFunctionResult allows the VGI DuckDB extension to call any DuckDB
+    `ScanFunctionResult` allows the VGI DuckDB extension to call any DuckDB
     function with specified positional and named arguments, and load any
     required extensions.
 
     Args:
-        result: ScanFunctionResult object
+        result: `ScanFunctionResult` object
 
     Returns:
         Dictionary representation with function_name, positional_arguments,
@@ -400,7 +400,7 @@ def get_attach_opaque_data_from_options(
     2. Auto-attach: Attach to catalog on-the-fly (for stateless catalogs)
 
     Args:
-        client: VGI Client instance
+        client: VGI [`Client`][] instance
         attach_opaque_data: Hex-encoded attach ID (from --attach-opaque-data option)
         catalog: Catalog name (from --catalog option)
         attach_options: Options for catalog attach (from --attach-options option)

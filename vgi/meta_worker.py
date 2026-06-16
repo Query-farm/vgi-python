@@ -1,9 +1,9 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""MetaWorker — composes multiple Worker instances in a single process.
+"""MetaWorker — composes multiple [`Worker`][] instances in a single process.
 
-Each Worker manages its own catalog interface. The MetaWorker dispatches
-VgiProtocol calls to the right Worker based on catalog name (for attach)
+Each `Worker` manages its own catalog interface. The MetaWorker dispatches
+[`VgiProtocol`][] calls to the right `Worker` based on catalog name (for attach)
 and wrapped attach_opaque_data (for everything else).
 
 attach_opaque_data wrapping:
@@ -48,7 +48,7 @@ def _attach_opaque_data_short(attach_opaque_data: bytes | None) -> str:
 def _make_attach_delegate(name: str) -> Any:
     """Create a method that unwraps attach_opaque_data and delegates to the right worker.
 
-    Copies the signature from Worker so vgi_rpc's validation passes.
+    Copies the signature from [`Worker`][] so vgi_rpc's validation passes.
     """
     import inspect
 
@@ -124,14 +124,14 @@ _ATTACH_ID_METHODS = [
 
 
 class MetaWorker:
-    """Composes multiple Worker instances, dispatching VgiProtocol calls.
+    """Composes multiple [`Worker`][] instances, dispatching [`VgiProtocol`][] calls.
 
-    Each Worker has its own catalog interface and function registry.
+    Each `Worker` has its own catalog interface and function registry.
     The MetaWorker wraps/unwraps attach_opaque_data values to route calls to the right worker.
     """
 
     def __init__(self, workers: list[Worker]) -> None:
-        """Initialize with a list of Worker instances."""
+        """Initialize with a list of [`Worker`][] instances."""
         self._workers = workers
         self._name_to_index: dict[str, int] = {}
         # The HTTP transport's state-rehydration path expects the

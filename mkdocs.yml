@@ -110,6 +110,8 @@ plugins:
             show_signature_annotations: true
             separate_signature: true
             signature_crossrefs: true
+            relative_crossrefs: true
+            scoped_crossrefs: true
 
 nav:
   - Home: index.md

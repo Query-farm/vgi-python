@@ -3,7 +3,7 @@
 """Schema building utilities for VGI functions.
 
 This module provides helpers for creating and modifying Arrow schemas with
-minimal boilerplate, making output_schema definitions more concise.
+minimal boilerplate, making `output_schema` definitions more concise.
 
 FUNCTIONS
 ---------
@@ -56,7 +56,7 @@ def partition_field(
                  metadata={VGI_PARTITION_COLUMN_KEY: b"true",
                            **(metadata or {})})
 
-    Use in a bind schema when the function opts into PartitionColumns
+    Use in a bind schema when the function opts into `PartitionColumns`
     mode by setting ``Meta.partition_kind`` to a non-default
     :class:`vgi.metadata.PartitionKind`. Per-field metadata round-trips
     through Arrow IPC, so the C++ extension can identify partition

@@ -2,22 +2,22 @@
 
 """VGI protocol definition for vgi_rpc server integration.
 
-Defines the VgiProtocol, consolidated request types (BindRequest, InitRequest),
+Defines the [`VgiProtocol`][], consolidated request types ([`BindRequest`][], [`InitRequest`][]),
 catalog request/response types, and StreamState implementations for each function type.
 
 VgiProtocol Methods
 -------------------
 - **bind()**: Schema resolution and argument validation (unary)
-- **init()**: Worker initialization, returns a Stream for data processing
+- **init()**: Worker initialization, returns a `Stream` for data processing
 - **catalog_*()**: ~35 typed catalog interface methods (unary)
 
 StreamState Implementations
 ---------------------------
-- **ScalarExchangeState**: Calls ScalarFunctionGenerator.process() per batch
-- **TableProducerState**: Calls TableFunctionGenerator.process() per tick
-- **TableInOutExchangeState**: Calls TableInOutGenerator.process() per input
+- **ScalarExchangeState**: Calls `ScalarFunctionGenerator.process()` per batch
+- **TableProducerState**: Calls `TableFunctionGenerator.process()` per tick
+- **TableInOutExchangeState**: Calls `TableInOutGenerator.process()` per input
 - **BufferedFinalizeState**: Drains a state_log via cursor for streaming-shape
-  FINALIZE phase of TableInOutGenerator
+  FINALIZE phase of [`TableInOutGenerator`][]
 
 """
 
@@ -215,8 +215,8 @@ class TableFunctionCardinalityRequest(ArrowSerializableDataclass):
 class TableFunctionStatisticsRequest(ArrowSerializableDataclass):
     """Consolidated request for table function per-column statistics.
 
-    Mirrors TableFunctionCardinalityRequest: the worker receives a full
-    copy of the original BindRequest (including parsed Arguments), so it
+    Mirrors [`TableFunctionCardinalityRequest`][]: the worker receives a full
+    copy of the original [`BindRequest`][] (including parsed [`Arguments`][]), so it
     can derive per-column stats from the user-supplied args.
     """
 
@@ -262,7 +262,7 @@ class TableFunctionDynamicToStringResponse(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CatalogAttachRequest(ArrowSerializableDataclass):
-    """Request for catalog_attach. Uses RecordBatch for mixed-type options.
+    """Request for catalog_attach. Uses `RecordBatch` for mixed-type options.
 
     ``data_version_spec`` and ``implementation_version`` carry semver
     strings the user supplied at ATTACH time (concrete or range). ``None``
@@ -278,7 +278,7 @@ class CatalogAttachRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CatalogCreateRequest(ArrowSerializableDataclass):
-    """Request for catalog_create. Uses RecordBatch for mixed-type options."""
+    """Request for catalog_create. Uses `RecordBatch` for mixed-type options."""
 
     name: str
     on_conflict: OnConflict
@@ -325,20 +325,20 @@ class CatalogVersionResponse(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TransactionBeginResponse(ArrowSerializableDataclass):
-    """Response wrapping optional TransactionOpaqueData for catalog_transaction_begin()."""
+    """Response wrapping optional `TransactionOpaqueData` for `catalog_transaction_begin()`."""
 
     transaction_opaque_data: bytes | None = None
 
 
 def _catalog_items_response(item_type: type) -> type:
-    """Generate a catalog items response class for the given ArrowSerializableDataclass type.
+    """Generate a catalog items response class for the given `ArrowSerializableDataclass` type.
 
     Each generated class wraps a list of IPC-serialized items with helpers:
     - from_infos(items) / from_optional(item) — serialize into response
     - to_infos() / to_optional() — deserialize from response
 
     The item_type must have serialize_to_bytes() and deserialize_from_bytes() methods
-    (i.e., be an ArrowSerializableDataclass).
+    (i.e., be an `ArrowSerializableDataclass`).
     """
     type_name = item_type.__name__
 
@@ -394,22 +394,22 @@ if TYPE_CHECKING:
         def to_optional(self) -> Any: ...
 
     class CatalogsResponse(_CatalogItemsResponseStub):
-        """Response wrapping list of CatalogInfo."""
+        """Response wrapping list of [`CatalogInfo`][]."""
 
     class SchemasResponse(_CatalogItemsResponseStub):
-        """Response wrapping list of SchemaInfo."""
+        """Response wrapping list of [`SchemaInfo`][]."""
 
     class TablesResponse(_CatalogItemsResponseStub):
-        """Response wrapping list of TableInfo."""
+        """Response wrapping list of [`TableInfo`][]."""
 
     class ViewsResponse(_CatalogItemsResponseStub):
-        """Response wrapping list of ViewInfo."""
+        """Response wrapping list of [`ViewInfo`][]."""
 
     class FunctionsResponse(_CatalogItemsResponseStub):
-        """Response wrapping list of FunctionInfo."""
+        """Response wrapping list of [`FunctionInfo`][]."""
 
     class MacrosResponse(_CatalogItemsResponseStub):
-        """Response wrapping list of MacroInfo."""
+        """Response wrapping list of [`MacroInfo`][]."""
 else:
     CatalogsResponse = _catalog_items_response(CatalogInfo)
     SchemasResponse = _catalog_items_response(SchemaInfo)
@@ -421,7 +421,7 @@ else:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class MacroCreateRequest(ArrowSerializableDataclass):
-    """Request for catalog_macro_create with RecordBatch for parameter defaults."""
+    """Request for catalog_macro_create with `RecordBatch` for parameter defaults."""
 
     attach_opaque_data: bytes
     schema_name: str
@@ -437,7 +437,7 @@ class MacroCreateRequest(ArrowSerializableDataclass):
 if TYPE_CHECKING:
 
     class IndexesResponse(_CatalogItemsResponseStub):  # noqa: E302
-        """Response wrapping list of IndexInfo."""
+        """Response wrapping list of [`IndexInfo`][]."""
 else:
     IndexesResponse = _catalog_items_response(IndexInfo)
 
@@ -546,14 +546,14 @@ _log = logging.getLogger(__name__)
 
 
 def _resolve_state_type(func_cls: type) -> type[ArrowSerializableDataclass] | None:
-    """Extract the TState type parameter from a TableFunctionGenerator or TableInOutGenerator.
+    """Extract the TState type parameter from a [`TableFunctionGenerator`][] or [`TableInOutGenerator`][].
 
     Walks the MRO looking for ``TableFunctionGenerator[TArgs, TState]`` or
     ``TableInOutGenerator[TArgs, TState]`` and returns ``TState`` if it is a
     concrete ``ArrowSerializableDataclass`` subclass.
 
-    Raises TypeError if the state type is a concrete class that does not
-    extend ArrowSerializableDataclass — this catches the problem early
+    Raises `TypeError` if the state type is a concrete class that does not
+    extend `ArrowSerializableDataclass` — this catches the problem early
     rather than silently falling back to initial_state() on each HTTP exchange.
     """
     for klass in func_cls.__mro__:
@@ -666,7 +666,7 @@ def _build_partition_values_batch(
     partition_fields: list[pa.Field[Any]],
     resolved: dict[str, tuple[pa.Scalar[Any], pa.Scalar[Any]]],
 ) -> pa.RecordBatch:
-    """Build the 2-row ``(min, max)`` RecordBatch from resolved scalars."""
+    """Build the 2-row ``(min, max)`` `RecordBatch` from resolved scalars."""
     arrays: list[pa.Array[Any]] = []
     fields: list[pa.Field[Any]] = []
     for pf in partition_fields:
@@ -814,7 +814,7 @@ class _FilteringOutputCollector:
     """Wrapper that applies pushdown filters to emitted data batches.
 
     Intercepts emit() calls and applies the pushdown filter before
-    delegating to the real OutputCollector. Threads ``batch_index=`` and
+    delegating to the real `OutputCollector`. Threads ``batch_index=`` and
     ``metadata=`` kwargs through unchanged — validation lives on the
     innermost wrapper (``_TrackingOutputCollector``) so it happens exactly
     once regardless of which wrappers are stacked.
@@ -1250,15 +1250,15 @@ class TableInOutExchangeState(ExchangeState):
 class BufferedFinalizeState(ProducerState):
     """Cursor-driven streaming finalize. Drains a state_log via cursor.
 
-    Used by the streaming-shape ``TableInOutGenerator`` FINALIZE phase
+    Used by the streaming-shape `[`TableInOutGenerator`][]` FINALIZE phase
     (not the new ``TableBufferingFunction`` path — that has its own
-    ``TableBufferingFinalizeState``). Wire-serializable end-to-end:
+    `[`TableBufferingFinalizeState`][]`). Wire-serializable end-to-end:
     nothing here is Transient, nothing holds object references. Each
-    ``produce()`` tick: cold-build BoundedStorage from
+    ``produce()`` tick: cold-build `BoundedStorage` from
     (execution_id + attach), scan the next page of log rows past
     ``cursor``, emit, advance cursor. No per-tick user code — the
     worker's init handler materializes the user's
-    ``finalize() -> list[batch]`` return into BoundedStorage at init
+    ``finalize() -> list[batch]`` return into `BoundedStorage` at init
     time, and produce() drains it.
     """
 
@@ -1618,7 +1618,7 @@ class AggregateWindowRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateWindowResponse(ArrowSerializableDataclass):
-    """Response from aggregate_window — one row RecordBatch with the scalar result."""
+    """Response from aggregate_window — one row `RecordBatch` with the scalar result."""
 
     result_batch: bytes  # Full IPC stream bytes (one row, output schema)
 
@@ -1662,7 +1662,7 @@ class AggregateWindowBatchRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateWindowBatchResponse(ArrowSerializableDataclass):
-    """Response from aggregate_window_batch — count-row RecordBatch."""
+    """Response from aggregate_window_batch — count-row `RecordBatch`."""
 
     result_batch: bytes  # Full IPC stream bytes (count rows, output schema)
 
@@ -1816,8 +1816,8 @@ class VgiProtocol(Protocol):
     def table_function_statistics(self, request: TableFunctionStatisticsRequest) -> bytes | None:
         """Return per-column statistics for a table function's output.
 
-        Returns IPC bytes of a RecordBatch with sparse-union min/max columns
-        (same shape as catalog_table_column_statistics_get), or None if no
+        Returns IPC bytes of a `RecordBatch` with sparse-union min/max columns
+        (same shape as `catalog_table_column_statistics_get`), or None if no
         statistics are available.
         """
         ...
@@ -1843,7 +1843,7 @@ class VgiProtocol(Protocol):
         ...
 
     def aggregate_update(self, request: AggregateUpdateRequest) -> AggregateUpdateResponse:
-        """Accumulate rows from a DataChunk into per-group state."""
+        """Accumulate rows from a `DataChunk` into per-group state."""
         ...
 
     def aggregate_combine(self, request: AggregateCombineRequest) -> AggregateCombineResponse:
@@ -2063,7 +2063,7 @@ class VgiProtocol(Protocol):
         at_value: str | None = None,
         transaction_opaque_data: bytes | None = None,
     ) -> bytes:
-        """Get the scan function for a table. Returns ScanFunctionResult as IPC bytes."""
+        """Get the scan function for a table. Returns `ScanFunctionResult` as IPC bytes."""
         ...
 
     def catalog_table_scan_branches_get(
@@ -2075,7 +2075,7 @@ class VgiProtocol(Protocol):
         at_value: str | None = None,
         transaction_opaque_data: bytes | None = None,
     ) -> bytes:
-        """Get the list of scan branches for a multi-branch table. Returns ScanBranchesResult as IPC bytes.
+        """Get the list of scan branches for a multi-branch table. Returns `ScanBranchesResult` as IPC bytes.
 
         Additive successor to ``catalog_table_scan_function_get``. Workers that
         only implement the legacy method continue to work — the VGI extension's
@@ -2100,7 +2100,7 @@ class VgiProtocol(Protocol):
     ) -> bytes | None:
         """Get column statistics for a table.
 
-        Returns IPC bytes of a RecordBatch with sparse-union min/max columns,
+        Returns IPC bytes of a `RecordBatch` with sparse-union min/max columns,
         or None if statistics are not available.
         """
         ...
@@ -2113,7 +2113,7 @@ class VgiProtocol(Protocol):
         transaction_opaque_data: bytes | None = None,
         writable_branch_function_name: str | None = None,
     ) -> bytes:
-        """Get the insert function for a table. Returns WriteFunctionResult as IPC bytes.
+        """Get the insert function for a table. Returns `WriteFunctionResult` as IPC bytes.
 
         ``writable_branch_function_name`` is set by the C++ extension when the
         table is multi-branch and a branch declared ``writable=True``: the value
@@ -2131,7 +2131,7 @@ class VgiProtocol(Protocol):
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> bytes:
-        """Get the update function for a table. Returns WriteFunctionResult as IPC bytes."""
+        """Get the update function for a table. Returns `WriteFunctionResult` as IPC bytes."""
         ...
 
     def catalog_table_delete_function_get(
@@ -2141,7 +2141,7 @@ class VgiProtocol(Protocol):
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> bytes:
-        """Get the delete function for a table. Returns WriteFunctionResult as IPC bytes."""
+        """Get the delete function for a table. Returns `WriteFunctionResult` as IPC bytes."""
         ...
 
     def catalog_table_comment_set(

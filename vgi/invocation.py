@@ -2,14 +2,14 @@
 
 """Response types for the VGI protocol.
 
-This module defines response dataclasses and the FunctionType enum:
+This module defines response dataclasses and the `FunctionType` enum:
 
-- FunctionType: Enum for scalar, table, and aggregate function types.
-- BindResponse: Result of bind phase with output schema.
-- BaseInitResponse: Base class for init responses.
-- GlobalInitResponse: Result of init phase with max_workers.
+- `FunctionType`: Enum for scalar, table, and aggregate function types.
+- [`BindResponse`][]: Result of bind phase with output schema.
+- [`BaseInitResponse`][]: Base class for init responses.
+- [`GlobalInitResponse`][]: Result of init phase with max_workers.
 
-Request types (BindRequest, InitRequest) are in ``vgi.protocol``.
+Request types ([`BindRequest`][], [`InitRequest`][]) are in ``vgi.protocol``.
 
 """
 
@@ -37,7 +37,7 @@ __all__ = [
 class FunctionType(Enum):
     """Type of function being invoked.
 
-    Used in BindRequest to indicate which function category is being bound,
+    Used in [`BindRequest`][] to indicate which function category is being bound,
     allowing the worker to apply appropriate validation and processing.
 
     """
@@ -60,7 +60,7 @@ class BindResponse(ArrowSerializableDataclass):
     request** rather than a normal bind response. C++ resolves the requested
     secrets and retries bind with ``resolved_secrets_provided=True``. The
     developer never constructs scope requests directly — the framework
-    generates them when ``SecretsAccessor`` has pending lookups after
+    generates them when `[`SecretsAccessor`][]` has pending lookups after
     ``on_bind()`` returns.
 
     Attributes:
@@ -95,7 +95,7 @@ class BindResponse(ArrowSerializableDataclass):
     def secret_scope_request(entries: list[SecretLookupEntry]) -> BindResponse:
         """Create a secret scope request from lookup entries.
 
-        The framework calls this when ``SecretsAccessor`` has pending lookups.
+        The framework calls this when `[`SecretsAccessor`][]` has pending lookups.
         C++ detects the non-empty ``lookup_secret_types`` and resolves them.
         """
         return BindResponse(
@@ -106,7 +106,7 @@ class BindResponse(ArrowSerializableDataclass):
         )
 
     def secret_scope_entries(self) -> list[SecretLookupEntry]:
-        """Convert lookup fields back to SecretLookupEntry objects."""
+        """Convert lookup fields back to [`SecretLookupEntry`][] objects."""
         return [
             SecretLookupEntry(
                 secret_type=t,

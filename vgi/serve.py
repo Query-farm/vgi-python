@@ -2,7 +2,7 @@
 
 """Zero-boilerplate CLI for serving VGI workers.
 
-Loads any Worker by module reference and serves it — stdio by default
+Loads any [`Worker`][] by module reference and serves it — stdio by default
 (matching vgi-rpc's ``run_server()``), ``--http`` for cloud deployment.
 
 Usage::
@@ -53,27 +53,27 @@ __all__ = [
 
 
 def load_worker_class(reference: str) -> type[Worker]:
-    """Load a Worker subclass from a module reference string.
+    """Load a [`Worker`][] subclass from a module reference string.
 
     Accepts several reference formats:
 
     - ``module:ClassName`` — import *module* and return *ClassName*
-    - ``module`` — import *module* and auto-discover the single Worker subclass
+    - ``module`` — import *module* and auto-discover the single `Worker` subclass
     - ``./path/to/file.py`` or ``path.py`` — load from file path
     - ``./path/to/file.py:ClassName`` — load from file path, return *ClassName*
 
-    Auto-discovery finds Worker subclasses **defined** in the module (ignores
+    Auto-discovery finds `Worker` subclasses **defined** in the module (ignores
     imported ones by checking ``__module__``).
 
     Args:
         reference: Module reference string.
 
     Returns:
-        The Worker subclass.
+        The `Worker` subclass.
 
     Raises:
         SystemExit: If the reference is invalid, module can't be loaded,
-            no Worker subclass is found, or multiple are found.
+            no `Worker` subclass is found, or multiple are found.
 
     """
     from vgi.worker import Worker
@@ -212,7 +212,7 @@ def create_app(
     any WSGI server.
 
     Args:
-        worker_cls: The Worker subclass to serve.
+        worker_cls: The [`Worker`][] subclass to serve.
         prefix: URL prefix for RPC endpoints.
         cors_origins: Allowed CORS origins.
         describe: Enable worker + API description pages.
@@ -222,9 +222,9 @@ def create_app(
             pass explicitly for multi-process deployments.
         log_level: Logging level for the worker instance.
         authenticate: Optional callback that validates each HTTP request
-            and returns an AuthContext. When ``None``, all requests are
+            and returns an `AuthContext`. When ``None``, all requests are
             anonymous.
-        oauth_resource_metadata: Optional OAuthResourceMetadata for
+        oauth_resource_metadata: Optional `OAuthResourceMetadata` for
             RFC 9728 discovery endpoint.
         otel_config: Optional OpenTelemetry configuration.  When provided,
             instruments the RPC server with tracing and/or metrics.
@@ -535,7 +535,7 @@ def _resolve_oauth_resource_metadata() -> Any:
       to use the OIDC ``id_token`` as Bearer instead of the ``access_token``.
 
     Returns:
-        OAuthResourceMetadata instance, or None if not configured.
+        `OAuthResourceMetadata` instance, or None if not configured.
 
     """
     resource = os.environ.get("VGI_OAUTH_RESOURCE")
@@ -648,7 +648,7 @@ def _resolve_otel_config() -> Any:
     - ``VGI_OTEL_DISABLE_METRICS``: disable metrics only (``1``/``true``/``yes``).
 
     Returns:
-        OtelConfig instance, or None if not enabled.
+        `OtelConfig` instance, or None if not enabled.
 
     """
     enabled = os.environ.get("VGI_OTEL_ENABLED", "").lower() in ("1", "true", "yes")

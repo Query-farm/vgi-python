@@ -5,11 +5,11 @@
 This module provides classes for handling function arguments in VGI:
 
 Classes:
-    Arguments: Container for positional and named function arguments.
-    ArgumentValidationError: Raised when an argument fails validation.
-    Arg: Descriptor for declarative argument parsing with optional validation.
-    AnyArrow: Sentinel type for arguments accepting multiple Arrow types.
-    AnyArrowValue: Wrapper returned when accessing AnyArrow arguments.
+    [`Arguments`][]: Container for positional and named function arguments.
+    [`ArgumentValidationError`][]: Raised when an argument fails validation.
+    [`Arg`][]: Descriptor for declarative argument parsing with optional validation.
+    [`AnyArrow`][]: Sentinel type for arguments accepting multiple Arrow types.
+    [`AnyArrowValue`][]: Wrapper returned when accessing `AnyArrow` arguments.
 
 """
 
@@ -242,13 +242,13 @@ __all__ = [
 class TableInput:
     """Sentinel type for table input parameters in table-in-out functions.
 
-    Use this as the type parameter for Arg to declare which argument receives
-    the streaming table input. Every TableInOutFunction must have exactly one
-    TableInput argument, and it must be positional (not named).
+    Use this as the type parameter for [`Arg`][] to declare which argument
+    receives the streaming table input. Every [`TableInOutFunction`][] must have
+    exactly one [`TableInput`][] argument, and it must be positional (not named).
 
-    The TableInput argument determines which table expression feeds the function
-    when called from SQL. It doesn't correspond to an actual Arrow value - the
-    table data arrives as streaming RecordBatches via process().
+    The `TableInput` argument determines which table expression feeds the
+    function when called from SQL. It doesn't correspond to an actual Arrow
+    value - the table data arrives as streaming `RecordBatch`es via `process()`.
 
     """
 
@@ -257,17 +257,17 @@ class TableInput:
 
 @dataclass(frozen=True, slots=True)
 class AnyArrowValue:
-    """Wrapper for AnyArrow argument values with metadata.
+    """Wrapper for [`AnyArrow`][] argument values with metadata.
 
-    When an Arg returns an AnyArrow type, accessing the attribute returns
-    an AnyArrowValue instead of just the raw value. This provides access to
+    When an [`Arg`][] returns an `AnyArrow` type, accessing the attribute returns
+    an [`AnyArrowValue`][] instead of just the raw value. This provides access to
     both the value and the argument's position/name for schema lookups.
 
     Attributes:
-        value: The Python value (from scalar.as_py()).
-        position: The positional index from the Arg definition (int for positional,
-            str for named arguments).
-        name: The Python attribute name of the Arg.
+        value: The Python value (from `scalar.as_py()`).
+        position: The positional index from the `Arg` definition (`int` for positional,
+            `str` for named arguments).
+        name: The Python attribute name of the `Arg`.
 
     Example using Annotated (recommended):
         from typing import Annotated
@@ -294,9 +294,9 @@ class AnyArrowValue:
 class AnyArrow:
     """Sentinel type for arguments accepting multiple Arrow types.
 
-    Use this with ``AnyArrowValue`` in the Annotated pattern when an argument
+    Use this with `[`AnyArrowValue`][]` in the Annotated pattern when an argument
     should accept multiple valid Arrow types, validated via the ``type_bound``
-    parameter. When accessed, returns an AnyArrowValue containing the value
+    parameter. When accessed, returns an `AnyArrowValue` containing the value
     plus metadata (position and name).
 
     Choosing Between Specific Types and AnyArrowValue
@@ -306,7 +306,7 @@ class AnyArrow:
 
     - **Multiple valid types**: Use ``Annotated[AnyArrowValue, Arg(...)]`` with
       ``type_bound`` to specify which types are acceptable. For example, numeric
-      operations that work on integers, floats, and decimals should use AnyArrowValue.
+      operations that work on integers, floats, and decimals should use `AnyArrowValue`.
 
     The ``type_bound`` parameter is ONLY meaningful for ``AnyArrowValue`` arguments.
     Using it with other types will emit a warning.
@@ -335,13 +335,13 @@ class AnyArrow:
             column: Annotated[AnyArrowValue, Arg(0, doc="Column to pass through")]
 
     Accessing Values:
-        When using AnyArrowValue, access the value via the ``.value`` attribute::
+        When using `AnyArrowValue`, access the value via the ``.value`` attribute::
 
             val = self.column.value     # The column name as a string
             pos = self.column.position  # The positional index
 
     Note:
-        Unlike TableInput, AnyArrow arguments have actual Arrow values -
+        Unlike [`TableInput`][], [`AnyArrow`][] arguments have actual Arrow values -
         they are just not constrained to a specific Arrow type.
 
     """
@@ -500,14 +500,14 @@ class Arguments:
         )
 
     def schema(self) -> pa.Schema:
-        """Return Arrow schema for serializing these Arguments.
+        """Return Arrow schema for serializing these [`Arguments`][].
 
         Creates a schema with one field per argument: "positional_0", "positional_1",
         etc. for positional args, and "named_<name>" for named args. Field types
         are taken directly from scalar values to handle Arrow extension types.
 
         Returns:
-            Arrow schema matching the structure returned by encoded_dict().
+            Arrow schema matching the structure returned by `encoded_dict()`.
 
         """
         args_dict = self.encoded_dict()
@@ -521,13 +521,13 @@ class Arguments:
 
     @staticmethod
     def decode(data: pa.StructScalar) -> "Arguments":
-        """Decode Arguments from a serialized dictionary.
+        """Decode [`Arguments`][] from a serialized dictionary.
 
         Args:
             data: Dictionary containing serialized argument fields.
 
         Returns:
-            Deserialized Arguments instance.
+            Deserialized `Arguments` instance.
 
         """
         positional: list[Scalar[Any] | None] = []
@@ -544,16 +544,16 @@ class Arguments:
         return Arguments(positional=tuple(positional), named=named or None)
 
     def serialize_to_bytes(self) -> bytes:
-        """Serialize Arguments to bytes using Arrow IPC format.
+        """Serialize [`Arguments`][] to bytes using Arrow IPC format.
 
-        Creates a single-row RecordBatch with the arguments encoded as
+        Creates a single-row `RecordBatch` with the arguments encoded as
         a struct column, then serializes it to IPC stream bytes.
 
         Builds the batch with explicit types from scalar values to handle
         Arrow extension types (e.g., HUGEINT) that ``from_pylist()`` cannot infer.
 
         Returns:
-            Serialized bytes containing the Arguments.
+            Serialized bytes containing the `Arguments`.
 
         """
         args_dict = self.encoded_dict()
@@ -580,15 +580,15 @@ class Arguments:
 
     @staticmethod
     def deserialize_from_bytes(data: bytes, ipc_validation: Any = None) -> "Arguments":
-        """Deserialize Arguments from bytes.
+        """Deserialize [`Arguments`][] from bytes.
 
         Args:
-            data: Bytes serialized via serialize_to_bytes().
+            data: Bytes serialized via `serialize_to_bytes()`.
             ipc_validation: Unused, accepted for compatibility with
-                ArrowSerializableDataclass._convert_value_for_deserialization.
+                `ArrowSerializableDataclass._convert_value_for_deserialization`.
 
         Returns:
-            Deserialized Arguments instance.
+            Deserialized `Arguments` instance.
 
         """
         reader = pa.ipc.open_stream(data)
@@ -751,10 +751,10 @@ TypeBoundPredicate = Callable[[pa.DataType], bool]
 
 
 class _ArgFactory:
-    """Factory returned by Arg[type] to capture the type parameter.
+    """Factory returned by `Arg[type]` to capture the type parameter.
 
-    This allows Arg[str](0) to create an Arg instance with _type_param=str,
-    which can be used by extract_argument_specs to infer the Arrow type.
+    This allows `Arg[str](0)` to create an [`Arg`][] instance with _type_param=str,
+    which can be used by `extract_argument_specs` to infer the Arrow type.
     """
 
     __slots__ = ("_type_param",)
@@ -847,8 +847,8 @@ class Arg[ArgT]:
     """Descriptor for declarative argument parsing with optional validation.
 
     Use as a class attribute to declare function arguments that are automatically
-    parsed from self.arguments when accessed. This eliminates the need to override
-    __init__ for simple argument parsing.
+    parsed from `self.arguments` when accessed. This eliminates the need to override
+    `__init__` for simple argument parsing.
 
     Attributes:
         position: Positional index (int) or named key (str).
@@ -936,15 +936,15 @@ class Arg[ArgT]:
                 position onwards. Returns tuple[ArgT, ...]. Requires at least 1 value.
                 Must be positional (not named).
             arrow_type: Explicit Arrow type for this argument. If not provided,
-                type is inferred from the type hint using PYTHON_TO_ARROW.
-            type_bound: Type predicate(s) for Arg[AnyArrow] column type validation.
+                type is inferred from the type hint using `PYTHON_TO_ARROW`.
+            type_bound: Type predicate(s) for `Arg[AnyArrow]` column type validation.
                 Accepts a single predicate (e.g., pa.types.is_integer) or a sequence
                 of predicates where any match is valid (OR logic). Only meaningful
-                for Arg[AnyArrow] arguments; issues a warning if used with other types.
-            const: If True, marks this argument as constant-folded (ConstParam).
+                for `Arg[AnyArrow]` arguments; issues a warning if used with other types.
+            const: If True, marks this argument as constant-folded ([`ConstParam`][]).
                 Constant arguments have their values known at planning time.
-            is_any: If True, indicates this argument accepts any Arrow type (AnyArrow).
-                Used for tracking when AnyArrow was specified in the type hint.
+            is_any: If True, indicates this argument accepts any Arrow type ([`AnyArrow`][]).
+                Used for tracking when `AnyArrow` was specified in the type hint.
 
         Raises:
             ValueError: If conflicting constraints are specified (e.g., ge and gt),
@@ -1005,10 +1005,10 @@ class Arg[ArgT]:
             self._compiled_pattern = re.compile(pattern)
 
     def __class_getitem__(cls, item: type) -> "_ArgFactory":
-        """Support Arg[type] syntax to capture the type parameter at runtime.
+        """Support `Arg[type]` syntax to capture the type parameter at runtime.
 
-        When you write Arg[str](0), this method is called first with item=str,
-        and returns an _ArgFactory that will create Arg instances with
+        When you write `Arg[str](0)`, this method is called first with item=str,
+        and returns an `_ArgFactory` that will create [`Arg`][] instances with
         _type_param set to str.
         """
         return _ArgFactory(item)
@@ -1042,7 +1042,7 @@ class Arg[ArgT]:
         return obj.__dict__[self._name]  # type: ignore[no-any-return]
 
     def _resolve(self, obj: object) -> ArgT:
-        """Parse argument from obj.invocation.arguments and validate."""
+        """Parse argument from `obj.invocation.arguments` and validate."""
         invocation = getattr(obj, "invocation", None)
         if invocation is None:
             raise RuntimeError(
@@ -1371,7 +1371,7 @@ class Arg[ArgT]:
     def validate_type_bound(self, field_type: pa.DataType) -> None:
         """Validate that the field type satisfies the type bound predicate(s).
 
-        This method is called during function initialization for Arg[AnyArrow]
+        This method is called during function initialization for `Arg[AnyArrow]`
         arguments that have type_bound specified.
 
         If multiple predicates are provided, uses OR logic (any match is valid).
@@ -1380,7 +1380,7 @@ class Arg[ArgT]:
             field_type: The Arrow type of the column to validate.
 
         Raises:
-            SchemaValidationError: If the type bound is not satisfied.
+            [`SchemaValidationError`][]: If the type bound is not satisfied.
 
         """
         from vgi.exceptions import SchemaValidationError
@@ -1460,24 +1460,24 @@ class Arg[ArgT]:
 
 @dataclass(frozen=True, slots=True)
 class Param:
-    """Metadata for columnar parameters in compute() or class-level declarations.
+    """Metadata for columnar parameters in `compute()` or class-level declarations.
 
-    Use with Annotated to declare parameters that receive pa.Array values
+    Use with Annotated to declare parameters that receive `pa.Array` values
     at runtime. The type information is used for catalog registration and
     argument validation.
 
-    For ScalarFunction compute() methods, position is inferred from parameter order.
+    For [`ScalarFunction`][] `compute()` methods, position is inferred from parameter order.
 
-    Args:
-        position: Explicit column position (for class-level attributes).
-            None means position is inferred from method signature order.
+    Attributes:
         arrow_type: The Arrow data type, Python type
-            (int/str/float/bool/bytes), or None for AnyArrow (accepts any type).
+            (int/str/float/bool/bytes), or None for [`AnyArrow`][] (accepts any type).
         doc: Documentation string describing this parameter.
         type_bound: Type predicate(s) for validating input column types.
-            Only meaningful when arrow_type is None (AnyArrow).
+            Only meaningful when arrow_type is None (`AnyArrow`).
         varargs: If True, this parameter collects all remaining positional
             arguments as a list of arrays.
+        position: Explicit column position (for class-level attributes).
+            None means position is inferred from method signature order.
 
     Example (ScalarFunction compute() - position inferred):
         class AddColumns(ScalarFunction):
@@ -1511,38 +1511,38 @@ class Param:
 
 @dataclass(frozen=True, slots=True)
 class ConstParam:
-    """Metadata for constant scalar parameters in compute().
+    """Metadata for constant scalar parameters in `compute()`.
 
     Use with Annotated to declare parameters that receive constant (non-columnar)
     values known at planning time. The type is inferred from the Annotated first
     argument (e.g., `Annotated[int, ConstParam(...)]` infers pa.int64()).
 
-    Args:
+    Attributes:
         doc: Documentation string describing this parameter.
         arrow_type: Optional explicit Arrow type. If not provided, type is
             inferred from the Annotated first argument.
         position: Position in the argument list
-            (optional for ScalarFunction where position is inferred from signature).
+            (optional for [`ScalarFunction`][] where position is inferred from signature).
+        phase: Phase when this const param is needed (aggregate functions only).
+            ``"all"`` = every callback, ``"update"`` = only update,
+            ``"finalize"`` = only finalize.
 
     """
 
     doc: str = ""
     arrow_type: pa.DataType | type | None = None
-    # Position in the argument list
     position: int | None = None
-    # Phase when this const param is needed (aggregate functions only).
-    # "all" = every callback, "update" = only update, "finalize" = only finalize.
     phase: str = "all"
 
 
 @dataclass(frozen=True, slots=True)
 class Setting:
-    """Metadata for settings parameter in compute().
+    """Metadata for settings parameter in `compute()`.
 
     Use with Annotated to declare parameters that receive setting values
     from the DuckDB session. Settings are string key-value pairs.
 
-    Args:
+    Attributes:
         key: The setting key name. If not provided, uses the parameter name.
 
     """
@@ -1552,13 +1552,13 @@ class Setting:
 
 @dataclass(frozen=True, slots=True)
 class Secret:
-    """Metadata for secrets parameter in compute() or on_bind().
+    """Metadata for secrets parameter in `compute()` or `on_bind()`.
 
     Use with Annotated to declare parameters that receive secret values
-    from the DuckDB SecretManager. Secrets contain multiple key-value pairs
+    from the DuckDB `SecretManager`. Secrets contain multiple key-value pairs
     where keys are strings and values can be any DuckDB type.
 
-    Args:
+    Attributes:
         secret_type: The secret type to look up (e.g., "vgi_example", "s3").
             Required — C++ enforces type matching.
         name: Optional secret name for name-based lookup.
@@ -1587,7 +1587,7 @@ class SecretLookupEntry(ArrowSerializableDataclass):
     ``CatalogSecretRequirement`` which had identical fields).
 
     Extends ``ArrowSerializableDataclass`` so it can be serialized in
-    catalog ``FunctionInfo`` payloads.
+    catalog `[`FunctionInfo`][]` payloads.
 
     secret_type is required — C++ enforces type matching.
 
@@ -1626,7 +1626,7 @@ def _extract_setting_secret_params(
     """Extract Setting/Secret annotations from a method signature.
 
     Parses the method's type hints to find parameters annotated with
-    Setting() or Secret(), returning mappings from parameter name to key/Secret.
+    `Setting()` or `Secret()`, returning mappings from parameter name to key/[`Secret`][].
 
     Handles ``from __future__ import annotations`` (string annotations)
     using an eval-with-namespace fallback.
@@ -1709,10 +1709,10 @@ def _extract_setting_secret_params(
 
 @dataclass(frozen=True, slots=True)
 class Auth:
-    """Metadata for auth context parameter in compute().
+    """Metadata for auth context parameter in `compute()`.
 
-    Use with Annotated to declare a parameter that receives the AuthContext
-    for the current request. Returns AuthContext.anonymous() when no
+    Use with Annotated to declare a parameter that receives the `AuthContext`
+    for the current request. Returns `AuthContext.anonymous()` when no
     authentication is configured (including stdio transport).
 
     """
@@ -1720,7 +1720,7 @@ class Auth:
 
 @dataclass(frozen=True, slots=True)
 class OutputLength:
-    """Metadata for output length parameter in compute().
+    """Metadata for output length parameter in `compute()`.
 
     Use with Annotated to declare a parameter that receives the number of rows
     in the input batch. This is useful for scalar functions that don't take
@@ -1733,13 +1733,13 @@ class OutputLength:
 
 @dataclass(frozen=True, slots=True)
 class Returns:
-    """Metadata for compute() return type.
+    """Metadata for `compute()` return type.
 
     Use with Annotated to declare the output Arrow type for catalog registration.
-    The annotation indicates that compute() returns a pa.Array of the specified type.
+    The annotation indicates that `compute()` returns a `pa.Array` of the specified type.
 
-    Args:
-        arrow_type: The Arrow data type of the output, or None for AnyArrow
+    Attributes:
+        arrow_type: The Arrow data type of the output, or None for [`AnyArrow`][]
             (dynamic output type determined at bind time).
 
     """

@@ -11,7 +11,7 @@ registration.
 The serialization uses a single Arrow schema where:
 - Positional arguments come first (field order = position index)
 - Named arguments follow (marked with metadata)
-- Special types (TableInput, AnyArrow, varargs) use field metadata markers
+- Special types ([`TableInput`][], [`AnyArrow`][], varargs) use field metadata markers
 """
 
 import warnings
@@ -87,15 +87,15 @@ class ArgumentSpec:
         name: Python attribute name for the argument.
         position: Positional index (int) for positional args, or the named key
             (str) for named arguments.
-        arrow_type: The Arrow data type. Use pa.null() for TableInput and
-            AnyArrow types.
+        arrow_type: The Arrow data type. Use pa.null() for [`TableInput`][] and
+            [`AnyArrow`][] types.
         is_table_input: True if this argument receives streaming table input
-            (Arg[TableInput]).
+            (`Arg[TableInput]`).
         is_any_type: True if this argument accepts any Arrow type
-            (Arg[AnyArrow]).
+            (`Arg[AnyArrow]`).
         is_varargs: True if this argument collects all remaining positional
             arguments (varargs=True).
-        is_const: True if this argument is constant-folded (ConstParam).
+        is_const: True if this argument is constant-folded ([`ConstParam`][]).
             Constant arguments are scalar values known at planning time,
             rather than columnar data processed at runtime.
 
@@ -147,18 +147,18 @@ class ArgumentSpec:
 
 
 def argument_specs_to_schema(specs: Sequence[ArgumentSpec]) -> pa.Schema:
-    """Convert ArgumentSpecs to a single Arrow schema.
+    """Convert [`ArgumentSpec`][]s to a single Arrow schema.
 
     The schema encodes the argument specifications as follows:
     - Positional arguments come first, in order (field index = position index)
     - Named arguments follow, each with metadata {b"vgi_arg": b"named"}
     - Special types are indicated via metadata:
-        - TableInput: {b"vgi_type": b"table"}
-        - AnyArrow: {b"vgi_type": b"any"}
+        - [`TableInput`][]: {b"vgi_type": b"table"}
+        - [`AnyArrow`][]: {b"vgi_type": b"any"}
         - varargs: {b"vgi_varargs": b"true"}
 
     Args:
-        specs: Sequence of ArgumentSpec objects to serialize.
+        specs: Sequence of `ArgumentSpec` objects to serialize.
 
     Returns:
         Arrow schema with one field per argument.
@@ -209,16 +209,16 @@ def argument_specs_to_schema(specs: Sequence[ArgumentSpec]) -> pa.Schema:
 
 
 def schema_to_argument_specs(schema: pa.Schema) -> list[ArgumentSpec]:
-    """Convert Arrow schema back to ArgumentSpecs.
+    """Convert Arrow schema back to [`ArgumentSpec`][]s.
 
     Parses the schema fields and their metadata to reconstruct the original
-    ArgumentSpec objects.
+    `ArgumentSpec` objects.
 
     Args:
         schema: Arrow schema with argument fields.
 
     Returns:
-        List of ArgumentSpec objects in schema field order.
+        List of `ArgumentSpec` objects in schema field order.
 
     """
     specs: list[ArgumentSpec] = []
@@ -269,19 +269,19 @@ def schema_to_argument_specs(schema: pa.Schema) -> list[ArgumentSpec]:
 def extract_argument_specs(
     cls: type,
 ) -> list[ArgumentSpec]:
-    """Extract ArgumentSpecs from a function class with Arg descriptors.
+    """Extract [`ArgumentSpec`][]s from a function class with [`Arg`][] descriptors.
 
-    Walks the class hierarchy to find all Arg descriptors and creates
-    ArgumentSpec objects with Arrow types determined by:
-    1. Explicit arrow_type on Arg (highest priority)
-    2. Type annotation with PYTHON_TO_ARROW mapping
+    Walks the class hierarchy to find all `Arg` descriptors and creates
+    `ArgumentSpec` objects with Arrow types determined by:
+    1. Explicit arrow_type on `Arg` (highest priority)
+    2. Type annotation with `PYTHON_TO_ARROW` mapping
     3. Default to pa.null() with warning for unknown types
 
     Args:
-        cls: Function class with Arg descriptors.
+        cls: Function class with `Arg` descriptors.
 
     Returns:
-        List of ArgumentSpec objects, sorted by position (positional first,
+        List of `ArgumentSpec` objects, sorted by position (positional first,
         then named).
 
     """

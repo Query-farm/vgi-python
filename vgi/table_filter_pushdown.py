@@ -4,18 +4,18 @@
 
 This module provides:
 - Filter AST classes for representing pushdown filter predicates
-- ColumnBounds for extracting numeric bounds from filters
-- PushdownFilters container with evaluation and helper methods
+- [`ColumnBounds`][] for extracting numeric bounds from filters
+- [`PushdownFilters`][] container with evaluation and helper methods
 - Deserialization from Arrow IPC format
 
 Filter Types:
-    ConstantFilter: Comparison with a constant value (=, !=, >, >=, <, <=)
-    IsNullFilter: IS NULL check
-    IsNotNullFilter: IS NOT NULL check
-    InFilter: Set membership (IN clause)
-    AndFilter: Conjunction of child filters
-    OrFilter: Disjunction of child filters
-    StructFilter: Nested struct field filter
+    [`ConstantFilter`][]: Comparison with a constant value (=, !=, >, >=, <, <=)
+    [`IsNullFilter`][]: IS NULL check
+    [`IsNotNullFilter`][]: IS NOT NULL check
+    [`InFilter`][]: Set membership (IN clause)
+    [`AndFilter`][]: Conjunction of child filters
+    [`OrFilter`][]: Disjunction of child filters
+    [`StructFilter`][]: Nested struct field filter
 """
 
 from __future__ import annotations
@@ -258,6 +258,10 @@ class Filter:
 class ConstantFilter(Filter):
     """Comparison filter: column <op> value.
 
+    Attributes:
+        op: The comparison operator applied between the column and ``value``.
+        value: The constant scalar the column is compared against.
+
     Examples:
         age >= 18
         status = 'active'
@@ -394,7 +398,7 @@ class OrFilter(Filter):
 class _SingleColumnBatch:
     """Lightweight wrapper providing batch-like interface for a single array.
 
-    Used by StructFilter to avoid creating a full RecordBatch when evaluating
+    Used by [`StructFilter`][] to avoid creating a full `RecordBatch` when evaluating
     child filters on nested struct fields.
     """
 
@@ -971,7 +975,7 @@ class PushdownFilters:
         Returns the deduplicated union iff every child constrains ``column_name``
         to discrete values (``=`` or ``IN``); otherwise None (the column could
         take any value through a non-discrete branch, so it cannot be enumerated).
-        Descends one level into ``OrFilter`` children, consistent with the
+        Descends one level into `[`OrFilter`][]` children, consistent with the
         single-level descent used elsewhere; deeper nesting yields None.
         """
         values: list[Any] = []
@@ -1211,17 +1215,17 @@ def deserialize_filters(
     """Deserialize Arrow IPC bytes to typed AST.
 
     Args:
-        batch: Arrow RecordBatch containing the serialized filters.
+        batch: Arrow `RecordBatch` containing the serialized filters.
         join_keys: Optional list of single-column Arrow RecordBatches, one per
             IN filter column. Each batch may have a different row count.
             Referenced by ``join_keys`` filter type entries in the filter spec.
 
     Returns:
-        PushdownFilters container with parsed filter AST.
+        [`PushdownFilters`][] container with parsed filter AST.
 
     Raises:
-        FilterDeserializationError: If parsing fails.
-        FilterVersionError: If version is unsupported.
+        [`FilterDeserializationError`][]: If parsing fails.
+        [`FilterVersionError`][]: If version is unsupported.
 
     """
     # Validate version
@@ -1298,7 +1302,7 @@ def _parse_filter(
     get_field: Callable[[int], pa.Field[Any]],
     get_join_keys_column: Callable[[str], pa.Array[Any] | None] | None = None,
 ) -> Filter | None:
-    """Parse a single filter spec into a typed Filter object.
+    """Parse a single filter spec into a typed [`Filter`][] object.
 
     Args:
         spec: Filter specification dict from JSON.
@@ -1308,10 +1312,10 @@ def _parse_filter(
             Returns None if no join keys batch or column not found.
 
     Returns:
-        Typed Filter object, or None if the filter references missing join keys.
+        Typed `Filter` object, or None if the filter references missing join keys.
 
     Raises:
-        FilterDeserializationError: If filter type is unknown.
+        [`FilterDeserializationError`][]: If filter type is unknown.
 
     """
     column_name = spec["column_name"]
@@ -1481,10 +1485,10 @@ def _parse_expression_node(
         get_field: Function to get Arrow field by value_ref index (for extension metadata).
 
     Returns:
-        Typed ExpressionNode.
+        Typed [`ExpressionNode`][].
 
     Raises:
-        FilterDeserializationError: If expression node type is unknown.
+        [`FilterDeserializationError`][]: If expression node type is unknown.
 
     """
     expr_type = spec["expr_type"]

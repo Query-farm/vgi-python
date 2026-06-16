@@ -262,7 +262,7 @@ class TestCatalogAttachSettingsRoundTrip:
             specs_by_name[spec.name] = spec
 
         # Verify all expected settings are present
-        expected_names = {"vgi_verbose_mode", "greeting", "multiplier", "threshold", "config"}
+        expected_names = {"vgi_verbose_mode", "greeting", "multiplier", "threshold", "scale_factor", "config"}
         assert set(specs_by_name.keys()) == expected_names
 
         # Check types and defaults
@@ -277,6 +277,9 @@ class TestCatalogAttachSettingsRoundTrip:
 
         assert specs_by_name["threshold"].type == pa.int64()
         assert specs_by_name["threshold"].default == 0
+
+        assert specs_by_name["scale_factor"].type == pa.float64()
+        assert specs_by_name["scale_factor"].default == 1.0
 
         assert specs_by_name["config"].type == pa.struct(
             [("start", pa.int64()), ("step", pa.int64()), ("label", pa.string())]

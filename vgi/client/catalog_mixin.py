@@ -1,10 +1,10 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""CatalogClientMixin for adding catalog operations to Client.
+"""[`CatalogClientMixin`][] for adding catalog operations to [`Client`][].
 
 This module provides a mixin class that adds catalog operation methods
-to the VGI Client. It handles the ephemeral subprocess pattern for
-catalog calls while using the Client's server_path and correlation_id.
+to the VGI `Client`. It handles the ephemeral subprocess pattern for
+catalog calls while using the `Client`'s server_path and correlation_id.
 
 Usage:
     class CatalogEnabledClient(CatalogClientMixin, Client):
@@ -31,8 +31,8 @@ Usage:
     )
 
 Error Handling:
-    Worker exceptions are propagated via vgi_rpc's RpcError mechanism.
-    These are wrapped in CatalogClientError for a consistent client API.
+    Worker exceptions are propagated via vgi_rpc's `RpcError` mechanism.
+    These are wrapped in [`CatalogClientError`][] for a consistent client API.
 
 """
 
@@ -85,7 +85,7 @@ class CatalogClientError(Exception):
 
 
 class CatalogClientMixin:
-    """Mixin that adds catalog operations to a VGI Client.
+    """Mixin that adds catalog operations to a VGI [`Client`][].
 
     Catalog methods spawn ephemeral connections under the hood — for
     subprocess transport a pooled subprocess worker; for HTTP transport a
@@ -111,7 +111,7 @@ class CatalogClientMixin:
 
     @contextmanager
     def _catalog_connect(self) -> Iterator[VgiProtocol]:
-        """Yield a typed ``VgiProtocol`` proxy honoring the client's transport.
+        """Yield a typed `[`VgiProtocol`][]` proxy honoring the client's transport.
 
         Subprocess: borrows from a module-level ``WorkerPool`` keyed by
         command, so repeated catalog calls reuse a warm worker.
@@ -148,7 +148,7 @@ class CatalogClientMixin:
 
     @staticmethod
     def _options_to_batch(options: dict[str, Any] | None) -> pa.RecordBatch | None:
-        """Convert an options dict to a one-row RecordBatch for wire transport.
+        """Convert an options dict to a one-row `RecordBatch` for wire transport.
 
         Returns None if options is empty/None.
         """
@@ -162,7 +162,7 @@ class CatalogClientMixin:
         """Get list of catalog discovery records from the worker.
 
         Returns:
-            List of CatalogInfo records carrying per-catalog name,
+            List of [`CatalogInfo`][] records carrying per-catalog name,
             implementation_version, and data_version_spec.
 
         """
@@ -190,7 +190,7 @@ class CatalogClientMixin:
                 implementation version (``None`` = unconstrained).
 
         Returns:
-            CatalogAttachResult with attach_opaque_data, catalog capabilities, and
+            [`CatalogAttachResult`][] with attach_opaque_data, catalog capabilities, and
             the resolved concrete versions the worker picked.
 
         """
@@ -276,7 +276,7 @@ class CatalogClientMixin:
             attach_opaque_data: The attachment ID from catalog_attach.
 
         Returns:
-            TransactionOpaqueData for the new transaction, or None if transactions
+            `TransactionOpaqueData` for the new transaction, or None if transactions
             are not supported by this catalog.
 
         """
@@ -328,7 +328,7 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID for transactional reads.
 
         Returns:
-            List of SchemaInfo for each schema in the catalog.
+            List of [`SchemaInfo`][] for each schema in the catalog.
 
         """
         with self._catalog_connect() as proxy:
@@ -352,7 +352,7 @@ class CatalogClientMixin:
             name: The schema name.
 
         Returns:
-            SchemaInfo for the schema, or None if not found.
+            [`SchemaInfo`][] for the schema, or None if not found.
 
         """
         with self._catalog_connect() as proxy:
@@ -482,16 +482,16 @@ class CatalogClientMixin:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID for transactional reads.
             name: The schema name.
-            type: The type of objects to return. Must be a SchemaObjectType enum:
-                - SchemaObjectType.TABLE: Return only tables
-                - SchemaObjectType.VIEW: Return only views
-                - SchemaObjectType.SCALAR_FUNCTION: Return only scalar functions
-                - SchemaObjectType.TABLE_FUNCTION: Return only table functions
-                - SchemaObjectType.SCALAR_MACRO: Return only scalar macros
-                - SchemaObjectType.TABLE_MACRO: Return only table macros
+            type: The type of objects to return. Must be a [`SchemaObjectType`][] enum:
+                - `SchemaObjectType.TABLE`: Return only tables
+                - `SchemaObjectType.VIEW`: Return only views
+                - `SchemaObjectType.SCALAR_FUNCTION`: Return only scalar functions
+                - `SchemaObjectType.TABLE_FUNCTION`: Return only table functions
+                - `SchemaObjectType.SCALAR_MACRO`: Return only scalar macros
+                - `SchemaObjectType.TABLE_MACRO`: Return only table macros
 
         Returns:
-            List of TableInfo, ViewInfo, FunctionInfo, or MacroInfo depending on the type.
+            List of [`TableInfo`][], [`ViewInfo`][], [`FunctionInfo`][], or [`MacroInfo`][] depending on the type.
 
         """
         with self._catalog_connect() as proxy:
@@ -541,7 +541,7 @@ class CatalogClientMixin:
             name: The table name.
 
         Returns:
-            TableInfo for the table, or None if not found.
+            [`TableInfo`][] for the table, or None if not found.
 
         """
         with self._catalog_connect() as proxy:
@@ -637,7 +637,7 @@ class CatalogClientMixin:
     ) -> ScanFunctionResult:
         """Get the scan function for a table.
 
-        Returns a ScanFunctionResult that tells the VGI DuckDB extension which
+        Returns a `ScanFunctionResult` that tells the VGI DuckDB extension which
         DuckDB function to call to obtain the table data.
 
         Args:
@@ -649,10 +649,10 @@ class CatalogClientMixin:
             at_value: Optional time travel value.
 
         Returns:
-            ScanFunctionResult with function_name, arguments, and extensions.
+            `ScanFunctionResult` with function_name, arguments, and extensions.
 
         Raises:
-            CatalogClientError: If table_scan_function_get returned no result.
+            [`CatalogClientError`][]: If `table_scan_function_get` returned no result.
 
         """
         with self._catalog_connect() as proxy:
@@ -1015,7 +1015,7 @@ class CatalogClientMixin:
             name: The view name.
 
         Returns:
-            ViewInfo for the view, or None if not found.
+            [`ViewInfo`][] for the view, or None if not found.
 
         """
         with self._catalog_connect() as proxy:
@@ -1169,7 +1169,7 @@ class CatalogClientMixin:
             name: The macro name.
 
         Returns:
-            MacroInfo for the macro, or None if not found.
+            [`MacroInfo`][] for the macro, or None if not found.
 
         """
         with self._catalog_connect() as proxy:
@@ -1204,7 +1204,7 @@ class CatalogClientMixin:
             parameters: Ordered list of parameter names.
             definition: SQL expression (scalar) or query (table).
             on_conflict: Behavior if macro already exists.
-            parameter_default_values: One-row RecordBatch with typed defaults.
+            parameter_default_values: One-row `RecordBatch` with typed defaults.
 
         """
         with self._catalog_connect() as proxy:

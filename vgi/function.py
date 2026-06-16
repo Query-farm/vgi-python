@@ -39,7 +39,7 @@ from vgi.metadata import MetadataMixin, ResolvedMetadata
 
 
 def _resolve_storage() -> FunctionStorage:
-    """Resolve the default FunctionStorage backend from environment."""
+    """Resolve the default `FunctionStorage` backend from environment."""
     backend = os.environ.get("VGI_WORKER_SHARED_STORAGE", "sqlite").lower()
     if backend == "memory":
         # In-process tier: SQLite at ":memory:" (shared-cache, process-local).
@@ -75,7 +75,7 @@ def _resolve_storage() -> FunctionStorage:
 
 
 class _DefaultStorageDescriptor:
-    """Resolve FunctionStorage lazily on first attribute access.
+    """Resolve `FunctionStorage` lazily on first attribute access.
 
     This avoids evaluating environment variables at import time. When a
     subclass explicitly sets ``storage = SomeStorage(...)``, the plain
@@ -102,7 +102,7 @@ __all__ = [
 class Function(ABC, MetadataMixin):
     """Base class for all VGI functions.
 
-    Provides shared infrastructure (metadata, storage, Arg descriptor extraction,
+    Provides shared infrastructure (metadata, storage, [`Arg`][] descriptor extraction,
     schema validation) for all function types. Since the child classes have very
     different APIs, there are not many standard methods here.
 
@@ -132,9 +132,9 @@ class Function(ABC, MetadataMixin):
     _metadata_cache: ClassVar[ResolvedMetadata | None] = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Extract Arg descriptors from Annotated type hints.
+        """Extract [`Arg`][] descriptors from Annotated type hints.
 
-        The Arg is extracted from the annotation metadata and installed
+        The `Arg` is extracted from the annotation metadata and installed
         as a class attribute (descriptor).
         """
         super().__init_subclass__(**kwargs)

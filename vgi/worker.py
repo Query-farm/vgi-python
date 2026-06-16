@@ -10,13 +10,13 @@ SUPPORTED FUNCTION TYPES
 ------------------------
 The worker supports three function types, dispatched based on class inheritance:
 
-1. ScalarFunction / ScalarFunctionGenerator: Transforms input batches to
+1. [`ScalarFunction`][] / [`ScalarFunctionGenerator`][]: Transforms input batches to
    single-column output with 1:1 row mapping. Use for per-row computations.
 
-2. TableInOutFunction / TableInOutGenerator: Reads input batches, produces
+2. [`TableInOutFunction`][] / [`TableInOutGenerator`][]: Reads input batches, produces
    output batches. Use for transforming, filtering, or aggregating input.
 
-3. TableFunctionGenerator: Generates output batches without reading input.
+3. [`TableFunctionGenerator`][]: Generates output batches without reading input.
    Use for data generation functions like sequence(), range(), etc.
 
 QUICK START
@@ -53,7 +53,7 @@ KEY CLASSES
 -----------
     Worker      - Base class to subclass (set functions attribute)
 
-See Also
+See Also:
 --------
 vgi.client.Client : Spawns workers and sends data to them
 vgi.function.Function : Base class for all functions
@@ -227,7 +227,7 @@ def _get_vgi_version() -> str:
 
 
 def _format_arguments_for_error(args: Arguments) -> str:
-    """Format Arguments for error messages, showing values and types.
+    """Format [`Arguments`][] for error messages, showing values and types.
 
     Produces output like:
         const_args=[3 (int64), "hello" (string)], named_args={sep: "," (string)}
@@ -407,7 +407,7 @@ class _AggregateConstArgsCache:
     colliding execution_id bytes (UUIDs make this vanishingly rare, but the
     bound is free and matches storage semantics).
 
-    Cache holds either ``Arguments`` (positive hit), ``_ABSENT_SENTINEL``
+    Cache holds either `[`Arguments`][]` (positive hit), ``_ABSENT_SENTINEL``
     (the worker has no const params; remember the negative result to skip
     future reads), or absent (not yet looked up). Bounded LRU eviction caps
     memory; aggregate_destructor proactively evicts.
@@ -467,7 +467,7 @@ def _build_bound_storage_from_fields(
     attach_plaintext: bytes | None,
     ctx: CallContext,
 ) -> BoundStorage:
-    """Cold-build a BoundStorage from (execution_id, attach_plaintext, ctx).
+    """Cold-build a [`BoundStorage`][] from (execution_id, attach_plaintext, ctx).
 
     Called by ``BufferedFinalizeState.produce()`` per tick. The storage
     backend is process-singleton: we read it through ``Function.storage``
@@ -519,7 +519,7 @@ def run_table_buffering_finalize_tick(state: Any, out: Any, ctx: Any) -> None:
     handle different ticks under HTTP).
 
     Applies the pushdown contract symmetric with the streaming
-    ``TableInOutExchangeState`` (``protocol.py:1106-1186``): narrow
+    `[`TableInOutExchangeState`][]` (``protocol.py:1106-1186``): narrow
     ``params.output_schema`` to the projected slots and, when
     ``Meta.auto_apply_filters`` is True, wrap ``out`` in a filtering
     collector so the user's ``finalize()`` doesn't need to know.
@@ -1001,7 +1001,7 @@ class Worker:
         worker's functions via the catalog protocol, allowing clients to discover
         available functions.
 
-        To customize the catalog, set `catalog_interface` to a CatalogInterface
+        To customize the catalog, set `catalog_interface` to a [`CatalogInterface`][]
         subclass. To disable the catalog entirely, set `catalog_interface = None`
         and `catalog_name = None`.
 
@@ -2024,7 +2024,7 @@ class Worker:
 
         The full framework plaintext is ``uuid(16) || catalog_bytes``. Storage
         shards on the leading UUID, so the function-execution paths thread this
-        full form to ``BoundStorage`` / params (which strips the UUID for the
+        full form to `[`BoundStorage`][]` / params (which strips the UUID for the
         user-facing ``attach_opaque_data``).
         """
         return self._unwrap_attach_full_with_auth(envelope, current_auth())
@@ -2043,7 +2043,7 @@ class Worker:
         return self._unwrap_attach_full(sealed)
 
     def _bound(self, storage: Any, execution_id: bytes, request: Any) -> BoundStorage:
-        """Build a ``BoundStorage`` for ``request``, sharding on its unwrapped attach UUID.
+        """Build a `[`BoundStorage`][]` for ``request``, sharding on its unwrapped attach UUID.
 
         The worker unwraps the request's sealed attach to ``uuid(16) || catalog_bytes``
         and threads it in; storage shards on the leading UUID. Centralizes the
@@ -2105,14 +2105,14 @@ class Worker:
         return TransactionOpaqueData(plaintext)
 
     def _get_catalog(self) -> CatalogInterface:
-        """Get the CatalogInterface instance for this worker.
+        """Get the [`CatalogInterface`][] instance for this worker.
 
         The instance is created on first access and cached for the lifetime
         of the worker, so that state (attach IDs, created schemas, etc.)
         persists across RPC calls.
 
         Returns:
-            CatalogInterface instance.
+            `CatalogInterface` instance.
 
         Raises:
             ValueError: If no catalog interface is available.
@@ -2632,7 +2632,7 @@ class Worker:
 
         Accepts either a unary table_buffering_* request (function_name,
         execution_id, attach_opaque_data, transaction_id at top level)
-        or an ``InitRequest`` (fields under ``bind_call``).
+        or an `[`InitRequest`][]` (fields under ``bind_call``).
 
         ``attach_already_unwrapped`` — pass True from callers that hold
         an already-unwrapped attach (e.g. ``run_table_buffering_finalize_tick``,
@@ -4018,7 +4018,7 @@ class Worker:
         at_value: str | None = None,
         transaction_opaque_data: bytes | None = None,
     ) -> bytes:
-        """Get the scan function for a table. Returns ScanFunctionResult as IPC bytes."""
+        """Get the scan function for a table. Returns `ScanFunctionResult` as IPC bytes."""
         _validate_at_params(at_unit, at_value)
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
@@ -4045,7 +4045,7 @@ class Worker:
     ) -> bytes:
         """Get the list of scan branches for a multi-branch table.
 
-        Returns ScanBranchesResult as IPC bytes. The CatalogInterface base
+        Returns `ScanBranchesResult` as IPC bytes. The [`CatalogInterface`][] base
         provides a default-impl shim that wraps the legacy
         ``table_scan_function_get`` as a one-branch result, so every existing
         single-source worker automatically responds correctly here without
@@ -4096,7 +4096,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
         writable_branch_function_name: str | None = None,
     ) -> bytes:
-        """Get the insert function for a table. Returns WriteFunctionResult as IPC bytes."""
+        """Get the insert function for a table. Returns `WriteFunctionResult` as IPC bytes."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_insert_function_get(
@@ -4117,7 +4117,7 @@ class Worker:
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> bytes:
-        """Get the update function for a table. Returns WriteFunctionResult as IPC bytes."""
+        """Get the update function for a table. Returns `WriteFunctionResult` as IPC bytes."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_update_function_get(
@@ -4137,7 +4137,7 @@ class Worker:
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> bytes:
-        """Get the delete function for a table. Returns WriteFunctionResult as IPC bytes."""
+        """Get the delete function for a table. Returns `WriteFunctionResult` as IPC bytes."""
         self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_delete_function_get(

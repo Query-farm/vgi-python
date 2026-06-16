@@ -1,6 +1,6 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""TransactorClient — connects to a db-transactor subprocess.
+"""[`TransactorClient`][] — connects to a db-transactor subprocess.
 
 Handles auto-spawning the transactor process if one isn't running,
 and provides a typed ``vgi_rpc`` proxy for RPC calls.

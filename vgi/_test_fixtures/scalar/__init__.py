@@ -58,6 +58,8 @@ from vgi._test_fixtures.scalar.random_demo import (
 from vgi._test_fixtures.scalar.settings_secrets import (
     MultiplyBySettingFunction,
     ReturnSecretValueFunction,
+    ScaleBySettingFunction,
+    SecretFieldFunction,
     WhoAmIFunction,
 )
 from vgi._test_fixtures.scalar.type_info import (
@@ -103,6 +105,8 @@ __all__ = [
     "RandomBytesFunction",
     "RandomIntFunction",
     "ReturnSecretValueFunction",
+    "ScaleBySettingFunction",
+    "SecretFieldFunction",
     "SmartFormatPrefixFunction",
     "SmartFormatWidthFunction",
     "SumValuesFunction",
