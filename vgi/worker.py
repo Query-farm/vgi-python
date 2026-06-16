@@ -1926,6 +1926,9 @@ class Worker:
             attach_opaque_data: Optional attach ID (reserved for future catalog use).
             function_type: Optional base class to filter candidates by type.
 
+        Returns:
+            The resolved [`Function`][] subclass for ``function_name``.
+
         """
         registry = self._build_registry()
         if function_name not in registry:

@@ -117,6 +117,7 @@ class Function(ABC, MetadataMixin):
 
     Attributes:
         logger: Structured logger for function diagnostics.
+        storage: Worker-owned storage backend descriptor for stateful functions.
 
     See Also:
         vgi.scalar_function.ScalarFunction: Scalar 1:1 row transforms.
@@ -125,6 +126,9 @@ class Function(ABC, MetadataMixin):
         vgi.metadata: Metadata documentation for functions.
 
     """
+
+    # Instance attribute set in __init__; annotated here so it is documentable.
+    logger: logging.Logger
 
     storage: ClassVar[FunctionStorage] = _DefaultStorageDescriptor()  # type: ignore[assignment]
 

@@ -69,6 +69,11 @@ class SequenceFunction(_BaseSequenceFunction):
     SELECT * FROM sequence(1000, batch_size := 100)
     Returns: integers 0-999 in batches of 100 rows each
 
+    Attributes:
+        FunctionArguments: The argument dataclass type bound to this function.
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
+        NUMPY_DTYPE: NumPy dtype used to build the output column(s).
+
     """
 
     FunctionArguments = SequenceFunctionArgs
@@ -143,6 +148,10 @@ class NamedParamsEchoFunction(_BaseSequenceFunction):
 
     SELECT * FROM named_params_echo(3, greeting := 'hi', multiplier := 10)
     Returns: rows with id=0..2, greeting='hi', value=id*10, float_value=id*1.0, enabled=true
+
+    Attributes:
+        FunctionArguments: The argument dataclass type bound to this function.
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
 
     """
 
@@ -241,6 +250,10 @@ class NestedSequenceFunction(_BaseSequenceFunction):
 
     SELECT metadata.index FROM nested_sequence(10)
     Test projection pushdown with struct field access
+
+    Attributes:
+        FunctionArguments: The argument dataclass type bound to this function.
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
 
     """
 
@@ -356,6 +369,12 @@ class DoubleSequenceFunction(_BaseSequenceFunction):
     SELECT * FROM double_sequence(1000, batch_size := 100)
     Returns: floats 0.0-999.0 in batches of 100 rows each
 
+    Attributes:
+        FunctionArguments: The argument dataclass type bound to this function.
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
+        NUMPY_DTYPE: NumPy dtype used to build the output column(s).
+        STATS_ARROW_TYPE: Arrow type used for the column statistics this function reports.
+
     """
 
     FunctionArguments = DoubleSequenceFunctionArguments
@@ -440,6 +459,11 @@ class PartitionedSequenceFunction(
 
     With count=5 and increment=10:
         Combined output: [0, 10, 20, 30, 40]
+
+    Attributes:
+        MAX_PARTITIONS: Maximum number of partitions this function emits.
+        BATCH_SIZE: Number of rows emitted per output batch.
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
 
     """
 
@@ -555,6 +579,10 @@ class TenThousandFunction(TableFunctionGenerator[TenThousandFunctionArguments, T
     -------
     SELECT * FROM ten_thousand()
     Returns: [{"n": 0}, {"n": 1}, ..., {"n": 9999}]
+
+    Attributes:
+        BATCH_SIZE: Number of rows emitted per output batch.
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
 
     """
 

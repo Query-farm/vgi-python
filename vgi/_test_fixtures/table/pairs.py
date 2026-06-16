@@ -83,6 +83,9 @@ class ConstantColumnsFunction(TableFunctionGenerator[ConstantColumnsFunctionArgu
     Returns: [{"col_0": 1, "col_1": 2, "col_2": 3, "col_3": "apple"},
               {"col_0": 1, "col_1": 2, "col_2": 3, "col_3": "apple"}]
 
+    Attributes:
+        BATCH_SIZE: Number of rows emitted per output batch.
+
     """
 
     class Meta:
@@ -188,6 +191,9 @@ class MakePairsIntFunction(TableFunctionGenerator[MakePairsIntArgs, MakePairsInt
         SELECT * FROM make_pairs(1, 4)
         Returns: (1,2), (2,4), (3,6)
 
+    Attributes:
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
+
     """
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = MAKE_PAIRS_INT_SCHEMA
@@ -222,6 +228,9 @@ class MakePairsStrFunction(TableFunctionGenerator[MakePairsStrArgs, MakePairsStr
     Example:
         SELECT * FROM make_pairs('row_', '_end')
         Returns: ('row_0','_end0'), ('row_1','_end1'), ...
+
+    Attributes:
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
 
     """
 
@@ -283,6 +292,9 @@ class MakePairsIntStrFunction(TableFunctionGenerator[MakePairsIntStrArgs, MakePa
     Example:
         SELECT * FROM make_pairs(10, 'item_')
         Returns: (10, 'item_0'), (11, 'item_1'), ..., (14, 'item_4')
+
+    Attributes:
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
 
     """
 

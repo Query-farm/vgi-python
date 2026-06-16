@@ -661,6 +661,7 @@ class ScanFunctionResult:
         positional_arguments: Positional arguments as PyArrow scalars.
         named_arguments: Named arguments as PyArrow scalars.
         required_extensions: DuckDB extensions to load before calling.
+        ARROW_SCHEMA: Arrow IPC schema used to (de)serialize this result over the wire.
 
     """
 
@@ -803,6 +804,7 @@ class ScanBranch:
             remain refused on multi-branch tables regardless of this
             flag; the contract is INSERT-only until cross-arm
             semantics have customer-driven evidence.
+        ARROW_SCHEMA: Arrow IPC schema used to (de)serialize this branch over the wire.
 
     """
 
@@ -906,6 +908,7 @@ class ScanBranchesResult:
             surface the existing extension-load diagnostic. Hoisted to the
             top level so workers don't repeat ``"iceberg"`` on every branch
             that uses it.
+        ARROW_SCHEMA: Arrow IPC schema used to (de)serialize this result over the wire.
 
     """
 

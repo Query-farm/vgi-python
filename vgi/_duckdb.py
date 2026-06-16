@@ -32,6 +32,9 @@ def engine_module() -> ModuleType:
 
     The result is cached for the life of the process.
 
+    Returns:
+        The resolved engine module (``haybarn`` if available, else ``duckdb``).
+
     Raises:
         ImportError: if neither engine is installed.
 

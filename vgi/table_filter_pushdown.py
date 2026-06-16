@@ -561,6 +561,9 @@ def _arrow_scalar_to_sql(scalar: pa.Scalar[Any], field: pa.Field[Any] | None = N
         field: Arrow field with extension metadata (optional). Used to detect
                extension types like geoarrow.wkb for proper SQL rendering.
 
+    Returns:
+        The scalar rendered as a SQL literal string (``"NULL"`` when invalid).
+
     """
     if scalar.is_valid is False:
         return "NULL"

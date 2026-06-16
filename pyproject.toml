@@ -145,12 +145,10 @@ skip_checking_raises = true
 # DOC301). pydoclint 0.8.x has no per-code ignore, so the noisy families are
 # turned off via these family switches instead.
 allow_init_docstring = true
-# Everything else still flagged (ClassVar constants like ARROW_SCHEMA /
-# FIXED_SCHEMA, undocumented args on private helpers + exception __init__s, and
-# the handful of DOC201 missing-Returns on multi-line docstrings) is frozen in
-# the baseline; only NEW violations fail. Regenerate after intentional changes:
+# No baseline: vgi/ is fully clean under this config, so the gate enforces
+# every in-scope violation with no grandfathered exceptions. If a future change
+# needs to defer cleanup, freeze the current state and re-add `baseline`:
 #   uv run pydoclint --generate-baseline=True --baseline=.pydoclint-baseline vgi/
-baseline = ".pydoclint-baseline"
 
 [tool.mypy]
 python_version = "3.13"

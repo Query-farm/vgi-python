@@ -508,6 +508,10 @@ class ResolvedMetadata:
 def _get_arg_type_info(cls: type, attr_name: str) -> tuple[str | None, bool]:
     """Extract type name and [`TableInput`][] status from type hints for an [`Arg`][] attribute.
 
+    Args:
+        cls: The class whose type hints are inspected.
+        attr_name: The attribute name to resolve the type hint for.
+
     Returns:
         Tuple of (type_name, is_table_input).
 
@@ -918,6 +922,12 @@ class FunctionTypeError(TypeError):
 
 def _infer_function_type(cls: type) -> CatalogFunctionType:
     """Infer the function type from the class hierarchy.
+
+    Args:
+        cls: The function class whose MRO is inspected.
+
+    Returns:
+        The [`CatalogFunctionType`][] inferred from the class hierarchy.
 
     Raises:
         FunctionTypeError: If no recognized base class is found in the MRO.

@@ -96,6 +96,10 @@ class SchemaValidationError(Exception):
 
     """
 
+    expected: pa.Schema | None
+    actual: pa.Schema | None
+    context: str
+
     def __init__(
         self,
         message: str,

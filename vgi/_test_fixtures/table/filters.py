@@ -116,6 +116,9 @@ class FilterEchoFunction(TableFunctionGenerator[FilterEchoFunctionArgs, FilterEc
     SELECT * FROM filter_echo(10) WHERE n >= 8
     Returns: rows 8-9 with pushed_filters showing "n >= 8"
 
+    Attributes:
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
+
     """
 
     class Meta:
@@ -473,6 +476,9 @@ class DictFilterEchoFunction(TableFunctionGenerator[_DictFilterEchoArgs, _DictFi
     SELECT * FROM dict_filter_echo(6) WHERE s = 'green'
     Returns: rows 1 and 4.
 
+    Attributes:
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
+
     """
 
     class Meta:
@@ -601,6 +607,9 @@ class SpatialFilterExampleFunction(TableFunctionGenerator[_SpatialFilterArgs, _S
     -------
     SELECT * FROM spatial_filter_example(100) WHERE geom && ST_MakeEnvelope(0, 0, 0.5, 0.5)
     Returns: points in the lower-left quadrant of the unit square.
+
+    Attributes:
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
 
     """
 

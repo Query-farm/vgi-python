@@ -75,6 +75,9 @@ class SettingsAwareFunction(TableFunctionGenerator[SettingsAwareFunctionArgument
     With settings={vgi_verbose_mode: true, greeting: "Hi", multiplier: 2}:
     Returns: [{"id": 0, "greeting": "Hi", "value": 0.0, "details": "row_0"}, ...]
 
+    Attributes:
+        BATCH_SIZE: Number of rows emitted per output batch.
+
     """
 
     class Meta:
@@ -206,6 +209,9 @@ class StructSettingsFunction(TableFunctionGenerator[StructSettingsFunctionArgume
     -------
     With config={'start': 10, 'step': 5, 'label': 'item'} and count=3:
     Returns: [{"n": 10, "label": "item_0"}, {"n": 15, "label": "item_1"}, {"n": 20, "label": "item_2"}]
+
+    Attributes:
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
 
     """
 

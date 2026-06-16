@@ -77,6 +77,9 @@ class MakeSeriesCountFunction(TableFunctionGenerator[MakeSeriesCountArgs, MakeSe
         SELECT * FROM make_series(5)
         Returns: 0, 1, 2, 3, 4
 
+    Attributes:
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
+
     """
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = MAKE_SERIES_SCHEMA
@@ -113,6 +116,9 @@ class MakeSeriesRangeFunction(TableFunctionGenerator[MakeSeriesRangeArgs, MakeSe
         SELECT * FROM make_series(3, 7)
         Returns: 3, 4, 5, 6
 
+    Attributes:
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
+
     """
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = MAKE_SERIES_SCHEMA
@@ -148,6 +154,9 @@ class MakeSeriesStepFunction(TableFunctionGenerator[MakeSeriesStepArgs, MakeSeri
     Example:
         SELECT * FROM make_series(0, 10, 3)
         Returns: 0, 3, 6, 9
+
+    Attributes:
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
 
     """
 
@@ -194,6 +203,9 @@ class MakeSeriesCsvFunction(TableFunctionGenerator[MakeSeriesCsvArgs, MakeSeries
     Example:
         SELECT * FROM make_series('10,20,30')
         Returns: 10, 20, 30
+
+    Attributes:
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
 
     """
 
@@ -242,6 +254,9 @@ class MakeSeriesFloatFunction(TableFunctionGenerator[MakeSeriesFloatArgs, MakeSe
     Example:
         SELECT * FROM make_series(0.5)
         Returns: 0.0, 0.5, 1.0, ..., 4.5
+
+    Attributes:
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
 
     """
 

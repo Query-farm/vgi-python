@@ -46,6 +46,7 @@ class SettingSpec:
         desc: Human-readable description.
         type: The Arrow data type for this setting.
         default: The default value (Python object).
+        ARROW_SCHEMA: Arrow IPC schema used to (de)serialize this spec over the wire.
 
     """
 

@@ -178,6 +178,10 @@ class ProjectedDataFunction(TableFunctionGenerator[ProjectedDataFunctionArgument
     SELECT id, value FROM projected_data(10)  -- Only computes id and value
     Returns: 10 rows with id and value columns only
 
+    Attributes:
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
+        BATCH_SIZE: Number of rows emitted per output batch.
+
     """
 
     class Meta:

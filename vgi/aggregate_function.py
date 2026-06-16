@@ -376,6 +376,11 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
         and ``finalize()``, so this helper should not normally be needed.
         Provided for defensive coding.
 
+        Args:
+            states: Mapping of group_id to its accumulated state.
+            group_id: The group to fetch or create state for.
+            params: The current process parameters (used to build fresh state).
+
         Returns:
             The state for the given group_id.
 

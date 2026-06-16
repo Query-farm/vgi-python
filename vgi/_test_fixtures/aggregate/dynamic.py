@@ -190,7 +190,7 @@ class _DynamicAggregateBase(AggregateFunction[DynamicState]):
     # when DuckDB batches many partitions into shared buffers.
 
     @staticmethod
-    def _slice_to_frame(  # noqa: D417
+    def _slice_to_frame(
         partition: WindowPartition,
         subframes: list[tuple[int, int]],
         data_start: int,
@@ -198,10 +198,16 @@ class _DynamicAggregateBase(AggregateFunction[DynamicState]):
         """Slice all partition columns to the frame rows.
 
         Args:
+            partition: The window partition whose columns are sliced.
+            subframes: List of ``(begin, end)`` index tuples describing the
+                row ranges to include in the frame.
             data_start: Index where data columns begin (header columns are
                 ``[0 .. data_start)``). NULL-drop is applied on data columns
                 only — matches the filtering ``_do_update`` performs in the
                 non-window path.
+
+        Returns:
+            A table containing only the frame rows across all partition columns.
 
         """
         num_cols = partition.inputs.num_columns

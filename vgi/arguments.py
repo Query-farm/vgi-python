@@ -604,14 +604,24 @@ class ArgumentValidationError(ValueError):
 
     Attributes:
         arg_name: Name of the argument that failed validation.
+        position: Positional index or named key of the argument.
         value: The invalid value that was provided.
         constraint: Description of the constraint that was violated.
         doc: Documentation string for the argument (if provided).
         valid_range: Human-readable description of valid values.
         default: Default value (if any) that could be used instead.
-        suggestions: List of valid values close to the provided value.
+        choices: Valid choices, if the argument is constrained to a set.
 
     """
+
+    arg_name: str | None
+    position: int | str | None
+    value: Any
+    constraint: str | None
+    doc: str | None
+    valid_range: str | None
+    default: Any
+    choices: Sequence[Any] | None
 
     def __init__(
         self,
@@ -875,6 +885,18 @@ class Arg[ArgT]:
         serialization where only one name is preserved.
 
     """
+
+    # Bare annotations (storage is provided by __slots__) so the documented
+    # attributes are recognized; order matches the Attributes: section.
+    position: int | str
+    default: ArgT | Any
+    doc: str
+    ge: float | int | None
+    le: float | int | None
+    gt: float | int | None
+    lt: float | int | None
+    choices: Sequence[ArgT] | None
+    pattern: str | None
 
     __slots__ = (
         "position",

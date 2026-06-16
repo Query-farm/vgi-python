@@ -148,6 +148,9 @@ class LateMaterializationFunction(TableFunctionGenerator[LateMaterializationFunc
     -------
     SELECT row_id, payload FROM late_materialization(100000) ORDER BY ord LIMIT 10
 
+    Attributes:
+        FunctionArguments: The argument dataclass type bound to this function.
+
     """
 
     FunctionArguments = LateMaterializationFunctionArgs

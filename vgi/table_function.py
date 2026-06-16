@@ -834,6 +834,9 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         Override to provide row count estimates that help query planners
         make better decisions about join ordering and memory allocation.
 
+        Args:
+            params: Bind parameters — function args, settings, and secrets.
+
         Returns:
             [`TableCardinality`][] with estimate and/or max, or None if unknown.
 
@@ -890,6 +893,9 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         ``params`` is the same ``BindParams[TArgs]`` used by ``cardinality`` and
         ``initial_state``, so stats can be derived directly from user-supplied
         arguments.
+
+        Args:
+            params: Bind parameters — function args, settings, and secrets.
 
         Returns:
             A list of `ColumnStatistics` (one entry per column for which stats

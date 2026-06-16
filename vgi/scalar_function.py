@@ -131,6 +131,12 @@ def _resolve_explicit_arrow_type(arrow_type: pa.DataType | type) -> pa.DataType:
 
     Handles pa.DataType instances and Python types (int/str/float/bool/bytes).
 
+    Args:
+        arrow_type: An Arrow ``DataType`` or a Python type to resolve.
+
+    Returns:
+        The resolved Arrow ``DataType``.
+
     Raises:
         TypeError: If the type cannot be converted to Arrow.
 
@@ -302,6 +308,10 @@ class RowCountMismatchError(Exception):
 
     """
 
+    input_rows: int | None
+    output_rows: int | None
+    function_name: str
+
     def __init__(
         self,
         message: str,
@@ -379,6 +389,11 @@ class TypeMismatchError(TypeError):
         function_name: Name of the function class.
 
     """
+
+    param_name: str
+    expected_type: pa.DataType | None
+    actual_type: pa.DataType | None
+    function_name: str
 
     def __init__(
         self,
@@ -487,6 +502,9 @@ class ScalarFunctionGenerator(vgi.function.Function):
 
         Args:
             params: Bind parameters including arguments and input schema.
+
+        Returns:
+            The Arrow ``DataType`` of the function's output column.
 
         """
         ...
@@ -980,6 +998,9 @@ class ScalarFunction(ScalarFunctionGenerator):
 
         Args:
             params: Bind parameters including arguments and input schema.
+
+        Returns:
+            The Arrow ``DataType`` of the function's output column.
 
         """
         if cls._returns_output_type is not None:

@@ -302,6 +302,10 @@ class TableInOutFunction[
         processed. This is useful for aggregations, sorting, or any operation
         that needs to see all data before producing output.
 
+        Args:
+            params: The process parameters — function args, settings, secrets.
+            states: The accumulated per-partition states from ``transform()``.
+
         Returns:
             List of pa.RecordBatch to emit as final output.
             Return an empty list if no finalization output is needed.

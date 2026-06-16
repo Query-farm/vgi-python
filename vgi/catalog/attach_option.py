@@ -46,6 +46,7 @@ class AttachOptionSpec:
         desc: Human-readable description.
         type: The Arrow data type for this option.
         default: The default value (Python object) or ``None`` if unset.
+        ARROW_SCHEMA: Arrow IPC schema used to (de)serialize this spec over the wire.
 
     """
 

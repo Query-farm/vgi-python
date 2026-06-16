@@ -55,12 +55,8 @@ jobs:
       - name: Check linting
         run: uv run ruff check .
 
-      # Docstring consistency: documented args/attributes must match the code.
-      # Config + frozen baseline live in pyproject.toml ([tool.pydoclint]); only
-      # NEW violations fail. Regenerate the baseline with:
-      #   uv run pydoclint --generate-baseline=True --baseline=.pydoclint-baseline vgi/
-      - name: Docstring lint (pydoclint)
-        run: uv run pydoclint vgi/
+      # Docstring consistency (pydoclint) runs inside the pytest suite via
+      # tests/test_docstrings.py, so it's not a separate CI lint step.
 
       - name: Type check (mypy)
         run: uv run mypy vgi/

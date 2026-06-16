@@ -31,6 +31,7 @@ class SecretTypeSpec:
         name: The secret type name (e.g., "vgi_example").
         description: Human-readable description.
         schema: Arrow schema defining the secret's key-value parameters.
+        ARROW_SCHEMA: Arrow IPC schema used to (de)serialize this spec over the wire.
 
     Example:
         SecretTypeSpec(

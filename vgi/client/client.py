@@ -1903,6 +1903,9 @@ class Client(CatalogClientMixin):
                 must be paired with the same ``function_name``/projection/
                 filters. ``None`` starts a fresh scan.
 
+        Returns:
+            A [`ResumableTableScan`][] yielding ``(batch, token)`` pairs.
+
         Raises:
             [`ResumeUnsupported`][]: If the transport is not HTTP.
             [`ClientError`][]: If the client is not started or the worker errors.
