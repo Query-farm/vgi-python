@@ -1,24 +1,18 @@
 name: Docs
 
+# Cloudflare Pages deploy is disabled for now — docs hosting is moving to a
+# different approach. This workflow is manual-only (workflow_dispatch) and just
+# builds the site as a check; the CI workflow already validates the docs build
+# (strict), examples, prose, and links on every push. Re-add a deploy step here
+# (or a new workflow) once the new hosting path is decided.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "docs/**"
-      - "mkdocs.yml"
-      - "vgi/**"
-      - "pyproject.toml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: pages
-  cancel-in-progress: true
-
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -37,10 +31,3 @@ jobs:
 
       - name: Build docs
         run: uv run mkdocs build --strict
-
-      - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy site --project-name=vgi-python-docs --commit-dirty=true
