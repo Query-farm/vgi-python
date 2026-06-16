@@ -93,11 +93,12 @@ class CatalogClientMixin:
     ``httpx.Client`` (bearer token, headers). Browsing catalogs over HTTP
     is the canonical non-DuckDB use case this mixin supports.
 
-    Expected attributes from ``Client``:
-        server_path: str — worker shell command (subprocess transport).
-        _transport: Literal["subprocess", "http"].
-        _base_url: str | None — HTTP base URL.
-        _get_or_create_httpx_client(): shared HTTP client factory.
+    Other attributes expected from ``Client``: ``_transport`` (subprocess vs
+    http), ``_base_url`` (HTTP base URL), and ``_get_or_create_httpx_client()``
+    (shared HTTP client factory).
+
+    Attributes:
+        server_path: Worker shell command used for subprocess transport.
     """
 
     # Type hints for attributes expected from Client
@@ -122,6 +123,9 @@ class CatalogClientMixin:
         connection pooling are consistent.
 
         Worker errors are caught and re-raised as ``CatalogClientError``.
+
+        Yields:
+            A typed `[`VgiProtocol`][]` proxy bound to the active transport.
         """
         try:
             if getattr(self, "_transport", "subprocess") == "http":

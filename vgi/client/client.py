@@ -201,6 +201,13 @@ class WorkerConnection:
 
     Exactly one of {proc+connection, _pool_ctx, _http_ctx} is active per
     connection — transport-specific teardown inspects these fields.
+
+    Attributes:
+        proxy: The typed `[`VgiProtocol`][]` proxy used to invoke the worker.
+        worker_index: Index of this worker within a parallel pool.
+        stream: The active streaming session, if any.
+        proc: The worker subprocess for direct (non-pooled) subprocess transport.
+        connection: The RPC connection for direct subprocess transport.
     """
 
     proxy: VgiProtocol
@@ -242,12 +249,15 @@ class Client(CatalogClientMixin):
         with Client.from_http("http://host:port", bearer_token="...") as c:
             for batch in c.table_function(function_name="sequence", ...):
                 ...
+
+    Attributes:
+        THREAD_JOIN_TIMEOUT: Seconds to wait for a worker thread to join during
+            shutdown.
+        PROCESS_WAIT_TIMEOUT: Seconds to wait for a worker process to exit during
+            shutdown.
     """
 
-    # Timeout for thread join operations (seconds)
     THREAD_JOIN_TIMEOUT: float = 5.0
-
-    # Timeout for worker process wait operations (seconds)
     PROCESS_WAIT_TIMEOUT: float = 5.0
 
     @staticmethod

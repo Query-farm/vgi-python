@@ -52,7 +52,15 @@ __all__ = [
 
 
 def pack_int_cursor(value: int) -> bytes:
-    """Encode a signed int64 cursor (e.g., last log_id consumed)."""
+    """Encode a signed int64 cursor (e.g., last log_id consumed).
+
+    Args:
+        value: The signed integer cursor to encode.
+
+    Returns:
+        The cursor as 8 little-endian bytes.
+
+    """
     return value.to_bytes(8, "little", signed=True)
 
 
@@ -61,6 +69,14 @@ def unpack_int_cursor(cursor: bytes, default: int = -1) -> int:
 
     Use ``default=-1`` (before-first sentinel) to start at the beginning
     of a state_log when no prior cursor exists.
+
+    Args:
+        cursor: The packed int64 cursor bytes (``b""`` for none).
+        default: Value returned when ``cursor`` is empty.
+
+    Returns:
+        The decoded integer cursor, or ``default`` when empty.
+
     """
     if not cursor:
         return default
@@ -75,6 +91,14 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
 
     For functions that need a finalize phase (e.g., aggregation), override
     `finalize()` to return the final output batches.
+
+    Attributes:
+        state_class: Concrete ``ArrowSerializableDataclass`` type subclasses set
+            to opt into framework-managed state; None (the default) means
+            process()/finalize() get ``state=None`` and the framework skips its
+            round-trip.
+        on_cancel.__func__.__doc__: Docstring assigned at class-definition time
+            to the ``on_cancel`` cancellation hook (see ``on_cancel``).
 
     """
 
@@ -104,6 +128,10 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
         The framework uses this to decide whether to advertise a finalize
         callback to DuckDB; DuckDB rejects LATERAL with correlated input on
         table functions that register ``in_out_function_final``.
+
+        Returns:
+            True if a real finalize/finish override is present.
+
         """
         # Explicit Meta override.
         meta = getattr(cls, "Meta", None)
@@ -140,6 +168,13 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
 
         Override to compute a dynamic output type or validate arguments.
         See ``TableFunctionBase.on_bind`` for the broader contract.
+
+        Args:
+            params: Bind parameters including arguments and the bind request.
+
+        Returns:
+            A BindResponse whose output schema equals the input schema.
+
         """
         assert params.bind_call.input_schema is not None
         return BindResponse(output_schema=params.bind_call.input_schema)
@@ -245,12 +280,21 @@ class TableInOutFunction[
     `ArrowSerializableDataclass`, state is automatically saved to storage
     after each `transform()` call for distributed processing.
 
+    Attributes:
+        state_class: The ``TState`` dataclass type, inferred automatically from
+            the generic type parameters; None disables state management.
+
     """
 
     state_class: type[TState] | None = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
-        """Automatically infer the state_class from the generic type parameters."""
+        """Automatically infer the state_class from the generic type parameters.
+
+        Args:
+            **kwargs: Subclass keyword arguments forwarded to ``super()``.
+
+        """
         super().__init_subclass__(**kwargs)
 
         # Iterate over the original bases to find the generic parameters
@@ -347,6 +391,12 @@ class TableInOutFunction[
         method for each input batch. State is automatically saved to storage
         after each call for distributed processing.
 
+        Args:
+            params: Process parameters including arguments and schemas.
+            state: Mutable state persisted between calls. None if TState unused.
+            batch: The input RecordBatch to process.
+            out: `OutputCollector` for emitting output and logging.
+
         """
         result = cls.transform(batch, params, state)
 
@@ -375,6 +425,12 @@ class TableInOutFunction[
 
         This method collects serialized states from all workers, deserializes
         them, and passes them to your `finish()` method.
+
+        Args:
+            params: Process parameters including arguments and schemas.
+
+        Returns:
+            List of output RecordBatches produced by ``finish()``.
 
         """
         if cls.state_class is not None and cls.state_class is not TableInOutFunctionStateNoOp:

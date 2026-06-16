@@ -124,6 +124,31 @@ class BindRequest(ArrowSerializableDataclass):
     For table functions (no input schema), ``input_schema`` is ``None``.
     For scalar and table-in-out functions, ``input_schema`` is set.
 
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        arguments: The bound function [`Arguments`][].
+        function_type: Which kind of function is being bound ([`FunctionType`][]).
+        input_schema: Serialized Arrow schema of the input table (``None`` for
+            table functions with no input).
+        settings: Serialized DuckDB session settings relevant to the function.
+        secrets: Serialized resolved secret values the function declared it needs.
+        attach_opaque_data: Opaque per-attach catalog session token (bytes) echoed
+            back so the worker can scope catalog state to the attachment; ``None``
+            outside a catalog context.
+        transaction_opaque_data: Opaque DuckDB transaction handle (bytes); ``None``
+            when not inside a transaction.
+        resolved_secrets_provided: True when ``secrets`` carries already-resolved
+            values, so the worker should not re-resolve them.
+        at_unit: Unit of the time-travel ``AT (TIMESTAMP|VERSION ...)`` clause for
+            this scan, threaded through from DuckDB's per-reference bind; ``None``
+            when the scan has no AT clause. NOTE: for inline-bound (function-backed)
+            tables the actual on_bind RPC runs once at attach with no AT, so this is
+            ``None`` there; the per-scan AT is carried on the bind request embedded
+            in each InitRequest, so functions should read it at init via
+            ``params.init_call.bind_call.at_value`` (or the ``ProcessParams.at_value``
+            accessor), not at on_bind.
+        at_value: Value of the time-travel ``AT`` clause for this scan; ``None`` when
+            the scan has no AT clause. See ``at_unit`` for the inline-bind caveat.
     """
 
     function_name: str
@@ -136,13 +161,6 @@ class BindRequest(ArrowSerializableDataclass):
     transaction_opaque_data: bytes | None = None
     resolved_secrets_provided: bool = False
 
-    # Time travel: the AT (TIMESTAMP|VERSION ...) clause for this scan, threaded
-    # through from DuckDB's per-reference bind. Both None when the scan has no AT
-    # clause. NOTE: for inline-bound (function-backed) tables the *actual* on_bind
-    # RPC runs once at attach with no AT, so these are None there; the per-scan AT
-    # is carried on the bind request embedded in each InitRequest, so functions
-    # should read it at init via ``params.init_call.bind_call.at_value`` (or the
-    # ``ProcessParams.at_value`` accessor), not at on_bind.
     at_unit: str | None = None
     at_value: str | None = None
 
@@ -154,18 +172,49 @@ class InitRequest(ArrowSerializableDataclass):
     For secondary init requests, ``execution_id`` and ``init_opaque_data``
     are set; use :attr:`is_secondary` to distinguish.
 
+    Attributes:
+        bind_call: The originating [`BindRequest`][] (function name, arguments,
+            schemas).
+        output_schema: Serialized Arrow schema of the rows the function produces.
+        bind_opaque_data: Opaque per-bind state the worker returned from bind(),
+            threaded back into later calls. Wire-facing bytes the framework
+            produced from the typed ``BindResult.opaque_data``; consumers
+            reconstruct via ``MyConcreteDataclass.deserialize_from_bytes(raw)``.
+            See ``BindResponse.opaque_data`` in vgi/invocation.py for the full
+            contract rationale.
+        projection_ids: Column indices DuckDB wants projected from the function's
+            output; ``None`` for scalar functions or when no projection pushdown.
+        pushdown_filters: Serialized filter predicates DuckDB pushed down to the
+            scan; ``None`` when no filters apply.
+        join_keys: Serialized join-key batches pushed down for join filtering;
+            ``None`` when not applicable.
+        phase: For table-in-out functions, which init phase (INPUT / FINALIZE /
+            buffering) this request opens; ``None`` for other function types.
+        finalize_state_id: For a buffered-table finalize stream, which state_id
+            this stream serves. Required when ``phase=TABLE_BUFFERING_FINALIZE``,
+            ``None`` otherwise. Opaque bytes — the worker chose the encoding when
+            its combine() returned the finalize_state_ids list.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys worker-owned state.
+            ``None`` for global init, set for secondary init.
+        init_opaque_data: Opaque per-init state threaded back into the stream;
+            same producer/wire/consumer contract as ``bind_opaque_data``.
+        order_by_column_name: Column name of the order-pushdown hint from DuckDB's
+            RowGroupPruner optimizer; ``None`` when no hint.
+        order_by_direction: Sort direction of the order-pushdown hint; ``None``
+            when no hint.
+        order_by_null_order: Null-ordering of the order-pushdown hint; ``None``
+            when no hint.
+        order_by_limit: Row limit of the order-pushdown hint; ``None`` when no hint.
+        tablesample_percentage: Sample percentage of the TABLESAMPLE pushdown hint
+            from DuckDB's SamplingPushdown optimizer; ``None`` when no hint.
+        tablesample_seed: Sample seed of the TABLESAMPLE pushdown hint; ``None``
+            when no hint.
     """
 
     # Core (always present)
     bind_call: BindRequest
     output_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
-    # Wire-facing — bytes the framework produced from the typed
-    # ``BindResult.opaque_data``. Consumers reconstruct via
-    # ``MyConcreteDataclass.deserialize_from_bytes(raw)``. See
-    # ``BindResponse.opaque_data`` in vgi/invocation.py for the full
-    # contract rationale (typed producer / bytes wire / explicit
-    # consumer; abstract-base reconstruction can't be done in Python
-    # without a class registry).
     bind_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
     # Table function extras (None for scalar)
@@ -175,15 +224,10 @@ class InitRequest(ArrowSerializableDataclass):
 
     # Table-in-out extras
     phase: TableInOutFunctionInitPhase | None = None
-    # Buffered-table finalize stream: which state_id this stream serves.
-    # Required when phase=TABLE_BUFFERING_FINALIZE; None otherwise. Opaque
-    # bytes — worker chose the encoding when its combine() returned the
-    # finalize_state_ids list.
     finalize_state_id: bytes | None = None
 
     # Secondary init (None = global init, set = secondary)
     execution_id: bytes | None = None
-    # Same contract as ``bind_opaque_data`` above.
     init_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
     # Order pushdown hint from DuckDB's RowGroupPruner optimizer (all None when no hint)
@@ -204,10 +248,17 @@ class InitRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TableFunctionCardinalityRequest(ArrowSerializableDataclass):
-    """Consolidated request for table function cardinality."""
+    """Consolidated request for table function cardinality.
+
+    Attributes:
+        bind_call: The originating [`BindRequest`][] (function name, arguments,
+            schemas).
+        bind_opaque_data: Opaque per-bind state the worker returned from bind(),
+            threaded back into later calls (same contract as
+            ``InitRequest.bind_opaque_data``).
+    """
 
     bind_call: BindRequest
-    # Same contract as InitRequest.bind_opaque_data above.
     bind_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
 
@@ -218,10 +269,16 @@ class TableFunctionStatisticsRequest(ArrowSerializableDataclass):
     Mirrors [`TableFunctionCardinalityRequest`][]: the worker receives a full
     copy of the original [`BindRequest`][] (including parsed [`Arguments`][]), so it
     can derive per-column stats from the user-supplied args.
+
+    Attributes:
+        bind_call: The originating [`BindRequest`][] (function name, arguments,
+            schemas).
+        bind_opaque_data: Opaque per-bind state the worker returned from bind(),
+            threaded back into later calls (same contract as
+            ``InitRequest.bind_opaque_data``).
     """
 
     bind_call: BindRequest
-    # Same contract as InitRequest.bind_opaque_data above.
     bind_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
 
@@ -234,10 +291,18 @@ class TableFunctionDynamicToStringRequest(ArrowSerializableDataclass):
     storage, external service, in-memory class state for single-worker
     setups, etc.). VGI does not serialize per-thread ``_user_state``
     across the boundary — the user owns persistence.
+
+    Attributes:
+        bind_call: The originating [`BindRequest`][] (function name, arguments,
+            schemas).
+        bind_opaque_data: Opaque per-bind state the worker returned from bind(),
+            threaded back into later calls (same contract as
+            ``InitRequest.bind_opaque_data``).
+        global_execution_id: Query-wide execution id under which the function
+            persisted the diagnostics this RPC retrieves.
     """
 
     bind_call: BindRequest
-    # Same contract as InitRequest.bind_opaque_data above.
     bind_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
     global_execution_id: bytes
 
@@ -249,6 +314,12 @@ class TableFunctionDynamicToStringResponse(ArrowSerializableDataclass):
     Parallel ``keys``/``values`` lists keep insertion order explicit on
     the wire. The C++ side reassembles them into an
     ``InsertionOrderPreservingMap<string>``.
+
+    Attributes:
+        keys: Diagnostic labels, in insertion order, paired positionally with
+            ``values``.
+        values: Diagnostic values, in insertion order, paired positionally with
+            ``keys``.
     """
 
     keys: Annotated[list[str], ArrowType(pa.list_(pa.string()))]
@@ -268,6 +339,15 @@ class CatalogAttachRequest(ArrowSerializableDataclass):
     strings the user supplied at ATTACH time (concrete or range). ``None``
     = unconstrained. The worker is responsible for interpreting and
     validating them.
+
+    Attributes:
+        name: Name of the target object/function.
+        options: Caller-supplied ATTACH options (serialized mixed-type record).
+        data_version_spec: Semver string (concrete or range) the user supplied at
+            ATTACH time constraining the catalog data version; ``None`` =
+            unconstrained.
+        implementation_version: Semver string (concrete or range) constraining the
+            catalog implementation version; ``None`` = unconstrained.
     """
 
     name: str
@@ -278,7 +358,14 @@ class CatalogAttachRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CatalogCreateRequest(ArrowSerializableDataclass):
-    """Request for catalog_create. Uses `RecordBatch` for mixed-type options."""
+    """Request for catalog_create. Uses `RecordBatch` for mixed-type options.
+
+    Attributes:
+        name: Name of the target object/function.
+        on_conflict: Behavior when the object already exists ([`OnConflict`][]:
+            ERROR/IGNORE/REPLACE).
+        options: Caller-supplied CREATE options (serialized mixed-type record).
+    """
 
     name: str
     on_conflict: OnConflict
@@ -287,7 +374,24 @@ class CatalogCreateRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TableCreateRequest(ArrowSerializableDataclass):
-    """Request for catalog_table_create with complex constraint types."""
+    """Request for catalog_table_create with complex constraint types.
+
+    Attributes:
+        attach_opaque_data: Opaque per-attach catalog session token (bytes) echoed
+            back so the worker can scope catalog state to the attachment.
+        schema_name: Name of the catalog schema containing the object.
+        name: Name of the target object/function.
+        columns: The columns of the table as a PyArrow schema serialized as bytes.
+        on_conflict: Behavior when the object already exists ([`OnConflict`][]:
+            ERROR/IGNORE/REPLACE).
+        not_null_constraints: Column indices with a NOT NULL constraint.
+        unique_constraints: Column-index groups with a UNIQUE constraint.
+        check_constraints: SQL CHECK constraint expressions.
+        primary_key_constraints: Column-index groups forming the primary key.
+        foreign_key_constraints: Serialized foreign-key constraint specs.
+        transaction_opaque_data: Opaque DuckDB transaction handle (bytes); ``None``
+            when not inside a transaction.
+    """
 
     attach_opaque_data: bytes
     schema_name: str
@@ -318,14 +422,23 @@ class TableCreateRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CatalogVersionResponse(ArrowSerializableDataclass):
-    """Response wrapping int for catalog_version()."""
+    """Response wrapping int for catalog_version().
+
+    Attributes:
+        version: The catalog version integer.
+    """
 
     version: int
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TransactionBeginResponse(ArrowSerializableDataclass):
-    """Response wrapping optional `TransactionOpaqueData` for `catalog_transaction_begin()`."""
+    """Response wrapping optional `TransactionOpaqueData` for `catalog_transaction_begin()`.
+
+    Attributes:
+        transaction_opaque_data: Opaque DuckDB transaction handle (bytes) for the
+            newly begun transaction; ``None`` when the worker is non-transactional.
+    """
 
     transaction_opaque_data: bytes | None = None
 
@@ -339,6 +452,14 @@ def _catalog_items_response(item_type: type) -> type:
 
     The item_type must have serialize_to_bytes() and deserialize_from_bytes() methods
     (i.e., be an `ArrowSerializableDataclass`).
+
+    Args:
+        item_type: The `ArrowSerializableDataclass` subtype whose instances the
+            generated response class serializes and deserializes.
+
+    Returns:
+        A newly generated response dataclass wrapping ``list[bytes]`` of
+        IPC-serialized ``item_type`` records.
     """
     type_name = item_type.__name__
 
@@ -381,6 +502,12 @@ if TYPE_CHECKING:
 
     # Provide mypy with explicit class shapes for the dynamically generated responses.
     class _CatalogItemsResponseStub(ArrowSerializableDataclass):
+        """Type-check-only shape for the dynamically generated catalog responses.
+
+        Attributes:
+            items: IPC-serialized catalog ``Info`` records, one entry per item.
+        """
+
         items: list[bytes]
 
         @classmethod
@@ -421,7 +548,23 @@ else:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class MacroCreateRequest(ArrowSerializableDataclass):
-    """Request for catalog_macro_create with `RecordBatch` for parameter defaults."""
+    """Request for catalog_macro_create with `RecordBatch` for parameter defaults.
+
+    Attributes:
+        attach_opaque_data: Opaque per-attach catalog session token (bytes) echoed
+            back so the worker can scope catalog state to the attachment.
+        schema_name: Name of the catalog schema containing the object.
+        name: Name of the target object/function.
+        macro_type: Whether this is a scalar or table macro.
+        parameters: Ordered list of parameter names.
+        definition: The SQL expression (scalar) or query (table).
+        on_conflict: Behavior when the object already exists ([`OnConflict`][]:
+            ERROR/IGNORE/REPLACE).
+        parameter_default_values: One-row `RecordBatch` where column names are
+            parameter names and values are typed defaults; ``None`` if no defaults.
+        transaction_opaque_data: Opaque DuckDB transaction handle (bytes); ``None``
+            when not inside a transaction.
+    """
 
     attach_opaque_data: bytes
     schema_name: str
@@ -444,7 +587,25 @@ else:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class IndexCreateRequest(ArrowSerializableDataclass):
-    """Request for catalog_index_create."""
+    """Request for catalog_index_create.
+
+    Attributes:
+        attach_opaque_data: Opaque per-attach catalog session token (bytes) echoed
+            back so the worker can scope catalog state to the attachment.
+        schema_name: Name of the catalog schema containing the object.
+        name: Name of the target object/function.
+        table_name: The name of the table this index is on.
+        index_type: The index type string (e.g., "ART", or empty for default).
+        constraint_type: The constraint enforcement type (NONE, UNIQUE, PRIMARY).
+        expressions: SQL expression strings defining the indexed expressions. For
+            column-based indexes these are column references (e.g., "col_a"); for
+            expression indexes, arbitrary SQL (e.g., "lower(col_a)").
+        on_conflict: Behavior when the object already exists ([`OnConflict`][]:
+            ERROR/IGNORE/REPLACE).
+        options: Key-value index options (WITH clause).
+        transaction_opaque_data: Opaque DuckDB transaction handle (bytes); ``None``
+            when not inside a transaction.
+    """
 
     attach_opaque_data: bytes
     schema_name: str
@@ -1260,6 +1421,17 @@ class BufferedFinalizeState(ProducerState):
     worker's init handler materializes the user's
     ``finalize() -> list[batch]`` return into `BoundedStorage` at init
     time, and produce() drains it.
+
+    Attributes:
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys the worker-owned state log
+            this stream drains.
+        ns: Namespace component of the state-log key the cursor scans within.
+        key: Key component of the state-log entry the cursor scans within.
+        cursor: Opaque pagination cursor into the state log; ``b""`` means
+            before-first (start of the log).
+        attach_opaque_data: Opaque per-attach catalog session token (bytes) used to
+            rebuild `BoundStorage`; ``None`` outside a catalog context.
     """
 
     execution_id: bytes = b""
@@ -1310,25 +1482,38 @@ class TableBufferingFinalizeState(ProducerState):
     ``cls.finalize(params, finalize_state_id, state, out)`` per tick,
     serializing the user's ``state_blob`` between ticks so the stream
     survives worker-process boundaries (HTTP transport).
+
+    Attributes:
+        function_name: Registered name of the VGI function this stream targets.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys worker-owned state.
+        transaction_id: Hex-encoded VGI transaction id when inside a transaction,
+            ``None`` otherwise.
+        finalize_state_id: Opaque id of the finalize partition this stream serves
+            (chosen by the worker's combine()).
+        state_blob: Serialized form of the user's TFinalizeState
+            (ArrowSerializableDataclass bytes), or ``b""`` on the first tick before
+            initial_finalize_state() runs.
+        state_initialized: True after the user's initial_finalize_state() has been
+            invoked and ``state_blob`` is populated; distinguishes first tick
+            (build initial) from subsequent tick (deserialize existing).
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
+        projection_ids: Column indices to project, carried from the InitRequest and
+            wire-serialized on every tick so an HTTP rehydration on a different
+            worker still knows which columns to project; ``None`` when no projection.
+        pushdown_filters: Serialized filter predicates carried from the InitRequest,
+            wire-serialized on every tick so a rehydrated worker still applies them;
+            ``None`` when no filters apply.
     """
 
     function_name: str = ""
     execution_id: bytes = b""
     transaction_id: bytes | None = None
     finalize_state_id: bytes = b""
-    # Serialized form of the user's TFinalizeState (ArrowSerializableDataclass
-    # bytes), or b"" on the first tick before initial_finalize_state() runs.
     state_blob: bytes = b""
-    # True after the user's initial_finalize_state() has been invoked and
-    # state_blob is populated. Distinguishes "first tick / build initial"
-    # from "subsequent tick / deserialize existing".
     state_initialized: bool = False
     attach_opaque_data: bytes | None = None
-    # Pushdown carried from the InitRequest. Wire-serialized on every tick so
-    # an HTTP rehydration on a different worker process still knows which
-    # columns to project and which filter predicates to apply. The streaming
-    # peer ``TableInOutExchangeState`` rehydrates these the same way on every
-    # round-trip (``vgi/protocol.py:1106-1119``).
     projection_ids: list[int] | None = None
     pushdown_filters: Annotated[pa.RecordBatch | None, ArrowType(pa.large_binary())] = None
 
@@ -1414,7 +1599,18 @@ ProcessState = (
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateBindRequest(ArrowSerializableDataclass):
-    """Request for aggregate_bind — resolve output schema."""
+    """Request for aggregate_bind — resolve output schema.
+
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        arguments: The bound function [`Arguments`][].
+        input_schema: Serialized Arrow schema of the input table; ``None`` when the
+            aggregate has no value inputs.
+        settings: Serialized DuckDB session settings relevant to the function.
+        secrets: Serialized resolved secret values the function declared it needs.
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
+    """
 
     function_name: str
     arguments: Annotated[Arguments, ArrowType(pa.binary())]
@@ -1426,7 +1622,13 @@ class AggregateBindRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateBindResponse(ArrowSerializableDataclass):
-    """Response from aggregate_bind."""
+    """Response from aggregate_bind.
+
+    Attributes:
+        output_schema: Serialized Arrow schema of the rows the function produces.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys worker-owned state.
+    """
 
     output_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
     execution_id: bytes
@@ -1434,7 +1636,17 @@ class AggregateBindResponse(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateUpdateRequest(ArrowSerializableDataclass):
-    """Request for aggregate_update — accumulate rows into per-group state."""
+    """Request for aggregate_update — accumulate rows into per-group state.
+
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys worker-owned state.
+        input_batch: An input Arrow ``RecordBatch`` for this call, as full IPC
+            stream bytes (schema + data + EOS).
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
+    """
 
     function_name: str
     execution_id: bytes
@@ -1451,7 +1663,17 @@ class AggregateUpdateResponse(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateCombineRequest(ArrowSerializableDataclass):
-    """Request for aggregate_combine — merge source states into targets."""
+    """Request for aggregate_combine — merge source states into targets.
+
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys worker-owned state.
+        merge_batch: Serialized partial aggregate states to combine, as full IPC
+            stream bytes.
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
+    """
 
     function_name: str
     execution_id: bytes
@@ -1468,7 +1690,18 @@ class AggregateCombineResponse(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateFinalizeRequest(ArrowSerializableDataclass):
-    """Request for aggregate_finalize — produce results for group_ids."""
+    """Request for aggregate_finalize — produce results for group_ids.
+
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys worker-owned state.
+        group_ids_batch: Serialized batch of aggregate group ids this call
+            addresses, as full IPC stream bytes.
+        output_schema: Serialized Arrow schema of the rows the function produces.
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
+    """
 
     function_name: str
     execution_id: bytes
@@ -1479,14 +1712,29 @@ class AggregateFinalizeRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateFinalizeResponse(ArrowSerializableDataclass):
-    """Response from aggregate_finalize — result batch as IPC stream bytes."""
+    """Response from aggregate_finalize — result batch as IPC stream bytes.
+
+    Attributes:
+        result_batch: The Arrow ``RecordBatch`` the call produced, as full IPC
+            stream bytes.
+    """
 
     result_batch: bytes  # Full IPC stream bytes
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateDestructorRequest(ArrowSerializableDataclass):
-    """Request for aggregate_destructor — best-effort state cleanup."""
+    """Request for aggregate_destructor — best-effort state cleanup.
+
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys worker-owned state.
+        group_ids_batch: Serialized batch of aggregate group ids whose state should
+            be released, as full IPC stream bytes.
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
+    """
 
     function_name: str
     execution_id: bytes
@@ -1515,7 +1763,21 @@ class AggregateDestructorResponse(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TableBufferingProcessRequest(ArrowSerializableDataclass):
-    """Request for table_buffering_process — sink one batch (unary)."""
+    """Request for table_buffering_process — sink one batch (unary).
+
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys worker-owned state.
+        input_batch: An input Arrow ``RecordBatch`` for this call, as full IPC
+            stream bytes.
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
+        transaction_id: Hex-encoded VGI transaction id when inside a transaction,
+            ``None`` otherwise.
+        batch_index: Ordinal of this batch within the input stream when the function
+            opts into batch-index tracking; ``None`` otherwise.
+    """
 
     function_name: str
     execution_id: bytes
@@ -1527,14 +1789,31 @@ class TableBufferingProcessRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TableBufferingProcessResponse(ArrowSerializableDataclass):
-    """Response from table_buffering_process — the worker-chosen state_id."""
+    """Response from table_buffering_process — the worker-chosen state_id.
+
+    Attributes:
+        state_id: Opaque worker-chosen identifier for the buffered state this sink
+            call produced; passed back in a later combine().
+    """
 
     state_id: bytes
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TableBufferingCombineRequest(ArrowSerializableDataclass):
-    """Request for table_buffering_combine — once-per-query end-of-input."""
+    """Request for table_buffering_combine — once-per-query end-of-input.
+
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys worker-owned state.
+        state_ids: Opaque worker-chosen state identifiers from every prior
+            process() call, to be merged at end-of-input.
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
+        transaction_id: Hex-encoded VGI transaction id when inside a transaction,
+            ``None`` otherwise.
+    """
 
     function_name: str
     execution_id: bytes
@@ -1545,14 +1824,29 @@ class TableBufferingCombineRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TableBufferingCombineResponse(ArrowSerializableDataclass):
-    """Response from table_buffering_combine — opaque finalize partition keys."""
+    """Response from table_buffering_combine — opaque finalize partition keys.
+
+    Attributes:
+        finalize_state_ids: Opaque worker-chosen identifiers, one per finalize
+            partition; each opens a finalize stream via [`InitRequest`][].
+    """
 
     finalize_state_ids: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TableBufferingDestructorRequest(ArrowSerializableDataclass):
-    """Request for table_buffering_destructor — best-effort cleanup."""
+    """Request for table_buffering_destructor — best-effort cleanup.
+
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys worker-owned state.
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
+        transaction_id: Hex-encoded VGI transaction id when inside a transaction,
+            ``None`` otherwise.
+    """
 
     function_name: str
     execution_id: bytes
@@ -1578,7 +1872,26 @@ class TableBufferingDestructorResponse(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateWindowInitRequest(ArrowSerializableDataclass):
-    """Request for aggregate_window_init — ship a partition to the worker."""
+    """Request for aggregate_window_init — ship a partition to the worker.
+
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys worker-owned state.
+        partition_id: Identifier of the window partition this call addresses.
+        row_count: Total number of rows in the partition.
+        partition_batch: The partition's input `RecordBatch` (all input columns, all
+            rows), as full IPC stream bytes.
+        output_schema: Serialized Arrow schema of the rows the function produces.
+        filter_mask: Boolean mask from an optional ``FILTER (WHERE ...)`` clause,
+            packed-bit, length equals ``row_count``.
+        frame_stats: DuckDB's per-partition frame statistics, as 4× int64
+            ``((begin_delta, end_delta), (begin_delta, end_delta))``.
+        all_valid: Per-input-column validity flag (1 byte per column; True if no
+            nulls in the column).
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
+    """
 
     function_name: str
     execution_id: bytes
@@ -1605,6 +1918,19 @@ class AggregateWindowRequest(ArrowSerializableDataclass):
 
     ``frame_starts`` and ``frame_ends`` are parallel arrays of length 1–3
     (one entry per subframe; 3 only for EXCLUDE TIES / EXCLUDE GROUP).
+
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys worker-owned state.
+        partition_id: Identifier of the window partition this call addresses.
+        rid: Row index within the partition for the output row being computed.
+        frame_starts: Subframe start offsets (inclusive) within the partition, one
+            per subframe.
+        frame_ends: Subframe end offsets (exclusive) within the partition, parallel
+            to ``frame_starts``.
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
     """
 
     function_name: str
@@ -1618,14 +1944,28 @@ class AggregateWindowRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateWindowResponse(ArrowSerializableDataclass):
-    """Response from aggregate_window — one row `RecordBatch` with the scalar result."""
+    """Response from aggregate_window — one row `RecordBatch` with the scalar result.
+
+    Attributes:
+        result_batch: The Arrow ``RecordBatch`` the call produced (one row, output
+            schema), as full IPC stream bytes.
+    """
 
     result_batch: bytes  # Full IPC stream bytes (one row, output schema)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateWindowDestructorRequest(ArrowSerializableDataclass):
-    """Request for aggregate_window_destructor — evict a partition from storage."""
+    """Request for aggregate_window_destructor — evict a partition from storage.
+
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys worker-owned state.
+        partition_id: Identifier of the window partition to evict from storage.
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
+    """
 
     function_name: str
     execution_id: bytes
@@ -1647,6 +1987,23 @@ class AggregateWindowBatchRequest(ArrowSerializableDataclass):
     ``frames_per_row[i]`` gives the subframe cardinality for output row ``i``
     (1 normally, 2–3 for EXCLUDE TIES / EXCLUDE GROUP). ``frame_starts`` and
     ``frame_ends`` are flat arrays of length ``sum(frames_per_row)``.
+
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys worker-owned state.
+        partition_id: Identifier of the window partition this call addresses.
+        row_idx: Index of the first output row (within the partition) this batch
+            computes.
+        count: Number of output rows to compute in this batched RPC.
+        frames_per_row: Subframe cardinality for each output row (1 normally, 2–3
+            for EXCLUDE TIES / EXCLUDE GROUP).
+        frame_starts: Flat subframe start offsets (inclusive), length
+            ``sum(frames_per_row)``.
+        frame_ends: Flat subframe end offsets (exclusive), parallel to
+            ``frame_starts``.
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
     """
 
     function_name: str
@@ -1662,7 +2019,12 @@ class AggregateWindowBatchRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateWindowBatchResponse(ArrowSerializableDataclass):
-    """Response from aggregate_window_batch — count-row `RecordBatch`."""
+    """Response from aggregate_window_batch — count-row `RecordBatch`.
+
+    Attributes:
+        result_batch: The Arrow ``RecordBatch`` the call produced (``count`` rows,
+            output schema), as full IPC stream bytes.
+    """
 
     result_batch: bytes  # Full IPC stream bytes (count rows, output schema)
 
@@ -1695,6 +2057,21 @@ class AggregateStreamingOpenRequest(ArrowSerializableDataclass):
     order-key columns (informational; the worker may verify monotonicity).
     Remaining columns are the function's value arguments, in declaration
     order.
+
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        arguments: The bound function [`Arguments`][].
+        input_schema: Serialized Arrow schema of every chunk shipped via
+            ``streaming_chunk``.
+        partition_key_count: Number of leading ``input_schema`` columns that are
+            partition-key columns (used to dispatch rows to per-partition state).
+        order_key_count: Number of columns after the partition keys that are
+            order-key columns (informational; the worker may verify monotonicity).
+        output_schema: Serialized Arrow schema of the rows the function produces.
+        settings: Serialized DuckDB session settings relevant to the function.
+        secrets: Serialized resolved secret values the function declared it needs.
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
     """
 
     function_name: str
@@ -1710,7 +2087,13 @@ class AggregateStreamingOpenRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateStreamingOpenResponse(ArrowSerializableDataclass):
-    """Response from aggregate_streaming_open — session token."""
+    """Response from aggregate_streaming_open — session token.
+
+    Attributes:
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; subsequent chunk/close calls
+            reference it.
+    """
 
     execution_id: bytes
 
@@ -1723,6 +2106,16 @@ class AggregateStreamingChunkRequest(ArrowSerializableDataclass):
     ``streaming_open``. The worker iterates rows, dispatches to per-partition
     state by the partition-key columns, applies the function's update logic,
     and returns a same-length output array.
+
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; keys worker-owned state.
+        input_batch: An input Arrow ``RecordBatch`` for this call, as full IPC
+            stream bytes; schema must match the ``input_schema`` agreed at
+            ``streaming_open``.
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
     """
 
     function_name: str
@@ -1733,14 +2126,27 @@ class AggregateStreamingChunkRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateStreamingChunkResponse(ArrowSerializableDataclass):
-    """Response from aggregate_streaming_chunk — same-length output batch."""
+    """Response from aggregate_streaming_chunk — same-length output batch.
+
+    Attributes:
+        result_batch: The Arrow ``RecordBatch`` the call produced (one row per input
+            row), as full IPC stream bytes.
+    """
 
     result_batch: bytes  # Full IPC stream bytes (one row per input row)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AggregateStreamingCloseRequest(ArrowSerializableDataclass):
-    """Request for aggregate_streaming_close — end the session, free state."""
+    """Request for aggregate_streaming_close — end the session, free state.
+
+    Attributes:
+        function_name: Registered name of the VGI function this message targets.
+        execution_id: Identifier for one query execution, stable across the
+            coordinator and any secondary workers; identifies the session to close.
+        attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
+            outside a catalog context.
+    """
 
     function_name: str
     execution_id: bytes
@@ -1797,6 +2203,10 @@ class VgiProtocol(Protocol):
     ``VGI_PROTOCOL_VERSION`` from ``vgi/src/generated/vgi_protocol_version.hpp``
     (also generated; sibling of ``vgi_protocol_constants.hpp`` but produced by
     a dedicated generator so this version doesn't pollute the byte-key constants).
+
+    Attributes:
+        protocol_version: The VGI protocol version integer, declared as the
+            canonical semver (MAJOR.MINOR.PATCH) of the method-and-schema contract.
     """
 
     protocol_version: ClassVar[str] = "1.0.0"

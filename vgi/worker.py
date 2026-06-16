@@ -336,6 +336,14 @@ class _CachedWindowPartition:
     regenerated whenever the partition is reloaded from FunctionStorage.
     Defaults to ``window_state`` when no hook is defined, so existing
     aggregates see the placeholder unchanged.
+
+    Attributes:
+        partition: The decoded ``WindowPartition`` (typed ``Any`` to avoid an
+            import cycle).
+        output_schema: The output schema the aggregate produces.
+        window_state: The deserialized window state placeholder, or ``None``.
+        prepared_state: Result of ``window_prepare`` if the user defines that
+            hook; defaults to ``window_state`` otherwise.
     """
 
     partition: Any  # vgi.aggregate_function.WindowPartition (avoid import cycle)
@@ -634,7 +642,15 @@ _STREAMING_SESSION_STORAGE_KEY = 0
 
 @dataclass(slots=True)
 class _StreamingSession:
-    """Per-execution_id state for a streaming-partitioned aggregate session."""
+    """Per-execution_id state for a streaming-partitioned aggregate session.
+
+    Attributes:
+        func_cls: The aggregate function class handling this session.
+        streaming_state: The user's opaque streaming state object.
+        output_schema: The output schema the aggregate produces.
+        partition_key_count: Number of leading columns that form the partition key.
+        order_key_count: Number of columns that form the within-partition order key.
+    """
 
     func_cls: type[AggregateFunction[Any]]
     streaming_state: Any
@@ -1005,6 +1021,18 @@ class Worker:
         subclass. To disable the catalog entirely, set `catalog_interface = None`
         and `catalog_name = None`.
 
+    Attributes:
+        functions: Function classes this worker hosts.
+        protocol_class: Protocol class handed to ``RpcServer``; defaults to the
+            real `[`VgiProtocol`][]`. Test fixtures override it with a subclass
+            that redeclares ``protocol_version`` to exercise version-mismatch
+            enforcement.
+        catalog_interface: Custom `[`CatalogInterface`][]` subclass, or ``None``
+            to use the auto-generated default (or disable the catalog).
+        catalog_name: Name of the default catalog; set to ``None`` to disable the
+            default catalog.
+        catalog: Optional declarative `[`Catalog`][]` describing the worker's
+            schemas, tables, and views.
     """
 
     functions: Sequence[type[Function]] = []

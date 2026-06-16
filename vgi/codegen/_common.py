@@ -69,11 +69,17 @@ class EmittedSchema:
 
     `name` is the factory/function/const stem (CamelCase, no trailing `Schema`);
     emitters are free to append whatever suffix their output language idiom uses.
+
+    Attributes:
+        name: The factory/function/const stem (CamelCase, no trailing ``Schema``).
+        schema: The Arrow schema to emit.
+        origin: Human-readable source of the schema (e.g. ``"method
+            'catalog_catalogs' result"``), used in generated comments.
     """
 
     name: str
     schema: pa.Schema
-    origin: str  # e.g. "method 'catalog_catalogs' result"
+    origin: str
 
 
 def sanitize_name(name: str) -> str:

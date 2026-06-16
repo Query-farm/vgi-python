@@ -107,6 +107,19 @@ class ColumnStatisticsInput:
         # Explicit PyArrow scalars
         ColumnStatisticsInput(min=pa.scalar(1, pa.int32()), max=pa.scalar(100, pa.int32()))
 
+    Attributes:
+        min: Minimum value as a Python literal or PyArrow scalar, or ``None`` if
+            unknown.
+        max: Maximum value as a Python literal or PyArrow scalar, or ``None`` if
+            unknown. Must share the column's Arrow type with ``min``.
+        has_null: Whether the column contains any null values.
+        has_not_null: Whether the column contains any non-null values.
+        distinct_count: Approximate count of distinct values, or ``None`` if
+            unknown.
+        contains_unicode: String/binary columns only -- whether values contain
+            non-ASCII characters. ``None`` for non-string columns.
+        max_string_length: String/binary columns only -- maximum byte length of
+            values. ``None`` for non-string columns.
     """
 
     min: StatValue = None

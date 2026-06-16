@@ -50,9 +50,12 @@ class ExampleOrchardSecretService:
     Returns a canned ``s3`` credential for any path under ``s3://test-bucket``
     with a short ``expires_at_unix`` (so the ``min(ttl, expiry)`` cache path is
     exercised) and ``secret`` marked for redaction. Everything else is a miss.
+
+    Attributes:
+        credential_lifetime_seconds: Seconds until the canned credential's
+            intrinsic expiry.
     """
 
-    #: Seconds until the canned credential's intrinsic expiry.
     credential_lifetime_seconds: int = 30
 
     def secret_lookup(self, path: str, type: str) -> SecretLookupResponse:  # noqa: A002

@@ -354,6 +354,61 @@ class ResolvedMetadata:
     This is the result of resolving a `Meta` class hierarchy and extracting
     parameter information from [`Arg`][] descriptors.
 
+    Attributes:
+        name: Function name used for registration.
+        class_name: The Python class name of the function.
+        function_type: The [`CatalogFunctionType`][] (scalar, table, aggregate,
+            or table-buffering).
+        description: Human-readable description of the function.
+        examples: SQL usage examples for the function.
+        categories: Classification/category labels.
+        tags: Free-form key/value metadata tags.
+        parameters: Resolved per-argument information from the [`Arg`][]
+            descriptors.
+        stability: Scalar evaluation stability (CONSISTENT, VOLATILE, …).
+        null_handling: Whether NULL inputs are passed through or handled.
+        required_settings: DuckDB settings the function needs at runtime.
+        required_secrets: Secrets the function needs (each entry carries
+            secret_type, optional secret_name, optional scope).
+        projection_pushdown: Whether the table function accepts projection
+            pushdown.
+        filter_pushdown: Whether the table function accepts filter pushdown.
+        sampling_pushdown: Whether the table function accepts TABLESAMPLE
+            pushdown.
+        late_materialization: When True, the table function participates in
+            DuckDB's late-materialization optimizer (TOP_N/LIMIT/SAMPLE over the
+            scan is rewritten into a SEMI join on the rowid virtual column).
+            Requires a unique, deterministic, snapshot-stable rowid column plus
+            projection and filter pushdown.
+        supported_expression_filters: Names of expression-filter classes the
+            function can accept pushed down.
+        preserves_order: Whether the function preserves input row order.
+        max_workers: Maximum parallel workers, or ``None`` for unbounded.
+        supports_batch_index: Whether the function opts into per-batch
+            ``vgi_batch_index`` tagging for ordered parallel output.
+        partition_kind: Partition shape the function declares over its
+            partition-column bind fields.
+        order_dependent: Whether the aggregate result depends on input order.
+        distinct_dependent: Whether the aggregate result depends on DISTINCT.
+        supports_window: Whether the aggregate implements the window() callback.
+        streaming_partitioned: Whether the aggregate opts into the
+            streaming-partitioned protocol.
+        has_finalize: True if the function has a meaningful finalize phase
+            (override of finalize()/finish()); the C++ extension uses this to
+            decide whether to register ``in_out_function_final``.
+        source_order_dependent: Only meaningful for ``TABLE_BUFFERING`` — when
+            True the source phase is single-threaded and finalize_state_ids
+            drain in combine-returned order.
+        sink_order_dependent: Only meaningful for ``TABLE_BUFFERING`` — when True
+            the sink phase runs single-threaded, so every process() call arrives
+            in source order. Mutually exclusive with
+            ``requires_input_batch_index``.
+        requires_input_batch_index: Only meaningful for ``TABLE_BUFFERING`` —
+            when True the C++ Sink declares ``RequiredPartitionInfo()=
+            BatchIndex()`` so each process() call carries a globally-unique
+            monotonic batch_index for reconstructing source order under parallel
+            ingest. Mutually exclusive with ``sink_order_dependent``.
+
     """
 
     # Identity

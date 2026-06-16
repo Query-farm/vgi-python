@@ -99,14 +99,30 @@ class TableCardinality(ArrowSerializableDataclass):
 
 
 def _batch_to_scalar_dict(batch: pa.RecordBatch | None) -> dict[str, pa.Scalar[Any]]:
-    """Extract a single-row RecordBatch into a dict of column-name to scalar value."""
+    """Extract a single-row RecordBatch into a dict of column-name to scalar value.
+
+    Args:
+        batch: A single-row RecordBatch, or None.
+
+    Returns:
+        Mapping of column name to its scalar value (empty when batch is None).
+
+    """
     if batch is None:
         return {}
     return {name: batch.column(i)[0] for i, name in enumerate(batch.schema.names)}
 
 
 def _struct_scalar_to_dict(scalar: pa.StructScalar) -> dict[str, pa.Scalar[Any]]:
-    """Expand a struct scalar into a dict of field name to scalar."""
+    """Expand a struct scalar into a dict of field name to scalar.
+
+    Args:
+        scalar: The struct scalar to expand.
+
+    Returns:
+        Mapping of field name to its scalar value.
+
+    """
     return {key: scalar[key] for key in scalar}
 
 
@@ -122,7 +138,14 @@ class SecretsAccessor:
     __slots__ = ("_unscoped", "_scoped", "_is_retry", "_pending_lookups")
 
     def __init__(self, secrets_batch: pa.RecordBatch | None, *, is_retry: bool = False) -> None:
-        """Initialize from a secrets RecordBatch."""
+        """Initialize from a secrets RecordBatch.
+
+        Args:
+            secrets_batch: Single-row RecordBatch of resolved secrets, or None.
+            is_retry: True when invoked on a two-phase bind retry, so unresolved
+                dynamic lookups are treated as genuinely missing.
+
+        """
         self._is_retry = is_retry
         self._pending_lookups: list[SecretLookupEntry] = []
 
@@ -223,6 +246,10 @@ class SecretsAccessor:
         Combines unscoped entries (column name = secret_type) with scoped
         entries (``secret_N`` columns, keyed by ``secret_type`` from Arrow
         field metadata).  Null/unresolved entries are omitted.
+
+        Returns:
+            Mapping of secret_type to its resolved key/scalar dict.
+
         """
         result = dict(self._unscoped)
         for meta, secret_dict in self._scoped:
@@ -238,7 +265,17 @@ class SecretsAccessor:
         name: str | None,
         scope: str | None,
     ) -> dict[str, pa.Scalar[Any]] | None:
-        """Find a resolved scoped secret matching the given criteria."""
+        """Find a resolved scoped secret matching the given criteria.
+
+        Args:
+            secret_type: The secret type to match.
+            name: Optional secret name to match.
+            scope: Optional scope to match.
+
+        Returns:
+            The matching secret's key/scalar dict, or None if not found.
+
+        """
         for meta, secret_dict in self._scoped:
             if meta.get("secret_type") != secret_type:
                 continue
@@ -251,14 +288,32 @@ class SecretsAccessor:
 
 
 def project_schema(projection_ids: list[int] | None, schema: pa.Schema) -> pa.Schema:
-    """Create the projected schema if projection_ids are supplied."""
+    """Create the projected schema if projection_ids are supplied.
+
+    Args:
+        projection_ids: Column indices to project, or None for all columns.
+        schema: The full output schema to project from.
+
+    Returns:
+        The projected schema, or the original schema when projection_ids is None.
+
+    """
     if projection_ids is not None:
         return pa.schema([schema.field(proj_id) for proj_id in projection_ids])
     return schema
 
 
 def _effective_projection_ids(func_cls: Any, projection_ids: list[int] | None) -> list[int] | None:
-    """Return projection_ids only if the function supports projection pushdown."""
+    """Return projection_ids only if the function supports projection pushdown.
+
+    Args:
+        func_cls: The function class whose metadata is inspected.
+        projection_ids: The requested projection column indices, or None.
+
+    Returns:
+        The projection_ids if the function supports projection pushdown, else None.
+
+    """
     if projection_ids is not None and func_cls.get_metadata().projection_pushdown:
         return projection_ids
     return None
@@ -273,6 +328,14 @@ class TableInOutFunctionInitPhase(Enum):
     ``table_buffering_process`` / ``_combine`` (unary) and
     ``TABLE_BUFFERING_FINALIZE`` opens a producer-mode finalize stream
     per finalize_state_id.
+
+    Attributes:
+        INPUT: Streaming input phase for the table-in-out generator path.
+        FINALIZE: End-of-input finalize phase for the streaming path.
+        TABLE_BUFFERING: Sink+Source init phase for ``TableBufferingFunction``.
+        TABLE_BUFFERING_FINALIZE: Producer-mode finalize stream phase, opened
+            per finalize_state_id.
+
     """
 
     INPUT = auto()
@@ -282,14 +345,26 @@ class TableInOutFunctionInitPhase(Enum):
 
 
 class OrderByDirection(Enum):
-    """ORDER BY direction pushed down from DuckDB's RowGroupPruner optimizer."""
+    """ORDER BY direction pushed down from DuckDB's RowGroupPruner optimizer.
+
+    Attributes:
+        ASC: Ascending order.
+        DESC: Descending order.
+
+    """
 
     ASC = auto()
     DESC = auto()
 
 
 class OrderByNullOrder(Enum):
-    """NULL ordering pushed down from DuckDB's RowGroupPruner optimizer."""
+    """NULL ordering pushed down from DuckDB's RowGroupPruner optimizer.
+
+    Attributes:
+        NULLS_FIRST: Nulls sort before non-null values.
+        NULLS_LAST: Nulls sort after non-null values.
+
+    """
 
     NULLS_FIRST = auto()
     NULLS_LAST = auto()
@@ -297,31 +372,34 @@ class OrderByNullOrder(Enum):
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class BindParams[TArgs]:
-    """Parameters passed to `on_bind()`."""
+    """Parameters passed to `on_bind()`.
+
+    Attributes:
+        args: The parsed function arguments.
+        bind_call: The underlying bind request from the client.
+        settings: DuckDB settings extracted from the bind_call, keyed by name.
+        secrets: Accessor for pre-resolved and dynamically-requested secrets.
+        transaction_storage: Transaction-scoped storage view that lets
+            ``cardinality()`` / ``statistics()`` cache expensive lookups (e.g.
+            Kafka watermarks) in the same store ``on_init`` reads/writes for
+            snapshot isolation. None when ``bind_call.transaction_opaque_data``
+            is unset.
+        storage: Execution-scoped storage view, populated only on call paths
+            that carry a ``global_execution_id`` (currently ``dynamic_to_string``).
+            None for bind/cardinality/statistics (they predate execution).
+        auth_context: Authentication context for the caller.
+        attach_opaque_data: The catalog's attach bytes, unwrapped by the
+            framework (shard-UUID prefix stripped). None without an ATTACH.
+
+    """
 
     args: TArgs
     bind_call: BindRequest
-    # Convenient access to settings and secrets, extracted from the bind_call.
     settings: dict[str, pa.Scalar[Any]]
     secrets: SecretsAccessor
-    # Transaction-scoped storage view. Lets ``cardinality()`` and
-    # ``statistics()`` cache expensive lookups (e.g. Kafka watermarks)
-    # in the same store ``on_init`` reads/writes for snapshot isolation
-    # — so a topic's row count is fetched once per SQL transaction
-    # rather than once per bind/cardinality/statistics/init phase.
-    # ``None`` when ``bind_call.transaction_opaque_data`` is unset.
     transaction_storage: TransactionBoundStorage | None = None
-    # Execution-scoped storage view. Populated only on call paths that
-    # carry a ``global_execution_id`` — currently just
-    # ``dynamic_to_string``. ``None`` for ``bind`` / ``cardinality`` /
-    # ``statistics`` (they predate execution and have no
-    # execution_id).
     storage: BoundStorage | None = None
     auth_context: AuthContext = AuthContext.anonymous()
-    # The catalog's attach bytes, unwrapped by the framework (encryption is the
-    # framework's concern, not the user's). This is what the catalog returned at
-    # ``catalog_attach`` — the framework shard-UUID prefix is already stripped.
-    # None when invoked without an ATTACH. Storage shards on that UUID separately.
     attach_opaque_data: bytes | None = None
 
     @property
@@ -342,25 +420,35 @@ class BindParams[TArgs]:
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class InitParams[TArgs]:
-    """Parameters passed to `on_init()`."""
+    """Parameters passed to `on_init()`.
+
+    Attributes:
+        args: The parsed function arguments.
+        init_call: The underlying init request from the client.
+        execution_id: Unique identifier for this execution.
+        output_schema: The projected output schema (based on projection_ids)
+            that the function should produce.
+        settings: DuckDB settings extracted from the bind_call, keyed by name.
+        secrets: Resolved secrets as dicts keyed by secret_type.
+        storage: Execution-scoped storage view for this init.
+        auth_context: Authentication context for the caller.
+        attach_opaque_data: The catalog's attach bytes, unwrapped by the
+            framework (uuid prefix stripped). None without an ATTACH.
+
+    """
 
     args: TArgs
     init_call: InitRequest
 
     execution_id: bytes
 
-    # This is the projected schema based on projection_ids,
-    # which is what the function should produce.
     output_schema: pa.Schema
 
-    # Convenient access to settings and secrets as dicts, extracted from the bind_call.
     settings: dict[str, pa.Scalar[Any]]
     secrets: dict[str, dict[str, pa.Scalar[Any]]]
 
     storage: BoundStorage
     auth_context: AuthContext = AuthContext.anonymous()
-    # Catalog's attach bytes, unwrapped by the framework (uuid prefix stripped);
-    # None without an ATTACH. See ``BindParams``.
     attach_opaque_data: bytes | None = None
 
     @property
@@ -380,37 +468,47 @@ class InitParams[TArgs]:
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class ProcessParams[TArgs]:
-    """Parameters passed to `process()` and `finalize()`."""
+    """Parameters passed to `process()` and `finalize()`.
+
+    Attributes:
+        args: The parsed function arguments.
+        init_call: The init request, or None for aggregate functions.
+        init_response: The init response, or None for aggregate functions.
+        output_schema: The projected output schema (based on projection_ids)
+            that the function should produce.
+        settings: DuckDB settings extracted from the bind_call, keyed by name.
+        secrets: Resolved secrets as dicts keyed by secret_type.
+        storage: Execution-scoped storage view.
+        auth_context: Authentication context for the caller.
+        current_pushdown_filters: Current pushdown filters
+            (``PushdownFilters | None``), updated dynamically from tick metadata
+            (e.g. for Top-N queries) before each process() call. None if no
+            filters have been received.
+        batch_index: Globally-unique monotonic batch index for this process()
+            call. Populated only for ``TableBufferingFunction`` subclasses with
+            ``Meta.requires_input_batch_index=True``, letting workers reconstruct
+            source order under parallel ingest. None for every other call path.
+        attach_opaque_data: The catalog's attach bytes, unwrapped by the
+            framework (uuid prefix stripped). None without an ATTACH.
+
+    """
 
     args: TArgs
-    init_call: InitRequest | None  # None for aggregate functions
-    init_response: BaseInitResponse | None  # None for aggregate functions
+    init_call: InitRequest | None
+    init_response: BaseInitResponse | None
 
-    # This is the projected schema based on projection_ids,
-    # which is what the function should produce.
     output_schema: pa.Schema
 
-    # Convenient access to settings and secrets as dicts, extracted from the bind_call.
     settings: dict[str, pa.Scalar[Any]]
     secrets: dict[str, dict[str, pa.Scalar[Any]]]
 
     storage: BoundStorage
     auth_context: AuthContext = AuthContext.anonymous()
 
-    # Current pushdown filters (updated dynamically from tick metadata for Top-N queries).
-    # None if no filters have been received. Updated before each process() call.
-    current_pushdown_filters: Any = None  # PushdownFilters | None
+    current_pushdown_filters: Any = None
 
-    # Globally-unique monotonic batch index for this process() call. Populated
-    # ONLY for TableBufferingFunction subclasses with
-    # Meta.requires_input_batch_index=True — the C++ Sink reads it from DuckDB's
-    # per-chunk OperatorPartitionInfo and forwards it. Workers can accumulate
-    # (batch_index, payload) tuples and sort in combine() to reconstruct source
-    # order under parallel ingest. None for every other call path.
     batch_index: int | None = None
 
-    # Catalog's attach bytes, unwrapped by the framework (uuid prefix stripped);
-    # None without an ATTACH. See ``BindParams``.
     attach_opaque_data: bytes | None = None
 
     @property
@@ -442,6 +540,10 @@ class TableFunctionBase[TArgs](vgi.function.Function):
     See Also:
         `TableFunctionGenerator`: Simple generator base class
         `TableInOutGenerator`: Full streaming with input batches
+
+    Attributes:
+        FunctionArguments: The dataclass type describing this function's
+            arguments, auto-extracted from the generic parameter if not set.
 
     """
 
@@ -565,7 +667,16 @@ class TableFunctionBase[TArgs](vgi.function.Function):
     @final
     @staticmethod
     def _parse_arguments(args_class: type[TArgs], arguments: Arguments) -> TArgs:
-        """Convert Arguments to typed FunctionArguments instance."""
+        """Convert Arguments to typed FunctionArguments instance.
+
+        Args:
+            args_class: The FunctionArguments dataclass type to build.
+            arguments: The positional/named arguments to convert.
+
+        Returns:
+            An instance of ``args_class`` populated from ``arguments``.
+
+        """
         hints = get_type_hints(args_class, include_extras=True)
         kwargs: dict[str, Any] = {}
 
@@ -643,6 +754,13 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
         Returns dict of keyword arguments matching Setting/Secret annotations
         on the on_bind() method.
+
+        Args:
+            input: The bind request carrying settings and secrets batches.
+
+        Returns:
+            Keyword arguments matching the Setting/Secret annotations.
+
         """
         kwargs: dict[str, Any] = {}
 
@@ -679,6 +797,18 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         only populated on call paths that have one (currently just
         ``dynamic_to_string``); when provided, ``BindParams.storage`` is
         a `[`BoundStorage`][]` view keyed by it.
+
+        Args:
+            input: The bind request to build parameters from.
+            auth_context: Authentication context for the caller, if any.
+            execution_id: Execution id used to key execution-scoped storage,
+                or None on call paths without one.
+            attach_plaintext: Full framework attach plaintext (uuid || catalog
+                bytes), or None without an ATTACH.
+
+        Returns:
+            The constructed BindParams.
+
         """
         txn_id = input.transaction_opaque_data
         # ``attach_plaintext`` is the full framework plaintext (``uuid(16) ||
@@ -764,6 +894,16 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         functions handle secrets via ``on_bind`` kwargs (``Secret()``
         annotations) and ``SecretsAccessor.get()`` calls, which may use
         dynamic scopes computed from function arguments.
+
+        Args:
+            input: The bind request from the client.
+            ctx: Call context carrying the caller's auth, if any.
+            attach_plaintext: Full framework attach plaintext, or None.
+
+        Returns:
+            The BindResponse from ``on_bind()``, or a secret-scope request when
+            dynamic secret lookups need a two-phase bind.
+
         """
         auth = ctx.auth if ctx is not None else AuthContext.anonymous()
         params = cls._make_bind_params(input, auth_context=auth, attach_plaintext=attach_plaintext)
@@ -787,6 +927,13 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
         Override to perform per-execution setup (open external resources,
         allocate caches, etc.). Default is a no-op.
+
+        Args:
+            params: Init parameters including arguments, schema, and storage.
+
+        Returns:
+            A GlobalInitResponse (default empty).
+
         """
         return GlobalInitResponse()
 
@@ -799,7 +946,17 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         ctx: CallContext | None = None,
         attach_plaintext: bytes | None = None,
     ) -> GlobalInitResponse:
-        """Global init protocol entry point. Do not override; use ``on_init()``."""
+        """Global init protocol entry point. Do not override; use ``on_init()``.
+
+        Args:
+            input: The init request from the client.
+            ctx: Call context carrying the caller's auth, if any.
+            attach_plaintext: Full framework attach plaintext, or None.
+
+        Returns:
+            The GlobalInitResponse with worker count and execution id.
+
+        """
         execution_id = uuid.uuid4().bytes
         auth = ctx.auth if ctx is not None else AuthContext.anonymous()
         params = InitParams[TArgs](
@@ -939,7 +1096,12 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
     @classmethod
     def _should_auto_apply_filters(cls) -> bool:
-        """Check if auto_apply_filters is enabled in Meta."""
+        """Check if auto_apply_filters is enabled in Meta.
+
+        Returns:
+            True if ``Meta.auto_apply_filters`` is set.
+
+        """
         meta = getattr(cls, "Meta", None)
         return bool(getattr(meta, "auto_apply_filters", False))
 
@@ -949,6 +1111,10 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
         Drives the ``batch_index=`` kwarg validation on ``out.emit()`` in the
         table-producer harness (see vgi.protocol._TrackingOutputCollector).
+
+        Returns:
+            True if ``Meta.supports_batch_index`` is set.
+
         """
         meta = getattr(cls, "Meta", None)
         return bool(getattr(meta, "supports_batch_index", False))
@@ -960,6 +1126,10 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         Drives the ``partition_values=`` kwarg validation on ``out.emit()``
         in the table-producer harness. Imported lazily so the base class
         doesn't pull in ``vgi.metadata`` at module load time.
+
+        Returns:
+            The configured ``Meta.partition_kind``, or ``NOT_PARTITIONED``.
+
         """
         from vgi.metadata import PartitionKind
 
@@ -996,6 +1166,10 @@ class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
     Use `TState` to persist state between `process()` calls.
 
     For functions that transform input batches, use [`TableInOutGenerator`][].
+
+    Attributes:
+        on_cancel.__func__.__doc__: Docstring assigned at class-definition time
+            to the ``on_cancel`` cancellation hook (see ``on_cancel``).
 
     """
 
@@ -1070,7 +1244,16 @@ class TableFunctionGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
 
 
 def init_single_worker[T: TableFunctionGenerator[Any, Any]](cls: type[T]) -> type[T]:
-    """Class decorator to set max_workers=1 for a [`TableFunctionGenerator`][] subclass."""
+    """Class decorator to set max_workers=1 for a [`TableFunctionGenerator`][] subclass.
+
+    Args:
+        cls: The TableFunctionGenerator subclass to decorate.
+
+    Returns:
+        The same class, with an ``on_init`` returning ``max_workers=1`` injected
+        if it did not already define one.
+
+    """
     if "on_init" not in cls.__dict__:
 
         def on_init_impl(cls_: type[T], params: Any) -> GlobalInitResponse:
@@ -1102,6 +1285,14 @@ def bind_fixed_schema[T: TableFunctionGenerator[Any, Any]](cls: type[T]) -> type
     framework's eligibility check is
     ``getattr(cls, "_inline_bind_safe", False) and "on_bind" not in cls.__dict__``,
     which correctly excludes such subclasses.
+
+    Args:
+        cls: The TableFunctionGenerator subclass to decorate.
+
+    Returns:
+        The same class, with an ``on_bind`` returning ``cls.FIXED_SCHEMA``
+        injected if it did not already define one.
+
     """
     if "on_bind" not in cls.__dict__:  # only inject if subclass hasn't overridden
         if not hasattr(cls, "FIXED_SCHEMA"):

@@ -45,7 +45,13 @@ _filter_logger = logging.getLogger("vgi.filter_pushdown")
 
 
 def _log_debug(event: str, **kwargs: Any) -> None:
-    """Log a debug message if VGI_FILTER_DEBUG is enabled."""
+    """Log a debug message if VGI_FILTER_DEBUG is enabled.
+
+    Args:
+        event: Short event name logged as the message prefix.
+        **kwargs: Arbitrary key/value pairs appended to the log line.
+
+    """
     if _FILTER_DEBUG:
         extra = " ".join(f"{k}={v}" for k, v in kwargs.items())
         _filter_logger.debug("%s %s", event, extra) if extra else _filter_logger.debug("%s", event)
@@ -74,6 +80,13 @@ def _strip_extension(x: Any) -> Any:
     ``pa.ExtensionType`` because canonical Arrow extension types like
     ``Bool8Type`` and ``UuidType`` inherit from ``BaseExtensionType``
     directly without going through the user-extension class.
+
+    Args:
+        x: An Arrow Array, ChunkedArray, or Scalar that may be extension-typed.
+
+    Returns:
+        The storage Array/Scalar when ``x`` is extension-typed, otherwise ``x``.
+
     """
     if isinstance(x.type, pa.BaseExtensionType):
         if isinstance(x, (pa.Array, pa.ChunkedArray)):
@@ -100,6 +113,14 @@ def _normalize_for_compare(col: Any, val: Any) -> tuple[Any, Any]:
          ``bool_`` while the literal came over the wire as
          ``arrow.bool8`` and stripped to ``int8``), cast the literal to
          the column's type so the kernel resolves.
+
+    Args:
+        col: The column Array/ChunkedArray side of the comparison.
+        val: The scalar (or array) literal side of the comparison.
+
+    Returns:
+        The ``(col, val)`` pair transformed into comparable Arrow types.
+
     """
     col = _strip_extension(col)
     val = _strip_extension(val)
@@ -114,6 +135,14 @@ def _make_bool_array(value: bool, length: int) -> pa.BooleanArray:
     """Create a boolean array of constant value.
 
     Used for empty AND (all True) and empty OR (all False) filter results.
+
+    Args:
+        value: The constant boolean to repeat.
+        length: Number of rows in the resulting array.
+
+    Returns:
+        A BooleanArray of ``length`` rows all equal to ``value``.
+
     """
     return pa.repeat(pa.scalar(value), length)
 
@@ -175,7 +204,20 @@ class FilterVersionError(FilterError):
 
 
 class FilterType(Enum):
-    """Filter type identifiers matching the JSON protocol."""
+    """Filter type identifiers matching the JSON protocol.
+
+    Attributes:
+        CONSTANT: Comparison against a constant value (``=``, ``!=``, ``<``, …).
+        IS_NULL: IS NULL check.
+        IS_NOT_NULL: IS NOT NULL check.
+        IN: Set membership (IN clause).
+        JOIN_KEYS: Membership against join-key values pushed as a separate batch.
+        AND: Conjunction of child filters.
+        OR: Disjunction of child filters.
+        STRUCT: Filter on a nested field within a struct column.
+        EXPRESSION: Arbitrary expression tree evaluated by DuckDB.
+
+    """
 
     CONSTANT = "constant"
     IS_NULL = "is_null"
@@ -189,7 +231,16 @@ class FilterType(Enum):
 
 
 class ExpressionNodeType(Enum):
-    """Expression node type identifiers matching the JSON protocol."""
+    """Expression node type identifiers matching the JSON protocol.
+
+    Attributes:
+        COLUMN_REF: Reference to a column in the filtered table.
+        CONSTANT: Constant literal value.
+        FUNCTION: Function call or infix operator.
+        COMPARISON: Binary comparison (left op right).
+        CONJUNCTION: AND/OR conjunction of child nodes.
+
+    """
 
     COLUMN_REF = "column_ref"
     CONSTANT = "constant"
@@ -199,7 +250,17 @@ class ExpressionNodeType(Enum):
 
 
 class ComparisonOp(Enum):
-    """Comparison operators for constant filters."""
+    """Comparison operators for constant filters.
+
+    Attributes:
+        EQ: Equality (``=``).
+        NE: Inequality (``!=``).
+        GT: Greater than (``>``).
+        GE: Greater than or equal (``>=``).
+        LT: Less than (``<``).
+        LE: Less than or equal (``<=``).
+
+    """
 
     EQ = "eq"  # =
     NE = "ne"  # !=
@@ -273,7 +334,15 @@ class ConstantFilter(Filter):
     value: pa.Scalar[Any]
 
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
-        """Evaluate comparison against batch column."""
+        """Evaluate comparison against batch column.
+
+        Args:
+            batch: RecordBatch to evaluate the filter against.
+
+        Returns:
+            Boolean array with True for rows that pass the comparison.
+
+        """
         col, val = _normalize_for_compare(batch.column(self.column_index), self.value)
         # _normalize_for_compare returns (Any, Any) — the compute kernels
         # below resolve to BooleanArray at runtime; cast once on the way out.
@@ -296,7 +365,12 @@ class ConstantFilter(Filter):
         return cast("pa.BooleanArray", result)
 
     def __repr__(self) -> str:
-        """Return string representation for debugging."""
+        """Return string representation for debugging.
+
+        Returns:
+            A human-readable representation of this filter.
+
+        """
         return f"ConstantFilter({self.column_name} {self.op.symbol} {self.value})"
 
 
@@ -305,11 +379,24 @@ class IsNullFilter(Filter):
     """IS NULL check filter."""
 
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
-        """Evaluate IS NULL check against batch column."""
+        """Evaluate IS NULL check against batch column.
+
+        Args:
+            batch: RecordBatch to evaluate the filter against.
+
+        Returns:
+            Boolean array with True for rows where the column is null.
+
+        """
         return pc.is_null(batch.column(self.column_index))
 
     def __repr__(self) -> str:
-        """Return string representation for debugging."""
+        """Return string representation for debugging.
+
+        Returns:
+            A human-readable representation of this filter.
+
+        """
         return f"IsNullFilter({self.column_name} IS NULL)"
 
 
@@ -318,11 +405,24 @@ class IsNotNullFilter(Filter):
     """IS NOT NULL check filter."""
 
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
-        """Evaluate IS NOT NULL check against batch column."""
+        """Evaluate IS NOT NULL check against batch column.
+
+        Args:
+            batch: RecordBatch to evaluate the filter against.
+
+        Returns:
+            Boolean array with True for rows where the column is non-null.
+
+        """
         return pc.is_valid(batch.column(self.column_index))
 
     def __repr__(self) -> str:
-        """Return string representation for debugging."""
+        """Return string representation for debugging.
+
+        Returns:
+            A human-readable representation of this filter.
+
+        """
         return f"IsNotNullFilter({self.column_name} IS NOT NULL)"
 
 
@@ -330,18 +430,34 @@ class IsNotNullFilter(Filter):
 class InFilter(Filter):
     """IN (v1, v2, ...) set membership filter.
 
-    The values are stored as an Arrow array (the contents of the list column).
+    Attributes:
+        values: The candidate values as an Arrow array (the contents of the
+            list column); a row passes if its column value is in this set.
+
     """
 
     values: pa.Array[Any]
 
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
-        """Evaluate IN membership against batch column."""
+        """Evaluate IN membership against batch column.
+
+        Args:
+            batch: RecordBatch to evaluate the filter against.
+
+        Returns:
+            Boolean array with True for rows whose value is in the set.
+
+        """
         col, vals = _normalize_for_compare(batch.column(self.column_index), self.values)
         return cast("pa.BooleanArray", pc.is_in(col, vals))
 
     def __repr__(self) -> str:
-        """Return string representation for debugging."""
+        """Return string representation for debugging.
+
+        Returns:
+            A human-readable representation of this filter.
+
+        """
         values = self.values.to_pylist()
         preview = f"{values[:3]!r}...({len(values)} total)" if len(values) > 5 else repr(values)
         return f"InFilter({self.column_name} IN {preview})"
@@ -352,12 +468,24 @@ class AndFilter(Filter):
     """Conjunction of child filters.
 
     All child filters must pass for a row to pass.
+
+    Attributes:
+        children: The child filters that are ANDed together.
+
     """
 
     children: tuple[Filter, ...]
 
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
-        """Evaluate AND of all child filters."""
+        """Evaluate AND of all child filters.
+
+        Args:
+            batch: RecordBatch to evaluate the filter against.
+
+        Returns:
+            Boolean array with True for rows passing every child filter.
+
+        """
         if not self.children:
             return _make_bool_array(True, batch.num_rows)
         result = self.children[0].evaluate(batch)
@@ -366,7 +494,12 @@ class AndFilter(Filter):
         return result
 
     def __repr__(self) -> str:
-        """Return string representation for debugging."""
+        """Return string representation for debugging.
+
+        Returns:
+            A human-readable representation of this filter.
+
+        """
         children_repr = " AND ".join(repr(c) for c in self.children)
         return f"AndFilter({children_repr})"
 
@@ -376,12 +509,24 @@ class OrFilter(Filter):
     """Disjunction of child filters.
 
     At least one child filter must pass for a row to pass.
+
+    Attributes:
+        children: The child filters that are ORed together.
+
     """
 
     children: tuple[Filter, ...]
 
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
-        """Evaluate OR of all child filters."""
+        """Evaluate OR of all child filters.
+
+        Args:
+            batch: RecordBatch to evaluate the filter against.
+
+        Returns:
+            Boolean array with True for rows passing any child filter.
+
+        """
         if not self.children:
             return _make_bool_array(False, batch.num_rows)
         result = self.children[0].evaluate(batch)
@@ -390,7 +535,12 @@ class OrFilter(Filter):
         return result
 
     def __repr__(self) -> str:
-        """Return string representation for debugging."""
+        """Return string representation for debugging.
+
+        Returns:
+            A human-readable representation of this filter.
+
+        """
         children_repr = " OR ".join(repr(c) for c in self.children)
         return f"OrFilter({children_repr})"
 
@@ -405,10 +555,24 @@ class _SingleColumnBatch:
     __slots__ = ("_array",)
 
     def __init__(self, array: pa.Array[Any]) -> None:
+        """Wrap a single array in a batch-like interface.
+
+        Args:
+            array: The array to expose via the batch-like ``column`` accessor.
+
+        """
         self._array = array
 
     def column(self, _index: int) -> pa.Array[Any]:
-        """Return the wrapped array (index is ignored)."""
+        """Return the wrapped array (index is ignored).
+
+        Args:
+            _index: Column index; ignored since only one column is wrapped.
+
+        Returns:
+            The wrapped array.
+
+        """
         return self._array
 
     @property
@@ -423,6 +587,12 @@ class StructFilter(Filter):
 
     Filters on a nested field within a struct column.
     Example: address.city = 'Seattle'
+
+    Attributes:
+        child_index: Position of the nested field within the struct column.
+        child_name: Name of the nested field within the struct column.
+        child_filter: The filter applied to the nested field's values.
+
     """
 
     child_index: int
@@ -430,7 +600,15 @@ class StructFilter(Filter):
     child_filter: Filter
 
     def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
-        """Evaluate filter on nested struct field."""
+        """Evaluate filter on nested struct field.
+
+        Args:
+            batch: RecordBatch to evaluate the filter against.
+
+        Returns:
+            Boolean array with True for rows passing the nested-field filter.
+
+        """
         struct_col = batch.column(self.column_index)
         nested = pc.struct_field(struct_col, self.child_name)
         # Use lightweight wrapper instead of creating a full RecordBatch
@@ -440,7 +618,12 @@ class StructFilter(Filter):
         return adjusted_child.evaluate(wrapper)  # type: ignore[arg-type]
 
     def __repr__(self) -> str:
-        """Return string representation for debugging."""
+        """Return string representation for debugging.
+
+        Returns:
+            A human-readable representation of this filter.
+
+        """
         nested = f"{self.column_name}.{self.child_name}"
         return f"StructFilter({nested}: {self.child_filter!r})"
 
@@ -456,12 +639,24 @@ class ExpressionNode:
 
     Subclasses must set ``expr_type`` to match their class. This field
     is used for serialization round-tripping (JSON ``expr_type`` key).
+
+    Attributes:
+        expr_type: Discriminator identifying the concrete node kind.
+
     """
 
     expr_type: ExpressionNodeType
 
     def to_sql(self, column_name: str) -> str:
-        """Convert node to SQL string. Override in subclasses."""
+        """Convert node to SQL string. Override in subclasses.
+
+        Args:
+            column_name: Name of the filter column to substitute for column refs.
+
+        Returns:
+            The node rendered as a SQL fragment.
+
+        """
         raise NotImplementedError
 
 
@@ -472,42 +667,91 @@ class ColumnRefNode(ExpressionNode):
     Note: In v1, all column refs in an expression filter refer to the same
     column (the filter column). The index is stored for future multi-column
     support but to_sql() always uses the filter's column_name.
+
+    Attributes:
+        index: Column position; reserved for future multi-column support.
+
     """
 
     index: int
 
     def to_sql(self, column_name: str) -> str:
-        """Return quoted column name with double-quote escaping."""
+        """Return quoted column name with double-quote escaping.
+
+        Args:
+            column_name: Name of the filter column to render.
+
+        Returns:
+            The column name as a double-quoted SQL identifier.
+
+        """
         escaped = column_name.replace('"', '""')
         return f'"{escaped}"'
 
 
 @dataclass(frozen=True, slots=True)
 class ConstantNode(ExpressionNode):
-    """Constant value node."""
+    """Constant value node.
+
+    Attributes:
+        value: The constant scalar literal.
+        field: Arrow field carrying extension metadata for ``value`` (if
+            available), used to render extension types correctly in SQL.
+
+    """
 
     value: pa.Scalar[Any]
-    field: pa.Field[Any] | None = None  # Arrow field with extension metadata (if available)
+    field: pa.Field[Any] | None = None
 
     def to_sql(self, column_name: str) -> str:
-        """Format Arrow scalar as SQL literal, using field metadata for extension types."""
+        """Format Arrow scalar as SQL literal, using field metadata for extension types.
+
+        Args:
+            column_name: Name of the filter column (unused for constants).
+
+        Returns:
+            The constant rendered as a SQL literal.
+
+        """
         return _arrow_scalar_to_sql(self.value, self.field)
 
 
 def _is_operator_name(name: str) -> bool:
-    """Check if a function name is an infix operator (all non-alphanumeric/underscore chars)."""
+    """Check if a function name is an infix operator (all non-alphanumeric/underscore chars).
+
+    Args:
+        name: The function name to test.
+
+    Returns:
+        True if every character is non-alphanumeric and not an underscore.
+
+    """
     return len(name) > 0 and all(not (c.isalnum() or c == "_") for c in name)
 
 
 @dataclass(frozen=True, slots=True)
 class FunctionNode(ExpressionNode):
-    """Function call node."""
+    """Function call node.
+
+    Attributes:
+        function_name: Name of the function or infix operator to invoke.
+        children: The argument expression nodes.
+
+    """
 
     function_name: str
     children: tuple[ExpressionNode, ...]
 
     def to_sql(self, column_name: str) -> str:
-        """Format as function_name(args...) or infix for operators like &&."""
+        """Format as function_name(args...) or infix for operators like &&.
+
+        Args:
+            column_name: Name of the filter column to substitute for column refs.
+
+        Returns:
+            The function call rendered as a SQL fragment.
+
+        """
         if _is_operator_name(self.function_name) and len(self.children) == 2:
             left = self.children[0].to_sql(column_name)
             right = self.children[1].to_sql(column_name)
@@ -518,26 +762,56 @@ class FunctionNode(ExpressionNode):
 
 @dataclass(frozen=True, slots=True)
 class ComparisonNode(ExpressionNode):
-    """Comparison node (left op right)."""
+    """Comparison node (left op right).
+
+    Attributes:
+        op: The comparison operator applied between ``left`` and ``right``.
+        left: The left-hand operand expression node.
+        right: The right-hand operand expression node.
+
+    """
 
     op: ComparisonOp
     left: ExpressionNode
     right: ExpressionNode
 
     def to_sql(self, column_name: str) -> str:
-        """Format as (left op right)."""
+        """Format as (left op right).
+
+        Args:
+            column_name: Name of the filter column to substitute for column refs.
+
+        Returns:
+            The comparison rendered as a parenthesized SQL fragment.
+
+        """
         return f"({self.left.to_sql(column_name)} {self.op.symbol} {self.right.to_sql(column_name)})"
 
 
 @dataclass(frozen=True, slots=True)
 class ConjunctionNode(ExpressionNode):
-    """AND/OR conjunction node."""
+    """AND/OR conjunction node.
 
-    conjunction_type: str  # "and" or "or"
+    Attributes:
+        conjunction_type: Either ``"and"`` or ``"or"``, selecting how the
+            children combine.
+        children: The child expression nodes being combined.
+
+    """
+
+    conjunction_type: str
     children: tuple[ExpressionNode, ...]
 
     def to_sql(self, column_name: str) -> str:
-        """Format as (child1 AND/OR child2 AND/OR ...)."""
+        """Format as (child1 AND/OR child2 AND/OR ...).
+
+        Args:
+            column_name: Name of the filter column to substitute for column refs.
+
+        Returns:
+            The conjunction rendered as a parenthesized SQL fragment.
+
+        """
         joiner = " AND " if self.conjunction_type == "and" else " OR "
         parts = [c.to_sql(column_name) for c in self.children]
         return f"({joiner.join(parts)})"
@@ -600,6 +874,10 @@ def _get_expression_eval_connection() -> Any:
 
     Each thread gets its own connection (DuckDB connections are not thread-safe).
     Spatial extension is loaded if available (needed for geometry functions like &&).
+
+    Returns:
+        A thread-local DuckDB connection for evaluating expression filters.
+
     """
     conn = getattr(_expression_eval_local, "conn", None)
     if conn is not None:
@@ -626,6 +904,10 @@ class ExpressionFilter(Filter):
 
     Contains a recursive expression tree that the worker evaluates
     using DuckDB. Typical use: spatial predicates like ``geom && box``.
+
+    Attributes:
+        expr: Root of the recursive expression tree to evaluate.
+
     """
 
     expr: ExpressionNode
@@ -637,6 +919,13 @@ class ExpressionFilter(Filter):
         pre-loaded (if available). The engine is imported lazily via
         :mod:`vgi._duckdb` (haybarn preferred, duckdb fallback) — workers
         that don't use expression filters don't need either installed.
+
+        Args:
+            batch: RecordBatch to evaluate the expression against.
+
+        Returns:
+            Boolean array with True for rows passing the expression.
+
         """
         conn = _get_expression_eval_connection()
         tbl = conn.from_arrow(batch)  # noqa: F841 (used in SQL below)
@@ -648,7 +937,12 @@ class ExpressionFilter(Filter):
         return result.column("_r").combine_chunks()  # type: ignore[no-any-return]
 
     def __repr__(self) -> str:
-        """Return string representation for debugging."""
+        """Return string representation for debugging.
+
+        Returns:
+            A human-readable representation of this filter.
+
+        """
         return f"ExpressionFilter({self.column_name}: {self.expr.to_sql(self.column_name)})"
 
 
@@ -722,6 +1016,12 @@ class PushdownFilters:
     - get_column_filters(name) - Get all filters for a column
     - to_sql() - Generate SQL WHERE clause
 
+    Attributes:
+        filters: The top-level filters, combined with AND.
+        version: Filter protocol version the filters were deserialized from.
+        join_keys_batches: Optional single-column batches of join-key values,
+            one per IN/join-keys filter column, or None when none were pushed.
+
     """
 
     filters: tuple[Filter, ...]
@@ -772,6 +1072,9 @@ class PushdownFilters:
 
         Each batch is a single-column RecordBatch. Different batches may have
         different row counts. Returns ``None`` if no join keys were pushed.
+
+        Returns:
+            The list of single-column join-key batches, or None.
 
         """
         return self.join_keys_batches if self.join_keys_batches else None
@@ -980,6 +1283,14 @@ class PushdownFilters:
         take any value through a non-discrete branch, so it cannot be enumerated).
         Descends one level into `[`OrFilter`][]` children, consistent with the
         single-level descent used elsewhere; deeper nesting yields None.
+
+        Args:
+            or_filter: The OR filter whose branches are inspected.
+            column_name: Name of the column to enumerate discrete values for.
+
+        Returns:
+            The deduplicated union of discrete values, or None if not enumerable.
+
         """
         values: list[Any] = []
         for child in or_filter.children:
@@ -1053,6 +1364,14 @@ class PushdownFilters:
         AND filters (AND within AND) are not traversed. This is sufficient
         for most query patterns where bounds filters are either at top level
         or grouped in a single AND.
+
+        Args:
+            column_name: Name of the column to collect filters for.
+
+        Returns:
+            Filters constraining the column from the top level and direct AND
+            children.
+
         """
         result: list[Filter] = []
         for f in self.filters:
@@ -1102,30 +1421,62 @@ class PushdownFilters:
 
     @classmethod
     def empty(cls) -> PushdownFilters:
-        """Create an empty PushdownFilters instance (no filters)."""
+        """Create an empty PushdownFilters instance (no filters).
+
+        Returns:
+            A PushdownFilters with no filters.
+
+        """
         return cls(filters=())
 
     def __bool__(self) -> bool:
-        """Return True if there are any filters."""
+        """Return True if there are any filters.
+
+        Returns:
+            True if at least one top-level filter is present.
+
+        """
         return len(self.filters) > 0
 
     def __len__(self) -> int:
-        """Return the number of top-level filters."""
+        """Return the number of top-level filters.
+
+        Returns:
+            The count of top-level filters.
+
+        """
         return len(self.filters)
 
     def __iter__(self) -> Iterator[Filter]:
-        """Iterate over top-level filters."""
+        """Iterate over top-level filters.
+
+        Returns:
+            An iterator over the top-level filters.
+
+        """
         return iter(self.filters)
 
     def __contains__(self, column_name: str) -> bool:
         """Check if any filter constrains the given column.
 
         Allows 'column_name in filters' syntax.
+
+        Args:
+            column_name: Name of the column to check.
+
+        Returns:
+            True if at least one filter applies to the column.
+
         """
         return any(f.column_name == column_name for f in self.filters)
 
     def __repr__(self) -> str:
-        """Return string representation for debugging."""
+        """Return string representation for debugging.
+
+        Returns:
+            A human-readable representation of this filter container.
+
+        """
         if not self.filters:
             return "PushdownFilters([])"
         filters_repr = ", ".join(repr(f) for f in self.filters)
@@ -1263,11 +1614,27 @@ def deserialize_filters(
         return value  # type: ignore[no-any-return]
 
     def get_field(ref: int) -> pa.Field[Any]:
-        """Get the Arrow field for a value_ref (column ref+1 in the batch)."""
+        """Get the Arrow field for a value_ref (column ref+1 in the batch).
+
+        Args:
+            ref: The value_ref index from the filter spec.
+
+        Returns:
+            The Arrow field for column ``ref + 1`` in the batch.
+
+        """
         return batch.schema.field(ref + 1)
 
     def get_join_keys_column(column_name: str) -> pa.Array[Any] | None:
-        """Resolve a column from the join keys batches by name."""
+        """Resolve a column from the join keys batches by name.
+
+        Args:
+            column_name: Name of the join-key column to look up.
+
+        Returns:
+            The matching column array, or None if not found.
+
+        """
         if not join_keys:
             return None
         for keys_batch in join_keys:

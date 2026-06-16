@@ -139,7 +139,11 @@ class CatalogStorageSqlite:
     - catalog_attachments: Maps attach_opaque_data to catalog name and options
     - catalog_transactions: Tracks active transactions
 
+    Attributes:
+        db_path: Filesystem path to the backing SQLite database file.
     """
+
+    db_path: str
 
     def __init__(self, db_path: str | None = None) -> None:
         """Initialize SQLite catalog storage.

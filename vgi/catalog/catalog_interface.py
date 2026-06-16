@@ -445,7 +445,14 @@ class MacroInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
 
 class FunctionType(Enum):
-    """The type of function in a schema."""
+    """The type of function in a schema.
+
+    Attributes:
+        SCALAR: A scalar function.
+        TABLE: A table function.
+        TABLE_BUFFERING: A table-buffering (table-in-out) function.
+        AGGREGATE: An aggregate function.
+    """
 
     SCALAR = "scalar"
     TABLE = "table"
@@ -454,7 +461,12 @@ class FunctionType(Enum):
 
 
 class MacroType(Enum):
-    """The type of macro in a schema."""
+    """The type of macro in a schema.
+
+    Attributes:
+        SCALAR: A scalar macro.
+        TABLE: A table macro.
+    """
 
     SCALAR = "scalar"
     TABLE = "table"
@@ -463,9 +475,10 @@ class MacroType(Enum):
 class IndexConstraintType(Enum):
     """The constraint type of an index.
 
-    NONE: Regular index (no constraint enforcement).
-    UNIQUE: Index enforces a UNIQUE constraint.
-    PRIMARY: Index enforces a PRIMARY KEY constraint.
+    Attributes:
+        NONE: Regular index (no constraint enforcement).
+        UNIQUE: Index enforces a UNIQUE constraint.
+        PRIMARY: Index enforces a PRIMARY KEY constraint.
     """
 
     NONE = "none"
@@ -499,6 +512,16 @@ class SchemaObjectType(Enum):
     """The type of object that can exist within a schema.
 
     Used to filter results from schema_contents().
+
+    Attributes:
+        TABLE: A table.
+        VIEW: A view.
+        SCALAR_FUNCTION: A scalar function.
+        TABLE_FUNCTION: A table function.
+        AGGREGATE_FUNCTION: An aggregate function.
+        SCALAR_MACRO: A scalar macro.
+        TABLE_MACRO: A table macro.
+        INDEX: An index.
     """
 
     TABLE = "table"
@@ -514,9 +537,10 @@ class SchemaObjectType(Enum):
 class OnConflict(Enum):
     """Behavior when a conflict occurs during creation of an object.
 
-    IGNORE: Do nothing if the object already exists.
-    REPLACE: Replace the existing object if it already exists.
-    ERROR: Raise an error if the object already exists.
+    Attributes:
+        ERROR: Raise an error if the object already exists.
+        IGNORE: Do nothing if the object already exists.
+        REPLACE: Replace the existing object if it already exists.
     """
 
     ERROR = "error"
@@ -2096,6 +2120,47 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     All DDL operations (create, drop, rename, modify) will raise
     [`CatalogReadOnlyError`][].
 
+    Attributes:
+        supports_transactions: Always ``False`` -- read-only catalogs do not
+            support transactions.
+        catalog_version_frozen: Always ``True`` -- the catalog version never
+            changes.
+        catalog_name: Name of the catalog exposed when using the functions-list
+            mode (default ``"functions"``).
+        functions: Function classes to expose in the ``"main"`` schema.
+        settings: DuckDB setting specs the catalog declares.
+        secret_types: Secret type specs the catalog declares.
+        attach_option_specs: Attach option specs accepted at ``ATTACH`` time.
+        catalog: Optional declarative `[`Catalog`][]` object describing the
+            catalog's schemas, tables, and views.
+        catalog_create: DDL stub that raises `[`CatalogReadOnlyError`][].
+        catalog_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
+        catalog_transaction_begin: DDL stub that raises `[`CatalogReadOnlyError`][].
+        catalog_transaction_commit: DDL stub that raises `[`CatalogReadOnlyError`][].
+        catalog_transaction_rollback: DDL stub that raises `[`CatalogReadOnlyError`][].
+        schema_create: DDL stub that raises `[`CatalogReadOnlyError`][].
+        schema_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
+        table_create: DDL stub that raises `[`CatalogReadOnlyError`][].
+        table_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
+        table_comment_set: DDL stub that raises `[`CatalogReadOnlyError`][].
+        table_column_comment_set: DDL stub that raises `[`CatalogReadOnlyError`][].
+        table_rename: DDL stub that raises `[`CatalogReadOnlyError`][].
+        table_column_add: DDL stub that raises `[`CatalogReadOnlyError`][].
+        table_column_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
+        table_column_rename: DDL stub that raises `[`CatalogReadOnlyError`][].
+        table_column_default_set: DDL stub that raises `[`CatalogReadOnlyError`][].
+        table_column_default_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
+        table_column_type_change: DDL stub that raises `[`CatalogReadOnlyError`][].
+        table_not_null_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
+        table_not_null_set: DDL stub that raises `[`CatalogReadOnlyError`][].
+        view_create: DDL stub that raises `[`CatalogReadOnlyError`][].
+        view_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
+        view_rename: DDL stub that raises `[`CatalogReadOnlyError`][].
+        view_comment_set: DDL stub that raises `[`CatalogReadOnlyError`][].
+        macro_create: DDL stub that raises `[`CatalogReadOnlyError`][].
+        macro_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
+        index_create: DDL stub that raises `[`CatalogReadOnlyError`][].
+        index_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
     """
 
     supports_transactions = False

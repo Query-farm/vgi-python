@@ -71,6 +71,21 @@ class SecretLookupResponse(ArrowSerializableDataclass):
 
     When ``found`` is False every other field is empty/zero and the client caches
     a short-TTL negative entry.
+
+    Attributes:
+        found: Whether a matching credential was located; when False every
+            other field is empty/zero.
+        secret_type: The DuckDB secret type the resolved credential is for.
+        provider: The provider/backend that issued the credential.
+        name: The name of the resolved secret.
+        scope: URI prefixes the secret applies to (DuckDB secret scope list).
+        values: The secret's key->value map as a one-row ``RecordBatch``
+            (serialized to binary on the wire); None when not found.
+        redact_keys: Subset of value keys whose values must be redacted by
+            ``duckdb_secrets()``.
+        ttl_seconds: Server's suggested cache lifetime in seconds.
+        expires_at_unix: The credential's own hard expiry as a Unix timestamp
+            (0 means no intrinsic expiry).
     """
 
     found: bool
@@ -109,6 +124,10 @@ class VgiSecretProtocol(Protocol):
 
     Bump rules mirror :class:`vgi.protocol.VgiProtocol`: major for any
     backwards-incompatible change, minor for additive, patch for worker-side fixes.
+
+    Attributes:
+        protocol_version: Canonical semver (MAJOR.MINOR.PATCH) of this contract,
+            enforced as an exact major+minor match at the dispatch boundary.
     """
 
     protocol_version: ClassVar[str] = "1.0.0"

@@ -40,11 +40,18 @@ GENERATOR_VERSION = "1"
 
 
 class _ByteConstant(NamedTuple):
-    """One C++-visible byte constant sourced from the Python vgi_rpc package."""
+    """One C++-visible byte constant sourced from the Python vgi_rpc package.
 
-    cpp_name: str  # emitted as `inline constexpr std::string_view {cpp_name}`
-    python_name: str  # key in vgi_rpc.metadata
-    description: str  # one-liner for the doc comment
+    Attributes:
+        cpp_name: Identifier emitted as ``inline constexpr std::string_view
+            {cpp_name}``.
+        python_name: Key in ``vgi_rpc.metadata`` whose value supplies the bytes.
+        description: One-liner used for the generated doc comment.
+    """
+
+    cpp_name: str
+    python_name: str
+    description: str
 
 
 # Ordered list of constants to emit. Add new entries here, regenerate,

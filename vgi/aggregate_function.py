@@ -46,7 +46,15 @@ __all__ = [
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class AggregateBindParams:
-    """Parameters passed to `AggregateFunction.on_bind()`."""
+    """Parameters passed to `AggregateFunction.on_bind()`.
+
+    Attributes:
+        args: The bound function [`Arguments`][], or ``None`` if none.
+        input_schema: Arrow schema of the aggregate's input columns, or ``None``.
+        settings: DuckDB session settings relevant to the function.
+        secrets: Accessor for the resolved secrets the function declared.
+        auth_context: The caller's authentication context (anonymous by default).
+    """
 
     args: Arguments | None
     input_schema: pa.Schema | None
@@ -135,6 +143,11 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
                 params: ProcessParams,
             ) -> Annotated[pa.RecordBatch, Returns(pa.int64())]:
                 ...
+
+    Attributes:
+        state_class: The resolved ``TState`` dataclass used for per-group
+            accumulation state, inferred from the generic parameter; ``None``
+            until resolved by ``__init_subclass__``.
 
     """
 

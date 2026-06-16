@@ -215,16 +215,23 @@ class TableBufferingFunction[TArgs, TFinalizeState = None](TableFunctionBase[TAr
     _finalize_state_class: ClassVar[type[ArrowSerializableDataclass] | None] = None
 
     class Meta:
-        """Per-class metadata for [`TableBufferingFunction`][]."""
+        """Per-class metadata for [`TableBufferingFunction`][].
+
+        Attributes:
+            name: The function's registration name.
+            sink_order_dependent: Sink-side ordering — forces ``ParallelSink=
+                false`` in the C++ operator so process() sees input in source
+                order.
+            source_order_dependent: Source-side ordering — forces serial output
+                in ``finalize_queue`` order.
+            requires_input_batch_index: Threads DuckDB's per-chunk batch_index
+                into every process() call. Mutually exclusive with
+                ``sink_order_dependent``.
+        """
 
         name: ClassVar[str]
-        # Output schema declared via Meta.return_schema or via on_bind().
-        # Sink-side ordering: forces ParallelSink=false in the C++ operator.
         sink_order_dependent: ClassVar[bool] = False
-        # Source-side ordering: forces serial output in finalize_queue order.
         source_order_dependent: ClassVar[bool] = False
-        # Threads DuckDB's per-chunk batch_index into every process() call.
-        # Mutually exclusive with sink_order_dependent (validated below).
         requires_input_batch_index: ClassVar[bool] = False
 
     def __init_subclass__(cls) -> None:  # noqa: D105 — internal hook

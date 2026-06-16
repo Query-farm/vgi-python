@@ -344,6 +344,10 @@ class AnyArrow:
         Unlike [`TableInput`][], [`AnyArrow`][] arguments have actual Arrow values -
         they are just not constrained to a specific Arrow type.
 
+    Attributes:
+        value: The resolved Arrow value of the argument.
+        position: The argument's positional index or name used to resolve it.
+        name: The argument's name.
     """
 
     # Type stubs for static analysis - at runtime, Arg[AnyArrow] returns AnyArrowValue
@@ -1618,6 +1622,12 @@ class SecretLookupEntry(ArrowSerializableDataclass):
     - By type + scope:        SecretLookupEntry(secret_type="s3", scope="s3://bucket/")
     - By type + name:         SecretLookupEntry(secret_type="s3", secret_name="my_cred")
     - By type + scope + name: all three fields set
+
+    Attributes:
+        secret_type: The DuckDB secret type to match (required; C++ enforces
+            type matching).
+        scope: Optional URI prefix the secret must apply to.
+        secret_name: Optional name of the specific secret to resolve.
     """
 
     secret_type: str

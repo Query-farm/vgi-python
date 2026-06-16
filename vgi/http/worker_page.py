@@ -240,17 +240,27 @@ def _build_view_card(view) -> str:  # type: ignore[no-untyped-def]  # catalog Vi
 
 @dataclass(frozen=True)
 class _CatalogPanel:
-    """Per-catalog descriptor used to render the connect section."""
+    """Per-catalog descriptor used to render the connect section.
+
+    Attributes:
+        name: Catalog name shown and passed to ``catalog_attach()``.
+        implementation_version: Worker software version, or ``None`` when the
+            worker declares none.
+        data_version_spec: Semver range the catalog serves, or ``None`` when the
+            worker declares no data-version opinion.
+        attach_option_specs: Attach-time options the catalog accepts.
+        comment: Optional comment describing this catalog.
+        releases: Published data-version releases, newest-first. Duplicates by
+            ``version`` are dropped at deserialization (uniqueness contract).
+        source_url: Optional link to where the worker's code lives.
+    """
 
     name: str
     implementation_version: str | None = None
     data_version_spec: str | None = None
     attach_option_specs: tuple[AttachOptionSpec, ...] = ()
     comment: str | None = None
-    # Published data-version releases, newest-first. Duplicates by
-    # ``version`` are dropped at deserialization (uniqueness contract).
     releases: tuple[CatalogDataVersionRelease, ...] = ()
-    # Optional link to where the worker's code lives.
     source_url: str | None = None
 
 

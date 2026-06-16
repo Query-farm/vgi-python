@@ -110,6 +110,17 @@ _ENUM_VALUE_OVERRIDES: set[type] = set()
 
 @dataclasses.dataclass
 class _Ctx:
+    """Mutable codegen context tracking emitted TypeScript types.
+
+    Attributes:
+        dataclasses_seen: Maps each registered Python dataclass to its emitted
+            TypeScript type name.
+        enums_seen: Maps each registered Python enum to its emitted TypeScript
+            type name.
+        dataclass_order: Dataclasses in the order they should be emitted.
+        enum_order: Enums in the order they should be emitted.
+    """
+
     dataclasses_seen: dict[type, str] = dataclasses.field(default_factory=dict)
     enums_seen: dict[type, str] = dataclasses.field(default_factory=dict)
     dataclass_order: list[type] = dataclasses.field(default_factory=list)
