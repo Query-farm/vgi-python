@@ -48,6 +48,7 @@ from vgi._test_fixtures.table.filters import (
     SpatialFilterExampleFunction,
     ValuePruneFunction,
 )
+from vgi._test_fixtures.table.typed_probe import TypedProbeFunction
 from vgi._test_fixtures.table.late_materialization import (
     LateMaterializationFunction,
 )
@@ -137,6 +138,7 @@ from vgi._test_fixtures.table.versioned import (
 )
 
 __all__ = [
+    "TypedProbeFunction",
     "_CURRENT_VERSION",
     "_VERSIONED_CONSTRAINTS_CURRENT",
     "_VERSIONED_CONSTRAINTS_DATA",

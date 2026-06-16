@@ -89,6 +89,8 @@ from vgi._test_fixtures.scalar import (
     RandomBytesFunction,
     RandomIntFunction,
     ReturnSecretValueFunction,
+    ScaleBySettingFunction,
+    SecretFieldFunction,
     SmartFormatPrefixFunction,
     SmartFormatWidthFunction,
     SumValuesFunction,
@@ -139,6 +141,7 @@ from vgi._test_fixtures.table import (
     MakeSeriesRangeFunction,
     MakeSeriesStepFunction,
     MissingBatchIndexTagFunction,
+    TypedProbeFunction,
     NamedParamsEchoFunction,
     NestedSequenceFunction,
     NonMonotoneBatchIndexFunction,
@@ -360,6 +363,7 @@ _EXAMPLE_CATALOG = Catalog(
                 MakeSeriesFloatFunction,
                 MakeSeriesRangeFunction,
                 MakeSeriesStepFunction,
+                TypedProbeFunction,
                 MakePairsIntFunction,
                 MakePairsIntStrFunction,
                 MakePairsStrFunction,
@@ -454,6 +458,8 @@ _EXAMPLE_CATALOG = Catalog(
                 RandomBytesFunction,
                 RandomIntFunction,
                 ReturnSecretValueFunction,
+                ScaleBySettingFunction,
+                SecretFieldFunction,
                 SmartFormatPrefixFunction,
                 SmartFormatWidthFunction,
                 SumValuesFunction,
@@ -1580,6 +1586,7 @@ class ExampleWorker(Worker):
         greeting: Annotated[str, Setting(desc="Custom greeting message")] = "Hello"
         multiplier: Annotated[int, Setting(desc="Value multiplier")] = 1
         threshold: Annotated[int, Setting(desc="Filter threshold")] = 0
+        scale_factor: Annotated[float, Setting(desc="Float scale factor")] = 1.0
         config: Annotated[  # type: ignore[valid-type]
             pa.struct([("start", pa.int64()), ("step", pa.int64()), ("label", pa.string())]),
             Setting(desc="Sequence configuration struct"),
