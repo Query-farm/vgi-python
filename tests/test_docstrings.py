@@ -10,6 +10,7 @@ code. Configuration lives in ``[tool.pydoclint]`` in ``pyproject.toml`` — this
 test invokes the same CLI, so there is no duplicated rule set.
 """
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -17,6 +18,11 @@ from pathlib import Path
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# A real violation line looks like ``    42: DOC101: ...``. If pydoclint exits
+# non-zero without emitting any such code, it failed to *run* (e.g. import
+# error) rather than finding violations — see the environment note below.
+_VIOLATION_RE = re.compile(r"\bDOC\d{3}\b")
 
 
 def test_pydoclint_clean() -> None:
@@ -31,10 +37,23 @@ def test_pydoclint_clean() -> None:
         capture_output=True,
         text=True,
     )
+    output = result.stdout + result.stderr
 
-    assert result.returncode == 0, (
+    if result.returncode == 0:
+        return
+
+    # pydoclint depends on ``docstring-parser-fork`` while ``vgi-rpc`` depends on
+    # the upstream ``docstring-parser``; both claim the ``docstring_parser``
+    # import namespace, so on some interpreter/OS combinations the wrong files
+    # win and pydoclint crashes on import. That's a broken tool environment, not
+    # a docstring problem — skip rather than fail (the gate still runs on every
+    # other matrix cell where the tool is healthy).
+    if not _VIOLATION_RE.search(output):  # pragma: no cover - env-dependent
+        pytest.skip(f"pydoclint could not run in this environment:\n{output}")
+
+    pytest.fail(
         "pydoclint found docstring violations:\n\n"
-        f"{result.stdout}{result.stderr}\n"
+        f"{output}\n"
         "Fix the docstrings, or run "
         "`uv run pydoclint --generate-baseline=True --baseline=.pydoclint-baseline vgi/` "
         "to defer them (see [tool.pydoclint] in pyproject.toml)."
