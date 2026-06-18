@@ -7,7 +7,7 @@ Tests cover Invocation, Arguments, InitResult, and table_function classes.
 
 from __future__ import annotations
 
-from typing import TypeVar, get_args, get_origin, get_type_hints
+from typing import get_args, get_origin, get_type_hints
 
 import pyarrow as pa
 import pytest
@@ -28,10 +28,8 @@ from vgi.protocol import (
 )
 from vgi.table_function import TableCardinality
 
-T = TypeVar("T")
 
-
-def ipc_round_trip(obj: T, cls: type[T]) -> T:
+def ipc_round_trip[T](obj: T, cls: type[T]) -> T:
     """Serialize an object and deserialize via IPC stream."""
     batch, metadata = deserialize_record_batch(obj.serialize_to_bytes())  # type: ignore[attr-defined]
     return cls.deserialize_from_batch(batch, metadata)  # type: ignore[attr-defined, no-any-return]
