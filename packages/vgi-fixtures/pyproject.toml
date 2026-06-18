@@ -8,7 +8,7 @@
 # and the conformance suite import it by its normal `vgi._test_fixtures` path.
 [project]
 name = "vgi-fixtures"
-version = "0.8.0"
+version = "0.8.1"
 description = "Example/test VGI worker modules and entry points (not for production use)"
 readme = "README.md"
 # Local copy of the repo-root LICENSE (kept in sync): the build can't reach
