@@ -1,20 +1,15 @@
 # VGI (Vector Gateway Interface)
 
 <p align="center">
-  <img src="docs/vgi-logo.png" alt="VGI Logo" width="480">
+  <img src="https://raw.githubusercontent.com/Query-farm/vgi-python/main/docs/vgi-logo.png" alt="VGI Logo" width="480">
 </p>
 
 <p align="center">
-  <strong>Apache Arrow-based protocol for extending DuckDB using any language.</strong><br/>
-  <strong>No C++/C/Zig/Rust or compilation/linking required (unless you want to).</strong>
+  <strong>Apache Arrow-based protocol for extending DuckDB using any language.</strong>
 </p>
 
 <p align="center">
   Created by <a href="https://query.farm">Query.Farm</a>
-</p>
-
-<p align="center">
-  📖 <strong>Documentation:</strong> <a href="https://vgi-python.query.farm/">vgi-python.query.farm</a>
 </p>
 
 ---
@@ -33,21 +28,21 @@ from vgi.catalog import Catalog, Schema
 import pyarrow as pa
 import pyarrow.compute as pc
 
-class Greeting(ScalarFunction):
-    """Generate a greeting for each name."""
+class Multiply(ScalarFunction):
+    """Multiply two columns element-wise."""
 
     @classmethod
     def compute(
         cls,
-        name: Annotated[pa.StringArray, Param(doc="Column containing names")],
-    ) -> Annotated[pa.StringArray, Returns()]:
-        # The final argument to binary_join_element_wise is the separator.
-        return pc.binary_join_element_wise("Hello, ", name, "!", "")
+        a: Annotated[pa.Int64Array, Param(doc="First operand")],
+        b: Annotated[pa.Int64Array, Param(doc="Second operand")],
+    ) -> Annotated[pa.Int64Array, Returns()]:
+        return pc.multiply(a, b)
 
 class MyWorker(Worker):
     catalog = Catalog(
         name="my_worker",
-        schemas=[Schema(name="main", functions=[Greeting])],
+        schemas=[Schema(name="main", functions=[Multiply])],
     )
 
 if __name__ == "__main__":
@@ -66,9 +61,8 @@ LOAD vgi;
 -- script's inline dependencies, so nothing needs to be installed first.
 ATTACH 'my_worker' (TYPE vgi, LOCATION 'uv run my_worker.py');
 
-SELECT my_worker.greeting(name) FROM users;
--- "Hello, Alice!"
--- "Hello, Bob!"
+SELECT my_worker.multiply(6, 7);
+-- 42
 ```
 
 Or you can launch the [Haybarn](https://github.com/Query-farm-haybarn/haybarn)
@@ -79,7 +73,7 @@ uvx haybarn-cli "vgi:my_worker?location=uv run my_worker.py"
 ```
 
 This drops you into a session with the functions you just added, available as
-`my_worker.greeting(...)`.
+`my_worker.multiply(...)`.
 
 That's it. No C++ compilation, no extension versioning, no complex build process. Just a Python script that Haybarn (or DuckDB) can call.
 
@@ -120,7 +114,6 @@ VGI lets you extend DuckDB with Python functions that run in separate processes,
 | Tied to DuckDB version | Version independent |
 | Complex build/release cycle | Ship a script or executable |
 | Runs in-process | Process isolation |
-| Single-threaded | Parallel workers |
 
 **Use cases:**
 - Call REST APIs or external services from SQL
@@ -194,140 +187,26 @@ Your function is now available in any DuckDB-compatible engine. Ship the Python 
 
 ---
 
-## Going Further: Type-Safe Arguments
-
-For production use, you'll want type validation. Use `Param` with `type_bound` to ensure columns have the correct type:
-
-```python
-from typing import Annotated
-from vgi import ScalarFunction, Param, Returns, Worker
-import pyarrow as pa
-import pyarrow.compute as pc
-
-
-class AddValues(ScalarFunction):
-    """Add two integer values together."""
-
-    @classmethod
-    def compute(
-        cls,
-        left: Annotated[pa.Int64Array, Param(type_bound=pa.types.is_integer, doc="First integer value")],
-        right: Annotated[pa.Int64Array, Param(type_bound=pa.types.is_integer, doc="Second integer value")],
-    ) -> Annotated[pa.Int64Array, Returns()]:
-        return pc.add(left, right)
-```
-
-```sql
-SELECT add_values(price, tax) as total FROM orders;
-
--- This would fail at bind time with a clear error:
--- SELECT add_values(name, price) FROM orders;
--- Error: Column 'name' has type string, expected integer
-```
-
-Key features of the `Param`/`Returns` API:
-- Types are inferred from PyArrow array annotations (`pa.Int64Array` -> `pa.int64()`)
-- `type_bound` validates the column's Arrow type at bind time
-- `ConstParam` receives scalar values (not columns) from SQL arguments
-- `Returns` declares the output type
-
----
-
 ## Function Types
 
-VGI supports three function types:
+VGI supports five function types:
 
 | Type | Base Class | SQL Pattern | Use Case |
 |------|------------|-------------|----------|
-| **Scalar** | `ScalarFunction` | `SELECT func(col) FROM t` | Per-row transforms (1:1) |
-| **Table** | `TableFunctionGenerator` | `SELECT * FROM func(args)` | Generate data |
-| **Table-In-Out** | `TableInOutFunction` | `SELECT * FROM func((SELECT ...))` | Aggregation, filtering |
+| **Scalar** | `ScalarFunction` | `SELECT func(col) FROM t` | Per-row transforms (1 row → 1 value) |
+| **Table** | `TableFunctionGenerator` | `SELECT * FROM func(args)` | Generate rows from arguments (args → N rows) |
+| **Table-In-Out** | `TableInOutFunction` | `SELECT * FROM func((SELECT ...))` | Reshape or filter a streamed table (N rows → M rows) |
+| **Aggregate** | `AggregateFunction` | `SELECT func(col) FROM t GROUP BY k` | Accumulate per `GROUP BY` group (N rows → 1 value) |
+| **Buffering** | `TableBufferingFunction` | `SELECT * FROM func((SELECT ...))` | See every row first — sort, top-k, full reduction (stream → state → stream) |
 
-### Scalar Functions
+Each type overrides a small, predictable surface (see the `Multiply` example
+above for a complete scalar worker):
 
-Transform each row independently. Output has the same number of rows as input.
-
-```python
-class Double(ScalarFunction):
-    """Double an integer value."""
-
-    @classmethod
-    def compute(
-        cls,
-        value: Annotated[pa.Int64Array, Param(doc="Value to double")],
-    ) -> Annotated[pa.Int64Array, Returns()]:
-        return pc.multiply(value, 2)
-```
-
-### Table Functions
-
-Generate output data from arguments (no input table). Each call to `process()` emits
-a batch via `out.emit()` or signals completion via `out.finish()`.
-
-```python
-from dataclasses import dataclass
-from typing import Annotated, ClassVar
-import pyarrow as pa
-from vgi import TableFunctionGenerator, Arg
-from vgi.table_function import ProcessParams, OutputCollector
-
-
-@dataclass
-class CounterState:
-    remaining: int
-    current: int = 0
-
-
-class Counter(TableFunctionGenerator):
-    """Generate a sequence of integers."""
-
-    count: Annotated[int, Arg(0, doc="Number of rows to generate")]
-    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([("n", pa.int64())])
-
-    @classmethod
-    def initial_state(cls, params: ProcessParams) -> CounterState:
-        return CounterState(remaining=params.args.count)
-
-    @classmethod
-    def process(cls, params: ProcessParams, state: CounterState, out: OutputCollector) -> None:
-        if state.remaining <= 0:
-            out.finish()
-            return
-        batch_size = min(state.remaining, 1000)
-        values = list(range(state.current, state.current + batch_size))
-        out.emit(pa.RecordBatch.from_pydict({"n": values}, schema=params.output_schema))
-        state.current += batch_size
-        state.remaining -= batch_size
-```
-
-### Table-In-Out Functions
-
-Transform or aggregate input data. Override `transform()` for per-batch processing
-and `finish()` for final output after all input is consumed.
-
-```python
-import pyarrow as pa
-import pyarrow.compute as pc
-from vgi import TableInOutFunction
-
-
-class FilterPositive(TableInOutFunction):
-    """Keep only rows where all numeric columns are positive."""
-
-    @property
-    def output_schema(self) -> pa.Schema:
-        return self.input_schema
-
-    def transform(self, batch: pa.RecordBatch) -> pa.RecordBatch:
-        mask = None
-        for i, field in enumerate(batch.schema):
-            if pa.types.is_integer(field.type) or pa.types.is_floating(field.type):
-                col_mask = pc.greater(batch.column(i), 0)
-                mask = col_mask if mask is None else pc.and_(mask, col_mask)
-        if mask is not None:
-            return pc.filter(batch, mask)
-        return batch
-```
+- **Scalar** — `compute()` maps input arrays to one output array of the same length.
+- **Table** — `process()` streams batches via `out.emit()` until `out.finish()`.
+- **Table-In-Out** — `transform()` reshapes each input batch; `finish()` emits any trailing rows.
+- **Aggregate** — `initialize` / `update` / `combine` / `finalize` accumulate one value per `GROUP BY` group, merging partial states across parallel workers.
+- **Buffering** — like aggregate, but `finalize` streams a whole relation out once every input row has been seen (sort, top-k, full-stream reductions).
 
 ---
 
@@ -552,17 +431,7 @@ uv run mypy vgi/            # Type check
 Copyright (c) 2025, 2026 Query Farm LLC.
 
 Licensed under the **Query Farm Source-Available License, Version 1.0** — see
-[LICENSE](LICENSE) for the binding terms. In summary (the LICENSE text governs):
-
-- ✅ **Use, copy, modify, and redistribute** the code freely, **including in
-  production and for commercial purposes** — your own internal use, and building
-  products and services on top of VGI.
-- 🚫 Not permitted **without a separate commercial license**: offering a
-  *competing* VGI-equivalent product or service to third parties (hosted,
-  embedded, or as-a-service), or operating a commercial marketplace for such
-  services.
-- ⏳ Each released version converts to the **Apache License, Version 2.0**, ten
-  years after its public release.
+[LICENSE](LICENSE) for the binding terms.
 
 For a commercial license or any licensing questions, contact
 [hello@query.farm](mailto:hello@query.farm).
