@@ -53,10 +53,10 @@ jobs:
     name: integration (${{ matrix.lane }})
     steps:
       - name: Checkout vgi-python
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Checkout pinned vgi test suite
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           repository: Query-farm/vgi
           ref: ${{ env.VGI_REF }}
