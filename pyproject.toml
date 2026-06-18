@@ -3,6 +3,20 @@ name = "vgi-python"
 version = "0.8.0"
 description = "Vector Gateway Interface - Connect DuckDB to external programs via Apache Arrow"
 readme = "README.md"
+keywords = [
+    "duckdb",
+    "apache-arrow",
+    "arrow",
+    "pyarrow",
+    "udf",
+    "user-defined-functions",
+    "sql",
+    "database",
+    "data-engineering",
+    "analytics",
+    "rpc",
+    "vgi",
+]
 license = { file = "LICENSE" }
 authors = [{ name = "Rusty Conover", email = "rusty@query.farm" }]
 maintainers = [{ name = "Query Farm LLC", email = "hello@query.farm" }]
