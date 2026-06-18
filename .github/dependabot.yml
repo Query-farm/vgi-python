@@ -19,6 +19,14 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      # aiohttp is transitive via vgi-rpc[external], which caps it at <3.14.
+      # The aiohttp CVE fixes only exist in >=3.14, so no bump is resolvable
+      # from this repo — the security updater errors out every run with
+      # "requirements are unsatisfiable". Ignore it here so Dependabot stops
+      # failing on an impossible update; the alerts stay visible in the
+      # security tab. The real fix is lifting the cap upstream in vgi-rpc.
+      - dependency-name: "aiohttp"
 
   # GitHub Actions used by the workflows in .github/workflows/.
   - package-ecosystem: "github-actions"
