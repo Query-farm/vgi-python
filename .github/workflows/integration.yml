@@ -1,0 +1,94 @@
+# Runs the canonical Query-farm/vgi integration sqllogictest suite against the
+# Python example worker on every push / PR. Rather than building the C++ extension
+# from source, it drives a prebuilt standalone `haybarn-unittest` and installs the
+# SIGNED vgi extension from the Haybarn community channel + its deps from core.
+# The .test files come from a pinned Query-farm/vgi checkout; ci/run-integration.sh
+# + ci/preprocess-require.awk adapt them for the standalone runner. See ci/README.md.
+#
+# (The separate ci.yml covers lint / type-check / unit + conformance tests / docs.
+# Those drive the pure-Python in-process Client; this workflow is the only place
+# the worker is exercised through the real published DuckDB extension over the wire.)
+name: Integration suite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The Query-farm/vgi ref whose test/sql/integration suite we run. For now this
+  # tracks the latest `main` (resolved at checkout time) so the Python port is
+  # always validated against the newest C++ test suite. Pin to a specific commit
+  # SHA here if/when reproducible, deliberate bumps are wanted (see ci/README.md).
+  VGI_REF: main
+  # The Haybarn release providing the prebuilt haybarn-unittest binary. Must be
+  # ABI-compatible with the community-published vgi extension.
+  HAYBARN_RELEASE: haybarn-v1.5.4-rc1
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # stdio:  the subprocess transport (whole suite — the primary lane).
+          # shm:    stdio + the POSIX shared-memory side channel.
+          # launch: the AF_UNIX launcher-only tests.
+          # http:   the whole suite over the stateless HTTP transport.
+          - { lane: stdio }
+          - { lane: shm, shm_bytes: '67108864' }
+          - { lane: launch }
+          - { lane: http }
+    name: integration (${{ matrix.lane }})
+    steps:
+      - name: Checkout vgi-python
+        uses: actions/checkout@v5
+
+      - name: Checkout pinned vgi test suite
+        uses: actions/checkout@v5
+        with:
+          repository: Query-farm/vgi
+          ref: ${{ env.VGI_REF }}
+          path: vgi-upstream
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Install dependencies (vgi + fixtures + all extras)
+        run: uv sync --all-extras --python 3.13
+
+      - name: Download haybarn-unittest
+        run: |
+          gh release download "$HAYBARN_RELEASE" \
+            --repo Query-farm-haybarn/haybarn \
+            --pattern 'haybarn_unittest-linux-amd64.zip' \
+            --output /tmp/haybarn-unittest.zip --clobber
+          unzip -o -q /tmp/haybarn-unittest.zip -d /tmp/haybarn-unittest
+          UNITTEST=$(find /tmp/haybarn-unittest -name 'haybarn-unittest' -type f | head -1)
+          chmod +x "$UNITTEST"
+          echo "HAYBARN_UNITTEST=$UNITTEST" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Run integration suite (${{ matrix.lane }})
+        run: ci/run-integration.sh
+        env:
+          VGI_SRC: ${{ github.workspace }}/vgi-upstream
+          TRANSPORT: ${{ matrix.lane }}
+          # Empty on every lane except shm; run-integration.sh drops an empty value.
+          VGI_RPC_SHM_SIZE_BYTES: ${{ matrix.shm_bytes || '' }}
