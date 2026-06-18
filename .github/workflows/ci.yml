@@ -3,8 +3,12 @@ name: CI
 on:
   push:
     branches: [main]
+    # README-only changes don't affect code, tests, or the mkdocs site
+    # (which is built from docs/, not README.md), so skip the full CI for them.
+    paths-ignore: ['README.md']
   pull_request:
     branches: [main]
+    paths-ignore: ['README.md']
   workflow_dispatch:
 
 # Least-privilege default for all jobs — none need write access. (The release
