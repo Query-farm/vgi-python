@@ -91,12 +91,12 @@ mkdir -p "$STAGE/test/sql/integration"
   #   nested_type_combinations.test — segfaults the prebuilt standalone runner
   #     (a property of that C++ build, not the worker, which passes it against a
   #     locally-built unittest).
-  #   bool_in_union.test — a pre-existing, arch-dependent union-bool bug whose
-  #     pinned expected output matches arm64 but not amd64 (CI is amd64).
+  # (bool_in_union.test is NOT excluded here: it disables itself with `mode skip`
+  # upstream — a Haybarn/DuckDB Arrow serialization bug, arch-dependent — so the
+  # flag in the test is the single source of truth.)
   find . -name '*.test' \
        -not -path './writable/*' \
        -not -name 'nested_type_combinations.test' \
-       -not -name 'bool_in_union.test' \
        "${EXTRA_SKIP[@]}" | while read -r f; do
     mkdir -p "$STAGE/test/sql/integration/$(dirname "$f")"
     awk -v http="$AWK_HTTP" -f "$HERE/preprocess-require.awk" "$f" > "$STAGE/test/sql/integration/$f"

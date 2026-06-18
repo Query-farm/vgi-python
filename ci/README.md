@@ -78,8 +78,10 @@ Out of scope on **every** lane:
 - `nested_type_combinations.test` — segfaults the prebuilt standalone runner (a
   property of that C++ build, not the worker, which passes it against a
   locally-built unittest).
-- `bool_in_union.test` — a pre-existing, arch-dependent union-bool bug whose
-  pinned expected output matches arm64 but not amd64 (CI is amd64).
+
+(`bool_in_union.test` is not excluded here — it disables itself with `mode skip`
+upstream, being an arch-dependent Haybarn/DuckDB Arrow serialization bug, so the
+flag in the test is the single source of truth.)
 
 Dropped on the **http** lane only:
 
