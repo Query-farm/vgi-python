@@ -8,10 +8,10 @@ import pyarrow as pa
 import pytest
 from vgi_rpc.utils import deserialize_record_batch
 
+from vgi.catalog._descriptor_spec import _resolve_arrow_type
 from vgi.catalog.setting import (
     Setting,
     SettingSpec,
-    _resolve_arrow_type,
     extract_setting_specs,
 )
 

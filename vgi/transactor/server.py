@@ -543,8 +543,12 @@ def _unique_batch_name(prefix: str) -> str:
         return f"__{prefix}_{_batch_counter}__"
 
 
-class _InsertState(ExchangeState):
-    """Insert exchange: receives row batches, inserts into table, returns count or RETURNING rows."""
+class _DmlState(ExchangeState):
+    """Shared base for DML exchanges (insert/delete/update).
+
+    Holds the common construction and the count-vs-RETURNING result emit; each
+    subclass implements its own ``exchange`` with the appropriate SQL.
+    """
 
     def __init__(
         self,
@@ -559,6 +563,21 @@ class _InsertState(ExchangeState):
         self.returning = returning
         self.table_schema = table_schema
         self.tx_lock = tx_lock
+
+    def _emit_result(self, result_batch: pa.RecordBatch, out: OutputCollector) -> None:
+        if self.returning:
+            out.emit(
+                result_batch
+                if result_batch.num_rows > 0
+                else pa.record_batch({c: [] for c in self.table_schema.names}, schema=self.table_schema)
+            )
+        else:
+            count = result_batch.column("Count")[0].as_py() if result_batch.num_rows > 0 else 0
+            out.emit(pa.record_batch({"count": [count]}, schema=_COUNT_SCHEMA))
+
+
+class _InsertState(_DmlState):
+    """Insert exchange: receives row batches, inserts into table, returns count or RETURNING rows."""
 
     def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         with self.tx_lock:
@@ -575,34 +594,9 @@ class _InsertState(ExchangeState):
             self.conn.unregister(view_name)
         self._emit_result(result_batch, out)
 
-    def _emit_result(self, result_batch: pa.RecordBatch, out: OutputCollector) -> None:
-        if self.returning:
-            out.emit(
-                result_batch
-                if result_batch.num_rows > 0
-                else pa.record_batch({c: [] for c in self.table_schema.names}, schema=self.table_schema)
-            )
-        else:
-            count = result_batch.column("Count")[0].as_py() if result_batch.num_rows > 0 else 0
-            out.emit(pa.record_batch({"count": [count]}, schema=_COUNT_SCHEMA))
 
-
-class _DeleteState(ExchangeState):
+class _DeleteState(_DmlState):
     """Delete exchange: receives rowid batches, deletes matching rows."""
-
-    def __init__(
-        self,
-        conn: duckdb.DuckDBPyConnection,
-        qualified_name: str,
-        returning: bool,
-        table_schema: pa.Schema,
-        tx_lock: threading.Lock,
-    ) -> None:
-        self.conn = conn
-        self.qualified_name = qualified_name
-        self.returning = returning
-        self.table_schema = table_schema
-        self.tx_lock = tx_lock
 
     def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         with self.tx_lock:
@@ -627,34 +621,11 @@ class _DeleteState(ExchangeState):
                 )
                 result_batch = _read_result_batch(result)
             self.conn.unregister(view_name)
-
-        if self.returning:
-            out.emit(
-                result_batch
-                if result_batch.num_rows > 0
-                else pa.record_batch({c: [] for c in self.table_schema.names}, schema=self.table_schema)
-            )
-        else:
-            count = result_batch.column("Count")[0].as_py() if result_batch.num_rows > 0 else 0
-            out.emit(pa.record_batch({"count": [count]}, schema=_COUNT_SCHEMA))
+        self._emit_result(result_batch, out)
 
 
-class _UpdateState(ExchangeState):
+class _UpdateState(_DmlState):
     """Update exchange: receives rowid + updated columns, updates matching rows."""
-
-    def __init__(
-        self,
-        conn: duckdb.DuckDBPyConnection,
-        qualified_name: str,
-        returning: bool,
-        table_schema: pa.Schema,
-        tx_lock: threading.Lock,
-    ) -> None:
-        self.conn = conn
-        self.qualified_name = qualified_name
-        self.returning = returning
-        self.table_schema = table_schema
-        self.tx_lock = tx_lock
 
     def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         with self.tx_lock:
@@ -673,16 +644,7 @@ class _UpdateState(ExchangeState):
             result = self.conn.execute(sql)
             result_batch = _read_result_batch(result)
             self.conn.unregister(view_name)
-
-        if self.returning:
-            out.emit(
-                result_batch
-                if result_batch.num_rows > 0
-                else pa.record_batch({c: [] for c in self.table_schema.names}, schema=self.table_schema)
-            )
-        else:
-            count = result_batch.column("Count")[0].as_py() if result_batch.num_rows > 0 else 0
-            out.emit(pa.record_batch({"count": [count]}, schema=_COUNT_SCHEMA))
+        self._emit_result(result_batch, out)
 
 
 class _ScanState(ProducerState):
