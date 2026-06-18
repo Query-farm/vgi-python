@@ -19,15 +19,14 @@ import click
 
 from vgi.catalog import OnConflict, SerializedSchema, SqlExpression
 from vgi.client.cli_utils import (
-    get_attach_opaque_data_from_options,
-    hex_to_transaction_opaque_data,
     json_to_arrow_schema,
+    optional_transaction_opaque_data,
     output_json,
     parse_json_option,
+    resolve_attach,
     scan_function_result_to_dict,
     table_info_to_dict,
 )
-from vgi.client.client import Client
 
 
 @click.group()
@@ -58,22 +57,10 @@ def table_get(
     NAME is the table name.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     table_info = client.table_get(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=name,
     )
@@ -134,17 +121,7 @@ def table_create(
     NAME is the name for the new table.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
 
     columns_json = parse_json_option(columns, "--columns")
     arrow_schema = json_to_arrow_schema(columns_json)
@@ -157,9 +134,7 @@ def table_create(
 
     client.table_create(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=name,
         columns=SerializedSchema(arrow_schema.serialize().to_pybytes()),
@@ -196,22 +171,10 @@ def table_drop(
     NAME is the table name to drop.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     client.table_drop(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=name,
         ignore_not_found=ignore_not_found,
@@ -247,22 +210,10 @@ def table_rename(
     NEW_NAME is the new name for the table.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     client.table_rename(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=name,
         new_name=new_name,
@@ -314,22 +265,10 @@ def table_comment(
     if comment_text and clear:
         raise click.ClickException("Cannot specify both --set and --clear")
 
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     client.table_comment_set(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=name,
         comment=None if clear else comment_text,
@@ -366,22 +305,10 @@ def table_scan_function(
     NAME is the table name.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     result = client.table_scan_function_get(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=name,
         at_unit=at_unit,
@@ -430,26 +357,14 @@ def column_add(
     TABLE_NAME is the table to add the column to.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
 
     col_json = parse_json_option(column_def, "--column")
     arrow_schema = json_to_arrow_schema([col_json])
 
     client.table_column_add(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=table_name,
         column_definition=SerializedSchema(arrow_schema.serialize().to_pybytes()),
@@ -498,22 +413,10 @@ def column_drop(
     COLUMN_NAME is the column to drop.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     client.table_column_drop(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=table_name,
         column_name=column_name,
@@ -562,22 +465,10 @@ def column_rename(
     NEW_COLUMN_NAME is the new name for the column.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     client.table_column_rename(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=table_name,
         column_name=column_name,
@@ -626,22 +517,10 @@ def column_set_default(
     EXPRESSION is the SQL expression for the default value.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     client.table_column_default_set(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=table_name,
         column_name=column_name,
@@ -686,22 +565,10 @@ def column_drop_default(
     COLUMN_NAME is the column to remove the default from.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     client.table_column_default_drop(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=table_name,
         column_name=column_name,
@@ -753,26 +620,14 @@ def column_set_type(
     The --column option specifies the column name and new type.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
 
     col_json = parse_json_option(column_def, "--column")
     arrow_schema = json_to_arrow_schema([col_json])
 
     client.table_column_type_change(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=table_name,
         column_definition=SerializedSchema(arrow_schema.serialize().to_pybytes()),
@@ -817,22 +672,10 @@ def column_set_not_null(
     COLUMN_NAME is the column to add NOT NULL to.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     client.table_not_null_set(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=table_name,
         column_name=column_name,
@@ -876,22 +719,10 @@ def column_drop_not_null(
     COLUMN_NAME is the column to remove NOT NULL from.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     client.table_not_null_drop(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=table_name,
         column_name=column_name,

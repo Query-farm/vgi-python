@@ -33,11 +33,11 @@ from vgi.client.cli_transaction import transaction
 from vgi.client.cli_utils import (
     bytes_to_hex,
     catalog_attach_result_to_dict,
-    get_attach_opaque_data_from_options,
     hex_to_attach_opaque_data,
-    hex_to_transaction_opaque_data,
+    optional_transaction_opaque_data,
     output_json,
     parse_json_option,
+    resolve_attach,
 )
 from vgi.client.cli_view import view
 from vgi.client.client import Client
@@ -155,22 +155,10 @@ def catalog_version(
     transaction_opaque_data: str | None,
 ) -> None:
     """Get the current catalog version."""
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     version = client.catalog_version(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
     )
     output_json({"version": version, "attach_opaque_data": bytes_to_hex(resolved_attach_opaque_data)})
 

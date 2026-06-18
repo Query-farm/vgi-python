@@ -18,15 +18,14 @@ import click
 from vgi.catalog import FunctionInfo, SchemaObjectType, TableInfo, ViewInfo
 from vgi.client.cli_utils import (
     function_info_to_dict,
-    get_attach_opaque_data_from_options,
-    hex_to_transaction_opaque_data,
+    optional_transaction_opaque_data,
     output_json,
     parse_json_option,
+    resolve_attach,
     schema_info_to_dict,
     table_info_to_dict,
     view_info_to_dict,
 )
-from vgi.client.client import Client
 
 
 @click.group()
@@ -48,22 +47,10 @@ def schema_list(
     transaction_opaque_data: str | None,
 ) -> None:
     """List schemas in a catalog."""
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     for schema_info in client.schemas(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
     ):
         output_json(schema_info_to_dict(schema_info))
 
@@ -88,22 +75,10 @@ def schema_get(
     NAME is the schema name.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     schema_info = client.schema_get(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         name=name,
     )
     if schema_info:
@@ -136,23 +111,11 @@ def schema_create(
     NAME is the name for the new schema.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     tags_dict = parse_json_option(tags, "--tags")
     client.schema_create(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         name=name,
         comment=comment,
         tags=tags_dict,
@@ -184,22 +147,10 @@ def schema_drop(
     NAME is the name of the schema to drop.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     client.schema_drop(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         name=name,
         ignore_not_found=ignore_not_found,
         cascade=cascade,
@@ -237,26 +188,14 @@ def schema_contents(
     Requires --type to specify which object type to list.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
 
     # Convert string type to SchemaObjectType enum
     type_filter = SchemaObjectType(object_type)
 
     for item in client.schema_contents(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         name=name,
         type=type_filter,
     ):

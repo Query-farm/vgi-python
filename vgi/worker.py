@@ -1367,87 +1367,6 @@ class Worker:
 
         app()
 
-    @final
-    @classmethod
-    def main_http(cls) -> None:
-        """Run this worker as a dedicated HTTP server with logging options.
-
-        Prefer using ``main()`` with ``--http`` instead — it provides the
-        same HTTP capabilities while also supporting pipe transport as the
-        default.  This method is kept for backward compatibility and for
-        entry points that are always HTTP-only.
-
-        Requires the ``http`` extra: ``pip install vgi[http]``
-        """
-        import typer
-
-        from vgi.logging_config import configure_worker_logging
-
-        app = typer.Typer(add_completion=False)
-
-        @app.command()
-        def _run(
-            host: str = typer.Option("127.0.0.1", "--host", "-h", help="Bind address"),
-            port: int = typer.Option(0, "--port", "-p", help="Bind port (0 = auto-select)"),
-            prefix: str = typer.Option("", "--prefix", help="URL prefix for RPC endpoints"),
-            cors_origins: str = typer.Option("*", "--cors-origins", help="Allowed CORS origins"),
-            describe: bool = typer.Option(  # noqa: B008
-                True, "--describe/--no-describe", help="Enable description pages (worker + RPC API)"
-            ),
-            debug: bool = typer.Option(False, "--debug", help="Enable DEBUG on all vgi + vgi_rpc loggers"),
-            log_level: LogLevel = typer.Option(LogLevel.INFO, "--log-level", help="Set log level"),  # noqa: B008
-            log_logger: list[str] | None = typer.Option(  # noqa: B008
-                None, "--log-logger", help="Target specific logger(s)"
-            ),
-            log_format: LogFormat = typer.Option(  # noqa: B008
-                LogFormat.text, "--log-format", help="Stderr log format"
-            ),
-            http_threads: int | None = typer.Option(  # noqa: B008
-                None,
-                "--http-threads",
-                help=(
-                    "waitress worker thread count. Default None uses waitress's "
-                    "default (4). Raise this when many concurrent process() ticks "
-                    "would otherwise queue on the WSGI threadpool — typical sign "
-                    "is 'Task queue depth is N' messages from waitress."
-                ),
-            ),
-        ) -> None:
-            env_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
-            effective_debug = debug or env_debug
-            effective_level = configure_worker_logging(
-                debug=effective_debug,
-                log_level=log_level,
-                log_loggers=log_logger,
-                log_format=log_format,
-            )
-
-            from vgi.serve import (
-                _maybe_init_sentry,
-                _resolve_authenticate,
-                _resolve_oauth_resource_metadata,
-                _resolve_otel_config,
-            )
-
-            _maybe_init_sentry()
-            authenticate = _resolve_authenticate()
-            oauth_metadata = _resolve_oauth_resource_metadata()
-            otel_config = _resolve_otel_config()
-            cls._run_http(
-                effective_level=effective_level,
-                host=host,
-                port=port,
-                prefix=prefix,
-                cors_origins=cors_origins,
-                describe=describe,
-                authenticate=authenticate,
-                oauth_resource_metadata=oauth_metadata,
-                otel_config=otel_config,
-                http_threads=http_threads,
-            )
-
-        app()
-
     @classmethod
     def _run_http(
         cls,
@@ -1976,6 +1895,22 @@ class Worker:
         # (overload disambiguation happens at bind time on the C++ side)
         return candidates[0]
 
+    def _resolve_aggregate(self, request: Any) -> type[AggregateFunction[Any]]:
+        """Resolve ``request.function_name`` to an [`AggregateFunction`][] subclass.
+
+        Shared entry point for every aggregate RPC handler: resolves the
+        function (filtering on `AggregateFunction`), narrows the type, and
+        raises ``TypeError`` if the resolved class is not an aggregate.
+        """
+        func_cls = self._resolve_function_by_name(
+            request.function_name,
+            self._unwrap_attach(request.attach_opaque_data),
+            function_type=AggregateFunction,
+        )
+        if not issubclass(func_cls, AggregateFunction):
+            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+        return func_cls
+
     # ---------------------------------------------------------------------------
     # Catalog helpers
     # ---------------------------------------------------------------------------
@@ -2134,6 +2069,15 @@ class Worker:
         except crypto.SealError as exc:
             raise self._opaque_data_rejected("transaction_opaque_data") from exc
         return TransactionOpaqueData(plaintext)
+
+    def _unwrap_tx_opt(self, envelope: bytes | None, attach_envelope: bytes) -> TransactionOpaqueData | None:
+        """Open an optional ``transaction_opaque_data`` envelope.
+
+        Convenience wrapper over [`_unwrap_transaction`][] for the common
+        catalog-handler shape where the transaction envelope may be absent
+        (non-transactional call): returns ``None`` when ``envelope`` is falsy.
+        """
+        return self._unwrap_transaction(envelope, attach_envelope) if envelope else None
 
     def _get_catalog(self) -> CatalogInterface:
         """Get the [`CatalogInterface`][] instance for this worker.
@@ -2323,11 +2267,7 @@ class Worker:
         """Bind an aggregate function, return output schema and execution_id."""
         from vgi.protocol import AggregateBindResponse
 
-        func_cls = self._resolve_function_by_name(
-            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
-        )
-        if not issubclass(func_cls, AggregateFunction):
-            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+        func_cls = self._resolve_aggregate(request)
 
         # Mirror the scalar varargs guard: a Param(varargs=True) on update()
         # must bind to at least one input column. Without this check, calling
@@ -2388,11 +2328,7 @@ class Worker:
         from vgi.aggregate_function import GROUP_COLUMN_NAME
         from vgi.protocol import AggregateUpdateResponse
 
-        func_cls = self._resolve_function_by_name(
-            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
-        )
-        if not issubclass(func_cls, AggregateFunction):
-            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+        func_cls = self._resolve_aggregate(request)
 
         batch = pa.ipc.open_stream(request.input_batch).read_next_batch()
         storage = self._bound(func_cls.storage, request.execution_id, request)
@@ -2499,11 +2435,7 @@ class Worker:
         """Merge source states into target states."""
         from vgi.protocol import AggregateCombineResponse
 
-        func_cls = self._resolve_function_by_name(
-            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
-        )
-        if not issubclass(func_cls, AggregateFunction):
-            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+        func_cls = self._resolve_aggregate(request)
         merge_batch = pa.ipc.open_stream(request.merge_batch).read_next_batch()
         storage = self._bound(func_cls.storage, request.execution_id, request)
 
@@ -2571,11 +2503,7 @@ class Worker:
         """Produce results for a chunk of group_ids."""
         from vgi.protocol import AggregateFinalizeResponse
 
-        func_cls = self._resolve_function_by_name(
-            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
-        )
-        if not issubclass(func_cls, AggregateFunction):
-            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+        func_cls = self._resolve_aggregate(request)
         group_ids_batch = pa.ipc.open_stream(request.group_ids_batch).read_next_batch()
         group_ids: pa.Int64Array = group_ids_batch.column("group_id").cast(pa.int64())  # type: ignore[assignment]
         gid_list: list[int] = group_ids.to_pylist()  # type: ignore[assignment]
@@ -2631,11 +2559,7 @@ class Worker:
         """Best-effort cleanup of aggregate states."""
         from vgi.protocol import AggregateDestructorResponse
 
-        func_cls = self._resolve_function_by_name(
-            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
-        )
-        if not issubclass(func_cls, AggregateFunction):
-            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+        func_cls = self._resolve_aggregate(request)
 
         # Called once when all states have been destroyed (C++ tracks with
         # destroy_counter == group_id_counter). Clear all FunctionStorage
@@ -2824,11 +2748,7 @@ class Worker:
         from vgi.aggregate_function import WindowPartition
         from vgi.protocol import AggregateWindowInitResponse
 
-        func_cls = self._resolve_function_by_name(
-            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
-        )
-        if not issubclass(func_cls, AggregateFunction):
-            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+        func_cls = self._resolve_aggregate(request)
 
         storage = self._bound(func_cls.storage, request.execution_id, request)
         const_args = self._load_aggregate_const_args(func_cls, storage)
@@ -2919,11 +2839,7 @@ class Worker:
         """Compute one output row for a windowed aggregate."""
         from vgi.protocol import AggregateWindowResponse
 
-        func_cls = self._resolve_function_by_name(
-            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
-        )
-        if not issubclass(func_cls, AggregateFunction):
-            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+        func_cls = self._resolve_aggregate(request)
 
         storage = self._bound(func_cls.storage, request.execution_id, request)
         cached = self._load_cached_window_partition(
@@ -3038,11 +2954,7 @@ class Worker:
         """Compute ``count`` window output rows in a single batched RPC."""
         from vgi.protocol import AggregateWindowBatchResponse
 
-        func_cls = self._resolve_function_by_name(
-            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
-        )
-        if not issubclass(func_cls, AggregateFunction):
-            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+        func_cls = self._resolve_aggregate(request)
 
         storage = self._bound(func_cls.storage, request.execution_id, request)
         cached = self._load_cached_window_partition(
@@ -3116,11 +3028,7 @@ class Worker:
         """Evict a cached partition from storage."""
         from vgi.protocol import AggregateWindowDestructorResponse
 
-        func_cls = self._resolve_function_by_name(
-            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
-        )
-        if not issubclass(func_cls, AggregateFunction):
-            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+        func_cls = self._resolve_aggregate(request)
 
         storage = self._bound(func_cls.storage, request.execution_id, request)
         storage.state_delete(FrameworkNS.AGGREGATE_WINDOW_PARTITION, [BoundStorage.pack_int_key(request.partition_id)])
@@ -3135,11 +3043,7 @@ class Worker:
         """Open a streaming-partitioned aggregate session."""
         from vgi.protocol import AggregateStreamingOpenResponse
 
-        func_cls = self._resolve_function_by_name(
-            request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
-        )
-        if not issubclass(func_cls, AggregateFunction):
-            raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
+        func_cls = self._resolve_aggregate(request)
 
         execution_id = uuid.uuid4().bytes
 
@@ -3196,13 +3100,7 @@ class Worker:
         if session is None:
             # Cold reload — the session may have been opened on a different
             # pool worker. Look it up in FunctionStorage.
-            func_cls = self._resolve_function_by_name(
-                request.function_name, self._unwrap_attach(request.attach_opaque_data), function_type=AggregateFunction
-            )
-            if not issubclass(func_cls, AggregateFunction):
-                raise TypeError(
-                    f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})"
-                )
+            func_cls = self._resolve_aggregate(request)
             cold_storage = self._bound(func_cls.storage, request.execution_id, request)
             import time as _t
 
@@ -3776,9 +3674,7 @@ class Worker:
         cat = self._get_catalog()
         version = cat.catalog_version(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             ctx=ctx,
         )
         return CatalogVersionResponse(version=version)
@@ -3839,9 +3735,7 @@ class Worker:
         cat = self._get_catalog()
         infos = cat.schemas(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
         )
         return SchemasResponse.from_infos(list(infos))
 
@@ -3853,9 +3747,7 @@ class Worker:
         cat = self._get_catalog()
         info = cat.schema_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             name=name,
         )
         return SchemasResponse.from_optional(info)
@@ -3874,9 +3766,7 @@ class Worker:
         cat = self._get_catalog()
         cat.schema_create(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             name=name,
             on_conflict=on_conflict,
             comment=comment,
@@ -3896,9 +3786,7 @@ class Worker:
         cat = self._get_catalog()
         cat.schema_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             name=name,
             ignore_not_found=ignore_not_found,
             cascade=cascade,
@@ -3915,9 +3803,7 @@ class Worker:
         cat = self._get_catalog()
         infos = cat.schema_contents(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             name=name,
             type=SchemaObjectType.TABLE,
         )
@@ -3934,9 +3820,7 @@ class Worker:
         cat = self._get_catalog()
         infos = cat.schema_contents(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             name=name,
             type=SchemaObjectType.VIEW,
         )
@@ -3954,9 +3838,7 @@ class Worker:
         cat = self._get_catalog()
         infos = cat.schema_contents(  # type: ignore[call-overload]
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             name=name,
             type=type,
         )
@@ -3981,9 +3863,7 @@ class Worker:
         cat = self._get_catalog()
         info = cat.table_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             at_unit=at_unit,
@@ -4031,9 +3911,7 @@ class Worker:
         cat = self._get_catalog()
         cat.table_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             ignore_not_found=ignore_not_found,
@@ -4055,9 +3933,7 @@ class Worker:
         cat = self._get_catalog()
         result = cat.table_scan_function_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             at_unit=at_unit,
@@ -4087,9 +3963,7 @@ class Worker:
         cat = self._get_catalog()
         result = cat.table_scan_branches_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             at_unit=at_unit,
@@ -4109,9 +3983,7 @@ class Worker:
         cat = self._get_catalog()
         result = cat.table_column_statistics_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
         )
@@ -4132,9 +4004,7 @@ class Worker:
         cat = self._get_catalog()
         result = cat.table_insert_function_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             writable_branch_function_name=writable_branch_function_name,
@@ -4153,9 +4023,7 @@ class Worker:
         cat = self._get_catalog()
         result = cat.table_update_function_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
         )
@@ -4173,9 +4041,7 @@ class Worker:
         cat = self._get_catalog()
         result = cat.table_delete_function_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
         )
@@ -4195,9 +4061,7 @@ class Worker:
         cat = self._get_catalog()
         cat.table_comment_set(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             comment=comment,
@@ -4219,9 +4083,7 @@ class Worker:
         cat = self._get_catalog()
         cat.table_column_comment_set(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             column_name=column_name,
@@ -4243,9 +4105,7 @@ class Worker:
         cat = self._get_catalog()
         cat.table_rename(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             new_name=new_name,
@@ -4267,9 +4127,7 @@ class Worker:
         cat = self._get_catalog()
         cat.table_column_add(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             column_definition=SerializedSchema(column_definition),
@@ -4293,9 +4151,7 @@ class Worker:
         cat = self._get_catalog()
         cat.table_column_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             column_name=column_name,
@@ -4319,9 +4175,7 @@ class Worker:
         cat = self._get_catalog()
         cat.table_column_rename(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             column_name=column_name,
@@ -4344,9 +4198,7 @@ class Worker:
         cat = self._get_catalog()
         cat.table_column_default_set(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             column_name=column_name,
@@ -4368,9 +4220,7 @@ class Worker:
         cat = self._get_catalog()
         cat.table_column_default_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             column_name=column_name,
@@ -4392,9 +4242,7 @@ class Worker:
         cat = self._get_catalog()
         cat.table_column_type_change(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             column_definition=SerializedSchema(column_definition),
@@ -4416,9 +4264,7 @@ class Worker:
         cat = self._get_catalog()
         cat.table_not_null_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             column_name=column_name,
@@ -4439,9 +4285,7 @@ class Worker:
         cat = self._get_catalog()
         cat.table_not_null_set(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             column_name=column_name,
@@ -4464,9 +4308,7 @@ class Worker:
         cat = self._get_catalog()
         info = cat.view_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
         )
@@ -4486,9 +4328,7 @@ class Worker:
         cat = self._get_catalog()
         cat.view_create(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             definition=definition,
@@ -4509,9 +4349,7 @@ class Worker:
         cat = self._get_catalog()
         cat.view_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             ignore_not_found=ignore_not_found,
@@ -4532,9 +4370,7 @@ class Worker:
         cat = self._get_catalog()
         cat.view_rename(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             new_name=new_name,
@@ -4555,9 +4391,7 @@ class Worker:
         cat = self._get_catalog()
         cat.view_comment_set(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             comment=comment,
@@ -4580,9 +4414,7 @@ class Worker:
         cat = self._get_catalog()
         info = cat.macro_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
         )
@@ -4621,9 +4453,7 @@ class Worker:
         cat = self._get_catalog()
         cat.macro_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             ignore_not_found=ignore_not_found,
@@ -4641,9 +4471,7 @@ class Worker:
         cat = self._get_catalog()
         infos = cat.schema_contents(  # type: ignore[call-overload]
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             name=name,
             type=type,
         )
@@ -4665,9 +4493,7 @@ class Worker:
         cat = self._get_catalog()
         info = cat.index_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
         )
@@ -4708,9 +4534,7 @@ class Worker:
         cat = self._get_catalog()
         cat.index_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_name=schema_name,
             name=name,
             ignore_not_found=ignore_not_found,
@@ -4728,9 +4552,7 @@ class Worker:
         cat = self._get_catalog()
         infos = cat.schema_contents(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(transaction_opaque_data, attach_opaque_data)
-            if transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             name=name,
             type=SchemaObjectType.INDEX,
         )

@@ -26,14 +26,10 @@ from typing import (
     Annotated,
     Any,
     ClassVar,
-    final,
     get_args,
     get_origin,
 )
 
-import pyarrow as pa
-
-from vgi.exceptions import SchemaValidationError
 from vgi.function_storage import FunctionStorage, FunctionStorageSqlite
 from vgi.metadata import MetadataMixin, ResolvedMetadata
 
@@ -223,27 +219,3 @@ class Function(ABC, MetadataMixin):
 
         """
         self.logger = logger
-
-    @final
-    @classmethod
-    def _validate_output_schema(cls, batch: pa.RecordBatch, output_schema: pa.Schema) -> None:
-        """Validate that a batch conforms to the expected output schema."""
-        if batch.schema != output_schema:
-            raise SchemaValidationError(
-                "Output batch schema does not match expected output_schema.",
-                expected=output_schema,
-                actual=batch.schema,
-                context=f"output from {cls.__name__}",
-            )
-
-    @final
-    @classmethod
-    def _validate_input_schema(cls, batch: pa.RecordBatch, input_schema: pa.Schema) -> None:
-        """Validate that a batch conforms to the expected input schema."""
-        if batch.schema != input_schema:
-            raise SchemaValidationError(
-                "Input batch schema does not match expected input_schema.",
-                expected=input_schema,
-                actual=batch.schema,
-                context=f"input to {cls.__name__}",
-            )

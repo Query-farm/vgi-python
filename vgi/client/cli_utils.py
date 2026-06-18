@@ -387,6 +387,61 @@ def scan_function_result_to_dict(result: ScanFunctionResult) -> dict[str, Any]:
     }
 
 
+def optional_transaction_opaque_data(hex_string: str | None) -> TransactionOpaqueData | None:
+    """Decode an optional hex transaction ID, returning ``None`` when absent.
+
+    Convenience wrapper over [`hex_to_transaction_opaque_data`][] for the common
+    CLI shape ``... if transaction_opaque_data else None``.
+
+    Args:
+        hex_string: Hex-encoded transaction ID, or ``None``.
+
+    Returns:
+        `TransactionOpaqueData`, or ``None`` if ``hex_string`` is falsy.
+
+    """
+    return hex_to_transaction_opaque_data(hex_string) if hex_string else None
+
+
+def resolve_attach(
+    worker: str,
+    attach_opaque_data: str | None,
+    catalog_name: str | None,
+    attach_options: str,
+) -> tuple[Client, AttachOpaqueData]:
+    """Build a [`Client`][] and resolve attach data for a CLI command.
+
+    Consolidates the preamble shared by nearly every catalog CLI command:
+    construct the client, parse ``--attach-options`` JSON, resolve the attach
+    data (explicit ``--attach-opaque-data`` or auto-attach via ``--catalog``),
+    and warn when ``--catalog`` is used against a stateful catalog.
+
+    Args:
+        worker: VGI worker command (from ``--worker``).
+        attach_opaque_data: Hex-encoded attach ID (from ``--attach-opaque-data``).
+        catalog_name: Catalog name for auto-attach (from ``--catalog``).
+        attach_options: Attach options as a JSON string (from ``--attach-options``).
+
+    Returns:
+        Tuple of (client, resolved_attach_opaque_data).
+
+    """
+    from vgi.client import Client
+
+    client = Client(worker)
+    opts = parse_json_option(attach_options, "--attach-options")
+    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
+        client, attach_opaque_data, catalog_name, opts
+    )
+    if is_stateful and catalog_name:
+        click.echo(
+            "Warning: Using --catalog with a stateful catalog. "
+            "Consider using --attach-opaque-data for session persistence.",
+            err=True,
+        )
+    return client, resolved_attach_opaque_data
+
+
 def get_attach_opaque_data_from_options(
     client: Client,
     attach_opaque_data: str | None,

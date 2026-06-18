@@ -198,41 +198,6 @@ def _resolve_shard_key(backend: Any, attach_plaintext: bytes | None, _origin: st
     return ""
 
 
-def _scan_worker_stream_id() -> bytes:
-    """Return raw stream-id bytes for the current scan worker.
-
-    HTTP transport: pulls the per-stream UUID from
-    ``vgi_rpc.rpc._common._current_stream_id`` and returns its raw 16-byte
-    form. The framework sets this once per ``_serve_stream`` call and
-    preserves it across HTTP turns via the state token, so every tick of
-    one scan worker yields the same bytes regardless of which machine
-    or thread serves it.
-
-    Stdio transport / any non-stream path: returns
-    ``struct.pack("<Q", os.getpid())`` so we still have a stable
-    per-pid identifier and the storage row doesn't collide. Distinct
-    pids → distinct keys; same pid across queries → overwrite (same
-    semantics as the old per-pid ``BoundStorage.put``).
-    """
-    import struct
-
-    try:
-        from vgi_rpc.rpc._common import _current_stream_id
-    except ImportError:
-        return struct.pack("<Q", os.getpid())
-    sid = _current_stream_id.get()
-    if not sid:
-        return struct.pack("<Q", os.getpid())
-    # Stream ids are hex-encoded 128-bit UUIDs. Decode to the canonical
-    # 16-byte form so the storage column doesn't carry the encoding tax.
-    try:
-        return bytes.fromhex(sid)
-    except ValueError:
-        # Defensively fall back to UTF-8 bytes — preserves uniqueness
-        # even if a future framework version uses a non-hex stream id.
-        return sid.encode("utf-8")
-
-
 def _get_default_db_path() -> str:
     """Return the default SQLite database path for VGI storage."""
     from pathlib import Path

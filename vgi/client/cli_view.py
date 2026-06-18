@@ -17,13 +17,11 @@ import click
 
 from vgi.catalog import OnConflict
 from vgi.client.cli_utils import (
-    get_attach_opaque_data_from_options,
-    hex_to_transaction_opaque_data,
+    optional_transaction_opaque_data,
     output_json,
-    parse_json_option,
+    resolve_attach,
     view_info_to_dict,
 )
-from vgi.client.client import Client
 
 
 @click.group()
@@ -54,22 +52,10 @@ def view_get(
     NAME is the view name.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     view_info = client.view_get(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=name,
     )
@@ -111,22 +97,10 @@ def view_create(
     NAME is the name for the new view.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     client.view_create(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=name,
         definition=definition,
@@ -160,22 +134,10 @@ def view_drop(
     NAME is the name of the view to drop.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     client.view_drop(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=name,
         ignore_not_found=ignore_not_found,
@@ -211,22 +173,10 @@ def view_rename(
     NEW_NAME is the new name for the view.
 
     """
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     client.view_rename(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=name,
         new_name=new_name,
@@ -278,22 +228,10 @@ def view_comment(
     if comment_text is not None and clear:
         raise click.ClickException("Cannot specify both --set and --clear")
 
-    client = Client(worker)
-    opts = parse_json_option(attach_options, "--attach-options")
-    resolved_attach_opaque_data, is_stateful = get_attach_opaque_data_from_options(
-        client, attach_opaque_data, catalog_name, opts
-    )
-    if is_stateful and catalog_name:
-        click.echo(
-            "Warning: Using --catalog with a stateful catalog. "
-            "Consider using --attach-opaque-data for session persistence.",
-            err=True,
-        )
+    client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     client.view_comment_set(
         attach_opaque_data=resolved_attach_opaque_data,
-        transaction_opaque_data=(
-            hex_to_transaction_opaque_data(transaction_opaque_data) if transaction_opaque_data else None
-        ),
+        transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_name=schema_name,
         name=name,
         comment=None if clear else comment_text,

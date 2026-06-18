@@ -36,7 +36,7 @@ PYTHON_TO_ARROW: dict[type, pa.DataType] = {
     bytes: pa.binary(),
 }
 
-# Private mapping used by _python_to_arrow() helper
+# Python type to Arrow type mapping (imported by vgi.scalar_function).
 _PYTHON_TO_ARROW: dict[type, pa.DataType] = {
     int: pa.int64(),
     float: pa.float64(),
@@ -44,62 +44,6 @@ _PYTHON_TO_ARROW: dict[type, pa.DataType] = {
     bool: pa.bool_(),
     bytes: pa.binary(),
 }
-
-# Arrow type to Python scalar type mapping
-# Keys are the type class of Arrow DataType instances (e.g., type(pa.int8()))
-_ARROW_TO_PYTHON: dict[type, type] = {
-    # Primitives - integers
-    type(pa.int8()): int,
-    type(pa.int16()): int,
-    type(pa.int32()): int,
-    type(pa.int64()): int,
-    type(pa.uint8()): int,
-    type(pa.uint16()): int,
-    type(pa.uint32()): int,
-    type(pa.uint64()): int,
-    # Primitives - floats
-    type(pa.float16()): float,
-    type(pa.float32()): float,
-    type(pa.float64()): float,
-    # Primitives - strings
-    type(pa.string()): str,
-    type(pa.large_string()): str,
-    # Primitives - boolean
-    type(pa.bool_()): bool,
-    # Primitives - binary
-    type(pa.binary()): bytes,
-    type(pa.large_binary()): bytes,
-    # Nested types
-    type(pa.struct([])): dict,
-    type(pa.list_(pa.int32())): list,
-    type(pa.large_list(pa.int32())): list,
-    type(pa.list_(pa.int32(), 3)): list,  # FixedSizeListType
-    type(pa.map_(pa.string(), pa.int32())): dict,
-}
-
-
-def _python_to_arrow(py_type: type) -> pa.DataType:
-    """Convert a Python type to the corresponding Arrow type.
-
-    Args:
-        py_type: Python type (int, float, str, bool, bytes).
-
-    Returns:
-        Corresponding Arrow data type.
-
-    Raises:
-        TypeError: If py_type is not a supported Python type.
-
-    """
-    if py_type in _PYTHON_TO_ARROW:
-        return _PYTHON_TO_ARROW[py_type]
-
-    supported = ", ".join(t.__name__ for t in _PYTHON_TO_ARROW)
-    raise TypeError(
-        f"Cannot convert Python type '{py_type.__name__}' to Arrow type. "
-        f"Supported types: {supported}. "
-        f"Example: _python_to_arrow(int) -> pa.int64()"
-    )
 
 
 # =============================================================================
@@ -163,21 +107,6 @@ COMPLEX_ARRAY_CLASSES: set[type] = {
     pa.TimestampArray,
     pa.DurationArray,
 }
-
-
-def _arrow_type_to_python(arrow_type: pa.DataType) -> type:
-    """Convert an Arrow type to the corresponding Python scalar type.
-
-    Args:
-        arrow_type: Arrow data type instance.
-
-    Returns:
-        Corresponding Python type for scalar values.
-        Returns Any (object) for unknown Arrow types.
-
-    """
-    arrow_type_class = type(arrow_type)
-    return _ARROW_TO_PYTHON.get(arrow_type_class, object)
 
 
 # Sentinel for missing default value - proper type pattern
