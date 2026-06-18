@@ -23,7 +23,7 @@ class SettingSpec(_SpecBase):
     """Extracted setting metadata for catalog serialization.
 
     This is the resolved form of a `Setting`, with all types inferred and
-    ready for serialization. See [`_SpecBase`][vgi.catalog._descriptor_spec._SpecBase]
+    ready for serialization. See `_SpecBase` (in `vgi.catalog._descriptor_spec`)
     for the field and wire-format definition.
     """
 
@@ -34,7 +34,7 @@ class Setting(_DescriptorBase):
 
     Use with `Annotated` type hints to declare settings in a [`Worker`][]'s Settings class.
     The Arrow type is resolved from the base type in the `Annotated` hint. See
-    [`_DescriptorBase`][vgi.catalog._descriptor_spec._DescriptorBase] for the
+    `_DescriptorBase` (in `vgi.catalog._descriptor_spec`) for the
     ``desc`` and ``arrow_type`` attributes.
     """
 

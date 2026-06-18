@@ -27,7 +27,7 @@ class AttachOptionSpec(_SpecBase):
     """Extracted attach-option metadata for catalog discovery serialization.
 
     The resolved form of an `AttachOption`. See
-    [`_SpecBase`][vgi.catalog._descriptor_spec._SpecBase] for the field and
+    `_SpecBase` (in `vgi.catalog._descriptor_spec`) for the field and
     wire-format definition.
     """
 
@@ -39,7 +39,7 @@ class AttachOption(_DescriptorBase):
     Use with Annotated type hints to declare options in a Worker's
     AttachOptions inner class. The Arrow type is resolved from the base type
     in the Annotated hint. See
-    [`_DescriptorBase`][vgi.catalog._descriptor_spec._DescriptorBase] for the
+    `_DescriptorBase` (in `vgi.catalog._descriptor_spec`) for the
     ``desc`` and ``arrow_type`` attributes.
     """
 
