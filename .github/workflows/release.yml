@@ -30,7 +30,7 @@ jobs:
     name: Build distributions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
@@ -45,13 +45,13 @@ jobs:
         run: uvx twine check dist-vgi/* dist-fixtures/*
 
       - name: Upload vgi artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-vgi
           path: dist-vgi/
 
       - name: Upload vgi-fixtures artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-fixtures
           path: dist-fixtures/
@@ -65,7 +65,7 @@ jobs:
       id-token: write # required for Trusted Publishing
     steps:
       - name: Download vgi artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dist-vgi
           path: dist/
@@ -88,7 +88,7 @@ jobs:
       id-token: write # required for Trusted Publishing
     steps:
       - name: Download vgi-fixtures artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dist-fixtures
           path: dist/
