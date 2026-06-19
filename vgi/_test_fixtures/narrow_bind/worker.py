@@ -50,9 +50,7 @@ from vgi.table_function import (
 CATALOG_NAME = "narrow_bind"
 
 # What the catalog advertises for both tables: two columns.
-_TABLE_SCHEMA: pa.Schema = pa.schema(
-    [pa.field("id", pa.int64()), pa.field("val", pa.int64())]
-)
+_TABLE_SCHEMA: pa.Schema = pa.schema([pa.field("id", pa.int64()), pa.field("val", pa.int64())])
 # What the narrow scan function actually binds to: one column.
 _NARROW_BIND_SCHEMA: pa.Schema = pa.schema([pa.field("id", pa.int64())])
 
@@ -114,9 +112,7 @@ class WideScan(TableFunctionGenerator[_Args, _State]):
             out.finish()
             return
         state.done = True
-        out.emit(
-            pa.RecordBatch.from_pydict({"id": [0, 1, 2], "val": [10, 20, 30]}, schema=params.output_schema)
-        )
+        out.emit(pa.RecordBatch.from_pydict({"id": [0, 1, 2], "val": [10, 20, 30]}, schema=params.output_schema))
 
 
 _FUNCTIONS: list[type[Function]] = [NarrowScan, WideScan]
