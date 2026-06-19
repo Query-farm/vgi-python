@@ -136,6 +136,50 @@ class HashSeedFunction(ScalarFunction):
         return pa.array([seed + i for i in range(_length)], type=pa.int64())
 
 
+class QuerySeedFunction(ScalarFunction):
+    """Adds a per-query-stable seed to each input value.
+
+    Demonstrates ``FunctionStability.CONSISTENT_WITHIN_QUERY`` — the only
+    fixture that emits this stability variant. Semantically the value is fixed
+    for the duration of a single query but may differ across queries (like
+    ``now()``). DuckDB has no behavioral consumer that this fixture asserts; it
+    exists so the wire path for the third stability value stays exercised and
+    so other-language workers must specify it.
+
+    Example:
+        SQL:    SELECT query_seed(value) FROM data
+
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "query_seed"
+        description = "Add a per-query-stable seed to each value (demonstrates CONSISTENT_WITHIN_QUERY stability)"
+        stability = FunctionStability.CONSISTENT_WITHIN_QUERY
+        examples = [
+            FunctionExample(
+                sql="SELECT query_seed(value) FROM data",
+                description="Offset each value by a seed that is constant within a query",
+            ),
+        ]
+
+    @classmethod
+    def compute(
+        cls,
+        value: Annotated[pa.Int64Array, Param(doc="Value to offset")],
+    ) -> Annotated[pa.Int64Array, Returns()]:
+        """Add a fixed per-query offset to each value.
+
+        The offset is deterministic here (a constant) so SQL tests have a
+        stable expected output; the stability flag is what is under test, not
+        the numeric result.
+        """
+        import pyarrow.compute as pc
+
+        return pc.add(value, 1000)
+
+
 class RandomBytesFunction(ScalarFunction):
     """Generates deterministic pseudo-random binary blobs from a seed."""
 

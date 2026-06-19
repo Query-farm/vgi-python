@@ -52,6 +52,7 @@ from vgi._test_fixtures.scalar.null_handling import (
 from vgi._test_fixtures.scalar.random_demo import (
     BernoulliFunction,
     HashSeedFunction,
+    QuerySeedFunction,
     RandomBytesFunction,
     RandomIntFunction,
 )
@@ -102,6 +103,7 @@ __all__ = [
     "PairTypeIntIntFunction",
     "PairTypeIntStrFunction",
     "PairTypeStrStrFunction",
+    "QuerySeedFunction",
     "RandomBytesFunction",
     "RandomIntFunction",
     "ReturnSecretValueFunction",

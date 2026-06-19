@@ -43,6 +43,7 @@ vgi-fixture-versioned-worker = "vgi._test_fixtures.versioned:main"
 vgi-fixture-versioned-tables-worker = "vgi._test_fixtures.versioned_tables:main"
 vgi-fixture-attach-options-worker = "vgi._test_fixtures.attach_options:main"
 vgi-fixture-bad-protocol-worker = "vgi._test_fixtures.bad_protocol:main"
+vgi-fixture-bad-enum-worker = "vgi._test_fixtures.bad_enum:main"
 vgi-fixture-writable-worker = "vgi._test_fixtures.writable.worker:main"
 vgi-fixture-simple-writable-worker = "vgi._test_fixtures.simple_writable:main"
 

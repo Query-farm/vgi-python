@@ -33,6 +33,11 @@ Fixtures:
   disjoint integer range. Verifies the wire path; DuckDB falls back to
   ``HASH_GROUP_BY`` for GROUP BY queries against it.
 
+* :class:`OverlappingRangePartitionedFunction` — declares
+  ``OVERLAPPING_PARTITIONS`` (the only fixture that does). Consecutive
+  chunks share ``key`` values. Wire-level only; DuckDB falls back to
+  ``HASH_GROUP_BY``.
+
 All fixtures use the in-memory state pattern (no work-queue / no
 stream_state) — they're simpler than the v1 partitioned_batch_index
 since the v2 plan is about correctness of the partition contract,
@@ -462,6 +467,102 @@ class DisjointRangePartitionedFunction(TableFunctionGenerator[_DisjointArgs, _Di
 
         rpp = params.args.rows_per_partition
         base = state.current_partition_idx * 1000
+        keys = [base + i for i in range(rpp)]
+        values = [state.current_partition_idx * 10 + i for i in range(rpp)]
+        batch = pa.RecordBatch.from_pydict(
+            {"key": keys, "value": values},
+            schema=cls.FIXED_SCHEMA,
+        )
+        out.emit(batch)
+        state.current_idx = rpp
+
+
+# =============================================================================
+# OVERLAPPING_PARTITIONS — wire-level only
+# =============================================================================
+
+
+@dataclass(slots=True, frozen=True)
+class _OverlappingArgs:
+    """Arguments for ``overlapping_range_partitioned``."""
+
+    partitions: Annotated[int, Arg(0, doc="Number of overlapping partitions", ge=1)]
+    rows_per_partition: Annotated[int, Arg("rows_per_partition", default=10, doc="Rows per partition", ge=1)]
+
+
+@dataclass(kw_only=True)
+class _OverlappingState(ArrowSerializableDataclass):
+    current_partition_idx: int = -1
+    current_idx: int = 0
+    started: bool = False
+
+
+@bind_fixed_schema
+@_cardinality_from_count
+class OverlappingRangePartitionedFunction(TableFunctionGenerator[_OverlappingArgs, _OverlappingState]):
+    """Per-chunk *overlapping* integer ranges on ``key``.
+
+    Each chunk N emits ``key`` values in ``[N*500, N*500 + rows)``. With the
+    default ``rows_per_partition`` of 10 the ranges are disjoint, but callers
+    pass ``rows_per_partition > 500`` to make consecutive chunks overlap on
+    ``key`` — distinguishing this from
+    :class:`DisjointRangePartitionedFunction`.
+
+    Declares ``OVERLAPPING_PARTITIONS``. Like DISJOINT, DuckDB has no consumer
+    for OVERLAPPING today, so GROUP BY queries fall back to ``HASH_GROUP_BY``;
+    the value's purpose here is to keep the wire path (declaration, per-batch
+    min/max metadata, C++ extraction → ``get_partition_info``) exercised so
+    other-language workers must specify it. This is the only fixture that emits
+    ``OVERLAPPING_PARTITIONS``.
+    """
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        [
+            partition_field("key", pa.int64()),
+            pa.field("value", pa.int64()),
+        ]
+    )
+
+    class Meta:
+        name = "overlapping_range_partitioned"
+        description = (
+            "Overlapping per-chunk integer ranges on ``key``. Declares "
+            "OVERLAPPING_PARTITIONS (wire-level only; DuckDB falls back to "
+            "HASH_GROUP_BY for now)."
+        )
+        categories = ["generator", "partitioning", "testing"]
+        partition_kind = PartitionKind.OVERLAPPING_PARTITIONS
+
+    @classmethod
+    def on_init(cls, params: InitParams[_OverlappingArgs]) -> GlobalInitResponse:
+        items = [struct.pack(_QUEUE_ITEM_FMT, i) for i in range(params.args.partitions)]
+        params.storage.queue_push(items)
+        return GlobalInitResponse()
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_OverlappingArgs]) -> _OverlappingState:
+        return _OverlappingState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_OverlappingArgs],
+        state: _OverlappingState,
+        out: OutputCollector,
+    ) -> None:
+        if not state.started or state.current_idx >= params.args.rows_per_partition:
+            item = params.storage.queue_pop()
+            if item is None:
+                out.finish()
+                return
+            (state.current_partition_idx,) = struct.unpack(_QUEUE_ITEM_FMT, item)
+            state.current_idx = 0
+            state.started = True
+
+        rpp = params.args.rows_per_partition
+        # Stride of 500 (< rpp when callers want overlap) makes consecutive
+        # chunks share key values.
+        base = state.current_partition_idx * 500
         keys = [base + i for i in range(rpp)]
         values = [state.current_partition_idx * 10 + i for i in range(rpp)]
         batch = pa.RecordBatch.from_pydict(

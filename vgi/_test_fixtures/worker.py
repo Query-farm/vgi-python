@@ -86,6 +86,7 @@ from vgi._test_fixtures.scalar import (
     PairTypeIntIntFunction,
     PairTypeIntStrFunction,
     PairTypeStrStrFunction,
+    QuerySeedFunction,
     RandomBytesFunction,
     RandomIntFunction,
     ReturnSecretValueFunction,
@@ -146,6 +147,7 @@ from vgi._test_fixtures.table import (
     NestedSequenceFunction,
     NonMonotoneBatchIndexFunction,
     OrderEchoFunction,
+    OverlappingRangePartitionedFunction,
     PartitionedBatchIndexFunction,
     PartitionedBatchIndexMarkedFunction,
     PartitionedFixedOrderFunction,
@@ -385,6 +387,7 @@ _EXAMPLE_CATALOG = Catalog(
                 # — see vgi/_test_fixtures/table/partition_columns.py.
                 CountryPartitionedSalesFunction,
                 DisjointRangePartitionedFunction,
+                OverlappingRangePartitionedFunction,
                 PartitionedWithExplicitOverrideFunction,
                 RegionYearPartitionedFunction,
                 # Deliberately-broken batch_index fixtures (see
@@ -457,6 +460,7 @@ _EXAMPLE_CATALOG = Catalog(
                 PairTypeIntIntFunction,
                 PairTypeIntStrFunction,
                 PairTypeStrStrFunction,
+                QuerySeedFunction,
                 RandomBytesFunction,
                 RandomIntFunction,
                 ReturnSecretValueFunction,

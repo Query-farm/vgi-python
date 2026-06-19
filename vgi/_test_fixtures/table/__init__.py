@@ -82,6 +82,7 @@ from vgi._test_fixtures.table.pairs import (
 from vgi._test_fixtures.table.partition_columns import (
     CountryPartitionedSalesFunction,
     DisjointRangePartitionedFunction,
+    OverlappingRangePartitionedFunction,
     PartitionedWithExplicitOverrideFunction,
     RegionYearPartitionedFunction,
 )
@@ -182,6 +183,7 @@ __all__ = [
     "NestedSequenceFunction",
     "NonMonotoneBatchIndexFunction",
     "OrderEchoFunction",
+    "OverlappingRangePartitionedFunction",
     "PartitionedBatchIndexFunction",
     "PartitionedBatchIndexMarkedFunction",
     "PartitionedFixedOrderFunction",
