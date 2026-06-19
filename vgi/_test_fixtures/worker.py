@@ -1621,11 +1621,18 @@ def main() -> None:
     extra is also installed.
     """
     from vgi._test_fixtures.accumulate.worker import AccumulateWorker
+    from vgi._test_fixtures.narrow_bind.worker import NarrowBindWorker
     from vgi._test_fixtures.projection_repro.worker import ProjReproWorker
     from vgi._test_fixtures.schema_reconcile.worker import SchemaReconcileWorker
     from vgi.meta_worker import MetaWorker
 
-    workers: list[type] = [ExampleWorker, ProjReproWorker, SchemaReconcileWorker, AccumulateWorker]
+    workers: list[type] = [
+        ExampleWorker,
+        ProjReproWorker,
+        SchemaReconcileWorker,
+        AccumulateWorker,
+        NarrowBindWorker,
+    ]
     try:
         from vgi._test_fixtures.writable.worker import WritableWorker
     except ImportError:
