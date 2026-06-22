@@ -159,6 +159,7 @@ __all__ = [
     "PYTHON_TO_ARROW",
     "Returns",
     "TableInput",
+    "TaggedUnion",
     "TypeBoundPredicate",
     "OutputLength",
     "Setting",
@@ -166,6 +167,53 @@ __all__ = [
     "SecretLookupEntry",
     "_extract_setting_secret_params",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class TaggedUnion:
+    """A decoded union-typed argument: which member is set (``tag``) and its ``value``.
+
+    DuckDB ``UNION`` / Arrow union arguments are *tagged*: the discriminator
+    (which member is present) lives in the Arrow ``UnionScalar.type_code``, not
+    in the member value. Plain ``Scalar.as_py()`` returns only the member value
+    and drops that tag, so union arguments are decoded into this wrapper
+    instead — ``tag`` is the active member's field name and ``value`` is its
+    Python value.
+
+    Example::
+
+        config: Annotated[TaggedUnion, Arg("config", arrow_type=pa.sparse_union([...]))]
+        ...
+        cfg = params.args.config            # TaggedUnion(tag=..., value=...)
+        if cfg.tag == "random_forest_classifier":
+            grid = cfg.value                # the member struct, as a dict
+
+    """
+
+    tag: str | None
+    value: Any
+
+
+def _scalar_to_py(scalar: "Scalar") -> Any:
+    """Convert an argument scalar to a Python value, preserving union tags.
+
+    Identical to ``scalar.as_py()`` for every type except unions: a
+    ``UnionScalar`` is decoded to a [`TaggedUnion`][] so the member
+    discriminator (which ``as_py()`` discards) is retained.
+    """
+    if isinstance(scalar, pa.UnionScalar):
+        union_type = scalar.type
+        tag = next(
+            (
+                union_type.field(i).name
+                for i in range(union_type.num_fields)
+                if union_type.type_codes[i] == scalar.type_code
+            ),
+            None,
+        )
+        inner = scalar.value
+        return TaggedUnion(tag=tag, value=inner.as_py() if inner is not None else None)
+    return scalar.as_py()
 
 
 class TableInput:
@@ -377,7 +425,7 @@ class Arguments:
             else:
                 raise TypeError(f"Argument '{key}': expected {type}, got {scalar.type}")
 
-        return scalar.as_py()
+        return _scalar_to_py(scalar)
 
     def get_varargs(
         self,
@@ -410,7 +458,7 @@ class Arguments:
             if type is not None and scalar.type != type:
                 raise TypeError(f"Argument {i}: expected {type}, got {scalar.type}")
 
-            values.append(scalar.as_py())
+            values.append(_scalar_to_py(scalar))
 
         return tuple(values)
 

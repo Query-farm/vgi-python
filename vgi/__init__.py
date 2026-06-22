@@ -39,6 +39,7 @@ from vgi.arguments import (
     Param,
     Returns,
     TableInput,
+    TaggedUnion,
 )
 from vgi.auth import AuthContext, CallContext
 from vgi.metadata import (
@@ -143,6 +144,7 @@ __all__ = [
     "TableInOutGenerator",
     "TableInput",
     "TableInputValidationError",
+    "TaggedUnion",
     "TypeMismatchError",
     "Worker",
     "functions_to_arrow",
