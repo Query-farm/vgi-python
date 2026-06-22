@@ -194,23 +194,28 @@ class TaggedUnion:
     value: Any
 
 
-def _scalar_to_py(scalar: "Scalar") -> Any:
+def _scalar_to_py(scalar: "Scalar[Any]") -> Any:
     """Convert an argument scalar to a Python value, preserving union tags.
 
     Identical to ``scalar.as_py()`` for every type except unions: a
     ``UnionScalar`` is decoded to a [`TaggedUnion`][] so the member
     discriminator (which ``as_py()`` discards) is retained.
+
+    Args:
+        scalar: The argument scalar to convert.
+
+    Returns:
+        ``scalar.as_py()`` for non-union scalars; a [`TaggedUnion`][] for unions.
+
     """
     if isinstance(scalar, pa.UnionScalar):
+        # Map the active ``type_code`` to its member field name via the union
+        # type's parallel ``type_codes`` / ``field()``. (``type_code`` is coerced
+        # to int — it is an integer at runtime regardless of the stub's typing.)
         union_type = scalar.type
-        tag = next(
-            (
-                union_type.field(i).name
-                for i in range(union_type.num_fields)
-                if union_type.type_codes[i] == scalar.type_code
-            ),
-            None,
-        )
+        type_codes = list(union_type.type_codes)
+        code = int(scalar.type_code)
+        tag = union_type.field(type_codes.index(code)).name if code in type_codes else None
         inner = scalar.value
         return TaggedUnion(tag=tag, value=inner.as_py() if inner is not None else None)
     return scalar.as_py()

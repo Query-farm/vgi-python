@@ -17,8 +17,8 @@ _RF = pa.struct([pa.field("n_estimators", pa.list_(pa.int64())), pa.field("max_d
 _SVC = pa.struct([pa.field("C", pa.list_(pa.float64())), pa.field("kernel", pa.list_(pa.string()))])
 
 
-def _union_scalar(tag: str, code: int, members: dict) -> pa.UnionScalar:
-    """Build a one-element sparse-union scalar with named members, active = ``tag``."""
+def _union_scalar(code: int, members: dict) -> pa.UnionScalar:
+    """Build a one-element sparse-union scalar with named members, active = ``code``."""
     arr = pa.UnionArray.from_sparse(
         pa.array([code], type=pa.int8()),
         [
@@ -32,9 +32,8 @@ def _union_scalar(tag: str, code: int, members: dict) -> pa.UnionScalar:
 
 
 def test_union_arg_preserves_tag() -> None:
-    scalar = _union_scalar(
-        "random_forest_classifier", 0, {"random_forest_classifier": {"n_estimators": [100, 300], "max_depth": [3, 5]}}
-    )
+    """A union argument decodes to a TaggedUnion carrying the active member name."""
+    scalar = _union_scalar(0, {"random_forest_classifier": {"n_estimators": [100, 300], "max_depth": [3, 5]}})
     got = Arguments(named={"config": scalar}).get("config")
     assert isinstance(got, TaggedUnion)
     assert got.tag == "random_forest_classifier"
@@ -42,13 +41,15 @@ def test_union_arg_preserves_tag() -> None:
 
 
 def test_union_arg_other_member() -> None:
-    scalar = _union_scalar("svc", 1, {"svc": {"C": [1.0, 10.0], "kernel": ["rbf", "linear"]}})
+    """The tag reflects whichever union member is set."""
+    scalar = _union_scalar(1, {"svc": {"C": [1.0, 10.0], "kernel": ["rbf", "linear"]}})
     got = Arguments(named={"config": scalar}).get("config")
     assert got.tag == "svc"
     assert got.value == {"C": [1.0, 10.0], "kernel": ["rbf", "linear"]}
 
 
 def test_non_union_args_unchanged() -> None:
+    """Non-union arguments still decode via plain as_py()."""
     args = Arguments(named={"n": pa.scalar(5), "s": pa.scalar("hi")}, positional=(pa.scalar(1.5),))
     assert args.get("n") == 5
     assert args.get("s") == "hi"
