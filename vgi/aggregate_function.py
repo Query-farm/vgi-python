@@ -337,6 +337,22 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
         The ``states`` dict is pre-populated with ``initial_state()`` for
         all new group_ids. ``group_ids`` is parallel to each column array.
 
+        IMPORTANT — reassign to persist. Treat state as immutable: to record
+        a change you MUST write it back with ``states[gid] = new_state``. The
+        framework only persists a group whose entry you *assigned* during this
+        call (plus groups already saved from an earlier batch). Mutating the
+        existing object in place — e.g. ``states[gid].items.append(x)`` — is
+        NOT detected for a group first seen in this batch, so its data is
+        silently dropped and ``finalize()`` sees only ``initial_state()``. This
+        bites single-group / single-batch aggregates hardest. Do::
+
+            s = states[gid]
+            states[gid] = MyState(items=s.items + new_items)  # reassign
+
+        not::
+
+            states[gid].items.extend(new_items)  # in-place: may be lost
+
         """
         ...
 
