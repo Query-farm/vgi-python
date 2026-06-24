@@ -613,3 +613,118 @@ class TestFunctionTypeInference:
 
         meta = resolve_metadata(TestFunc)
         assert meta.function_type == CatalogFunctionType.TABLE
+
+
+class TestFunctionTags:
+    """A worker can attach arbitrary free-form tags to a function's metadata.
+
+    These flow ``Meta.tags`` -> ``ResolvedMetadata.tags`` -> ``FunctionInfo.tags``
+    -> DuckDB's per-function ``tags`` map, which is what the ``vgi-lint-check``
+    metadata linter reads (e.g. VGI307 requires ``vgi.columns_md`` on a
+    dynamic-schema table function).
+    """
+
+    def test_meta_tags_resolved(self) -> None:
+        """Arbitrary Meta.tags land on ResolvedMetadata.tags verbatim."""
+
+        class TaggedFunction(TableInOutFunction):  # type: ignore[type-arg]
+            class Meta:
+                name = "tagged_func"
+                tags = {
+                    "vgi.columns_md": "| col | type |\n| --- | --- |\n| id | BIGINT |",
+                    "custom.team": "data",
+                }
+
+            data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
+
+        meta = resolve_metadata(TaggedFunction)
+        assert meta.tags == {
+            "vgi.columns_md": "| col | type |\n| --- | --- |\n| id | BIGINT |",
+            "custom.team": "data",
+        }
+
+    def test_tags_survive_arrow_roundtrip(self) -> None:
+        """Function tags survive the metadata Arrow wire roundtrip (map column)."""
+
+        class TaggedFunction(TableInOutFunction):  # type: ignore[type-arg]
+            class Meta:
+                name = "tagged_func"
+                tags = {"vgi.columns_md": "| col |", "k": "v"}
+
+            data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
+
+        restored = arrow_to_functions(functions_to_arrow([TaggedFunction]))[0]
+        assert restored.tags == {"vgi.columns_md": "| col |", "k": "v"}
+
+    def test_tags_and_examples_are_independent(self) -> None:
+        """Worker tags do not clobber the structured examples, and vice versa.
+
+        ``examples`` is its own structured channel (serialized to the
+        ``examples`` struct column / ``FunctionInfo.examples``); it is never
+        folded into the ``tags`` map. A worker that *also* sets a
+        ``vgi.example_queries`` tag (the tag-encoded examples convention the
+        linter understands) keeps both — the tag is preserved untouched and the
+        structured examples remain separate.
+        """
+
+        class BothFunction(TableInOutFunction):  # type: ignore[type-arg]
+            class Meta:
+                name = "both_func"
+                examples = ["SELECT * FROM both_func((SELECT 1))"]
+                tags = {
+                    "vgi.example_queries": '[{"description":"x","sql":"SELECT tag"}]',
+                    "vgi.columns_md": "| col |",
+                }
+
+            data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
+
+        meta = resolve_metadata(BothFunction)
+        # Worker-provided tags untouched (example_queries tag not derived, not dropped).
+        assert meta.tags == {
+            "vgi.example_queries": '[{"description":"x","sql":"SELECT tag"}]',
+            "vgi.columns_md": "| col |",
+        }
+        # Structured examples live independently and are not merged into tags.
+        assert [ex.sql for ex in meta.examples] == ["SELECT * FROM both_func((SELECT 1))"]
+
+    def test_tags_flow_into_function_info(self) -> None:
+        """Tags reach ``FunctionInfo.tags`` (catalog -> DuckDB -> linter path).
+
+        Also asserts that the structured ``examples`` and the worker-set
+        ``vgi.example_queries`` tag coexist on ``FunctionInfo`` without either
+        clobbering the other.
+        """
+        from vgi.catalog.catalog_interface import (
+            FunctionInfo,
+            ReadOnlyCatalogInterface,
+        )
+        from vgi.table_function import TableFunctionGenerator
+
+        class DynamicTable(TableFunctionGenerator):  # type: ignore[type-arg]
+            class Meta:
+                name = "dynamic_table"
+                examples = ["SELECT * FROM dynamic_table()"]
+                tags = {
+                    "vgi.columns_md": "| col | type |\n| --- | --- |\n| id | BIGINT |",
+                    "vgi.example_queries": '[{"description":"x","sql":"SELECT 1"}]',
+                    "custom.team": "data",
+                }
+
+            FIXED_SCHEMA = pa.schema([pa.field("id", pa.int64())])
+
+            def process(self, params):  # type: ignore[no-untyped-def]
+                yield pa.record_batch({"id": [1]})
+
+        class Cat(ReadOnlyCatalogInterface):
+            catalog_name = "functions"
+            functions = [DynamicTable]
+
+        info = Cat()._function_to_info(DynamicTable, "main")
+        assert isinstance(info, FunctionInfo)
+        assert info.tags == {
+            "vgi.columns_md": "| col | type |\n| --- | --- |\n| id | BIGINT |",
+            "vgi.example_queries": '[{"description":"x","sql":"SELECT 1"}]',
+            "custom.team": "data",
+        }
+        # Structured examples are carried separately from the tag-encoded ones.
+        assert [ex.sql for ex in info.examples] == ["SELECT * FROM dynamic_table()"]
