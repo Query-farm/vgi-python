@@ -61,7 +61,7 @@ class CountBatchArgs:
     """
 
     count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
-    batch_size: Annotated[int, Arg("batch_size", default=1000, doc="Batch size for output", ge=1)]
+    batch_size: Annotated[int, Arg("batch_size", default=2048, doc="Batch size for output", ge=1)]
 
 
 @dataclass(slots=True, frozen=True)
@@ -91,7 +91,7 @@ class _BaseSequenceFunction(TableFunctionGenerator[Any, CountdownState]):
     NUMPY_DTYPE: ClassVar[type[np.generic]] = np.int64
     STATS_ARROW_TYPE: ClassVar[pa.DataType] = pa.int64()
     STATS_COLUMN_NAME: ClassVar[str] = "n"
-    BATCH_SIZE_FALLBACK: ClassVar[int] = 1000
+    BATCH_SIZE_FALLBACK: ClassVar[int] = 2048
 
     @classmethod
     def initial_state(cls, params: ProcessParams[Any]) -> CountdownState:
