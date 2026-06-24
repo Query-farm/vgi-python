@@ -873,6 +873,10 @@ class Catalog:
         schemas: Sequence of Schema objects defining the catalog contents.
         comment: Optional comment describing the catalog.
         tags: Optional key-value tags associated with the catalog.
+        source_url: Where this worker's code lives — repo, build, or docs
+            homepage. ``None`` (the default) when the worker doesn't advertise
+            a source location. Surfaced via the ``catalog_catalogs()`` discovery
+            record (``CatalogInfo.source_url``).
 
     """
 
@@ -881,6 +885,7 @@ class Catalog:
     schemas: Sequence[Schema] = ()
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
+    source_url: str | None = None
 
     def __post_init__(self) -> None:
         """Validate catalog configuration."""

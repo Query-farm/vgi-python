@@ -2319,6 +2319,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                 implementation_version=None,
                 data_version_spec=None,
                 attach_option_specs=[spec.serialize() for spec in self.attach_option_specs],
+                source_url=self.catalog.source_url if self.catalog is not None else None,
             )
         ]
 

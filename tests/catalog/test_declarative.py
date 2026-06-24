@@ -1207,6 +1207,20 @@ class TestCatalogDescriptor:
         catalog = Catalog(name="myapp", schemas=[main, analytics])
         assert len(catalog.schemas) == 2
 
+    def test_catalog_source_url_defaults_to_none(self) -> None:
+        """Catalog source_url is None unless set."""
+        catalog = Catalog(name="myapp", schemas=[Schema(name="main")])
+        assert catalog.source_url is None
+
+    def test_catalog_source_url_settable(self) -> None:
+        """Catalog source_url can advertise the repo/docs homepage."""
+        catalog = Catalog(
+            name="myapp",
+            schemas=[Schema(name="main")],
+            source_url="https://github.com/example/myapp",
+        )
+        assert catalog.source_url == "https://github.com/example/myapp"
+
 
 class TestCatalogValidation:
     """Tests for Catalog validation."""
@@ -1310,6 +1324,25 @@ class TestReadOnlyCatalogWithCatalog:
         """catalogs() returns the catalog name from Catalog object."""
         infos = catalog_interface.catalogs()
         assert [i.name for i in infos] == ["testapp"]
+
+    def test_catalogs_omits_source_url_when_unset(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
+        """catalogs() yields source_url=None when the Catalog doesn't set one."""
+        infos = catalog_interface.catalogs()
+        assert infos[0].source_url is None
+
+    def test_catalogs_serializes_source_url(self, users_table: Table) -> None:
+        """catalogs() surfaces the Catalog.source_url into CatalogInfo."""
+
+        class SourcedCatalog(ReadOnlyCatalogInterface):
+            catalog = Catalog(
+                name="sourced",
+                default_schema="main",
+                schemas=[Schema(name="main", tables=[users_table])],
+                source_url="https://github.com/example/sourced",
+            )
+
+        infos = SourcedCatalog().catalogs()
+        assert infos[0].source_url == "https://github.com/example/sourced"
 
     def test_catalog_attach(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """catalog_attach returns result with correct defaults."""

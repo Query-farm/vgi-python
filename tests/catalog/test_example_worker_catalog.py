@@ -78,6 +78,13 @@ class TestExampleWorkerCatalog:
         catalogs = client.catalogs()
         assert "example" in [c.name for c in catalogs]
 
+    def test_catalogs_advertises_source_url(self) -> None:
+        """The declarative catalog's source_url round-trips through discovery."""
+        client = Client(EXAMPLE_WORKER)
+        catalogs = client.catalogs()
+        example = next(c for c in catalogs if c.name == "example")
+        assert example.source_url == "https://github.com/query-farm/vgi-python"
+
     def test_catalog_attach_works(self) -> None:
         """Can attach to the 'example' catalog."""
         client = Client(EXAMPLE_WORKER)

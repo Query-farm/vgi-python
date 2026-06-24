@@ -320,6 +320,7 @@ _EXAMPLE_CATALOG = Catalog(
     default_schema="main",
     comment="Example VGI catalog for testing",
     tags={"source": "vgi-fixture-worker", "version": "1"},
+    source_url="https://github.com/query-farm/vgi-python",
     schemas=[
         Schema(
             name="main",
