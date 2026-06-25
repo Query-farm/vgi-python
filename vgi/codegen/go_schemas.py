@@ -155,8 +155,14 @@ def _emit_field_literal(field: pa.Field[Any], *, origin: str) -> str:
 
 def _emit_var(es: EmittedSchema) -> str:
     body = f"// Origin: {es.origin}\n"
+    fields = list(es.schema)
+    # Empty schemas must collapse to `[]arrow.Field{}` on one line — gofmt
+    # rejects the multi-line `{\n}` form, and vgi-go's CI runs `gofmt -l`.
+    if not fields:
+        body += f"var {es.name}Schema = arrow.NewSchema([]arrow.Field{{}}, nil)\n"
+        return body
     body += f"var {es.name}Schema = arrow.NewSchema([]arrow.Field{{\n"
-    for f in es.schema:
+    for f in fields:
         body += "\t" + _emit_field_literal(f, origin=f"{es.name}.{f.name}") + ",\n"
     body += "}, nil)\n"
     return body
@@ -178,9 +184,9 @@ def emit(out: TextIO) -> None:
     body.write("\n")
     body.write("var _ = arrow.BinaryTypes.String // keep import live when no schemas reference it\n")
     body.write("\n")
-    for block in (_emit_var(es) for es in schemas):
-        body.write(block)
-        body.write("\n")
+    # Blank line BETWEEN blocks, but no trailing blank line at EOF (gofmt rejects
+    # it; vgi-go CI runs `gofmt -l`). Each block already ends in "\n".
+    body.write("\n".join(_emit_var(es) for es in schemas))
 
     out.write(
         provenance_comment(
