@@ -4438,6 +4438,7 @@ class Worker:
             definition=request.definition,
             on_conflict=request.on_conflict,
             parameter_default_values=request.parameter_default_values,
+            arguments_schema=request.arguments_schema,
         )
 
     def catalog_macro_drop(

@@ -752,6 +752,7 @@ class InMemoryCatalog(CatalogInterface):
         definition: str,
         on_conflict: OnConflict,
         parameter_default_values: pa.RecordBatch | None = None,
+        arguments_schema: pa.Schema | None = None,
     ) -> None:
         """Create a new macro."""
         schema_data = self._get_schema(attach_opaque_data, schema_name)
@@ -773,6 +774,7 @@ class InMemoryCatalog(CatalogInterface):
                 definition=definition,
                 comment=None,
                 tags={},
+                arguments_schema=arguments_schema,
             )
         )
         self._increment_version(attach_opaque_data)

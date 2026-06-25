@@ -435,6 +435,15 @@ class MacroInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             names and values are typed defaults. None if no defaults.
             Serialized as IPC bytes over the wire.
         definition: The SQL expression (scalar) or query (table).
+        arguments_schema: Optional Arrow schema (serialized as IPC bytes) with one
+            nullable field per parameter, in ``parameters`` order. Each field's type
+            is the parameter's default value type when known (else null), and the
+            ``vgi_doc`` field metadata key carries the parameter's description (UTF-8,
+            presence-only — omitted when undocumented). Mirrors the per-argument doc
+            channel functions expose via ``FunctionInfo.arguments``. None means the
+            worker did not supply per-parameter docs (older workers); the extension
+            falls back to ``parameters`` for names. Built with
+            ``vgi.argument_spec.macro_arguments_schema``.
 
     """
 
@@ -442,6 +451,7 @@ class MacroInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     parameters: list[str]
     parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     definition: str = ""
+    arguments_schema: Annotated[pa.Schema | None, ArrowType(pa.binary())] = None
 
 
 class FunctionType(Enum):
@@ -1979,8 +1989,25 @@ class CatalogInterface(ABC):
         definition: str,
         on_conflict: OnConflict,
         parameter_default_values: pa.RecordBatch | None = None,
+        arguments_schema: pa.Schema | None = None,
     ) -> None:
-        """Create a new macro with the given definition."""
+        """Create a new macro with the given definition.
+
+        Args:
+            attach_opaque_data: Per-attach catalog session token.
+            transaction_opaque_data: Optional transaction handle.
+            schema_name: Schema to create the macro in.
+            name: Name for the new macro.
+            macro_type: Whether this is a scalar or table macro.
+            parameters: Ordered list of parameter names.
+            definition: SQL expression (scalar) or query (table).
+            on_conflict: Behavior if the macro already exists.
+            parameter_default_values: One-row ``RecordBatch`` with typed defaults.
+            arguments_schema: Optional Arrow schema (one nullable field per
+                parameter, in ``parameters`` order) carrying per-parameter
+                descriptions via the ``vgi_doc`` field metadata key. ``None`` when
+                no per-parameter docs are supplied.
+        """
         raise NotImplementedError("Macro create not implemented.")
 
     def macro_drop(

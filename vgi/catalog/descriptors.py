@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Union
 
 import pyarrow as pa
 
+from vgi.argument_spec import macro_arguments_schema
 from vgi.arguments import Arguments
 from vgi.catalog.catalog_interface import (
     AttachOpaqueData,
@@ -695,6 +696,11 @@ class Macro:
         parameter_default_values: One-row `RecordBatch` where columns are parameter
             names and values are typed defaults. None if no defaults.
             Example: pa.RecordBatch.from_pydict({"b": [5]}) for b := 5.
+        parameter_docs: Optional mapping of parameter name to a human/agent-facing
+            description. Keys must appear in ``parameters``. Descriptions flow over
+            the wire via the macro ``arguments_schema``'s ``vgi_doc`` field metadata
+            (the same channel functions use), so the DuckDB extension's
+            ``vgi_function_arguments()`` can surface them. Empty/default = no docs.
         definition: SQL expression (scalar) or query (table).
         comment: Optional macro comment.
         tags: Optional metadata tags.
@@ -705,12 +711,14 @@ class Macro:
     macro_type: MacroType
     parameters: list[str] = field(default_factory=list)
     parameter_default_values: pa.RecordBatch | None = None
+    parameter_docs: dict[str, str] = field(default_factory=dict)
     definition: str = ""
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate macro configuration."""
+        param_set = set(self.parameters)
         if self.parameter_default_values is not None:
             if self.parameter_default_values.num_rows != 1:
                 raise ValueError(
@@ -718,13 +726,19 @@ class Macro:
                     f"got {self.parameter_default_values.num_rows}"
                 )
             # Validate that default param column names exist in parameters list
-            param_set = set(self.parameters)
             for col_name in self.parameter_default_values.schema.names:
                 if col_name not in param_set:
                     raise ValueError(
                         f"Macro '{self.name}': default parameter '{col_name}' not found "
                         f"in parameters list {self.parameters}"
                     )
+        # Validate that documented parameter names exist in parameters list
+        for doc_name in self.parameter_docs:
+            if doc_name not in param_set:
+                raise ValueError(
+                    f"Macro '{self.name}': documented parameter '{doc_name}' not found "
+                    f"in parameters list {self.parameters}"
+                )
 
     def to_macro_info(self, schema_name: str) -> MacroInfo:
         """Convert to [`MacroInfo`][] for catalog response."""
@@ -737,6 +751,11 @@ class Macro:
             definition=self.definition,
             comment=self.comment,
             tags=dict(self.tags),
+            arguments_schema=macro_arguments_schema(
+                self.parameters,
+                self.parameter_default_values,
+                self.parameter_docs,
+            ),
         )
 
 

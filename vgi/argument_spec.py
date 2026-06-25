@@ -27,6 +27,8 @@ __all__ = [
     "ArgumentSpec",
     "argument_specs_to_schema",
     "extract_argument_specs",
+    "macro_arguments_schema",
+    "macro_parameter_docs_from_schema",
     "schema_to_argument_specs",
     # Metadata constants for parsing schemas
     "VGI_ARG_KEY",
@@ -278,6 +280,86 @@ def schema_to_argument_specs(schema: pa.Schema) -> list[ArgumentSpec]:
         )
 
     return specs
+
+
+# =============================================================================
+# Macro Argument Schemas
+# =============================================================================
+
+
+def macro_arguments_schema(
+    parameters: Sequence[str],
+    parameter_default_values: pa.RecordBatch | None = None,
+    parameter_docs: dict[str, str] | None = None,
+) -> pa.Schema:
+    """Build a macro ``arguments_schema`` describing macro parameters.
+
+    Mirrors the function ``arguments_schema`` mechanism: one Arrow field per
+    macro parameter, in ``parameters`` order, each nullable. The per-parameter
+    description is carried via the same ``vgi_doc`` field-metadata key functions
+    use (UTF-8, presence-only — the key is omitted entirely when there is no
+    doc). A parameter's field type is the type of its default value when one is
+    known (from ``parameter_default_values``), else ``pa.null()``.
+
+    Args:
+        parameters: Ordered list of macro parameter names.
+        parameter_default_values: Optional one-row ``RecordBatch`` whose columns
+            are parameter names with typed default values; used to infer each
+            parameter's field type.
+        parameter_docs: Optional mapping of parameter name to description. Empty
+            or missing descriptions yield no ``vgi_doc`` metadata on the field.
+
+    Returns:
+        Arrow schema with one nullable field per parameter, in order.
+
+    """
+    docs = parameter_docs or {}
+
+    # Map parameter name -> Arrow type from the typed default values, if any.
+    default_types: dict[str, pa.DataType] = {}
+    if parameter_default_values is not None:
+        for default_field in parameter_default_values.schema:
+            default_types[default_field.name] = default_field.type
+
+    fields: list[pa.Field[Any]] = []
+    for name in parameters:
+        metadata: dict[bytes, bytes] = {}
+        doc = docs.get(name, "")
+        if doc:
+            metadata[VGI_DOC_KEY] = doc.encode("utf-8")
+
+        field = pa.field(
+            name,
+            default_types.get(name, pa.null()),
+            nullable=True,
+            metadata=metadata if metadata else None,
+        )
+        fields.append(field)
+
+    return pa.schema(fields)
+
+
+def macro_parameter_docs_from_schema(schema: pa.Schema) -> dict[str, str]:
+    """Extract per-parameter descriptions from a macro ``arguments_schema``.
+
+    Inverse of [`macro_arguments_schema`][]'s ``vgi_doc`` handling: reads the
+    ``vgi_doc`` field metadata (UTF-8) for each field. Fields without the key
+    (undocumented) are omitted from the result.
+
+    Args:
+        schema: A macro ``arguments_schema`` (one field per parameter).
+
+    Returns:
+        Mapping of parameter name to description, for documented parameters only.
+
+    """
+    docs: dict[str, str] = {}
+    for field in schema:
+        metadata = field.metadata or {}
+        doc_bytes = metadata.get(VGI_DOC_KEY)
+        if doc_bytes:
+            docs[field.name] = doc_bytes.decode("utf-8")
+    return docs
 
 
 # =============================================================================

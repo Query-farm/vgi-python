@@ -615,6 +615,140 @@ class TestMacroInfoSerialization:
             restored = MacroInfo.deserialize_from_batch(batch)
             assert restored.macro_type == macro_type
 
+    def test_arguments_schema_round_trip(self) -> None:
+        """arguments_schema carries vgi_doc per documented param; absent doc -> no key."""
+        from vgi.argument_spec import VGI_DOC_KEY, macro_arguments_schema, macro_parameter_docs_from_schema
+
+        defaults = pa.RecordBatch.from_pydict({"lo": pa.array([0], type=pa.int64())})
+        args = macro_arguments_schema(
+            parameters=["val", "lo", "hi"],
+            parameter_default_values=defaults,
+            parameter_docs={"val": "value to clamp", "hi": "upper bound"},
+        )
+        original = MacroInfo(
+            name="clamp",
+            schema_name="main",
+            macro_type=MacroType.SCALAR,
+            parameters=["val", "lo", "hi"],
+            parameter_default_values=defaults,
+            definition="GREATEST(lo, LEAST(hi, val))",
+            comment=None,
+            tags={},
+            arguments_schema=args,
+        )
+        serialized = original.serialize_to_bytes()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = MacroInfo.deserialize_from_batch(batch)
+
+        assert restored.arguments_schema is not None
+        rs = restored.arguments_schema
+        # One field per parameter, in order.
+        assert rs.names == ["val", "lo", "hi"]
+        # Field type tracks the default value type when known, else null.
+        assert rs.field("lo").type == pa.int64()
+        assert rs.field("val").type == pa.null()
+        assert rs.field("hi").type == pa.null()
+        # Documented params carry vgi_doc; undocumented (lo) has no key.
+        assert (rs.field("val").metadata or {}).get(VGI_DOC_KEY) == b"value to clamp"
+        assert (rs.field("hi").metadata or {}).get(VGI_DOC_KEY) == b"upper bound"
+        assert VGI_DOC_KEY not in (rs.field("lo").metadata or {})
+        # Convenience extractor returns only documented params.
+        assert macro_parameter_docs_from_schema(rs) == {"val": "value to clamp", "hi": "upper bound"}
+
+    def test_none_arguments_schema(self) -> None:
+        """arguments_schema defaults to None (older workers) and survives round-trip."""
+        original = MacroInfo(
+            name="simple",
+            schema_name="main",
+            macro_type=MacroType.SCALAR,
+            parameters=["x"],
+            definition="x",
+            comment=None,
+            tags={},
+        )
+        serialized = original.serialize_to_bytes()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = MacroInfo.deserialize_from_batch(batch)
+        assert restored.arguments_schema is None
+
+
+class TestMacroArgumentsSchemaWire:
+    """Macro per-parameter docs flow over create/list wire types."""
+
+    def test_declarative_macro_to_info_carries_docs(self) -> None:
+        """Declarative Macro.parameter_docs -> MacroInfo.arguments_schema vgi_doc."""
+        from vgi.argument_spec import macro_parameter_docs_from_schema
+        from vgi.catalog.descriptors import Macro
+
+        m = Macro(
+            name="clamp",
+            macro_type=MacroType.SCALAR,
+            parameters=["x", "lo", "hi"],
+            parameter_default_values=pa.RecordBatch.from_pydict(
+                {"lo": pa.array([0], type=pa.int64()), "hi": pa.array([100], type=pa.int64())}
+            ),
+            parameter_docs={"x": "value to clamp"},
+            definition="GREATEST(lo, LEAST(hi, x))",
+        )
+        info = m.to_macro_info("main")
+        assert info.arguments_schema is not None
+        assert info.arguments_schema.names == ["x", "lo", "hi"]
+        assert macro_parameter_docs_from_schema(info.arguments_schema) == {"x": "value to clamp"}
+
+    def test_declarative_macro_rejects_unknown_doc_param(self) -> None:
+        """parameter_docs keys must be in parameters (validated like defaults)."""
+        from vgi.catalog.descriptors import Macro
+
+        with pytest.raises(ValueError, match="documented parameter 'bogus' not found"):
+            Macro(
+                name="bad",
+                macro_type=MacroType.SCALAR,
+                parameters=["x"],
+                parameter_docs={"bogus": "nope"},
+                definition="x",
+            )
+
+    def test_macro_create_request_round_trip(self) -> None:
+        """MacroCreateRequest carries arguments_schema over the wire."""
+        from vgi.argument_spec import macro_arguments_schema, macro_parameter_docs_from_schema
+        from vgi.catalog import OnConflict
+        from vgi.protocol import MacroCreateRequest
+
+        args = macro_arguments_schema(
+            parameters=["x", "y"],
+            parameter_docs={"x": "first", "y": "second"},
+        )
+        req = MacroCreateRequest(
+            attach_opaque_data=b"attach",
+            schema_name="main",
+            name="add",
+            macro_type=MacroType.SCALAR,
+            parameters=["x", "y"],
+            definition="x + y",
+            on_conflict=OnConflict.ERROR,
+            arguments_schema=args,
+        )
+        restored = MacroCreateRequest.deserialize_from_bytes(req.serialize_to_bytes())
+        assert restored.arguments_schema is not None
+        assert macro_parameter_docs_from_schema(restored.arguments_schema) == {"x": "first", "y": "second"}
+
+    def test_macro_create_request_none_arguments_schema(self) -> None:
+        """MacroCreateRequest.arguments_schema defaults to None and round-trips."""
+        from vgi.catalog import OnConflict
+        from vgi.protocol import MacroCreateRequest
+
+        req = MacroCreateRequest(
+            attach_opaque_data=b"attach",
+            schema_name="main",
+            name="add",
+            macro_type=MacroType.SCALAR,
+            parameters=["x", "y"],
+            definition="x + y",
+            on_conflict=OnConflict.ERROR,
+        )
+        restored = MacroCreateRequest.deserialize_from_bytes(req.serialize_to_bytes())
+        assert restored.arguments_schema is None
+
 
 class TestFunctionInfoSerialization:
     """Test FunctionInfo serialization round-trip."""

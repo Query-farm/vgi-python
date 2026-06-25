@@ -519,6 +519,10 @@ _EXAMPLE_CATALOG = Catalog(
                     parameters=["x", "y"],
                     definition="x * y",
                     comment="Multiply two values",
+                    parameter_docs={
+                        "x": "First factor",
+                        "y": "Second factor",
+                    },
                 ),
                 Macro(
                     name="vgi_clamp",
@@ -530,6 +534,11 @@ _EXAMPLE_CATALOG = Catalog(
                     ),
                     definition="GREATEST(lo, LEAST(hi, val))",
                     comment="Clamp a value between lo and hi (defaults: 0..100)",
+                    parameter_docs={
+                        "val": "Value to clamp",
+                        "lo": "Lower bound (inclusive)",
+                        "hi": "Upper bound (inclusive)",
+                    },
                 ),
                 Macro(
                     name="vgi_range_table",
@@ -537,6 +546,7 @@ _EXAMPLE_CATALOG = Catalog(
                     parameters=["n"],
                     definition="SELECT * FROM range(n)",
                     comment="Table macro returning range of values",
+                    parameter_docs={"n": "Number of rows to generate"},
                 ),
             ],
         ),

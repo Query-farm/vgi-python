@@ -562,6 +562,13 @@ class MacroCreateRequest(ArrowSerializableDataclass):
             ERROR/IGNORE/REPLACE).
         parameter_default_values: One-row `RecordBatch` where column names are
             parameter names and values are typed defaults; ``None`` if no defaults.
+        arguments_schema: Optional Arrow schema (serialized as IPC bytes) with one
+            nullable field per parameter, in ``parameters`` order. Each field's type
+            is the parameter's default value type when known (else null), and the
+            ``vgi_doc`` field metadata key carries the parameter's description (UTF-8,
+            presence-only — omitted when undocumented). Mirrors the per-argument doc
+            channel functions expose. ``None`` when no per-parameter docs are
+            supplied. Built with ``vgi.argument_spec.macro_arguments_schema``.
         transaction_opaque_data: Opaque DuckDB transaction handle (bytes); ``None``
             when not inside a transaction.
     """
@@ -574,6 +581,7 @@ class MacroCreateRequest(ArrowSerializableDataclass):
     definition: str
     on_conflict: OnConflict
     parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
+    arguments_schema: Annotated[pa.Schema | None, ArrowType(pa.binary())] = None
     transaction_opaque_data: bytes | None = None
 
 
