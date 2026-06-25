@@ -12,6 +12,7 @@ import pytest
 from vgi.argument_spec import (
     VGI_ARG_KEY,
     VGI_ARG_NAMED,
+    VGI_DOC_KEY,
     VGI_TYPE_ANY,
     VGI_TYPE_KEY,
     VGI_TYPE_TABLE,
@@ -674,3 +675,50 @@ class TestArgumentSpecRepr:
         )
         result = repr(spec)
         assert "any_type" in result
+
+
+class TestArgumentDoc:
+    """Per-argument description via the vgi_doc field-metadata key."""
+
+    def test_doc_serialized_as_utf8_field_metadata(self) -> None:
+        """A non-empty doc is emitted as the vgi_doc field metadata (UTF-8)."""
+        specs = [ArgumentSpec(name="unit", position=0, arrow_type=pa.utf8(), doc="Source unit, e.g. 'mi'")]
+        schema = argument_specs_to_schema(specs)
+        meta = schema.field("unit").metadata or {}
+        assert meta.get(VGI_DOC_KEY) == b"Source unit, e.g. 'mi'"
+
+    def test_doc_absent_when_empty(self) -> None:
+        """Presence-only: an empty doc emits no vgi_doc key (absent = undocumented)."""
+        specs = [ArgumentSpec(name="x", position=0, arrow_type=pa.int64())]
+        schema = argument_specs_to_schema(specs)
+        meta = schema.field("x").metadata or {}
+        assert VGI_DOC_KEY not in meta
+
+    def test_doc_round_trips(self) -> None:
+        """Doc survives schema -> specs round-trip; missing doc decodes to ''."""
+        specs = [
+            ArgumentSpec(name="a", position=0, arrow_type=pa.int64(), doc="first arg"),
+            ArgumentSpec(name="b", position=1, arrow_type=pa.utf8()),
+        ]
+        out = schema_to_argument_specs(argument_specs_to_schema(specs))
+        by_name = {s.name: s for s in out}
+        assert by_name["a"].doc == "first arg"
+        assert by_name["b"].doc == ""
+
+    def test_doc_unicode_round_trips(self) -> None:
+        """Non-ASCII docs (µ, ≥, em-dash) survive the UTF-8 round-trip."""
+        doc = "value in µm — must be ≥ 1"
+        specs = [ArgumentSpec(name="v", position=0, arrow_type=pa.float64(), doc=doc)]
+        out = schema_to_argument_specs(argument_specs_to_schema(specs))
+        assert out[0].doc == doc
+
+    def test_extract_doc_from_arg(self) -> None:
+        """extract_argument_specs captures the Arg(doc=...) string."""
+
+        class FunctionWithDocs(TableInOutFunction):  # type: ignore[type-arg]
+            unit: str = Arg[str](0, doc="Unit string, e.g. 'mi'")  # type: ignore[assignment]
+            scale: float = Arg[float](1)  # type: ignore[assignment]
+
+        specs = {s.name: s for s in extract_argument_specs(FunctionWithDocs)}
+        assert specs["unit"].doc == "Unit string, e.g. 'mi'"
+        assert specs["scale"].doc == ""

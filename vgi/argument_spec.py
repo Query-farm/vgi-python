@@ -38,6 +38,7 @@ __all__ = [
     "VGI_VARARGS_TRUE",
     "VGI_CONST_KEY",
     "VGI_CONST_TRUE",
+    "VGI_DOC_KEY",
 ]
 
 # =============================================================================
@@ -60,6 +61,11 @@ VGI_VARARGS_TRUE = b"true"
 # Key indicating constant-folded argument (scalar value, not array)
 VGI_CONST_KEY = b"vgi_const"
 VGI_CONST_TRUE = b"true"
+
+# Key carrying the per-argument description (UTF-8 text). Presence-only: the key
+# is omitted entirely when there is no doc (absent = undocumented). The
+# ``vgi_doc_*`` prefix is reserved for future per-argument doc variants.
+VGI_DOC_KEY = b"vgi_doc"
 
 
 def _argument_spec_sort_key(spec: "ArgumentSpec") -> tuple[int, int | str]:
@@ -98,6 +104,9 @@ class ArgumentSpec:
         is_const: True if this argument is constant-folded ([`ConstParam`][]).
             Constant arguments are scalar values known at planning time,
             rather than columnar data processed at runtime.
+        doc: Optional human/agent-facing description of the argument. Surfaced
+            through the catalog as the ``vgi_doc`` Arrow field metadata key
+            (UTF-8); empty string means undocumented.
 
     Note:
         For named arguments, the Python attribute name (``name``) and the SQL
@@ -119,6 +128,7 @@ class ArgumentSpec:
     is_any_type: bool = False
     is_varargs: bool = False
     is_const: bool = False
+    doc: str = ""
 
     def __repr__(self) -> str:
         """Return concise repr showing key attributes."""
@@ -197,6 +207,10 @@ def argument_specs_to_schema(specs: Sequence[ArgumentSpec]) -> pa.Schema:
         if spec.is_const:
             metadata[VGI_CONST_KEY] = VGI_CONST_TRUE
 
+        # Per-argument description (UTF-8; presence-only — omit when empty)
+        if spec.doc:
+            metadata[VGI_DOC_KEY] = spec.doc.encode("utf-8")
+
         # Create field with or without metadata
         field = pa.field(
             spec.name,
@@ -246,6 +260,10 @@ def schema_to_argument_specs(schema: pa.Schema) -> list[ArgumentSpec]:
         # Check const
         is_const = metadata.get(VGI_CONST_KEY) == VGI_CONST_TRUE
 
+        # Per-argument description (UTF-8; absent = undocumented)
+        doc_bytes = metadata.get(VGI_DOC_KEY)
+        doc = doc_bytes.decode("utf-8") if doc_bytes else ""
+
         specs.append(
             ArgumentSpec(
                 name=field.name,
@@ -255,6 +273,7 @@ def schema_to_argument_specs(schema: pa.Schema) -> list[ArgumentSpec]:
                 is_any_type=is_any_type,
                 is_varargs=is_varargs,
                 is_const=is_const,
+                doc=doc,
             )
         )
 
@@ -312,6 +331,7 @@ def extract_argument_specs(
                 is_any_type=param_arg.is_any,
                 is_varargs=param_arg.varargs,
                 is_const=False,
+                doc=param_arg.doc or "",
             )
         )
 
@@ -328,6 +348,7 @@ def extract_argument_specs(
                 is_any_type=const_arg.is_any,
                 is_varargs=const_arg.varargs,
                 is_const=True,
+                doc=const_arg.doc or "",
             )
         )
 
@@ -392,6 +413,7 @@ def extract_argument_specs(
                     is_any_type=is_any_type,
                     is_varargs=arg_instance.varargs,
                     is_const=getattr(arg_instance, "const", False),
+                    doc=getattr(arg_instance, "doc", "") or "",
                 )
             )
 
@@ -466,6 +488,7 @@ def extract_argument_specs(
                         is_any_type=is_any_type,
                         is_varargs=is_varargs,
                         is_const=is_const,
+                        doc=getattr(arg_legacy, "doc", "") or "",
                     )
                 )
 
