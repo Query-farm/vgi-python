@@ -38,6 +38,7 @@ from vgi.arguments import (
     TableInput,
     _accepts_none,
     _extract_setting_secret_params,
+    _scalar_to_py,
 )
 from vgi.function_storage import BoundStorage, TransactionBoundStorage, attach_catalog_bytes
 from vgi.invocation import (
@@ -240,7 +241,7 @@ class SecretsAccessor:
         """Return the list of pending secret lookups."""
         return list(self._pending_lookups)
 
-    def to_dict(self) -> "ResolvedSecrets":
+    def to_dict(self) -> ResolvedSecrets:
         """Return all resolved secrets keyed by secret name.
 
         Resolved secrets are keyed by their unique DuckDB secret name, so several
@@ -316,9 +317,7 @@ class ResolvedSecrets(dict):
 
     def of_type(self, secret_type: str) -> list[dict[str, Any]]:
         """Every resolved secret whose ``type`` field matches ``secret_type``."""
-        return [
-            f for f in self.values() if _secret_scalar_str(f.get("type")) == secret_type
-        ]
+        return [f for f in self.values() if _secret_scalar_str(f.get("type")) == secret_type]
 
     def for_scope(self, path: str) -> dict[str, Any] | None:
         """The secret whose ``scope`` is the longest prefix of ``path``.
@@ -338,9 +337,7 @@ class ResolvedSecrets(dict):
         fields = self.for_scope(path)
         return None if fields is None else fields.get(field)
 
-    def _select_for_scope(
-        self, path: str, secret_type: str | None
-    ) -> dict[str, Any] | None:
+    def _select_for_scope(self, path: str, secret_type: str | None) -> dict[str, Any] | None:
         best: dict[str, Any] | None = None
         best_len = -1
         fallback: dict[str, Any] | None = None
@@ -763,9 +760,21 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             for meta in get_args(hint)[1:]:
                 if isinstance(meta, Arg):
                     if meta.varargs:
-                        # Varargs: collect remaining positional args as raw pa.Scalar objects
+                        # Varargs: collect remaining positional args as raw pa.Scalar
+                        # objects (e.g. constant_columns reads .type / pa.repeat off
+                        # them). Union-typed varargs are the exception: decode each
+                        # scalar to a TaggedUnion so the active member discriminator
+                        # is preserved — matching how non-vararg union args resolve
+                        # via Arguments.get()/_scalar_to_py(). Keyed on the declared
+                        # arrow_type so the raw-scalar contract is untouched otherwise.
                         assert isinstance(meta.position, int)
-                        kwargs[attr_name] = tuple(arguments.positional[meta.position :])
+                        varargs_scalars = arguments.positional[meta.position :]
+                        if meta.arrow_type is not None and pa.types.is_union(meta.arrow_type):
+                            kwargs[attr_name] = tuple(
+                                _scalar_to_py(s) if s is not None else None for s in varargs_scalars
+                            )
+                        else:
+                            kwargs[attr_name] = tuple(varargs_scalars)
                     else:
                         value = arguments.get(meta.position, default=meta.default)
                         # Reject SQL NULL for non-Optional Args. Without this,

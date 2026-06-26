@@ -78,6 +78,7 @@ from vgi._test_fixtures.table.pairs import (
     MakePairsStrFunction,
     RepeatValueIntFunction,
     RepeatValueStrFunction,
+    UnionVarargsFunction,
 )
 from vgi._test_fixtures.table.partition_columns import (
     CountryPartitionedSalesFunction,
@@ -199,6 +200,7 @@ __all__ = [
     "RegionYearPartitionedFunction",
     "RepeatValueIntFunction",
     "RepeatValueStrFunction",
+    "UnionVarargsFunction",
     "RFF_MULTI_COLUMNS",
     "RFF_NESTED_COLUMNS",
     "RFF_NONE_COLUMNS",

@@ -25,8 +25,9 @@ from vgi.arguments import Arg
 from vgi.copy_from_function import CopyFromFunction
 
 if TYPE_CHECKING:
-    from vgi.table_function import ProcessParams
     from vgi_rpc.rpc import OutputCollector
+
+    from vgi.table_function import ProcessParams
 
 __all__ = ["ExampleLinesCopyFromFunction"]
 
@@ -37,9 +38,7 @@ class ExampleLinesCopyFromArgs:
 
     null_string: Annotated[str, Arg("null_string", doc="Token parsed as SQL NULL")]
     delimiter: Annotated[str, Arg("delimiter", default=",", doc="Field separator")] = ","
-    skip_rows: Annotated[
-        int, Arg("skip_rows", default=0, ge=0, doc="Leading lines to skip before data")
-    ] = 0
+    skip_rows: Annotated[int, Arg("skip_rows", default=0, ge=0, doc="Leading lines to skip before data")] = 0
     on_error: Annotated[
         str,
         Arg(
@@ -87,9 +86,7 @@ class ExampleLinesCopyFromFunction(CopyFromFunction[ExampleLinesCopyFromArgs]):
             if len(cells) != ncols:
                 if options.on_error == "skip":
                     continue
-                raise ValueError(
-                    f"example_lines: row has {len(cells)} fields, expected {ncols}: {line!r}"
-                )
+                raise ValueError(f"example_lines: row has {len(cells)} fields, expected {ncols}: {line!r}")
             rows.append(cells)
 
         # Column-major string arrays, NULL where the cell equals null_string,

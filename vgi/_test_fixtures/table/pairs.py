@@ -14,7 +14,7 @@ from vgi_rpc.rpc import OutputCollector
 from vgi._test_fixtures.table._common import (
     _cardinality_from_count,
 )
-from vgi.arguments import Arg
+from vgi.arguments import Arg, TaggedUnion
 from vgi.invocation import BindResponse
 from vgi.metadata import FunctionExample
 from vgi.schema_utils import schema
@@ -447,3 +447,109 @@ class RepeatValueStrFunction(TableFunctionGenerator[RepeatValueStrArgs, RepeatVa
         data = {f"v{i}": col for i, col in enumerate(state.rows)}
         out_schema = schema({f"v{i}": pa.string() for i in range(len(state.rows))})
         out.emit(pa.RecordBatch.from_pydict(data, schema=out_schema))
+
+
+# ============================================================================
+
+# Sparse union shared by every union_varargs argument. DuckDB only ever emits
+# sparse unions (+us:) over Arrow, so this round-trips end-to-end.
+UNION_VARARGS_TYPE = pa.sparse_union([pa.field("i", pa.int64()), pa.field("s", pa.string())])
+
+UNION_VARARGS_SCHEMA = schema(idx=pa.int64(), tag=pa.string(), value=pa.string())
+
+
+@dataclass(kw_only=True)
+class UnionVarargsArgs:
+    """Arguments for union_varargs."""
+
+    configs: Annotated[
+        tuple[TaggedUnion, ...],
+        Arg(
+            0,
+            varargs=True,
+            arrow_type=UNION_VARARGS_TYPE,
+            doc="Union values whose active member tag is echoed back",
+        ),
+    ]
+
+
+@dataclass(kw_only=True)
+class UnionVarargsState(ArrowSerializableDataclass):
+    """State for union_varargs."""
+
+    idx: list[int] = field(default_factory=list)
+    tags: list[str | None] = field(default_factory=list)
+    values: list[str] = field(default_factory=list)
+    done: bool = False
+
+
+@init_single_worker
+@bind_fixed_schema
+class UnionVarargsFunction(TableFunctionGenerator[UnionVarargsArgs, UnionVarargsState]):
+    """Echo the active member tag and value of each union vararg.
+
+    USE CASE
+    --------
+    Exercises union-typed varargs: each argument arrives as a
+    [`TaggedUnion`][vgi.arguments.TaggedUnion] so the active member
+    discriminator (which a plain ``Scalar.as_py()`` would drop) is preserved.
+    Emits one row per vararg with its positional index, the active member
+    name, and the member value stringified into a single fixed column.
+
+    SCHEMA
+    ------
+    Fixed: ``{"idx": int64, "tag": string, "value": string}``.
+
+    Example:
+        SELECT * FROM union_varargs(
+            union_value(i := 1)::UNION(i INT, s VARCHAR),
+            union_value(s := 'x')::UNION(i INT, s VARCHAR))
+        Returns: (0, 'i', '1'), (1, 's', 'x')
+
+    Attributes:
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
+
+    """
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = UNION_VARARGS_SCHEMA
+
+    class Meta:
+        """Function metadata."""
+
+        name = "union_varargs"
+        description = "Echo the active member tag and value of each union vararg"
+        categories = ["generator", "utility"]
+        examples = [
+            FunctionExample(
+                sql=(
+                    "SELECT * FROM union_varargs("
+                    "union_value(i := 1)::UNION(i INT, s VARCHAR), "
+                    "union_value(s := 'x')::UNION(i INT, s VARCHAR))"
+                ),
+                description="Echo the tag and value of two union arguments",
+            ),
+        ]
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[UnionVarargsArgs]) -> UnionVarargsState:
+        """Decompose each union vararg into (idx, tag, value) rows."""
+        configs = params.args.configs
+        return UnionVarargsState(
+            idx=list(range(len(configs))),
+            tags=[cfg.tag for cfg in configs],
+            values=[str(cfg.value) for cfg in configs],
+        )
+
+    @classmethod
+    def process(cls, params: ProcessParams[UnionVarargsArgs], state: UnionVarargsState, out: OutputCollector) -> None:
+        """Emit one row per union vararg."""
+        if state.done:
+            out.finish()
+            return
+        state.done = True
+        out.emit(
+            pa.RecordBatch.from_pydict(
+                {"idx": state.idx, "tag": state.tags, "value": state.values},
+                schema=UNION_VARARGS_SCHEMA,
+            )
+        )
