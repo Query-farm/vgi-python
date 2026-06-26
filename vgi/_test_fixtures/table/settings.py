@@ -412,6 +412,25 @@ class ScopedSecretDemoFunction(TableFunctionGenerator[ScopedSecretDemoArgs, Scop
             secret_keys=",".join(secret.keys()) if secret else "",
         )
 
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[ScopedSecretDemoArgs],
+        state: ScopedSecretDemoState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit scope info and resolved secret keys."""
+        batch = pa.RecordBatch.from_pydict(
+            {
+                "scope": [params.args.path],
+                "found": [state.found],
+                "secret_keys": [state.secret_keys],
+            },
+            schema=params.output_schema,
+        )
+        out.emit(batch)
+        out.finish()
+
 
 @dataclass(kw_only=True)
 class MultiSecretDemoState(ArrowSerializableDataclass):
@@ -456,16 +475,12 @@ class MultiSecretDemoFunction(TableFunctionGenerator[ScopedSecretDemoArgs, Multi
     def process(
         cls,
         params: ProcessParams[ScopedSecretDemoArgs],
-        state: ScopedSecretDemoState,
+        state: MultiSecretDemoState,
         out: OutputCollector,
     ) -> None:
-        """Emit scope info and resolved secret keys."""
+        """Emit the resolved api_key for the path-matched secret."""
         batch = pa.RecordBatch.from_pydict(
-            {
-                "scope": [params.args.path],
-                "found": [state.found],
-                "secret_keys": [state.secret_keys],
-            },
+            {"api_key": [state.api_key]},
             schema=params.output_schema,
         )
         out.emit(batch)
