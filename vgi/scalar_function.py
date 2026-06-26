@@ -1067,12 +1067,30 @@ class ScalarFunction(ScalarFunctionGenerator):
                 col_idx = settings_schema.get_field_index(setting_key)
                 kwargs[name] = bind_call.settings.column(col_idx)[0] if col_idx >= 0 else None
 
-        # Secret params: extract dict[str, pa.Scalar] from secrets RecordBatch
+        # Secret params: extract dict[str, pa.Scalar] from secrets RecordBatch.
+        # Secrets are keyed by secret NAME (not type), so match the requested
+        # secret_type on each resolved secret's serialized "type" field. The
+        # first secret of that type wins (use the scope-aware accessors on a
+        # table function's params.secrets to disambiguate several of one type).
         if bind_call.secrets is not None and cls._secret_params:
-            secrets_schema = bind_call.secrets.schema
+            by_type: dict[str, dict[str, Any]] = {}
+            by_col: dict[str, dict[str, Any]] = {}
+            names = bind_call.secrets.schema.names
+            for i in range(bind_call.secrets.num_columns):
+                scalar = bind_call.secrets.column(i)[0]
+                if not scalar.is_valid:
+                    continue
+                fields = _struct_scalar_to_dict(scalar)
+                t = fields.get("type")
+                t = t.as_py() if t is not None and hasattr(t, "as_py") else t
+                if t is not None and str(t) not in by_type:
+                    by_type[str(t)] = fields
+                by_col.setdefault(names[i], fields)
             for name, secret in cls._secret_params.items():
-                col_idx = secrets_schema.get_field_index(secret.secret_type)
-                kwargs[name] = _struct_scalar_to_dict(bind_call.secrets.column(col_idx)[0]) if col_idx >= 0 else None
+                chosen = by_type.get(secret.secret_type)
+                if chosen is None:
+                    chosen = by_col.get(secret.secret_type)
+                kwargs[name] = chosen
 
         # OutputLength param: pass the batch row count
         if cls._output_length_param is not None:

@@ -321,7 +321,7 @@ class SecretDemoFunction(TableFunctionGenerator[None, SecretDemoState]):
     @classmethod
     def initial_state(cls, params: ProcessParams[None]) -> SecretDemoState:
         """Build initial state from secret key-value pairs."""
-        secret = params.secrets.get("vgi_example", {})
+        secret = next(iter(params.secrets.of_type("vgi_example")), {})
         keys = list(secret.keys())
         values = [str(v.as_py()) for v in secret.values()]
         types = [str(v.type) for v in secret.values()]
@@ -406,11 +406,51 @@ class ScopedSecretDemoFunction(TableFunctionGenerator[ScopedSecretDemoArgs, Scop
     @classmethod
     def initial_state(cls, params: ProcessParams[ScopedSecretDemoArgs]) -> ScopedSecretDemoState:
         """Build state from resolved secrets."""
-        secret = params.secrets.get("vgi_example", {})
+        secret = next(iter(params.secrets.of_type("vgi_example")), {})
         return ScopedSecretDemoState(
             found=bool(secret),
             secret_keys=",".join(secret.keys()) if secret else "",
         )
+
+
+@dataclass(kw_only=True)
+class MultiSecretDemoState(ArrowSerializableDataclass):
+    """State for MultiSecretDemoFunction."""
+
+    api_key: str = ""
+
+
+@init_single_worker
+class MultiSecretDemoFunction(TableFunctionGenerator[ScopedSecretDemoArgs, MultiSecretDemoState]):
+    """Resolve TWO same-type scoped secrets in one bind, then select per path.
+
+    Requests the ``vgi_example`` secret for both ``s3://bucket-a/`` and
+    ``s3://bucket-b/`` scopes in a single bind. Because resolved secrets are keyed
+    by name, both survive; ``for_scope_of_type`` then picks the one whose scope
+    matches the ``path`` argument and returns its ``api_key``.
+    """
+
+    class Meta:
+        """Metadata for MultiSecretDemoFunction."""
+
+        name = "multi_secret_demo"
+        description = "Demo: two same-type scoped secrets resolved in one bind"
+
+    @classmethod
+    def on_bind(cls, params: BindParams[ScopedSecretDemoArgs]) -> BindResponse:
+        """Request the secret for two distinct scopes of the same type."""
+        params.secrets.get("vgi_example", scope="s3://bucket-a/")
+        params.secrets.get("vgi_example", scope="s3://bucket-b/")
+        return BindResponse(output_schema=schema({"api_key": pa.string()}))
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[ScopedSecretDemoArgs]) -> MultiSecretDemoState:
+        """Select the resolved secret matching the path and return its api_key."""
+        secret = params.secrets.for_scope_of_type(params.args.path, "vgi_example") or {}
+        api_key = secret.get("api_key")
+        if api_key is not None and hasattr(api_key, "as_py"):
+            api_key = api_key.as_py()
+        return MultiSecretDemoState(api_key="" if api_key is None else str(api_key))
 
     @classmethod
     def process(

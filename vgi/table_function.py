@@ -240,24 +240,28 @@ class SecretsAccessor:
         """Return the list of pending secret lookups."""
         return list(self._pending_lookups)
 
-    def to_dict(self) -> dict[str, dict[str, pa.Scalar[Any]]]:
-        """Return all resolved secrets as a flat dict keyed by secret_type.
+    def to_dict(self) -> "ResolvedSecrets":
+        """Return all resolved secrets keyed by secret name.
 
-        Combines unscoped entries (column name = secret_type) with scoped
-        entries (``secret_N`` columns, keyed by ``secret_type`` from Arrow
-        field metadata).  Null/unresolved entries are omitted.
+        Resolved secrets are keyed by their unique DuckDB secret name, so several
+        secrets of the same type (e.g. one per S3 bucket) coexist. Each carries a
+        ``type`` field (the DuckDB secret type) and a ``scope`` field
+        (newline-joined scope prefixes). Scoped ``secret_N`` columns (keyed by
+        ``secret_type`` from Arrow field metadata) are merged in. Null/unresolved
+        entries are omitted.
 
         Returns:
-            Mapping of secret_type to its resolved key/scalar dict.
+            A :class:`ResolvedSecrets` (a dict keyed by secret name) with
+            type- and scope-aware selection helpers.
 
         """
         result = dict(self._unscoped)
         for meta, secret_dict in self._scoped:
             if secret_dict is not None:
-                key = meta.get("secret_type", "")
+                key = meta.get("secret_name") or meta.get("secret_type", "")
                 if key:
                     result[key] = secret_dict
-        return result
+        return ResolvedSecrets(result)
 
     def _find_scoped(
         self,
@@ -285,6 +289,74 @@ class SecretsAccessor:
                 continue
             return secret_dict
         return None
+
+
+def _secret_scalar_str(v: Any) -> str:
+    """Render a resolved-secret field (a pyarrow Scalar or plain value) to str."""
+    if v is None:
+        return ""
+    py = v.as_py() if hasattr(v, "as_py") else v
+    return "" if py is None else str(py)
+
+
+class ResolvedSecrets(dict):
+    """Resolved secrets keyed by secret name, with type- and scope-aware lookup.
+
+    A plain ``dict`` (so ``secrets[name]`` and ``secrets.get(name)`` still work)
+    plus selectors that read each secret's connector-serialized ``type`` and
+    ``scope`` fields. Mirrors ``vgi::Secrets`` in the Rust SDK.
+    """
+
+    def secret_type(self, name: str) -> str | None:
+        """The DuckDB secret type of the named secret (its ``type`` field)."""
+        fields = self.get(name)
+        if not fields or "type" not in fields:
+            return None
+        return _secret_scalar_str(fields["type"])
+
+    def of_type(self, secret_type: str) -> list[dict[str, Any]]:
+        """Every resolved secret whose ``type`` field matches ``secret_type``."""
+        return [
+            f for f in self.values() if _secret_scalar_str(f.get("type")) == secret_type
+        ]
+
+    def for_scope(self, path: str) -> dict[str, Any] | None:
+        """The secret whose ``scope`` is the longest prefix of ``path``.
+
+        The connector serializes each secret's scope as a newline-joined list of
+        prefixes; a secret with no (or empty) scope matches as a last-resort
+        fallback. Returns ``None`` only when there are no candidate secrets.
+        """
+        return self._select_for_scope(path, None)
+
+    def for_scope_of_type(self, path: str, secret_type: str) -> dict[str, Any] | None:
+        """Like :meth:`for_scope` but only over secrets of ``secret_type``."""
+        return self._select_for_scope(path, secret_type)
+
+    def field_for(self, path: str, field: str) -> Any | None:
+        """A field of the best scope-matching secret for ``path``."""
+        fields = self.for_scope(path)
+        return None if fields is None else fields.get(field)
+
+    def _select_for_scope(
+        self, path: str, secret_type: str | None
+    ) -> dict[str, Any] | None:
+        best: dict[str, Any] | None = None
+        best_len = -1
+        fallback: dict[str, Any] | None = None
+        for fields in self.values():
+            if secret_type is not None and _secret_scalar_str(fields.get("type")) != secret_type:
+                continue
+            scope = _secret_scalar_str(fields.get("scope"))
+            if not scope:
+                if fallback is None:
+                    fallback = fields
+                continue
+            for prefix in scope.split("\n"):
+                if prefix and path.startswith(prefix) and len(prefix) > best_len:
+                    best_len = len(prefix)
+                    best = fields
+        return best if best is not None else fallback
 
 
 def project_schema(projection_ids: list[int] | None, schema: pa.Schema) -> pa.Schema:

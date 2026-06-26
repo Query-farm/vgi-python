@@ -119,6 +119,7 @@ from vgi._test_fixtures.table.sequence import (
     TenThousandFunction,
 )
 from vgi._test_fixtures.table.settings import (
+    MultiSecretDemoFunction,
     ScopedSecretDemoFunction,
     SecretDemoFunction,
     SettingsAwareFunction,
@@ -212,6 +213,7 @@ __all__ = [
     "RffStructScanFunction",
     "RowIdSequenceFunction",
     "SampleEchoFunction",
+    "MultiSecretDemoFunction",
     "ScopedSecretDemoFunction",
     "SecretDemoFunction",
     "SequenceFunction",
