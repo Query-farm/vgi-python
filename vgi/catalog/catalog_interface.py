@@ -705,11 +705,17 @@ class CopyFromFormatInfo(CatalogObject, ArrowSerializableDataclass):
             :attr:`FunctionInfo.arguments`); each field's metadata carries the
             option type / default / ``vgi_doc`` description. The reserved
             ``file_path`` positional is excluded.
-        direction: ``"from"`` — the only direction supported today. Reserved
-            ``"to"`` for a future ``COPY ... TO``; surfaced so the C++
-            ``vgi_copy_formats()`` diagnostic can split FROM vs TO.
+        direction: ``"from"`` | ``"to"`` | ``"both"`` — which COPY direction(s)
+            this format serves; surfaced so the C++ ``vgi_copy_formats()``
+            diagnostic can split FROM vs TO and so registration wires the right
+            callbacks.
         description: Intrinsic documentation from the handler's
             ``Meta.description``.
+        ordered: COPY ... TO only — when true the worker requires rows in source
+            order, so the extension uses a single-threaded sink
+            (``REGULAR_COPY_TO_FILE``) instead of the default parallel sharded
+            write. Set via ``Meta.ordered = True`` on a ``CopyToFunction``.
+            Ignored for readers.
     """
 
     format_name: str
@@ -717,6 +723,7 @@ class CopyFromFormatInfo(CatalogObject, ArrowSerializableDataclass):
     options: SerializedSchema
     direction: str = "from"
     description: str = ""
+    ordered: bool = False
 
 
 @dataclass(frozen=True)
@@ -2863,17 +2870,20 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
     ) -> list[CopyFromFormatInfo]:
-        """Advertise every ``CopyFromFunction`` registered in this catalog.
+        """Advertise every custom COPY format registered in this catalog.
 
         Introspects the catalog's function list for
-        :class:`vgi.copy_from_function.CopyFromFunction` subclasses and converts
-        each into a :class:`CopyFromFormatInfo`. The option schema reuses the same
-        argument serialization as :meth:`_function_to_info`, so option types /
-        defaults / ``doc`` descriptions surface identically to
-        ``vgi_function_arguments()``.
+        :class:`vgi.copy_from_function.CopyFromFunction` (``direction='from'``) and
+        :class:`vgi.copy_to_function.CopyToFunction` (``direction='to'``) subclasses
+        and converts each into a :class:`CopyFromFormatInfo`. (The RPC name is
+        historical; it returns *all* directions, distinguished by ``direction``.)
+        The option schema reuses the same argument serialization as
+        :meth:`_function_to_info`, so option types / defaults / ``doc`` descriptions
+        surface identically to ``vgi_function_arguments()``.
         """
         from vgi.argument_spec import argument_specs_to_schema, extract_argument_specs
         from vgi.copy_from_function import CopyFromFunction
+        from vgi.copy_to_function import CopyToFunction
         from vgi.metadata import resolve_metadata
 
         self._build_registries()
@@ -2883,23 +2893,45 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         seen: set[str] = set()
         for (_, _), func_classes in self._function_registry.items():
             for func_cls in func_classes:
-                if not (isinstance(func_cls, type) and issubclass(func_cls, CopyFromFunction)):
+                if not isinstance(func_cls, type):
                     continue
-                fmt = getattr(func_cls, "COPY_FROM_FORMAT", None)
-                if not fmt or fmt in seen:
+                # A format is identified by COPY_FROM_FORMAT (readers) or
+                # COPY_TO_FORMAT (writers); direction comes from the matching
+                # *_DIRECTION marker.
+                is_to = False
+                if issubclass(func_cls, CopyFromFunction):
+                    fmt = getattr(func_cls, "COPY_FROM_FORMAT", None)
+                    direction = getattr(func_cls, "COPY_FROM_DIRECTION", "from")
+                    comment = getattr(func_cls, "COPY_FROM_COMMENT", None)
+                elif issubclass(func_cls, CopyToFunction):
+                    fmt = getattr(func_cls, "COPY_TO_FORMAT", None)
+                    direction = getattr(func_cls, "COPY_TO_DIRECTION", "to")
+                    comment = getattr(func_cls, "COPY_TO_COMMENT", None)
+                    is_to = True
+                else:
                     continue
-                seen.add(fmt)
+                # Key by (format, direction): a from-format and a to-format may
+                # legitimately share a name; the extension scopes by alias anyway.
+                dedup_key = f"{direction}:{fmt}"
+                if not fmt or dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
                 meta = resolve_metadata(func_cls)
+                # COPY TO writers that require source order declare it via
+                # Meta.sink_order_dependent = True (single-thread sink ingest);
+                # the extension maps that to REGULAR_COPY_TO_FILE. Ignored for readers.
+                ordered = bool(is_to and meta.sink_order_dependent)
                 args_schema = argument_specs_to_schema(extract_argument_specs(func_cls))
                 formats.append(
                     CopyFromFormatInfo(
-                        comment=getattr(func_cls, "COPY_FROM_COMMENT", None),
+                        comment=comment,
                         tags=meta.tags,
                         format_name=fmt,
                         handler=meta.name,
                         options=SerializedSchema(args_schema.serialize().to_pybytes()),
-                        direction=getattr(func_cls, "COPY_FROM_DIRECTION", "from"),
+                        direction=direction,
                         description=meta.description or "",
+                        ordered=ordered,
                     )
                 )
         return formats

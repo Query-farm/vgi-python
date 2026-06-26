@@ -145,6 +145,26 @@ class CopyFromContext(ArrowSerializableDataclass):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class CopyToContext(ArrowSerializableDataclass):
+    """Context for a ``COPY ... TO`` write, threaded onto :class:`BindRequest`.
+
+    Present only when the bind/init opens a COPY-TO sink (``None`` otherwise — set
+    by the VGI extension's ``copy_to_bind``). ``InitRequest`` embeds the same
+    ``BindRequest`` as ``bind_call``, so process()/combine() reach it via
+    ``params.init_call.bind_call.copy_to``. The handler's options arrive through the
+    normal ``BindRequest.arguments``; the **source** columns ride the existing
+    ``BindRequest.input_schema`` (so they are not duplicated here).
+
+    Attributes:
+        format: The ``FORMAT`` name resolved at COPY bind time.
+        file_path: The destination path from the ``COPY ... TO 'path'`` statement.
+    """
+
+    format: str
+    file_path: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class BindRequest(ArrowSerializableDataclass):
     """Consolidated bind request for all function types.
 
@@ -193,6 +213,9 @@ class BindRequest(ArrowSerializableDataclass):
 
     # COPY ... FROM context (None unless this bind/init opens a COPY-FROM scan)
     copy_from: CopyFromContext | None = None
+
+    # COPY ... TO context (None unless this bind/init opens a COPY-TO sink)
+    copy_to: CopyToContext | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
