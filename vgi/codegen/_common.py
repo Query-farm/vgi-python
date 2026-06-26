@@ -25,6 +25,7 @@ from vgi_rpc.rpc._types import MethodType, rpc_methods  # type: ignore[attr-defi
 from vgi.catalog.catalog_interface import (
     CatalogInfo,
     CatalogObject,
+    CopyFromFormatInfo,
     FunctionInfo,
     IndexInfo,
     MacroInfo,
@@ -48,6 +49,7 @@ INFO_TYPES: tuple[type, ...] = (
     FunctionInfo,
     MacroInfo,
     IndexInfo,
+    CopyFromFormatInfo,
 )
 
 # Extra dataclasses whose ARROW_SCHEMA is referenced by methods whose return

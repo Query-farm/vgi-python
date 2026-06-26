@@ -59,6 +59,7 @@ from vgi._test_fixtures.cancellable import (
     SlowCancellableFunction,
     SlowCancellableInOutFunction,
 )
+from vgi._test_fixtures.copy_from import ExampleLinesCopyFromFunction
 from vgi._test_fixtures.nest_tensor import NestTensorFunction, UnnestTensorFunction, UnnestTensorRowsFunction
 from vgi._test_fixtures.scalar import (
     AddValuesFunction,
@@ -349,6 +350,8 @@ _EXAMPLE_CATALOG = Catalog(
                 EchoBufferingFunction,
                 BufferEmitWideFunction,
                 SlowCancellableBufferingFunction,
+                # CopyFromFunction - custom COPY ... FROM format reader
+                ExampleLinesCopyFromFunction,
                 # TableFunctionGenerator - generate output without input
                 ConstantColumnsFunction,
                 SlowCancellableFunction,

@@ -116,6 +116,7 @@ from vgi.protocol import (
     CatalogCreateRequest,
     CatalogsResponse,
     CatalogVersionResponse,
+    CopyFromFormatsResponse,
     FunctionsResponse,
     IndexCreateRequest,
     IndexesResponse,
@@ -3899,6 +3900,19 @@ class Worker:
             type=type,
         )
         return FunctionsResponse.from_infos(list(infos))
+
+    def catalog_copy_from_formats(
+        self,
+        attach_opaque_data: bytes,
+        transaction_opaque_data: bytes | None = None,
+    ) -> CopyFromFormatsResponse:
+        """List custom ``COPY ... FROM`` formats advertised by this catalog."""
+        cat = self._get_catalog()
+        infos = cat.copy_from_formats(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+        )
+        return CopyFromFormatsResponse.from_infos(list(infos))
 
     # ---------------------------------------------------------------------------
     # VgiProtocol implementation - Catalog Tables

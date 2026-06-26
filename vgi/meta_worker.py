@@ -91,6 +91,7 @@ _ATTACH_ID_METHODS = [
     "catalog_schema_contents_views",
     "catalog_schema_contents_functions",
     "catalog_schema_contents_macros",
+    "catalog_copy_from_formats",
     "catalog_table_get",
     "catalog_table_drop",
     "catalog_table_scan_function_get",

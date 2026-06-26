@@ -682,6 +682,44 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
 
 @dataclass(frozen=True)
+class CopyFromFormatInfo(CatalogObject, ArrowSerializableDataclass):
+    """A custom ``COPY ... FROM`` format advertised by a VGI catalog.
+
+    The VGI DuckDB extension registers one DuckDB ``CopyFunction`` per advertised
+    format (into the system catalog, keyed by ``format_name``) so users can run
+    ``COPY target FROM 'path' (FORMAT <format_name>, opt val, ...)`` and have a
+    worker function parse the source and stream rows into a local table. Discovery
+    is catalog-level via :meth:`VgiProtocol.catalog_copy_from_formats`; see the
+    C++ ``vgi_copy_from_impl.cpp`` and ``docs/copy_from.md``.
+
+    Inherits ``comment`` and ``tags`` from :class:`CatalogObject`.
+
+    Attributes:
+        format_name: The ``FORMAT`` identifier users type. Lives in a single
+            global namespace shared with built-ins (``csv``/``parquet``/``json``)
+            and every other attached catalog's formats — collisions are rejected
+            at ATTACH by the extension.
+        handler: Registered name of the worker function that performs the read.
+        options: Serialized Arrow schema of the format's options, built from the
+            handler's ``Arg``-annotated arguments (same encoding as
+            :attr:`FunctionInfo.arguments`); each field's metadata carries the
+            option type / default / ``vgi_doc`` description. The reserved
+            ``file_path`` positional is excluded.
+        direction: ``"from"`` — the only direction supported today. Reserved
+            ``"to"`` for a future ``COPY ... TO``; surfaced so the C++
+            ``vgi_copy_formats()`` diagnostic can split FROM vs TO.
+        description: Intrinsic documentation from the handler's
+            ``Meta.description``.
+    """
+
+    format_name: str
+    handler: str
+    options: SerializedSchema
+    direction: str = "from"
+    description: str = ""
+
+
+@dataclass(frozen=True)
 class ScanFunctionResult:
     """Result from getting a table scan function.
 
@@ -2069,6 +2107,20 @@ class CatalogInterface(ABC):
         """Drop the index with the given name."""
         raise NotImplementedError("Index drop not implemented.")
 
+    def copy_from_formats(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+    ) -> list[CopyFromFormatInfo]:
+        """List custom ``COPY ... FROM`` formats advertised by this catalog.
+
+        Catalog-level (not schema-scoped). The default returns an empty list, so
+        catalogs that don't define COPY formats are unaffected. The VGI extension
+        registers one DuckDB ``CopyFunction`` per returned entry at ATTACH time.
+        """
+        return []
+
 
 def _read_only(operation: str) -> Any:
     """Create a [`CatalogInterface`][] method that raises [`CatalogReadOnlyError`][]."""
@@ -2804,6 +2856,53 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                     results.append(func_info)
 
         return results
+
+    def copy_from_formats(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+    ) -> list[CopyFromFormatInfo]:
+        """Advertise every ``CopyFromFunction`` registered in this catalog.
+
+        Introspects the catalog's function list for
+        :class:`vgi.copy_from_function.CopyFromFunction` subclasses and converts
+        each into a :class:`CopyFromFormatInfo`. The option schema reuses the same
+        argument serialization as :meth:`_function_to_info`, so option types /
+        defaults / ``doc`` descriptions surface identically to
+        ``vgi_function_arguments()``.
+        """
+        from vgi.argument_spec import argument_specs_to_schema, extract_argument_specs
+        from vgi.copy_from_function import CopyFromFunction
+        from vgi.metadata import resolve_metadata
+
+        self._build_registries()
+        assert self._function_registry is not None
+
+        formats: list[CopyFromFormatInfo] = []
+        seen: set[str] = set()
+        for (_, _), func_classes in self._function_registry.items():
+            for func_cls in func_classes:
+                if not (isinstance(func_cls, type) and issubclass(func_cls, CopyFromFunction)):
+                    continue
+                fmt = getattr(func_cls, "COPY_FROM_FORMAT", None)
+                if not fmt or fmt in seen:
+                    continue
+                seen.add(fmt)
+                meta = resolve_metadata(func_cls)
+                args_schema = argument_specs_to_schema(extract_argument_specs(func_cls))
+                formats.append(
+                    CopyFromFormatInfo(
+                        comment=getattr(func_cls, "COPY_FROM_COMMENT", None),
+                        tags=meta.tags,
+                        format_name=fmt,
+                        handler=meta.name,
+                        options=SerializedSchema(args_schema.serialize().to_pybytes()),
+                        direction=getattr(func_cls, "COPY_FROM_DIRECTION", "from"),
+                        description=meta.description or "",
+                    )
+                )
+        return formats
 
     def _function_to_info(self, func_cls: type, schema_name: str) -> FunctionInfo:
         """Convert a function class to [`FunctionInfo`][]."""

@@ -46,6 +46,7 @@ from vgi.arguments import Arguments
 from vgi.catalog.catalog_interface import (
     CatalogAttachResult,
     CatalogInfo,
+    CopyFromFormatInfo,
     FunctionInfo,
     IndexConstraintType,
     IndexInfo,
@@ -118,6 +119,32 @@ __all__ = [
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class CopyFromContext(ArrowSerializableDataclass):
+    """Context for a ``COPY ... FROM`` read, threaded onto :class:`BindRequest`.
+
+    Present only when the bind/init opens a COPY-FROM scan (``None`` otherwise —
+    set by the VGI extension's ``copy_from_bind``). ``InitRequest`` embeds the same
+    ``BindRequest`` as ``bind_call``, so process()/init also reach it via
+    ``params.init_call.bind_call.copy_from``. The handler's options arrive through
+    the normal ``BindRequest.arguments`` (built from the COPY options), so they are
+    not duplicated here.
+
+    Attributes:
+        format: The ``FORMAT`` name resolved at COPY bind time.
+        file_path: The source path from the ``COPY ... FROM 'path'`` statement.
+        expected_schema: Serialized Arrow schema of the target table's columns
+            (name + type, in target order, honoring column subsets such as
+            ``COPY t(a, c) FROM ...``). The worker must bind its output to, and
+            emit columns whose types match, this schema exactly — DuckDB inserts no
+            cast between the scan and the INSERT.
+    """
+
+    format: str
+    file_path: str
+    expected_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class BindRequest(ArrowSerializableDataclass):
     """Consolidated bind request for all function types.
 
@@ -163,6 +190,9 @@ class BindRequest(ArrowSerializableDataclass):
 
     at_unit: str | None = None
     at_value: str | None = None
+
+    # COPY ... FROM context (None unless this bind/init opens a COPY-FROM scan)
+    copy_from: CopyFromContext | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -537,6 +567,9 @@ if TYPE_CHECKING:
 
     class MacrosResponse(_CatalogItemsResponseStub):
         """Response wrapping list of [`MacroInfo`][]."""
+
+    class CopyFromFormatsResponse(_CatalogItemsResponseStub):
+        """Response wrapping list of [`CopyFromFormatInfo`][]."""
 else:
     CatalogsResponse = _catalog_items_response(CatalogInfo)
     SchemasResponse = _catalog_items_response(SchemaInfo)
@@ -544,6 +577,7 @@ else:
     ViewsResponse = _catalog_items_response(ViewInfo)
     FunctionsResponse = _catalog_items_response(FunctionInfo)
     MacrosResponse = _catalog_items_response(MacroInfo)
+    CopyFromFormatsResponse = _catalog_items_response(CopyFromFormatInfo)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2440,6 +2474,20 @@ class VgiProtocol(Protocol):
         transaction_opaque_data: bytes | None = None,
     ) -> FunctionsResponse:
         """List functions in a schema (scalar or table)."""
+        ...
+
+    def catalog_copy_from_formats(
+        self,
+        attach_opaque_data: bytes,
+        transaction_opaque_data: bytes | None = None,
+    ) -> CopyFromFormatsResponse:
+        """List custom ``COPY ... FROM`` formats advertised by this catalog.
+
+        Catalog-level (not schema-scoped). Returns an empty list for catalogs with
+        no custom formats. Additive: workers that don't implement this method
+        return ``MethodNotImplementedError``, which the VGI extension treats as
+        "this catalog advertises no COPY formats" and continues the ATTACH normally.
+        """
         ...
 
     # ========== Catalog - Tables ==========

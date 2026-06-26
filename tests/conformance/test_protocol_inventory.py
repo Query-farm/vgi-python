@@ -180,6 +180,15 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
     "catalog_schema_contents_views": ("schema_contents",),
     "catalog_schema_contents_functions": ("schema_contents",),
     "catalog_schema_contents_macros": ("schema_contents",),
+    "catalog_copy_from_formats": NotExposed(
+        reason=(
+            "COPY ... FROM format discovery. Consumed today by the C++ extension, "
+            "which calls this at ATTACH to register a DuckDB CopyFunction per "
+            "advertised format; covered by C++ integration/copy_from/*.test. Client "
+            "wrappers for the other VGI languages are planned to follow the "
+            "Python/C++ implementation."
+        )
+    ),
     "catalog_schema_contents_indexes": NotExposed(
         reason=(
             "DuckDB-only metadata path. Indexes are catalog-planner territory; "
