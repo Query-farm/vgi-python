@@ -197,10 +197,10 @@ _HTTP_TRANSPORT_READY = True
 
 @dataclass
 class WorkerConnection:
-    """Holds state for a single worker connection (subprocess or HTTP).
+    """Holds state for a single worker connection (subprocess, HTTP, or TCP).
 
-    Exactly one of {proc+connection, _pool_ctx, _http_ctx} is active per
-    connection — transport-specific teardown inspects these fields.
+    Exactly one of {proc+connection, _pool_ctx, _http_ctx, _tcp_ctx} is active
+    per connection — transport-specific teardown inspects these fields.
 
     Attributes:
         proxy: The typed `[`VgiProtocol`][]` proxy used to invoke the worker.
@@ -220,6 +220,8 @@ class WorkerConnection:
     _pool_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
     # HTTP transport: context manager from vgi_rpc.http.http_connect.
     _http_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
+    # TCP transport: context manager from vgi_rpc.rpc.tcp_connect.
+    _tcp_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
 
 
 class Client(CatalogClientMixin):
@@ -381,8 +383,10 @@ class Client(CatalogClientMixin):
         attach_opaque_data: bytes | None = None,
         pool: WorkerPool | None = _default_pool,
         *,
-        transport: Literal["subprocess", "http"] = "subprocess",
+        transport: Literal["subprocess", "http", "tcp"] = "subprocess",
         base_url: str | None = None,
+        tcp_host: str | None = None,
+        tcp_port: int | None = None,
         bearer_token: str | None = None,
         httpx_client: Any | None = None,
         external_location: Any | None = None,
@@ -413,9 +417,14 @@ class Client(CatalogClientMixin):
                 management.
             transport: Which transport to use. ``"subprocess"`` (default)
                 spawns a local subprocess per worker; ``"http"`` connects to
-                a running worker via ``vgi_rpc.http.http_connect``.
+                a running worker via ``vgi_rpc.http.http_connect``; ``"tcp"``
+                connects to a running worker via ``vgi_rpc.rpc.tcp_connect``
+                (raw Arrow-IPC framing, no auth/encryption — loopback /
+                trusted networks only; use ``Client.from_tcp(...)``).
             base_url: HTTP-only. Base URL of the running worker, e.g.
                 ``"http://127.0.0.1:8765"``.
+            tcp_host: TCP-only. Hostname or IP of the running worker.
+            tcp_port: TCP-only. Port of the running worker.
             bearer_token: HTTP-only. When set, every request carries an
                 ``Authorization: Bearer <token>`` header. Static token
                 support only — no JWT / OAuth flows.
@@ -446,12 +455,21 @@ class Client(CatalogClientMixin):
                 raise ValueError("transport='http' requires base_url")
             if server_path is not None:
                 raise ValueError("server_path is only meaningful for transport='subprocess'")
+        elif transport == "tcp":
+            if tcp_host is None or tcp_port is None:
+                raise ValueError("transport='tcp' requires tcp_host and tcp_port")
+            if server_path is not None:
+                raise ValueError("server_path is only meaningful for transport='subprocess'")
+            if base_url is not None:
+                raise ValueError("base_url is only meaningful for transport='http'")
         else:
             raise ValueError(f"unknown transport {transport!r}")
 
         self.server_path = server_path or ""
         self._transport = transport
         self._base_url = base_url
+        self._tcp_host = tcp_host
+        self._tcp_port = tcp_port
         self._bearer_token = bearer_token
         self._httpx_client = httpx_client
         # True when ``_get_or_create_httpx_client`` constructed the client and
@@ -460,7 +478,7 @@ class Client(CatalogClientMixin):
         self._httpx_client_owned = False
         # Auto-enable pointer-batch resolution for HTTP unless the caller
         # asked for something different. See ``external_location`` docs above.
-        if transport == "http" and external_location is None:
+        if transport in ("http", "tcp") and external_location is None:
             from vgi_rpc.external import ExternalLocationConfig
 
             external_location = ExternalLocationConfig()
@@ -503,6 +521,34 @@ class Client(CatalogClientMixin):
             base_url=base_url,
             bearer_token=bearer_token,
             httpx_client=httpx_client,
+            external_location=external_location,
+            worker_limit=worker_limit,
+            attach_opaque_data=attach_opaque_data,
+            pool=None,
+        )
+
+    @classmethod
+    def from_tcp(
+        cls,
+        host: str,
+        port: int,
+        *,
+        external_location: Any | None = None,
+        worker_limit: int | None = None,
+        attach_opaque_data: bytes | None = None,
+    ) -> Client:
+        """Create a `[`Client`][]` bound to a running TCP VGI worker.
+
+        Connects via ``vgi_rpc.rpc.tcp_connect`` (raw Arrow-IPC framing). The
+        framing carries **no authentication or encryption** — only connect to
+        trusted endpoints on loopback or a trusted network; use
+        ``Client.from_http(...)`` for untrusted networks. Spin up a matching
+        worker with ``vgi-fixture-worker --tcp [HOST:]PORT``.
+        """
+        return cls(
+            transport="tcp",
+            tcp_host=host,
+            tcp_port=port,
             external_location=external_location,
             worker_limit=worker_limit,
             attach_opaque_data=attach_opaque_data,
@@ -577,7 +623,39 @@ class Client(CatalogClientMixin):
         """
         if self._transport == "http":
             return self._spawn_http_connection(worker_index)
+        if self._transport == "tcp":
+            return self._spawn_tcp_connection(worker_index)
         return self._spawn_subprocess_connection(worker_index)
+
+    def _spawn_tcp_connection(self, worker_index: int) -> WorkerConnection:
+        """Connect to a running TCP worker via ``vgi_rpc.rpc.tcp_connect``.
+
+        Raw Arrow-IPC framing with no auth/encryption — see ``from_tcp``.
+        Multiple ``worker_index`` values open independent TCP connections to
+        the same ``host:port``.
+        """
+        from vgi_rpc.rpc import tcp_connect
+
+        assert self._tcp_host is not None and self._tcp_port is not None  # enforced in __init__
+        ctx: AbstractContextManager[VgiProtocol] = tcp_connect(
+            VgiProtocol,  # type: ignore[type-abstract]
+            self._tcp_host,
+            self._tcp_port,
+            on_log=self._on_worker_log,
+            external_location=self._external_location,
+        )
+        proxy = ctx.__enter__()
+        _logger.debug(
+            "tcp_connection_opened worker_index=%s host=%s port=%s",
+            worker_index,
+            self._tcp_host,
+            self._tcp_port,
+        )
+        return WorkerConnection(
+            proxy=proxy,
+            worker_index=worker_index,
+            _tcp_ctx=ctx,
+        )
 
     def _spawn_http_connection(self, worker_index: int) -> WorkerConnection:
         """Connect to a remote HTTP worker via ``vgi_rpc.http.http_connect``.
@@ -724,6 +802,12 @@ class Client(CatalogClientMixin):
             _logger.debug("http_connection_closed worker_index=%s", worker.worker_index)
             return 0
 
+        if worker._tcp_ctx is not None:
+            # TCP transport — close the RPC proxy (and its socket).
+            worker._tcp_ctx.__exit__(None, None, None)
+            _logger.debug("tcp_connection_closed worker_index=%s", worker.worker_index)
+            return 0
+
         if worker._pool_ctx is not None:
             # Return to pool — pool handles subprocess lifecycle
             worker._pool_ctx.__exit__(None, None, None)
@@ -805,6 +889,8 @@ class Client(CatalogClientMixin):
             id_repr: Any = self._primary.proc.pid
         elif self._primary._http_ctx is not None:
             id_repr = f"http({self._base_url})"
+        elif self._primary._tcp_ctx is not None:
+            id_repr = f"tcp({self._tcp_host}:{self._tcp_port})"
         else:
             id_repr = "pooled"
         _logger.debug("server_started id=%s", id_repr)

@@ -1276,10 +1276,25 @@ class Worker:
                 "--unix",
                 help="Bind to this AF_UNIX socket path instead of stdin/stdout (mutex with --http).",
             ),
+            # TCP launcher contract — mutually exclusive with --http/--unix.
+            # Accepts ``[HOST:]PORT``; host defaults to loopback (127.0.0.1)
+            # and ``PORT`` may be 0 to auto-select a free port.  After binding
+            # the worker prints TCP:<host>:<port> to stdout and self-shuts-down
+            # after --idle-timeout seconds with zero connected clients. The raw
+            # framing carries no auth/encryption — bind loopback only; use
+            # --http for untrusted networks.
+            tcp: str | None = typer.Option(
+                None,
+                "--tcp",
+                help=(
+                    "Bind a TCP socket ([HOST:]PORT, host defaults to 127.0.0.1, PORT 0 "
+                    "auto-selects) instead of stdin/stdout (mutex with --http/--unix)."
+                ),
+            ),
             idle_timeout: float = typer.Option(
                 300.0,
                 "--idle-timeout",
-                help="Self-shutdown after N seconds idle when serving --unix.",
+                help="Self-shutdown after N seconds idle when serving --unix/--tcp.",
             ),
             http_threads: int | None = typer.Option(  # noqa: B008
                 None,
@@ -1300,8 +1315,8 @@ class Worker:
                 log_format=log_format,
             )
 
-            if http and unix is not None:
-                raise typer.BadParameter("--http and --unix are mutually exclusive")
+            if sum(x for x in (http, unix is not None, tcp is not None)) > 1:
+                raise typer.BadParameter("--http, --unix, and --tcp are mutually exclusive")
 
             if http:
                 from vgi.serve import (
@@ -1357,6 +1372,47 @@ class Worker:
                     threaded=True,
                     idle_timeout=effective_idle,
                     on_bound=_emit,
+                )
+            elif tcp is not None:
+                # TCP launcher path.  Bind to [HOST:]PORT, print
+                # TCP:<host>:<port> on stdout (mirrors run_server's
+                # cross-language discovery contract), idle-shutdown after
+                # idle_timeout seconds.
+                from vgi_rpc.rpc import serve_tcp
+
+                from vgi.serve import _maybe_init_sentry, _resolve_otel_config
+
+                if ":" in tcp:
+                    host_part, _, port_part = tcp.rpartition(":")
+                    tcp_host = host_part or "127.0.0.1"
+                else:
+                    tcp_host, port_part = "127.0.0.1", tcp
+                try:
+                    tcp_port = int(port_part)
+                except ValueError:
+                    raise typer.BadParameter(f"--tcp expects [HOST:]PORT, got {tcp!r}") from None
+
+                _maybe_init_sentry()
+                otel_config = _resolve_otel_config()
+                worker = cls(quiet=quiet, log_level=effective_level)
+                server = RpcServer(cls.protocol_class, worker, server_version=_get_vgi_version())
+                if otel_config is not None:
+                    from vgi_rpc.otel import instrument_server
+
+                    instrument_server(server, otel_config)
+                    worker._vgi_tracer = VgiTracer.create(otel_config)
+                effective_idle = idle_timeout if idle_timeout > 0 else None
+
+                def _emit_tcp(bound_host: str, bound_port: int) -> None:
+                    print(f"TCP:{bound_host}:{bound_port}", flush=True)
+
+                serve_tcp(
+                    server,
+                    tcp_host,
+                    tcp_port,
+                    threaded=True,
+                    idle_timeout=effective_idle,
+                    on_bound=_emit_tcp,
                 )
             else:
                 from vgi.serve import _maybe_init_sentry, _resolve_otel_config

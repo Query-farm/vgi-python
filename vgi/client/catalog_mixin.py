@@ -90,12 +90,14 @@ class CatalogClientMixin:
     Catalog methods spawn ephemeral connections under the hood — for
     subprocess transport a pooled subprocess worker; for HTTP transport a
     short-lived ``http_connect`` session reusing the ``Client``'s shared
-    ``httpx.Client`` (bearer token, headers). Browsing catalogs over HTTP
-    is the canonical non-DuckDB use case this mixin supports.
+    ``httpx.Client`` (bearer token, headers); for TCP transport a short-lived
+    ``tcp_connect`` session. Browsing catalogs over HTTP is the canonical
+    non-DuckDB use case this mixin supports.
 
-    Other attributes expected from ``Client``: ``_transport`` (subprocess vs
-    http), ``_base_url`` (HTTP base URL), and ``_get_or_create_httpx_client()``
-    (shared HTTP client factory).
+    Other attributes expected from ``Client``: ``_transport`` (subprocess,
+    http, or tcp), ``_base_url`` (HTTP base URL), ``_tcp_host`` / ``_tcp_port``
+    (TCP endpoint), and ``_get_or_create_httpx_client()`` (shared HTTP client
+    factory).
 
     Attributes:
         server_path: Worker shell command used for subprocess transport.
@@ -103,8 +105,10 @@ class CatalogClientMixin:
 
     # Type hints for attributes expected from Client
     server_path: str
-    _transport: Literal["subprocess", "http"]
+    _transport: Literal["subprocess", "http", "tcp"]
     _base_url: str | None
+    _tcp_host: str | None
+    _tcp_port: int | None
     _external_location: Any | None
 
     def _get_or_create_httpx_client(self) -> Any:  # implemented by Client
@@ -128,7 +132,8 @@ class CatalogClientMixin:
             A typed `[`VgiProtocol`][]` proxy bound to the active transport.
         """
         try:
-            if getattr(self, "_transport", "subprocess") == "http":
+            transport = getattr(self, "_transport", "subprocess")
+            if transport == "http":
                 from vgi_rpc.http import http_connect
 
                 httpx_client = self._get_or_create_httpx_client()
@@ -136,6 +141,17 @@ class CatalogClientMixin:
                     VgiProtocol,  # type: ignore[type-abstract]
                     base_url=self._base_url,
                     client=httpx_client,
+                    external_location=getattr(self, "_external_location", None),
+                ) as proxy:
+                    yield proxy
+            elif transport == "tcp":
+                from vgi_rpc.rpc import tcp_connect
+
+                assert self._tcp_host is not None and self._tcp_port is not None
+                with tcp_connect(
+                    VgiProtocol,  # type: ignore[type-abstract]
+                    self._tcp_host,
+                    self._tcp_port,
                     external_location=getattr(self, "_external_location", None),
                 ) as proxy:
                     yield proxy
