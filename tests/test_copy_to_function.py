@@ -110,4 +110,11 @@ def test_catalog_advertises_copy_to_format() -> None:
     assert fmt.comment == "Toy delimited-text writer for tests"
     assert fmt.tags.get("category") == "copy_to"
     opt_schema = pa.ipc.read_schema(pa.py_buffer(fmt.options))
-    assert set(opt_schema.names) == {"delimiter", "null_string", "header", "on_exists"}
+    assert set(opt_schema.names) == {
+        "delimiter",
+        "null_string",
+        "header",
+        "header_repeat",
+        "on_exists",
+        "fail_on_value",
+    }
