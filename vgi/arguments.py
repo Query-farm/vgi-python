@@ -109,6 +109,46 @@ COMPLEX_ARRAY_CLASSES: set[type] = {
 }
 
 
+# Simple scalar classes that can be inferred automatically. Annotating a const
+# parameter with one of these — ``Annotated[pa.Int64Scalar, ConstParam(...)]`` —
+# makes the SDK deliver the typed ``pa.Scalar`` straight through to ``compute()``
+# instead of converting it to a Python object via ``as_py()``. That lets the
+# const be passed directly into ``pyarrow.compute`` with no per-call scalar
+# re-inference, which is ~40-50x slower on Windows than a typed scalar. Built
+# defensively so a pyarrow release missing a class name doesn't break import.
+def _build_scalar_class_to_datatype() -> dict[type, pa.DataType]:
+    pairs: list[tuple[str, pa.DataType]] = [
+        ("Int8Scalar", pa.int8()),
+        ("Int16Scalar", pa.int16()),
+        ("Int32Scalar", pa.int32()),
+        ("Int64Scalar", pa.int64()),
+        ("UInt8Scalar", pa.uint8()),
+        ("UInt16Scalar", pa.uint16()),
+        ("UInt32Scalar", pa.uint32()),
+        ("UInt64Scalar", pa.uint64()),
+        ("HalfFloatScalar", pa.float16()),
+        ("FloatScalar", pa.float32()),
+        ("DoubleScalar", pa.float64()),
+        ("StringScalar", pa.string()),
+        ("LargeStringScalar", pa.large_string()),
+        ("BinaryScalar", pa.binary()),
+        ("LargeBinaryScalar", pa.large_binary()),
+        ("BooleanScalar", pa.bool_()),
+        ("Date32Scalar", pa.date32()),
+        ("Date64Scalar", pa.date64()),
+        ("NullScalar", pa.null()),
+    ]
+    out: dict[type, pa.DataType] = {}
+    for name, dt in pairs:
+        cls = getattr(pa, name, None)
+        if isinstance(cls, type):
+            out[cls] = dt
+    return out
+
+
+SCALAR_CLASS_TO_DATATYPE: dict[type, pa.DataType] = _build_scalar_class_to_datatype()
+
+
 # Sentinel for missing default value - proper type pattern
 class _MissingType:
     """Sentinel type for missing default values.
@@ -158,6 +198,7 @@ __all__ = [
     "Param",
     "PYTHON_TO_ARROW",
     "Returns",
+    "SCALAR_CLASS_TO_DATATYPE",
     "TableInput",
     "TaggedUnion",
     "TypeBoundPredicate",

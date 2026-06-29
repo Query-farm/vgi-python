@@ -48,6 +48,7 @@ from vgi.arguments import (
     _PYTHON_TO_ARROW,
     ARRAY_CLASS_TO_DATATYPE,
     COMPLEX_ARRAY_CLASSES,
+    SCALAR_CLASS_TO_DATATYPE,
     Arg,
     Arguments,
     ArgumentValidationError,
@@ -212,6 +213,25 @@ def _param_to_arg(param: Param, base_type: type, position: int) -> Arg[Any]:
     )
 
 
+def _is_scalar_annotation(base_type: object) -> bool:
+    """Whether a [`ConstParam`][] is annotated with a pyarrow scalar class.
+
+    ``Annotated[pa.Int64Scalar, ConstParam(...)]`` (or the generic ``pa.Scalar``)
+    signals that the typed Arrow scalar should be delivered to ``compute()``
+    unchanged, instead of converting it to a Python value via ``as_py()``. The
+    scalar can then flow straight into ``pyarrow.compute`` with no per-call scalar
+    re-inference (the latter is ~40-50x slower on Windows than a typed scalar).
+
+    Args:
+        base_type: The type from the ``Annotated`` first argument.
+
+    Returns:
+        True iff ``base_type`` is ``pa.Scalar`` or a subclass.
+
+    """
+    return isinstance(base_type, type) and issubclass(base_type, pa.Scalar)
+
+
 def _const_param_to_arg(const_param: ConstParam, base_type: type, position: int) -> Arg[Any]:
     """Convert [`ConstParam`][] dataclass to internal [`Arg`][] object.
 
@@ -235,6 +255,15 @@ def _const_param_to_arg(const_param: ConstParam, base_type: type, position: int)
     elif base_type in _PYTHON_TO_ARROW:
         # Infer from Annotated first argument
         arrow_type = _PYTHON_TO_ARROW[base_type]
+    elif base_type in SCALAR_CLASS_TO_DATATYPE:
+        # Annotated[pa.Int64Scalar, ConstParam(...)] — infer from the scalar class
+        # and deliver the typed scalar through (see _is_scalar_annotation).
+        arrow_type = SCALAR_CLASS_TO_DATATYPE[base_type]
+    elif _is_scalar_annotation(base_type):
+        raise TypeError(
+            f"Cannot infer Arrow type from {getattr(base_type, '__name__', base_type)}. "
+            f"Use a concrete scalar class (e.g. pa.Int64Scalar) or set arrow_type=... on ConstParam()."
+        )
     else:
         raise TypeError(
             f"Cannot infer Arrow type from {base_type}. "
@@ -791,6 +820,7 @@ class ScalarFunction(ScalarFunctionGenerator):
 
     _compute_params: dict[str, Arg[Any]]  # Regular Param() arguments (arrays)
     _const_params: dict[str, Arg[Any]]  # ConstParam() arguments (scalars)
+    _const_scalar_params: set[str]  # ConstParams annotated as pa.Scalar — delivered un-as_py()'d
     _setting_params: dict[str, str]  # Setting params: param_name -> setting_key
     _secret_params: dict[str, Secret]  # Secret params: param_name -> Secret instance
     _output_length_param: str | None  # OutputLength param name (batch row count)
@@ -866,6 +896,7 @@ class ScalarFunction(ScalarFunctionGenerator):
 
         compute_params: dict[str, Arg[Any]] = {}
         const_params: dict[str, Arg[Any]] = {}
+        const_scalar_params: set[str] = set()  # ConstParams annotated as pa.Scalar
         output_length_param: str | None = None  # param that receives batch row count
         auth_param: str | None = None  # param that receives AuthContext
         returns_output_type: pa.DataType | None = None
@@ -940,6 +971,8 @@ class ScalarFunction(ScalarFunctionGenerator):
                         # _resolution_index points to Arguments.positional index
                         arg._resolution_index = const_index
                         const_params[name] = arg
+                        if _is_scalar_annotation(base_type):
+                            const_scalar_params.add(name)
                         setattr(cls, name, _ConstArgDescriptor(arg, name))
                         overall_position += 1
                         const_index += 1
@@ -966,6 +999,7 @@ class ScalarFunction(ScalarFunctionGenerator):
 
         cls._compute_params = compute_params
         cls._const_params = const_params
+        cls._const_scalar_params = const_scalar_params
         cls._setting_params = setting_params
         cls._secret_params = secret_params
         cls._output_length_param = output_length_param
@@ -1051,14 +1085,22 @@ class ScalarFunction(ScalarFunctionGenerator):
                 # Regular param: extract column by index
                 kwargs[name] = batch.column(col_idx)
 
-        # Const params: extract scalar values from arguments
+        # Const params: extract values from the constant arguments. Params annotated
+        # with a pyarrow scalar class (e.g. Annotated[pa.Int64Scalar, ConstParam(...)])
+        # receive the typed pa.Scalar unchanged, so it can be passed straight into
+        # pyarrow.compute with no per-call scalar re-inference; all others get the
+        # Python value via as_py() (backward compatible).
         for name, arg in cls._const_params.items():
             # Use _resolution_index for Arguments.positional lookup
             arg_idx = cast(int, arg._resolution_index)
             # Get the scalar value from arguments
             scalar = bind_call.arguments.positional[arg_idx]
-            # Convert to Python value
-            kwargs[name] = scalar.as_py() if scalar is not None else None
+            if scalar is None:
+                kwargs[name] = None
+            elif name in cls._const_scalar_params:
+                kwargs[name] = scalar
+            else:
+                kwargs[name] = scalar.as_py()
 
         # Setting params: extract pa.Scalar from settings RecordBatch
         if bind_call.settings is not None and cls._setting_params:
