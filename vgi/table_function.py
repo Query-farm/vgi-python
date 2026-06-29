@@ -300,7 +300,7 @@ def _secret_scalar_str(v: Any) -> str:
     return "" if py is None else str(py)
 
 
-class ResolvedSecrets(dict):
+class ResolvedSecrets(dict[str, dict[str, Any]]):
     """Resolved secrets keyed by secret name, with type- and scope-aware lookup.
 
     A plain ``dict`` (so ``secrets[name]`` and ``secrets.get(name)`` still work)
@@ -514,7 +514,7 @@ class InitParams[TArgs]:
     output_schema: pa.Schema
 
     settings: dict[str, pa.Scalar[Any]]
-    secrets: dict[str, dict[str, pa.Scalar[Any]]]
+    secrets: ResolvedSecrets
 
     storage: BoundStorage
     auth_context: AuthContext = AuthContext.anonymous()
@@ -569,7 +569,7 @@ class ProcessParams[TArgs]:
     output_schema: pa.Schema
 
     settings: dict[str, pa.Scalar[Any]]
-    secrets: dict[str, dict[str, pa.Scalar[Any]]]
+    secrets: ResolvedSecrets
 
     storage: BoundStorage
     auth_context: AuthContext = AuthContext.anonymous()

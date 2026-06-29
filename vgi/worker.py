@@ -146,6 +146,7 @@ from vgi.table_buffering_function import (
 )
 from vgi.table_function import (
     ProcessParams,
+    ResolvedSecrets,
     SecretsAccessor,
     TableCardinality,
     TableFunctionBase,
@@ -2407,7 +2408,7 @@ class Worker:
             init_response=None,
             output_schema=pa.schema([]),
             settings={},
-            secrets={},
+            secrets=ResolvedSecrets(),
             storage=storage,
             auth_context=ctx.auth,
         )
@@ -2513,7 +2514,7 @@ class Worker:
             init_response=None,
             output_schema=pa.schema([]),
             settings={},
-            secrets={},
+            secrets=ResolvedSecrets(),
             storage=storage,
             auth_context=ctx.auth,
         )
@@ -2576,7 +2577,7 @@ class Worker:
             init_response=None,
             output_schema=request.output_schema,
             settings={},
-            secrets={},
+            secrets=ResolvedSecrets(),
             storage=storage,
             auth_context=ctx.auth,
         )
@@ -2815,7 +2816,7 @@ class Worker:
             init_response=None,
             output_schema=request.output_schema,
             settings={},
-            secrets={},
+            secrets=ResolvedSecrets(),
             storage=storage,
             auth_context=ctx.auth,
         )
@@ -2912,7 +2913,7 @@ class Worker:
             init_response=None,
             output_schema=output_schema,
             settings={},
-            secrets={},
+            secrets=ResolvedSecrets(),
             storage=storage,
             auth_context=ctx.auth,
         )
@@ -3027,7 +3028,7 @@ class Worker:
             init_response=None,
             output_schema=output_schema,
             settings={},
-            secrets={},
+            secrets=ResolvedSecrets(),
             storage=storage,
             auth_context=ctx.auth,
         )
@@ -3121,7 +3122,7 @@ class Worker:
             init_response=None,
             output_schema=request.output_schema,
             settings=_batch_to_scalar_dict(request.settings),
-            secrets={},
+            secrets=ResolvedSecrets(),
             storage=storage,
             auth_context=ctx.auth,
         )
@@ -3187,7 +3188,7 @@ class Worker:
             init_response=None,
             output_schema=session.output_schema,
             settings={},
-            secrets={},
+            secrets=ResolvedSecrets(),
             storage=storage,
             auth_context=ctx.auth,
         )
@@ -3280,7 +3281,7 @@ class Worker:
             init_response=None,
             output_schema=session.output_schema,
             settings={},
-            secrets={},
+            secrets=ResolvedSecrets(),
             storage=storage,
             auth_context=ctx.auth,
         )

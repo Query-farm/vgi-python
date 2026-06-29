@@ -196,6 +196,10 @@ class BindRequest(ArrowSerializableDataclass):
             accessor), not at on_bind.
         at_value: Value of the time-travel ``AT`` clause for this scan; ``None`` when
             the scan has no AT clause. See ``at_unit`` for the inline-bind caveat.
+        copy_from: The ``COPY ... FROM`` context (source format + path); ``None``
+            unless this bind/init opens a COPY-FROM scan.
+        copy_to: The ``COPY ... TO`` context (destination format + path); ``None``
+            unless this bind/init opens a COPY-TO sink.
     """
 
     function_name: str

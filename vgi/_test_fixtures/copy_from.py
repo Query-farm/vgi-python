@@ -91,7 +91,7 @@ class ExampleLinesCopyFromFunction(CopyFromFunction[ExampleLinesCopyFromArgs]):
 
         # Column-major string arrays, NULL where the cell equals null_string,
         # then cast each column to the target type (DuckDB inserts no cast).
-        columns = list(zip(*rows)) if rows else [() for _ in range(ncols)]
+        columns = list(zip(*rows, strict=True)) if rows else [() for _ in range(ncols)]
         arrays = []
         for idx, field in enumerate(expected_schema):
             raw = [None if v == options.null_string else v for v in columns[idx]]
