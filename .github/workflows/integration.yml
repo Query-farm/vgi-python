@@ -39,7 +39,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
-      fail-fast: false
+      # If any transport leg fails, cancel the rest — one broken transport means
+      # the build is broken; no value in burning ~45 min finishing the others.
+      fail-fast: true
       matrix:
         include:
           # stdio:  the subprocess transport (whole suite — the primary lane).
