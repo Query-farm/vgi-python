@@ -133,12 +133,23 @@ trap cleanup EXIT
 # set BOOTED_PORT to the port it reports (PORT:<n>, the worker's readiness
 # contract). Sets a global rather than echoing so the backgrounded worker stays a
 # child of this shell (a $(...) subshell would reparent it and break teardown).
+#
+# The worker is spawned with cwd=$STAGE — the same directory the unittest binary
+# runs from below (`cd "$STAGE"`). copy_from/copy_to tests have DuckDB write a
+# source file under a relative `__TEST_DIR__` (duckdb_unittest_tempdir/...) that
+# the worker then opens by the same relative path; the worker only resolves it
+# if it shares DuckDB's cwd. On the stdio lane the C++ extension spawns the
+# worker as a subprocess that inherits DuckDB's cwd, so it matches for free; the
+# `( cd … ; exec … )` subshell gives the http worker the same footing (and
+# mirrors the vgi repo's run_http_integration.sh, which boots server and DuckDB
+# from one cwd). exec keeps the worker on the subshell's pid so teardown via the
+# captured `$!` still works.
 BOOTED_PORT=""
 boot_http_worker() {
   local exe="$1" log pid port=""
   BOOTED_PORT=""
   log="$(mktemp)"
-  "$exe" --http --port 0 >"$log" 2>&1 &
+  ( cd "$STAGE" && exec "$exe" --http --port 0 ) >"$log" 2>&1 &
   pid=$!
   echo "$pid" >> "$BG_PIDS_FILE"
   for _ in $(seq 1 60); do
