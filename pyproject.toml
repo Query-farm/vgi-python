@@ -77,7 +77,11 @@ dev = [
     "duckdb>=1.5.3",
     "mypy",
     "pyarrow-stubs",
-    "pydoclint",
+    # pydoclint is intentionally NOT a project dependency: it pulls
+    # docstring-parser-fork, which clobbers the canonical docstring-parser
+    # (a vgi-rpc dependency) in the shared `docstring_parser` namespace,
+    # non-deterministically breaking imports. tests/test_docstrings.py runs it
+    # in an isolated env via `uvx pydoclint` instead.
     "pytest",
     "pytest-cov",
     "pytest-examples",
@@ -142,7 +146,9 @@ quote-style = "double"
 # Docstring consistency gate (complements ruff's `D` rules, which only check
 # docstring *shape*, not whether documented args/attributes match the code).
 # Enforced families: DOC001 (parse), DOC101/102/103 (arg<->signature), DOC4xx
-# (yields), DOC60x (dataclass attributes). Run via `uv run pydoclint vgi/`.
+# (yields), DOC60x (dataclass attributes). pydoclint is NOT a project dependency
+# (it pulls docstring-parser-fork, which clobbers vgi-rpc's docstring-parser);
+# run it isolated: `uvx --python $(which python) pydoclint --config pyproject.toml vgi/`.
 style = "google"
 # We keep types in signatures, not docstrings (Google style) — so don't ask for
 # them in docstrings, and don't try to match return/yield *types* against prose.
@@ -162,7 +168,7 @@ allow_init_docstring = true
 # No baseline: vgi/ is fully clean under this config, so the gate enforces
 # every in-scope violation with no grandfathered exceptions. If a future change
 # needs to defer cleanup, freeze the current state and re-add `baseline`:
-#   uv run pydoclint --generate-baseline=True --baseline=.pydoclint-baseline vgi/
+#   uvx pydoclint --config pyproject.toml --generate-baseline=True --baseline=.pydoclint-baseline vgi/
 
 [tool.mypy]
 python_version = "3.13"
