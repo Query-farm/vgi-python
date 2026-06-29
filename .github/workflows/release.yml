@@ -56,6 +56,80 @@ jobs:
           name: dist-fixtures
           path: dist-fixtures/
 
+  build-docker-image:
+    name: Build & push vgi-fixtures image (${{ matrix.short }})
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to GHCR
+    # One image per fixture worker, selected via the VGI_FIXTURE_WORKER build arg.
+    # The VGI extension's container transport uses plain `oci://…` string
+    # LOCATIONs (no struct env), so the worker must be baked into the tag rather
+    # than passed at runtime. Tags: ghcr.io/query-farm/vgi-fixtures:<ver>-<short>
+    # (plus :<ver> and :latest for the base worker). max-parallel: 1 so the heavy
+    # pip-install layer is built once and reused from the gha cache by the rest.
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - { short: worker, worker: vgi-fixture-worker, latest: true }
+          - { short: versioned, worker: vgi-fixture-versioned-worker }
+          - { short: versioned-tables, worker: vgi-fixture-versioned-tables-worker }
+          - { short: attach-options, worker: vgi-fixture-attach-options-worker }
+          - { short: bad-protocol, worker: vgi-fixture-bad-protocol-worker }
+          - { short: bad-enum, worker: vgi-fixture-bad-enum-worker }
+          - { short: simple-writable, worker: vgi-fixture-simple-writable-worker }
+    steps:
+      - uses: actions/checkout@v7
+
+      # The image installs the exact wheels this release publishes.
+      - name: Download vgi wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-vgi
+          path: dist
+      - name: Download vgi-fixtures wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-fixtures
+          path: dist
+
+      - name: Compute image tags
+        id: meta
+        run: |
+          ver="${{ github.event.release.tag_name }}"
+          ver="${ver#v}" # normalize a leading v (v0.8.2 -> 0.8.2)
+          img="ghcr.io/query-farm/vgi-fixtures"
+          tags="$img:$ver-${{ matrix.short }}"
+          if [ "${{ matrix.latest }}" = "true" ]; then
+            tags="$tags,$img:$ver,$img:latest"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/vgi-fixtures/docker/Dockerfile
+          platforms: linux/amd64
+          build-args: |
+            VGI_FIXTURE_WORKER=${{ matrix.worker }}
+          tags: ${{ steps.meta.outputs.tags }}
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   publish-vgi:
     name: Publish vgi to PyPI
     needs: build
