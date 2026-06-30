@@ -96,8 +96,39 @@ class CopyToFunction[TArgs](TableBufferingFunction[TArgs, None]):
     @final
     @classmethod
     def on_bind(cls, params: BindParams[TArgs]) -> BindResponse:
-        """A sink produces no rows — bind to an empty output schema."""
+        """A sink produces no rows — bind to an empty output schema.
+
+        ``on_bind`` is ``@final`` (a writer has no output schema to compute), but
+        a cloud writer still needs credentials. The seam is :meth:`on_secrets`,
+        called here so a subclass can request ``CREATE SECRET`` values via the
+        framework's two-phase secret bind without overriding ``on_bind`` itself.
+        """
+        cls.on_secrets(params)
         return BindResponse(output_schema=pa.schema([]))
+
+    @classmethod
+    def on_secrets(cls, params: BindParams[TArgs]) -> None:
+        """Request the credentials this writer needs to reach its destination.
+
+        Override to forward ``CREATE SECRET`` values to :meth:`write` / :meth:`close`
+        for secret-backed cloud writes (S3/GCS/HTTP/...). Call
+        ``params.secrets.get(secret_type, scope=..., name=...)`` — typically scoping
+        by the destination path (:meth:`copy_to_path` / ``params.bind_call.copy_to``)
+        so DuckDB resolves the longest-prefix-matching secret. The framework issues a
+        two-phase bind retry to resolve every requested secret from the caller's
+        secret store, then surfaces the resolved values on ``params.secrets`` (a
+        :class:`ResolvedSecrets`) at :meth:`write` / :meth:`close` time. Requested
+        secrets that don't exist resolve to "not found" rather than an error — pass
+        ``required=True`` to ``get()`` to make a missing secret fail the bind.
+
+        The destination path is available without an ``init_call`` here via
+        ``params.bind_call.copy_to.file_path`` (use :meth:`copy_to_path` only at
+        write/close time, where an ``init_call`` exists).
+
+        Default: request nothing (no secrets forwarded), so existing writers that
+        never touched credentials are unaffected.
+        """
+        # Default no-op. Subclasses override to call params.secrets.get(...).
 
     @final
     @classmethod

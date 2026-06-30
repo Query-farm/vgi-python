@@ -98,9 +98,31 @@ class CopyFromFunction[TArgs](TableFunctionGenerator[TArgs, _CopyFromState]):
                 f"{cls.__name__} is a COPY FROM format reader; invoke it via "
                 f"COPY <table> FROM '<path>' (FORMAT {fmt}), not as a table function."
             )
+        # Forward credentials for secret-backed cloud sources (S3/GCS/HTTP/...)
+        # via the framework's two-phase secret bind. on_bind is @final (the output
+        # schema is fixed to the COPY target), so on_secrets is the seam.
+        cls.on_secrets(params)
         # ``expected_schema`` is transparently a ``pa.Schema`` here — the
         # ArrowType(binary) annotation only governs the wire encoding.
         return BindResponse(output_schema=cf.expected_schema)
+
+    @classmethod
+    def on_secrets(cls, params: BindParams[TArgs]) -> None:
+        """Request the credentials this reader needs to reach its source.
+
+        Override to forward ``CREATE SECRET`` values to :meth:`read` for
+        secret-backed cloud sources. Call ``params.secrets.get(secret_type,
+        scope=..., name=...)`` — typically scoping by the source path
+        (``params.bind_call.copy_from.file_path``) so DuckDB resolves the
+        longest-prefix-matching secret. The framework issues a two-phase bind retry
+        to resolve every requested secret from the caller's secret store, then
+        surfaces the resolved values on ``params.secrets`` (a
+        :class:`ResolvedSecrets`) at :meth:`read` time. Pass ``required=True`` to
+        ``get()`` to make a missing secret fail the bind.
+
+        Default: request nothing (no secrets forwarded).
+        """
+        # Default no-op. Subclasses override to call params.secrets.get(...).
 
     @final
     @classmethod

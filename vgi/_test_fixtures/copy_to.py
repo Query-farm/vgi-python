@@ -29,8 +29,13 @@ from vgi.copy_to_function import CopyToFunction
 
 if TYPE_CHECKING:
     from vgi.table_buffering_function import TableBufferingParams
+    from vgi.table_function import BindParams
 
-__all__ = ["ExampleLinesCopyToFunction", "ExampleLinesOrderedCopyToFunction"]
+__all__ = [
+    "ExampleLinesCopyToFunction",
+    "ExampleLinesOrderedCopyToFunction",
+    "SecretLinesCopyToFunction",
+]
 
 _SHARD_NS = b"copy_to_shard"
 
@@ -158,3 +163,75 @@ class ExampleLinesOrderedCopyToFunction(ExampleLinesCopyToFunction):
         categories = ["copy", "test"]
         tags = {"category": "copy_to", "stability": "test"}
         sink_order_dependent = True  # ordered COPY TO → single-thread sink
+
+
+_SECRET_NS = b"copy_to_secret_shard"
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SecretLinesCopyToArgs:
+    """Options for the ``secret_lines_out`` COPY format."""
+
+    secret_type: Annotated[
+        str,
+        Arg("secret_type", default="vgi_example", doc="Secret type to fetch, scoped by the destination path"),
+    ] = "vgi_example"
+
+
+class SecretLinesCopyToFunction(CopyToFunction[SecretLinesCopyToArgs]):
+    """COPY ... TO writer that forwards a ``CREATE SECRET`` credential.
+
+    Exercises the COPY-TO secret-bind hook (:meth:`CopyToFunction.on_secrets`):
+    it requests the ``secret_type`` secret scoped to the destination path during
+    bind, and ``close()`` writes the resolved secret's ``api_key`` (or ``NONE``)
+    plus the row count into the destination — so a test can assert that the
+    caller's secret reached the writer for a secret-backed cloud write.
+    """
+
+    COPY_TO_FORMAT: ClassVar[str] = "secret_lines_out"
+    COPY_TO_COMMENT: ClassVar[str | None] = "Writer that forwards a CREATE SECRET credential (test fixture)"
+
+    class Meta:
+        name = "secret_lines_writer"
+        description = "Write the resolved secret's api_key + row count to the destination"
+        categories = ["copy", "test", "secret"]
+        tags = {"category": "copy_to", "stability": "test"}
+
+    @classmethod
+    def on_secrets(cls, params: BindParams[SecretLinesCopyToArgs]) -> None:
+        """Request the destination-scoped secret; framework two-phase resolves it."""
+        cf = params.bind_call.copy_to
+        scope = cf.file_path if cf is not None else None
+        # Scoped lookup → longest-prefix match against the caller's CREATE SECRETs.
+        params.secrets.get(params.args.secret_type, scope=scope)
+
+    @classmethod
+    def write(
+        cls,
+        *,
+        batch: pa.RecordBatch,
+        options: SecretLinesCopyToArgs,
+        file_path: str,
+        params: TableBufferingParams[SecretLinesCopyToArgs],
+    ) -> None:
+        """Record this shard's row count (cross-process-safe append)."""
+        params.storage.state_append(_SECRET_NS, b"", str(batch.num_rows).encode())
+
+    @classmethod
+    def close(
+        cls,
+        *,
+        options: SecretLinesCopyToArgs,
+        file_path: str,
+        params: TableBufferingParams[SecretLinesCopyToArgs],
+    ) -> int:
+        """Write the forwarded secret's api_key + total row count, once."""
+        secret = params.secrets.for_scope_of_type(file_path, options.secret_type) or {}
+        api_key = secret.get("api_key")
+        if api_key is not None and hasattr(api_key, "as_py"):
+            api_key = api_key.as_py()
+        total = sum(int(blob) for _id, blob in params.storage.state_log_scan(_SECRET_NS, b"", after_id=-1))
+        with open(file_path, "w", encoding="utf-8") as fh:
+            fh.write(f"api_key={'NONE' if api_key is None else api_key}\n")
+            fh.write(f"rows={total}\n")
+        return total

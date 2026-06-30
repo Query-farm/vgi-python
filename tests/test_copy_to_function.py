@@ -9,8 +9,14 @@ import types
 
 import pyarrow as pa
 
-from vgi._test_fixtures.copy_to import ExampleLinesCopyToArgs, ExampleLinesCopyToFunction
+from vgi._test_fixtures.copy_to import (
+    ExampleLinesCopyToArgs,
+    ExampleLinesCopyToFunction,
+    SecretLinesCopyToArgs,
+    SecretLinesCopyToFunction,
+)
 from vgi._test_fixtures.worker import ExampleCatalog
+from vgi.table_function import ResolvedSecrets, SecretsAccessor
 
 SCHEMA = pa.schema([("a", pa.int64()), ("b", pa.string())])
 
@@ -98,6 +104,81 @@ def test_close_empty_input_with_header_writes_header_only() -> None:
     )
     assert n == 0
     assert _read(out_name) == "a,b\n"
+
+
+# ---------------------------------------------------------------------------
+# Secret forwarding (CopyToFunction.on_secrets hook)
+# ---------------------------------------------------------------------------
+
+
+def _secret_params(store: _Store, secrets: ResolvedSecrets) -> types.SimpleNamespace:
+    """A TableBufferingParams-shaped stub carrying resolved secrets for write/close."""
+    bind_call = types.SimpleNamespace(input_schema=SCHEMA)
+    init_call = types.SimpleNamespace(bind_call=bind_call)
+    return types.SimpleNamespace(storage=store, init_call=init_call, execution_id=b"x", secrets=secrets)
+
+
+def test_on_secrets_requests_destination_scoped_secret() -> None:
+    """on_secrets() registers a pending lookup scoped to the COPY destination path."""
+    accessor = SecretsAccessor(None)  # nothing resolved yet → first-call behavior
+    params = types.SimpleNamespace(
+        args=SecretLinesCopyToArgs(),  # default secret_type='vgi_example'
+        bind_call=types.SimpleNamespace(copy_to=types.SimpleNamespace(file_path="s3://bucket/out.bin")),
+        secrets=accessor,
+    )
+    SecretLinesCopyToFunction.on_secrets(params)
+    # The hook must have asked the framework for a scoped two-phase resolution.
+    assert accessor.needs_resolution
+    pending = accessor.pending_lookups
+    assert len(pending) == 1
+    assert pending[0].secret_type == "vgi_example"
+    assert pending[0].scope == "s3://bucket/out.bin"
+
+
+def test_close_forwards_resolved_secret_api_key() -> None:
+    """close() writes the resolved (destination-scoped) secret's api_key + row count."""
+    store = _Store()
+    out_name = _tmp_path()
+    secrets = ResolvedSecrets(
+        {
+            "writer_creds": {
+                "type": pa.scalar("vgi_example"),
+                "scope": pa.scalar(out_name),
+                "api_key": pa.scalar("WRITER_KEY"),
+            }
+        }
+    )
+    params = _secret_params(store, secrets)
+    opts = SecretLinesCopyToArgs()
+
+    SecretLinesCopyToFunction.write(
+        batch=pa.record_batch({"a": [1, 2], "b": ["x", "y"]}, schema=SCHEMA),
+        options=opts,
+        file_path=out_name,
+        params=params,
+    )
+    n = SecretLinesCopyToFunction.close(options=opts, file_path=out_name, params=params)
+    assert n == 2
+    assert _read(out_name) == "api_key=WRITER_KEY\nrows=2\n"
+
+
+def test_close_writes_none_when_secret_absent() -> None:
+    """A genuinely missing secret resolves to 'NONE' (silent miss, not an error)."""
+    store = _Store()
+    out_name = _tmp_path()
+    params = _secret_params(store, ResolvedSecrets())
+    opts = SecretLinesCopyToArgs()
+    n = SecretLinesCopyToFunction.close(options=opts, file_path=out_name, params=params)
+    assert n == 0
+    assert _read(out_name) == "api_key=NONE\nrows=0\n"
+
+
+def test_catalog_advertises_secret_lines_out_format() -> None:
+    """The secret-forwarding writer is advertised like any other COPY TO format."""
+    formats = ExampleCatalog().copy_from_formats(attach_opaque_data=b"", transaction_opaque_data=None)
+    by = {(f.direction, f.format_name): f for f in formats}
+    assert ("to", "secret_lines_out") in by
+    assert by[("to", "secret_lines_out")].handler == "secret_lines_writer"
 
 
 def test_catalog_advertises_copy_to_format() -> None:
