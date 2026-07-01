@@ -775,7 +775,12 @@ def _unpack_bool_mask(data: bytes, length: int) -> pa.BooleanArray:
     if not data:
         return pa.array([True] * length, type=pa.bool_())
     buf = pa.py_buffer(data)
-    return cast(pa.BooleanArray, pa.Array.from_buffers(pa.bool_(), length, [None, buf]))  # type: ignore[list-item]
+    # buffers = [validity bitmap (None → all valid), data buffer]. A None validity
+    # buffer is valid at runtime, but pyarrow-stub versions disagree on whether the
+    # signature admits it — some reject `None` (needing an ignore), others accept it
+    # (making that ignore "unused"). A cast type-checks identically on both.
+    buffers = cast("list[pa.Buffer]", [None, buf])
+    return cast(pa.BooleanArray, pa.Array.from_buffers(pa.bool_(), length, buffers))
 
 
 def _unpack_frame_stats(data: bytes) -> tuple[tuple[int, int], tuple[int, int]]:
