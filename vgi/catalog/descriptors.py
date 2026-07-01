@@ -13,7 +13,7 @@ This module provides classes for declaratively defining catalog structure:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Union
 
 import pyarrow as pa
@@ -492,6 +492,20 @@ class Table:
                     f"Table '{self.name}': function '{self.function.__name__}' returned "
                     f"unexpected bind result type: {type(result).__name__}"
                 )
+            if result.is_secret_scope_request:
+                # ``on_bind()`` performed a two-phase secret lookup (``SecretsAccessor.get``),
+                # so this first bind returned an empty-schema scope request rather than the
+                # schema. A table's schema cannot depend on secret *values*, and schema
+                # derivation has no caller secrets to resolve, so retry as the terminal phase
+                # (``resolved_secrets_provided=True``): unresolved lookups become no-ops and
+                # ``on_bind()`` returns the real output schema. Without this, the table would
+                # silently take the empty scope-request schema (0 columns).
+                result = self.function.bind(replace(bind_call, resolved_secrets_provided=True))
+                if not isinstance(result, BindResponse) or result.is_secret_scope_request:
+                    raise ValueError(
+                        "function still requests secrets after a resolved-secrets retry — "
+                        "a function-backed table's schema must not depend on secret values"
+                    )
             return result.output_schema
         except Exception as e:
             raise ValueError(

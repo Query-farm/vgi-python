@@ -437,6 +437,52 @@ class FilterBySettingFunction(TableInOutGenerator[SingleTableArguments]):
         out.emit(batch.filter(mask))
 
 
+class SecretInOutFunction(TableInOutGenerator[SingleTableArguments]):
+    """Table-in-out whose on_bind performs a two-phase secret lookup.
+
+    Exercises secrets x table-in-out: ``on_bind`` calls ``params.secrets.get()``
+    (the dynamic two-phase bind), and ``process`` appends the resolved secret's
+    ``secret_string`` value as a column on every input row. Output schema is the
+    input schema plus a ``secret_string`` column.
+    """
+
+    class Meta:
+        """Metadata for SecretInOutFunction."""
+
+        name = "secret_in_out"
+        description = "Append a resolved secret value to each input row"
+        categories = ["transform", "secret"]
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM secret_in_out((SELECT 1 AS n))",
+                description="Append the secret_string value to each input row",
+            )
+        ]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[SingleTableArguments]) -> BindResponse:
+        """Request the secret (two-phase) and add a secret_string output column."""
+        params.secrets.get("vgi_example")
+        assert params.bind_call.input_schema is not None
+        fields = [*params.bind_call.input_schema, pa.field("secret_string", pa.string())]
+        return BindResponse(output_schema=pa.schema(fields))
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[SingleTableArguments],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        """Emit each input row with the resolved secret's secret_string appended."""
+        secret = next(iter(params.secrets.of_type("vgi_example")), {})
+        value = secret["secret_string"].as_py() if "secret_string" in secret else None
+        columns = {name: batch.column(name) for name in batch.schema.names}
+        columns["secret_string"] = pa.array([value] * batch.num_rows, type=pa.string())
+        out.emit(pa.record_batch(columns, schema=params.output_schema))
+
+
 @dataclass(slots=True, frozen=True)
 class RepeatsInputsFunctionArguments:
     """Arguments for RepeatInputsFunction."""

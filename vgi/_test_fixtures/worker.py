@@ -45,6 +45,7 @@ from vgi._test_fixtures.aggregate import (
     GenericSumFunction,
     ListAggFunction,
     PercentileFunction,
+    SecretTypedSumFunction,
     StreamingSumFunction,
     SumAllFunction,
     SumFunction,
@@ -217,6 +218,7 @@ from vgi._test_fixtures.table_in_out import (
     OrderedBufferInputFunction,
     OrderedSourceFunction,
     RepeatInputsFunction,
+    SecretInOutFunction,
     SumAllColumnsFunction,
     SumAllColumnsSimpleDistributed,
 )
@@ -339,6 +341,7 @@ _EXAMPLE_CATALOG = Catalog(
                 EchoWitnessFunction,
                 BufferInputFunction,
                 FilterBySettingFunction,
+                SecretInOutFunction,
                 RepeatInputsFunction,
                 SlowCancellableInOutFunction,
                 SumAllColumnsFunction,
@@ -506,6 +509,7 @@ _EXAMPLE_CATALOG = Catalog(
                 ListAggFunction,
                 NestTensorFunction,
                 PercentileFunction,
+                SecretTypedSumFunction,
                 StreamingSumFunction,
                 SumAllFunction,
                 SumFunction,
@@ -590,6 +594,18 @@ _EXAMPLE_CATALOG = Catalog(
                     name="ten_thousand_table",
                     function=TenThousandFunction,
                     comment="Function-backed table over the no-arg ten_thousand function",
+                ),
+                # Function-backed table whose backing function performs a two-phase
+                # secret lookup in on_bind (``SecretDemoFunction`` calls
+                # ``params.secrets.get(...)``). Exercises schema derivation through the
+                # secret-scope-request → resolved-secrets retry path in
+                # ``Table._get_resolved_columns`` — see
+                # ``secret/secret_function_backed_table.test``. The backing function
+                # name (``secret_demo``) intentionally differs from the table name.
+                Table(
+                    name="secret_demo_table",
+                    function=SecretDemoFunction,
+                    comment="Function-backed table over the secret-using secret_demo function",
                 ),
                 # Function-backed table with inlined cardinality. Used by the
                 # ``inlined_cardinality.test`` integration test to verify the

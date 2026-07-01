@@ -41,8 +41,10 @@ from vgi.catalog import (
     View,
     ViewInfo,
 )
+from vgi.invocation import BindResponse
 from vgi.schema_utils import schema
 from vgi.table_function import (
+    BindParams,
     ProcessParams,
     TableFunctionGenerator,
     bind_fixed_schema,
@@ -78,6 +80,31 @@ class UsersFunction(TableFunctionGenerator[EmptyArgs]):
                 schema=params.output_schema,
             )
         )
+        out.finish()
+
+
+@init_single_worker
+class SecretLookupFunction(TableFunctionGenerator[EmptyArgs]):
+    """Backing function whose ``on_bind`` performs a two-phase secret lookup.
+
+    This exercises the bug where ``Table(function=...)`` schema derivation took
+    the empty secret-scope-request schema instead of retrying the bind.
+    """
+
+    class Meta:  # noqa: D106
+        name = "secret_scan"
+        description = "Backing function that looks up a secret at bind time"
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema({"id": pa.int64(), "name": pa.string()})
+
+    @classmethod
+    def on_bind(cls, params: BindParams[EmptyArgs]) -> BindResponse:  # noqa: D102
+        params.secrets.get("some_secret")  # unresolved -> registers a two-phase lookup
+        return BindResponse(output_schema=cls.FIXED_SCHEMA)
+
+    @classmethod
+    def process(cls, params: ProcessParams[EmptyArgs], state: None, out: OutputCollector) -> None:  # noqa: D102
+        out.emit(pa.RecordBatch.from_pydict({"id": [1], "name": ["x"]}, schema=params.output_schema))
         out.finish()
 
 
@@ -185,6 +212,18 @@ class TestTableWithFunction:
         assert len(resolved) == 2
         assert resolved.field(0).name == "id"
         assert resolved.field(1).name == "name"
+
+    def test_function_backed_table_derives_schema_despite_secret_lookup(self) -> None:
+        """A backing function that calls secrets.get() in on_bind still yields its schema.
+
+        Regression: on_bind's two-phase secret lookup makes the first bind return an
+        empty secret-scope-request schema; schema derivation must retry with resolved
+        secrets rather than adopt the empty schema (which produced 0-column tables).
+        """
+        table = Table(name="things", function=SecretLookupFunction)
+        resolved = table.resolved_columns
+        assert [f.name for f in resolved] == ["id", "name"]
+        assert len(resolved) == 2
 
     def test_table_function_backed_with_constraints(self) -> None:
         """Function-backed table can have constraints validated."""
@@ -336,7 +375,6 @@ class TestTableWithFunction:
         from typing import Any as _Any
 
         from vgi.invocation import BindResponse
-        from vgi.table_function import BindParams
 
         @init_single_worker
         class _ManualBindFn(TableFunctionGenerator[EmptyArgs]):
