@@ -776,10 +776,11 @@ def _unpack_bool_mask(data: bytes, length: int) -> pa.BooleanArray:
         return pa.array([True] * length, type=pa.bool_())
     buf = pa.py_buffer(data)
     # buffers = [validity bitmap (None → all valid), data buffer]. A None validity
-    # buffer is valid at runtime, but pyarrow-stub versions disagree on whether the
-    # signature admits it — some reject `None` (needing an ignore), others accept it
-    # (making that ignore "unused"). A cast type-checks identically on both.
-    buffers = cast("list[pa.Buffer]", [None, buf])
+    # buffer is valid at runtime, but pyarrow-stub versions disagree on the param
+    # type (`list[Buffer]` vs `list[Buffer | None]`), and list invariance means no
+    # single concrete annotation satisfies both. Type as Any so the call checks on
+    # either version without a version-fragile `# type: ignore`.
+    buffers: Any = [None, buf]
     return cast(pa.BooleanArray, pa.Array.from_buffers(pa.bool_(), length, buffers))
 
 
