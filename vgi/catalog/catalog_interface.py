@@ -932,14 +932,6 @@ class ScanBranch:
             table function). The C++ rewriter resolves this name against
             DuckDB's function catalog and binds it at optimize time. Empty
             string for a catalog-table branch.
-        source_catalog: Catalog-table branch only — the attached catalog name
-            (matches an :attr:`AttachCatalogInfo.alias`). ``None`` for function
-            branches.
-        source_schema: Catalog-table branch only — the schema of the source
-            table. ``None`` for function branches.
-        source_table: Catalog-table branch only — the base table name; its
-            presence selects the catalog-table kind. ``None`` for function
-            branches.
         positional_arguments: Positional arguments as PyArrow scalars,
             passed through to the function's ``bind``.
         named_arguments: Named arguments as PyArrow scalars.
@@ -960,6 +952,14 @@ class ScanBranch:
             remain refused on multi-branch tables regardless of this
             flag; the contract is INSERT-only until cross-arm
             semantics have customer-driven evidence.
+        source_catalog: Catalog-table branch only — the attached catalog name
+            (matches an :attr:`AttachCatalogInfo.alias`). ``None`` for function
+            branches.
+        source_schema: Catalog-table branch only — the schema of the source
+            table. ``None`` for function branches.
+        source_table: Catalog-table branch only — the base table name; its
+            presence selects the catalog-table kind. ``None`` for function
+            branches.
         ARROW_SCHEMA: Arrow IPC schema used to (de)serialize this branch over the wire.
 
     """
@@ -2306,6 +2306,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         settings: DuckDB setting specs the catalog declares.
         secret_types: Secret type specs the catalog declares.
         attach_option_specs: Attach option specs accepted at ``ATTACH`` time.
+        attach_catalogs: Companion catalogs (lakehouse federation) the client
+            should ATTACH when this catalog attaches.
         catalog: Optional declarative `[`Catalog`][]` object describing the
             catalog's schemas, tables, and views.
         catalog_create: DDL stub that raises `[`CatalogReadOnlyError`][].

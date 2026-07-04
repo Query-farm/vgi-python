@@ -1,7 +1,9 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""Test fixture: a VGI catalog that advertises a companion catalog + a
-multi-branch table whose branches are catalog-table branches on that companion.
+"""Companion-catalog (lakehouse federation) test fixture.
+
+A VGI catalog that advertises a companion catalog + a multi-branch table whose
+branches are catalog-table branches on that companion.
 
 Exercises the lakehouse-federation feature end-to-end:
 
@@ -38,12 +40,14 @@ import pyarrow as pa
 
 from vgi.catalog import (
     AttachCatalogInfo,
+    AttachOpaqueData,
     Catalog,
     ReadOnlyCatalogInterface,
     ScanBranch,
     ScanBranchesResult,
     Schema,
     Table,
+    TransactionOpaqueData,
 )
 from vgi.worker import Worker
 
@@ -116,8 +120,8 @@ class CompanionCatalog(ReadOnlyCatalogInterface):
     def table_scan_branches_get(
         self,
         *,
-        attach_opaque_data,  # noqa: ANN001
-        transaction_opaque_data,  # noqa: ANN001
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
         schema_name: str,
         name: str,
         at_unit: str | None = None,

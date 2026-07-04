@@ -7,11 +7,11 @@ catalog interfaces in VGI workers, enabling DuckDB ATTACH support.
 """
 
 from vgi.catalog.catalog_interface import (
+    AttachCatalogInfo,
     AttachOpaqueData,
     CatalogAttachResult,
     CatalogDataVersionRelease,
     CatalogExample,
-    AttachCatalogInfo,
     CatalogInfo,
     CatalogInterface,
     CatalogObject,
