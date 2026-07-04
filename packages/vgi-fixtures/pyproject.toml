@@ -38,6 +38,7 @@ dependencies = ["vgi-python[test-fixtures-writable]", "vgi-python[duckdb]"]
 
 [project.scripts]
 vgi-fixture-worker = "vgi._test_fixtures.worker:main"
+vgi-fixture-companion-worker = "vgi._test_fixtures.companion:main"
 vgi-fixture-http = "vgi._test_fixtures.http_server:main"
 vgi-fixture-versioned-worker = "vgi._test_fixtures.versioned:main"
 vgi-fixture-versioned-tables-worker = "vgi._test_fixtures.versioned_tables:main"

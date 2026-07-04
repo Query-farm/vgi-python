@@ -1110,7 +1110,7 @@ class TestArrowSchemaCorrectness:
     def test_catalog_attach_result_schema(self) -> None:
         """Verify CatalogAttachResult Arrow schema."""
         schema = CatalogAttachResult.ARROW_SCHEMA
-        assert len(schema) == 14
+        assert len(schema) == 15
         assert schema.field("attach_opaque_data").type == pa.binary()
         assert schema.field("supports_transactions").type == pa.bool_()
         assert schema.field("supports_time_travel").type == pa.bool_()
@@ -1120,6 +1120,7 @@ class TestArrowSchemaCorrectness:
         assert schema.field("default_schema").type == pa.string()
         assert schema.field("settings").type == pa.list_(pa.binary())
         assert schema.field("secret_types").type == pa.list_(pa.binary())
+        assert schema.field("attach_catalogs").type == pa.list_(pa.binary())
         assert schema.field("resolved_data_version").type == pa.string()
         assert schema.field("resolved_implementation_version").type == pa.string()
 

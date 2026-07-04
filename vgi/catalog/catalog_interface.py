@@ -177,6 +177,55 @@ class CatalogInfo(ArrowSerializableDataclass):
 
 
 @dataclass(frozen=True)
+class AttachCatalogInfo(ArrowSerializableDataclass):
+    """A companion catalog the client should ATTACH when this VGI catalog attaches.
+
+    Advertised via :attr:`CatalogAttachResult.attach_catalogs`. The VGI DuckDB
+    extension attaches each entry at VGI-attach time (into the client's
+    DatabaseManager) so that multi-branch catalog-table branches — and direct
+    user queries — can resolve tables in a companion lakehouse (DuckLake /
+    iceberg / postgres / …) without the client hand-attaching anything.
+
+    Trust: companion attach is remote-influenced, so the extension applies a
+    scheme allowlist and a never-clobber conflict policy (it will never replace
+    a catalog it did not itself create). See ``docs/companion_catalogs.md``.
+
+    Attributes:
+        alias: Catalog name to attach as. Also the ``source_catalog`` a
+            catalog-table :class:`ScanBranch` references. **Namespace this by
+            your catalog identity** (e.g. ``"acme_lake"``) so two workers don't
+            both claim ``"lake"`` on the same client — collisions are rejected,
+            never silently merged.
+        target: The ATTACH target — a path or DSN, e.g.
+            ``"ducklake:sqlite:/data/meta.sqlite"`` or
+            ``"postgres:dbname=… host=…"``.
+        db_type: DuckDB storage/db type (e.g. ``"ducklake"``, ``"postgres"``).
+            Empty ⇒ the extension infers it from the ``target`` scheme prefix.
+        options: Extra ATTACH options forwarded verbatim (e.g. DuckLake
+            ``DATA_PATH``). Keys are matched case-insensitively by DuckDB.
+        hidden: When true, attach hidden (excluded from ``duckdb_databases()``);
+            still resolvable by qualified name and by branches. Use for
+            branch-only companions the user shouldn't see.
+        required: When true, a failure to attach (unreachable / conflict) fails
+            the whole VGI ATTACH loudly. When false, the failure is logged and
+            skipped; branches referencing it then error at bind.
+        secret_ref: Optional name of a credential to pre-resolve (via the
+            catalog's Orchard secret provider) and inject into the companion's
+            ATTACH options — for metadata connections (e.g. a postgres DSN)
+            where the catch-all path-keyed secret lookup isn't enough. Empty ⇒
+            rely on the automatic catch-all provider for data-file creds.
+    """
+
+    alias: str
+    target: str
+    db_type: str = ""
+    options: dict[str, str] = field(default_factory=dict)
+    hidden: bool = False
+    required: bool = False
+    secret_ref: str = ""
+
+
+@dataclass(frozen=True)
 class CatalogAttachResult(ArrowSerializableDataclass):
     """Result from attaching to a catalog.
 
@@ -199,6 +248,11 @@ class CatalogAttachResult(ArrowSerializableDataclass):
             Each ExtensionOption is serialized as bytes for Arrow compatibility.
         secret_types: Secret types registered with DuckDB's SecretManager. Each
             SecretTypeSpec is serialized as bytes for Arrow compatibility.
+        attach_catalogs: Companion catalogs the client should ATTACH alongside
+            this VGI catalog (lakehouse federation). Each :class:`AttachCatalogInfo`
+            is serialized as bytes for Arrow compatibility. Attached at
+            VGI-attach time; detached (refcounted) on DETACH. See
+            ``AttachCatalogInfo`` and ``docs/companion_catalogs.md``.
         comment: Optional comment describing this catalog/database.
         tags: Optional key-value tags associated with this catalog/database.
         supports_column_statistics: Whether any tables in this catalog can
@@ -221,6 +275,7 @@ class CatalogAttachResult(ArrowSerializableDataclass):
     default_schema: str = "main"
     settings: list[bytes] = field(default_factory=list)
     secret_types: list[bytes] = field(default_factory=list)
+    attach_catalogs: list[bytes] = field(default_factory=list)
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
     supports_column_statistics: bool = False
@@ -858,11 +913,33 @@ WriteFunctionResult = ScanFunctionResult
 class ScanBranch:
     """One physical source backing a multi-branch scan.
 
+    A branch is one of two **kinds**:
+
+    * **Function branch** (the default) — ``function_name`` names a DuckDB table
+      function bound with ``positional_arguments``/``named_arguments``.
+    * **Catalog-table branch** — ``function_name`` is empty (``""``) and
+      ``source_table`` is set; the branch scans the base table
+      ``source_catalog.source_schema.source_table`` in an *attached* catalog
+      (typically an :class:`AttachCatalogInfo` companion, e.g. a DuckLake
+      table). The extension binds it via the catalog's own scan function, so a
+      companion's snapshot/pruning semantics are honored.
+
+    The discriminator is simply "``source_table`` present ⇒ catalog-table kind".
+
     Attributes:
-        function_name: The DuckDB function to call for this branch
+        function_name: The DuckDB function to call for a *function* branch
             (e.g., ``"read_parquet"``, ``"iceberg_scan"``, or a VGI
             table function). The C++ rewriter resolves this name against
-            DuckDB's function catalog and binds it at optimize time.
+            DuckDB's function catalog and binds it at optimize time. Empty
+            string for a catalog-table branch.
+        source_catalog: Catalog-table branch only — the attached catalog name
+            (matches an :attr:`AttachCatalogInfo.alias`). ``None`` for function
+            branches.
+        source_schema: Catalog-table branch only — the schema of the source
+            table. ``None`` for function branches.
+        source_table: Catalog-table branch only — the base table name; its
+            presence selects the catalog-table kind. ``None`` for function
+            branches.
         positional_arguments: Positional arguments as PyArrow scalars,
             passed through to the function's ``bind``.
         named_arguments: Named arguments as PyArrow scalars.
@@ -892,6 +969,9 @@ class ScanBranch:
     named_arguments: dict[str, pa.Scalar]  # type: ignore[type-arg]
     branch_filter: str | None = None
     writable: bool = False
+    source_catalog: str | None = None
+    source_schema: str | None = None
+    source_table: str | None = None
 
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
@@ -899,6 +979,9 @@ class ScanBranch:
             pa.field("arguments", pa.binary(), nullable=False),
             pa.field("branch_filter", pa.string(), nullable=True),
             pa.field("writable", pa.bool_(), nullable=False),
+            pa.field("source_catalog", pa.string(), nullable=True),
+            pa.field("source_schema", pa.string(), nullable=True),
+            pa.field("source_table", pa.string(), nullable=True),
         ]  # type: ignore[arg-type]
     )
 
@@ -925,6 +1008,9 @@ class ScanBranch:
             "arguments": serialize_record_batch_bytes(argument_batch),
             "branch_filter": self.branch_filter,
             "writable": self.writable,
+            "source_catalog": self.source_catalog,
+            "source_schema": self.source_schema,
+            "source_table": self.source_table,
         }
 
     def serialize(self) -> bytes:
@@ -966,6 +1052,9 @@ class ScanBranch:
             branch_filter=cast("str | None", branch_filter_value) if branch_filter_value is not None else None,
             # writable is non-nullable on the wire — trust the schema.
             writable=bool(row["writable"]),
+            source_catalog=cast("str | None", row.get("source_catalog")),
+            source_schema=cast("str | None", row.get("source_schema")),
+            source_table=cast("str | None", row.get("source_table")),
         )
 
 
@@ -2258,6 +2347,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     settings: list["SettingSpec"] = []
     secret_types: list["SecretTypeSpec"] = []
     attach_option_specs: list["AttachOptionSpec"] = []
+    attach_catalogs: list["AttachCatalogInfo"] = []
 
     # NEW: Optional Catalog object for declarative definition
     catalog: "Catalog | None" = None
@@ -2427,6 +2517,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         # Serialize settings and secret types for the attach result
         serialized_settings = [s.serialize() for s in self.settings]
         serialized_secret_types = [st.serialize() for st in self.secret_types]
+        serialized_attach_catalogs = [c.serialize_to_bytes() for c in self.attach_catalogs]
 
         # Auto-derive supports_time_travel and supports_column_statistics from tables
         self._build_registries()
@@ -2444,6 +2535,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             default_schema=self._default_schema_name,
             settings=serialized_settings,
             secret_types=serialized_secret_types,
+            attach_catalogs=serialized_attach_catalogs,
             comment=self.catalog.comment if self.catalog is not None else None,
             tags=dict(self.catalog.tags) if self.catalog is not None else {},
             supports_column_statistics=has_column_statistics,

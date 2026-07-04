@@ -23,6 +23,7 @@ import pyarrow as pa
 from vgi_rpc.rpc._types import MethodType, rpc_methods  # type: ignore[attr-defined]
 
 from vgi.catalog.catalog_interface import (
+    AttachCatalogInfo,
     CatalogInfo,
     CatalogObject,
     CopyFromFormatInfo,
@@ -58,6 +59,7 @@ EXTRA_RESPONSE_TYPES: tuple[type, ...] = (
     ScanFunctionResult,  # catalog_table_{scan,insert,update,delete}_function_get
     ScanBranchesResult,  # catalog_table_scan_branches_get (top-level wrapper)
     ScanBranch,  # one entry inside ScanBranchesResult.branches (binary blob)
+    AttachCatalogInfo,  # one entry inside CatalogAttachResult.attach_catalogs (binary blob)
 )
 
 
