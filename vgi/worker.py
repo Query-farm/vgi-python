@@ -2354,6 +2354,15 @@ class Worker:
                     doc=arg.doc if arg.doc else None,
                 )
 
+        # Enforce ConstParam value constraints (choices/ge/le/gt/lt/pattern) once
+        # at bind — mirrors the scalar path so a discovered constraint is binding
+        # for aggregates too, failing fast instead of reaching update()/finalize().
+        const_params = getattr(func_cls, "_const_params", {}) or {}
+        if const_params and request.arguments is not None:
+            from vgi.arguments import validate_const_arg_constraints
+
+            validate_const_arg_constraints(const_params, request.arguments)
+
         execution_id = uuid.uuid4().bytes
         bind_params = AggregateBindParams(
             args=request.arguments,

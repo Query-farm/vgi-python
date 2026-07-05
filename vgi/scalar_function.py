@@ -60,6 +60,7 @@ from vgi.arguments import (
     Secret,
     SecretLookupEntry,
     _extract_setting_secret_params,
+    validate_const_arg_constraints,
 )
 from vgi.function_storage import BoundStorage, attach_catalog_bytes
 from vgi.invocation import (
@@ -646,6 +647,19 @@ class ScalarFunctionGenerator(vgi.function.Function):
                     doc=arg.doc if arg.doc else None,
                 )
 
+    @classmethod
+    def _validate_const_param_constraints(cls, arguments: Arguments) -> None:
+        """Enforce ``ConstParam`` value constraints at bind (choices/ge/le/gt/lt/pattern).
+
+        Delegates to the shared :func:`vgi.arguments.validate_const_arg_constraints`
+        so the scalar and aggregate paths enforce identically — a discovered
+        constraint (surfaced via ``vgi_function_arguments()``) is binding for the
+        modern API, matching the legacy ``Arg`` descriptor path.
+        """
+        const_params: dict[str, Arg[Any]] | None = getattr(cls, "_const_params", None)
+        if const_params:
+            validate_const_arg_constraints(const_params, arguments)
+
     @final
     @classmethod
     def bind(
@@ -666,6 +680,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
         assert input.input_schema is not None
         cls._validate_param_varargs_min(input.input_schema)
         cls._validate_param_type_bounds(input.input_schema)
+        cls._validate_const_param_constraints(input.arguments)
 
         # Auto-request secrets declared via Secret() annotations on compute()
         # when they haven't been resolved yet (first bind call).

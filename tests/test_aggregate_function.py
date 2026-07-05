@@ -13,7 +13,14 @@ import pytest
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
 
 from vgi.aggregate_function import AggregateFunction
-from vgi.arguments import ConstParam, Param, Returns
+from vgi.arguments import (
+    Arguments,
+    ArgumentValidationError,
+    ConstParam,
+    Param,
+    Returns,
+    validate_const_arg_constraints,
+)
 from vgi.table_function import ProcessParams
 
 # ---------------------------------------------------------------------------
@@ -198,6 +205,49 @@ class TestInitSubclassParameterExtraction:
         assert arg._name == "percentile"
         assert arg.arrow_type == pa.float64()
         assert arg.const is True
+
+    def test_const_param_constraints_enforced(self) -> None:
+        """A ConstParam's declared constraints are enforced at bind (same as scalar)."""
+
+        class BoundedAgg(AggregateFunction[SimpleState]):
+            class Meta:
+                name = "test_bounded_agg"
+
+            @classmethod
+            def initial_state(cls, params: ProcessParams[Any]) -> SimpleState:
+                return SimpleState()
+
+            @classmethod
+            def update(
+                cls,
+                states: dict[int, SimpleState],
+                group_ids: pa.Int64Array,
+                value: Annotated[pa.DoubleArray, Param(doc="Values")],
+                mode: Annotated[str, ConstParam("Mode", choices=["min", "max"])] = "min",
+            ) -> None:
+                pass
+
+            @classmethod
+            def combine(cls, source: SimpleState, target: SimpleState, params: ProcessParams[Any]) -> SimpleState:
+                return SimpleState()
+
+            @classmethod
+            def finalize(
+                cls,
+                group_ids: pa.Int64Array,
+                states: dict[int, SimpleState],
+                params: ProcessParams[Any],
+            ) -> Annotated[pa.RecordBatch, Returns(pa.float64())]:
+                return pa.record_batch({"result": pa.array([], type=pa.float64())})
+
+        # The ConstParam carries its choices (threaded via _const_param_to_arg)...
+        const_params = BoundedAgg._const_params
+        assert const_params["mode"].choices == ["min", "max"]
+        # ...and the shared bind-time validator (called by aggregate_bind) enforces it.
+        validate_const_arg_constraints(const_params, Arguments(positional=(pa.scalar("max"),)))
+        with pytest.raises(ArgumentValidationError) as exc:
+            validate_const_arg_constraints(const_params, Arguments(positional=(pa.scalar("median"),)))
+        assert "mode" in str(exc.value)
 
     def test_const_param_phases(self) -> None:
         """ConstParam phase values are stored correctly."""

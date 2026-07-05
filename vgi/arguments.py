@@ -17,7 +17,7 @@ import re
 import types
 import typing
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
 
@@ -1507,6 +1507,43 @@ class Arg[ArgT]:
 # =============================================================================
 
 
+def validate_const_arg_constraints(
+    const_params: "Mapping[str, Arg[Any]]",
+    arguments: "Arguments",
+) -> None:
+    """Enforce const-argument value constraints at bind time.
+
+    Const arguments are bind-time scalars, so validate them once (not per batch /
+    per group). Reuses [`Arg._validate`][], raising [`ArgumentValidationError`][]
+    for any value that violates a declared ``choices``/``ge``/``le``/``gt``/``lt``/
+    ``pattern`` constraint — so a bad value fails fast at bind instead of silently
+    reaching ``compute()``/``update()``. Shared by the scalar and aggregate bind
+    paths so both enforce identically (and match the legacy descriptor path).
+
+    Args:
+        const_params: The function's const parameters, keyed by name (each value
+            an `Arg` carrying the constraints and its ``_resolution_index``).
+        arguments: The bound call arguments; const scalars live in ``positional``.
+
+    Raises:
+        ArgumentValidationError: If a const value violates a declared constraint.
+
+    """
+    positional = arguments.positional
+    for arg in const_params.values():
+        idx = arg._resolution_index
+        if idx is None or idx >= len(positional):
+            continue
+        scalar = positional[idx]
+        if scalar is None:
+            continue
+        value = scalar.as_py() if hasattr(scalar, "as_py") else scalar
+        # None (SQL NULL / unset optional) skips value constraints, mirroring
+        # Arg._resolve; numeric/choice/pattern checks don't apply to None.
+        if value is not None:
+            arg._validate(value)
+
+
 @dataclass(frozen=True, slots=True)
 class Param:
     """Metadata for columnar parameters in `compute()` or class-level declarations.
@@ -1528,9 +1565,14 @@ class Param:
         position: Explicit column position (for class-level attributes).
             None means position is inferred from method signature order.
         choices: Closed set of allowed values, surfaced for agent discovery.
-        ge: Value must be >= this (inclusive lower bound).
-        le: Value must be <= this (inclusive upper bound).
-        gt: Value must be > this (exclusive lower bound).
+            Advisory for a columnar `Param`: it is published through
+            `vgi_function_arguments()` but NOT enforced per row by the framework
+            (validate column contents in `compute()` if required). On a scalar
+            `ConstParam` the equivalent constraint IS enforced at bind.
+        ge: Value must be >= this (inclusive lower bound). Advisory on `Param`
+            (see `choices`).
+        le: Value must be <= this (inclusive upper bound). Advisory on `Param`.
+        gt: Value must be > this (exclusive lower bound). Advisory on `Param`.
         lt: Value must be < this (exclusive upper bound).
         pattern: Regex the value must match (for string parameters).
 
@@ -1588,12 +1630,14 @@ class ConstParam:
         phase: Phase when this const param is needed (aggregate functions only).
             ``"all"`` = every callback, ``"update"`` = only update,
             ``"finalize"`` = only finalize.
-        choices: Closed set of allowed values, surfaced for agent discovery.
-        ge: Value must be >= this (inclusive lower bound).
-        le: Value must be <= this (inclusive upper bound).
-        gt: Value must be > this (exclusive lower bound).
-        lt: Value must be < this (exclusive upper bound).
-        pattern: Regex the value must match (for string parameters).
+        choices: Closed set of allowed values. Surfaced for agent discovery
+            (via `vgi_function_arguments()`) AND enforced at bind: a const value
+            outside the set raises `ArgumentValidationError`.
+        ge: Value must be >= this (inclusive lower bound); enforced at bind.
+        le: Value must be <= this (inclusive upper bound); enforced at bind.
+        gt: Value must be > this (exclusive lower bound); enforced at bind.
+        lt: Value must be < this (exclusive upper bound); enforced at bind.
+        pattern: Regex the value must match (string params); enforced at bind.
 
     """
 
