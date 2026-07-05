@@ -1514,7 +1514,7 @@ def validate_const_arg_constraints(
     """Enforce const-argument value constraints at bind time.
 
     Const arguments are bind-time scalars, so validate them once (not per batch /
-    per group). Reuses [`Arg._validate`][], raising [`ArgumentValidationError`][]
+    per group). Reuses ``Arg._validate``, raising [`ArgumentValidationError`][]
     for any value that violates a declared ``choices``/``ge``/``le``/``gt``/``lt``/
     ``pattern`` constraint — so a bad value fails fast at bind instead of silently
     reaching ``compute()``/``update()``. Shared by the scalar and aggregate bind

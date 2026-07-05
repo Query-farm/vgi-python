@@ -651,8 +651,8 @@ class ScalarFunctionGenerator(vgi.function.Function):
     def _validate_const_param_constraints(cls, arguments: Arguments) -> None:
         """Enforce ``ConstParam`` value constraints at bind (choices/ge/le/gt/lt/pattern).
 
-        Delegates to the shared :func:`vgi.arguments.validate_const_arg_constraints`
-        so the scalar and aggregate paths enforce identically — a discovered
+        Delegates to the shared ``validate_const_arg_constraints`` helper so the
+        scalar and aggregate paths enforce identically — a discovered
         constraint (surfaced via ``vgi_function_arguments()``) is binding for the
         modern API, matching the legacy ``Arg`` descriptor path.
         """
