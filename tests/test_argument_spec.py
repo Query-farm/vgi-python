@@ -12,13 +12,18 @@ import pytest
 from vgi.argument_spec import (
     VGI_ARG_KEY,
     VGI_ARG_NAMED,
+    VGI_CHOICES_KEY,
+    VGI_DEFAULT_KEY,
     VGI_DOC_KEY,
+    VGI_PATTERN_KEY,
+    VGI_RANGE_KEY,
     VGI_TYPE_ANY,
     VGI_TYPE_KEY,
     VGI_TYPE_TABLE,
     VGI_VARARGS_KEY,
     VGI_VARARGS_TRUE,
     ArgumentSpec,
+    _format_range,
     argument_specs_to_schema,
     extract_argument_specs,
     schema_to_argument_specs,
@@ -722,3 +727,99 @@ class TestArgumentDoc:
         specs = {s.name: s for s in extract_argument_specs(FunctionWithDocs)}
         assert specs["unit"].doc == "Unit string, e.g. 'mi'"
         assert specs["scale"].doc == ""
+
+
+class TestArgumentConstraints:
+    """Per-argument constraint metadata (choices / range / pattern / default)."""
+
+    def test_format_range_notation(self) -> None:
+        """Interval notation covers inclusive, exclusive, open, and empty bounds."""
+        assert _format_range(0, 100, None, None) == "[0, 100]"
+        assert _format_range(None, None, 0, None) == "(0, +inf)"
+        assert _format_range(1, None, None, 10) == "[1, 10)"
+        assert _format_range(None, 5, None, None) == "(-inf, 5]"
+        assert _format_range(None, None, None, None) is None
+
+    def test_writer_emits_constraint_keys(self) -> None:
+        """A constrained spec writes value-encoded constraint metadata keys."""
+        spec = ArgumentSpec(
+            name="unit",
+            position="unit",
+            arrow_type=pa.utf8(),
+            default_json='"mm"',
+            choices_json='["mm", "cm", "m"]',
+            range_notation="[0, 100]",
+            pattern="^[A-Z]{2}$",
+        )
+        meta = argument_specs_to_schema([spec])[0].metadata
+        assert meta[VGI_DEFAULT_KEY] == b'"mm"'
+        assert meta[VGI_CHOICES_KEY] == b'["mm", "cm", "m"]'
+        assert meta[VGI_RANGE_KEY] == b"[0, 100]"
+        assert meta[VGI_PATTERN_KEY] == b"^[A-Z]{2}$"
+
+    def test_unconstrained_arg_omits_keys(self) -> None:
+        """An arg without constraints yields none of the constraint keys."""
+        meta = argument_specs_to_schema([ArgumentSpec(name="v", position=0, arrow_type=pa.int64())])[0].metadata
+        for key in (VGI_DEFAULT_KEY, VGI_CHOICES_KEY, VGI_RANGE_KEY, VGI_PATTERN_KEY):
+            assert meta is None or key not in meta
+
+    def test_constraints_round_trip(self) -> None:
+        """Constraint metadata survives the schema round-trip."""
+        spec = ArgumentSpec(
+            name="mode",
+            position="mode",
+            arrow_type=pa.utf8(),
+            default_json='"add"',
+            choices_json='["add", "mul"]',
+            range_notation="[0, 10)",
+            pattern="^x+$",
+        )
+        out = schema_to_argument_specs(argument_specs_to_schema([spec]))[0]
+        assert out.default_json == '"add"'
+        assert out.choices_json == '["add", "mul"]'
+        assert out.range_notation == "[0, 10)"
+        assert out.pattern == "^x+$"
+
+    def test_extract_constraints_from_arg(self) -> None:
+        """extract_argument_specs reads choices/default/bounds/pattern off Arg."""
+
+        class FunctionWithConstraints(TableInOutFunction):  # type: ignore[type-arg]
+            mode: str = Arg[str](  # type: ignore[assignment]
+                "mode", doc="Blend mode", choices=["add", "mul"], default="add"
+            )
+            level: int = Arg[int](0, ge=1, le=10)  # type: ignore[assignment]
+            code: str = Arg[str](1, pattern="^[A-Z]{2}$")  # type: ignore[assignment]
+
+        specs = {s.name: s for s in extract_argument_specs(FunctionWithConstraints)}
+        assert specs["mode"].choices_json == '["add", "mul"]'
+        assert specs["mode"].default_json == '"add"'
+        assert specs["level"].range_notation == "[1, 10]"
+        assert specs["code"].pattern == "^[A-Z]{2}$"
+
+    def test_const_param_constraints_surface(self) -> None:
+        """The modern Param/ConstParam API surfaces choices / range / pattern."""
+        from vgi.arguments import ConstParam, Param, Returns
+        from vgi.scalar_function import ScalarFunction
+
+        class ConstrainedScalar(ScalarFunction):
+            class Meta:
+                name = "constrained_scalar"
+                description = "constraint demo"
+
+            @classmethod
+            def compute(
+                cls,
+                unit: Annotated[str, ConstParam("Output unit", choices=["mm", "cm", "m"])],
+                precision: Annotated[int, ConstParam("Decimals", ge=0, le=10)],
+                code: Annotated[str, ConstParam("Label code", pattern="^[A-Z]{2}$")],
+                value: Annotated[pa.DoubleArray, Param(doc="Value")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return value  # never executed — the test only reads arg specs
+
+        specs = {s.name: s for s in extract_argument_specs(ConstrainedScalar)}
+        assert specs["unit"].choices_json == '["mm", "cm", "m"]'
+        assert specs["precision"].range_notation == "[0, 10]"
+        assert specs["code"].pattern == "^[A-Z]{2}$"
+        # The columnar Param carries no constraints.
+        assert specs["value"].choices_json is None
+        assert specs["value"].range_notation is None

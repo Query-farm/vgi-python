@@ -14,6 +14,7 @@ The serialization uses a single Arrow schema where:
 - Special types ([`TableInput`][], [`AnyArrow`][], varargs) use field metadata markers
 """
 
+import json
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -21,7 +22,7 @@ from typing import Annotated, Any, get_args, get_origin, get_type_hints
 
 import pyarrow as pa
 
-from vgi.arguments import PYTHON_TO_ARROW, AnyArrow, AnyArrowValue, Arg, TableInput
+from vgi.arguments import _MISSING, PYTHON_TO_ARROW, AnyArrow, AnyArrowValue, Arg, TableInput
 
 __all__ = [
     "ArgumentSpec",
@@ -41,6 +42,10 @@ __all__ = [
     "VGI_CONST_KEY",
     "VGI_CONST_TRUE",
     "VGI_DOC_KEY",
+    "VGI_DEFAULT_KEY",
+    "VGI_CHOICES_KEY",
+    "VGI_RANGE_KEY",
+    "VGI_PATTERN_KEY",
 ]
 
 # =============================================================================
@@ -68,6 +73,21 @@ VGI_CONST_TRUE = b"true"
 # is omitted entirely when there is no doc (absent = undocumented). The
 # ``vgi_doc_*`` prefix is reserved for future per-argument doc variants.
 VGI_DOC_KEY = b"vgi_doc"
+
+# Keys carrying per-argument constraint metadata for agent discovery. All are
+# presence-only (omitted when the constraint is absent) and value-encoded as
+# UTF-8 so the column type stays uniform regardless of the arg's value type:
+#   vgi_default — JSON scalar (the arg's default value; named/optional args only)
+#   vgi_choices — JSON array (the closed set of allowed values)
+#   vgi_range   — interval notation built from ge/le/gt/lt (e.g. "[0, 100]",
+#                 "(0, +inf)", "[1, 10)"); a discovery surface, not the raw bounds
+#   vgi_pattern — raw regex the value must match (open set)
+# Kept byte-for-byte in sync with the C++ reader in the vgi extension
+# (src/vgi_function_arguments_function.cpp / src/include/vgi_protocol_constants.hpp).
+VGI_DEFAULT_KEY = b"vgi_default"
+VGI_CHOICES_KEY = b"vgi_choices"
+VGI_RANGE_KEY = b"vgi_range"
+VGI_PATTERN_KEY = b"vgi_pattern"
 
 
 def _argument_spec_sort_key(spec: "ArgumentSpec") -> tuple[int, int | str]:
@@ -109,6 +129,15 @@ class ArgumentSpec:
         doc: Optional human/agent-facing description of the argument. Surfaced
             through the catalog as the ``vgi_doc`` Arrow field metadata key
             (UTF-8); empty string means undocumented.
+        default_json: Optional JSON-encoded default value (``vgi_default``);
+            None when the argument is required.
+        choices_json: Optional JSON array of allowed values (``vgi_choices``);
+            None when the argument is not restricted to a closed set.
+        range_notation: Optional interval-notation string built from the arg's
+            numeric bounds (``vgi_range``, e.g. ``"[0, 100]"``); None when
+            unbounded.
+        pattern: Optional regex the value must match (``vgi_pattern``); None
+            when there is no pattern constraint.
 
     Note:
         For named arguments, the Python attribute name (``name``) and the SQL
@@ -131,6 +160,10 @@ class ArgumentSpec:
     is_varargs: bool = False
     is_const: bool = False
     doc: str = ""
+    default_json: str | None = None
+    choices_json: str | None = None
+    range_notation: str | None = None
+    pattern: str | None = None
 
     def __repr__(self) -> str:
         """Return concise repr showing key attributes."""
@@ -213,6 +246,16 @@ def argument_specs_to_schema(specs: Sequence[ArgumentSpec]) -> pa.Schema:
         if spec.doc:
             metadata[VGI_DOC_KEY] = spec.doc.encode("utf-8")
 
+        # Per-argument constraint metadata (presence-only; already value-encoded)
+        if spec.default_json is not None:
+            metadata[VGI_DEFAULT_KEY] = spec.default_json.encode("utf-8")
+        if spec.choices_json is not None:
+            metadata[VGI_CHOICES_KEY] = spec.choices_json.encode("utf-8")
+        if spec.range_notation is not None:
+            metadata[VGI_RANGE_KEY] = spec.range_notation.encode("utf-8")
+        if spec.pattern is not None:
+            metadata[VGI_PATTERN_KEY] = spec.pattern.encode("utf-8")
+
         # Create field with or without metadata
         field = pa.field(
             spec.name,
@@ -266,6 +309,12 @@ def schema_to_argument_specs(schema: pa.Schema) -> list[ArgumentSpec]:
         doc_bytes = metadata.get(VGI_DOC_KEY)
         doc = doc_bytes.decode("utf-8") if doc_bytes else ""
 
+        # Per-argument constraint metadata (absent = unconstrained)
+        default_bytes = metadata.get(VGI_DEFAULT_KEY)
+        choices_bytes = metadata.get(VGI_CHOICES_KEY)
+        range_bytes = metadata.get(VGI_RANGE_KEY)
+        pattern_bytes = metadata.get(VGI_PATTERN_KEY)
+
         specs.append(
             ArgumentSpec(
                 name=field.name,
@@ -276,6 +325,10 @@ def schema_to_argument_specs(schema: pa.Schema) -> list[ArgumentSpec]:
                 is_varargs=is_varargs,
                 is_const=is_const,
                 doc=doc,
+                default_json=default_bytes.decode("utf-8") if default_bytes else None,
+                choices_json=choices_bytes.decode("utf-8") if choices_bytes else None,
+                range_notation=range_bytes.decode("utf-8") if range_bytes else None,
+                pattern=pattern_bytes.decode("utf-8") if pattern_bytes else None,
             )
         )
 
@@ -367,6 +420,94 @@ def macro_parameter_docs_from_schema(schema: pa.Schema) -> dict[str, str]:
 # =============================================================================
 
 
+def _format_range(
+    ge: float | int | None,
+    le: float | int | None,
+    gt: float | int | None,
+    lt: float | int | None,
+) -> str | None:
+    """Build interval notation from an argument's numeric bounds.
+
+    Inclusive bounds (``ge``/``le``) render as square brackets, exclusive bounds
+    (``gt``/``lt``) as parentheses, and an open side as ``-inf``/``+inf``. Returns
+    None when the argument has no numeric bound at all.
+
+    Args:
+        ge: Inclusive lower bound (value >= ge).
+        le: Inclusive upper bound (value <= le).
+        gt: Exclusive lower bound (value > gt).
+        lt: Exclusive upper bound (value < lt).
+
+    Returns:
+        Interval string such as ``"[0, 100]"``, ``"(0, +inf)"``, ``"[1, 10)"``,
+        or None when unbounded.
+
+    """
+    if ge is None and le is None and gt is None and lt is None:
+        return None
+    if gt is not None:
+        low = f"({gt}"
+    elif ge is not None:
+        low = f"[{ge}"
+    else:
+        low = "(-inf"
+    if lt is not None:
+        high = f"{lt})"
+    elif le is not None:
+        high = f"{le}]"
+    else:
+        high = "+inf)"
+    return f"{low}, {high}"
+
+
+def _constraint_kwargs(arg: Arg[Any]) -> dict[str, Any]:
+    """Extract discovery-facing constraint metadata from an [`Arg`][] descriptor.
+
+    Returns keyword arguments for [`ArgumentSpec`][] carrying only the constraints
+    that are present, value-encoded for uniform surfacing: ``default``/``choices``
+    as JSON, numeric bounds collapsed into a single ``range_notation`` interval
+    string, ``pattern`` as-is. A defensively unserializable default falls back to
+    its ``repr`` rather than dropping the whole registration.
+
+    Args:
+        arg: The `Arg` descriptor to read constraints from.
+
+    Returns:
+        A dict of `ArgumentSpec` keyword arguments (possibly empty).
+
+    """
+    kwargs: dict[str, Any] = {}
+
+    default = getattr(arg, "default", _MISSING)
+    if default is not _MISSING:
+        try:
+            kwargs["default_json"] = json.dumps(default)
+        except (TypeError, ValueError):
+            kwargs["default_json"] = json.dumps(repr(default))
+
+    choices = getattr(arg, "choices", None)
+    if choices is not None:
+        try:
+            kwargs["choices_json"] = json.dumps(list(choices))
+        except (TypeError, ValueError):
+            kwargs["choices_json"] = json.dumps([repr(c) for c in choices])
+
+    range_notation = _format_range(
+        getattr(arg, "ge", None),
+        getattr(arg, "le", None),
+        getattr(arg, "gt", None),
+        getattr(arg, "lt", None),
+    )
+    if range_notation is not None:
+        kwargs["range_notation"] = range_notation
+
+    pattern = getattr(arg, "pattern", None)
+    if pattern is not None:
+        kwargs["pattern"] = pattern
+
+    return kwargs
+
+
 def extract_argument_specs(
     cls: type,
 ) -> list[ArgumentSpec]:
@@ -414,6 +555,7 @@ def extract_argument_specs(
                 is_varargs=param_arg.varargs,
                 is_const=False,
                 doc=param_arg.doc or "",
+                **_constraint_kwargs(param_arg),
             )
         )
 
@@ -431,6 +573,7 @@ def extract_argument_specs(
                 is_varargs=const_arg.varargs,
                 is_const=True,
                 doc=const_arg.doc or "",
+                **_constraint_kwargs(const_arg),
             )
         )
 
@@ -496,6 +639,7 @@ def extract_argument_specs(
                     is_varargs=arg_instance.varargs,
                     is_const=getattr(arg_instance, "const", False),
                     doc=getattr(arg_instance, "doc", "") or "",
+                    **_constraint_kwargs(arg_instance),
                 )
             )
 
@@ -571,6 +715,7 @@ def extract_argument_specs(
                         is_varargs=is_varargs,
                         is_const=is_const,
                         doc=getattr(arg_legacy, "doc", "") or "",
+                        **_constraint_kwargs(arg_legacy),
                     )
                 )
 

@@ -1527,6 +1527,12 @@ class Param:
             arguments as a list of arrays.
         position: Explicit column position (for class-level attributes).
             None means position is inferred from method signature order.
+        choices: Closed set of allowed values, surfaced for agent discovery.
+        ge: Value must be >= this (inclusive lower bound).
+        le: Value must be <= this (inclusive upper bound).
+        gt: Value must be > this (exclusive lower bound).
+        lt: Value must be < this (exclusive upper bound).
+        pattern: Regex the value must match (for string parameters).
 
     Example (ScalarFunction compute() - position inferred):
         class AddColumns(ScalarFunction):
@@ -1556,6 +1562,13 @@ class Param:
     type_bound: "TypeBoundPredicate | Sequence[TypeBoundPredicate] | None" = None
     varargs: bool = False
     position: int | None = None
+    # Discovery-facing validation constraints (surfaced via vgi_function_arguments()).
+    choices: Sequence[Any] | None = None
+    ge: float | int | None = None
+    le: float | int | None = None
+    gt: float | int | None = None
+    lt: float | int | None = None
+    pattern: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1575,6 +1588,12 @@ class ConstParam:
         phase: Phase when this const param is needed (aggregate functions only).
             ``"all"`` = every callback, ``"update"`` = only update,
             ``"finalize"`` = only finalize.
+        choices: Closed set of allowed values, surfaced for agent discovery.
+        ge: Value must be >= this (inclusive lower bound).
+        le: Value must be <= this (inclusive upper bound).
+        gt: Value must be > this (exclusive lower bound).
+        lt: Value must be < this (exclusive upper bound).
+        pattern: Regex the value must match (for string parameters).
 
     """
 
@@ -1582,6 +1601,13 @@ class ConstParam:
     arrow_type: pa.DataType | type | None = None
     position: int | None = None
     phase: str = "all"
+    # Discovery-facing validation constraints (surfaced via vgi_function_arguments()).
+    choices: Sequence[Any] | None = None
+    ge: float | int | None = None
+    le: float | int | None = None
+    gt: float | int | None = None
+    lt: float | int | None = None
+    pattern: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

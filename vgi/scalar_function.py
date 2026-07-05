@@ -210,6 +210,12 @@ def _param_to_arg(param: Param, base_type: type, position: int) -> Arg[Any]:
         type_bound=param.type_bound,
         varargs=param.varargs,
         is_any=is_any,
+        choices=param.choices,
+        ge=param.ge,
+        le=param.le,
+        gt=param.gt,
+        lt=param.lt,
+        pattern=param.pattern,
     )
 
 
@@ -270,7 +276,18 @@ def _const_param_to_arg(const_param: ConstParam, base_type: type, position: int)
             f"Use a supported type (int/str/float/bool/bytes) or specify arrow_type."
         )
 
-    return Arg[Any](position, doc=const_param.doc, arrow_type=arrow_type, const=True)
+    return Arg[Any](
+        position,
+        doc=const_param.doc,
+        arrow_type=arrow_type,
+        const=True,
+        choices=const_param.choices,
+        ge=const_param.ge,
+        le=const_param.le,
+        gt=const_param.gt,
+        lt=const_param.lt,
+        pattern=const_param.pattern,
+    )
 
 
 # =============================================================================

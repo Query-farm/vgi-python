@@ -77,7 +77,7 @@ class FormatNumberPrecisionFunction(ScalarFunction):
     @classmethod
     def compute(
         cls,
-        precision: Annotated[int, ConstParam("Number of decimal places")],
+        precision: Annotated[int, ConstParam("Number of decimal places", ge=0, le=10)],
         value: Annotated[pa.DoubleArray, Param(doc="Number to format")],
     ) -> Annotated[pa.StringArray, Returns()]:
         """Format each value with the specified precision."""
@@ -115,7 +115,7 @@ class FormatNumberFullFunction(ScalarFunction):
     @classmethod
     def compute(
         cls,
-        precision: Annotated[int, ConstParam("Number of decimal places")],
+        precision: Annotated[int, ConstParam("Number of decimal places", ge=0, le=10)],
         prefix: Annotated[str, ConstParam("Prefix string")],
         value: Annotated[pa.DoubleArray, Param(doc="Number to format")],
     ) -> Annotated[pa.StringArray, Returns()]:
