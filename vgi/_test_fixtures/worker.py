@@ -702,6 +702,16 @@ _EXAMPLE_CATALOG = Catalog(
                     columns=schema(n=pa.int64()),
                     comment="Multi-branch: sequence(50) + read_parquet — used by multi_branch_heterogeneous.test",
                 ),
+                # Iceberg cold arm: one VGI sequence() hot arm + one native
+                # iceberg_scan arm. The iceberg table is created by the test at a
+                # well-known path via COPY … TO (FORMAT iceberg) (see
+                # multi_branch_iceberg.test). Demonstrates iceberg_scan as a
+                # first-class cold-tier branch — the flagship lakehouse example.
+                Table(
+                    name="multi_branch_iceberg",
+                    columns=schema(n=pa.int64()),
+                    comment="Multi-branch: sequence(50) + iceberg_scan — used by multi_branch_iceberg.test",
+                ),
                 # Column reconciliation: 3 read_parquet branches, the test creates
                 # the parquet files with deliberately different column orders and
                 # a missing column on one branch. Canonical schema (a, b) is
@@ -1329,6 +1339,28 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                     ),
                 ],
                 required_extensions=[],
+            )
+
+        # multi_branch_iceberg: one VGI arm (sequence(50)) + one native
+        # iceberg_scan arm pointing at a well-known iceberg table dir the test
+        # creates via COPY … TO (FORMAT iceberg) before querying. The iceberg
+        # table has a single column "n" holding values 50..99. Total rows = 100.
+        # required_extensions=["iceberg"] so the rewriter auto-loads it.
+        if schema_name.lower() == "data" and name.lower() == "multi_branch_iceberg":
+            return ScanBranchesResult(
+                branches=[
+                    ScanBranch(
+                        function_name="sequence",
+                        positional_arguments=[pa.scalar(50)],
+                        named_arguments={},
+                    ),
+                    ScanBranch(
+                        function_name="iceberg_scan",
+                        positional_arguments=[pa.scalar("/tmp/vgi_iceberg_branch", pa.string())],
+                        named_arguments={},
+                    ),
+                ],
+                required_extensions=["iceberg"],
             )
 
         # multi_branch_empty: worker deliberately returns branches=[] to
