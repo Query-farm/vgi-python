@@ -447,14 +447,21 @@ class TestCLI:
             # Give server a moment to start
             time.sleep(0.5)
 
-            # Hit the worker description page
+            # The landing surface: GET / serves the shared static page (which
+            # fetches its data via JS), and the worker name lives in describe.json.
+            import json as _json
             import urllib.request
 
             url = f"http://127.0.0.1:{port}/"
             with urllib.request.urlopen(url, timeout=5) as resp:
                 body = resp.read()
                 assert resp.status == 200
-                assert b"ExampleWorker" in body
+                assert b"vgi-landing-asset" in body
+
+            with urllib.request.urlopen(f"{url}describe.json", timeout=5) as resp:
+                doc = _json.loads(resp.read())
+                assert doc["worker"]["name"] == "ExampleWorker"
+                assert doc["landing_schema_version"] >= 1
         finally:
             proc.terminate()
             proc.wait(timeout=5)

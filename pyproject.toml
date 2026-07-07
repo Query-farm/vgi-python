@@ -1,6 +1,6 @@
 [project]
 name = "vgi-python"
-version = "0.10.0"
+version = "0.11.0"
 description = "Vector Gateway Interface - Connect DuckDB to external programs via Apache Arrow"
 readme = "README.md"
 keywords = [
@@ -40,7 +40,7 @@ dependencies = [
     "pyarrow",
     "typer>=0.9",
     "platformdirs",
-    "vgi-rpc>=0.21.0",
+    "vgi-rpc>=0.23.0",
     "httpx>=0.24",
 ]
 
@@ -82,6 +82,7 @@ dev = [
     # (a vgi-rpc dependency) in the shared `docstring_parser` namespace,
     # non-deterministically breaking imports. tests/test_docstrings.py runs it
     # in an isolated env via `uvx pydoclint` instead.
+    "jsonschema",
     "pytest",
     "pytest-cov",
     "pytest-examples",

@@ -341,6 +341,7 @@ def main() -> None:
             max_request_bytes=max_request_bytes,
             authenticate=authenticate,
             oauth_resource_metadata=oauth_metadata,
+            enable_landing_page=False,
         )
 
         if demo_storage:
@@ -362,9 +363,25 @@ def main() -> None:
                     mw._exempt_prefixes = (*mw._exempt_prefixes, f"{prefix}/__blobs__")
 
         if describe:
-            from vgi.http.worker_page import WorkerPageResource
+            # Standardized landing surface (shared static page + JSON contract),
+            # describing the reference ExampleWorker catalog.
+            from vgi.http.landing_page import (
+                ColumnsResource,
+                DescribeJsonResource,
+                LandingPageResource,
+            )
 
-            wsgi_app.add_route(f"{prefix}/worker", WorkerPageResource(ExampleWorker, prefix))
+            oauth_active = oauth_metadata is not None and getattr(oauth_metadata, "client_id", None) is not None
+            server_id = getattr(server, "server_id", "")
+            wsgi_app.add_route(prefix or "/", LandingPageResource(server_id=server_id))
+            wsgi_app.add_route(
+                f"{prefix}/describe.json",
+                DescribeJsonResource(ExampleWorker, oauth=oauth_active, server_id=server_id),
+            )
+            wsgi_app.add_route(
+                f"{prefix}/describe/{{catalog}}/{{schema}}/{{table}}.json",
+                ColumnsResource(ExampleWorker),
+            )
 
         # vgi_rpc's make_wsgi_app already advertises VGI-Max-Request-Bytes and
         # installs a Falcon middleware enforcing it with a structured 413 that

@@ -284,21 +284,25 @@ def create_app(
         _FrontendRedirectResource = _make_frontend_redirect(frontend_url, prefix)
         wsgi_app.add_route(prefix or "/", _FrontendRedirectResource)
     elif describe:
-        from vgi.http.worker_page import WorkerPageResource
+        # Standardized landing surface: the shared static page + its JSON
+        # contract. The page (identical across all language workers) reads the
+        # ``_vgi_identity`` cookie itself, so no server-side HTML injection is
+        # needed.
+        from vgi.http.landing_page import (
+            ColumnsResource,
+            DescribeJsonResource,
+            LandingPageResource,
+        )
 
-        # Inject PKCE user-info JS if OAuth PKCE is active.
-        body_transform = None
-        if oauth_resource_metadata is not None and getattr(oauth_resource_metadata, "client_id", None) is not None:
-            try:
-                from vgi_rpc.http._oauth_pkce import build_user_info_html
-
-                user_info_html = build_user_info_html(prefix).encode()
-
-                def body_transform(body: bytes, _html: bytes = user_info_html) -> bytes:
-                    return body.replace(b"</body>", _html + b"\n</body>")
-            except ImportError:
-                pass
-        wsgi_app.add_route(prefix or "/", WorkerPageResource(worker_cls, prefix, body_transform))
+        oauth_active = (
+            oauth_resource_metadata is not None and getattr(oauth_resource_metadata, "client_id", None) is not None
+        )
+        server_id = getattr(server, "server_id", "")
+        wsgi_app.add_route(prefix or "/", LandingPageResource(server_id=server_id))
+        wsgi_app.add_route(
+            f"{prefix}/describe.json", DescribeJsonResource(worker_cls, oauth=oauth_active, server_id=server_id)
+        )
+        wsgi_app.add_route(f"{prefix}/describe/{{catalog}}/{{schema}}/{{table}}.json", ColumnsResource(worker_cls))
 
     return wsgi_app
 
