@@ -332,7 +332,10 @@ def _build_schemas(
         # same scalar/table/aggregate/table_in_out buckets on the landing page).
         functions.sort(key=lambda d: (d["type"], d["name"]))
 
-        schemas.append({"name": si.name, "tables": tables, "views": views, "functions": functions})
+        schema_entry: dict[str, Any] = {"name": si.name, "tables": tables, "views": views, "functions": functions}
+        if si.comment:
+            schema_entry["doc"] = si.comment
+        schemas.append(schema_entry)
         totals["schemas"] += 1
         totals["tables"] += len(tables)
         totals["views"] += len(views)
