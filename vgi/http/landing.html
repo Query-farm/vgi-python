@@ -73,6 +73,12 @@
   .cat-card .cc-title { display: flex; align-items: center; gap: 9px; font-size: 18px; font-weight: 650; letter-spacing: -0.01em; }
   .cat-card .cc-title .ic { width: 19px; height: 19px; color: var(--accent); }
   .cat-card .cc-doc { color: var(--muted); font-size: 13.5px; margin-top: 5px; }
+  .cat-card .cc-doc .md-h { font-size: 14px; font-weight: 650; color: var(--ink); margin: 8px 0 4px; }
+  .cat-card .cc-doc .md-p { margin: 4px 0; }
+  .cat-card .cc-doc .md-p:first-child { margin-top: 0; }
+  .cat-card .cc-doc .md-ul { margin: 4px 0; padding-left: 18px; }
+  .cat-card .cc-doc code { font-family: var(--mono); background: var(--chip); padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+  .cat-card .cc-doc a { color: var(--accent); }
   .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 13px; }
   .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 5px 11px; border: 1px solid var(--line-strong); border-radius: 8px; text-decoration: none; color: var(--ink); background: var(--panel); }
   .badge:hover { border-color: var(--accent); color: var(--accent); }
@@ -190,10 +196,17 @@
   .t-name, .fn-name { font-family: var(--mono); font-size: 12.5px; font-weight: 550; }
   .t-meta { color: var(--muted); font-size: 11.5px; font-family: var(--mono); font-variant-numeric: tabular-nums; flex: none; }
   .fn-sig { color: var(--muted); font-size: 12px; font-family: var(--mono); flex: none; }
-  .t-comment, .fn-doc { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; margin-left: auto; text-align: right; }
+  .fn-doc { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; margin-left: auto; text-align: right; }
 
   /* level 4: body inset */
   .t-body, .fn-body { padding: 9px 13px 12px; background: color-mix(in srgb, var(--kc) 4%, var(--bg)); border-radius: 0 0 var(--row-radius) var(--row-radius); }
+  .t-desc { color: var(--ink); font-size: 12.5px; line-height: 1.5; margin: 0 0 11px; }
+  .t-desc .md-h { font-size: 13px; font-weight: 650; margin: 8px 0 4px; }
+  .t-desc .md-p { margin: 4px 0; }
+  .t-desc .md-p:first-child { margin-top: 0; }
+  .t-desc .md-ul { margin: 4px 0; padding-left: 18px; }
+  .t-desc code { font-family: var(--mono); background: var(--chip); padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+  .t-desc a { color: var(--accent); }
   .args-label { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 700; margin: 0 0 6px; }
   .cols { display: flex; flex-direction: column; gap: 6px; }
   .col-item { border: 1px solid color-mix(in srgb, var(--kc) 22%, var(--line)); border-radius: 7px; padding: 7px 10px; background: color-mix(in srgb, var(--kc) 4%, var(--panel)); }
@@ -225,7 +238,7 @@
 </style>
 </head>
 <body>
-<!-- vgi-landing-asset v1 -->
+<!-- vgi-landing-asset v2 -->
 
 <a class="skip" href="#contents">Skip to contents</a>
 
@@ -312,6 +325,55 @@ const serviceUrl = origin + basePath;
 const esc = s => String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const sqlHi = s => esc(s).replace(/\b(SELECT|FROM|WHERE|GROUP BY|ORDER BY|INTERVAL|AND|OR|AS|JOIN|ON|YEAR)\b/g, m=>'<span class="kw">'+m+'</span>');
 
+function mdToHtml(src){
+  if(!src) return '';
+  var lines = String(src).replace(/\r\n?/g,'\n').split('\n'), out=[], i=0;
+  function inl(t){
+    t = esc(t);
+    t = t.replace(/`([^`]+)`/g,'<code>$1</code>');
+    t = t.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+    t = t.replace(/(^|[^*])\*([^*]+)\*/g,'$1<em>$2</em>');
+    t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+    return t;
+  }
+  while(i<lines.length){
+    var ln=lines[i];
+    if(/^\s*$/.test(ln)){ i++; continue; }
+    var h=ln.match(/^(#{1,6})\s+(.*)$/);
+    if(h){ var lv=Math.min(h[1].length,6); out.push('<h'+lv+' class="md-h">'+inl(h[2])+'</h'+lv+'>'); i++; continue; }
+    if(/^\s*[-*+]\s+/.test(ln)){
+      var items=[];
+      while(i<lines.length && /^\s*[-*+]\s+/.test(lines[i])){ items.push('<li>'+inl(lines[i].replace(/^\s*[-*+]\s+/,''))+'</li>'); i++; }
+      out.push('<ul class="md-ul">'+items.join('')+'</ul>'); continue;
+    }
+    var para=[ln]; i++;
+    while(i<lines.length && !/^\s*$/.test(lines[i]) && !/^(#{1,6}\s|\s*[-*+]\s)/.test(lines[i])){ para.push(lines[i]); i++; }
+    out.push('<p class="md-p">'+inl(para.join(' '))+'</p>');
+  }
+  return out.join('');
+}
+var _DDB_TYPES = {int8:'TINYINT',int16:'SMALLINT',int32:'INTEGER',int64:'BIGINT',
+  uint8:'UTINYINT',uint16:'USMALLINT',uint32:'UINTEGER',uint64:'UBIGINT',
+  halffloat:'FLOAT',float:'FLOAT',float32:'FLOAT',double:'DOUBLE',float64:'DOUBLE',
+  bool:'BOOLEAN',boolean:'BOOLEAN',string:'VARCHAR',large_string:'VARCHAR',utf8:'VARCHAR',large_utf8:'VARCHAR',
+  binary:'BLOB',large_binary:'BLOB',date32:'DATE','date32[day]':'DATE',date64:'DATE',null:'NULL',
+  month_day_nano_interval:'INTERVAL'};
+function duckdbType(t){
+  if(!t) return t; t=String(t); var lt=t.toLowerCase();
+  if(_DDB_TYPES[lt]) return _DDB_TYPES[lt];
+  var d=t.match(/^dictionary<values=([^,>]+)/i); if(d) return duckdbType(d[1].trim());
+  var l=t.match(/^(?:large_)?list<(?:item:\s*)?(.+)>$/i); if(l) return duckdbType(l[1].trim())+'[]';
+  if(/^fixed_size_binary/i.test(t)) return 'BLOB';
+  var ts=t.match(/^timestamp\[([^,\]]+)(?:,\s*tz=([^\]]+))?\]$/i); if(ts) return ts[2]?'TIMESTAMPTZ':'TIMESTAMP';
+  if(/^time(32|64)\[/i.test(t)) return 'TIME';
+  if(/^duration\[/i.test(t)) return 'INTERVAL';
+  var dec=t.match(/^decimal(?:128|256)\((\d+),\s*(\d+)\)$/i); if(dec) return 'DECIMAL('+dec[1]+','+dec[2]+')';
+  if(/^struct</i.test(t)) return 'STRUCT';
+  if(/^map</i.test(t)) return 'MAP';
+  return t;
+}
+
+
 // ── identity pill ────────────────────────────────────────────────────────────────
 function renderIdentity(){
   if (!describe.oauth) return;
@@ -377,7 +439,7 @@ function renderCatCard(){
     ? '<div class="cc-by">'+[t.author?'by '+esc(t.author):'', t.copyright?esc(t.copyright):''].filter(Boolean).join(' · ')+'</div>' : '';
   document.getElementById('cat-card').innerHTML =
     '<div class="cc-title">'+icon('catalog')+esc(t.title || c.name)+'</div>' +
-    (t.doc_md ? '<div class="cc-doc">'+esc(t.doc_md)+'</div>' : '') +
+    (t.doc_md ? '<div class="cc-doc">'+mdToHtml(t.doc_md)+'</div>' : '') +
     (badges ? '<div class="badges">'+badges+'</div>' : '') + kw + by;
 }
 
@@ -482,9 +544,9 @@ function tableRow(catName, s, t, kind){       // kind: 'table' | 'view'
   const kcls = kind==='view' ? ' view k-view' : '';
   return '<details class="tbl'+kcls+'" data-name="'+esc(t.name.toLowerCase())+'" data-kind="'+kind+'" data-catalog="'+esc(catName)+'" data-schema="'+esc(s.name)+'" data-table="'+esc(t.name)+'">'+
     '<summary>'+icon('caret','tri')+icon(iconName,'row-icon')+
-      '<span class="t-name">'+esc(t.name)+'</span><span class="t-meta">'+t.cols+' cols</span>'+
-      (t.comment? '<span class="t-comment">'+esc(t.comment)+'</span>':'')+'</summary>'+
+      '<span class="t-name">'+esc(t.name)+'</span><span class="t-meta">'+t.cols+' cols</span></summary>'+
     '<div class="t-body">'+
+      (t.comment ? '<div class="t-desc">'+mdToHtml(t.comment)+'</div>' : '')+
       (kind==='view' && t.def ? '<div class="args-label">Definition</div><pre class="view-sql">'+sqlHi(t.def)+'</pre>' : '')+
       '<div class="args-label">Columns</div><div class="cols"><div class="skeleton">Loading columns…</div></div></div></details>';
 }
@@ -497,7 +559,7 @@ function argCard(a){
   const def = (a.default!==undefined && a.default!==null) ? '<span class="arg-def">default '+esc(a.default)+'</span>' : '';
   const desc = a.desc ? esc(a.desc) : '';
   const meta = (desc||def) ? '<div class="col-comment">'+desc+(desc&&def?' · ':'')+def+'</div>' : '';
-  return '<div class="col-item"><div class="col"><span class="col-name">'+esc(a.name)+(a.named?'<span class="arg-kind"> :=</span>':'')+'</span><span class="col-type">'+esc(a.type)+'</span></div>'+meta+'</div>';
+  return '<div class="col-item"><div class="col"><span class="col-name">'+esc(a.name)+(a.named?'<span class="arg-kind"> :=</span>':'')+'</span><span class="col-type">'+esc(duckdbType(a.type))+'</span></div>'+meta+'</div>';
 }
 function fnRow(f, iconName){
   const pos = f.args.filter(a=>!a.named), named = f.args.filter(a=>a.named);
@@ -563,7 +625,7 @@ document.getElementById('catalogs').addEventListener('toggle', e=>{
   const body = d.querySelector('.cols');
   fetchColumns(d.dataset.catalog, d.dataset.schema, d.dataset.table).then(info=>{
     body.innerHTML = info.columns.map(col=>
-      '<div class="col-item"><div class="col"><span class="col-name">'+esc(col.name)+'</span><span class="col-type">'+esc(col.type)+'</span></div>'+
+      '<div class="col-item"><div class="col"><span class="col-name">'+esc(col.name)+'</span><span class="col-type">'+esc(duckdbType(col.type))+'</span></div>'+
       (col.comment? '<div class="col-comment">'+esc(col.comment)+'</div>':'')+'</div>').join('');
   });
 }, true);
@@ -604,9 +666,7 @@ document.getElementById('footer').innerHTML =
   '<a href="'+prefix+'/describe">RPC API</a><span class="dot">·</span>'+
   '<a href="https://github.com/query-farm">Source</a><span class="dot">·</span>'+
   '<a href="https://query.farm">Query.Farm</a>'+
-  '<div class="foot-meta">vgi-rpc (<code>'+esc(describe.worker.lang)+'</code>) · v'+esc(describe.worker.version)+' · <code>'+esc(describe.server_id)+'</code></div>'+
-  '<div class="foot-meta">landing_schema_version '+describe.landing_schema_version+
-  ' · shared page, identical across Python / Go / Rust / TypeScript / Java</div>';
+  '<div class="foot-meta">vgi-rpc (<code>'+esc(describe.worker.lang)+'</code>) · v'+esc(describe.worker.version)+' · <code>'+esc(describe.server_id)+'</code></div>';
 }
 
 function renderAll(){ renderCatBar(); renderCatCard(); renderConnect(); updateCupola(); renderContents(); }

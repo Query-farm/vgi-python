@@ -17,6 +17,7 @@ See ``~/Development/vgi/docs/http-landing-contract.md`` for the normative spec.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from importlib.metadata import version as _pkg_version
@@ -37,6 +38,8 @@ from vgi.catalog.catalog_interface import (
     CatalogInterface,
     FunctionInfo,
     FunctionType,
+    MacroInfo,
+    MacroType,
     SchemaObjectType,
     TableInfo,
     ViewInfo,
@@ -190,6 +193,68 @@ def _function_args(fn: FunctionInfo) -> list[dict[str, Any]]:
     return args
 
 
+def _macro_display_type(m: MacroInfo) -> str:
+    # A scalar macro is invoked exactly like a scalar function in SQL, and a
+    # table macro like a table function; surface them in the same buckets so the
+    # landing page lists a catalog's full callable surface (VGI workers commonly
+    # expose their "functions" as declarative macros — see vgi-volcanos).
+    return "scalar" if m.macro_type == MacroType.SCALAR else "table"
+
+
+def _macro_args(m: MacroInfo) -> list[dict[str, Any]]:
+    # Defaulted parameters are optional and callable by name in DuckDB, so we
+    # present them as named args (with their default); the rest are positional.
+    defaults: dict[str, Any] = {}
+    if m.parameter_default_values is not None:
+        batch = m.parameter_default_values
+        for col_name in batch.schema.names:
+            with contextlib.suppress(Exception):
+                defaults[col_name] = batch.column(col_name)[0].as_py()
+
+    raw = m.arguments_schema
+    if raw is None:
+        schema = None
+    elif isinstance(raw, pa.Schema):
+        # In-process catalog interfaces hand back a live schema; only the
+        # serialized wire form is IPC bytes.
+        schema = raw
+    else:
+        schema = _read_schema(bytes(raw))
+    fields = list(schema) if schema is not None else None
+
+    args: list[dict[str, Any]] = []
+    names = [f.name for f in fields] if fields is not None else list(m.parameters)
+    field_by_name = {f.name: f for f in fields} if fields is not None else {}
+    for name in names:
+        field = field_by_name.get(name)
+        # Macro parameters are untyped unless a typed default pins them; show
+        # ANY rather than the Arrow null placeholder.
+        if field is not None and not pa.types.is_null(field.type):
+            arg: dict[str, Any] = {"name": name, "type": str(field.type)}
+        else:
+            arg = {"name": name, "type": "ANY"}
+        doc = _meta(field, VGI_DOC_KEY) if field is not None else None
+        if doc:
+            arg["desc"] = doc
+        if name in defaults:
+            arg["named"] = True
+            try:
+                arg["default"] = json.dumps(defaults[name])
+            except Exception:  # noqa: BLE001
+                arg["default"] = str(defaults[name])
+        args.append(arg)
+    return args
+
+
+def _macro_to_dict(m: MacroInfo) -> dict[str, Any]:
+    return {
+        "name": m.name,
+        "type": _macro_display_type(m),
+        "doc": m.comment or "",
+        "args": _macro_args(m),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Catalog contents
 # ---------------------------------------------------------------------------
@@ -230,6 +295,9 @@ def _build_schemas(
             SchemaObjectType.AGGREGATE_FUNCTION,
         ):
             funcs_raw.extend(_schema_contents(iface, attach_opaque_data, si.name, kind))
+        macros_raw: list[MacroInfo] = []
+        for kind in (SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO):
+            macros_raw.extend(_schema_contents(iface, attach_opaque_data, si.name, kind))
 
         tables = []
         for t in sorted(tables_raw, key=lambda x: x.name):
@@ -257,8 +325,12 @@ def _build_schemas(
                 "args": _function_args(fn),
                 **({"returns": r} if (r := _function_returns(fn)) else {}),
             }
-            for fn in sorted(funcs_raw, key=lambda f: (f.function_type.value, f.name))
+            for fn in funcs_raw
         ]
+        functions.extend(_macro_to_dict(m) for m in macros_raw)
+        # Deterministic ordering across functions + macros (both fold into the
+        # same scalar/table/aggregate/table_in_out buckets on the landing page).
+        functions.sort(key=lambda d: (d["type"], d["name"]))
 
         schemas.append({"name": si.name, "tables": tables, "views": views, "functions": functions})
         totals["schemas"] += 1
