@@ -119,13 +119,13 @@ def _attach(
 # ---------------------------------------------------------------------------
 
 
-def _meta(field: pa.Field, key: bytes) -> str | None:
+def _meta(field: pa.Field[Any], key: bytes) -> str | None:
     md = field.metadata or {}
     raw = md.get(key)
     return raw.decode("utf-8") if raw is not None else None
 
 
-def _column(field: pa.Field) -> dict[str, Any]:
+def _column(field: pa.Field[Any]) -> dict[str, Any]:
     col: dict[str, Any] = {"name": field.name, "type": str(field.type)}
     comment = _meta(field, b"comment") or _meta(field, VGI_DOC_KEY)
     if comment:
@@ -157,7 +157,7 @@ def _function_returns(fn: FunctionInfo) -> str | None:
         return None
     if fn.function_type in (FunctionType.SCALAR, FunctionType.AGGREGATE):
         # Scalar/aggregate output is a single "result" column.
-        return str(schema[0].type)
+        return str(schema.field(0).type)
     cols = ", ".join(f"{f.name} {f.type}" for f in schema)
     return f"TABLE({cols})"
 
@@ -206,7 +206,9 @@ def _schema_contents(
         return []
 
 
-def _build_schemas(iface: CatalogInterface, attach_opaque_data: AttachOpaqueData) -> tuple[list[dict], dict[str, int]]:
+def _build_schemas(
+    iface: CatalogInterface, attach_opaque_data: AttachOpaqueData
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Return ``(schemas, counts)`` for the attached catalog."""
     try:
         schema_infos = list(iface.schemas(attach_opaque_data=attach_opaque_data, transaction_opaque_data=None))
@@ -214,9 +216,11 @@ def _build_schemas(iface: CatalogInterface, attach_opaque_data: AttachOpaqueData
         logger.debug("iface.schemas() failed", exc_info=True)
         return [], {"schemas": 0, "tables": 0, "views": 0, "functions": 0}
 
-    schemas: list[dict] = []
+    schemas: list[dict[str, Any]] = []
     totals = {"schemas": 0, "tables": 0, "views": 0, "functions": 0}
-    for si in schema_infos:
+    # Deterministic ordering so describe.json (and the conformance golden) is
+    # stable across platforms / Python versions / worker iteration order.
+    for si in sorted(schema_infos, key=lambda s: s.name):
         tables_raw: list[TableInfo] = _schema_contents(iface, attach_opaque_data, si.name, SchemaObjectType.TABLE)
         views_raw: list[ViewInfo] = _schema_contents(iface, attach_opaque_data, si.name, SchemaObjectType.VIEW)
         funcs_raw: list[FunctionInfo] = []
@@ -228,14 +232,14 @@ def _build_schemas(iface: CatalogInterface, attach_opaque_data: AttachOpaqueData
             funcs_raw.extend(_schema_contents(iface, attach_opaque_data, si.name, kind))
 
         tables = []
-        for t in tables_raw:
+        for t in sorted(tables_raw, key=lambda x: x.name):
             schema = _read_schema(bytes(t.columns))
             tables.append(
                 {"name": t.name, "cols": len(schema) if schema is not None else 0, "comment": t.comment or ""}
             )
 
         views = []
-        for v in views_raw:
+        for v in sorted(views_raw, key=lambda x: x.name):
             views.append(
                 {
                     "name": v.name,
