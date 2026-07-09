@@ -766,7 +766,9 @@ _EXAMPLE_CATALOG = Catalog(
                 Table(
                     name="cache_ordered",
                     function=CacheOrderedFunction,
-                    comment="Order-sensitive cacheable result (batch_index; parallel capture, ordered serve)",
+                    comment=(
+                        "Multi-worker order-sensitive cacheable result (batch_index; parallel capture, ordered serve)"
+                    ),
                 ),
                 Table(
                     name="cache_revalidatable",
