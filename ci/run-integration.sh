@@ -73,18 +73,16 @@ if [ "$TRANSPORT" = "http" ]; then
   #   * buffer_input/sizes.test — input buffering semantics differ over HTTP
   #     (same known limitation). (scale.test_slow is a .test_slow file and is
   #     never staged below, which only finds *.test.)
-  #   * cache/revalidate.test — HTTP conditional revalidation (304) IS implemented
-  #     (the C++ client puts the validators on the /init request metadata and vgi-rpc
-  #     surfaces them to the producer's first process()), but it needs BOTH a
-  #     community vgi extension carrying that C++ change AND a vgi-rpc release carrying
-  #     the _app_stream change. This lane runs the published community extension +
-  #     PyPI vgi-rpc, so keep it skipped until both ship, then remove this line.
+  # cache/revalidate.test now runs on http too: HTTP conditional revalidation is
+  # implemented (C++ /init-request validators + vgi-rpc >=0.24.0 surfacing them to
+  # the producer's first process()). It needs a community vgi extension carrying
+  # that C++ change; if the http lane fails on it, the community extension predates
+  # the change and needs republishing.
   EXTRA_SKIP=(
     -not -name 'projection_pushdown_repro.test'
     -not -name 'dynamic_filter.test'
     -not -name 'partitioned_sequence.test'
     -not -path './table_in_out/buffer_input/sizes.test'
-    -not -name 'revalidate.test'
   )
 fi
 
