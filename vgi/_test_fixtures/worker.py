@@ -32,6 +32,8 @@ except ImportError:
 
     _sys.exit("vgi-fixture-worker requires numpy. Install it with: pip install 'vgi-python[test-fixtures]'")
 
+import os
+import tempfile
 import uuid
 from typing import Annotated, Any
 
@@ -268,6 +270,14 @@ from vgi.catalog.descriptors import ColumnStatisticsInput
 from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 from vgi.schema_utils import schema
 from vgi.worker import Worker
+
+# Shared scratch dir for native-branch fixtures (read_parquet / read_csv arms).
+# The fixture below and the coupled .test files must name the SAME concrete path:
+# the tests reference it via ${VGI_TEST_BRANCH_DIR} and this reads the same env,
+# defaulting to the OS temp dir. Hardcoding /tmp broke on Windows (no /tmp). Kept
+# forward-slashed (DuckDB + Python both accept '/' on Windows) with no trailing
+# separator so f"{_BRANCH_DIR}/name" matches the test's COPY-TO target byte-for-byte.
+_BRANCH_DIR = (os.environ.get("VGI_TEST_BRANCH_DIR") or tempfile.gettempdir()).replace("\\", "/").rstrip("/")
 
 
 # ---------------------------------------------------------------------------
@@ -1453,7 +1463,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                     ),
                     ScanBranch(
                         function_name="read_parquet",
-                        positional_arguments=[pa.scalar("/tmp/vgi_hetero_branch.parquet", pa.string())],
+                        positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_hetero_branch.parquet", pa.string())],
                         named_arguments={},
                     ),
                 ],
@@ -1475,7 +1485,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                     ),
                     ScanBranch(
                         function_name="iceberg_scan",
-                        positional_arguments=[pa.scalar("/tmp/vgi_iceberg_branch", pa.string())],
+                        positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_iceberg_branch", pa.string())],
                         named_arguments={},
                     ),
                 ],
@@ -1525,7 +1535,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                     ),
                     ScanBranch(
                         function_name="read_csv_auto",
-                        positional_arguments=[pa.scalar("/tmp/vgi_nopushdown_branch.csv", pa.string())],
+                        positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_nopushdown_branch.csv", pa.string())],
                         named_arguments={},
                     ),
                 ],
@@ -1542,17 +1552,17 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 branches=[
                     ScanBranch(
                         function_name="read_parquet",
-                        positional_arguments=[pa.scalar("/tmp/vgi_recon_a_b.parquet", pa.string())],
+                        positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_recon_a_b.parquet", pa.string())],
                         named_arguments={},
                     ),
                     ScanBranch(
                         function_name="read_parquet",
-                        positional_arguments=[pa.scalar("/tmp/vgi_recon_b_a.parquet", pa.string())],
+                        positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_recon_b_a.parquet", pa.string())],
                         named_arguments={},
                     ),
                     ScanBranch(
                         function_name="read_parquet",
-                        positional_arguments=[pa.scalar("/tmp/vgi_recon_a_only.parquet", pa.string())],
+                        positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_recon_a_only.parquet", pa.string())],
                         named_arguments={},
                     ),
                 ],
@@ -1629,7 +1639,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         if schema_name.lower() == "data" and name.lower() == "rff_parquet":
             return ScanFunctionResult(
                 function_name="read_parquet",
-                positional_arguments=[pa.scalar("/tmp/rff_seg.parquet", pa.string())],
+                positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/rff_seg.parquet", pa.string())],
                 named_arguments={},
             )
 
@@ -1637,7 +1647,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         if schema_name.lower() == "data" and name.lower() in ("rff_hive", "rff_hive_mixed"):
             return ScanFunctionResult(
                 function_name="read_parquet",
-                positional_arguments=[pa.scalar("/tmp/rff_hive/*/*/*.parquet", pa.string())],
+                positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/rff_hive/*/*/*.parquet", pa.string())],
                 named_arguments={"hive_partitioning": pa.scalar(True)},
             )
 
