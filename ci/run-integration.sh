@@ -257,12 +257,43 @@ rm -f "$STAGE/test/_warm.test"
 # simple_writable); the http lane's writes self-skip.
 echo "Running suite ($SUITE_GLOB, transport=$TRANSPORT) ..."
 suite_rc=0
+
+# run_unittest — invoke haybarn-unittest, streaming its output, and additionally
+# fail on a fatal-signal report that the process's own exit code cannot express.
+#
+# Catch2 arms handlers for SIGTERM/SIGINT/SIGSEGV/... for the duration of a test
+# case. Those handlers are inherited by any process the extension fork()s, and
+# run in the child if a signal lands before it execs. The child then prints a
+# full "FAILED: ... due to a fatal error condition: SIGTERM" block plus a run
+# summary — the *parent's* accumulated counters, since it's an address-space
+# copy — and dies. The parent never sees it, records no failure, and exits 0.
+# The only trace is on stdout, so that is what we scan. Seen on the shm lane in
+# https://github.com/Query-farm/vgi-python/actions/runs/29051359074.
+run_unittest() {
+  local log rc=0
+  log="$(mktemp)"
+  # `set +e` rather than `|| true`: the latter runs before PIPESTATUS is read and
+  # overwrites it with true's 0, silently swallowing every real test failure.
+  set +e
+  "$HAYBARN_UNITTEST" "$@" 2>&1 | tee "$log"
+  rc="${PIPESTATUS[0]}"
+  set -e
+  if grep -q 'due to a fatal error condition' "$log"; then
+    echo "::error::a forked child ran the test harness's signal handler (see the" \
+         "'fatal error condition' block above). The parent exited $rc and would" \
+         "otherwise have passed. This is invisible to the exit code by construction."
+    rc=1
+  fi
+  rm -f "$log"
+  return "$rc"
+}
+
 if [ "$TRANSPORT" = "launch" ]; then
-  "$HAYBARN_UNITTEST" "$SUITE_GLOB" || suite_rc=$?
+  run_unittest "$SUITE_GLOB" || suite_rc=$?
 else
-  "$HAYBARN_UNITTEST" "$SUITE_GLOB" "~test/sql/integration/simple_writable/*" || suite_rc=$?
+  run_unittest "$SUITE_GLOB" "~test/sql/integration/simple_writable/*" || suite_rc=$?
   echo "Running simple_writable (isolated process) ..."
-  "$HAYBARN_UNITTEST" "test/sql/integration/simple_writable/*" || suite_rc=$?
+  run_unittest "test/sql/integration/simple_writable/*" || suite_rc=$?
 fi
 
 exit "$suite_rc"
