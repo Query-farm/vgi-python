@@ -43,6 +43,7 @@ from vgi_rpc.rpc import (
 )
 
 from vgi.arguments import Arguments
+from vgi.cache_control import CacheControl
 from vgi.catalog.catalog_interface import (
     CatalogAttachResult,
     CatalogInfo,
@@ -1014,6 +1015,33 @@ def _merge_batch_index(
     return merged
 
 
+def _merge_cache_control(
+    *,
+    cache_control: CacheControl | None,
+    metadata: dict[str, str] | None,
+    is_first_batch: bool,
+) -> dict[str, str] | None:
+    """Fold a worker-provided :class:`CacheControl` into the emit metadata dict.
+
+    The cache-control keys ride on the **first** emitted data batch only (the
+    client reads them once per result). Passing ``cache_control`` on a later
+    batch is a programming error — raising here gives the worker author a
+    clearer line number than a silently-ignored advertisement.
+
+    Explicit ``metadata={"vgi.cache.ttl": ...}`` keys already flow through the
+    ``metadata`` kwarg unchanged; this helper only applies the typed
+    :class:`CacheControl` object. When both are supplied the rendered
+    ``CacheControl`` keys win (``dict.update`` last-write).
+    """
+    if cache_control is None:
+        return metadata
+    if not is_first_batch:
+        raise RuntimeError("out.emit(cache_control=...) is only valid on the first emitted batch")
+    merged: dict[str, str] = dict(metadata) if metadata else {}
+    merged.update(cache_control.to_metadata())
+    return merged
+
+
 class VgiOutputCollector(Protocol):
     """Structural type for the ``out`` handed to a table function's body.
 
@@ -1033,6 +1061,7 @@ class VgiOutputCollector(Protocol):
         batch_index: int | None = None,
         partition_values: dict[str, tuple[pa.Scalar[Any], pa.Scalar[Any]]] | None = None,
         metadata: dict[str, str] | None = None,
+        cache_control: CacheControl | None = None,
     ) -> None: ...
 
     def finish(self) -> None: ...
@@ -1063,6 +1092,7 @@ class _FilteringOutputCollector:
         batch_index: int | None = None,
         partition_values: dict[str, tuple[pa.Scalar[Any], pa.Scalar[Any]]] | None = None,
         metadata: dict[str, str] | None = None,
+        cache_control: CacheControl | None = None,
     ) -> None:
         filtered = self._func_cls._apply_pushdown_filter(batch, self._filters)
         self._inner.emit(
@@ -1070,6 +1100,7 @@ class _FilteringOutputCollector:
             batch_index=batch_index,
             partition_values=partition_values,
             metadata=metadata,
+            cache_control=cache_control,
         )
 
     def emit_pydict(self, data: dict[str, Any], schema: pa.Schema | None = None) -> None:
@@ -1113,6 +1144,7 @@ class _TrackingOutputCollector:
         "_supports_batch_index",
         "_partition_fields",
         "_partition_kind",
+        "_batches_emitted",
         "total_rows",
         "total_bytes",
     )
@@ -1130,6 +1162,7 @@ class _TrackingOutputCollector:
         # schema; empty when the function did not opt in to PartitionColumns.
         self._partition_fields = partition_fields or []
         self._partition_kind = partition_kind
+        self._batches_emitted = 0
         self.total_rows = 0
         self.total_bytes = 0
 
@@ -1139,6 +1172,7 @@ class _TrackingOutputCollector:
         batch_index: int | None = None,
         partition_values: dict[str, tuple[pa.Scalar[Any], pa.Scalar[Any]]] | None = None,
         metadata: dict[str, str] | None = None,
+        cache_control: CacheControl | None = None,
     ) -> None:
         merged_metadata = _merge_batch_index(
             supports_batch_index=self._supports_batch_index,
@@ -1152,6 +1186,12 @@ class _TrackingOutputCollector:
             partition_values=partition_values,
             metadata=merged_metadata,
         )
+        merged_metadata = _merge_cache_control(
+            cache_control=cache_control,
+            metadata=merged_metadata,
+            is_first_batch=(self._batches_emitted == 0),
+        )
+        self._batches_emitted += 1
         self.total_rows += batch.num_rows
         self.total_bytes += _batch_bytes(batch)
         if merged_metadata is None:
@@ -1206,6 +1246,10 @@ class TableProducerState(ProducerState):
     _pushdown_filters: Annotated[Any, Transient()] = field(default=None, repr=False)  # PushdownFilters | None
     _auto_apply: Annotated[bool, Transient()] = field(default=False, repr=False)
     _vgi_tracer: Annotated[VgiTracer, Transient()] = field(default_factory=get_noop_tracer, repr=False)
+    # Conditional-revalidation validators read off the first tick's custom_metadata
+    # and surfaced to the generator via ProcessParams (M6). None on a normal call.
+    _if_none_match: Annotated[str | None, Transient()] = field(default=None, repr=False)
+    _if_modified_since: Annotated[str | None, Transient()] = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         """Resolve pushdown filters if auto_apply_filters is enabled."""
@@ -1278,6 +1322,14 @@ class TableProducerState(ProducerState):
             encoded = input.custom_metadata.get(b"vgi_pushdown_filters")
             if encoded is not None:
                 self._update_filters_from_metadata(encoded)
+            # Conditional-revalidation validators (M6): the client holds a stale
+            # cached result and asks the worker to confirm freshness cheaply.
+            inm = input.custom_metadata.get(b"vgi.cache.if_none_match")
+            ims = input.custom_metadata.get(b"vgi.cache.if_modified_since")
+            if inm is not None:
+                self._if_none_match = inm.decode("utf-8")
+            if ims is not None:
+                self._if_modified_since = ims.decode("utf-8")
         self.produce(out, ctx)
 
     def _update_filters_from_metadata(self, encoded_filters: bytes) -> None:
@@ -1302,6 +1354,8 @@ class TableProducerState(ProducerState):
             self._params,
             auth_context=ctx.auth,
             current_pushdown_filters=self._pushdown_filters,
+            if_none_match=self._if_none_match,
+            if_modified_since=self._if_modified_since,
         )
         timer = _timed_exchange(
             self._vgi_tracer,

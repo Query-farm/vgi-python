@@ -33,6 +33,15 @@ _EXEMPTIONS: dict[str, str] = {
         "lifecycle/schema/table surfaces are mirrored by test_attach.py, "
         "test_table.py, test_view.py, and test_macro.py."
     ),
+    "cache": (
+        "The table-function result cache lives entirely in the C++ extension "
+        "(key/eligibility, in-memory + content-addressed disk tiers, serve/"
+        "capture, conditional revalidation). The Python worker's only role is "
+        "advertising vgi.cache.* metadata + answering 304 not_modified, which is "
+        "unit-tested by tests/test_cache_control.py (rendering, the emit merge "
+        "path, ProcessParams.if_none_match threading, and the revalidatable "
+        "fixture's 304 behavior)."
+    ),
     "filter_pushdown": (
         "Per-type filter-pushdown coverage is mirrored by tests/test_filter_pushdown.py "
         "and tests/test_filter_pushdown_extension.py, which drive the same predicate "

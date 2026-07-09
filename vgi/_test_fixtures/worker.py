@@ -124,6 +124,25 @@ from vgi._test_fixtures.table import (
     BrokenPartitionColumnAbsentFromBatchFunction,
     BrokenPartitionMinNeqMaxFunction,
     BrokenPartitionValuesNoAnnotationFunction,
+    CacheableNumbersFunction,
+    CacheBigFunction,
+    CacheBenchFunction,
+    CacheExternalFailFunction,
+    CacheFilteredFunction,
+    CacheInterleavedFunction,
+    CacheMultiColFunction,
+    CacheNonceFunction,
+    CacheNoStoreFunction,
+    CacheOrderedFunction,
+    CacheParallelFunction,
+    CachePartitionedFunction,
+    CachePoisonFunction,
+    CacheProjectionFunction,
+    CacheTypesFunction,
+    CacheRevalidatableFunction,
+    CacheScopedTxnFunction,
+    CacheVersionedFunction,
+    CacheWhoamiFunction,
     ColorsScanFunction,
     ConstantColumnsFunction,
     CountryPartitionedSalesFunction,
@@ -427,6 +446,26 @@ _EXAMPLE_CATALOG = Catalog(
                 ProjectedDataFunction,
                 SampleEchoFunction,
                 RowIdSequenceFunction,
+                # Result-cache fixtures (advertise vgi.cache.* on the first
+                # emitted batch) — see vgi/_test_fixtures/table/cache.py.
+                CacheableNumbersFunction,
+                CacheNonceFunction,
+                CacheNoStoreFunction,
+                CacheScopedTxnFunction,
+                CacheBigFunction,
+                CacheRevalidatableFunction,
+                CacheWhoamiFunction,
+                CacheVersionedFunction,
+                CacheProjectionFunction,
+                CachePoisonFunction,
+                CacheExternalFailFunction,
+                CacheBenchFunction,
+                CacheParallelFunction,
+                CacheOrderedFunction,
+                CacheInterleavedFunction,
+                CacheTypesFunction,
+                CacheFilteredFunction,
+                CachePartitionedFunction,
                 SecretDemoFunction,
                 MultiSecretDemoFunction,
                 ScopedSecretDemoFunction,
@@ -676,6 +715,86 @@ _EXAMPLE_CATALOG = Catalog(
                     columns=schema(n=pa.int64()),
                     comment="123456 integers; stats served by the sequence function, not the table",
                 ),
+                # Result-cache fixtures, exposed as function-backed tables so the
+                # catalog-attached path (SELECT ... FROM ex.data.<name>) exercises
+                # the C++ result cache. See vgi/_test_fixtures/table/cache.py.
+                Table(
+                    name="cacheable_numbers",
+                    function=CacheableNumbersFunction,
+                    comment="Cacheable 10-row result advertising vgi.cache.ttl",
+                ),
+                Table(
+                    name="cache_nonce",
+                    function=CacheNonceFunction,
+                    comment="One-row cacheable result whose value changes per real invocation",
+                ),
+                Table(
+                    name="cache_multicol",
+                    function=CacheMultiColFunction,
+                    comment="Multi-column cacheable result (projection-coverage reuse)",
+                ),
+                Table(
+                    name="cache_no_store",
+                    function=CacheNoStoreFunction,
+                    comment="Advertises vgi.cache.no_store — must never be cached",
+                ),
+                Table(
+                    name="cache_scoped_txn",
+                    function=CacheScopedTxnFunction,
+                    comment="Advertises vgi.cache.scope=transaction",
+                ),
+                Table(
+                    name="cache_filtered",
+                    function=CacheFilteredFunction,
+                    comment="Cacheable sequence with static filter pushdown (filter_bytes keying)",
+                ),
+                Table(
+                    name="cache_big",
+                    function=CacheBigFunction,
+                    comment="Large multi-batch cacheable result (advertises vgi.cache.ttl)",
+                ),
+                Table(
+                    name="cache_ordered",
+                    function=CacheOrderedFunction,
+                    comment="Multi-worker order-sensitive cacheable result (batch_index; parallel capture, ordered serve)",
+                ),
+                Table(
+                    name="cache_revalidatable",
+                    function=CacheRevalidatableFunction,
+                    comment="Always-revalidate result (304 not_modified reuses stored bytes)",
+                ),
+                Table(
+                    name="cache_whoami",
+                    function=CacheWhoamiFunction,
+                    comment="Cacheable result echoing the caller's auth principal (identity-scoped)",
+                ),
+                # Time-travel + cacheable: AT (VERSION => n) is resolved to the
+                # scan-function version arg in table_scan_function_get below.
+                Table(
+                    name="cache_versioned",
+                    columns=schema(v=pa.int64()),
+                    supports_time_travel=True,
+                    comment="Version-specific cacheable rows (AT-keyed cache isolation)",
+                ),
+                Table(
+                    name="cache_projection",
+                    function=CacheProjectionFunction,
+                    comment="Projection-pushdown cacheable result (SELECT a vs b are distinct keys)",
+                ),
+                Table(
+                    name="cache_poison",
+                    function=CachePoisonFunction,
+                    comment="Cacheable first batch then a mid-stream error (never-partial check)",
+                ),
+                Table(
+                    name="cache_external_fail",
+                    function=CacheExternalFailFunction,
+                    comment="Cacheable first batch then an unresolvable external-location pointer",
+                ),
+                # NB: cache_bench is intentionally NOT a data Table — it takes a
+                # required positional arg (rows) that a function-backed Table can't
+                # supply at bind. The scaling bench + S8 guard use the direct path
+                # `vgi_table_function(w, 'cache_bench', [rows])` instead.
                 # Multi-branch fixture — two ScanBranch entries both calling
                 # sequence() with different counts. SELECT count(*) should
                 # return 100 (50 + 50). Exercises VgiMultiScanRewriter end-to-end.
@@ -1473,6 +1592,16 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             version = resolve_version(at_unit, at_value)
             return ScanFunctionResult(
                 function_name="versioned_data_scan",
+                positional_arguments=[pa.scalar(version)],
+                named_arguments={},
+            )
+
+        # cache_versioned: AT → version arg, same as versioned_data but the scan
+        # function advertises cache metadata (for the AT cache-isolation test).
+        if schema_name.lower() == "data" and name.lower() == "cache_versioned":
+            version = resolve_version(at_unit, at_value)
+            return ScanFunctionResult(
+                function_name="cache_versioned_scan",
                 positional_arguments=[pa.scalar(version)],
                 named_arguments={},
             )

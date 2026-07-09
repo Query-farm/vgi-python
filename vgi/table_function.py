@@ -559,6 +559,14 @@ class ProcessParams[TArgs]:
             source order under parallel ingest. None for every other call path.
         attach_opaque_data: The catalog's attach bytes, unwrapped by the
             framework (uuid prefix stripped). None without an ATTACH.
+        if_none_match: Conditional-revalidation validator (client's stored
+            ETag). Set when the client holds a stale-but-revalidatable cached
+            result and asks the worker to confirm freshness cheaply; a worker
+            that advertised ``revalidatable`` compares it and, if unchanged,
+            emits a 0-row ``CacheControl(not_modified=True)`` batch. None
+            otherwise.
+        if_modified_since: Conditional-revalidation validator (client's stored
+            Last-Modified). Companion to ``if_none_match``. None otherwise.
 
     """
 
@@ -579,6 +587,14 @@ class ProcessParams[TArgs]:
     batch_index: int | None = None
 
     attach_opaque_data: bytes | None = None
+
+    # Conditional-revalidation validators (client cache -> worker). Set when the
+    # client holds a stale-but-revalidatable cached result and asks the worker to
+    # confirm freshness cheaply. A worker that advertised ``revalidatable`` reads
+    # these; if its data is unchanged it emits a 0-row ``CacheControl(not_modified
+    # =True, ...)`` batch instead of re-streaming. Both None on a normal call.
+    if_none_match: str | None = None
+    if_modified_since: str | None = None
 
     @property
     def at_unit(self) -> str | None:

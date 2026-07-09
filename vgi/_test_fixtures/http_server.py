@@ -304,6 +304,32 @@ def main() -> None:
         authenticate = _resolve_authenticate()
         oauth_metadata = _resolve_oauth_resource_metadata()
 
+        if authenticate is None:
+            # Test-only OPTIONAL bearer auth. Lets the cache identity-isolation
+            # test attach the same worker under different principals (alice/bob)
+            # while every other test on this shared server stays anonymous:
+            # no/blank/unknown bearer → anonymous (existing behaviour), a known
+            # token → its principal. Never 401s, so no anonymous test breaks.
+            from vgi_rpc.http import bearer_authenticate_static
+            from vgi_rpc.rpc import AuthContext
+
+            _test_tokens = {
+                "vgi-test-alice": AuthContext(principal="alice", authenticated=True, domain="bearer"),
+                "vgi-test-bob": AuthContext(principal="bob", authenticated=True, domain="bearer"),
+            }
+            _bearer_validate = bearer_authenticate_static(tokens=_test_tokens)
+
+            def _optional_bearer(req: Any) -> AuthContext:
+                header = req.get_header("Authorization") or ""
+                if not header.startswith("Bearer "):
+                    return AuthContext.anonymous()
+                try:
+                    return _bearer_validate(req)
+                except Exception:
+                    return AuthContext.anonymous()
+
+            authenticate = _optional_bearer
+
         from vgi.worker import _get_vgi_version
 
         # Match vgi-fixture-worker (subprocess transport): always serve the
