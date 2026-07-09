@@ -37,7 +37,9 @@ from vgi.arguments import Arg
 from vgi.cache_control import CACHE_SCOPE_TRANSACTION, CacheControl
 from vgi.invocation import GlobalInitResponse
 from vgi.metadata import FunctionExample, OrderPreservation
+from vgi.metadata import PartitionKind as _PartitionKind
 from vgi.protocol import VgiOutputCollector
+from vgi.schema_utils import partition_field as _partition_field
 from vgi.schema_utils import schema
 from vgi.table_function import (
     InitParams,
@@ -339,13 +341,9 @@ class CacheScopedTxnFunction(TableFunctionGenerator[CacheScopedTxnArgs, _CacheSc
         first_batch = state.current_index == 0
         size = min(state.remaining, cls.BATCH_SIZE)
         values = list(range(state.current_index, state.current_index + size))
-        batch = pa.RecordBatch.from_pydict(
-            {"n": values, "nonce": [state.nonce] * size}, schema=params.output_schema
-        )
+        batch = pa.RecordBatch.from_pydict({"n": values, "nonce": [state.nonce] * size}, schema=params.output_schema)
 
-        cache_control = (
-            CacheControl(ttl=_DEFAULT_TTL_SECONDS, scope=CACHE_SCOPE_TRANSACTION) if first_batch else None
-        )
+        cache_control = CacheControl(ttl=_DEFAULT_TTL_SECONDS, scope=CACHE_SCOPE_TRANSACTION) if first_batch else None
         cast(VgiOutputCollector, out).emit(batch, cache_control=cache_control)
 
         state.current_index += size
@@ -485,9 +483,7 @@ class CacheRevalidatableFunction(TableFunctionGenerator[CacheRevalidatableArgs, 
             empty = pa.RecordBatch.from_pydict({"nonce": []}, schema=params.output_schema)
             emit(
                 empty,
-                cache_control=CacheControl(
-                    not_modified=True, ttl=0, etag=cls.ETAG, revalidatable=True
-                ),
+                cache_control=CacheControl(not_modified=True, ttl=0, etag=cls.ETAG, revalidatable=True),
             )
             state.done = True
             return
@@ -814,9 +810,9 @@ _UNRESOLVABLE_LOCATION = "http://127.0.0.1:9/vgi-cache-poison-nonexistent"
 @init_single_worker
 @bind_fixed_schema
 class CacheExternalFailFunction(TableFunctionGenerator[CachePoisonArgs, _CachePoisonState]):
-    """Emits a cacheable first batch, then an EXTERNAL_LOCATION pointer batch whose
-    URL is unreachable, so the client's resolution throws mid-stream.
+    """Emit a cacheable batch, then a pointer batch to an unreachable location.
 
+    The client's resolution of the EXTERNAL_LOCATION pointer throws mid-stream.
     Second adversarial never-partial check: an external-location resolution failure
     after a cacheable batch must also commit nothing. The 0-row pointer batch
     carries ``vgi_rpc.location`` metadata (the same key the transport uses for
@@ -1010,10 +1006,7 @@ class CacheParallelFunction(TableFunctionGenerator[CacheParallelArgs, _CachePara
         """Primary worker enqueues (start, end) chunks covering [0, rows)."""
         rows = params.args.rows
         chunk = max(1, -(-rows // cls.MAX_CHUNKS))  # ceil(rows / MAX_CHUNKS)
-        work_items = [
-            struct.pack(_PC_ITEM_FMT, start, min(start + chunk, rows))
-            for start in range(0, rows, chunk)
-        ]
+        work_items = [struct.pack(_PC_ITEM_FMT, start, min(start + chunk, rows)) for start in range(0, rows, chunk)]
         params.storage.queue_push(work_items)  # always push (registers the invocation)
         return GlobalInitResponse()
 
@@ -1458,9 +1451,7 @@ class CacheFilteredFunction(TableFunctionGenerator[CacheFilteredArgs, _CacheCoun
 # partition column makes the framework emit pv per batch; forced to spill and
 # served back, any misframed pv_len would misalign the streaming TOC seek → the
 # GROUP BY would return wrong rows. Single-worker → deterministic 5-batch output.
-from vgi.metadata import PartitionKind as _PartitionKind
-from vgi.schema_utils import partition_field as _partition_field
-
+# (_PartitionKind / _partition_field imported at the top of the module.)
 _CACHE_COUNTRIES: list[str] = ["AU", "BR", "CA", "FR", "US"]
 
 

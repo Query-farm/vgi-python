@@ -202,9 +202,7 @@ class TestRevalidatableFixture:
         """A matching if_none_match yields a 0-row not_modified batch (no data)."""
         from vgi._test_fixtures.table.cache import CacheRevalidatableFunction
 
-        collector, _state, not_modified_key = self._run(
-            if_none_match=CacheRevalidatableFunction.ETAG
-        )
+        collector, _state, not_modified_key = self._run(if_none_match=CacheRevalidatableFunction.ETAG)
 
         assert len(collector.calls) == 1
         batch, metadata = collector.calls[0]

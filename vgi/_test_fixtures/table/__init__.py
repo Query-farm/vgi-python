@@ -34,10 +34,10 @@ from vgi._test_fixtures.table.batch_index_broken import (
 from vgi._test_fixtures.table.cache import (
     CacheableNumbersFunction,
     CacheBenchFunction,
-    CacheInterleavedFunction,
     CacheBigFunction,
     CacheExternalFailFunction,
     CacheFilteredFunction,
+    CacheInterleavedFunction,
     CacheMultiColFunction,
     CacheNonceFunction,
     CacheNoStoreFunction,
@@ -46,9 +46,9 @@ from vgi._test_fixtures.table.cache import (
     CachePartitionedFunction,
     CachePoisonFunction,
     CacheProjectionFunction,
-    CacheTypesFunction,
     CacheRevalidatableFunction,
     CacheScopedTxnFunction,
+    CacheTypesFunction,
     CacheVersionedFunction,
     CacheWhoamiFunction,
 )

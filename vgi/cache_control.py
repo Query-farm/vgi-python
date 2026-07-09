@@ -114,9 +114,7 @@ class CacheControl:
     def __post_init__(self) -> None:
         """Validate scope and non-negative durations."""
         if self.scope not in _VALID_SCOPES:
-            raise ValueError(
-                f"CacheControl.scope must be one of {sorted(_VALID_SCOPES)}, got {self.scope!r}"
-            )
+            raise ValueError(f"CacheControl.scope must be one of {sorted(_VALID_SCOPES)}, got {self.scope!r}")
         for name in ("ttl", "stale_while_revalidate", "stale_if_error"):
             value = getattr(self, name)
             if value is not None and value < 0:
