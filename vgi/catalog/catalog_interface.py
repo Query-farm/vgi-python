@@ -37,7 +37,7 @@ import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
 from vgi_rpc.utils import deserialize_record_batch, serialize_record_batch_bytes
 
-from vgi.arguments import SecretLookupEntry
+from vgi.arguments import Arguments, SecretLookupEntry
 from vgi.exceptions import CatalogReadOnlyError
 from vgi.metadata import (
     DistinctDependence,
@@ -884,6 +884,50 @@ class ScanFunctionResult:
 
 # Write function discovery uses the same wire format as scan function discovery.
 WriteFunctionResult = ScanFunctionResult
+
+
+def scan_arguments_from(
+    arguments: Arguments | None,
+) -> tuple[list[pa.Scalar], dict[str, pa.Scalar]]:  # type: ignore[type-arg]
+    """Split a table's declared [`Arguments`][] into `ScanFunctionResult` shape.
+
+    A function-backed ``Table`` declares the arguments its backing function needs
+    via ``Table.arguments``. Those arguments must reach the *scan-time* worker bind,
+    not just the catalog-build-time schema derivation — otherwise a backing function
+    with a required positional ``Arg(0)`` sees zero positional arguments at scan.
+
+    ``ScanFunctionResult.to_row_dict`` serializes ``positional_arguments`` as the
+    ``arg_<N>`` wire fields the VGI DuckDB extension's ``DecodeScanArguments``
+    expects, so returning them here is all that is required.
+
+    Args:
+        arguments: The table's declared arguments, or ``None`` when it declares none.
+
+    Returns:
+        ``(positional_arguments, named_arguments)`` ready for `ScanFunctionResult`.
+        ``([], {})`` when ``arguments`` is ``None``.
+
+    Raises:
+        ValueError: If a positional slot is ``None``. Dropping it would shift every
+            later argument down one index and silently bind the wrong values, so an
+            unfilled slot is rejected rather than skipped.
+
+    """
+    if arguments is None:
+        return [], {}
+    positional: list[pa.Scalar] = []  # type: ignore[type-arg]
+    for index, scalar in enumerate(arguments.positional):
+        if scalar is None:
+            raise ValueError(
+                f"Table arguments: positional slot {index} is None. Positional "
+                f"arguments passed to a function-backed table must all be concrete "
+                f"pa.Scalar values — an unfilled slot would shift the arguments after "
+                f'it. To make an argument optional, declare it as a named argument '
+                f'(Arg("name", default=...)) instead.'
+            )
+        positional.append(scalar)
+    named = dict(arguments.named) if arguments.named else {}
+    return positional, named
 
 
 # ============================================================================
@@ -2704,12 +2748,16 @@ class ReadOnlyCatalogInterface(CatalogInterface):
 
         # Check if table exists and is function-backed
         if table is not None and table.function is not None:
-            # Auto-implement for function-backed tables
+            # Auto-implement for function-backed tables. The table's declared
+            # ``arguments`` are forwarded so the scan-time bind receives the same
+            # arguments the catalog-build-time schema derivation used; a backing
+            # function with a required positional ``Arg(0)`` depends on this.
             func_meta = table.function.get_metadata()
+            positional_arguments, named_arguments = scan_arguments_from(table.arguments)
             return ScanFunctionResult(
                 function_name=func_meta.name,
-                positional_arguments=[],
-                named_arguments={},
+                positional_arguments=positional_arguments,
+                named_arguments=named_arguments,
                 required_extensions=[],
             )
 

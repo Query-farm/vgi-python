@@ -33,6 +33,7 @@ from vgi.catalog.catalog_interface import (
     TableColumnStatisticsResult,
     TableInfo,
     ViewInfo,
+    scan_arguments_from,
     serialize_column_statistics,
 )
 from vgi.invocation import BindResponse, FunctionType
@@ -171,22 +172,31 @@ def _default_to_sql(value: DefaultValue) -> str:
 
 def _inline_function_result(
     func: type[Function] | None,
+    arguments: Arguments | None = None,
 ) -> bytes | None:
     """Build inlined ``ScanFunctionResult`` IPC bytes for a function-backed table.
 
     Returns ``None`` when the table is not function-backed for that operation.
     Mirrors ``ReadOnlyCatalogInterface._write_function_get`` /
-    ``table_scan_function_get`` auto-impl: empty positional/named arguments,
-    no required extensions. The C++ extension uses these bytes verbatim and
-    skips the corresponding ``catalog_table_*_function_get`` RPC.
+    ``table_scan_function_get`` auto-impl: no required extensions, and the
+    table's declared ``arguments`` (if any) forwarded as the function's
+    positional/named arguments. The C++ extension uses these bytes verbatim and
+    skips the corresponding ``catalog_table_*_function_get`` RPC — so omitting
+    the arguments here means the scan-time worker bind sees none, which breaks
+    any backing function with a required positional ``Arg(0)``.
+
+    ``arguments`` defaults to ``None`` (empty args) because only the *scan*
+    function is parameterized by ``Table.arguments``; the insert/update/delete
+    functions receive their rows via the streaming table input instead.
     """
     if func is None:
         return None
     func_meta = func.get_metadata()
+    positional_arguments, named_arguments = scan_arguments_from(arguments)
     return ScanFunctionResult(
         function_name=func_meta.name,
-        positional_arguments=[],
-        named_arguments={},
+        positional_arguments=positional_arguments,
+        named_arguments=named_arguments,
         required_extensions=[],
     ).serialize()
 
@@ -633,7 +643,7 @@ class Table:
             supports_column_statistics=bool(self.statistics),
             comment=self.comment,
             tags=dict(self.tags),
-            scan_function=_inline_function_result(self.function),
+            scan_function=_inline_function_result(self.function, self.arguments),
             insert_function=_inline_function_result(self.insert_function),
             update_function=_inline_function_result(self.update_function),
             delete_function=_inline_function_result(self.delete_function),

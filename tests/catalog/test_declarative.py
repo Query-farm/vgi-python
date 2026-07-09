@@ -14,13 +14,13 @@ Tests cover:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import Annotated, ClassVar
 
 import pyarrow as pa
 import pytest
 from vgi_rpc.rpc import OutputCollector
 
-from vgi import Worker
+from vgi import Arg, Arguments, Worker
 from vgi.catalog import (
     AttachOpaqueData,
     Catalog,
@@ -50,6 +50,7 @@ from vgi.table_function import (
     bind_fixed_schema,
     init_single_worker,
 )
+from vgi.table_in_out_function import TableInOutGenerator
 
 # =============================================================================
 # Test Fixtures: Example Functions for Function-Backed Tables
@@ -59,6 +60,45 @@ from vgi.table_function import (
 @dataclass(slots=True, frozen=True)
 class EmptyArgs:
     """No arguments."""
+
+
+@dataclass(frozen=True)
+class CountedRowsArgs:
+    """A required positional argument plus an optional named one."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+    label: Annotated[str, Arg("label", default="rows", doc="Label for the rows")]
+
+
+@init_single_worker
+@bind_fixed_schema
+class CountedRowsFunction(TableFunctionGenerator[CountedRowsArgs]):
+    """Table function with a required positional arg, for arg-propagation tests."""
+
+    class Meta:  # noqa: D106
+        name = "counted_rows"
+        description = "Generate N rows"
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema({"n": pa.int64()})
+
+    @classmethod
+    def process(  # noqa: D102
+        cls, params: ProcessParams[CountedRowsArgs], state: None, out: OutputCollector
+    ) -> None:
+        out.emit(
+            pa.RecordBatch.from_pydict(
+                {"n": list(range(params.args.count))},
+                schema=params.output_schema,
+            )
+        )
+        out.finish()
+
+
+class CountedRowsInsert(TableInOutGenerator[None, None]):
+    """Stub insert function, for the write-path arg-propagation test."""
+
+    class Meta:  # noqa: D106
+        name = "counted_rows_insert"
 
 
 @init_single_worker
@@ -261,6 +301,87 @@ class TestTableWithFunction:
         assert info.insert_function is None
         assert info.update_function is None
         assert info.delete_function is None
+
+    def test_inlined_scan_function_carries_declared_positional_arguments(self) -> None:
+        """``Table.arguments`` must reach the scan-time bind, not just ``bind()``.
+
+        Regression: the inlined ``ScanFunctionResult`` used to hardcode empty
+        arguments, so a backing function with a required positional ``Arg(0)``
+        saw zero positional args at scan and failed with
+        ``IndexError: Argument 0: index out of range``.
+        """
+        from vgi_rpc.utils import deserialize_record_batch
+
+        table = Table(
+            name="counted",
+            function=CountedRowsFunction,
+            arguments=Arguments(positional=(pa.scalar(7),)),
+        )
+        info = table.to_table_info("main")
+        assert info.scan_function is not None
+        batch, _ = deserialize_record_batch(info.scan_function)
+        sfr = ScanFunctionResult.deserialize(batch)
+        assert sfr.function_name == "counted_rows"
+        assert [s.as_py() for s in sfr.positional_arguments] == [7]
+        assert sfr.named_arguments == {}
+
+    def test_inlined_scan_function_carries_declared_named_arguments(self) -> None:
+        """Named args declared on the Table also reach the scan-time bind."""
+        from vgi_rpc.utils import deserialize_record_batch
+
+        table = Table(
+            name="counted",
+            function=CountedRowsFunction,
+            arguments=Arguments(
+                positional=(pa.scalar(3),),
+                named={"label": pa.scalar("widgets")},
+            ),
+        )
+        info = table.to_table_info("main")
+        assert info.scan_function is not None
+        batch, _ = deserialize_record_batch(info.scan_function)
+        sfr = ScanFunctionResult.deserialize(batch)
+        assert [s.as_py() for s in sfr.positional_arguments] == [3]
+        assert {k: v.as_py() for k, v in sfr.named_arguments.items()} == {"label": "widgets"}
+
+    def test_inlined_write_functions_ignore_table_arguments(self) -> None:
+        """Only the *scan* function is parameterized by ``Table.arguments``.
+
+        Insert/update/delete functions receive their rows via the streaming table
+        input, so their inlined results stay argument-free.
+        """
+        from vgi_rpc.utils import deserialize_record_batch
+
+        table = Table(
+            name="counted",
+            function=CountedRowsFunction,
+            arguments=Arguments(positional=(pa.scalar(7),)),
+            insert_function=CountedRowsInsert,
+        )
+        info = table.to_table_info("main")
+        assert info.insert_function is not None
+        batch, _ = deserialize_record_batch(info.insert_function)
+        sfr = ScanFunctionResult.deserialize(batch)
+        assert sfr.positional_arguments == []
+        assert sfr.named_arguments == {}
+
+    def test_none_positional_slot_is_rejected(self) -> None:
+        """A ``None`` positional slot would shift later args — reject it loudly.
+
+        Exercised on the ``scan_arguments_from`` helper directly: a Table carrying
+        such a slot already fails earlier, in bind()-based schema derivation. This
+        guards the serializer against ever silently dropping the slot instead.
+        """
+        from vgi.catalog.catalog_interface import scan_arguments_from
+
+        with pytest.raises(ValueError, match="positional slot 0 is None"):
+            scan_arguments_from(Arguments(positional=(None, pa.scalar(7))))
+
+    def test_scan_arguments_from_none_is_empty(self) -> None:
+        """A table declaring no arguments serializes empty args (unchanged behavior)."""
+        from vgi.catalog.catalog_interface import scan_arguments_from
+
+        assert scan_arguments_from(None) == ([], {})
 
     def test_table_propagates_cardinality_to_table_info(self) -> None:
         """``Table.cardinality_estimate`` / ``cardinality_max`` flow into TableInfo.
@@ -1121,8 +1242,6 @@ class TestSchemaDescriptor:
         client hits a cold miss. Reporting an explicit ``0`` for empty
         categories lets the client skip the bulk RPC entirely.
         """
-        from typing import Annotated
-
         from vgi.arguments import Param, Returns
         from vgi.scalar_function import ScalarFunction
 
@@ -1174,8 +1293,6 @@ class TestLegacyFunctionsListSchemaInfo:
     """
 
     def _interface(self) -> ReadOnlyCatalogInterface:
-        from typing import Annotated
-
         from vgi.arguments import Param, Returns
         from vgi.scalar_function import ScalarFunction
 
@@ -1694,6 +1811,70 @@ class TestTableScanFunctionGet:
         )
         assert isinstance(result, ScanFunctionResult)
         assert result.function_name == "users"
+        # No declared Table.arguments => empty args, unchanged behavior.
+        assert result.positional_arguments == []
+        assert result.named_arguments == {}
+
+    def test_auto_scan_forwards_declared_arguments(self) -> None:
+        """The RPC auto-impl forwards ``Table.arguments`` to the scan bind.
+
+        Companion to the inlined-path regression: workers that don't inline
+        ``TableInfo.scan_function`` reach the scan through this RPC instead.
+        """
+        counted = Table(
+            name="counted",
+            function=CountedRowsFunction,
+            arguments=Arguments(
+                positional=(pa.scalar(7),),
+                named={"label": pa.scalar("widgets")},
+            ),
+        )
+
+        class TestCatalog(ReadOnlyCatalogInterface):
+            catalog = Catalog(
+                name="test",
+                schemas=[Schema(name="main", tables=[counted])],
+            )
+
+        result = TestCatalog().table_scan_function_get(
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
+            schema_name="main",
+            name="counted",
+            at_unit=None,
+            at_value=None,
+        )
+        assert result.function_name == "counted_rows"
+        assert [s.as_py() for s in result.positional_arguments] == [7]
+        assert {k: v.as_py() for k, v in result.named_arguments.items()} == {"label": "widgets"}
+
+    def test_scan_branches_default_inherits_declared_arguments(self) -> None:
+        """The default ``table_scan_branches_get`` delegates to the legacy method.
+
+        So the one-branch synthesis must carry the declared arguments too.
+        """
+        counted = Table(
+            name="counted",
+            function=CountedRowsFunction,
+            arguments=Arguments(positional=(pa.scalar(7),)),
+        )
+
+        class TestCatalog(ReadOnlyCatalogInterface):
+            catalog = Catalog(
+                name="test",
+                schemas=[Schema(name="main", tables=[counted])],
+            )
+
+        result = TestCatalog().table_scan_branches_get(
+            attach_opaque_data=AttachOpaqueData(b"test"),
+            transaction_opaque_data=None,
+            schema_name="main",
+            name="counted",
+            at_unit=None,
+            at_value=None,
+        )
+        assert len(result.branches) == 1
+        assert [s.as_py() for s in result.branches[0].positional_arguments] == [7]
 
     def test_explicit_columns_table_raises(self) -> None:
         """Tables with explicit columns raise NotImplementedError."""
