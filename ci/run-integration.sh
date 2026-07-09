@@ -73,12 +73,12 @@ if [ "$TRANSPORT" = "http" ]; then
   #   * buffer_input/sizes.test — input buffering semantics differ over HTTP
   #     (same known limitation). (scale.test_slow is a .test_slow file and is
   #     never staged below, which only finds *.test.)
-  #   * cache/revalidate.test — conditional revalidation (304) is subprocess-only:
-  #     the if_none_match validator rides the first producer tick, but over HTTP
-  #     that first exchange folds into the /init POST before any tick, so the
-  #     not_modified path can't fire (documented in the test header + vgi CLAUDE.md).
-  #     The test omits `require httpfs` to auto-skip under a plain HTTP harness, but
-  #     this lane force-injects `LOAD httpfs`, defeating that — so drop it explicitly.
+  #   * cache/revalidate.test — HTTP conditional revalidation (304) IS implemented
+  #     (the C++ client puts the validators on the /init request metadata and vgi-rpc
+  #     surfaces them to the producer's first process()), but it needs BOTH a
+  #     community vgi extension carrying that C++ change AND a vgi-rpc release carrying
+  #     the _app_stream change. This lane runs the published community extension +
+  #     PyPI vgi-rpc, so keep it skipped until both ship, then remove this line.
   EXTRA_SKIP=(
     -not -name 'projection_pushdown_repro.test'
     -not -name 'dynamic_filter.test'
