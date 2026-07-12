@@ -1149,10 +1149,10 @@ class TestArrowSchemaCorrectness:
         assert schema.field("cardinality_estimate").type == pa.int64()
         assert schema.field("column_statistics").type == pa.binary()
         assert schema.field("bind_result").type == pa.binary()
-        assert schema.field("required_field_filter_paths").type == pa.list_(pa.string())
-        # required_field_filter_paths is the LAST field (positional schema
-        # compatibility: old C++ extensions ignore-by-position trailing fields).
-        assert schema.field(len(schema) - 1).name == "required_field_filter_paths"
+        assert schema.field("required_filters").type == pa.list_(pa.list_(pa.string()))
+        # required_filters is the LAST field (positional schema compatibility:
+        # old C++ extensions ignore-by-position trailing fields).
+        assert schema.field(len(schema) - 1).name == "required_filters"
 
     def test_view_info_schema(self) -> None:
         """Verify ViewInfo Arrow schema."""

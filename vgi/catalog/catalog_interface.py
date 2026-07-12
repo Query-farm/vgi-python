@@ -415,16 +415,19 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             path; workers can still inline manually inside their own
             ``schema_contents`` override when the bind output is independently
             known to be stable.
-        required_field_filter_paths: Dotted-path column references that the VGI
-            extension's optimizer pass must verify appear in any scan's WHERE
-            expression (top-level column names like ``"country"`` or struct
-            subfields like ``"bbox.xmin"``, ``"nested.outer.inner"``). Empty
-            (default) means no enforcement — the zero-cost fast path for every
-            existing table. Satisfaction is prefix-based: a present filter on a
-            shorter dotted path satisfies any required path it's a prefix of. A
-            whole-struct filter on ``bbox`` therefore satisfies every required
-            ``"bbox.*"`` path. The C++ extension throws ``BinderException``
-            listing any unsatisfied paths.
+        required_filters: Required WHERE-filter groups the VGI extension's
+            optimizer pass verifies against any scan (conjunctive normal form):
+            the outer list is an AND of groups, each inner group is an OR of
+            dotted-path column references (top-level names like ``"country"`` or
+            struct subfields like ``"bbox.xmin"``). A group is satisfied when any
+            one of its paths has a filter; every group must be satisfied. So
+            ``[["accession_number"], ["ticker", "cik"]]`` means "accession_number
+            AND one of (ticker, cik)". Empty (default) means no enforcement — the
+            zero-cost fast path. Satisfaction is prefix-based: a present filter on
+            a shorter dotted path satisfies any required path it's a prefix of (a
+            whole-struct filter on ``bbox`` satisfies every ``"bbox.*"`` path).
+            The C++ extension throws ``BinderException`` listing any unsatisfied
+            groups.
     """
 
     columns: SerializedSchema
@@ -456,7 +459,9 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
     bind_result: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
-    required_field_filter_paths: list[str] = field(default_factory=list)
+    required_filters: Annotated[list[list[str]], ArrowType(pa.list_(pa.list_(pa.string())))] = field(
+        default_factory=list
+    )
 
 
 @dataclass(frozen=True)
@@ -922,7 +927,7 @@ def scan_arguments_from(
                 f"Table arguments: positional slot {index} is None. Positional "
                 f"arguments passed to a function-backed table must all be concrete "
                 f"pa.Scalar values — an unfilled slot would shift the arguments after "
-                f'it. To make an argument optional, declare it as a named argument '
+                f"it. To make an argument optional, declare it as a named argument "
                 f'(Arg("name", default=...)) instead.'
             )
         positional.append(scalar)

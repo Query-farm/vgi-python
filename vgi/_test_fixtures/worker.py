@@ -1093,51 +1093,59 @@ _EXAMPLE_CATALOG = Catalog(
                     columns=schema(n=pa.int64(), s=pa.utf8(), pushed_filters=pa.utf8()),
                     comment="Catalog table echoing pushed-down filters (filter-pushdown-through-view tests).",
                 ),
-                # ----- required_field_filter_paths fixtures -----
-                # Exercised by ~/Development/vgi/test/sql/vgi_required_filters_*.test
-                # to verify the C++ optimizer extension that enforces the new
-                # Table.required_field_filter_paths field.
+                # ----- required_filters fixtures -----
+                # Exercised by ~/Development/vgi/test/sql/integration/table/required_filters_*.test
+                # to verify the C++ optimizer extension that enforces the
+                # Table.required_filters field (AND-of-OR-groups). Existing
+                # fixtures use singleton groups (== the old flat-AND behavior);
+                # rff_or exercises a genuine OR-group.
                 Table(
                     name="rff_simple",
                     columns=RFF_SIMPLE_COLUMNS,
-                    required_field_filter_paths=("a",),
+                    required_filters=(("a",),),
                     comment="rff_simple — requires a filter referencing column 'a'.",
                 ),
                 Table(
                     name="rff_struct",
                     columns=RFF_STRUCT_COLUMNS,
-                    required_field_filter_paths=("s.a", "s.b"),
+                    required_filters=(("s.a",), ("s.b",)),
                     comment="rff_struct — requires filters on both struct subfields s.a and s.b.",
                 ),
                 Table(
                     name="rff_nested",
                     columns=RFF_NESTED_COLUMNS,
-                    required_field_filter_paths=("wrapper.mid.leaf",),
+                    required_filters=(("wrapper.mid.leaf",),),
                     comment="rff_nested — requires a filter on the 3-deep nested path wrapper.mid.leaf.",
                 ),
                 Table(
                     name="rff_multi",
                     columns=RFF_MULTI_COLUMNS,
-                    required_field_filter_paths=("top", "s.a"),
+                    required_filters=(("top",), ("s.a",)),
                     comment="rff_multi — mixed top-level + struct subfield requirements.",
+                ),
+                Table(
+                    name="rff_or",
+                    columns=RFF_SIMPLE_COLUMNS,
+                    required_filters=(("a", "b"),),
+                    comment="rff_or — requires a filter on 'a' OR 'b' (a single OR-group).",
                 ),
                 Table(
                     name="rff_none",
                     columns=RFF_NONE_COLUMNS,
-                    comment="rff_none — control table with no required_field_filter_paths (opt-out fast path).",
+                    comment="rff_none — control table with no required_filters (opt-out fast path).",
                 ),
                 Table(
                     name="rff_rowid",
                     columns=RFF_ROWID_COLUMNS,
-                    required_field_filter_paths=(
-                        "bbox.xmin",
-                        "bbox.xmax",
-                        "bbox.ymin",
-                        "bbox.ymax",
+                    required_filters=(
+                        ("bbox.xmin",),
+                        ("bbox.xmax",),
+                        ("bbox.ymin",),
+                        ("bbox.ymax",),
                     ),
                     comment="rff_rowid — row_id virtual column + required bbox.* filters.",
                 ),
-                # rff_parquet — native read_parquet delegation + required_field_filter_paths
+                # rff_parquet — native read_parquet delegation + required_filters
                 # on a FLOAT bbox struct (mirrors Overture transportation.segment).
                 Table(
                     name="rff_parquet",
@@ -1157,11 +1165,11 @@ _EXAMPLE_CATALOG = Catalog(
                             pa.field("other", pa.int64()),
                         ]
                     ),
-                    required_field_filter_paths=(
-                        "bbox.xmin",
-                        "bbox.xmax",
-                        "bbox.ymin",
-                        "bbox.ymax",
+                    required_filters=(
+                        ("bbox.xmin",),
+                        ("bbox.xmax",),
+                        ("bbox.ymin",),
+                        ("bbox.ymax",),
                     ),
                     comment="rff_parquet — native read_parquet delegation with bbox.* required filters.",
                 ),
@@ -1190,11 +1198,11 @@ _EXAMPLE_CATALOG = Catalog(
                             pa.field("type", pa.string()),
                         ]
                     ),
-                    required_field_filter_paths=(
-                        "bbox.xmin",
-                        "bbox.xmax",
-                        "bbox.ymin",
-                        "bbox.ymax",
+                    required_filters=(
+                        ("bbox.xmin",),
+                        ("bbox.xmax",),
+                        ("bbox.ymin",),
+                        ("bbox.ymax",),
                     ),
                     comment="rff_hive — native read_parquet over Hive glob with bbox.* required filters.",
                 ),
@@ -1224,12 +1232,12 @@ _EXAMPLE_CATALOG = Catalog(
                             pa.field("type", pa.string()),
                         ]
                     ),
-                    required_field_filter_paths=(
-                        "id",
-                        "bbox.xmin",
-                        "bbox.xmax",
-                        "bbox.ymin",
-                        "bbox.ymax",
+                    required_filters=(
+                        ("id",),
+                        ("bbox.xmin",),
+                        ("bbox.xmax",),
+                        ("bbox.ymin",),
+                        ("bbox.ymax",),
                     ),
                     comment="rff_hive_mixed — native read_parquet, top-level 'id' + bbox.* required filters.",
                 ),
@@ -1691,13 +1699,15 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             "projects": "projects_scan",
             # filter-pushdown-through-view fixture.
             "filter_echo_table": "filter_echo_table_scan",
-            # rff_* — required_field_filter_paths fixtures.
+            # rff_* — required_filters fixtures.
             "rff_simple": "rff_simple_scan",
             "rff_struct": "rff_struct_scan",
             "rff_nested": "rff_nested_scan",
             "rff_multi": "rff_multi_scan",
             "rff_none": "rff_none_scan",
             "rff_rowid": "rff_rowid_scan",
+            # rff_or reuses the rff_simple (a, b) scan — no new function needed.
+            "rff_or": "rff_simple_scan",
         }
         if schema_name.lower() == "data" and name.lower() in _static_scan_tables:
             return ScanFunctionResult(

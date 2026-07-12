@@ -3,7 +3,7 @@
 """Scan functions backing the ``rff_*`` required-filter sqllogictest Tables.
 
 Used by the ``vgi_required_filters_*.test`` matrix. These fixtures exercise
-the ``Table.required_field_filter_paths`` field +
+the ``Table.required_filters`` field +
 the C++ optimizer extension that enforces it. The five tables form a small
 matrix:
 
@@ -99,10 +99,10 @@ RFF_NONE_COLUMNS = pa.schema(
 )
 
 # rff_rowid — a row-id column (virtual, hidden from SELECT *) alongside a bbox
-# struct with required_field_filter_paths. A `WHERE rowid = N` predicate pushes
+# struct with required_filters. A `WHERE rowid = N` predicate pushes
 # a table_filter keyed by the COLUMN_IDENTIFIER_ROW_ID sentinel (>> column
 # count), which the optimizer's required-filter check must skip rather than
-# index out of bounds. See required_field_filter_paths_native.test.
+# index out of bounds. See required_filters_native.test.
 RFF_ROWID_COLUMNS = pa.schema(
     [
         pa.field("row_id", pa.int64(), metadata={b"is_row_id": b""}),
@@ -124,7 +124,7 @@ RFF_ROWID_COLUMNS = pa.schema(
 
 RffSimpleScanFunction = _static_scan_function(
     func_name="rff_simple_scan",
-    func_description="rff_simple — flat columns (a, b) for required_field_filter_paths tests",
+    func_description="rff_simple — flat columns (a, b) for required_filters tests",
     output_schema=RFF_SIMPLE_COLUMNS,
     data={
         "a": [1, 2, 3],
@@ -134,7 +134,7 @@ RffSimpleScanFunction = _static_scan_function(
 
 RffStructScanFunction = _static_scan_function(
     func_name="rff_struct_scan",
-    func_description="rff_struct — STRUCT(s.a, s.b) + other for required_field_filter_paths tests",
+    func_description="rff_struct — STRUCT(s.a, s.b) + other for required_filters tests",
     output_schema=RFF_STRUCT_COLUMNS,
     data={
         "s": [
@@ -148,7 +148,7 @@ RffStructScanFunction = _static_scan_function(
 
 RffNestedScanFunction = _static_scan_function(
     func_name="rff_nested_scan",
-    func_description="rff_nested — nested STRUCT(wrapper.mid.leaf) for required_field_filter_paths tests",
+    func_description="rff_nested — nested STRUCT(wrapper.mid.leaf) for required_filters tests",
     output_schema=RFF_NESTED_COLUMNS,
     data={
         "wrapper": [
@@ -174,7 +174,7 @@ RffMultiScanFunction = _static_scan_function(
 
 RffNoneScanFunction = _static_scan_function(
     func_name="rff_none_scan",
-    func_description="rff_none — control table with no required_field_filter_paths",
+    func_description="rff_none — control table with no required_filters",
     output_schema=RFF_NONE_COLUMNS,
     data={
         "a": [1, 2, 3],
