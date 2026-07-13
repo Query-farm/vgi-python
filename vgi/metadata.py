@@ -485,6 +485,16 @@ class ResolvedMetadata:
     # Mutually exclusive with sink_order_dependent.
     requires_input_batch_index: bool = False
 
+    # Blended ("UNNEST-style") table-in-out: the function's positional args ARE
+    # its per-row input columns (real typed args, no synthetic TABLE placeholder),
+    # so ONE registration serves f(52,13) (literal -> 1 input row), FROM t, f(t.x,
+    # t.y) (columns -> streaming), and LATERAL f(t.x,t.y). Derived from whether the
+    # class subclasses RowTransformFunction (a correctness choice — the signal
+    # can't be forgotten on one of N same-named overloads). The C++ extension reads
+    # this to enter the in-out registration branch with real-typed args and to
+    # drive the literal single-row scan-mode. function_type stays TABLE.
+    input_from_args: bool = False
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -517,6 +527,7 @@ class ResolvedMetadata:
             "source_order_dependent": self.source_order_dependent,
             "sink_order_dependent": self.sink_order_dependent,
             "requires_input_batch_index": self.requires_input_batch_index,
+            "input_from_args": self.input_from_args,
         }
 
     @staticmethod
@@ -552,6 +563,7 @@ class ResolvedMetadata:
             source_order_dependent=d.get("source_order_dependent", False),
             sink_order_dependent=d.get("sink_order_dependent", False),
             requires_input_batch_index=d.get("requires_input_batch_index", False),
+            input_from_args=d.get("input_from_args", False),
         )
 
 
@@ -1097,8 +1109,47 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
     # Normalize examples
     examples = _normalize_examples(attrs.get("examples", []))
 
+    # Blended ("UNNEST-style") table-in-out: positional args ARE the per-row input
+    # columns, so there is no TABLE marker to validate — skip _validate_table_input
+    # (which would otherwise reject "0 TableInput args") and let a single
+    # registration serve literal / column / LATERAL call shapes.
+    input_from_args = _detect_input_from_args(cls)
+    if input_from_args and function_type is not CatalogFunctionType.TABLE:
+        raise TypeError(
+            f"{cls.__name__}: RowTransformFunction (blended input_from_args) must resolve to a "
+            f"TABLE function, got {function_type.name}"
+        )
+
     # Extract parameters from Arg descriptors
-    parameters = extract_parameters(cls)
+    parameters = extract_parameters(cls, validate_table_input=not input_from_args)
+
+    if input_from_args:
+        # Foot-gun guards for blended mode (see docs/… / plan Stage 7).
+        if _detect_has_finalize(cls, function_type):
+            raise TypeError(
+                f"{cls.__name__}: a blended RowTransformFunction cannot override finalize()/finish() — "
+                f"it is a per-row map (DuckDB forbids FinalExecute under correlated LATERAL, one of the "
+                f"call shapes blended must serve). Use a classic TableInput table-in-out or a "
+                f"TableBufferingFunction for accumulating output."
+            )
+        positional_args = [p for p in parameters if isinstance(p.position, int) and not p.is_table_input]
+        if not positional_args:
+            raise TypeError(
+                f"{cls.__name__}: a blended RowTransformFunction needs at least one positional Arg "
+                f"(its per-row input column); found none."
+            )
+        if any(p.is_table_input for p in parameters):
+            raise TypeError(
+                f"{cls.__name__}: a blended RowTransformFunction must not declare a TableInput arg — "
+                f"its positional args ARE the input columns."
+            )
+        if any(p.is_const for p in positional_args):
+            raise TypeError(
+                f"{cls.__name__}: a blended RowTransformFunction cannot take a positional const arg "
+                f"(in the column/LATERAL form DuckDB sweeps it into the input subquery, so it is not a "
+                f"bind arg; in the literal form it is indistinguishable from an input column). Use classic "
+                f"TableInput mode for a REQUIRED constant, or a named arg for optional config."
+            )
 
     # Merge annotation-derived setting/secret keys into required_settings/required_secrets
     meta_required_settings: list[str] = list(attrs.get("required_settings", []))
@@ -1170,6 +1221,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         source_order_dependent=bool(attrs.get("source_order_dependent", False)),
         sink_order_dependent=bool(attrs.get("sink_order_dependent", False)),
         requires_input_batch_index=bool(attrs.get("requires_input_batch_index", False)),
+        input_from_args=input_from_args,
     )
 
 
@@ -1254,6 +1306,20 @@ def _detect_has_finalize(cls: type, function_type: CatalogFunctionType) -> bool:
     return cls.has_finalize_override()
 
 
+def _detect_input_from_args(cls: type) -> bool:
+    """Whether ``cls`` is a blended ("UNNEST-style") table-in-out function.
+
+    True iff the class subclasses ``RowTransformFunction`` — a correctness-driven
+    signal (subclassing can't be forgotten on one of N same-named overloads, a
+    per-arg or Meta flag can). Its positional args are the per-row input columns.
+    """
+    try:
+        from vgi.table_in_out_function import RowTransformFunction
+    except ImportError:  # pragma: no cover
+        return False
+    return isinstance(cls, type) and issubclass(cls, RowTransformFunction)
+
+
 # =============================================================================
 # Arrow Serialization
 # =============================================================================
@@ -1325,6 +1391,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("source_order_dependent", pa.bool_()),
         pa.field("sink_order_dependent", pa.bool_()),
         pa.field("requires_input_batch_index", pa.bool_()),
+        pa.field("input_from_args", pa.bool_()),
     ]
 )
 

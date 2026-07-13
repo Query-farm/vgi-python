@@ -736,6 +736,13 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
     requires_input_batch_index: bool = False
 
+    # Blended ("UNNEST-style") table-in-out: positional args ARE the per-row input
+    # columns (real typed args, no TABLE placeholder), so one registration serves
+    # literal / column / LATERAL call shapes. Set from RowTransformFunction
+    # subclassing; the C++ extension reads it to enter the in-out registration
+    # branch with real-typed args and drive the literal single-row scan-mode.
+    input_from_args: bool = False
+
     required_settings: list[str] = field(default_factory=list)
 
     required_secrets: list[SecretLookupEntry] = field(default_factory=list)
@@ -3161,6 +3168,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             source_order_dependent=meta.source_order_dependent,
             sink_order_dependent=meta.sink_order_dependent,
             requires_input_batch_index=meta.requires_input_batch_index,
+            input_from_args=False if is_scalar else meta.input_from_args,
             # Settings
             required_settings=meta.required_settings,
             # Secrets

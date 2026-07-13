@@ -765,12 +765,18 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
     @final
     @staticmethod
-    def _parse_arguments(args_class: type[TArgs], arguments: Arguments) -> TArgs:
+    def _parse_arguments(args_class: type[TArgs], arguments: Arguments, *, blended: bool = False) -> TArgs:
         """Convert Arguments to typed FunctionArguments instance.
 
         Args:
             args_class: The FunctionArguments dataclass type to build.
             arguments: The positional/named arguments to convert.
+            blended: When True (a ``RowTransformFunction``), the POSITIONAL Args
+                are the per-row input columns — they are NOT on the wire
+                (``arguments.positional`` is empty in the column/LATERAL form),
+                so skip them here (the worker reads them from ``batch``). Only
+                named (``str``-position) Args are parsed. Positional access on the
+                resulting dataclass field raises via the Arg guard.
 
         Returns:
             An instance of ``args_class`` populated from ``arguments``.
@@ -789,6 +795,13 @@ class TableFunctionBase[TArgs](vgi.function.Function):
                 continue
             for meta in get_args(hint)[1:]:
                 if isinstance(meta, Arg):
+                    # Blended: skip positional/varargs Args — they are the input
+                    # columns (read from batch), absent from the wire args. Set the
+                    # field to None so construction succeeds; the worker reads the
+                    # value from ``batch``, never from ``params.args.<name>``.
+                    if blended and isinstance(meta.position, int):
+                        kwargs[attr_name] = None
+                        break
                     if meta.varargs:
                         # Varargs: collect remaining positional args as raw pa.Scalar
                         # objects (e.g. constant_columns reads .type / pa.repeat off
@@ -824,6 +837,16 @@ class TableFunctionBase[TArgs](vgi.function.Function):
                     break
 
         return args_class(**kwargs)
+
+    @classmethod
+    def _is_blended(cls) -> bool:
+        """True iff this is a blended ``RowTransformFunction`` (positional args are
+        the per-row input columns). Lazy import to avoid a circular dependency."""
+        try:
+            from vgi.table_in_out_function import RowTransformFunction
+        except ImportError:  # pragma: no cover
+            return False
+        return issubclass(cls, RowTransformFunction)
 
     @final
     @staticmethod
@@ -926,7 +949,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         # catalog_bytes``) the worker unwrapped. Storage shards on its UUID;
         # bodies see only the catalog bytes via ``attach_opaque_data``.
         return BindParams[TArgs](
-            args=cls._parse_arguments(cls.FunctionArguments, input.arguments),
+            args=cls._parse_arguments(cls.FunctionArguments, input.arguments, blended=cls._is_blended()),
             bind_call=input,
             settings=_batch_to_scalar_dict(input.settings),
             secrets=SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided),
@@ -1071,7 +1094,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         execution_id = uuid.uuid4().bytes
         auth = ctx.auth if ctx is not None else AuthContext.anonymous()
         params = InitParams[TArgs](
-            args=cls._parse_arguments(cls.FunctionArguments, input.bind_call.arguments),
+            args=cls._parse_arguments(cls.FunctionArguments, input.bind_call.arguments, blended=cls._is_blended()),
             init_call=input,
             output_schema=project_schema(
                 _effective_projection_ids(cls, input.projection_ids),

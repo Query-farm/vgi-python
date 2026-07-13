@@ -1295,7 +1295,7 @@ class TableProducerState(ProducerState):
         proj_ids = _effective_projection_ids(func_cls, self._init_call.projection_ids)
         output_schema = project_schema(proj_ids, self._init_call.output_schema)
         self._params = ProcessParams(
-            args=func_cls._parse_arguments(func_cls.FunctionArguments, self._init_call.bind_call.arguments),
+            args=func_cls._parse_arguments(func_cls.FunctionArguments, self._init_call.bind_call.arguments, blended=func_cls._is_blended()),
             init_call=self._init_call,
             init_response=self._init_response,
             output_schema=output_schema,
@@ -1471,7 +1471,7 @@ class TableInOutExchangeState(ExchangeState):
         proj_ids = _effective_projection_ids(func_cls, self._init_call.projection_ids)
         output_schema = project_schema(proj_ids, self._init_call.output_schema)
         self._params = ProcessParams(
-            args=func_cls._parse_arguments(func_cls.FunctionArguments, self._init_call.bind_call.arguments),
+            args=func_cls._parse_arguments(func_cls.FunctionArguments, self._init_call.bind_call.arguments, blended=func_cls._is_blended()),
             init_call=self._init_call,
             init_response=self._init_response,
             output_schema=output_schema,

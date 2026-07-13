@@ -3512,7 +3512,7 @@ class Worker:
         elif isinstance(instance, TableInOutGenerator):
             # Table-in-out function: separate INPUT and FINALIZE phases
             params = ProcessParams(
-                args=type(instance)._parse_arguments(type(instance).FunctionArguments, request.bind_call.arguments),
+                args=type(instance)._parse_arguments(type(instance).FunctionArguments, request.bind_call.arguments, blended=type(instance)._is_blended()),
                 init_call=request,
                 init_response=init_response,
                 output_schema=output_schema,
@@ -3570,7 +3570,7 @@ class Worker:
         elif isinstance(instance, TableFunctionGenerator):
             # Table function: producer state with per-tick process()
             params = ProcessParams(
-                args=type(instance)._parse_arguments(type(instance).FunctionArguments, request.bind_call.arguments),
+                args=type(instance)._parse_arguments(type(instance).FunctionArguments, request.bind_call.arguments, blended=type(instance)._is_blended()),
                 init_call=request,
                 init_response=init_response,
                 output_schema=output_schema,

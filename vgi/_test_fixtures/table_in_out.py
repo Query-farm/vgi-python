@@ -59,6 +59,7 @@ from vgi.table_buffering_function import (
 )
 from vgi.table_function import BindParams, ProcessParams, TableCardinality
 from vgi.table_in_out_function import (
+    RowTransformFunction,
     TableInOutFunction,
     TableInOutGenerator,
 )
@@ -83,6 +84,7 @@ __all__ = [
     "BufferInputFunction",
     "FilterBySettingFunction",
     "RepeatInputsFunction",
+    "GeoEncodeFunction",
     "SubstreamPartialSumFunction",
     "SumAllColumnsFunction",
     "SumAllColumnsSimpleDistributed",
@@ -1526,3 +1528,53 @@ class BufferEmitWideFunction(TableBufferingFunction[BufferEmitWideArguments, _Em
         n = params.args.rows
         out.emit(pa.RecordBatch.from_pydict({"n": list(range(n))}, schema=_BUFFER_EMIT_WIDE_SCHEMA))
         state.emitted = True
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class GeoArgs:
+    """Blended args: latitude/longitude are per-row INPUT COLUMNS (positional);
+    precision is a bind-time named option."""
+
+    latitude: Annotated[float, Arg(0, doc="Latitude input column")]
+    longitude: Annotated[float, Arg(1, doc="Longitude input column")]
+    precision: Annotated[int, Arg("precision", doc="Rounding precision", default=4)] = 4
+
+
+class GeoEncodeFunction(RowTransformFunction[GeoArgs]):
+    """Blended ("UNNEST-style") geo encoder — proves ONE registration serves every
+    call shape: geo_encode(52.0, 13.0) (literal), FROM t, geo_encode(t.x, t.y)
+    (columns), and LATERAL geo_encode(t.x, t.y).
+
+    latitude/longitude are POSITIONAL args = the per-row input columns (read from
+    ``batch`` by declared name — the C++ bind builds the input schema from the
+    declared arg names). ``precision`` is a str-position NAMED arg, surfaced on
+    ``params.args`` (positional args are NOT). Emits one ``geohash`` string per
+    input row: ``"<lat>:<lon>"`` rounded to ``precision`` decimals — deterministic
+    so tests assert exact values.
+    """
+
+    class Meta:
+        name = "geo_encode"
+        description = "Blended per-row geo encoder (lat, lon -> geohash)"
+        categories = ["geo", "blended"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[GeoArgs]) -> BindResponse:
+        return BindResponse(output_schema=schema({"geohash": pa.string()}))
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[GeoArgs],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        precision = params.args.precision
+        lats = batch.column("latitude").to_pylist()
+        lons = batch.column("longitude").to_pylist()
+        codes = [
+            None if lat is None or lon is None else f"{round(lat, precision)}:{round(lon, precision)}"
+            for lat, lon in zip(lats, lons, strict=True)
+        ]
+        out.emit(pa.record_batch({"geohash": pa.array(codes, type=pa.string())}))

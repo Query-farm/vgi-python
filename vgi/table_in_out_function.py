@@ -38,6 +38,7 @@ __all__ = [
     "TableInOutGenerator",
     "TableInOutFunction",
     "TableInOutFunctionStateNoOp",
+    "RowTransformFunction",
     "pack_int_cursor",
     "unpack_int_cursor",
 ]
@@ -441,3 +442,51 @@ class TableInOutFunction[
             states = []
 
         return cls.finish(params, states)
+
+
+class RowTransformFunction[TArgs](TableInOutGenerator[TArgs, None]):
+    """Blended ("UNNEST-style") table-in-out: positional args ARE per-row input columns.
+
+    A ``RowTransformFunction`` collapses the classic either/or between a standard
+    table function (literal args only) and a table-in-out function (an explicit
+    ``TABLE`` subquery arg). Its **positional** ``Arg``\\s declare its per-row input
+    columns — real typed args, NO synthetic ``TABLE`` placeholder — so ONE
+    registration serves every call shape::
+
+        f(52, 13)                       -- literal   -> one input row
+        FROM t, f(t.x, t.y)             -- columns    -> streaming input
+        SELECT ... FROM t, LATERAL f(t.x, t.y)
+
+    **Contract.**
+
+    * Positional args are the input columns; they are read from ``batch`` in
+      ``process()`` (by declared name for fixed args, positionally for varargs —
+      use :meth:`input_columns`). They are NOT surfaced on ``params.args``.
+    * Named (``str``-position) args stay bind-time scalars on ``params.args``.
+    * Map-shaped, per-row: implement ``process()`` to emit output via
+      ``out.emit()``. 1->1, 1->N, 1->0 all work. There is **no finalize** — a
+      ``finalize()``/``finish()`` override is rejected at ``resolve_metadata``
+      (DuckDB forbids ``FinalExecute`` under correlated LATERAL, one of the call
+      shapes blended must serve). Accumulating functions use a classic
+      ``TableInput`` table-in-out or a ``TableBufferingFunction``.
+    * A positional ``const`` arg is rejected (in the column form DuckDB sweeps a
+      constant into the input subquery; in the literal form it is
+      indistinguishable from an input column). Use a named arg for optional
+      config, or classic ``TableInput`` mode for a required constant.
+
+    Subclassing ``RowTransformFunction`` (not a ``Meta`` flag) IS the blended
+    signal — a per-arg or Meta flag could be forgotten on one of N same-named
+    overloads; inheritance cannot. ``function_type`` stays ``TABLE``; the resolver
+    sets ``ResolvedMetadata.input_from_args=True`` (see
+    ``metadata._detect_input_from_args``).
+    """
+
+    @staticmethod
+    def input_columns(batch: pa.RecordBatch) -> list[pa.Array]:  # type: ignore[type-arg]
+        """This row-batch's input columns, positionally.
+
+        For a **varargs** blended function the runtime column names are not known
+        at declaration time, so read them positionally with this helper. For
+        fixed-arity blended functions read by declared name (``batch.column(name)``).
+        """
+        return list(batch.columns)
