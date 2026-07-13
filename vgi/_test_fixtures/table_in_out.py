@@ -1574,16 +1574,15 @@ class GeoEncodeFunction(RowTransformFunction[GeoArgs]):
         out: OutputCollector,
     ) -> None:
         precision = params.args.precision
-        # NB: a blended LITERAL call delivers the constant's natural type (a DuckDB
-        # DECIMAL for 52.0, which round() would pad to `precision` places), while a
-        # COLUMN call delivers the cast declared type (DOUBLE). Cast to float so the
-        # output is identical across call shapes regardless of that wart.
+        # The worker always receives its DECLARED arg types (float64) — the C++ bind
+        # casts a literal call's constants to the signature, so a `latitude: float`
+        # arg is a Python float here on every call shape.
         lats = batch.column("latitude").to_pylist()
         lons = batch.column("longitude").to_pylist()
         codes = [
             None
             if lat is None or lon is None
-            else f"{round(float(lat), precision)}:{round(float(lon), precision)}"
+            else f"{round(lat, precision)}:{round(lon, precision)}"
             for lat, lon in zip(lats, lons, strict=True)
         ]
         out.emit(pa.record_batch({"geohash": pa.array(codes, type=pa.string())}))
@@ -1635,7 +1634,7 @@ class GeoEncode3Function(RowTransformFunction[Geo3Args]):
         codes = [
             None
             if lat is None or lon is None or alt is None
-            else f"{round(float(lat), p)}:{round(float(lon), p)}:{round(float(alt), p)}"
+            else f"{round(lat, p)}:{round(lon, p)}:{round(alt, p)}"
             for lat, lon, alt in zip(lats, lons, alts, strict=True)
         ]
         out.emit(pa.record_batch({"geohash": pa.array(codes, type=pa.string())}))
