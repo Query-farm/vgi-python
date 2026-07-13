@@ -610,6 +610,20 @@ class ProcessParams[TArgs]:
         """AT (TIMESTAMP|VERSION) value for this scan, or None. See ``at_unit``."""
         return self.init_call.bind_call.at_value if self.init_call is not None else None
 
+    @property
+    def substream_id(self) -> bytes | None:
+        """Stable client-minted id for this streaming table-in-out substream.
+
+        Present (identical across init / every process() / finalize) when the
+        client fanned this function out across per-substream workers; use it to
+        key per-substream accumulated state in shared storage so a finalize()
+        that lands on a different HTTP backend than the process() calls still
+        finds it. ``None`` for the serial path, aggregate functions (no
+        ``init_call``), or an old client that did not supply one. See
+        ``InitRequest.substream_id``.
+        """
+        return self.init_call.substream_id if self.init_call is not None else None
+
 
 class TableFunctionBase[TArgs](vgi.function.Function):
     """Base class for table functions with cardinality and schema validation.

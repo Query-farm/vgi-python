@@ -288,6 +288,21 @@ class InitRequest(ArrowSerializableDataclass):
     execution_id: bytes | None = None
     init_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
+    # Per-substream identity for parallel streaming table-in-out functions.
+    # A streaming table-in-out is a per-substream map: under per-substream
+    # worker fan-out the client (VGI extension) acquires an independent worker
+    # per substream (per DuckDB PipelineExecutor). ``substream_id`` is a stable,
+    # CLIENT-minted id for that substream, identical across this substream's
+    # init / every process tick / finalize. Unlike a worker-minted
+    # ``execution_id``, it survives an HTTP load balancer dispatching each
+    # request to an arbitrary backend: a finalize that lands on a different
+    # backend than the process() calls can still key the substream's
+    # accumulated state (in shared storage) by ``substream_id``. It is folded
+    # into ``_init_call`` (serialized into the HTTP state token) so it is
+    # present on every rehydrated tick. ``None`` when the client did not
+    # supply one (serial path, non-table-in-out functions, old clients).
+    substream_id: bytes | None = None
+
     # Order pushdown hint from DuckDB's RowGroupPruner optimizer (all None when no hint)
     order_by_column_name: str | None = None
     order_by_direction: OrderByDirection | None = None

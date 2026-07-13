@@ -48,7 +48,6 @@ import pyarrow.compute as pc
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
 from vgi_rpc.log import Level
 from vgi_rpc.rpc import OutputCollector
-from vgi_rpc.utils import empty_batch
 
 from vgi.arguments import Arg, Setting, TableInput
 from vgi.invocation import BindResponse
@@ -84,6 +83,7 @@ __all__ = [
     "BufferInputFunction",
     "FilterBySettingFunction",
     "RepeatInputsFunction",
+    "SubstreamPartialSumFunction",
     "SumAllColumnsFunction",
     "SumAllColumnsSimpleDistributed",
     "ExceptionProcessFunction",
@@ -105,6 +105,83 @@ class SingleTableArguments:
     """Arguments for a table in/out function that just takes a table."""
 
     data: Annotated[TableInput, Arg(0, doc="Input table")]
+
+
+@dataclass(kw_only=True)
+class SubstreamPartialSumState(ArrowSerializableDataclass):
+    """Running sum for ONE substream's worker (never merged across substreams)."""
+
+    total: int = 0
+
+
+class SubstreamPartialSumFunction(TableInOutFunction[SingleTableArguments, SubstreamPartialSumState]):
+    """Per-substream partial sum emitted at finalize — proves parallel streaming FINALIZE (A4).
+
+    A streaming table-in-out *with* a finalize is still a per-substream operation
+    under per-substream worker fan-out: ``transform()`` accumulates only THIS
+    substream's rows (emitting nothing), and ``finish()`` emits ONE row = this
+    substream's partial sum. DuckDB fans the input across N workers and unions
+    their finalize outputs, so the caller re-aggregates with an outer
+    ``SELECT sum(...)`` to get the global total — correct no matter how the rows
+    were partitioned across substreams. Each substream's ``finish()`` reads only
+    its OWN worker's accumulated state (keyed by the substream's execution_id;
+    ``params.substream_id`` is the stable client-owned key available for workers
+    that manage cross-backend state themselves). This is the per-substream
+    finalize contract A4 enables — it is NOT a global cross-substream combine
+    (that is a ``TableBufferingFunction``; see ``SumAllColumnsSimpleDistributed``).
+
+    Invariant the tests assert (deterministic regardless of thread/substream
+    count): ``SELECT sum(n) FROM substream_partial_sum((SELECT ... AS n))`` equals
+    the sum of the input column, because the per-substream partials sum to the
+    whole. If a substream's finalize were skipped, hit a stateless worker, or
+    cross-contaminated another substream's state, this total would be wrong.
+    """
+
+    class Meta:
+        name = "substream_partial_sum"
+        description = "Per-substream partial sum emitted at finalize (parallel streaming finalize)"
+        categories = ["aggregation", "numeric"]
+
+    @classmethod
+    def cardinality(cls, params: BindParams[SingleTableArguments]) -> TableCardinality:
+        # One row per substream; unknown up-front, so leave the estimate open.
+        return TableCardinality(estimate=1)
+
+    @classmethod
+    def on_bind(cls, params: BindParams[SingleTableArguments]) -> BindResponse:
+        assert params.bind_call.input_schema is not None
+        field = params.bind_call.input_schema.field(0)
+        return BindResponse(output_schema=schema({field.name: pa.int64()}))
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[SingleTableArguments]) -> SubstreamPartialSumState:
+        return SubstreamPartialSumState(total=0)
+
+    @classmethod
+    def transform(
+        cls,
+        batch: pa.RecordBatch,
+        params: ProcessParams[SingleTableArguments],
+        state: SubstreamPartialSumState | None,
+    ) -> list[pa.RecordBatch]:
+        if state is None:
+            raise ValueError("State must not be None in transform()")
+        col_sum = pc.sum(batch.column(0))
+        if col_sum.is_valid:
+            state.total += col_sum.as_py()
+        return []  # accumulate only; emit nothing during processing
+
+    @classmethod
+    def finish(
+        cls,
+        params: ProcessParams[SingleTableArguments],
+        states: list[SubstreamPartialSumState],
+    ) -> list[pa.RecordBatch]:
+        # `states` are THIS substream's accumulated states (one per worker pid that
+        # handled this substream's batches); their sum is this substream's partial.
+        total = sum(st.total for st in states)
+        name = params.output_schema.names[0]
+        return [pa.RecordBatch.from_pydict({name: [total]}, schema=params.output_schema)]
 
 
 class EchoFunction(TableInOutGenerator[SingleTableArguments]):
@@ -828,37 +905,39 @@ class ExceptionFinalizeFunction(SumAllColumnsFunction):
         raise ValueError("Intentional exception during finalize()")
 
 
-@dataclass(slots=True, kw_only=True)
+@dataclass(kw_only=True)
 class SumAllColumnsSimpleDistributedState(ArrowSerializableDataclass):
-    """Partial sum state for distributed aggregation."""
+    """Partial sum state for distributed aggregation (one per process batch)."""
 
     partial_sum: Annotated[pa.RecordBatch, ArrowType(pa.binary())]
 
 
-class SumAllColumnsSimpleDistributed(TableInOutFunction[SingleTableArguments, SumAllColumnsSimpleDistributedState]):
-    """Distributed aggregation using the simple callback API.
+class SumAllColumnsSimpleDistributed(TableBufferingFunction[SingleTableArguments, _LogDrainState]):
+    """Distributed column-wise sum — a *global* reduction over all input.
 
-    This function demonstrates TableInOutFunction with distributed
-    state management.
+    Global combine (every input row contributes to a single output row) is a
+    **buffered** table function, NOT a streaming table-in-out one: a streaming
+    table-in-out is a per-substream map, and under per-substream worker fan-out
+    each worker sees only its own substream's rows, so a streaming ``finish``
+    that merges across substreams would produce a partial. This fixture used to
+    demonstrate that (now-invalid) streaming-distributed ``finish(states)`` API;
+    it has been migrated to the buffered Sink+Combine+Source model, which
+    coordinates cross-worker state through ``BoundStorage`` keyed by
+    ``execution_id`` (the correct home for a full-stream reduction).
 
-    It's equivalent to SumAllColumnsFunctionDistributed but uses
-    the simpler callback API.
+    Behaviourally identical to ``SumAllColumnsFunction`` (kept as a distinct
+    named fixture so its integration/unit tests keep exercising the buffered
+    path under its own name): ``process()`` appends this batch's partial sums to
+    an append-only per-execution log; ``combine()`` reduces the log to one merged
+    row; ``finalize()`` emits it.
 
     Example:
     -------
-    Input batches (split across workers):
-      Worker 1: [{a: 1, b: 1.0}, {a: 2, b: 2.0}]
-      Worker 2: [{a: 3, b: 3.0}]
-
-    Each worker computes partial sums:
-      Worker 1 state: {a: 3, b: 3.0}
-      Worker 2 state: {a: 3, b: 3.0}
-
-    Primary worker merges states in finish():
-      Combined: {a: 6, b: 6.0}
-
-    Output (single row):
-      [{a: 6, b: 6.0}]
+    Input batches (fanned out across workers):
+      Worker 1: [{a: 1, b: 1.0}, {a: 2, b: 2.0}]  -> partial {a: 3, b: 3.0}
+      Worker 2: [{a: 3, b: 3.0}]                  -> partial {a: 3, b: 3.0}
+    combine() reduces the partials:  {a: 6, b: 6.0}
+    Output (single row):             [{a: 6, b: 6.0}]
 
     """
 
@@ -866,12 +945,12 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction[SingleTableArguments, Su
         """Metadata for SumAllColumnsSimpleDistributed."""
 
         name = "sum_all_columns_simple_distributed"
-        description = "Distributed sum using simple callback API"
+        description = "Distributed sum using the buffered (Sink+Combine+Source) model"
         categories = ["aggregation", "numeric", "distributed"]
         examples = [
             FunctionExample(
                 sql=("SELECT * FROM sum_all_columns_simple_distributed((SELECT * FROM input_table))"),
-                description="Sum columns using distributed workers with callback API",
+                description="Sum columns across buffered workers",
             )
         ]
 
@@ -897,58 +976,87 @@ class SumAllColumnsSimpleDistributed(TableInOutFunction[SingleTableArguments, Su
 
         return BindResponse(output_schema=schema(output_fields))
 
-    @classmethod
-    def initial_state(cls, params: ProcessParams[SingleTableArguments]) -> SumAllColumnsSimpleDistributedState | None:
-        """Create the initial state."""
-        return SumAllColumnsSimpleDistributedState(
-            partial_sum=pa.RecordBatch.from_pylist(
-                [{name: 0 for name in params.output_schema.names}], schema=params.output_schema
-            )
-        )
+    @staticmethod
+    def _scalars_to_single_row_batch(values: dict[str, pa.Scalar]) -> pa.RecordBatch:  # type: ignore[type-arg]
+        arrays = [pa.array([scalar], type=scalar.type) for scalar in values.values()]
+        return pa.RecordBatch.from_arrays(arrays, names=list(values.keys()))
 
     @classmethod
-    def transform(
+    def process(
         cls,
         batch: pa.RecordBatch,
-        params: ProcessParams[SingleTableArguments],
-        state: SumAllColumnsSimpleDistributedState | None,
-    ) -> pa.RecordBatch:
-        """Accumulate column sums. Emit nothing during processing."""
-        if state is None:
-            raise ValueError("State must not be None in transform()")
-        # Add this batch's values to running sums
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> bytes:
+        """Append this batch's partial sums to the append-only per-execution log.
+
+        Race-safe (``state_append`` is atomic) so parallel process() calls across
+        fanned-out workers accumulate without a lock; ``combine()`` reduces.
+        """
         sums: dict[str, pa.Scalar[Any]] = {}
         for name in params.output_schema.names:
             col_sum = pc.sum(batch.column(name))
             if col_sum.is_valid:
-                sums[name] = pc.add(state.partial_sum.column(name)[0], col_sum)
+                sums[name] = col_sum
             else:
-                sums[name] = state.partial_sum.column(name)[0]
-
-        state.partial_sum = pa.RecordBatch.from_pylist(
-            [{name: val for name, val in sums.items()}],
-            schema=params.output_schema,
+                sums[name] = pa.scalar(0, type=params.output_schema.field(name).type)
+        partial = cls._scalars_to_single_row_batch(sums)
+        params.storage.state_append(
+            b"partial",
+            b"",
+            SumAllColumnsSimpleDistributedState(partial_sum=partial).serialize_to_bytes(),
         )
-
-        return empty_batch(params.output_schema)
+        return params.execution_id
 
     @classmethod
-    def finish(
+    def combine(
         cls,
-        params: ProcessParams[SingleTableArguments],
-        states: list[SumAllColumnsSimpleDistributedState],
-    ) -> list[pa.RecordBatch]:
-        """Emit single row containing the column sums."""
-        table = pa.Table.from_batches([state.partial_sum for state in states])
+        state_ids: list[bytes],
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> list[bytes]:
+        """Reduce all per-batch partials into one merged row for finalize.
 
-        sums: dict[str, pa.Scalar[Any]] = {}
-        for field in params.output_schema:
-            sums[field.name] = pa.scalar(0, type=field.type)
+        Runs once on the coordinator after every process() completes (no race).
+        The empty-input guard still writes the zeros row so an empty source
+        produces one row of the expected shape.
+        """
+        merged: dict[str, pa.Scalar[Any]] = {
+            name: pa.scalar(0, type=field.type)
+            for name, field in zip(params.output_schema.names, params.output_schema, strict=True)
+        }
+        for _log_id, blob in params.storage.state_log_scan(b"partial", b""):
+            partial = SumAllColumnsSimpleDistributedState.deserialize_from_bytes(blob).partial_sum
+            for name in params.output_schema.names:
+                merged[name] = pc.add(merged[name], partial.column(name)[0])
+        merged_batch = cls._scalars_to_single_row_batch(merged)
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, merged_batch.schema) as w:
+            w.write_batch(merged_batch)
+        params.storage.state_append(b"buf", b"", sink.getvalue().to_pybytes())
+        return [params.execution_id]
 
-        for field in params.output_schema:
-            sums[field.name] = pc.sum(table.column(field.name))
+    @classmethod
+    def initial_finalize_state(
+        cls,
+        finalize_state_id: bytes,
+        params: TableBufferingParams[SingleTableArguments],
+    ) -> _LogDrainState:
+        return _LogDrainState(ns=b"buf", after_id=-1)
 
-        return [pa.RecordBatch.from_pylist([{name: val for name, val in sums.items()}], schema=params.output_schema)]
+    @classmethod
+    def finalize(
+        cls,
+        params: TableBufferingParams[SingleTableArguments],
+        finalize_state_id: bytes,
+        state: _LogDrainState,
+        out: OutputCollector,
+    ) -> None:
+        rows = params.storage.state_log_scan(state.ns, b"", after_id=state.after_id, limit=1)
+        if not rows:
+            out.finish()
+            return
+        log_id, value = rows[0]
+        out.emit(pa.ipc.open_stream(value).read_next_batch())
+        state.after_id = log_id
 
 
 # ============================================================================

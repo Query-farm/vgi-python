@@ -240,6 +240,7 @@ from vgi._test_fixtures.table_in_out import (
     OrderedSourceFunction,
     RepeatInputsFunction,
     SecretInOutFunction,
+    SubstreamPartialSumFunction,
     SumAllColumnsFunction,
     SumAllColumnsSimpleDistributed,
 )
@@ -373,6 +374,7 @@ _EXAMPLE_CATALOG = Catalog(
                 SecretInOutFunction,
                 RepeatInputsFunction,
                 SlowCancellableInOutFunction,
+                SubstreamPartialSumFunction,
                 SumAllColumnsFunction,
                 SumAllColumnsSimpleDistributed,
                 UnnestTensorRowsFunction,

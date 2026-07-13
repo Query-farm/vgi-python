@@ -197,13 +197,13 @@ class TestSumAllColumnsFunctionDistributed:
 
 
 class TestSumAllColumnsSimpleDistributed:
-    """Tests for sum_all_columns_simple_distributed (TableInOutFunction)."""
+    """Tests for sum_all_columns_simple_distributed (buffered global reduction)."""
 
     def test_sum_simple_distributed_basic(self, fixture_worker: str, numeric_batches: list[pa.RecordBatch]) -> None:
         """Should sum all numeric columns across all batches."""
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="sum_all_columns_simple_distributed",
                     input=iter(numeric_batches),
                 )
@@ -238,7 +238,7 @@ class TestSumAllColumnsSimpleDistributed:
 
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="sum_all_columns_simple_distributed",
                     input=iter(batches),
                 )
@@ -256,7 +256,7 @@ class TestSumAllColumnsSimpleDistributed:
         """Should exclude non-numeric columns from output."""
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="sum_all_columns_simple_distributed",
                     input=iter(simple_batches),
                 )
@@ -276,7 +276,7 @@ class TestSumAllColumnsSimpleDistributed:
 
         with Client(fixture_worker) as client:
             output_batches = list(
-                client.table_in_out_function(
+                client.table_buffering_function(
                     function_name="sum_all_columns_simple_distributed",
                     input=iter([empty_batch]),
                 )
