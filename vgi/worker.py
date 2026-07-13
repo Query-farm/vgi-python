@@ -1601,6 +1601,32 @@ class Worker:
                 # Scalar functions don't support named arguments
                 if named_keys:
                     continue
+            elif meta.input_from_args:
+                # Blended ("UNNEST-style") table function: the positional params ARE
+                # the per-row input columns, so they are NOT on the wire
+                # (args.positional is empty). Resolve overloads by INPUT-COLUMN count
+                # (arity) against the declared positional params instead. e.g.
+                # geo_encode(52,13) -> 2 input cols -> the 2-positional overload;
+                # geo_encode(52,13,100) -> 3 -> the 3-positional overload.
+                has_varargs = any(p.is_varargs for p in positional_params)
+                fixed_positional = [p for p in positional_params if not p.is_varargs]
+                num_input_cols = len(input_schema) if input_schema is not None else 0
+                if has_varargs:
+                    if num_input_cols < len(fixed_positional):
+                        continue  # Too few input columns for the fixed positional args
+                elif num_input_cols != len(positional_params):
+                    continue  # Wrong number of input columns for this overload
+
+                # Named args (str-position) still come from the wire arguments.
+                valid_named_keys = {p.position for p in named_params}
+                required_named_keys = {p.position for p in named_params if p.required}
+                if not named_keys.issubset(valid_named_keys):
+                    continue  # Unknown named argument
+                if not required_named_keys.issubset(named_keys):
+                    continue  # Missing required named argument
+
+                matches.append(func_cls)
+                continue
             else:
                 # Table functions: all params come from invocation.arguments
                 required_positional = [p for p in positional_params if p.required]
@@ -1823,14 +1849,35 @@ class Worker:
                     delta, matched = Worker._score_types(col_specs, col_types)
                     score += delta
             else:
-                # For table functions: compare arguments.positional types
+                # For table functions: compare declared positional specs against
+                # the argument types.
                 pos_specs = sorted(
                     [s for s in specs if isinstance(s.position, int) and not s.is_table_input],
                     key=lambda s: s.position,
                 )
-                pos_types: list[pa.DataType | None] = [
-                    arg.type if arg is not None else None for arg in arguments.positional
-                ]
+                if func_cls.get_metadata().input_from_args:
+                    # Blended ("UNNEST-style"): the positional args ARE the per-row
+                    # input columns, so they are NOT on the wire (arguments.positional
+                    # is empty). Score the declared positional specs against the
+                    # INPUT_SCHEMA column types instead (coercibly, via _score_types),
+                    # so same-arity overloads disambiguate by type — matching what
+                    # DuckDB's binder resolved. Expand a trailing varargs spec across
+                    # the remaining input columns (mirrors the scalar column path).
+                    pos_types: list[pa.DataType | None] = []
+                    if input_schema is not None:
+                        varargs_spec: ArgumentSpec | None = None
+                        for spec in pos_specs:
+                            if spec.is_varargs:
+                                varargs_spec = spec
+                            pos = spec.position
+                            assert isinstance(pos, int)
+                            pos_types.append(input_schema.field(pos).type if pos < len(input_schema) else None)
+                        if varargs_spec is not None:
+                            assert isinstance(varargs_spec.position, int)
+                            for i in range(varargs_spec.position + 1, len(input_schema)):
+                                pos_types.append(input_schema.field(i).type)
+                else:
+                    pos_types = [arg.type if arg is not None else None for arg in arguments.positional]
                 delta, matched = Worker._score_types(pos_specs, pos_types)
                 score += delta
 
@@ -3512,7 +3559,11 @@ class Worker:
         elif isinstance(instance, TableInOutGenerator):
             # Table-in-out function: separate INPUT and FINALIZE phases
             params = ProcessParams(
-                args=type(instance)._parse_arguments(type(instance).FunctionArguments, request.bind_call.arguments, blended=type(instance)._is_blended()),
+                args=type(instance)._parse_arguments(
+                    type(instance).FunctionArguments,
+                    request.bind_call.arguments,
+                    blended=type(instance)._is_blended(),
+                ),
                 init_call=request,
                 init_response=init_response,
                 output_schema=output_schema,
@@ -3570,7 +3621,11 @@ class Worker:
         elif isinstance(instance, TableFunctionGenerator):
             # Table function: producer state with per-tick process()
             params = ProcessParams(
-                args=type(instance)._parse_arguments(type(instance).FunctionArguments, request.bind_call.arguments, blended=type(instance)._is_blended()),
+                args=type(instance)._parse_arguments(
+                    type(instance).FunctionArguments,
+                    request.bind_call.arguments,
+                    blended=type(instance)._is_blended(),
+                ),
                 init_call=request,
                 init_response=init_response,
                 output_schema=output_schema,

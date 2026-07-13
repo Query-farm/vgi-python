@@ -85,6 +85,8 @@ __all__ = [
     "FilterBySettingFunction",
     "RepeatInputsFunction",
     "GeoEncodeFunction",
+    "GeoEncode3Function",
+    "RowSumFunction",
     "SubstreamPartialSumFunction",
     "SumAllColumnsFunction",
     "SumAllColumnsSimpleDistributed",
@@ -1532,8 +1534,7 @@ class BufferEmitWideFunction(TableBufferingFunction[BufferEmitWideArguments, _Em
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class GeoArgs:
-    """Blended args: latitude/longitude are per-row INPUT COLUMNS (positional);
-    precision is a bind-time named option."""
+    """Blended args: latitude/longitude are per-row input columns; precision is a named option."""
 
     latitude: Annotated[float, Arg(0, doc="Latitude input column")]
     longitude: Annotated[float, Arg(1, doc="Longitude input column")]
@@ -1541,9 +1542,10 @@ class GeoArgs:
 
 
 class GeoEncodeFunction(RowTransformFunction[GeoArgs]):
-    """Blended ("UNNEST-style") geo encoder — proves ONE registration serves every
-    call shape: geo_encode(52.0, 13.0) (literal), FROM t, geo_encode(t.x, t.y)
-    (columns), and LATERAL geo_encode(t.x, t.y).
+    """Blended ("UNNEST-style") geo encoder — one registration serves every call shape.
+
+    Proves geo_encode(52.0, 13.0) (literal), FROM t, geo_encode(t.x, t.y) (columns),
+    and LATERAL geo_encode(t.x, t.y) all resolve to one registration.
 
     latitude/longitude are POSITIONAL args = the per-row input columns (read from
     ``batch`` by declared name — the C++ bind builds the input schema from the
@@ -1571,10 +1573,115 @@ class GeoEncodeFunction(RowTransformFunction[GeoArgs]):
         out: OutputCollector,
     ) -> None:
         precision = params.args.precision
+        # NB: a blended LITERAL call delivers the constant's natural type (a DuckDB
+        # DECIMAL for 52.0, which round() would pad to `precision` places), while a
+        # COLUMN call delivers the cast declared type (DOUBLE). Cast to float so the
+        # output is identical across call shapes regardless of that wart.
         lats = batch.column("latitude").to_pylist()
         lons = batch.column("longitude").to_pylist()
         codes = [
-            None if lat is None or lon is None else f"{round(lat, precision)}:{round(lon, precision)}"
+            None
+            if lat is None or lon is None
+            else f"{round(float(lat), precision)}:{round(float(lon), precision)}"
             for lat, lon in zip(lats, lons, strict=True)
         ]
         out.emit(pa.record_batch({"geohash": pa.array(codes, type=pa.string())}))
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class Geo3Args:
+    """Blended args for the 3-positional geo_encode overload."""
+
+    latitude: Annotated[float, Arg(0, doc="Latitude input column")]
+    longitude: Annotated[float, Arg(1, doc="Longitude input column")]
+    altitude: Annotated[float, Arg(2, doc="Altitude input column")]
+    precision: Annotated[int, Arg("precision", doc="Rounding precision", default=4)] = 4
+
+
+class GeoEncode3Function(RowTransformFunction[Geo3Args]):
+    """Arity-overloaded blended geo encoder — same Meta.name, 3 positional columns.
+
+    Same ``Meta.name`` as GeoEncodeFunction ("geo_encode") but 3 positional input
+    columns (lat, lon, alt). Proves same-name blended overloads resolve by arity:
+    blended functions use
+    REAL value types (no TABLE-typed arg), so DuckDB permits multiple overloads
+    (the bind_table_function.cpp restriction that forbids a TABLE overload mixed
+    with others does not apply). geo_encode(52,13) resolves to the 2-arg overload,
+    geo_encode(52,13,100) to this 3-arg one, in both literal and column shapes.
+    """
+
+    class Meta:
+        name = "geo_encode"
+        description = "Blended per-row geo encoder (lat, lon, alt -> geohash)"
+        categories = ["geo", "blended"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[Geo3Args]) -> BindResponse:
+        return BindResponse(output_schema=schema({"geohash": pa.string()}))
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[Geo3Args],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        p = params.args.precision
+        lats = batch.column("latitude").to_pylist()
+        lons = batch.column("longitude").to_pylist()
+        alts = batch.column("altitude").to_pylist()
+        codes = [
+            None
+            if lat is None or lon is None or alt is None
+            else f"{round(float(lat), p)}:{round(float(lon), p)}:{round(float(alt), p)}"
+            for lat, lon, alt in zip(lats, lons, alts, strict=True)
+        ]
+        out.emit(pa.record_batch({"geohash": pa.array(codes, type=pa.string())}))
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class RowSumArgs:
+    """Blended VARARGS args: ``values`` is N input columns; ``absolute`` is a named option."""
+
+    values: Annotated[list[float], Arg(0, varargs=True, arrow_type=pa.float64(), doc="Numeric input columns")]
+    absolute: Annotated[bool, Arg("absolute", doc="Sum absolute values", default=False)] = False
+
+
+class RowSumFunction(RowTransformFunction[RowSumArgs]):
+    """Blended VARARGS row-wise sum — proves the varargs input path.
+
+    ``values`` is a varargs positional Arg: the per-row input is N columns of the
+    declared type. A varargs blended function has no per-column declared names
+    (the literal call gives empty input_table_names), so the worker reads the
+    columns POSITIONALLY via ``input_columns(batch)`` (the C++ bind names them
+    col0..colN-1). ``row_sum(1,2,3) -> 6``; ``FROM t, row_sum(t.a,t.b,t.c)`` sums
+    each row's columns. The ``absolute`` named option is surfaced on params.args.
+    """
+
+    class Meta:
+        name = "row_sum"
+        description = "Blended per-row varargs sum"
+        categories = ["numeric", "blended"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[RowSumArgs]) -> BindResponse:
+        return BindResponse(output_schema=schema({"row_sum": pa.float64()}))
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[RowSumArgs],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        cols = cls.input_columns(batch)
+        absolute = params.args.absolute
+        acc = None
+        for col in cols:
+            c = pc.abs(col) if absolute else col
+            acc = c if acc is None else pc.add(acc, c)
+        if acc is None:
+            acc = pa.array([0.0] * batch.num_rows, type=pa.float64())
+        out.emit(pa.record_batch({"row_sum": pc.cast(acc, pa.float64())}))

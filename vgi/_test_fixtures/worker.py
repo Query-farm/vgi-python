@@ -230,7 +230,9 @@ from vgi._test_fixtures.table_in_out import (
     CrashOnProcessFunction,
     EchoBufferingFunction,
     EchoFunction,
+    GeoEncode3Function,
     GeoEncodeFunction,
+    RowSumFunction,
     EchoWitnessFunction,
     ExceptionFinalizeFunction,
     ExceptionProcessFunction,
@@ -370,6 +372,8 @@ _EXAMPLE_CATALOG = Catalog(
                 # TableInOutGenerator - transform input batches
                 EchoFunction,
                 GeoEncodeFunction,
+                GeoEncode3Function,
+                RowSumFunction,
                 EchoWitnessFunction,
                 BufferInputFunction,
                 FilterBySettingFunction,

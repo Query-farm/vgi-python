@@ -761,6 +761,7 @@ def extract_parameters(cls: type, *, validate_table_input: bool = True) -> list[
                     constraints=_build_constraints(arg_instance),
                     is_table_input=is_table_input,
                     is_varargs=arg_instance.varargs,
+                    is_const=arg_instance.const,
                 )
             )
 
