@@ -87,6 +87,7 @@ __all__ = [
     "GeoEncodeFunction",
     "GeoEncode3Function",
     "RowSumFunction",
+    "BlendedDropFunction",
     "SubstreamPartialSumFunction",
     "SumAllColumnsFunction",
     "SumAllColumnsSimpleDistributed",
@@ -1685,3 +1686,42 @@ class RowSumFunction(RowTransformFunction[RowSumArgs]):
         if acc is None:
             acc = pa.array([0.0] * batch.num_rows, type=pa.float64())
         out.emit(pa.record_batch({"row_sum": pc.cast(acc, pa.float64())}))
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class _DropArgs:
+    """One positional input column (the value is ignored; output is always empty)."""
+
+    x: Annotated[float, Arg(0, doc="Input column (ignored)")]
+
+
+class BlendedDropFunction(RowTransformFunction[_DropArgs]):
+    """Blended 1->0 map: emits a single 0-row output batch for its input row.
+
+    Exercises the literal scan-mode drain loop's "empty-but-not-EOS -> keep reading,
+    never return 0 rows mid-stream, finish only at true EOS" branch: the worker's
+    whole output for the one synthesized input row is a 0-row batch, so
+    PhysicalTableScan must reach FINISHED cleanly (chunk.size()==0) and NOT
+    infinite-loop re-feeding the input. (The framework enforces one emit per
+    process() call, so an *intermediate* empty-then-row is impossible for a blended
+    map; a 1->0 single empty emit is the reachable shape.)
+    """
+
+    class Meta:
+        name = "blended_drop"
+        description = "Blended 1->0 map emitting a single 0-row batch (literal scan-mode)"
+        categories = ["blended", "test"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[_DropArgs]) -> BindResponse:
+        return BindResponse(output_schema=schema({"v": pa.int64()}))
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_DropArgs],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        out.emit(pa.record_batch({"v": pa.array([], type=pa.int64())}))
