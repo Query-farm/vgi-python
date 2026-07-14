@@ -600,13 +600,18 @@ def run_table_buffering_finalize_tick(state: Any, out: Any, ctx: Any) -> None:
     # ``batch_index=`` through to the inner; only _TrackingOutputCollector
     # accepts that kwarg, so a raw OutputCollector wrap would TypeError.
     # Mirrors protocol.py:1176-1186.
+    # Always wrap in ``_TrackingOutputCollector`` — the inner-validation wrapper that
+    # extends emit() with ``cache_control=`` / ``metadata=`` / ``partition_values=`` /
+    # ``batch_index=`` (parity with the streaming path; the raw vgi_rpc OutputCollector
+    # accepts none of those). This is what lets a buffered finalize advertise
+    # ``vgi.cache.*`` for the exchange-mode result cache. Optionally wrap again in the
+    # filtering collector when auto-apply-filters is on.
     auto_apply = state.pushdown_filters is not None and func_cls._should_auto_apply_filters()
-    effective_out = out
+    effective_out: Any = _TrackingOutputCollector(out)
     if auto_apply:
         pushdown_obj = func_cls.pushdown_filters(state.pushdown_filters)
         if pushdown_obj is not None:
-            tracking_out = _TrackingOutputCollector(out)
-            effective_out = _FilteringOutputCollector(tracking_out, func_cls, pushdown_obj)
+            effective_out = _FilteringOutputCollector(effective_out, func_cls, pushdown_obj)
 
     if not state.state_initialized:
         user_state: Any = func_cls.initial_finalize_state(

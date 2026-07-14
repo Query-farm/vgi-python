@@ -52,6 +52,7 @@ from vgi_rpc.log import Level
 from vgi_rpc.rpc import OutputCollector
 
 from vgi.arguments import Arg, Setting, TableInput
+from vgi.cache_control import CacheControl
 from vgi.invocation import BindResponse
 from vgi.metadata import FunctionExample
 from vgi.schema_utils import schema
@@ -1896,3 +1897,115 @@ class HostileProvenanceFunction(RowTransformFunction[_HostileArgs]):
         else:  # "range" — every parent index == n (one past the last valid index n-1)
             payload = base64.b64encode(struct.pack(f"<{n}i", *([n] * n))).decode("ascii")
         out.emit(out_batch, metadata={"vgi_rpc.parent_row#b64": payload})
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class _CachedDoubleArgs:
+    """One positional input column doubled by the map."""
+
+    x: Annotated[int, Arg(0, doc="Input column")]
+
+
+class CachedDoubleFunction(RowTransformFunction[_CachedDoubleArgs]):
+    """Cacheable blended 1->1 map (x -> x*2) advertising ``vgi.cache.*``.
+
+    Backs exchange-mode result-cache tests on BOTH call shapes served by the same
+    registration: the streaming column form ``FROM t, cached_double(t.x)`` (routed
+    through the per-input-batch memoization in VgiTableInOutFunction) and the
+    correlated form ``LATERAL cached_double(t.x)`` (routed through the batched
+    LATERAL operator's per-chunk memoization). Advertises a ttl on every output
+    batch (the C++ side latches the first). Output is deterministic (x*2) so a cache
+    hit — proven separately by a zero ``write_input`` count on the second run —
+    returns identical values.
+    """
+
+    class Meta:
+        name = "cached_double"
+        description = "Cacheable blended map x -> x*2 (advertises vgi.cache.ttl)"
+        categories = ["blended", "cache", "test"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[_CachedDoubleArgs]) -> BindResponse:
+        return BindResponse(output_schema=schema({"doubled": pa.int64()}))
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_CachedDoubleArgs],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        doubled = pc.multiply(pc.cast(batch.column("x"), pa.int64()), 2)
+        cast("VgiOutputCollector", out).emit(
+            pa.record_batch({"doubled": doubled}),
+            cache_control=CacheControl(ttl=300),
+        )
+
+
+class CachedEchoFunction(TableInOutGenerator[SingleTableArguments]):
+    """Cacheable CLASSIC (TABLE-input) streaming table-in-out passthrough.
+
+    Called as ``FROM cached_echo((SELECT ... FROM t))`` — a NON-correlated table-in-out
+    routed through the streaming VgiTableInOutFunction exchange (M1 per-input-batch
+    memoization), unlike the blended column/LATERAL forms which decorrelate to the
+    batched-LATERAL operator (M2). Passthrough output (input schema) advertising a ttl
+    on each output batch. A cache hit on a repeat scan is proven by a zero
+    ``write_input`` count; passthrough determinism keeps the values identical.
+    """
+
+    class Meta:
+        name = "cached_echo"
+        description = "Cacheable classic (TABLE-input) passthrough (advertises vgi.cache.ttl)"
+        categories = ["cache", "test"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[SingleTableArguments]) -> BindResponse:
+        assert params.bind_call.input_schema is not None
+        return BindResponse(output_schema=params.bind_call.input_schema)
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[SingleTableArguments],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        cast("VgiOutputCollector", out).emit(batch, cache_control=CacheControl(ttl=300))
+
+
+class CachedSumAllColumnsFunction(SumAllColumnsFunction):
+    """Cacheable BUFFERED whole-input reducer (column-wise sum) advertising vgi.cache.*.
+
+    Reuses SumAllColumnsFunction's Sink+Combine accumulation (sum over the whole input
+    multiset) and overrides finalize() to advertise a ttl on its output — backing the
+    exchange-mode buffered result cache (M3). A repeat query with the same input
+    multiset (any order) replays the cached single-row result and skips the combine +
+    finalize-drain on the worker (the Sink ingestion still runs — the key is only known
+    after all input is folded). Deterministic output (the sum) keeps values identical.
+    """
+
+    class Meta(SumAllColumnsFunction.Meta):
+        name = "cached_sum_all"
+        description = "Cacheable column-wise sum across all input (advertises vgi.cache.ttl)"
+        categories = ["aggregation", "cache", "test"]
+
+    @classmethod
+    def finalize(
+        cls,
+        params: "TableBufferingParams[SumAllColumnsFunctionArguments]",
+        finalize_state_id: bytes,
+        state: "_LogDrainState",
+        out: OutputCollector,
+    ) -> None:
+        rows = params.storage.state_log_scan(state.ns, b"", after_id=state.after_id, limit=1)
+        if not rows:
+            out.finish()
+            return
+        log_id, value = rows[0]
+        cast("VgiOutputCollector", out).emit(
+            pa.ipc.open_stream(value).read_next_batch(),
+            cache_control=CacheControl(ttl=300),
+        )
+        state.after_id = log_id
