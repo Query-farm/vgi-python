@@ -36,8 +36,10 @@ LargeStateFunction             - Buffers ~N MB per state_id (IPC chunking test)
 
 from __future__ import annotations
 
+import base64
 import os
 import signal
+import struct
 import sys
 import time
 from dataclasses import dataclass
@@ -1784,3 +1786,113 @@ class BlendedExplodeFunction(RowTransformFunction[_ExplodeArgs]):
         # the correlated columns. (Identity provenance is omitted for 1->1 maps —
         # the extension assumes it — but here the row count changes, so it's required.)
         cast("VgiOutputCollector", out).emit(out_batch, parent_rows=parent_rows)
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class _ProjectableArgs:
+    """One positional input column; a 1->1 map emitting two output columns."""
+
+    x: Annotated[int, Arg(0, doc="Input column")]
+
+
+class ProjectableBlendedFunction(RowTransformFunction[_ProjectableArgs]):
+    """Blended 1->1 map advertising projection_pushdown, with TWO output columns.
+
+    Regression fixture for the batched correlated-LATERAL operator vs projection
+    pushdown: a blended function that opts into ``Meta.projection_pushdown`` and has
+    more than one output column. When a correlated LATERAL query projects only a
+    SUBSET of the worker's output columns, DuckDB's UNUSED_COLUMNS optimizer can
+    narrow the LogicalGet's output types before the batched-lateral rewriter runs.
+    The batched operator does not support projection pushdown (it inits the worker
+    with the full schema), so it must NOT batch such a get — it falls back to the
+    row-by-row path. This fixture + a subset-projection LATERAL query proves the
+    fallback keeps results correct (identical to ``SET vgi_batch_lateral=false``).
+
+    For input ``x`` emits ``{a: x*10, b: x*100}`` (deterministic).
+    """
+
+    class Meta:
+        name = "projectable_blended"
+        description = "Blended 1->1 map with projection_pushdown + two output columns"
+        categories = ["blended", "test"]
+        projection_pushdown = True
+
+    @classmethod
+    def on_bind(cls, params: BindParams[_ProjectableArgs]) -> BindResponse:
+        return BindResponse(output_schema=schema({"a": pa.int64(), "b": pa.int64()}))
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_ProjectableArgs],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        xs = batch.column("x").to_pylist()
+        a = pa.array([None if x is None else x * 10 for x in xs], type=pa.int64())
+        b = pa.array([None if x is None else x * 100 for x in xs], type=pa.int64())
+        # 1->1 identity map: no provenance needed (the operator assumes identity).
+        out.emit(pa.record_batch({"a": a, "b": b}))
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class _HostileArgs:
+    """One positional input column + a named ``mode`` selecting the hostile payload."""
+
+    x: Annotated[int, Arg(0, doc="Input column (echoed as output)")]
+    mode: Annotated[str, Arg("mode", doc="range | length | base64", default="range")] = "range"
+
+
+class HostileProvenanceFunction(RowTransformFunction[_HostileArgs]):
+    """Adversarial blended fixture: emits a MALFORMED ``vgi_rpc.parent_row`` payload.
+
+    Simulates a buggy or hostile worker (especially a remote HTTP one) that sends
+    provenance the batched correlated-LATERAL operator must reject rather than use
+    as an unchecked array index. Emits one output row per input row (so the row
+    count matches — the metadata is present, not the identity path), but attaches a
+    poisoned ``vgi_rpc.parent_row#b64`` according to ``mode``:
+
+    * ``range``  — a well-formed int32[] of the right length whose values are all
+      ``num_rows`` (== the row count, i.e. one past the last valid index). The C++
+      ``DecodeParentRow`` range check must throw ("out of range").
+    * ``length`` — a valid-base64 int32[] blob that is one element TOO LONG. The
+      length check (``raw.size() == output_rows * 4``) must throw.
+    * ``base64`` — a value that is not valid base64 at all. The connection's
+      base64 decode must throw ("invalid base64 payload").
+
+    Each is asserted on BOTH transports so the subprocess and HTTP parse paths stay
+    symmetric (an asymmetry would be a security bug — one path validating, the other
+    not). The ``range`` case sets the index directly via the raw metadata rather
+    than the ``parent_rows=`` kwarg so it bypasses the framework's length-only
+    check and reaches the C++ range check unfiltered.
+    """
+
+    class Meta:
+        name = "hostile_provenance"
+        description = "Adversarial blended fixture emitting malformed vgi_rpc.parent_row"
+        categories = ["blended", "test", "adversarial"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[_HostileArgs]) -> BindResponse:
+        return BindResponse(output_schema=schema({"hv": pa.int64()}))
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_HostileArgs],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        n = batch.num_rows
+        out_batch = pa.record_batch({"hv": pc.cast(batch.column("x"), pa.int64())})
+        mode = params.args.mode
+        if mode == "base64":
+            payload = "@@@ this is not base64 @@@"
+        elif mode == "length":
+            # One int32 too many for the emitted row count.
+            payload = base64.b64encode(struct.pack(f"<{n + 1}i", *([0] * (n + 1)))).decode("ascii")
+        else:  # "range" — every parent index == n (one past the last valid index n-1)
+            payload = base64.b64encode(struct.pack(f"<{n}i", *([n] * n))).decode("ascii")
+        out.emit(out_batch, metadata={"vgi_rpc.parent_row#b64": payload})
