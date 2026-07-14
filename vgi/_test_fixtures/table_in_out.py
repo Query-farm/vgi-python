@@ -2009,3 +2009,98 @@ class CachedSumAllColumnsFunction(SumAllColumnsFunction):
             cache_control=CacheControl(ttl=300),
         )
         state.after_id = log_id
+
+
+def _content_etag(batch: pa.RecordBatch) -> str:
+    """Stable etag from a batch's content (deterministic across runs for equal data)."""
+    import hashlib
+
+    h = hashlib.sha256()
+    for col in batch.columns:
+        h.update(repr(col.to_pylist()).encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
+class CachedRevalidatingEchoFunction(TableInOutGenerator[SingleTableArguments]):
+    """Classic (TABLE-input) passthrough with the always-revalidate (304) contract.
+
+    Advertises ``CacheControl(ttl=0, etag, revalidatable=True)`` on its output — the
+    "no-cache" semantic: stored but immediately stale, so every repeat sends a
+    conditional request (``vgi.cache.if_none_match``). On a matching validator the
+    worker answers with a 0-row ``CacheControl(not_modified=True)`` batch and the C++
+    side reuses the stored bytes (result_cache.revalidate outcome=not_modified) instead
+    of re-streaming. The etag is derived from the input content so it is stable across
+    identical repeats. Backs the streaming exchange-cache revalidation test (M1).
+    """
+
+    class Meta:
+        name = "cached_reval_echo"
+        description = "Classic passthrough with always-revalidate (304 not_modified) contract"
+        categories = ["cache", "test"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[SingleTableArguments]) -> BindResponse:
+        assert params.bind_call.input_schema is not None
+        return BindResponse(output_schema=params.bind_call.input_schema)
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[SingleTableArguments],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        etag = _content_etag(batch)
+        vo = cast("VgiOutputCollector", out)
+        if params.if_none_match == etag:
+            # 304 Not Modified: the client's stored copy for this input is still valid.
+            vo.emit(
+                batch.slice(0, 0),  # 0-row, same schema
+                cache_control=CacheControl(not_modified=True, ttl=0, etag=etag, revalidatable=True),
+            )
+            return
+        vo.emit(batch, cache_control=CacheControl(ttl=0, etag=etag, revalidatable=True))
+
+
+class CachedRevalidatingDoubleFunction(RowTransformFunction[_CachedDoubleArgs]):
+    """Blended map (x -> x*2) with the always-revalidate (304) contract.
+
+    Like CachedRevalidatingEchoFunction but blended, so it exercises the LATERAL
+    exchange-cache revalidation path (M2). The etag is derived from the worker-input
+    content (the positional arg) — stable across identical repeats. On a matching
+    ``if_none_match`` it answers 0-row ``not_modified``; the LATERAL operator then
+    slides the stored POST-STAMP entry's TTL and replays it. Called
+    ``FROM t, LATERAL cached_reval_double(t.x)``.
+    """
+
+    class Meta:
+        name = "cached_reval_double"
+        description = "Blended map x->x*2 with always-revalidate (304 not_modified) contract"
+        categories = ["blended", "cache", "test"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[_CachedDoubleArgs]) -> BindResponse:
+        return BindResponse(output_schema=schema({"doubled": pa.int64()}))
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_CachedDoubleArgs],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        etag = _content_etag(batch)
+        vo = cast("VgiOutputCollector", out)
+        if params.if_none_match == etag:
+            vo.emit(
+                pa.record_batch({"doubled": pa.array([], type=pa.int64())}),
+                cache_control=CacheControl(not_modified=True, ttl=0, etag=etag, revalidatable=True),
+            )
+            return
+        doubled = pc.multiply(pc.cast(batch.column("x"), pa.int64()), 2)
+        vo.emit(
+            pa.record_batch({"doubled": doubled}),
+            cache_control=CacheControl(ttl=0, etag=etag, revalidatable=True),
+        )

@@ -1559,6 +1559,20 @@ class TableInOutExchangeState(ExchangeState):
     def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Process one input batch through the table-in-out function."""
         params = dataclasses.replace(self._params, auth_context=ctx.auth)
+        # Conditional-revalidation validators (exchange-mode result cache): the client
+        # holds a stale cached result for THIS input unit and asks the worker to confirm
+        # freshness cheaply. Surfaced on params so process() can answer with a 0-row
+        # CacheControl(not_modified=True) instead of recomputing. Ride the input batch's
+        # custom_metadata (attached by the C++ WriteInputBatch).
+        if input.custom_metadata is not None:
+            inm = input.custom_metadata.get(b"vgi.cache.if_none_match")
+            ims = input.custom_metadata.get(b"vgi.cache.if_modified_since")
+            if inm is not None or ims is not None:
+                params = dataclasses.replace(
+                    params,
+                    if_none_match=inm.decode("utf-8") if inm is not None else None,
+                    if_modified_since=ims.decode("utf-8") if ims is not None else None,
+                )
         timer = _timed_exchange(
             self._vgi_tracer,
             "vgi.execute.table_in_out",
