@@ -27,6 +27,7 @@ import base64
 import contextlib
 import dataclasses
 import logging
+import struct
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Protocol, get_args, get_origin
 
@@ -1030,6 +1031,48 @@ def _merge_batch_index(
     return merged
 
 
+def _merge_parent_rows(
+    *,
+    parent_rows: list[int] | None,
+    batch: pa.RecordBatch,
+    metadata: dict[str, str] | None,
+) -> dict[str, str] | None:
+    """Fold per-output-row provenance into the emit metadata dict.
+
+    Used by the **batched correlated LATERAL** operator (blended
+    ``RowTransformFunction`` under ``FROM t, f(t.x, t.y)`` / ``LATERAL``): the
+    C++ extension ships a whole input chunk to the worker in ONE exchange and
+    reads ONE output batch, then maps each output row back to the input row
+    that produced it via this array — so a 1->N fan-out or 1->0 filter can be
+    batched instead of driven row-by-row.
+
+    ``parent_rows[i]`` is the 0-based index (into the input batch) of the row
+    that produced output row ``i``. Encoded as a raw little-endian ``int32``
+    array (NOT Arrow IPC), base64-encoded, under ``vgi_rpc.parent_row#b64`` —
+    the C++ side reinterprets the bytes directly. Absent metadata means an
+    identity 1->1 map (the common case: the extension assumes it, and requires
+    output rows == input rows).
+
+    Contract: ``len(parent_rows)`` MUST equal ``batch.num_rows`` (a mismatch is
+    a worker bug that would corrupt the stamping). Values are range-checked
+    against the input width on the C++ side (which knows it authoritatively).
+    """
+    if parent_rows is None:
+        return metadata
+    if len(parent_rows) != batch.num_rows:
+        raise RuntimeError(
+            f"out.emit(parent_rows=...) length {len(parent_rows)} != batch.num_rows {batch.num_rows}; "
+            "parent_rows must carry exactly one input-row index per emitted output row"
+        )
+    if batch.num_rows == 0:
+        # Nothing to map; skip the base64+pack for an empty emit.
+        return metadata
+    raw = struct.pack(f"<{len(parent_rows)}i", *parent_rows)
+    merged: dict[str, str] = dict(metadata) if metadata else {}
+    merged["vgi_rpc.parent_row#b64"] = base64.b64encode(raw).decode("ascii")
+    return merged
+
+
 def _merge_cache_control(
     *,
     cache_control: CacheControl | None,
@@ -1077,6 +1120,7 @@ class VgiOutputCollector(Protocol):
         partition_values: dict[str, tuple[pa.Scalar[Any], pa.Scalar[Any]]] | None = None,
         metadata: dict[str, str] | None = None,
         cache_control: CacheControl | None = None,
+        parent_rows: list[int] | None = None,
     ) -> None: ...
 
     def finish(self) -> None: ...
@@ -1108,6 +1152,7 @@ class _FilteringOutputCollector:
         partition_values: dict[str, tuple[pa.Scalar[Any], pa.Scalar[Any]]] | None = None,
         metadata: dict[str, str] | None = None,
         cache_control: CacheControl | None = None,
+        parent_rows: list[int] | None = None,
     ) -> None:
         filtered = self._func_cls._apply_pushdown_filter(batch, self._filters)
         self._inner.emit(
@@ -1116,6 +1161,7 @@ class _FilteringOutputCollector:
             partition_values=partition_values,
             metadata=metadata,
             cache_control=cache_control,
+            parent_rows=parent_rows,
         )
 
     def emit_pydict(self, data: dict[str, Any], schema: pa.Schema | None = None) -> None:
@@ -1188,6 +1234,7 @@ class _TrackingOutputCollector:
         partition_values: dict[str, tuple[pa.Scalar[Any], pa.Scalar[Any]]] | None = None,
         metadata: dict[str, str] | None = None,
         cache_control: CacheControl | None = None,
+        parent_rows: list[int] | None = None,
     ) -> None:
         merged_metadata = _merge_batch_index(
             supports_batch_index=self._supports_batch_index,
@@ -1199,6 +1246,11 @@ class _TrackingOutputCollector:
             partition_kind=self._partition_kind,
             batch=batch,
             partition_values=partition_values,
+            metadata=merged_metadata,
+        )
+        merged_metadata = _merge_parent_rows(
+            parent_rows=parent_rows,
+            batch=batch,
             metadata=merged_metadata,
         )
         merged_metadata = _merge_cache_control(

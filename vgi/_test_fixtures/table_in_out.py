@@ -41,7 +41,7 @@ import signal
 import sys
 import time
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -63,6 +63,9 @@ from vgi.table_in_out_function import (
     TableInOutFunction,
     TableInOutGenerator,
 )
+
+if TYPE_CHECKING:
+    from vgi.protocol import VgiOutputCollector
 
 
 # Per-tick cursor state for finalize streams that drain a state_log via
@@ -1724,3 +1727,60 @@ class BlendedDropFunction(RowTransformFunction[_DropArgs]):
         out: OutputCollector,
     ) -> None:
         out.emit(pa.record_batch({"v": pa.array([], type=pa.int64())}))
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class _ExplodeArgs:
+    """One positional input column: the fan-out count per input row."""
+
+    n: Annotated[int, Arg(0, doc="Fan-out count: emit rows 0..n-1 for this input row")]
+
+
+class BlendedExplodeFunction(RowTransformFunction[_ExplodeArgs]):
+    """Blended 1->N fan-out map carrying per-output-row provenance.
+
+    For each input row with count ``n``, emits ``n`` output rows (the integers
+    ``0..n-1``). Because the output row count differs from the input row count, the
+    worker declares per-output-row provenance via ``out.emit(..., parent_rows=[…])``
+    — ``parent_rows[i]`` is the index (into this call's input batch) of the row
+    that produced output row ``i``. That lets the **batched correlated LATERAL**
+    operator ship a whole input chunk in ONE exchange and still stamp each output
+    row's outer/correlated columns from the right input row, instead of DuckDB
+    driving the call row-by-row.
+
+    One fixture covers all three cardinalities by input value: ``n=0`` -> 1->0
+    (filter), ``n=1`` -> 1->1, ``n=3`` -> 1->N. Deterministic output (the emitted
+    integers are ``range(n)``) so tests assert exact values, and the result must
+    match the row-by-row path (``SET vgi_batch_lateral=false``) exactly.
+    """
+
+    class Meta:
+        name = "blended_explode"
+        description = "Blended 1->N fan-out (emit 0..n-1 per input row) with row provenance"
+        categories = ["blended", "test"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[_ExplodeArgs]) -> BindResponse:
+        return BindResponse(output_schema=schema({"i": pa.int64()}))
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_ExplodeArgs],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        counts = batch.column("n").to_pylist()
+        out_vals: list[int] = []
+        parent_rows: list[int] = []
+        for row_idx, n in enumerate(counts):
+            fan = 0 if n is None or n < 0 else int(n)
+            out_vals.extend(range(fan))
+            parent_rows.extend([row_idx] * fan)
+        out_batch = pa.record_batch({"i": pa.array(out_vals, type=pa.int64())})
+        # Whole-chunk fan-out: one emit for the whole input batch, carrying the
+        # per-output-row parent index so the batched-LATERAL operator can stamp
+        # the correlated columns. (Identity provenance is omitted for 1->1 maps —
+        # the extension assumes it — but here the row count changes, so it's required.)
+        cast("VgiOutputCollector", out).emit(out_batch, parent_rows=parent_rows)
