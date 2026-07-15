@@ -11,6 +11,7 @@ import pyarrow.compute as pc
 
 from vgi._test_fixtures.scalar._common import _is_addable_type, _is_multipliable_type, _promote_for_addition
 from vgi.arguments import ConstParam, Param, Returns
+from vgi.cache_control import CacheControl
 from vgi.metadata import FunctionExample
 from vgi.scalar_function import BindParameters, BindResult, ScalarFunction
 
@@ -129,6 +130,32 @@ class DoubleFunction(ScalarFunction):
             return pc.cast(summed, out_type)
         result: pa.Array[Any] = pc.multiply(value, 2)
         return result
+
+
+class CachedDoubleScalarFunction(ScalarFunction):
+    """Doubles a BIGINT value and advertises vgi.cache.* — backs scalar per-value memo tests.
+
+    A deterministic 1:1 map, so opting into the result cache is sound: the extension
+    memoizes the output per distinct input value and serves a fully-warm distinct set
+    without the worker.
+    """
+
+    # Opt into the result cache (per-value memoization on the C++ side).
+    CACHE_CONTROL = CacheControl(ttl=300)
+
+    class Meta:
+        """Function metadata."""
+
+        name = "cached_double_scalar"
+        description = "Doubles a BIGINT value (advertises vgi.cache.ttl for per-value memo)"
+
+    @classmethod
+    def compute(
+        cls,
+        value: Annotated[pa.Int64Array, Param(doc="Value to double")],
+    ) -> Annotated[pa.Int64Array, Returns(pa.int64())]:
+        """Double the input values."""
+        return pc.multiply(value, 2)
 
 
 class AddValuesFunction(ScalarFunction):

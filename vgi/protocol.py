@@ -786,7 +786,11 @@ class ScalarExchangeState(ExchangeState):
                 input_bytes=_batch_bytes(input.batch),
                 output_bytes=_batch_bytes(output),
             )
-        out.emit(output)
+        # Result-cache opt-in: a scalar declaring CACHE_CONTROL rides its vgi.cache.* keys on
+        # the emit path's batch custom_metadata (per-batch — not the fixed IPC schema), so the
+        # extension can memoize the output per distinct input value.
+        cc_meta = cls.CACHE_CONTROL.to_metadata() if getattr(cls, "CACHE_CONTROL", None) is not None else None
+        out.emit(output, metadata=cc_meta)
 
 
 _log = logging.getLogger(__name__)

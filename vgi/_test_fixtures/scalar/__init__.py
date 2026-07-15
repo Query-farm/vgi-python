@@ -19,6 +19,7 @@ unchanged.
 
 from vgi._test_fixtures.scalar.arithmetic import (
     AddValuesFunction,
+    CachedDoubleScalarFunction,
     ConcatValuesIntFunction,
     ConcatValuesStrFunction,
     DoubleFunction,
@@ -83,6 +84,7 @@ __all__ = [
     "AnyMixedStrFunction",
     "BernoulliFunction",
     "BinaryPacketFunction",
+    "CachedDoubleScalarFunction",
     "ConcatValuesIntFunction",
     "ConcatValuesStrFunction",
     "ConditionalMessageFunction",

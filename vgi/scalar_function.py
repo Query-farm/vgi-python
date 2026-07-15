@@ -62,6 +62,7 @@ from vgi.arguments import (
     _extract_setting_secret_params,
     validate_const_arg_constraints,
 )
+from vgi.cache_control import CacheControl
 from vgi.function_storage import BoundStorage, attach_catalog_bytes
 from vgi.invocation import (
     BaseInitResponse,
@@ -843,6 +844,12 @@ class ScalarFunction(ScalarFunctionGenerator):
 
     """
 
+    # Opt into the extension's result cache: when set, this CacheControl's ``vgi.cache.*``
+    # metadata is attached to every output batch, so the C++ side memoizes the scalar's
+    # output per distinct input value (see docs/exchange_dedup_pervalue.md). A pure,
+    # deterministic scalar only — advertising this on a non-pure scalar serves stale rows.
+    CACHE_CONTROL: CacheControl | None = None
+
     # For TYPE_CHECKING, allow dynamic attribute access for Param/ConstParam
     if TYPE_CHECKING:
 
@@ -1320,5 +1327,7 @@ class ScalarFunction(ScalarFunctionGenerator):
         # Validate output type matches declared Returns type
         cls._validate_output_type(result)
 
-        # Create output batch from result array
+        # Create output batch from result array. Result-cache opt-in (CACHE_CONTROL) rides
+        # the emit path's batch custom_metadata (see ScalarExchangeState.exchange) — NOT the
+        # schema, which the IPC stream fixes at open, so a per-batch schema tweak is dropped.
         return pa.RecordBatch.from_arrays([result], schema=output_schema)
