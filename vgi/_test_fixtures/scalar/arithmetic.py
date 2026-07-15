@@ -158,6 +158,56 @@ class CachedDoubleScalarFunction(ScalarFunction):
         return pc.multiply(value, 2)
 
 
+class CachedAddConstScalarFunction(ScalarFunction):
+    """value + addend (a CONST param), cacheable — backs per-value const-param keying tests.
+
+    Two calls with the same ``value`` but different ``addend`` must NOT cross-serve: the
+    const arg is folded into the cache key.
+    """
+
+    CACHE_CONTROL = CacheControl(ttl=300)
+
+    class Meta:
+        """Function metadata."""
+
+        name = "cached_add_const"
+        description = "value + const addend (advertises vgi.cache.ttl)"
+
+    @classmethod
+    def compute(
+        cls,
+        value: Annotated[pa.Int64Array, Param(doc="Value")],
+        addend: Annotated[pa.Int64Scalar, ConstParam("Constant addend")],
+    ) -> Annotated[pa.Int64Array, Returns(pa.int64())]:
+        """Add the const addend to each value."""
+        return pc.add(value, addend)
+
+
+class CachedLabelScalarFunction(ScalarFunction):
+    """VARCHAR output with NULLs, cacheable — exercises string/null round-trip through the cache.
+
+    Returns ``lbl-<value>`` for value >= 0, NULL otherwise, so a cached per-value entry must
+    round-trip both a heap string and a null.
+    """
+
+    CACHE_CONTROL = CacheControl(ttl=300)
+
+    class Meta:
+        """Function metadata."""
+
+        name = "cached_label"
+        description = "value -> 'lbl-<value>' or NULL for negatives (advertises vgi.cache.ttl)"
+
+    @classmethod
+    def compute(
+        cls,
+        value: Annotated[pa.Int64Array, Param(doc="Value")],
+    ) -> Annotated[pa.LargeStringArray, Returns(pa.string())]:
+        """Label non-negative values; NULL for negatives."""
+        labels = ["lbl-" + str(v.as_py()) if (v.is_valid and v.as_py() >= 0) else None for v in value]
+        return pa.array(labels, type=pa.string())
+
+
 class AddValuesFunction(ScalarFunction):
     """Adds two numeric values together.
 
