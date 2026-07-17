@@ -32,7 +32,7 @@ env:
   VGI_REF: main
   # The Haybarn release providing the prebuilt haybarn-unittest binary. Must be
   # ABI-compatible with the community-published vgi extension.
-  HAYBARN_RELEASE: haybarn-v1.5.4-rc1
+  HAYBARN_RELEASE: haybarn-v1.5.4-rc3
 
 jobs:
   integration:
