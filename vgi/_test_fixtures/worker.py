@@ -300,33 +300,30 @@ _BRANCH_DIR = (os.environ.get("VGI_TEST_BRANCH_DIR") or tempfile.gettempdir()).r
 # DuckDB-backed table: demonstrates statistics_from_duckdb() helper.
 # Creates an in-memory table and extracts real statistics from it.
 # ---------------------------------------------------------------------------
-def _build_numbers_stats() -> dict[str, ColumnStatisticsInput]:
-    """Extract statistics for the 'numbers' table (integers 0-99) from DuckDB.
+def _build_fixture_stats() -> tuple[
+    dict[str, ColumnStatisticsInput],
+    pa.Schema,
+    dict[str, ColumnStatisticsInput],
+    dict[str, ColumnStatisticsInput],
+]:
+    """Build the DuckDB-backed statistics fixtures on ONE shared connection.
 
-    Demonstrates the ``statistics_from_duckdb()`` helper by creating the same
-    data in a DuckDB in-memory table and pulling real statistics from it.
+    Runs at module import in every spawned worker process, so it is kept
+    deliberately cheap: a single in-memory DuckDB instance hosts all three
+    fixture tables (a fresh connection per table costs ~20 MB of engine
+    startup churn each).
+
+    - ``numbers`` (integers 0-99): the basic ``statistics_from_duckdb()`` demo.
+    - ``geo_points`` (5x5 point grid): geometry/spatial bounding-box statistics.
+    - ``colors`` (3-row ENUM table): dictionary-encoded min/max unwrapping.
     """
     from vgi._duckdb import connect as engine_connect
 
     conn = engine_connect()
+
     conn.execute("CREATE TABLE numbers AS SELECT unnest(range(100)) AS value")
-    stats = statistics_from_duckdb(conn, "numbers")
-    conn.close()
-    return stats
+    numbers_stats = statistics_from_duckdb(conn, "numbers")
 
-
-_NUMBERS_STATS = _build_numbers_stats()
-
-
-def _build_geo_stats() -> tuple[pa.Schema, dict[str, ColumnStatisticsInput]]:
-    """Build a geometry table in DuckDB and extract spatial statistics.
-
-    Creates a 5x5 grid of points (0,0) to (4,4) with an integer ID.
-    Demonstrates geometry statistics via ``statistics_from_duckdb()``.
-    """
-    from vgi._duckdb import connect as engine_connect
-
-    conn = engine_connect()
     # INSTALL is a no-op when the extension is already cached; fresh
     # environments (CI runners) need the download before LOAD.
     conn.execute("INSTALL spatial")
@@ -337,25 +334,9 @@ def _build_geo_stats() -> tuple[pa.Schema, dict[str, ColumnStatisticsInput]]:
         "ST_Point(x::DOUBLE, y::DOUBLE)::GEOMETRY AS geom "
         "FROM range(5) t1(x), range(5) t2(y)"
     )
-    schema = conn.execute("SELECT * FROM geo_points LIMIT 0").to_arrow_table().schema
-    stats = statistics_from_duckdb(conn, "geo_points")
-    conn.close()
-    return schema, stats
+    geo_schema = conn.execute("SELECT * FROM geo_points LIMIT 0").to_arrow_table(1024).schema
+    geo_stats = statistics_from_duckdb(conn, "geo_points")
 
-
-_GEO_SCHEMA, _GEO_STATS = _build_geo_stats()
-
-
-def _build_enum_stats() -> dict[str, ColumnStatisticsInput]:
-    """Extract statistics for a table with ENUM (dictionary-encoded) columns.
-
-    Demonstrates that ``statistics_from_duckdb()`` correctly unwraps
-    dictionary-encoded min/max to actual string values rather than
-    returning dictionary indices.
-    """
-    from vgi._duckdb import connect as engine_connect
-
-    conn = engine_connect()
     conn.execute("CREATE TYPE color AS ENUM ('red', 'green', 'blue')")
     conn.execute(
         "CREATE TABLE colors AS "
@@ -363,12 +344,13 @@ def _build_enum_stats() -> dict[str, ColumnStatisticsInput]:
         "unnest(['red', 'green', 'blue'])::color AS color, "
         "unnest(['#FF0000', '#00FF00', '#0000FF']) AS hex_code"
     )
-    stats = statistics_from_duckdb(conn, "colors")
+    enum_stats = statistics_from_duckdb(conn, "colors")
+
     conn.close()
-    return stats
+    return numbers_stats, geo_schema, geo_stats, enum_stats
 
 
-_ENUM_STATS = _build_enum_stats()
+_NUMBERS_STATS, _GEO_SCHEMA, _GEO_STATS, _ENUM_STATS = _build_fixture_stats()
 
 _EXAMPLE_CATALOG = Catalog(
     name="example",

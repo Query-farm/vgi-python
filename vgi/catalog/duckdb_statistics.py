@@ -25,6 +25,14 @@ Geometry columns are handled specially: instead of meaningless ``min``/``max``
 of the raw WKB blobs, the helper computes the spatial bounding box of the
 dataset and sends two corner points so that DuckDB's ``GeometryStats`` can
 reconstruct the correct spatial extent for filter pushdown.
+
+Performance notes: all per-column aggregates (counts, distinct, min/max,
+string lengths, unicode detection) are folded into a single full-table query
+so the table is scanned once, not 4+ times per column. Geometry and list
+columns add one extra query each for their type-specific extremes. Every
+Arrow materialization passes a small batch size — DuckDB's Arrow appender
+pre-allocates buffers for the batch size per column (default 1M rows ≈ 8 MiB
+per column), which is pure allocation churn for these 0/1-row results.
 """
 
 from __future__ import annotations
@@ -44,14 +52,17 @@ __all__ = ["column_statistics_from_duckdb", "statistics_from_duckdb"]
 # DuckDB type names that indicate a spatial column requiring special handling.
 _GEOMETRY_TYPE_NAMES = frozenset({"GEOMETRY", "POINT_2D", "LINESTRING_2D", "POLYGON_2D", "BOX_2D"})
 
+#: Arrow batch size for materializing statistics results. The results here are
+#: all zero- or one-row tables, but DuckDB's ArrowAppender pre-allocates
+#: buffers for the full batch size per column (the default is 1,000,000 rows —
+#: about 8 MiB per column of wasted allocation per query).
+_RESULT_BATCH_SIZE = 1024
 
-def _is_geometry_column(conn: duckdb.DuckDBPyConnection, qualified: str, col: str) -> bool:
-    """Check if a column is a geometry type by querying DuckDB's typeof()."""
-    try:
-        row = conn.execute(f"SELECT typeof({col}) FROM {qualified} WHERE {col} IS NOT NULL LIMIT 1").fetchone()
-        return row is not None and row[0] in _GEOMETRY_TYPE_NAMES
-    except Exception:
-        return False
+
+def _duckdb_column_types(conn: duckdb.DuckDBPyConnection, qualified: str) -> dict[str, str]:
+    """Map column name -> DuckDB type name via a single metadata-only DESCRIBE."""
+    rows = conn.execute(f"DESCRIBE SELECT * FROM {qualified}").fetchall()
+    return {row[0]: row[1] for row in rows}
 
 
 def _geometry_stats(
@@ -80,58 +91,42 @@ def _geometry_stats(
     extension is not loaded.
     """
     try:
-        # Detect which dimensions are present by checking if Z/M functions
-        # return non-NULL for any row
-        dim_row = conn.execute(
+        # One scan computes the bounds for every dimension. Z/M presence is
+        # derived from the aggregates themselves: min(ST_ZMin(...)) is NULL
+        # iff no row carries a Z coordinate (min/max ignore NULLs).
+        bounds = conn.execute(
             f"SELECT"
-            f"  bool_or(ST_ZMin({col}) IS NOT NULL) AS has_z,"
-            f"  bool_or(ST_MMin({col}) IS NOT NULL) AS has_m"
-            f" FROM {qualified}"
-            f" WHERE {col} IS NOT NULL"
+            f"  min(ST_XMin({col})) AS xmin,"
+            f"  max(ST_XMax({col})) AS xmax,"
+            f"  min(ST_YMin({col})) AS ymin,"
+            f"  max(ST_YMax({col})) AS ymax,"
+            f"  min(ST_ZMin({col})) AS zmin,"
+            f"  max(ST_ZMax({col})) AS zmax,"
+            f"  min(ST_MMin({col})) AS mmin,"
+            f"  max(ST_MMax({col})) AS mmax"
+            f" FROM {qualified} WHERE {col} IS NOT NULL"
         ).fetchone()
-
-        if dim_row is None:
-            return None, None
-
-        has_z = bool(dim_row[0])
-        has_m = bool(dim_row[1])
-
-        # Build the aggregation query for all present dimensions
-        agg_parts = [
-            f"min(ST_XMin({col})) AS xmin",
-            f"max(ST_XMax({col})) AS xmax",
-            f"min(ST_YMin({col})) AS ymin",
-            f"max(ST_YMax({col})) AS ymax",
-        ]
-        if has_z:
-            agg_parts += [f"min(ST_ZMin({col})) AS zmin", f"max(ST_ZMax({col})) AS zmax"]
-        if has_m:
-            agg_parts += [f"min(ST_MMin({col})) AS mmin", f"max(ST_MMax({col})) AS mmax"]
-
-        bounds = conn.execute(f"SELECT {', '.join(agg_parts)} FROM {qualified} WHERE {col} IS NOT NULL").fetchone()
 
         if bounds is None:
             return None, None
 
-        xmin, xmax, ymin, ymax = bounds[0], bounds[1], bounds[2], bounds[3]
+        xmin, xmax, ymin, ymax, zmin, zmax, mmin, mmax = bounds
         if xmin is None:
             return None, None
 
+        has_z = zmin is not None
+        has_m = mmin is not None
+
         # Build WKT for the corner points with the correct vertex type
-        idx = 4
         if has_z and has_m:
-            zmin, zmax = bounds[idx], bounds[idx + 1]
-            mmin, mmax = bounds[idx + 2], bounds[idx + 3]
             dim_label = "ZM"
             min_coords = f"{xmin} {ymin} {zmin} {mmin}"
             max_coords = f"{xmax} {ymax} {zmax} {mmax}"
         elif has_z:
-            zmin, zmax = bounds[idx], bounds[idx + 1]
             dim_label = "Z"
             min_coords = f"{xmin} {ymin} {zmin}"
             max_coords = f"{xmax} {ymax} {zmax}"
         elif has_m:
-            mmin, mmax = bounds[idx], bounds[idx + 1]
             dim_label = "M"
             min_coords = f"{xmin} {ymin} {mmin}"
             max_coords = f"{xmax} {ymax} {mmax}"
@@ -148,7 +143,7 @@ def _geometry_stats(
             f"SELECT"
             f"  ST_GeomFromText('{min_wkt}')::GEOMETRY AS min_pt,"
             f"  ST_GeomFromText('{max_wkt}')::GEOMETRY AS max_pt"
-        ).to_arrow_table()
+        ).to_arrow_table(_RESULT_BATCH_SIZE)
 
         min_scalar = arrow_table.column("min_pt")[0]
         max_scalar = arrow_table.column("max_pt")[0]
@@ -185,7 +180,7 @@ def _list_stats(
             f"  [max(list_max({col}))] AS max_val"
             f" FROM {qualified}"
             f" WHERE {col} IS NOT NULL"
-        ).to_arrow_table()
+        ).to_arrow_table(_RESULT_BATCH_SIZE)
         min_scalar = arrow_table.column("min_val")[0]
         max_scalar = arrow_table.column("max_val")[0]
         # Check if the inner element is null (all lists were empty)
@@ -220,6 +215,9 @@ def statistics_from_duckdb(
     per column. Returns a dict mapping column names to
     :class:`ColumnStatisticsInput` instances with properly typed PyArrow scalars.
 
+    All plain-column aggregates are computed in one full-table scan; geometry
+    and list columns each add one type-specific query for their extremes.
+
     Special column type handling:
 
     - **Geometry**: computes the spatial bounding box and sends two corner-point
@@ -243,44 +241,98 @@ def statistics_from_duckdb(
     qualified = f'"{schema_name}"."{table_name}"' if schema_name else f'"{table_name}"'
 
     # Get the table schema via a zero-row Arrow query
-    schema: pa.Schema = conn.execute(f"SELECT * FROM {qualified} LIMIT 0").to_arrow_table().schema
+    schema: pa.Schema = conn.execute(f"SELECT * FROM {qualified} LIMIT 0").to_arrow_table(_RESULT_BATCH_SIZE).schema
 
-    result: dict[str, ColumnStatisticsInput] = {}
+    # Geometry detection from declared column types (metadata only, no scan).
+    duck_types = _duckdb_column_types(conn, qualified)
 
-    for field in schema:
+    # Build ONE aggregation query covering every column's counts, distinct
+    # count, min/max, string lengths, and unicode detection — a single table
+    # scan instead of 4+ scans per column. Geometry/list min/max are handled
+    # by their dedicated helpers afterwards.
+    agg_exprs: list[str] = ["count(*) AS row_count"]
+    plans: list[dict[str, bool]] = []
+    for idx, field in enumerate(schema):
         col = f'"{field.name}"'
-
-        # Count nulls/non-nulls and distinct values (works for all types)
-        count_table = conn.execute(
-            f"SELECT"
-            f"  approx_count_distinct({col}) AS distinct_count,"
-            f"  count({col}) AS non_null_count,"
-            f"  (count(*) - count({col})) AS null_count"
-            f" FROM {qualified}"
-        ).to_arrow_table()
-        distinct_count: int = count_table.column("distinct_count")[0].as_py()
-        non_null_count: int = count_table.column("non_null_count")[0].as_py()
-        null_count: int = count_table.column("null_count")[0].as_py()
-
-        # Compute min/max — dispatch by column type
-        min_val: pa.Scalar | None = None  # type: ignore[type-arg]
-        max_val: pa.Scalar | None = None  # type: ignore[type-arg]
-
-        is_geom = _is_geometry_column(conn, qualified, col)
-        if is_geom:
-            min_val, max_val = _geometry_stats(conn, qualified, col)
-        elif (
+        is_geom = duck_types.get(field.name) in _GEOMETRY_TYPE_NAMES
+        is_list = (
             pa.types.is_list(field.type)
             or pa.types.is_large_list(field.type)
             or pa.types.is_fixed_size_list(field.type)
-        ):
+        )
+        is_dict = pa.types.is_dictionary(field.type)
+        effective_type = field.type.value_type if is_dict else field.type
+        is_stringish = pa.types.is_string(effective_type) or pa.types.is_large_string(effective_type)
+        is_binaryish = pa.types.is_binary(effective_type) or pa.types.is_large_binary(effective_type)
+
+        agg_exprs.append(f"approx_count_distinct({col}) AS d{idx}")
+        agg_exprs.append(f"count({col}) AS n{idx}")
+
+        want_minmax = not is_geom and not is_list
+        if want_minmax:
+            agg_exprs.append(f"min({col}) AS min{idx}")
+            agg_exprs.append(f"max({col}) AS max{idx}")
+
+        # max_string_length for string/binary columns (including dictionary-
+        # encoded columns with string value types like ENUMs). Skip geometry
+        # columns — their Arrow type is binary but strlen/octet_length don't
+        # apply to the DuckDB GEOMETRY type.
+        want_len = not is_geom and (is_stringish or is_binaryish)
+        if want_len:
+            # strlen returns byte length for VARCHAR; octet_length for BLOB.
+            # ENUM columns need a cast to VARCHAR first.
+            if is_binaryish:
+                len_expr = f"octet_length({col})"
+            elif is_dict:
+                len_expr = f"strlen({col}::VARCHAR)"
+            else:
+                len_expr = f"strlen({col})"
+            agg_exprs.append(f"max({len_expr}) AS len{idx}")
+
+        # contains_unicode for string columns: true if any value has characters
+        # outside ASCII (byte length > character length).
+        want_unicode = is_stringish
+        if want_unicode:
+            if is_dict:
+                unicode_expr = f"strlen({col}::VARCHAR) != length({col}::VARCHAR)"
+            else:
+                unicode_expr = f"strlen({col}) != length({col})"
+            agg_exprs.append(f"bool_or({unicode_expr}) AS uni{idx}")
+
+        plans.append(
+            {
+                "is_geom": is_geom,
+                "is_list": is_list,
+                "want_minmax": want_minmax,
+                "want_len": want_len,
+                "want_unicode": want_unicode,
+            }
+        )
+
+    agg_table = conn.execute(f"SELECT {', '.join(agg_exprs)} FROM {qualified}").to_arrow_table(_RESULT_BATCH_SIZE)
+    row_count: int = agg_table.column("row_count")[0].as_py()
+
+    result: dict[str, ColumnStatisticsInput] = {}
+
+    for idx, field in enumerate(schema):
+        col = f'"{field.name}"'
+        plan = plans[idx]
+
+        distinct_count: int = agg_table.column(f"d{idx}")[0].as_py()
+        non_null_count: int = agg_table.column(f"n{idx}")[0].as_py()
+        null_count = row_count - non_null_count
+
+        # min/max — typed Arrow scalars straight from the aggregate result;
+        # geometry and list columns dispatch to their dedicated helpers.
+        min_val: pa.Scalar | None = None  # type: ignore[type-arg]
+        max_val: pa.Scalar | None = None  # type: ignore[type-arg]
+        if plan["is_geom"]:
+            min_val, max_val = _geometry_stats(conn, qualified, col)
+        elif plan["is_list"]:
             min_val, max_val = _list_stats(conn, qualified, col, field.type)
         else:
-            minmax_table = conn.execute(
-                f"SELECT min({col}) AS min_val, max({col}) AS max_val FROM {qualified}"
-            ).to_arrow_table()
-            min_scalar = minmax_table.column("min_val")[0]
-            max_scalar = minmax_table.column("max_val")[0]
+            min_scalar = agg_table.column(f"min{idx}")[0]
+            max_scalar = agg_table.column(f"max{idx}")[0]
             min_val = min_scalar if min_scalar.is_valid else None
             max_val = max_scalar if max_scalar.is_valid else None
 
@@ -291,41 +343,16 @@ def statistics_from_duckdb(
         if max_val is not None and pa.types.is_dictionary(max_val.type):
             max_val = pa.scalar(max_val.as_py(), type=max_val.type.value_type)
 
-        # Compute max_string_length for string/binary columns (including
-        # dictionary-encoded columns with string value types like ENUMs).
-        # Skip geometry columns — their Arrow type is binary but strlen/octet_length
-        # don't apply to the DuckDB GEOMETRY type.
         max_string_length: int | None = None
-        is_dict = pa.types.is_dictionary(field.type)
-        effective_type = field.type.value_type if is_dict else field.type
-        if not is_geom and (
-            pa.types.is_string(effective_type)
-            or pa.types.is_large_string(effective_type)
-            or pa.types.is_binary(effective_type)
-            or pa.types.is_large_binary(effective_type)
-        ):
-            # strlen returns byte length for VARCHAR; octet_length for BLOB.
-            # ENUM columns need a cast to VARCHAR first.
-            if pa.types.is_binary(effective_type) or pa.types.is_large_binary(effective_type):
-                len_expr = f"octet_length({col})"
-            elif is_dict:
-                len_expr = f"strlen({col}::VARCHAR)"
-            else:
-                len_expr = f"strlen({col})"
-            len_row = conn.execute(f"SELECT max({len_expr}) AS max_len FROM {qualified}").fetchone()
-            if len_row is not None and len_row[0] is not None:
-                max_string_length = int(len_row[0])
+        if plan["want_len"]:
+            len_val = agg_table.column(f"len{idx}")[0].as_py()
+            if len_val is not None:
+                max_string_length = int(len_val)
 
-        # Compute contains_unicode for string columns: true if any value has
-        # characters outside ASCII (byte length > character length).
         contains_unicode: bool | None = None
-        if pa.types.is_string(effective_type) or pa.types.is_large_string(effective_type):
-            if is_dict:
-                unicode_expr = f"strlen({col}::VARCHAR) != length({col}::VARCHAR)"
-            else:
-                unicode_expr = f"strlen({col}) != length({col})"
-            uni_row = conn.execute(f"SELECT bool_or({unicode_expr}) AS has_unicode FROM {qualified}").fetchone()
-            contains_unicode = bool(uni_row[0]) if uni_row is not None and uni_row[0] is not None else False
+        if plan["want_unicode"]:
+            uni_val = agg_table.column(f"uni{idx}")[0].as_py()
+            contains_unicode = bool(uni_val) if uni_val is not None else False
 
         result[field.name] = ColumnStatisticsInput(
             min=min_val,
@@ -372,6 +399,6 @@ def column_statistics_from_duckdb(
 
     """
     qualified = f'"{schema_name}"."{table_name}"' if schema_name else f'"{table_name}"'
-    schema: pa.Schema = conn.execute(f"SELECT * FROM {qualified} LIMIT 0").to_arrow_table().schema
+    schema: pa.Schema = conn.execute(f"SELECT * FROM {qualified} LIMIT 0").to_arrow_table(_RESULT_BATCH_SIZE).schema
     stats_dict = statistics_from_duckdb(conn, table_name, schema_name=schema_name)
     return [stats_dict[field.name].resolve(field.name, field.type) for field in schema if field.name in stats_dict]
