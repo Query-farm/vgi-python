@@ -695,6 +695,13 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             carries a globally-unique monotonic batch_index from DuckDB's source.
             Workers can sort by it in combine() to reconstruct source order under
             parallel ingest. Mutually exclusive with ``sink_order_dependent``.
+        input_from_args: True for a blended ``RowTransformFunction`` — its
+            positional args ARE its per-row input columns (real typed args, no
+            ``TABLE`` placeholder), so one registration serves the literal /
+            column / LATERAL call shapes. Set from ``RowTransformFunction``
+            subclassing; the C++ extension reads it to enter the in-out
+            registration branch with real-typed args and drive the literal
+            single-row scan-mode.
         required_settings: Settings required by the function.
         required_secrets: Secrets required by the function (each entry has
             secret_type, optional secret_name, optional scope).

@@ -445,11 +445,11 @@ class TableInOutFunction[
 
 
 class RowTransformFunction[TArgs](TableInOutGenerator[TArgs, None]):
-    """Blended ("UNNEST-style") table-in-out: positional args ARE per-row input columns.
+    r"""Blended ("UNNEST-style") table-in-out: positional args ARE per-row input columns.
 
     A ``RowTransformFunction`` collapses the classic either/or between a standard
     table function (literal args only) and a table-in-out function (an explicit
-    ``TABLE`` subquery arg). Its **positional** ``Arg``\\s declare its per-row input
+    ``TABLE`` subquery arg). Its **positional** ``Arg``\s declare its per-row input
     columns — real typed args, NO synthetic ``TABLE`` placeholder — so ONE
     registration serves every call shape::
 

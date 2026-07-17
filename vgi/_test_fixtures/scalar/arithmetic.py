@@ -202,7 +202,7 @@ class CachedLabelScalarFunction(ScalarFunction):
     def compute(
         cls,
         value: Annotated[pa.Int64Array, Param(doc="Value")],
-    ) -> Annotated[pa.LargeStringArray, Returns(pa.string())]:
+    ) -> Annotated[pa.StringArray, Returns(pa.string())]:
         """Label non-negative values; NULL for negatives."""
         labels = ["lbl-" + str(v.as_py()) if (v.is_valid and v.as_py() >= 0) else None for v in value]
         return pa.array(labels, type=pa.string())

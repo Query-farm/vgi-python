@@ -840,8 +840,11 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
     @classmethod
     def _is_blended(cls) -> bool:
-        """True iff this is a blended ``RowTransformFunction`` (positional args are
-        the per-row input columns). Lazy import to avoid a circular dependency."""
+        """Return True iff this is a blended ``RowTransformFunction``.
+
+        Positional args are the per-row input columns. Lazy import to avoid
+        a circular dependency.
+        """
         try:
             from vgi.table_in_out_function import RowTransformFunction
         except ImportError:  # pragma: no cover

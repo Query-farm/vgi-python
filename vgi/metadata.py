@@ -408,6 +408,10 @@ class ResolvedMetadata:
             BatchIndex()`` so each process() call carries a globally-unique
             monotonic batch_index for reconstructing source order under parallel
             ingest. Mutually exclusive with ``sink_order_dependent``.
+        input_from_args: True for a blended ``RowTransformFunction`` — its
+            positional args ARE its per-row input columns, so one registration
+            serves the literal / column / LATERAL call shapes. Detected from
+            ``RowTransformFunction`` subclassing.
 
     """
 

@@ -531,6 +531,12 @@ class ScalarFunctionGenerator(vgi.function.Function):
 
     """
 
+    # Opt into the extension's result cache: when set, this CacheControl's ``vgi.cache.*``
+    # metadata is attached to every output batch, so the C++ side memoizes the scalar's
+    # output per distinct input value (see docs/exchange_dedup_pervalue.md). A pure,
+    # deterministic scalar only — advertising this on a non-pure scalar serves stale rows.
+    CACHE_CONTROL: CacheControl | None = None
+
     @final
     @classmethod
     def _validate_row_count(cls, output_batch: pa.RecordBatch, input_batch: pa.RecordBatch) -> None:
@@ -843,12 +849,6 @@ class ScalarFunction(ScalarFunctionGenerator):
         Override when output type depends on input schema or arguments.
 
     """
-
-    # Opt into the extension's result cache: when set, this CacheControl's ``vgi.cache.*``
-    # metadata is attached to every output batch, so the C++ side memoizes the scalar's
-    # output per distinct input value (see docs/exchange_dedup_pervalue.md). A pure,
-    # deterministic scalar only — advertising this on a non-pure scalar serves stale rows.
-    CACHE_CONTROL: CacheControl | None = None
 
     # For TYPE_CHECKING, allow dynamic attribute access for Param/ConstParam
     if TYPE_CHECKING:

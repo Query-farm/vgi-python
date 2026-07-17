@@ -155,8 +155,8 @@ class SubstreamPartialSumFunction(TableInOutFunction[SingleTableArguments, Subst
 
     @classmethod
     def cardinality(cls, params: BindParams[SingleTableArguments]) -> TableCardinality:
-        # One row per substream; unknown up-front, so leave the estimate open.
-        return TableCardinality(estimate=1)
+        # One row per substream; the substream count is unknown up-front.
+        return TableCardinality(estimate=1, max=None)
 
     @classmethod
     def on_bind(cls, params: BindParams[SingleTableArguments]) -> BindResponse:
@@ -1586,9 +1586,7 @@ class GeoEncodeFunction(RowTransformFunction[GeoArgs]):
         lats = batch.column("latitude").to_pylist()
         lons = batch.column("longitude").to_pylist()
         codes = [
-            None
-            if lat is None or lon is None
-            else f"{round(lat, precision)}:{round(lon, precision)}"
+            None if lat is None or lon is None else f"{round(lat, precision)}:{round(lon, precision)}"
             for lat, lon in zip(lats, lons, strict=True)
         ]
         out.emit(pa.record_batch({"geohash": pa.array(codes, type=pa.string())}))
@@ -1638,9 +1636,7 @@ class GeoEncode3Function(RowTransformFunction[Geo3Args]):
         lons = batch.column("longitude").to_pylist()
         alts = batch.column("altitude").to_pylist()
         codes = [
-            None
-            if lat is None or lon is None or alt is None
-            else f"{round(lat, p)}:{round(lon, p)}:{round(alt, p)}"
+            None if lat is None or lon is None or alt is None else f"{round(lat, p)}:{round(lon, p)}:{round(alt, p)}"
             for lat, lon, alt in zip(lats, lons, alts, strict=True)
         ]
         out.emit(pa.record_batch({"geohash": pa.array(codes, type=pa.string())}))
@@ -1994,9 +1990,9 @@ class CachedSumAllColumnsFunction(SumAllColumnsFunction):
     @classmethod
     def finalize(
         cls,
-        params: "TableBufferingParams[SumAllColumnsFunctionArguments]",
+        params: TableBufferingParams[SumAllColumnsFunctionArguments],
         finalize_state_id: bytes,
-        state: "_LogDrainState",
+        state: _LogDrainState,
         out: OutputCollector,
     ) -> None:
         rows = params.storage.state_log_scan(state.ns, b"", after_id=state.after_id, limit=1)

@@ -258,6 +258,13 @@ class InitRequest(ArrowSerializableDataclass):
             ``None`` for global init, set for secondary init.
         init_opaque_data: Opaque per-init state threaded back into the stream;
             same producer/wire/consumer contract as ``bind_opaque_data``.
+        substream_id: Stable, client-owned identity of the streaming
+            table-in-out substream this request opens (per DuckDB
+            PipelineExecutor). Rides every InitRequest a substream's worker
+            builds — INPUT and FINALIZE — so a worker can locate that
+            substream's accumulated state even when an HTTP load balancer
+            routes its init / process / finalize to different backends. ``None``
+            for non-substream function types.
         order_by_column_name: Column name of the order-pushdown hint from DuckDB's
             RowGroupPruner optimizer; ``None`` when no hint.
         order_by_direction: Sort direction of the order-pushdown hint; ``None``
@@ -789,7 +796,7 @@ class ScalarExchangeState(ExchangeState):
         # Result-cache opt-in: a scalar declaring CACHE_CONTROL rides its vgi.cache.* keys on
         # the emit path's batch custom_metadata (per-batch — not the fixed IPC schema), so the
         # extension can memoize the output per distinct input value.
-        cc_meta = cls.CACHE_CONTROL.to_metadata() if getattr(cls, "CACHE_CONTROL", None) is not None else None
+        cc_meta = cls.CACHE_CONTROL.to_metadata() if cls.CACHE_CONTROL is not None else None
         out.emit(output, metadata=cc_meta)
 
 
@@ -939,7 +946,9 @@ def _serialize_partition_values_batch(batch: pa.RecordBatch) -> str:
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, batch.schema) as writer:
         writer.write_batch(batch)
-    return base64.b64encode(sink.getvalue().to_pybytes()).decode("ascii")
+    # b64encode accepts buffer-protocol objects — no need to copy the
+    # pa.Buffer into an intermediate bytes first.
+    return base64.b64encode(sink.getvalue()).decode("ascii")
 
 
 def _merge_partition_values(
@@ -1351,7 +1360,9 @@ class TableProducerState(ProducerState):
         proj_ids = _effective_projection_ids(func_cls, self._init_call.projection_ids)
         output_schema = project_schema(proj_ids, self._init_call.output_schema)
         self._params = ProcessParams(
-            args=func_cls._parse_arguments(func_cls.FunctionArguments, self._init_call.bind_call.arguments, blended=func_cls._is_blended()),
+            args=func_cls._parse_arguments(
+                func_cls.FunctionArguments, self._init_call.bind_call.arguments, blended=func_cls._is_blended()
+            ),
             init_call=self._init_call,
             init_response=self._init_response,
             output_schema=output_schema,
@@ -1527,7 +1538,9 @@ class TableInOutExchangeState(ExchangeState):
         proj_ids = _effective_projection_ids(func_cls, self._init_call.projection_ids)
         output_schema = project_schema(proj_ids, self._init_call.output_schema)
         self._params = ProcessParams(
-            args=func_cls._parse_arguments(func_cls.FunctionArguments, self._init_call.bind_call.arguments, blended=func_cls._is_blended()),
+            args=func_cls._parse_arguments(
+                func_cls.FunctionArguments, self._init_call.bind_call.arguments, blended=func_cls._is_blended()
+            ),
             init_call=self._init_call,
             init_response=self._init_response,
             output_schema=output_schema,

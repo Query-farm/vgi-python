@@ -64,6 +64,7 @@ vgi._test_fixtures.worker : Example worker with built-in functions
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import importlib.metadata
 import logging
@@ -804,6 +805,35 @@ def _unpack_all_valid(data: bytes, column_count: int) -> list[bool]:
     if not data:
         return [True] * column_count
     return [bool(b) for b in data[:column_count]]
+
+
+def _ipc_stream_view(sink: pa.BufferOutputStream) -> bytes:
+    """Zero-copy view of a finished IPC stream for a binary response field.
+
+    ``sink.getvalue()`` hands back the ``pa.Buffer`` that already owns the
+    serialized stream; ``to_pybytes()`` would copy the whole batch a second
+    time. vgi_rpc passes buffer-protocol values through untouched and Arrow
+    accepts ``memoryview`` elements for binary columns, so the view is
+    serialized without ever materializing a Python ``bytes``.
+
+    Typed as ``bytes`` to satisfy the response dataclass field annotations;
+    only hand the result to vgi_rpc response fields, not to APIs that
+    require an actual ``bytes`` object (pickle, dict keys, storage backends).
+    """
+    return cast("bytes", memoryview(sink.getvalue()))
+
+
+@functools.cache
+def _update_accepts_params(func_cls: type) -> bool:
+    """True if ``func_cls.update()`` declares a ``params`` parameter.
+
+    Cached per class: ``inspect.signature`` is expensive and this runs on
+    the per-chunk aggregate update path. Registered function classes live
+    for the process lifetime, so the cache cannot grow unboundedly.
+    """
+    import inspect
+
+    return "params" in inspect.signature(func_cls.update).parameters  # type: ignore[attr-defined]
 
 
 def _serialize_schema_bytes(schema: pa.Schema) -> bytes:
@@ -2533,10 +2563,7 @@ class Worker:
                     scalar = const_args.positional[arg_idx]
                     kwargs[name] = scalar.as_py() if scalar is not None else None
         # Inject params for functions that declare it
-        import inspect
-
-        update_sig = inspect.signature(func_cls.update)
-        if "params" in update_sig.parameters:
+        if _update_accepts_params(func_cls):
             kwargs["params"] = params
         func_cls.update(**kwargs)
 
@@ -2674,7 +2701,7 @@ class Worker:
         sink = pa.BufferOutputStream()
         with pa.ipc.new_stream(sink, result_batch.schema) as writer:
             writer.write_batch(result_batch)
-        return AggregateFinalizeResponse(result_batch=sink.getvalue().to_pybytes())
+        return AggregateFinalizeResponse(result_batch=_ipc_stream_view(sink))
 
     def aggregate_destructor(
         self,
@@ -3009,7 +3036,7 @@ class Worker:
         sink = pa.BufferOutputStream()
         with pa.ipc.new_stream(sink, result_batch.schema) as writer:
             writer.write_batch(result_batch)
-        return AggregateWindowResponse(result_batch=sink.getvalue().to_pybytes())
+        return AggregateWindowResponse(result_batch=_ipc_stream_view(sink))
 
     def _load_cached_window_partition(
         self,
@@ -3143,7 +3170,7 @@ class Worker:
         sink = pa.BufferOutputStream()
         with pa.ipc.new_stream(sink, result_batch.schema) as writer:
             writer.write_batch(result_batch)
-        return AggregateWindowBatchResponse(result_batch=sink.getvalue().to_pybytes())
+        return AggregateWindowBatchResponse(result_batch=_ipc_stream_view(sink))
 
     def aggregate_window_destructor(
         self,
@@ -3300,7 +3327,7 @@ class Worker:
         _record_persist_timing(t_enc, t_put, len(payload))
         with _streaming_persist_lock:
             _streaming_persist_stats["n_chunks"] += 1
-        return AggregateStreamingChunkResponse(result_batch=sink.getvalue().to_pybytes())
+        return AggregateStreamingChunkResponse(result_batch=_ipc_stream_view(sink))
 
     def aggregate_streaming_close(
         self,

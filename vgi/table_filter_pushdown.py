@@ -1092,46 +1092,52 @@ class PushdownFilters:
             Boolean array with True for rows that pass all filters.
 
         """
-        _log_debug(
-            "evaluate_start",
-            num_filters=len(self.filters),
-            input_rows=batch.num_rows,
-            columns=[f.column_name for f in self.filters],
-        )
+        # Debug bookkeeping is guarded at the call site: the pc.sum() passes
+        # and filter reprs (InFilter materializes its whole IN set) are pure
+        # instrumentation and must cost nothing when VGI_FILTER_DEBUG is off.
+        if _FILTER_DEBUG:
+            _log_debug(
+                "evaluate_start",
+                num_filters=len(self.filters),
+                input_rows=batch.num_rows,
+                columns=[f.column_name for f in self.filters],
+            )
 
         if not self.filters:
-            _log_debug("evaluate_no_filters", input_rows=batch.num_rows)
+            if _FILTER_DEBUG:
+                _log_debug("evaluate_no_filters", input_rows=batch.num_rows)
             return _make_bool_array(True, batch.num_rows)
 
         result = self.filters[0].evaluate(batch)
-        # pc.sum works on BooleanArray (counts True values) but stubs don't reflect this
-        true_count: int | None = pc.sum(result).as_py()  # type: ignore[type-var]
-        _log_debug(
-            "evaluate_filter",
-            filter_index=0,
-            filter_type=type(self.filters[0]).__name__,
-            filter_repr=repr(self.filters[0]),
-            rows_passing=true_count,
-        )
+        if _FILTER_DEBUG:
+            _log_debug(
+                "evaluate_filter",
+                filter_index=0,
+                filter_type=type(self.filters[0]).__name__,
+                filter_repr=repr(self.filters[0]),
+                # pc.sum works on BooleanArray (counts True values) but stubs don't reflect this
+                rows_passing=pc.sum(result).as_py(),  # type: ignore[type-var]
+            )
 
         for i, f in enumerate(self.filters[1:], start=1):
             result = pc.and_(result, f.evaluate(batch))
-            true_count = pc.sum(result).as_py()  # type: ignore[type-var]
-            _log_debug(
-                "evaluate_filter",
-                filter_index=i,
-                filter_type=type(f).__name__,
-                filter_repr=repr(f),
-                rows_passing=true_count,
-            )
+            if _FILTER_DEBUG:
+                _log_debug(
+                    "evaluate_filter",
+                    filter_index=i,
+                    filter_type=type(f).__name__,
+                    filter_repr=repr(f),
+                    rows_passing=pc.sum(result).as_py(),  # type: ignore[type-var]
+                )
 
-        final_count: int | None = pc.sum(result).as_py()  # type: ignore[type-var]
-        _log_debug(
-            "evaluate_complete",
-            input_rows=batch.num_rows,
-            rows_passing=final_count,
-            rows_filtered=batch.num_rows - (final_count or 0),
-        )
+        if _FILTER_DEBUG:
+            final_count: int | None = pc.sum(result).as_py()  # type: ignore[type-var]
+            _log_debug(
+                "evaluate_complete",
+                input_rows=batch.num_rows,
+                rows_passing=final_count,
+                rows_filtered=batch.num_rows - (final_count or 0),
+            )
         return result
 
     def apply(self, batch: pa.RecordBatch) -> pa.RecordBatch:
@@ -1144,16 +1150,18 @@ class PushdownFilters:
             Filtered RecordBatch containing only rows that pass all filters.
 
         """
-        _log_debug("apply_start", input_rows=batch.num_rows)
+        if _FILTER_DEBUG:
+            _log_debug("apply_start", input_rows=batch.num_rows)
         mask = self.evaluate(batch)
         # pc.filter supports RecordBatch but pyarrow-stubs don't have the overload
         filtered: pa.RecordBatch = pc.filter(batch, mask)  # type: ignore[call-overload]
-        _log_debug(
-            "apply_complete",
-            input_rows=batch.num_rows,
-            output_rows=filtered.num_rows,
-            rows_removed=batch.num_rows - filtered.num_rows,
-        )
+        if _FILTER_DEBUG:
+            _log_debug(
+                "apply_complete",
+                input_rows=batch.num_rows,
+                output_rows=filtered.num_rows,
+                rows_removed=batch.num_rows - filtered.num_rows,
+            )
         return filtered
 
     # =========================================================================
@@ -1731,13 +1739,16 @@ def _parse_filter(
         # ListScalar.values gives us the underlying array
         # pyarrow-stubs doesn't type ListScalar.values correctly
         values_array: pa.Array[Any] = list_scalar.values  # type: ignore[attr-defined]
-        _log_debug(
-            "parse_filter_in",
-            column=column_name,
-            num_values=len(values_array),
-            values=values_array.to_pylist(),
-            value_type=str(values_array.type),
-        )
+        if _FILTER_DEBUG:
+            # Guarded: to_pylist() materializes the whole IN set to Python
+            # objects, and deserialization re-runs per dynamic-filter tick.
+            _log_debug(
+                "parse_filter_in",
+                column=column_name,
+                num_values=len(values_array),
+                values=values_array.to_pylist(),
+                value_type=str(values_array.type),
+            )
         return InFilter(
             column_name=column_name,
             column_index=column_index,
