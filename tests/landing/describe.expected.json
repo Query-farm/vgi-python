@@ -3,7 +3,7 @@
     {
       "attach_options": [],
       "counts": {
-        "functions": 199,
+        "functions": 203,
         "schemas": 2,
         "tables": 59,
         "views": 3
@@ -1522,6 +1522,54 @@
               ],
               "doc": "Multi-worker cacheable sequence (one substream per worker); parallel-capture fixture",
               "name": "cache_parallel",
+              "type": "table"
+            },
+            {
+              "args": [
+                {
+                  "desc": "Rows per (region, year) partition",
+                  "name": "rows_per_partition",
+                  "type": "int64"
+                }
+              ],
+              "doc": "Per-partition cacheable over (region, year) SINGLE_VALUE partition columns",
+              "name": "cache_partition_multicol",
+              "type": "table"
+            },
+            {
+              "args": [
+                {
+                  "desc": "Rows per country partition",
+                  "name": "rows_per_country",
+                  "type": "int64"
+                }
+              ],
+              "doc": "Per-partition cacheable; work-queue fan-out (parallel capture); one NULL partition",
+              "name": "cache_partition_parallel",
+              "type": "table"
+            },
+            {
+              "args": [
+                {
+                  "desc": "Rows per country partition",
+                  "name": "rows_per_country",
+                  "type": "int64"
+                }
+              ],
+              "doc": "Per-partition cacheable with projection pushdown + explicit partition_values",
+              "name": "cache_partition_proj",
+              "type": "table"
+            },
+            {
+              "args": [
+                {
+                  "desc": "Rows per country partition",
+                  "name": "rows_per_country",
+                  "type": "int64"
+                }
+              ],
+              "doc": "Per-partition cacheable single-value-partitioned result (vgi.cache.partition_scope)",
+              "name": "cache_partition_scope",
               "type": "table"
             },
             {

@@ -27,7 +27,7 @@ from __future__ import annotations
 import itertools
 import struct
 from dataclasses import dataclass
-from typing import Annotated, ClassVar, cast
+from typing import Annotated, Any, ClassVar, cast
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
@@ -1332,7 +1332,6 @@ class CacheTypesFunction(TableFunctionGenerator[CacheTypesArgs, _CacheCountdownS
         first_batch = state.current_index == 0
         size = min(state.remaining, cls.BATCH_SIZE)
         from decimal import Decimal
-        from typing import Any
 
         ids: list[int] = []
         tags: list[list[int] | None] = []
@@ -1634,9 +1633,7 @@ class _CachePartitionParallelState(ArrowSerializableDataclass):
 
 
 @bind_fixed_schema
-class CachePartitionParallelFunction(
-    TableFunctionGenerator[CachePartitionParallelArgs, _CachePartitionParallelState]
-):
+class CachePartitionParallelFunction(TableFunctionGenerator[CachePartitionParallelArgs, _CachePartitionParallelState]):
     """Per-partition cacheable; work-queue fan-out across workers; includes a NULL partition."""
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema(
@@ -1731,9 +1728,7 @@ class _CachePartitionMultiColState(ArrowSerializableDataclass):
 
 @init_single_worker
 @bind_fixed_schema
-class CachePartitionMultiColFunction(
-    TableFunctionGenerator[CachePartitionMultiColArgs, _CachePartitionMultiColState]
-):
+class CachePartitionMultiColFunction(TableFunctionGenerator[CachePartitionMultiColArgs, _CachePartitionMultiColState]):
     """Per-partition cacheable over TWO SINGLE_VALUE partition columns (region, year)."""
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema(
@@ -1849,7 +1844,7 @@ class CachePartitionProjFunction(TableFunctionGenerator[CachePartitionProjArgs, 
         country = _PSCOPE_PROJ_COUNTRIES[state.country_idx]
         rpc = params.args.rows_per_country
         base = state.country_idx * 1_000_000
-        full = {
+        full: dict[str, list[Any]] = {
             "country": [country] * rpc,
             "sales": [base + i for i in range(rpc)],
             "extra": [base + 500 + i for i in range(rpc)],
