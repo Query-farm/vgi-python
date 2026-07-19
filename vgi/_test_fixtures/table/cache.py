@@ -1523,3 +1523,343 @@ class CachePartitionedFunction(TableFunctionGenerator[CachePartitionedArgs, _Cac
         cast(VgiOutputCollector, out).emit(batch, cache_control=cache_control)
         state.advertised = True
         state.country_idx += 1
+
+
+# ---------------------------------------------------------------------------
+# cache_partition_scope — per-PARTITION result caching opt-in
+# ---------------------------------------------------------------------------
+# SINGLE_VALUE_PARTITIONS + vgi.cache.partition_scope: the client ALSO caches the
+# result split by partition value (one entry per country), so a later =/IN scan on
+# `country` serves the requested partitions from cache without the worker.
+# filter_pushdown + auto_apply_filters means a WHERE country=... predicate reaches
+# the worker as a real filter (so input.filters is populated → the client can
+# enumerate the requested set) and the framework prunes emitted batches to it (so a
+# fall-through worker scan is row-correct, since DuckDB does NOT re-filter a pushed
+# predicate). partition_scope is advertised on EVERY batch so the client latches it
+# even if the first country is filtered away on a fall-through scan.
+
+
+@dataclass(slots=True, frozen=True)
+class CachePartitionScopeArgs:
+    """Arguments for CachePartitionScopeFunction."""
+
+    rows_per_country: Annotated[int, Arg(0, doc="Rows per country partition", ge=1)]
+
+
+@init_single_worker
+@bind_fixed_schema
+class CachePartitionScopeFunction(TableFunctionGenerator[CachePartitionScopeArgs, _CachePartitionedState]):
+    """Per-partition cacheable single-value-partitioned result (country + sales)."""
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        [_partition_field("country", pa.string()), pa.field("sales", pa.int64())]
+    )
+
+    class Meta:
+        """Metadata for CachePartitionScopeFunction."""
+
+        name = "cache_partition_scope"
+        description = "Per-partition cacheable single-value-partitioned result (vgi.cache.partition_scope)"
+        categories = ["generator", "cache", "testing", "partitioning"]
+        tags = {"category": "cache", "type": "partitioned"}
+        partition_kind = _PartitionKind.SINGLE_VALUE_PARTITIONS
+        filter_pushdown = True
+        auto_apply_filters = True
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM cache_partition_scope(10) WHERE country = 'US'",
+                description="Per-partition cache serve for one country",
+            ),
+        ]
+
+    FunctionArguments = CachePartitionScopeArgs
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[CachePartitionScopeArgs]) -> _CachePartitionedState:
+        """Create initial state."""
+        return _CachePartitionedState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[CachePartitionScopeArgs],
+        state: _CachePartitionedState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit one single-country batch per tick; advertise per-partition cacheability."""
+        if state.country_idx >= len(_CACHE_COUNTRIES):
+            out.finish()
+            return
+        country = _CACHE_COUNTRIES[state.country_idx]
+        rpc = params.args.rows_per_country
+        base = state.country_idx * 1_000_000
+        batch = pa.RecordBatch.from_pydict(
+            {"country": [country] * rpc, "sales": [base + i for i in range(rpc)]},
+            schema=params.output_schema,
+        )
+        # Advertise on every batch (extension latches the first it sees) so the opt-in
+        # survives a fall-through scan whose leading country was filtered to 0 rows.
+        cast(VgiOutputCollector, out).emit(
+            batch, cache_control=CacheControl(ttl=_DEFAULT_TTL_SECONDS, partition_scope=True)
+        )
+        state.country_idx += 1
+
+
+# ---------------------------------------------------------------------------
+# cache_partition_parallel — work-queue fan-out (PARALLEL capture) + a NULL partition
+# ---------------------------------------------------------------------------
+# Unlike cache_partition_scope (single-worker), this uses the work-queue pattern so a
+# `threads=N` + `pool false` scan fans partitions across N workers → the per-partition
+# split at commit must bucket batches drawn from MULTIPLE capture substreams. Also emits
+# one NULL-valued partition (SINGLE_VALUE permits NULL) so capture/serve of a NULL tuple
+# and the correct non-enumerability of `IS NULL` are exercised.
+_PSCOPE_COUNTRIES: list[str | None] = ["AU", "CA", "US", None]
+_PSCOPE_QUEUE_FMT = ">i"  # int32 country index
+
+
+@dataclass(slots=True, frozen=True)
+class CachePartitionParallelArgs:
+    """Arguments for CachePartitionParallelFunction."""
+
+    rows_per_country: Annotated[int, Arg(0, doc="Rows per country partition", ge=1)]
+
+
+@dataclass(kw_only=True)
+class _CachePartitionParallelState(ArrowSerializableDataclass):
+    """Per-worker cursor over the work queue."""
+
+    country_idx: int = -1
+    current_idx: int = 0
+    started: bool = False
+
+
+@bind_fixed_schema
+class CachePartitionParallelFunction(
+    TableFunctionGenerator[CachePartitionParallelArgs, _CachePartitionParallelState]
+):
+    """Per-partition cacheable; work-queue fan-out across workers; includes a NULL partition."""
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        [_partition_field("country", pa.string()), pa.field("sales", pa.int64())]
+    )
+
+    class Meta:
+        """Metadata for CachePartitionParallelFunction."""
+
+        name = "cache_partition_parallel"
+        description = "Per-partition cacheable; work-queue fan-out (parallel capture); one NULL partition"
+        categories = ["generator", "cache", "testing", "partitioning"]
+        tags = {"category": "cache", "type": "partitioned"}
+        partition_kind = _PartitionKind.SINGLE_VALUE_PARTITIONS
+        filter_pushdown = True
+        auto_apply_filters = True
+
+    FunctionArguments = CachePartitionParallelArgs
+
+    @classmethod
+    def on_init(cls, params: InitParams[CachePartitionParallelArgs]) -> GlobalInitResponse:
+        """Primary worker enqueues one (country_idx) item per partition."""
+        items = [struct.pack(_PSCOPE_QUEUE_FMT, i) for i in range(len(_PSCOPE_COUNTRIES))]
+        params.storage.queue_push(items)
+        return GlobalInitResponse()
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[CachePartitionParallelArgs]) -> _CachePartitionParallelState:
+        """Create initial state."""
+        return _CachePartitionParallelState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[CachePartitionParallelArgs],
+        state: _CachePartitionParallelState,
+        out: OutputCollector,
+    ) -> None:
+        """Pop one country from the queue; emit its single-valued batch (auto pv)."""
+        if not state.started or state.current_idx >= params.args.rows_per_country:
+            item = params.storage.queue_pop()
+            if item is None:
+                out.finish()
+                return
+            (state.country_idx,) = struct.unpack(_PSCOPE_QUEUE_FMT, item)
+            state.current_idx = 0
+            state.started = True
+        country = _PSCOPE_COUNTRIES[state.country_idx]
+        rpc = params.args.rows_per_country
+        base = state.country_idx * 1_000_000
+        batch = pa.RecordBatch.from_pydict(
+            {"country": [country] * rpc, "sales": [base + i for i in range(rpc)]},
+            schema=params.output_schema,
+        )
+        # Explicit pv so the NULL partition is unambiguous (auto-extract of an all-NULL
+        # column is fine too, but explicit keeps the NULL scalar's type pinned).
+        cast(VgiOutputCollector, out).emit(
+            batch,
+            cache_control=CacheControl(ttl=_DEFAULT_TTL_SECONDS, partition_scope=True),
+            partition_values={"country": (pa.scalar(country, pa.string()), pa.scalar(country, pa.string()))},
+        )
+        state.current_idx = rpc
+
+
+# ---------------------------------------------------------------------------
+# cache_partition_multicol — MULTI-COLUMN (region, year) SINGLE_VALUE partitions
+# ---------------------------------------------------------------------------
+# Exercises the cross-product enumeration (region IN × year IN), 2-column tuple
+# canonicalization, and the partial-constraint case (region constrained, year free →
+# NOT enumerable → falls through).
+# Years are NON-contiguous on purpose: DuckDB rewrites `year IN (2020, 2021)` (contiguous
+# ints) into a BETWEEN range (non-enumerable), so a gap keeps the pushed filter an IN_FILTER
+# and the cross-product enumeration path is actually exercised.
+_PSCOPE_REGIONS: list[str] = ["EU", "US"]
+_PSCOPE_YEARS: list[int] = [2020, 2022]
+_PSCOPE_RY: list[tuple[str, int]] = [(r, y) for r in _PSCOPE_REGIONS for y in _PSCOPE_YEARS]
+
+
+@dataclass(slots=True, frozen=True)
+class CachePartitionMultiColArgs:
+    """Arguments for CachePartitionMultiColFunction."""
+
+    rows_per_partition: Annotated[int, Arg(0, doc="Rows per (region, year) partition", ge=1)]
+
+
+@dataclass(kw_only=True)
+class _CachePartitionMultiColState(ArrowSerializableDataclass):
+    """Cursor over the fixed (region, year) list."""
+
+    idx: int = 0
+
+
+@init_single_worker
+@bind_fixed_schema
+class CachePartitionMultiColFunction(
+    TableFunctionGenerator[CachePartitionMultiColArgs, _CachePartitionMultiColState]
+):
+    """Per-partition cacheable over TWO SINGLE_VALUE partition columns (region, year)."""
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        [
+            _partition_field("region", pa.string()),
+            _partition_field("year", pa.int64()),
+            pa.field("amount", pa.int64()),
+        ]
+    )
+
+    class Meta:
+        """Metadata for CachePartitionMultiColFunction."""
+
+        name = "cache_partition_multicol"
+        description = "Per-partition cacheable over (region, year) SINGLE_VALUE partition columns"
+        categories = ["generator", "cache", "testing", "partitioning"]
+        tags = {"category": "cache", "type": "partitioned"}
+        partition_kind = _PartitionKind.SINGLE_VALUE_PARTITIONS
+        filter_pushdown = True
+        auto_apply_filters = True
+
+    FunctionArguments = CachePartitionMultiColArgs
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[CachePartitionMultiColArgs]) -> _CachePartitionMultiColState:
+        """Create initial state."""
+        return _CachePartitionMultiColState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[CachePartitionMultiColArgs],
+        state: _CachePartitionMultiColState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit one single-valued (region, year) batch per tick (pv auto-extracted)."""
+        if state.idx >= len(_PSCOPE_RY):
+            out.finish()
+            return
+        region, year = _PSCOPE_RY[state.idx]
+        rpp = params.args.rows_per_partition
+        base = state.idx * 1000
+        batch = pa.RecordBatch.from_pydict(
+            {"region": [region] * rpp, "year": [year] * rpp, "amount": [base + i for i in range(rpp)]},
+            schema=params.output_schema,
+        )
+        cast(VgiOutputCollector, out).emit(
+            batch, cache_control=CacheControl(ttl=_DEFAULT_TTL_SECONDS, partition_scope=True)
+        )
+        state.idx += 1
+
+
+# ---------------------------------------------------------------------------
+# cache_partition_proj — projection pushdown + per-partition cache
+# ---------------------------------------------------------------------------
+# projection_pushdown=True makes projection part of the cache key; explicit pv means the
+# partition value survives even when the partition column is projected OUT of the emitted
+# batch (the auto-extract-impossible case). `extra` is a non-partition column to project
+# away while keeping `country` (so a WHERE country=X can still push).
+_PSCOPE_PROJ_COUNTRIES: list[str] = ["CA", "US"]
+
+
+@dataclass(slots=True, frozen=True)
+class CachePartitionProjArgs:
+    """Arguments for CachePartitionProjFunction."""
+
+    rows_per_country: Annotated[int, Arg(0, doc="Rows per country partition", ge=1)]
+
+
+@init_single_worker
+@bind_fixed_schema
+class CachePartitionProjFunction(TableFunctionGenerator[CachePartitionProjArgs, _CachePartitionedState]):
+    """Per-partition cacheable with projection pushdown (explicit pv survives a dropped column)."""
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        [
+            _partition_field("country", pa.string()),
+            pa.field("sales", pa.int64()),
+            pa.field("extra", pa.int64()),
+        ]
+    )
+
+    class Meta:
+        """Metadata for CachePartitionProjFunction."""
+
+        name = "cache_partition_proj"
+        description = "Per-partition cacheable with projection pushdown + explicit partition_values"
+        categories = ["generator", "cache", "testing", "partitioning"]
+        tags = {"category": "cache", "type": "partitioned"}
+        partition_kind = _PartitionKind.SINGLE_VALUE_PARTITIONS
+        projection_pushdown = True
+        filter_pushdown = True
+        auto_apply_filters = True
+
+    FunctionArguments = CachePartitionProjArgs
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[CachePartitionProjArgs]) -> _CachePartitionedState:
+        """Create initial state."""
+        return _CachePartitionedState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[CachePartitionProjArgs],
+        state: _CachePartitionedState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit only the projected columns per partition; supply pv explicitly."""
+        if state.country_idx >= len(_PSCOPE_PROJ_COUNTRIES):
+            out.finish()
+            return
+        country = _PSCOPE_PROJ_COUNTRIES[state.country_idx]
+        rpc = params.args.rows_per_country
+        base = state.country_idx * 1_000_000
+        full = {
+            "country": [country] * rpc,
+            "sales": [base + i for i in range(rpc)],
+            "extra": [base + 500 + i for i in range(rpc)],
+        }
+        # Emit only the projected columns (params.output_schema reflects the pushdown).
+        cols = {f.name: full[f.name] for f in params.output_schema}
+        batch = pa.RecordBatch.from_pydict(cols, schema=params.output_schema)
+        cast(VgiOutputCollector, out).emit(
+            batch,
+            cache_control=CacheControl(ttl=_DEFAULT_TTL_SECONDS, partition_scope=True),
+            partition_values={"country": (pa.scalar(country, pa.string()), pa.scalar(country, pa.string()))},
+        )
+        state.country_idx += 1
