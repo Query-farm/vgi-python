@@ -1404,3 +1404,88 @@ class TestJoinKeysBatch:
         assert merged.num_columns == 2
         assert merged.column("a").to_pylist() == [1, 2, 3]
         assert merged.column("b").to_pylist() == [10, 20, 30]
+
+
+# =============================================================================
+# TestDegenerateConjunctions
+# =============================================================================
+
+
+class TestDegenerateConjunctions:
+    """An AND whose children all degrade must not render as `WHERE ()`.
+
+    `_parse_filter` returns None for a join-key filter whose keys column cannot
+    be resolved ("graceful degradation — DuckDB filters client-side"). Dropping
+    such a child from an AND is safe on its own, but when *every* child drops the
+    conjunction is left empty, and `f"({' AND '.join([])})"` yields `()` — which
+    reaches the backend as the syntactically invalid `... WHERE () LIMIT n`.
+    """
+
+    def _and_of_join_keys_batch(self) -> pa.RecordBatch:
+        """A filter spec of one AND whose only children are join-key filters.
+
+        No `join_keys` batches are supplied to `deserialize_filters`, so every
+        child resolves to None — the shape observed in production.
+        """
+        spec = json.dumps(
+            [
+                {
+                    "column_name": "trade_canceled",
+                    "column_index": 0,
+                    "type": "and",
+                    "children": [
+                        {
+                            "column_name": "trade_canceled",
+                            "column_index": 0,
+                            "type": "join_keys",
+                            "keys_column": "missing_keys_a",
+                        },
+                        {
+                            "column_name": "_partition_date",
+                            "column_index": 1,
+                            "type": "join_keys",
+                            "keys_column": "missing_keys_b",
+                        },
+                    ],
+                }
+            ]
+        )
+        s = pa.schema([pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"})])
+        return pa.RecordBatch.from_pydict({"filter_spec": [spec]}, schema=s)
+
+    def test_and_with_all_children_dropped_yields_no_filter(self) -> None:
+        """All conjuncts unresolvable -> the AND is dropped entirely, not emptied."""
+        pf = deserialize_filters(self._and_of_join_keys_batch())
+        assert len(pf) == 0
+        assert pf.to_sql() == ("", [])
+
+    def test_and_with_all_children_dropped_never_emits_empty_parens(self) -> None:
+        """Regression: the rendered clause must never be the invalid `()`."""
+        where, params = deserialize_filters(self._and_of_join_keys_batch()).to_sql()
+        assert where != "()"
+        assert not params
+        # A caller appending `WHERE {where}` only when truthy must produce no WHERE.
+        assert not where
+
+    def test_empty_and_renders_as_true(self) -> None:
+        """An empty conjunction is AND's identity: it constrains nothing."""
+        f = AndFilter(column_name="c", column_index=0, children=())
+        assert _filter_to_sql(f, lambda s: f'"{s}"', "?", 0) == ("TRUE", [])
+        assert _filters(f).to_sql() == ("TRUE", [])
+
+    def test_empty_or_renders_as_false(self) -> None:
+        """An empty disjunction admits nothing — it must not widen the result set."""
+        f = OrFilter(column_name="c", column_index=0, children=())
+        assert _filter_to_sql(f, lambda s: f'"{s}"', "?", 0) == ("FALSE", [])
+        assert _filters(f).to_sql() == ("FALSE", [])
+
+    def test_and_keeps_resolvable_children(self) -> None:
+        """Partial degradation still yields a usable (weaker) conjunction."""
+        f = AndFilter(
+            column_name="c",
+            column_index=0,
+            children=(_eq("a", 0, 1), _eq("b", 1, 2)),
+        )
+        where, params = _filters(f).to_sql()
+        assert where == '("a" = ? AND "b" = ?)'
+        assert params == [1, 2]

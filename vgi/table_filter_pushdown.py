@@ -1531,6 +1531,12 @@ def _filter_to_sql(
             return f"{col} IN ({placeholders})", values.to_pylist()
 
         case AndFilter(children=children):
+            # An empty conjunction is the identity for AND: it constrains nothing.
+            # `_parse_filter` no longer produces one, but a hand-built filter still
+            # can, and `f"({' AND '.join([])})"` would emit the syntactically
+            # invalid `WHERE ()`.
+            if not children:
+                return "TRUE", []
             parts: list[str] = []
             params: list[Any] = []
             for child in children:
@@ -1541,6 +1547,11 @@ def _filter_to_sql(
             return f"({' AND '.join(parts)})", params
 
         case OrFilter(children=children):
+            # Dual of the above: an empty disjunction admits nothing. FALSE (not
+            # TRUE) is the correct identity here — an empty OR must not silently
+            # widen the result set.
+            if not children:
+                return "FALSE", []
             parts = []
             params = []
             for child in children:
@@ -1789,6 +1800,15 @@ def _parse_filter(
             for c in spec["children"]
             if (f := _parse_filter(c, get_value, get_field, get_join_keys_column)) is not None
         )
+        if not children:
+            # Every conjunct degraded (e.g. an AND of join-key filters whose keys
+            # column never resolved). Dropping conjuncts from an AND is safe — it
+            # only weakens the filter — but an AndFilter with no children imposes
+            # no constraint at all, and rendering it yields the syntactically
+            # invalid `WHERE ()`. Report "no usable filter" instead, exactly as
+            # the OR branch does, and let DuckDB filter client-side.
+            _log_debug("parse_filter_and_all_children_missing", column=column_name)
+            return None
         _log_debug("parse_filter_and_complete", column=column_name)
         return AndFilter(
             column_name=column_name,
