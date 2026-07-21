@@ -28,6 +28,12 @@ from vgi._test_fixtures.scalar.arithmetic import (
     MultiplyFunction,
     SumValuesFunction,
 )
+from vgi._test_fixtures.scalar.bench_ladder import (
+    CollatzStepsFunction,
+    PassthruFunction,
+    HashRoundsFunction,
+    Sha256HexFunction,
+)
 from vgi._test_fixtures.scalar.binary import (
     BinaryPacketFunction,
     UpperCaseFunction,
@@ -89,10 +95,14 @@ __all__ = [
     "CachedAddConstScalarFunction",
     "CachedDoubleScalarFunction",
     "CachedLabelScalarFunction",
+    "CollatzStepsFunction",
     "ConcatValuesIntFunction",
     "ConcatValuesStrFunction",
     "ConditionalMessageFunction",
     "DoubleFunction",
+    "HashRoundsFunction",
+    "PassthruFunction",
+    "Sha256HexFunction",
     "FormatNumberDefaultFunction",
     "FormatNumberFullFunction",
     "FormatNumberPrecisionFunction",
