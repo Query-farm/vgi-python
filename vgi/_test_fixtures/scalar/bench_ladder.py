@@ -56,8 +56,7 @@ class CollatzStepsFunction(ScalarFunction):
         name = "collatz_steps"
         description = "Number of Collatz (3n+1) steps for each integer to reach 1"
         examples = [
-            FunctionExample(sql="SELECT collatz_steps(n) FROM range(1000) t(n)",
-                            description="Step count per integer"),
+            FunctionExample(sql="SELECT collatz_steps(n) FROM range(1000) t(n)", description="Step count per integer"),
         ]
 
     @classmethod
@@ -88,8 +87,7 @@ class Sha256HexFunction(ScalarFunction):
         name = "sha256_hex"
         description = "Lowercase hex SHA-256 digest of the UTF-8 string"
         examples = [
-            FunctionExample(sql="SELECT sha256_hex(s) FROM docs",
-                            description="Hash each string"),
+            FunctionExample(sql="SELECT sha256_hex(s) FROM docs", description="Hash each string"),
         ]
 
     @classmethod
@@ -114,8 +112,7 @@ class HashRoundsFunction(ScalarFunction):
         name = "hash_rounds"
         description = "Apply SHA-256 `rounds` times (key-stretching); rounds is a const compute knob"
         examples = [
-            FunctionExample(sql="SELECT hash_rounds(s, 256) FROM docs",
-                            description="256-round key stretch"),
+            FunctionExample(sql="SELECT hash_rounds(s, 256) FROM docs", description="256-round key stretch"),
         ]
 
     @classmethod

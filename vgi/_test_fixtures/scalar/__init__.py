@@ -30,8 +30,8 @@ from vgi._test_fixtures.scalar.arithmetic import (
 )
 from vgi._test_fixtures.scalar.bench_ladder import (
     CollatzStepsFunction,
-    PassthruFunction,
     HashRoundsFunction,
+    PassthruFunction,
     Sha256HexFunction,
 )
 from vgi._test_fixtures.scalar.binary import (
