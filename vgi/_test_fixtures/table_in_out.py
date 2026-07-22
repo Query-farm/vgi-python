@@ -1913,11 +1913,17 @@ class CachedDoubleFunction(RowTransformFunction[_CachedDoubleArgs]):
     batch (the C++ side latches the first). Output is deterministic (x*2) so a cache
     hit — proven separately by a zero ``write_input`` count on the second run —
     returns identical values.
+
+    Also advertises ``vgi.cache.per_value`` so the per-VALUE memo tier is exercised by
+    the per_value_* tests. Note this is a TEST fixture asking for behaviour it would
+    not want in production: x*2 is far too cheap to memoize per value (a per-value
+    serve costs ~50x a worker call for a map this trivial). The fixture opts in so the
+    tier has coverage, not because the economics work here.
     """
 
     class Meta:
         name = "cached_double"
-        description = "Cacheable blended map x -> x*2 (advertises vgi.cache.ttl)"
+        description = "Cacheable blended map x -> x*2 (advertises vgi.cache.ttl + per_value)"
         categories = ["blended", "cache", "test"]
 
     @classmethod
@@ -1935,7 +1941,7 @@ class CachedDoubleFunction(RowTransformFunction[_CachedDoubleArgs]):
         doubled = pc.multiply(pc.cast(batch.column("x"), pa.int64()), 2)
         cast("VgiOutputCollector", out).emit(
             pa.record_batch({"doubled": doubled}),
-            cache_control=CacheControl(ttl=300),
+            cache_control=CacheControl(ttl=300, per_value=True),
         )
 
 

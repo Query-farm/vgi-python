@@ -140,8 +140,11 @@ class CachedDoubleScalarFunction(ScalarFunction):
     without the worker.
     """
 
-    # Opt into the result cache (per-value memoization on the C++ side).
-    CACHE_CONTROL = CacheControl(ttl=300)
+    # Opt into the result cache AND per-value memoization on the C++ side. `per_value` is
+    # a deliberate TEST choice: doubling an int is far too cheap to memoize per value in
+    # production (the probe + decode costs more than the call). These fixtures set it so
+    # the tier has coverage.
+    CACHE_CONTROL = CacheControl(ttl=300, per_value=True)
 
     class Meta:
         """Function metadata."""
@@ -165,7 +168,7 @@ class CachedAddConstScalarFunction(ScalarFunction):
     const arg is folded into the cache key.
     """
 
-    CACHE_CONTROL = CacheControl(ttl=300)
+    CACHE_CONTROL = CacheControl(ttl=300, per_value=True)
 
     class Meta:
         """Function metadata."""
@@ -190,7 +193,7 @@ class CachedLabelScalarFunction(ScalarFunction):
     round-trip both a heap string and a null.
     """
 
-    CACHE_CONTROL = CacheControl(ttl=300)
+    CACHE_CONTROL = CacheControl(ttl=300, per_value=True)
 
     class Meta:
         """Function metadata."""

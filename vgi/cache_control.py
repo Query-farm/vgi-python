@@ -40,6 +40,7 @@ __all__ = [
     "CACHE_NOT_MODIFIED_KEY",
     "CACHE_NO_STORE_KEY",
     "CACHE_PARTITION_SCOPE_KEY",
+    "CACHE_PER_VALUE_KEY",
     "CACHE_REVALIDATABLE_KEY",
     "CACHE_SCOPE_KEY",
     "CACHE_STALE_IF_ERROR_KEY",
@@ -63,6 +64,7 @@ CACHE_STALE_WHILE_REVALIDATE_KEY = "vgi.cache.stale_while_revalidate"
 CACHE_STALE_IF_ERROR_KEY = "vgi.cache.stale_if_error"
 CACHE_NOT_MODIFIED_KEY = "vgi.cache.not_modified"
 CACHE_PARTITION_SCOPE_KEY = "vgi.cache.partition_scope"
+CACHE_PER_VALUE_KEY = "vgi.cache.per_value"
 
 # --- Reuse-scope values ----------------------------------------------------
 CACHE_SCOPE_CATALOG = "catalog"
@@ -105,6 +107,16 @@ class CacheControl:
             the result split by partition value (one entry per distinct
             partition-value tuple) so a later ``=``/``IN``-filtered scan reuses
             per-partition entries. Additive to the whole-scan cache.
+        per_value: Opt in to per-VALUE memoization. Only meaningful for an
+            exchange-mode MAP (a scalar, or a blended table-in-out called via
+            correlated ``LATERAL``); the client ALSO memoizes each distinct
+            input tuple's output, so the same value serves without the worker
+            on a later chunk or query. **Default off, and leave it off unless
+            one call is genuinely expensive.** A per-value serve costs a cache
+            probe, a decode and an assembly step per distinct value; that only
+            pays back when it is cheaper than calling you. For an arithmetic
+            map it is roughly 50x slower than just answering the call. Turn it
+            on for model inference, geocoding, or a rate-limited remote fetch.
     """
 
     ttl: int | None = None
@@ -118,6 +130,7 @@ class CacheControl:
     stale_if_error: int | None = None
     not_modified: bool = False
     partition_scope: bool = False
+    per_value: bool = False
 
     def __post_init__(self) -> None:
         """Validate scope and non-negative durations."""
@@ -157,4 +170,6 @@ class CacheControl:
             md[CACHE_NOT_MODIFIED_KEY] = "1"
         if self.partition_scope:
             md[CACHE_PARTITION_SCOPE_KEY] = "1"
+        if self.per_value:
+            md[CACHE_PER_VALUE_KEY] = "1"
         return md
