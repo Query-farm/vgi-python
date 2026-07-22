@@ -1785,6 +1785,58 @@ class BlendedExplodeFunction(RowTransformFunction[_ExplodeArgs]):
         cast("VgiOutputCollector", out).emit(out_batch, parent_rows=parent_rows)
 
 
+class CachedExplodeFunction(RowTransformFunction[_ExplodeArgs]):
+    """Cacheable blended 1->N fan-out advertising vgi.cache.per_value.
+
+    Same shape as blended_explode (emit 0..n-1 per input row, with per-output-row
+    provenance) but opts into the per-value memo tier, so it exercises the columnar
+    arena + its SQLite disk backend for the cardinalities the 1:1 cached_double
+    cannot reach: n=0 is a NEGATIVE MEMO (a length-0 slot), n>1 a 1:N slot whose
+    rows must survive the d-major store gather, the [cached|fresh] partial splice,
+    and (for disk) the per-slot Arrow-IPC round trip. Deterministic (emits range(n))
+    so tests assert exact values and equivalence with per-value off.
+
+    A test choice, not production advice — memoizing a trivial fan-out is a net loss;
+    the point is to cover the arena's 1:N and negative-memo paths deterministically.
+    """
+
+    class Meta:
+        name = "cached_explode"
+        description = "Cacheable blended 1->N fan-out (per_value) — 1:0 / 1:1 / 1:N by input"
+        categories = ["blended", "cache", "test"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[_ExplodeArgs]) -> BindResponse:
+        return BindResponse(output_schema=schema({"i": pa.int64()}))
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_ExplodeArgs],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        counts = [0 if n is None or n < 0 else int(n) for n in batch.column("n").to_pylist()]
+        # INTERLEAVE parents round-robin (round k emits value k for every parent with
+        # n>k), so within one chunk the output rows for a given parent are NON-contiguous
+        # (e.g. parents [1,2,3] -> row parents [0,1,2, 1,2, 2]). This deliberately stresses
+        # the per-value store's rows_by_d gather + the serve-time expansion: a gather that
+        # assumed each parent's rows were a contiguous run would corrupt the result.
+        out_vals: list[int] = []
+        parent_rows: list[int] = []
+        for k in range(max(counts) if counts else 0):
+            for row_idx, n in enumerate(counts):
+                if n > k:
+                    out_vals.append(k)
+                    parent_rows.append(row_idx)
+        cast("VgiOutputCollector", out).emit(
+            pa.record_batch({"i": pa.array(out_vals, type=pa.int64())}),
+            parent_rows=parent_rows,
+            cache_control=CacheControl(ttl=300, per_value=True),
+        )
+
+
 @dataclass(slots=True, frozen=True, kw_only=True)
 class _ProjectableArgs:
     """One positional input column; a 1->1 map emitting two output columns."""
