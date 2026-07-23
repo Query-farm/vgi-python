@@ -52,21 +52,47 @@ runs them as a matrix):
   Also boots the versioned and versioned-tables workers as background HTTP
   servers (`VGI_VERSIONED_HTTP_WORKER` / `VGI_VERSIONED_TABLES_HTTP_WORKER`) so
   the `attach/versioned_tables_*_http` and `versioning_http` tests run.
-- **`shm`** — `stdio` plus the POSIX shared-memory side channel
+- **`shm`** — the **`launch`** lane plus the POSIX shared-memory side channel
   (`VGI_RPC_SHM_SIZE_BYTES`); the whole suite. vgi-rpc-python attaches the
-  segment transparently, so the env var alone flips the transport.
-- **`launch`** — the AF_UNIX launcher transport; the launcher-only tests
-  (`launcher/*`), which the other lanes skip via `require-env`.
+  segment transparently, so the env var alone flips the side channel on.
+  This deliberately differs from the vgi Makefile's `test_shm`, which layers shm
+  on raw subprocess: `stdio` already covers the fork-per-connection path and
+  spends most of its wall-clock doing it, so paying that cost twice just to
+  exercise shm is waste. The side channel is transport-independent — negotiated
+  via the `__transport_options__` handshake and carried in POSIX shm rather than
+  in the pipe or socket — and engages identically over the launcher (verified:
+  the same 18 `[shm]` transfers under `VGI_RPC_SHM_DEBUG=1` on both).
+- **`launch`** — the AF_UNIX launcher transport; the whole suite, with *every*
+  `VGI_*_WORKER` fronted by `launch:` so traffic flows through the C++ launcher
+  (`ResolveLauncherSocketPath` → AF_UNIX → `UnixSocketWorker`). Mirrors the vgi
+  Makefile's `test_launcher`: the point is that the launcher path produces
+  identical query results to the subprocess path, which only a full-suite run
+  demonstrates. Setting `VGI_REQUIRE_LAUNCHER_TRANSPORT` additionally un-skips
+  the launcher-only tests (`launcher/*`), whose options apply solely to the
+  `launch:` dispatch path and which the other lanes skip via `require-env`.
+  The versioned / versioned-tables *http* worker vars are left unset (as in
+  `test_launcher`), so those tests skip here — stdio covers them. One deliberate
+  divergence from `test_launcher`: see `filter_echo_partitioned.test` below.
 - **`http`** — the whole suite over the stateless HTTP transport. Staging
   injects `LOAD httpfs` before each worker ATTACH (the prebuilt binary doesn't
   statically link httpfs).
 
 The `simple_writable/*.test` write-path tests (INSERT/UPDATE/DELETE/RETURNING)
-run on the subprocess lanes against `VGI_SIMPLE_WRITABLE_WORKER`
+run on **every** lane against `VGI_SIMPLE_WRITABLE_WORKER`
 (`vgi-fixture-simple-writable-worker`), in their own `haybarn-unittest`
 invocation so their warm pooled connections don't perturb the immediately
-following crash-recovery test. They self-skip on the http lane
-(skip-on-error `'HTTP'`).
+following crash-recovery test. That env var is always a spawned binary — a
+`launch:` path on the launch lane, a plain path elsewhere — so these tests run
+over subprocess even on the http lane rather than skipping.
+
+The crash / pool-recovery tests (`table_in_out/table_buffering_*`) are gated on
+`VGI_TEST_DEDICATED_WORKER`, which is set on the **`stdio` lane only**. Their
+`crash_on_process` fixture does `os.kill(getpid(), SIGKILL)`; that is a
+recoverable per-DuckDB-process child kill under subprocess transport, but under
+any shared-worker transport (`http://`, `launch:`) it kills the one process
+serving the whole suite and every later `ATTACH` fails. Because `shm` now rides
+the launcher, `stdio` is the only lane that can host them — worth knowing if you
+ever narrow the stdio lane.
 
 ### Excluded tests
 
@@ -95,8 +121,22 @@ Dropped on the **http** lane only:
   `CLAUDE.md`). `buffer_input/scale.test_slow` is a `.test_slow` file, which the
   harness never stages (it only finds `*.test`).
 
+Nothing is dropped on the **launch** lane. `test_launcher` upstream excludes two
+files, and neither applies:
+
+- `test/sql/vgi_worker_pool.test` lives outside `test/sql/integration`, so the
+  harness never stages it.
+- `table/filter_echo_partitioned.test` is excluded upstream for asserting >1
+  distinct `worker_pid`, which AF_UNIX socket pooling cannot satisfy. That
+  rationale is stale — the test now counts transport-neutral `conn=` ids instead
+  — and it passes over `launch:` against the Python fixture worker. Keeping it
+  preserves coverage of precisely what the launcher changes: connection
+  multiplexing.
+
 The HTTP-attach / bearer-auth / dynamic-code / schema-reconcile-only tests skip
 via their `require-env` gates when we don't set the corresponding worker.
+`bad_enum.test` skips on every lane — `VGI_BAD_ENUM_WORKER` is not wired up here
+even though the fixture (`vgi-fixture-bad-enum-worker`) is installed.
 
 ## Run it locally
 

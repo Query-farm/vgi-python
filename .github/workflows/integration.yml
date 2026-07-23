@@ -45,8 +45,11 @@ jobs:
       matrix:
         include:
           # stdio:  the subprocess transport (whole suite — the primary lane).
-          # shm:    stdio + the POSIX shared-memory side channel.
-          # launch: the AF_UNIX launcher-only tests.
+          # launch: the whole suite over the AF_UNIX launcher transport.
+          # shm:    launch + the POSIX shared-memory side channel. Rides the
+          #         launcher, not raw subprocess: stdio already covers the
+          #         fork-per-connection path and spends most of its wall-clock
+          #         doing it, so re-paying that cost to test shm is waste.
           # http:   the whole suite over the stateless HTTP transport.
           - { lane: stdio }
           - { lane: shm, shm_bytes: '67108864' }
