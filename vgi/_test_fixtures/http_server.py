@@ -335,8 +335,19 @@ def main() -> None:
         # Match vgi-fixture-worker (subprocess transport): always serve the
         # base ExampleWorker plus the projection_repro, schema_reconcile,
         # and accumulate fixture catalogs. Add the writable catalog when its
-        # extra is installed.
-        worker_classes: list[type] = [ExampleWorker, ProjReproWorker, SchemaReconcileWorker, AccumulateWorker]
+        # extra is installed. The twin_a/twin_b catalogs (same worker, one
+        # function name colliding across two catalogs) back
+        # scalar/same_name_catalogs.test — catalog-qualified dispatch.
+        from vgi._test_fixtures.twin_catalogs import TwinAWorker, TwinBWorker
+
+        worker_classes: list[type] = [
+            ExampleWorker,
+            ProjReproWorker,
+            SchemaReconcileWorker,
+            AccumulateWorker,
+            TwinAWorker,
+            TwinBWorker,
+        ]
         try:
             from vgi._test_fixtures.writable.worker import WritableWorker
         except ImportError:
