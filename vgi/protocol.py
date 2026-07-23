@@ -1840,6 +1840,9 @@ class AggregateBindRequest(ArrowSerializableDataclass):
         secrets: Serialized resolved secret values the function declared it needs.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
+        schema_name: Catalog schema that declares the function. A name is unique
+            only within a schema, so this is what lets the worker resolve
+            (schema, name); ``None`` when the caller names no schema.
     """
 
     function_name: str
@@ -1848,6 +1851,7 @@ class AggregateBindRequest(ArrowSerializableDataclass):
     settings: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     secrets: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     attach_opaque_data: bytes | None = None
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1876,12 +1880,16 @@ class AggregateUpdateRequest(ArrowSerializableDataclass):
             stream bytes (schema + data + EOS).
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
+        schema_name: Catalog schema that declares the function. A name is unique
+            only within a schema, so this is what lets the worker resolve
+            (schema, name); ``None`` when the caller names no schema.
     """
 
     function_name: str
     execution_id: bytes
     input_batch: bytes  # Full IPC stream bytes (schema + data + EOS)
     attach_opaque_data: bytes | None = None
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1903,12 +1911,16 @@ class AggregateCombineRequest(ArrowSerializableDataclass):
             stream bytes.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
+        schema_name: Catalog schema that declares the function. A name is unique
+            only within a schema, so this is what lets the worker resolve
+            (schema, name); ``None`` when the caller names no schema.
     """
 
     function_name: str
     execution_id: bytes
     merge_batch: bytes  # Full IPC stream bytes
     attach_opaque_data: bytes | None = None
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1931,6 +1943,9 @@ class AggregateFinalizeRequest(ArrowSerializableDataclass):
         output_schema: Serialized Arrow schema of the rows the function produces.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
+        schema_name: Catalog schema that declares the function. A name is unique
+            only within a schema, so this is what lets the worker resolve
+            (schema, name); ``None`` when the caller names no schema.
     """
 
     function_name: str
@@ -1938,6 +1953,7 @@ class AggregateFinalizeRequest(ArrowSerializableDataclass):
     group_ids_batch: bytes  # Full IPC stream bytes
     output_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
     attach_opaque_data: bytes | None = None
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1964,12 +1980,16 @@ class AggregateDestructorRequest(ArrowSerializableDataclass):
             be released, as full IPC stream bytes.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
+        schema_name: Catalog schema that declares the function. A name is unique
+            only within a schema, so this is what lets the worker resolve
+            (schema, name); ``None`` when the caller names no schema.
     """
 
     function_name: str
     execution_id: bytes
     group_ids_batch: bytes  # Full IPC stream bytes
     attach_opaque_data: bytes | None = None
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2007,6 +2027,9 @@ class TableBufferingProcessRequest(ArrowSerializableDataclass):
             ``None`` otherwise.
         batch_index: Ordinal of this batch within the input stream when the function
             opts into batch-index tracking; ``None`` otherwise.
+        schema_name: Catalog schema that declares the function. A name is unique
+            only within a schema, so this is what lets the worker resolve
+            (schema, name); ``None`` when the caller names no schema.
     """
 
     function_name: str
@@ -2015,6 +2038,7 @@ class TableBufferingProcessRequest(ArrowSerializableDataclass):
     attach_opaque_data: bytes | None = None
     transaction_id: bytes | None = None
     batch_index: int | None = None
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2043,6 +2067,9 @@ class TableBufferingCombineRequest(ArrowSerializableDataclass):
             outside a catalog context.
         transaction_id: Hex-encoded VGI transaction id when inside a transaction,
             ``None`` otherwise.
+        schema_name: Catalog schema that declares the function. A name is unique
+            only within a schema, so this is what lets the worker resolve
+            (schema, name); ``None`` when the caller names no schema.
     """
 
     function_name: str
@@ -2050,6 +2077,7 @@ class TableBufferingCombineRequest(ArrowSerializableDataclass):
     state_ids: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
     attach_opaque_data: bytes | None = None
     transaction_id: bytes | None = None
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2076,12 +2104,16 @@ class TableBufferingDestructorRequest(ArrowSerializableDataclass):
             outside a catalog context.
         transaction_id: Hex-encoded VGI transaction id when inside a transaction,
             ``None`` otherwise.
+        schema_name: Catalog schema that declares the function. A name is unique
+            only within a schema, so this is what lets the worker resolve
+            (schema, name); ``None`` when the caller names no schema.
     """
 
     function_name: str
     execution_id: bytes
     attach_opaque_data: bytes | None = None
     transaction_id: bytes | None = None
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2121,6 +2153,9 @@ class AggregateWindowInitRequest(ArrowSerializableDataclass):
             nulls in the column).
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
+        schema_name: Catalog schema that declares the function. A name is unique
+            only within a schema, so this is what lets the worker resolve
+            (schema, name); ``None`` when the caller names no schema.
     """
 
     function_name: str
@@ -2133,6 +2168,7 @@ class AggregateWindowInitRequest(ArrowSerializableDataclass):
     frame_stats: bytes  # 4× int64: ((begin_delta,end_delta),(begin_delta,end_delta))
     all_valid: bytes  # 1 byte per input column
     attach_opaque_data: bytes | None = None
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2161,6 +2197,9 @@ class AggregateWindowRequest(ArrowSerializableDataclass):
             to ``frame_starts``.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
+        schema_name: Catalog schema that declares the function. A name is unique
+            only within a schema, so this is what lets the worker resolve
+            (schema, name); ``None`` when the caller names no schema.
     """
 
     function_name: str
@@ -2170,6 +2209,7 @@ class AggregateWindowRequest(ArrowSerializableDataclass):
     frame_starts: list[int]
     frame_ends: list[int]
     attach_opaque_data: bytes | None = None
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2195,12 +2235,16 @@ class AggregateWindowDestructorRequest(ArrowSerializableDataclass):
         partition_id: Identifier of the window partition to evict from storage.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
+        schema_name: Catalog schema that declares the function. A name is unique
+            only within a schema, so this is what lets the worker resolve
+            (schema, name); ``None`` when the caller names no schema.
     """
 
     function_name: str
     execution_id: bytes
     partition_id: int
     attach_opaque_data: bytes | None = None
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2234,6 +2278,9 @@ class AggregateWindowBatchRequest(ArrowSerializableDataclass):
             ``frame_starts``.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
+        schema_name: Catalog schema that declares the function. A name is unique
+            only within a schema, so this is what lets the worker resolve
+            (schema, name); ``None`` when the caller names no schema.
     """
 
     function_name: str
@@ -2245,6 +2292,7 @@ class AggregateWindowBatchRequest(ArrowSerializableDataclass):
     frame_starts: list[int]
     frame_ends: list[int]
     attach_opaque_data: bytes | None = None
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2302,6 +2350,9 @@ class AggregateStreamingOpenRequest(ArrowSerializableDataclass):
         secrets: Serialized resolved secret values the function declared it needs.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
+        schema_name: Catalog schema that declares the function. A name is unique
+            only within a schema, so this is what lets the worker resolve
+            (schema, name); ``None`` when the caller names no schema.
     """
 
     function_name: str
@@ -2313,6 +2364,7 @@ class AggregateStreamingOpenRequest(ArrowSerializableDataclass):
     settings: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     secrets: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     attach_opaque_data: bytes | None = None
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2346,12 +2398,16 @@ class AggregateStreamingChunkRequest(ArrowSerializableDataclass):
             ``streaming_open``.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
+        schema_name: Catalog schema that declares the function. A name is unique
+            only within a schema, so this is what lets the worker resolve
+            (schema, name); ``None`` when the caller names no schema.
     """
 
     function_name: str
     execution_id: bytes
     input_batch: bytes  # Full IPC stream bytes
     attach_opaque_data: bytes | None = None
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2376,11 +2432,15 @@ class AggregateStreamingCloseRequest(ArrowSerializableDataclass):
             coordinator and any secondary workers; identifies the session to close.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
+        schema_name: Catalog schema that declares the function. A name is unique
+            only within a schema, so this is what lets the worker resolve
+            (schema, name); ``None`` when the caller names no schema.
     """
 
     function_name: str
     execution_id: bytes
     attach_opaque_data: bytes | None = None
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2439,7 +2499,7 @@ class VgiProtocol(Protocol):
             canonical semver (MAJOR.MINOR.PATCH) of the method-and-schema contract.
     """
 
-    protocol_version: ClassVar[str] = "1.1.0"
+    protocol_version: ClassVar[str] = "1.2.0"
 
     def bind(self, request: BindRequest) -> BindResponse:
         """Resolve output schema and validate arguments."""

@@ -32,6 +32,7 @@ from vgi._test_fixtures.aggregate.dynamic import (
 from vgi._test_fixtures.aggregate.generic import GenericSumFunction
 from vgi._test_fixtures.aggregate.listagg import ListAggFunction
 from vgi._test_fixtures.aggregate.percentile import PercentileFunction
+from vgi._test_fixtures.aggregate.same_name import SameNameDataAgg, SameNameMainAgg
 from vgi._test_fixtures.aggregate.secret_typed import SecretTypedSumFunction
 from vgi._test_fixtures.aggregate.streaming import StreamingSumFunction
 from vgi._test_fixtures.aggregate.varargs import SumAllFunction
@@ -45,6 +46,8 @@ from vgi._test_fixtures.aggregate.window import (
 __all__ = [
     "AvgFunction",
     "CountFunction",
+    "SameNameDataAgg",
+    "SameNameMainAgg",
     "DynamicAggregateFunction",
     "DynamicMLAggregateFunction",
     "GenericSumFunction",

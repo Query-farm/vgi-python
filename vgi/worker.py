@@ -2132,11 +2132,18 @@ class Worker:
         Shared entry point for every aggregate RPC handler: resolves the
         function (filtering on `AggregateFunction`), narrows the type, and
         raises ``TypeError`` if the resolved class is not an aggregate.
+
+        Every aggregate request carries ``schema_name``, so an aggregate name
+        declared in two schemas resolves to the one the caller named rather
+        than to whichever the by-name lookup happens to find first. ``None``
+        (a caller that names no schema) keeps the cross-schema lookup, which
+        still raises on a genuine ambiguity.
         """
         func_cls = self._resolve_function_by_name(
             request.function_name,
             self._unwrap_attach(request.attach_opaque_data),
             function_type=AggregateFunction,
+            schema_name=getattr(request, "schema_name", None),
         )
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
@@ -2872,10 +2879,13 @@ class Worker:
         function_name = getattr(request, "function_name", None)
         attach = getattr(request, "attach_opaque_data", None)
         transaction_id = getattr(request, "transaction_id", None)
-        # Only the InitRequest shape carries the owning schema (on bind_call);
-        # the unary table_buffering_* requests reference an already-bound
-        # execution, so they resolve by name across schemas.
-        schema_name: str | None = None
+        # The owning schema arrives on the request itself for the unary
+        # table_buffering_* shapes and on ``bind_call`` for the InitRequest
+        # shape. Both must name it: a Sink-phase process() call that resolved
+        # by bare name would run the wrong implementation whenever the name is
+        # declared in two schemas, and it would do so *after* a bind that had
+        # resolved correctly — silently returning another schema's answer.
+        schema_name: str | None = getattr(request, "schema_name", None)
         if function_name is None:
             function_name = request.bind_call.function_name
             schema_name = request.bind_call.schema_name
@@ -3006,6 +3016,7 @@ class Worker:
                 request.function_name,
                 self._unwrap_attach(request.attach_opaque_data),
                 function_type=TableBufferingFunction,
+                schema_name=getattr(request, "schema_name", None),
             )
             storage = self._bound(func_cls.storage, request.execution_id, request)
             storage.execution_clear()
@@ -3475,6 +3486,7 @@ class Worker:
                     request.function_name,
                     self._unwrap_attach(request.attach_opaque_data),
                     function_type=AggregateFunction,
+                    schema_name=getattr(request, "schema_name", None),
                 )
             except Exception:  # noqa: BLE001
                 func_cls = None

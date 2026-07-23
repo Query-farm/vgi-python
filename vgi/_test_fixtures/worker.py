@@ -47,6 +47,8 @@ from vgi._test_fixtures.aggregate import (
     GenericSumFunction,
     ListAggFunction,
     PercentileFunction,
+    SameNameDataAgg,
+    SameNameMainAgg,
     SecretTypedSumFunction,
     StreamingSumFunction,
     SumAllFunction,
@@ -268,6 +270,12 @@ from vgi._test_fixtures.table_in_out import (
     SubstreamPartialSumFunction,
     SumAllColumnsFunction,
     SumAllColumnsSimpleDistributed,
+)
+from vgi._test_fixtures.table_in_out_same_name import (
+    SameNameDataBuffered,
+    SameNameDataTransform,
+    SameNameMainBuffered,
+    SameNameMainTransform,
 )
 from vgi.arguments import Arguments
 from vgi.catalog import (
@@ -566,9 +574,15 @@ _EXAMPLE_CATALOG = Catalog(
                 RandomBytesFunction,
                 RandomIntFunction,
                 ReturnSecretValueFunction,
-                # Schema-disambiguation probe: the same function name is also
-                # registered in the `data` schema below with a different body.
+                # Schema-disambiguation probes: each name is also registered in
+                # the `data` schema below with a different body. The scalar
+                # covers the scalar bind path; the table-in-out and buffered
+                # pair cover the exchange-mode bind call sites, which the
+                # scalar cannot reach (see table_in_out_same_name).
                 SameNameMainFunction,
+                SameNameMainTransform,
+                SameNameMainBuffered,
+                SameNameMainAgg,
                 ScaleBySettingFunction,
                 SecretFieldFunction,
                 SmartFormatPrefixFunction,
@@ -659,9 +673,14 @@ _EXAMPLE_CATALOG = Catalog(
             name="data",
             comment="Example tables backed by functions",
             functions=[
-                # Schema-disambiguation probe: same registered name as the
-                # `main`-schema function above, different implementation.
+                # Schema-disambiguation probes: same registered names as the
+                # `main`-schema functions above, different implementations.
+                # The exchange-mode pair covers bind call sites the scalar
+                # cannot reach — see table_in_out_same_name's module docstring.
                 SameNameDataFunction,
+                SameNameDataTransform,
+                SameNameDataBuffered,
+                SameNameDataAgg,
             ],
             tables=[
                 # Function-backed table: schema derived via bind()
