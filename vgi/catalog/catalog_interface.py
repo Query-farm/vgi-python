@@ -1188,9 +1188,10 @@ class ScanBranchesResult:
         )
 
         branch_blobs = cast("list[bytes]", row["branches"])
-        if not branch_blobs:
-            raise ValueError(f"{cls.__name__}: branches list must not be empty")
-
+        # An empty branch list is valid: a multi-branch scan can prune to zero
+        # branches (see catalog/multi_branch_empty_branches) — it scans nothing.
+        # Lenient producers (the Rust/Go/Java SDKs, tolerated by the DuckDB C++
+        # client) send it; don't reject.
         branches: list[ScanBranch] = []
         for blob in branch_blobs:
             branch_batch, _ = deserialize_record_batch(blob)
