@@ -105,6 +105,8 @@ from vgi._test_fixtures.scalar import (
     RandomBytesFunction,
     RandomIntFunction,
     ReturnSecretValueFunction,
+    SameNameDataFunction,
+    SameNameMainFunction,
     ScaleBySettingFunction,
     SecretFieldFunction,
     Sha256HexFunction,
@@ -138,7 +140,6 @@ from vgi._test_fixtures.table import (
     CacheBigFunction,
     CacheExternalFailFunction,
     CacheFilteredFunction,
-    CacheInterleavedFunction,
     CacheMultiColFunction,
     CacheNonceFunction,
     CacheNoStoreFunction,
@@ -236,11 +237,11 @@ from vgi._test_fixtures.table_in_out import (
     BatchIndexBufferInputFunction,
     BlendedDropFunction,
     BlendedExplodeFunction,
-    CachedExplodeFunction,
     BufferEmitWideFunction,
     BufferInputFunction,
     CachedDoubleFunction,
     CachedEchoFunction,
+    CachedExplodeFunction,
     CachedRevalidatingDoubleFunction,
     CachedRevalidatingEchoFunction,
     CachedSumAllColumnsFunction,
@@ -493,7 +494,6 @@ _EXAMPLE_CATALOG = Catalog(
                 CacheBenchFunction,
                 CacheParallelFunction,
                 CacheOrderedFunction,
-                CacheInterleavedFunction,
                 CacheTypesFunction,
                 CacheFilteredFunction,
                 CachePartitionedFunction,
@@ -566,6 +566,9 @@ _EXAMPLE_CATALOG = Catalog(
                 RandomBytesFunction,
                 RandomIntFunction,
                 ReturnSecretValueFunction,
+                # Schema-disambiguation probe: the same function name is also
+                # registered in the `data` schema below with a different body.
+                SameNameMainFunction,
                 ScaleBySettingFunction,
                 SecretFieldFunction,
                 SmartFormatPrefixFunction,
@@ -655,6 +658,11 @@ _EXAMPLE_CATALOG = Catalog(
         Schema(
             name="data",
             comment="Example tables backed by functions",
+            functions=[
+                # Schema-disambiguation probe: same registered name as the
+                # `main`-schema function above, different implementation.
+                SameNameDataFunction,
+            ],
             tables=[
                 # Function-backed table: schema derived via bind()
                 Table(
@@ -1878,15 +1886,17 @@ def main() -> None:
     """Run the fixture worker process.
 
     Always serves the base ExampleWorker catalog plus the
-    ``projection_repro``, ``schema_reconcile``, and ``accumulate``
-    fixture catalogs (all depend on the ``vgi[test-fixtures]`` extra).
-    Adds the writable catalog when the ``vgi[test-fixtures-writable]``
-    extra is also installed.
+    ``projection_repro``, ``schema_reconcile``, ``accumulate``,
+    ``narrow_bind``, ``twin_a`` and ``twin_b`` fixture catalogs (all
+    depend on the ``vgi[test-fixtures]`` extra). Adds the writable
+    catalog when the ``vgi[test-fixtures-writable]`` extra is also
+    installed.
     """
     from vgi._test_fixtures.accumulate.worker import AccumulateWorker
     from vgi._test_fixtures.narrow_bind.worker import NarrowBindWorker
     from vgi._test_fixtures.projection_repro.worker import ProjReproWorker
     from vgi._test_fixtures.schema_reconcile.worker import SchemaReconcileWorker
+    from vgi._test_fixtures.twin_catalogs import TwinAWorker, TwinBWorker
     from vgi.meta_worker import MetaWorker
 
     workers: list[type] = [
@@ -1895,6 +1905,10 @@ def main() -> None:
         SchemaReconcileWorker,
         AccumulateWorker,
         NarrowBindWorker,
+        # Two catalogs whose `main` schemas both declare
+        # `test_same_name_catalog` — only the attached catalog tells them apart.
+        TwinAWorker,
+        TwinBWorker,
     ]
     try:
         from vgi._test_fixtures.writable.worker import WritableWorker

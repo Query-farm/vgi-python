@@ -274,6 +274,14 @@ def _create_cli() -> Any:
         help="Function name to invoke (e.g., sequence, echo, upper_case).",
     )
     @click.option(
+        "--schema",
+        "schema_name",
+        default="main",
+        show_default=True,
+        type=str,
+        help="Catalog schema declaring the function. A worker may register one name in several schemas.",
+    )
+    @click.option(
         "--args",
         "arguments",
         default="[]",
@@ -372,6 +380,7 @@ def _create_cli() -> Any:
         output_file: str | None,
         output_format: str,
         function_name: str | None,
+        schema_name: str,
         arguments: str,
         worker_path: str,
         worker_stderr: bool,
@@ -502,6 +511,7 @@ def _create_cli() -> Any:
                     _logger.info("invoking_table_function function=%s", function_name)
                     output_iterator = client.table_function(
                         function_name=function_name,
+                        schema_name=schema_name,
                         arguments=func_args,
                         projection_ids=list(projection_ids) if projection_ids else None,
                         pushdown_filters=pushdown_filters_bytes,
@@ -517,6 +527,7 @@ def _create_cli() -> Any:
 
                     output_iterator = client.scalar_function(
                         function_name=function_name,
+                        schema_name=schema_name,
                         arguments=func_args,
                         input=pf.iter_batches(),
                         transaction_opaque_data=transaction_opaque_data_bytes,
@@ -543,6 +554,7 @@ def _create_cli() -> Any:
 
                     output_iterator = client.table_in_out_function(
                         function_name=function_name,
+                        schema_name=schema_name,
                         arguments=func_args,
                         input=pf.iter_batches(),
                         projection_ids=list(projection_ids) if projection_ids else None,

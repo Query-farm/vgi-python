@@ -20,6 +20,7 @@ class TestDoubleSequenceFunction:
             outputs = list(
                 client.table_function(
                     function_name="double_sequence",
+                    schema_name="main",
                     arguments=Arguments(positional=(pa.scalar(5),)),
                 )
             )
@@ -36,6 +37,7 @@ class TestDoubleSequenceFunction:
             outputs = list(
                 client.table_function(
                     function_name="double_sequence",
+                    schema_name="main",
                     arguments=Arguments(
                         positional=(pa.scalar(3),),
                         named={"increment": pa.scalar(0.5)},

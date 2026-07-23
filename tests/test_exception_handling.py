@@ -33,6 +33,7 @@ class TestBindExceptionHandling:
                 list(
                     client.table_function(
                         function_name="nonexistent_function_xyz",
+                        schema_name="main",
                         arguments=Arguments(),
                     )
                 )
@@ -51,6 +52,7 @@ class TestBindExceptionHandling:
                 list(
                     client.table_function(
                         function_name="settings_aware",
+                        schema_name="main",
                         arguments=Arguments(positional=(pa.scalar(3),)),
                     )
                 )
@@ -74,6 +76,7 @@ class TestProcessingExceptionHandling:
                 list(
                     client.table_function(
                         function_name="sequence",
+                        schema_name="main",
                         arguments=Arguments(positional=(pa.scalar("not_a_number"),)),
                     )
                 )
@@ -101,6 +104,7 @@ class TestExceptionTracebackPreservation:
                 list(
                     client.table_function(
                         function_name="settings_aware",
+                        schema_name="main",
                         arguments=Arguments(positional=(pa.scalar(3),)),
                     )
                 )
@@ -116,6 +120,7 @@ class TestExceptionTracebackPreservation:
                 list(
                     client.table_function(
                         function_name="nonexistent_function",
+                        schema_name="main",
                         arguments=Arguments(),
                     )
                 )
@@ -140,6 +145,7 @@ class TestMultiWorkerExceptionHandling:
                 list(
                     client.table_function(
                         function_name="settings_aware",
+                        schema_name="main",
                         arguments=Arguments(positional=(pa.scalar(3),)),
                     )
                 )
@@ -167,6 +173,7 @@ class TestTableInOutExceptionHandling:
                 list(
                     client.table_in_out_function(
                         function_name="multiply_column",
+                        schema_name="main",
                         input=iter([input_batch]),
                         arguments=Arguments(positional=(pa.scalar("nonexistent_column"),)),
                     )
@@ -197,6 +204,7 @@ class TestScalarExceptionHandling:
                 list(
                     client.scalar_function(
                         function_name="add",
+                        schema_name="main",
                         input=iter([input_batch]),
                         arguments=Arguments(
                             positional=(
@@ -230,6 +238,7 @@ class TestErrorMessageContent:
                 list(
                     client.table_function(
                         function_name="nonexistent_function",
+                        schema_name="main",
                         arguments=Arguments(),
                     )
                 )
@@ -247,6 +256,7 @@ class TestErrorMessageContent:
                 list(
                     client.table_function(
                         function_name="settings_aware",
+                        schema_name="main",
                         arguments=Arguments(positional=(pa.scalar(3),)),
                     )
                 )
@@ -262,6 +272,7 @@ class TestErrorMessageContent:
                 list(
                     client.table_function(
                         function_name="settings_aware",
+                        schema_name="main",
                         arguments=Arguments(positional=(pa.scalar(3),)),
                     )
                 )

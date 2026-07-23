@@ -1062,7 +1062,9 @@ class Worker:
 
         To customize the catalog, set `catalog_interface` to a [`CatalogInterface`][]
         subclass. To disable the catalog entirely, set `catalog_interface = None`
-        and `catalog_name = None`.
+        and `catalog_name = None`. A catalog-less worker is reachable only from
+        the pure-Python ``Client`` — DuckDB reaches VGI functions exclusively
+        through ``ATTACH``, which requires a catalog.
 
     Attributes:
         functions: Function classes this worker hosts.
@@ -1089,6 +1091,12 @@ class Worker:
     catalog_name: str | None = "functions"  # Set to None to disable default catalog
     catalog: Catalog | None = None
     _registry: dict[str, list[type[Function]]] | None = None
+    # (lowercased schema name, function name) -> classes declared in that schema.
+    # Built alongside ``_registry`` so a name registered in two catalog schemas
+    # can be resolved by the schema the caller named. Only the declarative
+    # ``catalog`` pattern populates it; the legacy ``functions`` list has no
+    # schema, so those entries resolve through ``_registry`` alone.
+    _schema_registry: dict[tuple[str, str], list[type[Function]]] | None = None
     _default_catalog_interface: type[CatalogInterface] | None = None
     _setting_specs: list[SettingSpec] = []  # Extracted from Settings inner class
     _secret_type_specs: list[SecretTypeSpec] = []  # Secret types to register
@@ -1155,7 +1163,10 @@ class Worker:
         """Build function name -> list of classes mapping from functions list.
 
         Multiple functions can share the same name if they have different
-        argument signatures (overloading).
+        argument signatures (overloading), or if they are declared in different
+        catalog schemas. This index is name-only and therefore merges both
+        cases; :meth:`_build_schema_registry` keeps them apart by schema and is
+        what a schema-qualified bind resolves through.
 
         Supports both patterns:
         - Legacy: cls.functions list
@@ -1164,42 +1175,107 @@ class Worker:
         if cls._registry is not None:
             return cls._registry
 
+        # Schemas come from whichever descriptor actually gets advertised: the
+        # worker's own `catalog` when it has one, else the catalog interface's.
+        # A worker built on the legacy `functions` list but serving a
+        # ReadOnlyCatalogInterface still exposes its functions inside that
+        # interface's schemas, and the bind request names those schemas.
+        catalog_obj = cls.catalog
+        if catalog_obj is None and cls.catalog_interface is not None:
+            catalog_obj = getattr(cls.catalog_interface, "catalog", None)
+
         registry: dict[str, list[type[Function]]] = {}
+        schema_registry: dict[tuple[str, str], list[type[Function]]] = {}
 
         seen: set[type[Function]] = set()
 
-        def add_function(func_cls: type[Function]) -> None:
+        def add_function(func_cls: type[Function], schema_name: str | None) -> None:
+            meta = func_cls.get_metadata()
+            if schema_name is not None:
+                key = (schema_name.lower(), meta.name)
+                bucket = schema_registry.setdefault(key, [])
+                if func_cls not in bucket:
+                    bucket.append(func_cls)
             if func_cls in seen:
                 return
             seen.add(func_cls)
-            meta = func_cls.get_metadata()
-            if meta.name not in registry:
-                registry[meta.name] = []
-            registry[meta.name].append(func_cls)
+            registry.setdefault(meta.name, []).append(func_cls)
 
-        # Legacy pattern: functions list
+        # Legacy pattern: functions list. No schema of its own, so these land in
+        # the catalog's default schema — that is the schema DuckDB registers
+        # them into, so a qualified call has to find them there.
+        default_schema = catalog_obj.default_schema if catalog_obj is not None else "main"
         for func_cls in cls.functions:
-            add_function(func_cls)
+            add_function(func_cls, default_schema)
 
         # Declarative pattern: functions in catalog schemas
-        if cls.catalog is not None:
-            for schema in cls.catalog.schemas:
+        if catalog_obj is not None:
+            for schema in catalog_obj.schemas:
                 for func_cls in schema.functions:
-                    add_function(func_cls)
+                    add_function(func_cls, schema.name)
 
                 # Auto-register functions referenced by table descriptors
                 for table in schema.tables:
                     # Scan function (Table.function)
                     if table.function is not None:
-                        add_function(table.function)
+                        add_function(table.function, schema.name)
                     # Write functions
                     for attr in ("insert_function", "update_function", "delete_function"):
                         write_func = getattr(table, attr, None)
                         if write_func is not None:
-                            add_function(write_func)
+                            add_function(write_func, schema.name)
 
         cls._registry = registry
+        cls._schema_registry = schema_registry
         return registry
+
+    @classmethod
+    def _build_schema_registry(cls) -> dict[tuple[str, str], list[type[Function]]]:
+        """Return the ``(lowercased schema, function name)`` index.
+
+        Built as a side effect of :meth:`_build_registry`; this accessor just
+        guarantees the build has run.
+        """
+        cls._build_registry()
+        assert cls._schema_registry is not None
+        return cls._schema_registry
+
+    def _candidates_for(self, function_name: str, schema_name: str | None) -> list[type[Function]]:
+        """Resolve ``function_name`` to its candidate classes, scoped by schema.
+
+        A schema-qualified lookup is *exact*: only functions declared in that
+        schema are candidates, so a name registered in two schemas dispatches to
+        the implementation the caller named rather than colliding. Callers with
+        no schema (the pure-Python ``Client``, the CLI) search every schema and
+        get a cross-schema ambiguity error if the name is not unique.
+        """
+        registry = self._build_registry()
+
+        if schema_name is not None:
+            scoped = self._build_schema_registry().get((schema_name.lower(), function_name))
+            if scoped:
+                return list(scoped)
+            # Named a schema that doesn't hold this function. Report where it
+            # does live rather than the generic unknown-function list.
+            if function_name in registry:
+                schemas = sorted({schema for (schema, name) in self._build_schema_registry() if name == function_name})
+                raise ValueError(
+                    f"Function '{function_name}' is not registered in schema '{schema_name}'. "
+                    f"It is available in: {schemas}"
+                )
+
+        if function_name not in registry:
+            available = sorted(registry.keys())
+            suggestions = self._suggest_similar_names(function_name, available)
+            msg_lines = [f"Unknown function: '{function_name}'"]
+            if suggestions:
+                msg_lines.append("  Did you mean:")
+                for suggestion in suggestions[:3]:
+                    msg_lines.append(f"    - {suggestion}")
+            msg_lines.append(f"  Available functions: {available}")
+            raise ValueError("\n".join(msg_lines))
+
+        return list(registry[function_name])
 
     @classmethod
     def _get_catalog_interface(cls) -> type[CatalogInterface] | None:
@@ -1563,6 +1639,7 @@ class Worker:
         arguments: Arguments,
         input_schema: pa.Schema | None,
         candidates: Sequence[type[Function]],
+        schema_registry: dict[tuple[str, str], list[type[Function]]] | None = None,
     ) -> type[Function]:
         """Find the function that matches the invocation's arguments.
 
@@ -1576,6 +1653,8 @@ class Worker:
             arguments: The arguments that were used to call the function
             input_schema: The input_schema that is passed to the function,
             candidates: Sequence of function classes with the same name.
+            schema_registry: The worker's ``(schema, name)`` index, used only to
+                turn a cross-schema tie into an actionable error message.
 
         Returns:
             The matching function class.
@@ -1721,7 +1800,22 @@ class Worker:
 
         if len(matches) > 1:
             match_names = [m.__name__ for m in matches]
-            raise ValueError(f"Ambiguous function call '{function_name}': multiple overloads match: {match_names}")
+            hint = ""
+            if schema_registry is not None:
+                # A tie between classes that live in *different* schemas is not an
+                # overload problem — the caller just didn't say which schema.
+                owners = {
+                    m.__name__: sorted(schema for (schema, name), classes in schema_registry.items() if m in classes)
+                    for m in matches
+                }
+                if len({tuple(v) for v in owners.values()}) > 1:
+                    hint = (
+                        f". These are declared in different schemas ({owners}) — "
+                        f"qualify the call with a schema to disambiguate"
+                    )
+            raise ValueError(
+                f"Ambiguous function call '{function_name}': multiple overloads match: {match_names}{hint}"
+            )
 
         return matches[0]
 
@@ -1974,7 +2068,8 @@ class Worker:
         """Look up and disambiguate function class from registry.
 
         Args:
-            request: The BindRequest containing function_name and arguments.
+            request: The BindRequest carrying function_name, schema_name and
+                arguments.
 
         Returns:
             The matching function class.
@@ -1983,19 +2078,7 @@ class Worker:
             ValueError: If function not found or ambiguous.
 
         """
-        registry = self._build_registry()
-        if request.function_name not in registry:
-            available = sorted(registry.keys())
-            suggestions = self._suggest_similar_names(request.function_name, available)
-            msg_lines = [f"Unknown function: '{request.function_name}'"]
-            if suggestions:
-                msg_lines.append("  Did you mean:")
-                for suggestion in suggestions[:3]:
-                    msg_lines.append(f"    - {suggestion}")
-            msg_lines.append(f"  Available functions: {available}")
-            raise ValueError("\n".join(msg_lines))
-
-        candidates = registry[request.function_name]
+        candidates = self._candidates_for(request.function_name, request.schema_name)
         if len(candidates) == 1:
             return candidates[0]
 
@@ -2004,6 +2087,7 @@ class Worker:
             arguments=request.arguments,
             input_schema=request.input_schema,
             candidates=candidates,
+            schema_registry=self._build_schema_registry(),
         )
 
     def _resolve_function_by_name(
@@ -2011,6 +2095,7 @@ class Worker:
         function_name: str,
         attach_opaque_data: bytes | None = None,
         function_type: type[Function] | None = None,
+        schema_name: str | None = None,
     ) -> type[Function]:
         """Look up a function by name only (no argument disambiguation).
 
@@ -2018,16 +2103,15 @@ class Worker:
             function_name: The name of the function to look up.
             attach_opaque_data: Optional attach ID (reserved for future catalog use).
             function_type: Optional base class to filter candidates by type.
+            schema_name: Catalog schema owning the function, when the caller
+                knows it. Scopes the lookup so a name declared in two schemas
+                resolves to the right one.
 
         Returns:
             The resolved [`Function`][] subclass for ``function_name``.
 
         """
-        registry = self._build_registry()
-        if function_name not in registry:
-            available = sorted(registry.keys())
-            raise ValueError(f"Unknown function: '{function_name}'. Available: {available}")
-        candidates = registry[function_name]
+        candidates = self._candidates_for(function_name, schema_name)
         if function_type is not None:
             candidates = [c for c in candidates if issubclass(c, function_type)]
             if not candidates:
@@ -2751,8 +2835,13 @@ class Worker:
         function_name = getattr(request, "function_name", None)
         attach = getattr(request, "attach_opaque_data", None)
         transaction_id = getattr(request, "transaction_id", None)
+        # Only the InitRequest shape carries the owning schema (on bind_call);
+        # the unary table_buffering_* requests reference an already-bound
+        # execution, so they resolve by name across schemas.
+        schema_name: str | None = None
         if function_name is None:
             function_name = request.bind_call.function_name
+            schema_name = request.bind_call.schema_name
             if attach is None:
                 attach = request.bind_call.attach_opaque_data
             if transaction_id is None:
@@ -2772,6 +2861,7 @@ class Worker:
             function_name,
             catalog_bytes,
             function_type=TableBufferingFunction,
+            schema_name=schema_name,
         )
         if not issubclass(func_cls, TableBufferingFunction):
             raise TypeError(f"Function '{function_name}' is not a TableBufferingFunction (got {func_cls.__name__})")

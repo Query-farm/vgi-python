@@ -202,6 +202,11 @@ class BindRequest(ArrowSerializableDataclass):
             unless this bind/init opens a COPY-FROM scan.
         copy_to: The ``COPY ... TO`` context (destination format + path); ``None``
             unless this bind/init opens a COPY-TO sink.
+        schema_name: Catalog schema that owns the function being bound. Set by the
+            DuckDB extension from the schema entry the function was registered
+            into, so a name registered in two schemas resolves to the right
+            implementation. ``None`` for non-catalog callers (the legacy
+            ``Worker.functions`` list), where lookup falls back to bare name.
     """
 
     function_name: str
@@ -222,6 +227,10 @@ class BindRequest(ArrowSerializableDataclass):
 
     # COPY ... TO context (None unless this bind/init opens a COPY-TO sink)
     copy_to: CopyToContext | None = None
+
+    # Catalog schema owning the function; disambiguates a name registered in
+    # more than one schema. None for non-catalog callers.
+    schema_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2430,7 +2439,7 @@ class VgiProtocol(Protocol):
             canonical semver (MAJOR.MINOR.PATCH) of the method-and-schema contract.
     """
 
-    protocol_version: ClassVar[str] = "1.0.0"
+    protocol_version: ClassVar[str] = "1.1.0"
 
     def bind(self, request: BindRequest) -> BindResponse:
         """Resolve output schema and validate arguments."""

@@ -178,6 +178,7 @@ def test_scalar_function_end_to_end(attached_example: tuple[str, bytes]) -> None
         out_batches = list(
             client.scalar_function(
                 function_name="double",
+                schema_name="main",
                 arguments=Arguments(positional=(pa.scalar("x"),)),
                 input=iter([input_batch]),
             )
@@ -199,6 +200,7 @@ def test_table_function_end_to_end(attached_example: tuple[str, bytes]) -> None:
         out_batches = list(
             client.table_function(
                 function_name="sequence",
+                schema_name="main",
                 arguments=Arguments(positional=(pa.scalar(5),)),
             )
         )

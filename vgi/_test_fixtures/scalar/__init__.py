@@ -65,6 +65,10 @@ from vgi._test_fixtures.scalar.random_demo import (
     RandomBytesFunction,
     RandomIntFunction,
 )
+from vgi._test_fixtures.scalar.same_name import (
+    SameNameDataFunction,
+    SameNameMainFunction,
+)
 from vgi._test_fixtures.scalar.settings_secrets import (
     MultiplyBySettingFunction,
     ReturnSecretValueFunction,
@@ -123,6 +127,8 @@ __all__ = [
     "RandomBytesFunction",
     "RandomIntFunction",
     "ReturnSecretValueFunction",
+    "SameNameDataFunction",
+    "SameNameMainFunction",
     "ScaleBySettingFunction",
     "SecretFieldFunction",
     "SmartFormatPrefixFunction",

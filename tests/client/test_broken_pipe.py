@@ -40,6 +40,7 @@ class TestClientWorkerExitHandling:
             list(
                 client.table_in_out_function(
                     function_name="test",
+                    schema_name="main",
                     arguments=Arguments(),
                     input=iter([_make_test_batch()]),
                 )
@@ -56,6 +57,7 @@ class TestClientWorkerExitHandling:
             list(
                 client.table_in_out_function(
                     function_name="test",
+                    schema_name="main",
                     arguments=Arguments(),
                     input=iter([_make_test_batch()]),
                 )

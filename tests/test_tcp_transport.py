@@ -87,6 +87,7 @@ def test_tcp_round_trip_table_function() -> None:
         batches = list(
             client.table_function(
                 function_name="sequence",
+                schema_name="main",
                 arguments=Arguments(positional=(pa.scalar(5),)),
             )
         )

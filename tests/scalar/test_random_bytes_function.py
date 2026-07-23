@@ -25,6 +25,7 @@ class TestRandomBytesFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="random_bytes",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(123), pa.scalar(16))),
                 )
@@ -45,6 +46,7 @@ class TestRandomBytesFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="random_bytes",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(123), pa.scalar(0))),
                 )
@@ -63,6 +65,7 @@ class TestRandomBytesFunction:
             first = list(
                 client.scalar_function(
                     function_name="random_bytes",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(999), pa.scalar(16))),
                 )
@@ -70,6 +73,7 @@ class TestRandomBytesFunction:
             second = list(
                 client.scalar_function(
                     function_name="random_bytes",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(999), pa.scalar(16))),
                 )
@@ -88,6 +92,7 @@ class TestRandomBytesFunction:
             first = list(
                 client.scalar_function(
                     function_name="random_bytes",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(1), pa.scalar(16))),
                 )
@@ -95,6 +100,7 @@ class TestRandomBytesFunction:
             second = list(
                 client.scalar_function(
                     function_name="random_bytes",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(2), pa.scalar(16))),
                 )

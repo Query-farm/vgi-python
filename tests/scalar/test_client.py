@@ -29,6 +29,7 @@ class TestScalarFunctionClient:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -46,6 +47,7 @@ class TestScalarFunctionClient:
             outputs = list(
                 client.scalar_function(
                     function_name="add_values",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -63,6 +65,7 @@ class TestScalarFunctionClient:
             outputs = list(
                 client.scalar_function(
                     function_name="upper_case",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("name"),)),
                 )
@@ -82,6 +85,7 @@ class TestScalarFunctionClient:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
+                    schema_name="main",
                     input=iter([batch1, batch2, batch3]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -106,6 +110,7 @@ class TestScalarFunctionClient:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
+                    schema_name="main",
                     input=iter([empty_batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -124,6 +129,7 @@ class TestScalarFunctionClient:
             list(
                 client.scalar_function(
                     function_name="double",
+                    schema_name="main",
                     input=iter([]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -139,6 +145,7 @@ class TestScalarFunctionClient:
             list(
                 client.scalar_function(
                     function_name="double",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -154,6 +161,7 @@ class TestScalarFunctionClient:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -182,6 +190,7 @@ class TestScalarFunctionClient:
             list(
                 client.scalar_function(
                     function_name="double",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                     bind_result_callback=capture_bind_result,
@@ -204,6 +213,7 @@ class TestScalarFunctionClient:
             outputs = list(
                 client.scalar_function(
                     function_name="add_values",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -221,6 +231,7 @@ class TestScalarFunctionClient:
             outputs = list(
                 client.scalar_function(
                     function_name="add_values",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -244,6 +255,7 @@ class TestSumValues:
             outputs = list(
                 client.scalar_function(
                     function_name="sum_values",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -261,6 +273,7 @@ class TestSumValues:
             outputs = list(
                 client.scalar_function(
                     function_name="sum_values",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"), pa.scalar("c"))),
                 )
@@ -278,6 +291,7 @@ class TestSumValues:
             outputs = list(
                 client.scalar_function(
                     function_name="sum_values",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -300,6 +314,7 @@ class TestSumValues:
             list(
                 client.scalar_function(
                     function_name="sum_values",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -315,6 +330,7 @@ class TestSumValues:
             outputs = list(
                 client.scalar_function(
                     function_name="sum_values",
+                    schema_name="main",
                     input=iter([batch1, batch2]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -335,6 +351,7 @@ class TestSumValues:
             outputs = list(
                 client.scalar_function(
                     function_name="sum_values",
+                    schema_name="main",
                     input=iter([empty_batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -352,6 +369,7 @@ class TestSumValues:
             outputs = list(
                 client.scalar_function(
                     function_name="sum_values",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -373,6 +391,7 @@ class TestScalarFunctionParallel:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
+                    schema_name="main",
                     input=iter(batches),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -400,6 +419,7 @@ class TestScalarFunctionParallel:
             outputs = list(
                 client.scalar_function(
                     function_name="add_values",
+                    schema_name="main",
                     input=iter(batches),
                     arguments=Arguments(positional=(pa.scalar("a"), pa.scalar("b"))),
                 )
@@ -423,6 +443,7 @@ class TestScalarFunctionParallel:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
+                    schema_name="main",
                     input=iter(batches),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -446,6 +467,7 @@ class TestScalarFunctionParallel:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -467,6 +489,7 @@ class TestNullHandlingFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="null_handling",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -484,6 +507,7 @@ class TestNullHandlingFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="null_handling",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -501,6 +525,7 @@ class TestNullHandlingFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="null_handling",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -518,6 +543,7 @@ class TestNullHandlingFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="null_handling",
+                    schema_name="main",
                     input=iter([empty_batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -536,6 +562,7 @@ class TestNullHandlingFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="null_handling",
+                    schema_name="main",
                     input=iter([batch1, batch2]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -563,6 +590,7 @@ class TestRandomIntFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="random_int",
+                    schema_name="main",
                     input=iter([batch]),
                     # Args are column names, not values
                     arguments=Arguments(positional=(pa.scalar("min_val"), pa.scalar("max_val"))),
@@ -586,6 +614,7 @@ class TestRandomIntFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="random_int",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar("min_val"), pa.scalar("max_val"))),
                 )
@@ -607,6 +636,7 @@ class TestRandomIntFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="random_int",
+                    schema_name="main",
                     input=iter([empty_batch]),
                     arguments=Arguments(positional=(pa.scalar("min_val"), pa.scalar("max_val"))),
                 )
@@ -625,6 +655,7 @@ class TestRandomIntFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="random_int",
+                    schema_name="main",
                     input=iter([batch1, batch2]),
                     arguments=Arguments(positional=(pa.scalar("min_val"), pa.scalar("max_val"))),
                 )
@@ -658,6 +689,7 @@ class TestScalarMultiWorkerEdgeCases:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
+                    schema_name="main",
                     input=iter([zero_row_batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -677,6 +709,7 @@ class TestScalarMultiWorkerEdgeCases:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
+                    schema_name="main",
                     input=iter([zero_row_batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -696,6 +729,7 @@ class TestScalarMultiWorkerEdgeCases:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
+                    schema_name="main",
                     input=iter([single_batch]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )
@@ -715,6 +749,7 @@ class TestScalarMultiWorkerEdgeCases:
             outputs = list(
                 client.scalar_function(
                     function_name="double",
+                    schema_name="main",
                     input=iter([batch1, batch2]),
                     arguments=Arguments(positional=(pa.scalar("x"),)),
                 )

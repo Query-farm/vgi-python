@@ -17,6 +17,7 @@ class TestTenThousandFunction:
             outputs = list(
                 client.table_function(
                     function_name="ten_thousand",
+                    schema_name="main",
                 )
             )
 

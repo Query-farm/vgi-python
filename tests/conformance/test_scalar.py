@@ -23,6 +23,9 @@ skip_area(
         "hash_seed.test",
         "null_handling.test",
         "random_int.test",
+        # Covered on the Python side by tests/test_schema_scoped_functions.py.
+        "same_name_catalogs.test",
+        "same_name_schemas.test",
         "sum_values.test",
         "unnest_tensor.test",
         "upper_case.test",

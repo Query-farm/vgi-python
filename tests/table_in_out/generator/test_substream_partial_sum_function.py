@@ -28,6 +28,7 @@ class TestSubstreamPartialSumFunction:
             output = list(
                 client.table_in_out_function(
                     function_name="substream_partial_sum",
+                    schema_name="main",
                     input=iter([batch]),
                 )
             )
@@ -46,6 +47,7 @@ class TestSubstreamPartialSumFunction:
             output = list(
                 client.table_in_out_function(
                     function_name="substream_partial_sum",
+                    schema_name="main",
                     input=iter(batches),
                 )
             )
@@ -61,6 +63,7 @@ class TestSubstreamPartialSumFunction:
             output = list(
                 client.table_in_out_function(
                     function_name="substream_partial_sum",
+                    schema_name="main",
                     input=iter([empty]),
                 )
             )

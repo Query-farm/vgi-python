@@ -102,6 +102,7 @@ def test_scalar_function_over_http(http_example_base_url: str) -> None:
         out = list(
             client.scalar_function(
                 function_name="double",
+                schema_name="main",
                 arguments=Arguments(positional=(pa.scalar("x"),)),
                 input=iter([batch]),
             )
@@ -119,6 +120,7 @@ def test_table_function_over_http(http_example_base_url: str) -> None:
         out = list(
             client.table_function(
                 function_name="sequence",
+                schema_name="main",
                 arguments=Arguments(positional=(pa.scalar(5),)),
             )
         )

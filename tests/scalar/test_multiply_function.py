@@ -23,6 +23,7 @@ class TestMultiplyFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="multiply",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(2),)),
                 )
@@ -40,6 +41,7 @@ class TestMultiplyFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="multiply",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(1),)),
                 )
@@ -57,6 +59,7 @@ class TestMultiplyFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="multiply",
+                    schema_name="main",
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(2),)),
                 )

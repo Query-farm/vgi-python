@@ -307,6 +307,52 @@ class MyReadOnlyCatalog(ReadOnlyCatalogInterface):
 
 ---
 
+## Function Name Scoping
+
+A function name is **not** a global key. The worker resolves a call by the pair
+`(schema, function name)`, so the same name may be declared in more than one
+schema of a catalog, and a schema-qualified call reaches the implementation in
+that schema:
+
+```python test="lint"
+Catalog(
+    name="example",
+    default_schema="main",
+    schemas=[
+        Schema(name="main", functions=[ProdLookup]),   # Meta.name = "lookup"
+        Schema(name="staging", functions=[StagingLookup]),  # Meta.name = "lookup"
+    ],
+)
+```
+
+```sql
+SELECT example.main.lookup(1);     -- ProdLookup
+SELECT example.staging.lookup(1);  -- StagingLookup
+```
+
+The DuckDB extension carries the owning schema on every bind request
+(`BindRequest.schema_name`), taken from the schema entry the function was
+registered into. Two consequences worth knowing:
+
+- **Overloads still work.** Several classes sharing a name *within one schema*
+  are overloads, disambiguated by argument signature as before. Only the
+  cross-schema case is resolved by schema.
+- **Callers without a schema must be unambiguous.** The pure-Python `Client`
+  and the CLI send no schema. If the name is unique across the worker they
+  resolve normally; if two schemas declare it, the worker raises an ambiguity
+  error naming the schemas involved.
+
+Functions declared via the legacy `Worker.functions` list have no schema of
+their own, so they are registered into the catalog's `default_schema` — the
+same schema DuckDB registers them into.
+
+Across **catalogs**, the key is the attachment rather than the name: two
+catalogs served by one worker process (see `vgi.meta_worker.MetaWorker`) may
+each declare `main.lookup`, and each attachment's `attach_opaque_data` routes
+its calls to the right catalog.
+
+---
+
 ## Declarative Catalogs
 
 For most use cases, the declarative catalog API provides a simpler way to define catalogs using Python dataclasses instead of implementing `CatalogInterface` directly.
@@ -483,12 +529,18 @@ class MyWorker(Worker):
 
 To disable the catalog interface entirely:
 
-```python
+```python test="lint"
 class MyWorker(Worker):
     catalog_interface = None
     catalog_name = None  # Required to fully disable
     functions = [...]
 ```
+
+A catalog-less worker is reachable only from the pure-Python [`Client`][], which
+binds by `(schema, function name)` and needs no attachment — its functions
+register into the default `main` schema. It is **not** reachable from DuckDB:
+`ATTACH ... (TYPE vgi)` requires a catalog, and there is no standalone
+call form. If the worker should be usable from SQL, give it a catalog.
 
 ---
 

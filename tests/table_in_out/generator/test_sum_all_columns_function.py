@@ -21,6 +21,7 @@ class TestSumAllColumnsFunction:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="sum_all_columns",
+                    schema_name="main",
                     input=iter(numeric_batches),
                 )
             )
@@ -34,6 +35,7 @@ class TestSumAllColumnsFunction:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="sum_all_columns",
+                    schema_name="main",
                     input=iter(simple_batches),
                 )
             )
@@ -51,6 +53,7 @@ class TestSumAllColumnsFunction:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="sum_all_columns",
+                    schema_name="main",
                     input=iter(numeric_batches),
                 )
             )
@@ -77,6 +80,7 @@ class TestSumAllColumnsFunctionWithLogging:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="sum_all_columns",
+                    schema_name="main",
                     arguments=self._logging_args(),
                     input=iter(numeric_batches),
                 )
@@ -93,6 +97,7 @@ class TestSumAllColumnsFunctionWithLogging:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="sum_all_columns",
+                    schema_name="main",
                     arguments=self._logging_args(),
                     input=iter(numeric_batches),
                 )
@@ -110,6 +115,7 @@ class TestSumAllColumnsFunctionWithLogging:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="sum_all_columns",
+                    schema_name="main",
                     arguments=self._logging_args(),
                     input=iter(single_batch),
                 )
@@ -150,6 +156,7 @@ class TestSumAllColumnsFunctionDistributed:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="sum_all_columns",
+                    schema_name="main",
                     input=iter(batches),
                 )
             )
@@ -168,6 +175,7 @@ class TestSumAllColumnsFunctionDistributed:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="sum_all_columns",
+                    schema_name="main",
                     input=iter(simple_batches),
                 )
             )
@@ -188,6 +196,7 @@ class TestSumAllColumnsFunctionDistributed:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="sum_all_columns",
+                    schema_name="main",
                     input=iter([empty_batch]),
                 )
             )
@@ -205,6 +214,7 @@ class TestSumAllColumnsSimpleDistributed:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="sum_all_columns_simple_distributed",
+                    schema_name="main",
                     input=iter(numeric_batches),
                 )
             )
@@ -240,6 +250,7 @@ class TestSumAllColumnsSimpleDistributed:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="sum_all_columns_simple_distributed",
+                    schema_name="main",
                     input=iter(batches),
                 )
             )
@@ -258,6 +269,7 @@ class TestSumAllColumnsSimpleDistributed:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="sum_all_columns_simple_distributed",
+                    schema_name="main",
                     input=iter(simple_batches),
                 )
             )
@@ -278,6 +290,7 @@ class TestSumAllColumnsSimpleDistributed:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="sum_all_columns_simple_distributed",
+                    schema_name="main",
                     input=iter([empty_batch]),
                 )
             )

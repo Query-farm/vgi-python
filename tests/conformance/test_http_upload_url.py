@@ -85,6 +85,7 @@ def test_oversize_input_auto_externalized(small_request_limit_base_url: str) -> 
         out = list(
             client.scalar_function(
                 function_name="double",
+                schema_name="main",
                 arguments=Arguments(positional=(pa.scalar("x"),)),
                 input=iter([input_batch]),
             )
@@ -115,6 +116,7 @@ def test_small_input_not_externalized(small_request_limit_base_url: str) -> None
         out = list(
             client.scalar_function(
                 function_name="double",
+                schema_name="main",
                 arguments=Arguments(positional=(pa.scalar("x"),)),
                 input=iter([input_batch]),
             )

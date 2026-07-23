@@ -26,6 +26,7 @@ class TestPartitionedSequenceFunctionMultiWorker:
             outputs = list(
                 client.table_function(
                     function_name="partitioned_sequence",
+                    schema_name="main",
                     arguments=Arguments(positional=(pa.scalar(20),)),
                 )
             )
@@ -42,6 +43,7 @@ class TestPartitionedSequenceFunctionMultiWorker:
             outputs = list(
                 client.table_function(
                     function_name="partitioned_sequence",
+                    schema_name="main",
                     arguments=Arguments(positional=(pa.scalar(30),)),
                 )
             )
@@ -58,6 +60,7 @@ class TestPartitionedSequenceFunctionMultiWorker:
             outputs = list(
                 client.table_function(
                     function_name="partitioned_sequence",
+                    schema_name="main",
                     arguments=Arguments(positional=(pa.scalar(10000),)),
                 )
             )
@@ -74,6 +77,7 @@ class TestPartitionedSequenceFunctionMultiWorker:
             outputs = list(
                 client.table_function(
                     function_name="partitioned_sequence",
+                    schema_name="main",
                     arguments=Arguments(positional=(pa.scalar(7),)),
                 )
             )
@@ -90,6 +94,7 @@ class TestPartitionedSequenceFunctionMultiWorker:
             outputs = list(
                 client.table_function(
                     function_name="partitioned_sequence",
+                    schema_name="main",
                     arguments=Arguments(positional=(pa.scalar(15),)),
                 )
             )
@@ -106,6 +111,7 @@ class TestPartitionedSequenceFunctionMultiWorker:
             outputs = list(
                 client.table_function(
                     function_name="partitioned_sequence",
+                    schema_name="main",
                     arguments=Arguments(
                         positional=(pa.scalar(10),),
                         named={"increment": pa.scalar(5)},

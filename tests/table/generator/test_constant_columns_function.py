@@ -20,6 +20,7 @@ class TestConstantColumnsFunction:
             outputs = list(
                 client.table_function(
                     function_name="constant_columns",
+                    schema_name="main",
                     arguments=Arguments(
                         positional=(pa.scalar(3), pa.scalar(42), pa.scalar("hello")),
                     ),
@@ -41,6 +42,7 @@ class TestConstantColumnsFunction:
             outputs = list(
                 client.table_function(
                     function_name="constant_columns",
+                    schema_name="main",
                     arguments=Arguments(
                         positional=(pa.scalar(2), pa.scalar(99)),
                     ),

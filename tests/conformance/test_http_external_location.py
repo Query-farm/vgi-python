@@ -83,6 +83,7 @@ def test_pointer_batch_auto_resolved(demo_storage_base_url: str) -> None:
         out = list(
             client.scalar_function(
                 function_name="random_bytes",
+                schema_name="main",
                 arguments=Arguments(positional=(pa.scalar(seed), pa.scalar(payload_bytes))),
                 input=iter([input_batch]),
             )
@@ -116,6 +117,7 @@ def test_http_client_uses_default_external_config(demo_storage_base_url: str) ->
         list(
             client.scalar_function(
                 function_name="random_bytes",
+                schema_name="main",
                 arguments=Arguments(positional=(pa.scalar(0), pa.scalar(payload_bytes))),
                 input=iter([input_batch]),
             )

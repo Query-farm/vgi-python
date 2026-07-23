@@ -22,6 +22,7 @@ class TestBernoulliFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="bernoulli",
+                    schema_name="main",
                     input=iter([batch]),
                 )
             )
@@ -38,6 +39,7 @@ class TestBernoulliFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="bernoulli",
+                    schema_name="main",
                     input=iter([batch]),
                 )
             )

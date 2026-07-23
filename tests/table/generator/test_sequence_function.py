@@ -23,6 +23,7 @@ class TestSequenceFunctionClient:
             list(
                 client.table_function(
                     function_name="sequence",
+                    schema_name="main",
                     arguments=Arguments(positional=(pa.scalar(100),)),
                     bind_result_callback=capture_bind_result,
                 )

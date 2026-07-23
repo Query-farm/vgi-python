@@ -68,6 +68,7 @@ class TestStderrInErrorMessages:
             list(
                 client.table_function(
                     function_name="nonexistent",
+                    schema_name="main",
                     arguments=Arguments(),
                 )
             )
@@ -87,6 +88,7 @@ class TestStderrInErrorMessages:
             list(
                 client.table_function(
                     function_name="nonexistent",
+                    schema_name="main",
                     arguments=Arguments(),
                 )
             )
@@ -108,6 +110,7 @@ class TestStderrInErrorMessages:
             list(
                 client.table_in_out_function(
                     function_name="nonexistent",
+                    schema_name="main",
                     input=iter([batch]),
                 )
             )
@@ -126,6 +129,7 @@ class TestStderrInErrorMessages:
             list(
                 client.scalar_function(
                     function_name="nonexistent",
+                    schema_name="main",
                     input=iter([batch]),
                 )
             )

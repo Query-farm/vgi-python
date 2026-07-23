@@ -25,6 +25,7 @@ class TestExceptionProcessFunction:
             list(
                 client.table_buffering_function(
                     function_name="exception_process",
+                    schema_name="main",
                     input=iter(numeric_batches),
                 )
             )
@@ -45,6 +46,7 @@ class TestExceptionProcessFunction:
             list(
                 client.table_buffering_function(
                     function_name="exception_process",
+                    schema_name="main",
                     input=iter(numeric_batches),
                 )
             )
@@ -68,6 +70,7 @@ class TestExceptionFinalizeFunction:
             list(
                 client.table_buffering_function(
                     function_name="exception_finalize",
+                    schema_name="main",
                     input=iter(numeric_batches),
                 )
             )
@@ -87,6 +90,7 @@ class TestExceptionFinalizeFunction:
             list(
                 client.table_buffering_function(
                     function_name="exception_finalize",
+                    schema_name="main",
                     input=iter(numeric_batches),
                 )
             )
@@ -110,6 +114,7 @@ class TestExceptionFinalizeFunction:
             list(
                 client.table_buffering_function(
                     function_name="exception_finalize",
+                    schema_name="main",
                     input=iter(numeric_batches),
                 )
             )

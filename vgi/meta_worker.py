@@ -168,17 +168,47 @@ class MetaWorker:
                 mapping,
             )
 
+    def _worker_for_unattached(self, function_name: str, schema_name: str | None) -> Worker | None:
+        """Pick a sub-worker for a call that carries no attach_opaque_data.
+
+        The direct ``vgi_table_function(worker, schema, fn, args)`` form and the
+        HTTP state-rehydration path both arrive without an attach, so the
+        catalog is unknown. Prefer a sub-worker that declares the name in the
+        requested schema before falling back to any that declares the name.
+        """
+        if schema_name is not None:
+            key = (schema_name.lower(), function_name)
+            for w in self._workers:
+                if key in type(w)._build_schema_registry():
+                    return w
+        for w in self._workers:
+            if function_name in type(w)._build_registry():
+                return w
+        return None
+
     def _resolve_function(self, request: BindRequest) -> Any:
         """Dispatch function-class resolution to the worker that hosts it.
 
+        ``attach_opaque_data`` names the catalog, so it is the only key that
+        distinguishes two sub-workers declaring the same function name — use it
+        whenever it is present and well-formed.
+
         The HTTP state-rehydration path calls this on the implementation
-        without any attach_opaque_data, so route by function name across all
-        sub-workers.
+        *without* any attach_opaque_data. There the catalog is unknowable, so
+        fall back to scanning sub-workers by (schema, name) and then by name
+        alone.
         """
-        for w in self._workers:
-            registry = type(w)._build_registry()
-            if request.function_name in registry:
-                return w._resolve_function(request)
+        if request.attach_opaque_data:
+            try:
+                worker, original_id = self._unwrap_attach_opaque_data(request.attach_opaque_data)
+            except (IndexError, KeyError):
+                pass  # Invalid wrapped id — fall through to the registry scan
+            else:
+                return worker._resolve_function(dataclasses.replace(request, attach_opaque_data=original_id))
+
+        fallback_worker = self._worker_for_unattached(request.function_name, request.schema_name)
+        if fallback_worker is not None:
+            return fallback_worker._resolve_function(request)
         msg = f"Unknown function: '{request.function_name}'"
         raise ValueError(msg)
 
@@ -358,14 +388,14 @@ class MetaWorker:
             except (IndexError, KeyError):
                 pass  # Invalid wrapped id — fall through to registry search
 
-        for w in self._workers:
-            registry = type(w)._build_registry()
-            if request.function_name in registry:
-                logger.debug(
-                    "dispatch method=bind function=%r fallback=registry_scan",
-                    request.function_name,
-                )
-                return w.bind(request, ctx=ctx)
+        fallback_worker = self._worker_for_unattached(request.function_name, request.schema_name)
+        if fallback_worker is not None:
+            logger.debug(
+                "dispatch method=bind function=%r schema=%r fallback=registry_scan",
+                request.function_name,
+                request.schema_name,
+            )
+            return fallback_worker.bind(request, ctx=ctx)
 
         msg = f"Unknown function '{request.function_name}'"
         raise ValueError(msg)
@@ -390,14 +420,15 @@ class MetaWorker:
                 pass  # Invalid wrapped id — fall through
 
         fn_name = request.bind_call.function_name if request.bind_call else ""
-        for w in self._workers:
-            registry = type(w)._build_registry()
-            if fn_name in registry:
-                logger.debug(
-                    "dispatch method=init function=%r fallback=registry_scan",
-                    fn_name,
-                )
-                return w.init(request, ctx=ctx)
+        schema = request.bind_call.schema_name if request.bind_call else None
+        fallback_worker = self._worker_for_unattached(fn_name, schema)
+        if fallback_worker is not None:
+            logger.debug(
+                "dispatch method=init function=%r schema=%r fallback=registry_scan",
+                fn_name,
+                schema,
+            )
+            return fallback_worker.init(request, ctx=ctx)
 
         msg = f"Unknown function '{fn_name}'"
         raise ValueError(msg)

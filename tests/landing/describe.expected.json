@@ -3,7 +3,7 @@
     {
       "attach_options": [],
       "counts": {
-        "functions": 207,
+        "functions": 209,
         "schemas": 2,
         "tables": 59,
         "views": 3
@@ -15,7 +15,21 @@
       "schemas": [
         {
           "doc": "Example tables backed by functions",
-          "functions": [],
+          "functions": [
+            {
+              "args": [
+                {
+                  "desc": "Integer value to tag",
+                  "name": "value",
+                  "type": "int64"
+                }
+              ],
+              "doc": "Schema-disambiguation probe; the data-schema implementation",
+              "name": "test_same_name_bind",
+              "returns": "string",
+              "type": "scalar"
+            }
+          ],
           "name": "data",
           "tables": [
             {
@@ -1204,6 +1218,19 @@
             {
               "args": [
                 {
+                  "desc": "Integer value to tag",
+                  "name": "value",
+                  "type": "int64"
+                }
+              ],
+              "doc": "Schema-disambiguation probe; the main-schema implementation",
+              "name": "test_same_name_bind",
+              "returns": "string",
+              "type": "scalar"
+            },
+            {
+              "args": [
+                {
                   "desc": "Input value",
                   "name": "v",
                   "type": "int32"
@@ -1505,25 +1532,6 @@
             {
               "args": [
                 {
-                  "desc": "Total number of rows to generate",
-                  "name": "rows",
-                  "type": "int64"
-                },
-                {
-                  "default": "20000",
-                  "desc": "Rows per partition",
-                  "name": "chunk_size",
-                  "named": true,
-                  "type": "int64"
-                }
-              ],
-              "doc": "Parallel batch_index-tagged cacheable sequence; cache serve reassembles order",
-              "name": "cache_interleaved",
-              "type": "table"
-            },
-            {
-              "args": [
-                {
                   "default": "10",
                   "desc": "Number of rows to generate",
                   "name": "n",
@@ -1732,7 +1740,7 @@
                   "type": "int64"
                 }
               ],
-              "doc": "Cacheable blended map x -> x*2 (advertises vgi.cache.ttl)",
+              "doc": "Cacheable blended map x -> x*2 (advertises vgi.cache.ttl + per_value)",
               "name": "cached_double",
               "type": "table"
             },
@@ -1740,6 +1748,18 @@
               "args": [],
               "doc": "Cacheable classic (TABLE-input) passthrough (advertises vgi.cache.ttl)",
               "name": "cached_echo",
+              "type": "table"
+            },
+            {
+              "args": [
+                {
+                  "desc": "Fan-out count: emit rows 0..n-1 for this input row",
+                  "name": "n",
+                  "type": "int64"
+                }
+              ],
+              "doc": "Cacheable blended 1->N fan-out (per_value) — 1:0 / 1:1 / 1:N by input",
+              "name": "cached_explode",
               "type": "table"
             },
             {

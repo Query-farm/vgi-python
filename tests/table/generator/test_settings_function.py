@@ -19,6 +19,7 @@ class TestSettingsViaClient:
             outputs = list(
                 client.table_function(
                     function_name="settings_aware",
+                    schema_name="main",
                     arguments=Arguments(positional=(pa.scalar(3),)),
                     settings={
                         "vgi_verbose_mode": False,
@@ -42,6 +43,7 @@ class TestSettingsViaClient:
             outputs = list(
                 client.table_function(
                     function_name="settings_aware",
+                    schema_name="main",
                     arguments=Arguments(positional=(pa.scalar(3),)),
                     settings={
                         "vgi_verbose_mode": True,
@@ -65,6 +67,7 @@ class TestSettingsViaClient:
             outputs = list(
                 client.table_function(
                     function_name="settings_aware",
+                    schema_name="main",
                     arguments=Arguments(positional=(pa.scalar(3),)),
                     settings={
                         "vgi_verbose_mode": "true",
@@ -90,6 +93,7 @@ class TestSettingsViaClient:
                 list(
                     client.table_function(
                         function_name="settings_aware",
+                        schema_name="main",
                         arguments=Arguments(positional=(pa.scalar(3),)),
                         # No settings provided
                     )

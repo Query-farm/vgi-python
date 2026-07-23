@@ -977,6 +977,7 @@ class Client(CatalogClientMixin):
         self,
         *,
         function_name: str,
+        schema_name: str,
         arguments: Arguments,
         function_type: FunctionType,
         input_schema: pa.Schema | None = None,
@@ -987,6 +988,7 @@ class Client(CatalogClientMixin):
         """Create a BindRequest for the given function parameters."""
         return BindRequest(
             function_name=function_name,
+            schema_name=schema_name,
             arguments=arguments,
             function_type=function_type,
             input_schema=input_schema,
@@ -1084,6 +1086,7 @@ class Client(CatalogClientMixin):
         self,
         *,
         function_name: str,
+        schema_name: str,
         arguments: Arguments,
         function_type: FunctionType,
         input_schema: pa.Schema | None,
@@ -1117,6 +1120,7 @@ class Client(CatalogClientMixin):
 
         bind_request = self._make_bind_request(
             function_name=function_name,
+            schema_name=schema_name,
             arguments=arguments,
             function_type=function_type,
             input_schema=input_schema,
@@ -1538,6 +1542,7 @@ class Client(CatalogClientMixin):
         self,
         *,
         function_name: str,
+        schema_name: str,
         input: Iterator[pa.RecordBatch],
         arguments: Arguments | None = None,
         bind_result_callback: Callable[[BindResponse], None] | None = None,
@@ -1556,6 +1561,9 @@ class Client(CatalogClientMixin):
         Args:
             function_name: Name of the function to invoke. Must exist in the
                 worker's registry.
+            schema_name: Name of the catalog schema that declares the function.
+                Required — a worker may register one name in several schemas, so
+                the (schema, name) pair is what identifies the implementation.
             input: Iterator yielding input `RecordBatch`es. Must yield at least one
                 batch. The first batch's schema is used to initialize the IPC
                 stream. Raises [`ClientError`][] if the iterator is empty.
@@ -1600,6 +1608,7 @@ class Client(CatalogClientMixin):
 
                 bind_request, bind_response, init_response = self._initialize_stream_common(
                     function_name=function_name,
+                    schema_name=schema_name,
                     arguments=arguments,
                     function_type=FunctionType.TABLE,
                     input_schema=input_schema,
@@ -1653,6 +1662,7 @@ class Client(CatalogClientMixin):
         self,
         *,
         function_name: str,
+        schema_name: str,
         input: Iterator[pa.RecordBatch],
         arguments: Arguments | None = None,
         bind_result_callback: Callable[[BindResponse], None] | None = None,
@@ -1688,6 +1698,9 @@ class Client(CatalogClientMixin):
 
         Args:
             function_name: Name of the ``TableBufferingFunction`` to invoke.
+            schema_name: Name of the catalog schema that declares the function.
+                Required — a worker may register one name in several schemas, so
+                the (schema, name) pair is what identifies the implementation.
             input: Iterator yielding input `RecordBatch`es. May be empty —
                 buffering aggregations still produce a result for zero rows.
             arguments: Optional [`Arguments`][] container. Defaults to empty.
@@ -1728,6 +1741,7 @@ class Client(CatalogClientMixin):
 
             bind_request = self._make_bind_request(
                 function_name=function_name,
+                schema_name=schema_name,
                 arguments=arguments,
                 function_type=FunctionType.TABLE_BUFFERING,
                 input_schema=input_schema,
@@ -1887,6 +1901,7 @@ class Client(CatalogClientMixin):
         self,
         *,
         function_name: str,
+        schema_name: str,
         arguments: Arguments | None = None,
         bind_result_callback: Callable[[BindResponse], None] | None = None,
         projection_ids: list[int] | None = None,
@@ -1906,6 +1921,9 @@ class Client(CatalogClientMixin):
         Args:
             function_name: Name of the function to invoke. Must exist in the
                 worker's registry and be a table function (not table-in-out).
+            schema_name: Name of the catalog schema that declares the function.
+                Required — a worker may register one name in several schemas, so
+                the (schema, name) pair is what identifies the implementation.
             arguments: Optional [`Arguments`][] container with positional and named
                 arguments to pass to the function. Defaults to empty `Arguments()`.
             bind_result_callback: Optional callback invoked with the [`BindResponse`][]
@@ -1937,6 +1955,7 @@ class Client(CatalogClientMixin):
 
             self._initialize_stream_common(
                 function_name=function_name,
+                schema_name=schema_name,
                 arguments=arguments,
                 function_type=FunctionType.TABLE,
                 input_schema=None,
@@ -1968,6 +1987,7 @@ class Client(CatalogClientMixin):
         self,
         *,
         function_name: str,
+        schema_name: str,
         arguments: Arguments | None = None,
         projection_ids: list[int] | None = None,
         pushdown_filters: bytes | None = None,
@@ -1989,6 +2009,9 @@ class Client(CatalogClientMixin):
 
         Args:
             function_name: Name of the table function to scan.
+            schema_name: Name of the catalog schema that declares the function.
+                Required — a worker may register one name in several schemas, so
+                the (schema, name) pair is what identifies the implementation.
             arguments: Positional/named arguments for the function's bind.
             projection_ids: Optional column indices to project (projection
                 pushdown). ``None`` selects all columns.
@@ -2023,6 +2046,7 @@ class Client(CatalogClientMixin):
             # (parallel max_workers>1 reads are unordered and not token-resumable).
             bind_request = self._make_bind_request(
                 function_name=function_name,
+                schema_name=schema_name,
                 arguments=arguments,
                 function_type=FunctionType.TABLE,
                 input_schema=None,
@@ -2195,6 +2219,7 @@ class Client(CatalogClientMixin):
         self,
         *,
         function_name: str,
+        schema_name: str,
         input: Iterator[pa.RecordBatch],
         arguments: Arguments | None = None,
         bind_result_callback: Callable[[BindResponse], None] | None = None,
@@ -2214,6 +2239,9 @@ class Client(CatalogClientMixin):
         Args:
             function_name: Name of the function to invoke. Must exist in the
                 worker's registry.
+            schema_name: Name of the catalog schema that declares the function.
+                Required — a worker may register one name in several schemas, so
+                the (schema, name) pair is what identifies the implementation.
             input: Iterator yielding input `RecordBatch`es. Must yield at least one
                 batch. The first batch's schema is used to initialize the IPC
                 stream. Raises [`ClientError`][] if the iterator is empty.
@@ -2256,6 +2284,7 @@ class Client(CatalogClientMixin):
 
                 self._initialize_stream_common(
                     function_name=function_name,
+                    schema_name=schema_name,
                     arguments=arguments,
                     function_type=FunctionType.SCALAR,
                     input_schema=input_schema,
