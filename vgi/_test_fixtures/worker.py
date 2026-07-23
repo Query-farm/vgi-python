@@ -229,6 +229,10 @@ from vgi._test_fixtures.table import (
     resolve_version,
     resolve_versioned_constraints_version,
 )
+from vgi._test_fixtures.table.same_name_cached import (
+    SameNameDataCached,
+    SameNameMainCached,
+)
 from vgi._test_fixtures.table.tt_pushdown import (
     _TT_SCHEMA,
     TimeTravelPushdownFunction,
@@ -583,6 +587,7 @@ _EXAMPLE_CATALOG = Catalog(
                 SameNameMainTransform,
                 SameNameMainBuffered,
                 SameNameMainAgg,
+                SameNameMainCached,
                 ScaleBySettingFunction,
                 SecretFieldFunction,
                 SmartFormatPrefixFunction,
@@ -681,6 +686,7 @@ _EXAMPLE_CATALOG = Catalog(
                 SameNameDataTransform,
                 SameNameDataBuffered,
                 SameNameDataAgg,
+                SameNameDataCached,
             ],
             tables=[
                 # Function-backed table: schema derived via bind()
