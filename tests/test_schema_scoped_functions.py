@@ -10,6 +10,7 @@ same_name_schemas.test`` covers the same ground end-to-end through DuckDB.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Annotated
 
 import pyarrow as pa
@@ -154,7 +155,8 @@ class TestLegacyFunctionsList:
 class TestCrossCatalogResolution:
     """Two catalogs in one worker process, colliding on schema *and* function name.
 
-    Only ``attach_opaque_data`` names the catalog, so it is the routing key.
+    Only the catalog name sealed into ``attach_opaque_data`` distinguishes them,
+    so it is the routing key.
     ``vgi/test/sql/integration/scalar/same_name_catalogs.test`` drives the same
     scenario end-to-end through DuckDB.
     """
@@ -175,11 +177,29 @@ class TestCrossCatalogResolution:
         )
 
     def test_attach_opaque_data_selects_the_catalog(self) -> None:
-        """Each sub-worker's wrapped attach routes to that catalog's class."""
+        """The catalog name sealed into the attach routes to that catalog's class."""
         meta = self._meta()
-        for index, expected in ((0, TwinAFunction), (1, TwinBFunction)):
-            wrapped = meta._wrap_attach_opaque_data(index, b"\x00" * 16)
-            assert meta._resolve_function(self._request(wrapped)) is expected
+        for index, catalog, expected in ((0, "twin_a", TwinAFunction), (1, "twin_b", TwinBFunction)):
+            attach = meta._workers[index]._seal_attach_with_catalog(b"\x00" * 16, catalog)
+            assert meta._resolve_function(self._request(attach)) is expected
+
+    def test_routing_survives_the_strip_that_http_serialization_performs(self) -> None:
+        """A rehydrated attach still routes — the regression behind the twin bug.
+
+        HTTP stream state persists the attach the sub-worker was handed, then
+        ``rehydrate`` re-resolves against the MetaWorker. When routing lived in a
+        prefix that ``init`` stripped before the sub-worker saw it, that
+        round-trip lost the key and silently resolved to whichever sub-worker
+        declared the name first. The name is inside the sealed plaintext now, so
+        the value that gets persisted is itself routable.
+        """
+        meta = self._meta()
+        for index, catalog, expected in ((0, "twin_a", TwinAFunction), (1, "twin_b", TwinBFunction)):
+            worker = meta._workers[index]
+            attach = worker._seal_attach_with_catalog(b"\x00" * 16, catalog)
+            # What init() hands the sub-worker is what ends up serialized.
+            assert meta._maybe_worker_for_attach(attach) is worker
+            assert meta._resolve_function(self._request(attach)) is expected
 
     def test_both_catalogs_declare_the_same_schema_and_name(self) -> None:
         """The fixture is only meaningful if the collision is total."""
@@ -187,7 +207,33 @@ class TestCrossCatalogResolution:
         assert TwinAWorker._build_schema_registry()[key] == [TwinAFunction]
         assert TwinBWorker._build_schema_registry()[key] == [TwinBFunction]
 
-    def test_without_an_attach_the_scan_still_finds_a_host(self) -> None:
-        """No catalog is knowable (HTTP state rehydration) — resolve, don't crash."""
+    def test_without_an_attach_an_ambiguous_name_raises(self) -> None:
+        """No routing key and two declarers — refuse rather than guess.
+
+        This previously returned ``TwinAFunction``: whichever sub-worker declared
+        the name first. That is what made ``b.main.test_same_name_catalog(1)``
+        answer ``twin_a:1`` over HTTP instead of failing, so a routing bug read
+        as a plausible result. An attach-less call to an ambiguous name means the
+        key was lost upstream, which is worth surfacing.
+        """
         meta = self._meta()
+        with pytest.raises(ValueError, match="Cannot route"):
+            meta._resolve_function(self._request(None))
+
+    def test_without_an_attach_an_unambiguous_name_still_resolves(self) -> None:
+        """The legitimate attach-less path is untouched.
+
+        Non-catalog callers (``Worker.functions``) reach ``_resolve_function``
+        with no attach at all. With a single declarer there is no ambiguity to
+        refuse, so resolution must still succeed — the guard keys off the
+        candidate count, not off the attach being absent.
+        """
+        meta = MetaWorker([TwinAWorker()])
         assert meta._resolve_function(self._request(None)) is TwinAFunction
+
+    def test_an_unknown_name_reports_unknown_not_ambiguous(self) -> None:
+        """A name no sub-worker declares is still a plain 'unknown function'."""
+        meta = self._meta()
+        request = dataclasses.replace(self._request(None), function_name="no_such_function")
+        with pytest.raises(ValueError, match="Unknown function"):
+            meta._resolve_function(request)

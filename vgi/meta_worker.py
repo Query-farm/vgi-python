@@ -3,13 +3,24 @@
 """MetaWorker — composes multiple [`Worker`][] instances in a single process.
 
 Each `Worker` manages its own catalog interface. The MetaWorker dispatches
-[`VgiProtocol`][] calls to the right `Worker` based on catalog name (for attach)
-and wrapped attach_opaque_data (for everything else).
+[`VgiProtocol`][] calls to the right `Worker` by catalog name — for ``attach``
+from the request, and for everything else from the name it sealed into the
+``attach_opaque_data`` at attach time.
 
-attach_opaque_data wrapping:
-    Each sub-worker may use the same underlying attach_opaque_data. The MetaWorker
-    prepends a 1-byte worker index to distinguish them:
-        wrapped = bytes([worker_index]) + original_attach_opaque_data
+attach_opaque_data encapsulation:
+    Sub-workers may vend byte-identical attach_opaque_data — the built-in
+    read-only catalog returns one class constant for every catalog it serves —
+    so the value alone cannot say which catalog it came from. At
+    ``catalog_attach`` the MetaWorker opens what the sub-worker sealed, records
+    the catalog name inside the plaintext, and re-seals it (see
+    [`vgi.attach_header`][]). Routing then means opening the envelope and
+    reading that name.
+
+    The name lives *inside* the AEAD because the signing key is process-wide: a
+    header outside the seal would be client-editable, and every sub-worker's key
+    would still open the envelope, so a caller could route one catalog's attach
+    into another. It also rides along through HTTP state serialization, so a
+    rehydrate that lands on a different instance still routes correctly.
 
 Usage::
 
@@ -24,7 +35,7 @@ from typing import Any
 
 from vgi_rpc.rpc import CallContext, Stream
 
-from vgi.catalog.catalog_interface import AttachOpaqueData, CatalogAttachResult
+from vgi.catalog.catalog_interface import CatalogAttachResult
 from vgi.invocation import GlobalInitResponse
 from vgi.protocol import (
     BindRequest,
@@ -46,7 +57,7 @@ def _attach_opaque_data_short(attach_opaque_data: bytes | None) -> str:
 
 
 def _make_attach_delegate(name: str) -> Any:
-    """Create a method that unwraps attach_opaque_data and delegates to the right worker.
+    """Create a method that routes on the sealed catalog name and delegates.
 
     Copies the signature from [`Worker`][] so vgi_rpc's validation passes.
     """
@@ -58,16 +69,10 @@ def _make_attach_delegate(name: str) -> Any:
 
     def method(self: MetaWorker, **kwargs: Any) -> Any:
         attach_opaque_data = kwargs.pop("attach_opaque_data")
-        worker, original_id = self._unwrap_attach_opaque_data(attach_opaque_data)
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "dispatch method=%s sub_worker_index=%d wrapped_aid=%s unwrapped_aid=%s",
-                name,
-                self._wrapped_index(attach_opaque_data),
-                _attach_opaque_data_short(attach_opaque_data),
-                _attach_opaque_data_short(original_id),
-            )
-        return getattr(worker, name)(attach_opaque_data=original_id, **kwargs)
+        worker = self._worker_for_attach(attach_opaque_data, method_name=name)
+        # The attach is passed through untouched: the sub-worker opens the same
+        # envelope and its own unwrap strips the routing header.
+        return getattr(worker, name)(attach_opaque_data=attach_opaque_data, **kwargs)
 
     # Copy the signature from the Worker method so vgi_rpc validation passes
     method.__name__ = name
@@ -127,8 +132,9 @@ _ATTACH_ID_METHODS = [
 class MetaWorker:
     """Composes multiple [`Worker`][] instances, dispatching [`VgiProtocol`][] calls.
 
-    Each `Worker` has its own catalog interface and function registry.
-    The MetaWorker wraps/unwraps attach_opaque_data values to route calls to the right worker.
+    Each `Worker` has its own catalog interface and function registry. Calls are
+    routed by the catalog name that ``catalog_attach`` sealed into the
+    ``attach_opaque_data``; see the module docstring.
     """
 
     def __init__(self, workers: list[Worker]) -> None:
@@ -150,9 +156,9 @@ class MetaWorker:
                 pass
 
         # Detailed startup record — each sub-worker's index → catalog mapping.
-        # The 1-byte index is the prefix MetaWorker prepends to attach_opaque_data values;
-        # making it explicit here means a stray ``wrapped_aid=…`` in a dispatch
-        # log can be cross-referenced without source diving.
+        # Routing resolves a sealed catalog name through this map, so having it
+        # in the log means a dispatch line naming a catalog can be tied back to a
+        # sub-worker without source diving.
         if logger.isEnabledFor(logging.INFO):
             mapping = [
                 {
@@ -168,113 +174,100 @@ class MetaWorker:
                 mapping,
             )
 
-    def _worker_for_unattached(self, function_name: str, schema_name: str | None) -> Worker | None:
-        """Pick a sub-worker for a call that carries no attach_opaque_data.
+    def _worker_for_attach(self, attach_opaque_data: bytes | None, *, method_name: str = "?") -> Worker:
+        """Route to the sub-worker whose catalog minted ``attach_opaque_data``.
 
-        The direct ``vgi_table_function(worker, schema, fn, args)`` form and the
-        HTTP state-rehydration path both arrive without an attach, so the
-        catalog is unknown. Prefer a sub-worker that declares the name in the
-        requested schema before falling back to any that declares the name.
+        Reads the catalog name sealed into the envelope at ``catalog_attach``.
+        Any sub-worker can open it (the signing key is process-wide), so the
+        first is used as the opener.
         """
+        worker = self._maybe_worker_for_attach(attach_opaque_data)
+        if worker is None:
+            msg = (
+                f"Cannot route {method_name}: attach_opaque_data carries no catalog name "
+                f"this process recognizes (known catalogs: {sorted(self._name_to_index)})."
+            )
+            raise ValueError(msg)
+        return worker
+
+    def _maybe_worker_for_attach(self, attach_opaque_data: bytes | None) -> Worker | None:
+        """Like :meth:`_worker_for_attach` but ``None`` instead of raising."""
+        if not attach_opaque_data:
+            return None
+        catalog_name = self._workers[0]._attach_catalog_name(attach_opaque_data)
+        if catalog_name is None:
+            return None
+        idx = self._name_to_index.get(catalog_name)
+        if idx is None:
+            return None
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "dispatch catalog=%r sub_worker_index=%d aid=%s",
+                catalog_name,
+                idx,
+                _attach_opaque_data_short(attach_opaque_data),
+            )
+        return self._workers[idx]
+
+    def _candidates_for(self, function_name: str, schema_name: str | None) -> list[Worker]:
+        """Every sub-worker declaring ``function_name``, most specific first."""
         if schema_name is not None:
             key = (schema_name.lower(), function_name)
-            for w in self._workers:
-                if key in type(w)._build_schema_registry():
-                    return w
-        for w in self._workers:
-            if function_name in type(w)._build_registry():
-                return w
-        return None
+            scoped = [w for w in self._workers if key in type(w)._build_schema_registry()]
+            if scoped:
+                return scoped
+        return [w for w in self._workers if function_name in type(w)._build_registry()]
+
+    def _worker_for_unattached(self, function_name: str, schema_name: str | None) -> Worker | None:
+        """Pick a sub-worker for a call that carries no usable attach.
+
+        Non-catalog callers (the legacy ``Worker.functions`` list, where
+        ``BindRequest.schema_name`` is ``None``) invoke a function without ever
+        opening a catalog, so there is no attach to route on and the sole
+        declarer of the name is the intended target.
+
+        When more than one sub-worker declares the same name there is no basis
+        to choose. Guessing is what silently routed
+        ``b.main.test_same_name_catalog(1)`` into the ``twin_a`` implementation
+        and returned a plausible wrong answer rather than an error
+        (``scalar/same_name_catalogs.test``). Raise instead — reaching here with
+        an ambiguous name means the routing key was lost, which is a bug worth
+        surfacing.
+        """
+        candidates = self._candidates_for(function_name, schema_name)
+        if not candidates:
+            return None
+        if len(candidates) > 1:
+            where = f"{schema_name}.{function_name}" if schema_name else function_name
+            msg = (
+                f"Cannot route {where!r}: {len(candidates)} sub-workers declare it "
+                f"({', '.join(type(w).__name__ for w in candidates)}) and the call carries "
+                f"no attach_opaque_data naming the catalog."
+            )
+            raise ValueError(msg)
+        return candidates[0]
 
     def _resolve_function(self, request: BindRequest) -> Any:
         """Dispatch function-class resolution to the worker that hosts it.
 
-        ``attach_opaque_data`` names the catalog, so it is the only key that
-        distinguishes two sub-workers declaring the same function name — use it
-        whenever it is present and well-formed.
+        The sealed catalog name is the only key that distinguishes two
+        sub-workers declaring the same function name. It survives HTTP state
+        serialization, so the rehydrate path — which calls this on *this* object
+        with the attach the sub-worker persisted — routes the same way a live
+        call does.
 
-        The HTTP state-rehydration path calls this on the implementation
-        *without* any attach_opaque_data. There the catalog is unknowable, so
-        fall back to scanning sub-workers by (schema, name) and then by name
-        alone.
+        Only a call with no attach at all (a non-catalog caller) falls through to
+        the registry scan.
         """
-        if request.attach_opaque_data:
-            try:
-                worker, original_id = self._unwrap_attach_opaque_data(request.attach_opaque_data)
-            except (IndexError, KeyError):
-                pass  # Invalid wrapped id — fall through to the registry scan
-            else:
-                return worker._resolve_function(dataclasses.replace(request, attach_opaque_data=original_id))
+        worker = self._maybe_worker_for_attach(request.attach_opaque_data)
+        if worker is not None:
+            return worker._resolve_function(request)
 
         fallback_worker = self._worker_for_unattached(request.function_name, request.schema_name)
         if fallback_worker is not None:
             return fallback_worker._resolve_function(request)
         msg = f"Unknown function: '{request.function_name}'"
         raise ValueError(msg)
-
-    # ========== attach_opaque_data wrapping ==========
-    #
-    # Wire format of a MetaWorker-wrapped attach_opaque_data:
-    #
-    #   [ 'M' 'W' 0x00 ][ <index byte> ][ <original attach_opaque_data bytes> ]
-    #     ^^^^^^^^^^^^^   ^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^^^^^^^^
-    #     magic prefix    sub-worker      original attach_opaque_data as
-    #     (3 bytes)       index (1B)      vended by the sub-worker
-    #
-    # The magic prefix means a wrapped attach_opaque_data is self-identifying: a
-    # 4-byte ``MW\0<idx>`` prefix is unmistakable in logs and storage shard
-    # ids (shows as ``att-4d570000...`` in hex). Without it, a bare 17-byte
-    # attach_opaque_data whose first byte happened to be ``\x00`` was indistinguishable
-    # from a wrapped ``[0][16 bytes]`` — making MetaWorker routing bugs
-    # silently mis-route (see the dynamic_to_string failure that motivated
-    # this marker).
-    #
-    # 4-byte total overhead (3 magic + 1 index). Sub-workers see the
-    # un-prefixed bytes and don't need to know MetaWorker exists.
-
-    _WRAP_MAGIC = b"MW\x00"
-    _WRAP_OVERHEAD = len(_WRAP_MAGIC) + 1  # magic + index byte
-
-    def _wrap_attach_opaque_data(self, worker_index: int, attach_opaque_data: bytes) -> bytes:
-        """Prepend MetaWorker magic + sub-worker index to a sub-worker's attach_opaque_data."""
-        return self._WRAP_MAGIC + bytes([worker_index]) + attach_opaque_data
-
-    def _is_wrapped(self, attach_opaque_data: bytes) -> bool:
-        """Return whether ``attach_opaque_data`` starts with the MetaWorker magic."""
-        return (
-            len(attach_opaque_data) >= self._WRAP_OVERHEAD
-            and attach_opaque_data[: len(self._WRAP_MAGIC)] == self._WRAP_MAGIC
-        )
-
-    def _wrapped_index(self, wrapped_id: bytes) -> int:
-        """Return the sub-worker index encoded in a wrapped attach_opaque_data.
-
-        Assumes ``_is_wrapped(wrapped_id)`` already returned True. Returns
-        -1 for shapes that don't match (defensive — callers use this only
-        for logging).
-        """
-        if not self._is_wrapped(wrapped_id):
-            return -1
-        return wrapped_id[len(self._WRAP_MAGIC)]
-
-    def _unwrap_attach_opaque_data(self, wrapped_id: bytes) -> tuple[Worker, bytes]:
-        """Verify the magic, then split into (sub-worker, original attach_opaque_data).
-
-        Raises ``KeyError`` when the magic is missing or the index byte is
-        out of range. Callers in this module catch and fall back to a
-        function-name-based registry scan (the legacy path for clients that
-        never round-tripped through ``catalog_attach``).
-        """
-        if not self._is_wrapped(wrapped_id):
-            raise KeyError(
-                f"attach_opaque_data is not MetaWorker-wrapped (missing magic): "
-                f"first8={wrapped_id[:8].hex() if wrapped_id else '-'}"
-            )
-        idx = wrapped_id[len(self._WRAP_MAGIC)]
-        original = wrapped_id[self._WRAP_OVERHEAD :]
-        if idx >= len(self._workers):
-            raise KeyError(f"MetaWorker sub-worker index {idx} out of range (have {len(self._workers)} workers)")
-        return self._workers[idx], original
 
     # ========== Catalog listing ==========
 
@@ -315,16 +308,23 @@ class MetaWorker:
                 msg = f"No worker handles catalog '{request.name}'"
                 raise ValueError(msg)
 
-        wrapped = self._wrap_attach_opaque_data(idx, result.attach_opaque_data)
+        # Record which catalog this attach belongs to, inside the seal. Without
+        # it nothing downstream can tell two sub-workers apart: the catalog's own
+        # bytes are implementation-defined and routinely identical between
+        # catalogs (the built-in read-only interface returns one class constant
+        # for all of them).
+        if result.attach_opaque_data is not None:
+            encapsulated = self._workers[idx]._seal_attach_with_catalog(bytes(result.attach_opaque_data), request.name)
+            result = dataclasses.replace(result, attach_opaque_data=encapsulated)
+
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "catalog_attach catalog=%r sub_worker_index=%d original_aid=%s wrapped_aid=%s",
+                "catalog_attach catalog=%r sub_worker_index=%d aid=%s",
                 request.name,
                 idx,
                 _attach_opaque_data_short(result.attach_opaque_data),
-                _attach_opaque_data_short(wrapped),
             )
-        return dataclasses.replace(result, attach_opaque_data=AttachOpaqueData(wrapped))
+        return result
 
     # ========== Name-based dispatch (no attach_opaque_data) ==========
 
@@ -352,41 +352,29 @@ class MetaWorker:
 
     def catalog_table_create(self, request: Any) -> None:
         """Create a table — dispatch via attach_opaque_data in request."""
-        worker, original_id = self._unwrap_attach_opaque_data(request.attach_opaque_data)
-        patched = dataclasses.replace(request, attach_opaque_data=original_id)
-        worker.catalog_table_create(patched)
+        self._worker_for_attach(request.attach_opaque_data, method_name="catalog_table_create").catalog_table_create(
+            request
+        )
 
     def catalog_macro_create(self, request: Any) -> None:
         """Create a macro — dispatch via attach_opaque_data in request."""
-        worker, original_id = self._unwrap_attach_opaque_data(request.attach_opaque_data)
-        patched = dataclasses.replace(request, attach_opaque_data=original_id)
-        worker.catalog_macro_create(patched)
+        self._worker_for_attach(request.attach_opaque_data, method_name="catalog_macro_create").catalog_macro_create(
+            request
+        )
 
     def catalog_index_create(self, request: Any) -> None:
         """Create an index — dispatch via attach_opaque_data in request."""
-        worker, original_id = self._unwrap_attach_opaque_data(request.attach_opaque_data)
-        patched = dataclasses.replace(request, attach_opaque_data=original_id)
-        worker.catalog_index_create(patched)
+        self._worker_for_attach(request.attach_opaque_data, method_name="catalog_index_create").catalog_index_create(
+            request
+        )
 
     # ========== bind / init (unwrap attach_opaque_data from request) ==========
 
     def bind(self, request: BindRequest, ctx: CallContext) -> Any:
         """Dispatch bind to the right worker."""
-        if request.attach_opaque_data:
-            try:
-                worker, original_id = self._unwrap_attach_opaque_data(request.attach_opaque_data)
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        "dispatch method=bind function=%r sub_worker_index=%d wrapped_aid=%s unwrapped_aid=%s",
-                        request.function_name,
-                        self._wrapped_index(request.attach_opaque_data),
-                        _attach_opaque_data_short(request.attach_opaque_data),
-                        _attach_opaque_data_short(original_id),
-                    )
-                request = dataclasses.replace(request, attach_opaque_data=original_id)
-                return worker.bind(request, ctx=ctx)
-            except (IndexError, KeyError):
-                pass  # Invalid wrapped id — fall through to registry search
+        worker = self._maybe_worker_for_attach(request.attach_opaque_data)
+        if worker is not None:
+            return worker.bind(request, ctx=ctx)
 
         fallback_worker = self._worker_for_unattached(request.function_name, request.schema_name)
         if fallback_worker is not None:
@@ -402,22 +390,10 @@ class MetaWorker:
 
     def init(self, request: InitRequest, ctx: CallContext) -> Stream[ProcessState, GlobalInitResponse]:
         """Dispatch init to the right worker."""
-        if request.bind_call and request.bind_call.attach_opaque_data:
-            try:
-                worker, original_id = self._unwrap_attach_opaque_data(request.bind_call.attach_opaque_data)
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        "dispatch method=init function=%r sub_worker_index=%d wrapped_aid=%s unwrapped_aid=%s",
-                        request.bind_call.function_name,
-                        self._wrapped_index(request.bind_call.attach_opaque_data),
-                        _attach_opaque_data_short(request.bind_call.attach_opaque_data),
-                        _attach_opaque_data_short(original_id),
-                    )
-                bind_call = dataclasses.replace(request.bind_call, attach_opaque_data=original_id)
-                request = dataclasses.replace(request, bind_call=bind_call)
+        if request.bind_call:
+            worker = self._maybe_worker_for_attach(request.bind_call.attach_opaque_data)
+            if worker is not None:
                 return worker.init(request, ctx=ctx)
-            except (IndexError, KeyError):
-                pass  # Invalid wrapped id — fall through
 
         fn_name = request.bind_call.function_name if request.bind_call else ""
         schema = request.bind_call.schema_name if request.bind_call else None
@@ -439,42 +415,32 @@ class MetaWorker:
         *,
         method_name: str = "?",
     ) -> tuple[Any, Any | None]:
-        """Resolve the target sub-worker by unwrapping ``request.bind_call.attach_opaque_data``.
+        """Resolve the target sub-worker from ``request.bind_call.attach_opaque_data``.
 
-        Returns ``(patched_request, worker)`` where ``patched_request`` has the
-        unwrapped (sub-worker-relative) attach_opaque_data and ``worker`` is the matching
-        sub-worker. Returns ``(request, None)`` when the attach_opaque_data is missing or
-        unwrapping fails — caller falls back to a registry scan by function name.
+        Returns ``(request, worker)``; the request is passed through untouched
+        (the sub-worker opens the same envelope and strips the routing header
+        itself). Returns ``(request, None)`` when there is no attach or its
+        catalog is unknown here — the caller then falls back to a registry scan
+        by function name.
 
-        Mirrors the unwrap that ``init``/``bind`` already perform for the
-        wrapped attach_opaque_data MetaWorker prepends. Without this, sibling RPCs that
-        carry ``bind_call.attach_opaque_data`` (cardinality, statistics, dynamic_to_string)
-        would deliver the wrapped 18-byte id to the sub-worker — which then
-        derives a different shard_key than ``init``/``process`` use for the
-        same logical attach, so storage reads land on the wrong DO.
+        Used by the sibling RPCs that carry ``bind_call.attach_opaque_data``
+        (cardinality, statistics, dynamic_to_string) so they route exactly as
+        ``init``/``process`` do for the same logical attach — otherwise their
+        storage reads land on a different shard.
         """
         bind_call = getattr(request, "bind_call", None)
         if bind_call is None:
             return request, None
-        wrapped_aid = getattr(bind_call, "attach_opaque_data", None)
-        if not wrapped_aid:
-            return request, None
-        try:
-            worker, original_id = self._unwrap_attach_opaque_data(wrapped_aid)
-        except (IndexError, KeyError):
-            return request, None
-        if logger.isEnabledFor(logging.DEBUG):
+        aid = getattr(bind_call, "attach_opaque_data", None)
+        worker = self._maybe_worker_for_attach(aid)
+        if worker is not None and logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "dispatch method=%s function=%r sub_worker_index=%d wrapped_aid=%s unwrapped_aid=%s",
+                "dispatch method=%s function=%r aid=%s",
                 method_name,
                 getattr(bind_call, "function_name", "?"),
-                self._wrapped_index(wrapped_aid),
-                _attach_opaque_data_short(wrapped_aid),
-                _attach_opaque_data_short(original_id),
+                _attach_opaque_data_short(aid),
             )
-        patched_bind_call = dataclasses.replace(bind_call, attach_opaque_data=original_id)
-        patched_request = dataclasses.replace(request, bind_call=patched_bind_call)
-        return patched_request, worker
+        return request, worker
 
     def table_function_cardinality(self, request: Any, ctx: CallContext) -> Any:
         """Dispatch cardinality estimation to the right worker."""
@@ -532,22 +498,16 @@ class MetaWorker:
     def _dispatch_aggregate(self, request: Any, method_name: str, ctx: CallContext) -> Any:
         """Dispatch an aggregate RPC to the right worker by function_name."""
         fn_name = getattr(request, "function_name", "")
-        if hasattr(request, "attach_opaque_data") and request.attach_opaque_data:
-            try:
-                worker, original_id = self._unwrap_attach_opaque_data(request.attach_opaque_data)
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        "dispatch method=%s function=%r sub_worker_index=%d wrapped_aid=%s unwrapped_aid=%s",
-                        method_name,
-                        fn_name,
-                        self._wrapped_index(request.attach_opaque_data),
-                        _attach_opaque_data_short(request.attach_opaque_data),
-                        _attach_opaque_data_short(original_id),
-                    )
-                request = dataclasses.replace(request, attach_opaque_data=original_id)
-                return getattr(worker, method_name)(request, ctx=ctx)
-            except (IndexError, KeyError):
-                pass
+        worker = self._maybe_worker_for_attach(getattr(request, "attach_opaque_data", None))
+        if worker is not None:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "dispatch method=%s function=%r aid=%s",
+                    method_name,
+                    fn_name,
+                    _attach_opaque_data_short(request.attach_opaque_data),
+                )
+            return getattr(worker, method_name)(request, ctx=ctx)
         for w in self._workers:
             registry = type(w)._build_registry()
             if fn_name in registry:
@@ -634,25 +594,25 @@ class MetaWorker:
         """Dispatch the finalize-tick driver's cold-load to the right worker.
 
         ``run_table_buffering_finalize_tick`` calls this via
-        ``ctx.implementation._load_table_buffering_params(...)``. Under
-        MetaWorker, the wrapped attach_opaque_data steers us to the right
-        sub-worker; we unwrap the meta-prefix and delegate.
+        ``ctx.implementation._load_table_buffering_params(...)``. The catalog
+        name sealed into the attach_opaque_data steers us to the right
+        sub-worker.
 
         ``attach_already_unwrapped`` is forwarded to the sub-worker — see
-        ``Worker._load_table_buffering_params`` for semantics.
+        ``Worker._load_table_buffering_params`` for semantics. Note that when it
+        is set the caller holds an already-opened plaintext, which carries no
+        routing header (``Worker`` strips it on open), so those calls fall
+        through to the registry scan below just as they did before.
         """
         fn_name = getattr(request, "function_name", "")
-        if hasattr(request, "attach_opaque_data") and request.attach_opaque_data:
-            try:
-                worker, original_id = self._unwrap_attach_opaque_data(request.attach_opaque_data)
-                request = dataclasses.replace(request, attach_opaque_data=original_id)
+        if not attach_already_unwrapped:
+            worker = self._maybe_worker_for_attach(getattr(request, "attach_opaque_data", None))
+            if worker is not None:
                 return worker._load_table_buffering_params(
                     request,
                     ctx,
                     attach_already_unwrapped=attach_already_unwrapped,
                 )
-            except (IndexError, KeyError):
-                pass
         for w in self._workers:
             registry = type(w)._build_registry()
             if fn_name in registry:

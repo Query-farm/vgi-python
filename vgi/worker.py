@@ -82,6 +82,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast, final, overload
 import pyarrow as pa
 from vgi_rpc.rpc import AuthContext, CallContext, RpcServer, Stream, current_auth, serve_stdio
 
+from vgi import attach_header
 from vgi.aggregate_function import AggregateBindParams, AggregateFunction
 from vgi.argument_spec import ArgumentSpec, extract_argument_specs
 from vgi.arguments import Arguments
@@ -2188,13 +2189,49 @@ class Worker:
             return None
         key = self._signing_key
         if key is None:
-            return bytes(envelope)
+            # No key: the "envelope" is the plaintext (subprocess / unix
+            # transports). MetaWorker still encapsulates, so still strip.
+            return attach_header.split(bytes(envelope))[1]
         from vgi_rpc import crypto
 
         try:
-            return crypto.open_bytes(envelope, key, aad=_attach_aad(auth), version=_ATTACH_ENVELOPE_VERSION)
+            opened = crypto.open_bytes(envelope, key, aad=_attach_aad(auth), version=_ATTACH_ENVELOPE_VERSION)
         except crypto.SealError as exc:
             raise self._opaque_data_rejected("attach_opaque_data") from exc
+        # Strip MetaWorker's routing header so every consumer below sees the
+        # framework plaintext (``uuid(16) || catalog_bytes``) it expects. The
+        # header is only present when a MetaWorker minted this attach.
+        return attach_header.split(opened)[1]
+
+    def _attach_catalog_name(self, envelope: bytes | None) -> str | None:
+        """Read the catalog name MetaWorker sealed into an attach envelope.
+
+        Returns ``None`` for an attach minted without a routing header (a plain
+        single-``Worker`` process) or one this key cannot open.
+        """
+        if envelope is None:
+            return None
+        key = self._signing_key
+        if key is None:
+            return attach_header.split(bytes(envelope))[0]
+        from vgi_rpc import crypto
+
+        try:
+            opened = crypto.open_bytes(envelope, key, aad=_attach_aad(current_auth()), version=_ATTACH_ENVELOPE_VERSION)
+        except crypto.SealError:
+            return None
+        return attach_header.split(opened)[0]
+
+    def _seal_attach_with_catalog(self, envelope: bytes, catalog_name: str) -> AttachOpaqueData:
+        """Re-mint ``envelope`` with ``catalog_name`` recorded inside the seal.
+
+        Opens what the sub-worker sealed, encapsulates the routing header, and
+        seals again. Used by [`MetaWorker`][] at ``catalog_attach`` — the one
+        place that knows both the catalog name and the freshly minted attach.
+        """
+        plaintext = self._unwrap_attach_full_with_auth(envelope, current_auth())
+        assert plaintext is not None  # a non-None envelope always yields plaintext
+        return self._seal_attach(attach_header.encode(catalog_name, plaintext))
 
     @overload
     def _unwrap_attach(self, envelope: bytes) -> AttachOpaqueData: ...
