@@ -330,8 +330,6 @@ def main() -> None:
 
             authenticate = _optional_bearer
 
-        from vgi.worker import _get_vgi_version
-
         # Match vgi-fixture-worker (subprocess transport): always serve the
         # base ExampleWorker plus the projection_repro, schema_reconcile,
         # and accumulate fixture catalogs. Add the writable catalog when its
@@ -339,6 +337,7 @@ def main() -> None:
         # function name colliding across two catalogs) back
         # scalar/same_name_catalogs.test — catalog-qualified dispatch.
         from vgi._test_fixtures.twin_catalogs import TwinAWorker, TwinBWorker
+        from vgi.worker import _get_vgi_version
 
         worker_classes: list[type] = [
             ExampleWorker,
