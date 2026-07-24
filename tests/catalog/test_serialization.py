@@ -1275,16 +1275,22 @@ class TestScanBranchSerialization:
         assert restored.branches[1].function_name == "iceberg_scan"
         assert restored.required_extensions == ["iceberg", "httpfs"]
 
-    def test_scan_branches_result_empty_branches_rejected(self) -> None:
-        """Empty branches list is rejected at deserialize — workers must return >=1 branch."""
-        import pytest
+    def test_scan_branches_result_empty_branches_tolerated(self) -> None:
+        """Empty branches list round-trips cleanly.
 
+        Lenient producers (the Rust/Go/Java SDKs, tolerated by the DuckDB C++
+        client) omit the IPC stream for an empty nested list, so a strict
+        consumer must accept a zero-branch result rather than raising — otherwise
+        the Cedar proxy (the only strict Python consumer in the path) fails
+        closed on a legitimate response.
+        """
         from vgi.catalog import ScanBranchesResult
 
         empty = ScanBranchesResult(branches=[], required_extensions=[])
         batch, _ = deserialize_record_batch(empty.serialize())
-        with pytest.raises(ValueError, match="branches list must not be empty"):
-            ScanBranchesResult.deserialize(batch)
+        restored = ScanBranchesResult.deserialize(batch)
+        assert restored.branches == []
+        assert restored.required_extensions == []
 
 
 class TestSecretTypeSpecSerialization:

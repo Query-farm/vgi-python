@@ -288,7 +288,7 @@ class InitRequest(ArrowSerializableDataclass):
     """
 
     # Core (always present)
-    bind_call: BindRequest
+    bind_call: Annotated[BindRequest, ArrowType(pa.binary())]
     output_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
     bind_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
@@ -348,7 +348,7 @@ class TableFunctionCardinalityRequest(ArrowSerializableDataclass):
             ``InitRequest.bind_opaque_data``).
     """
 
-    bind_call: BindRequest
+    bind_call: Annotated[BindRequest, ArrowType(pa.binary())]
     bind_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
 
@@ -368,7 +368,7 @@ class TableFunctionStatisticsRequest(ArrowSerializableDataclass):
             ``InitRequest.bind_opaque_data``).
     """
 
-    bind_call: BindRequest
+    bind_call: Annotated[BindRequest, ArrowType(pa.binary())]
     bind_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
 
@@ -392,7 +392,7 @@ class TableFunctionDynamicToStringRequest(ArrowSerializableDataclass):
             persisted the diagnostics this RPC retrieves.
     """
 
-    bind_call: BindRequest
+    bind_call: Annotated[BindRequest, ArrowType(pa.binary())]
     bind_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
     global_execution_id: bytes
 

@@ -1149,3 +1149,61 @@ class TestAnyArrow:
         assert obj.data.value == {"key": "value"}
         assert obj.data.position == "data"
         assert obj.data.name == "data"
+
+
+class TestBindCallWireFormat:
+    """The embedded ``bind_call`` must serialize as an opaque binary IPC blob.
+
+    Every non-Python VGI implementation (the DuckDB C++ client, the Rust/Go/Java
+    SDKs) encodes ``bind_call`` as ``Bytes`` — an IPC-serialized ``BindRequest``
+    (Rust: ``ipc::read_batch(&dto.bind_call.0)``). If Python serializes it as an
+    inline Arrow *struct* instead, those workers reject the request with
+    "expected Binary array". This regression-anchors the ``bind_call`` field
+    being ``Annotated[BindRequest, ArrowType(pa.binary())]`` on every request
+    that carries one, so the Cedar proxy's re-serialized bind stays wire-
+    compatible with a non-Python backend.
+    """
+
+    @staticmethod
+    def _bind_call_arrow_type(obj: object) -> str:
+        batch = pa.ipc.open_stream(obj.serialize_to_bytes()).read_next_batch()  # type: ignore[attr-defined]
+        return str(dict((f.name, f.type) for f in batch.schema)["bind_call"])
+
+    def _make_bind(self) -> object:
+        """Build a minimal ``BindRequest`` to embed as ``bind_call``."""
+        from vgi.protocol import BindRequest, FunctionType
+
+        return BindRequest(
+            function_name="f",
+            arguments=Arguments(positional=[], named=None),
+            function_type=FunctionType.TABLE,
+        )
+
+    def test_init_request_bind_call_is_binary(self) -> None:
+        """``InitRequest.bind_call`` serializes as binary and round-trips."""
+        from vgi.protocol import InitRequest
+
+        ir = InitRequest(bind_call=self._make_bind(), output_schema=pa.schema([pa.field("x", pa.int64())]))
+        assert self._bind_call_arrow_type(ir) == "binary"
+        # round-trips back into a BindRequest
+        restored = InitRequest.deserialize_from_bytes(ir.serialize_to_bytes())
+        assert restored.bind_call.function_name == "f"
+
+    def test_table_function_requests_bind_call_is_binary(self) -> None:
+        """The ``table_function_*`` requests also serialize ``bind_call`` as binary."""
+        from vgi.protocol import (
+            TableFunctionCardinalityRequest,
+            TableFunctionDynamicToStringRequest,
+            TableFunctionStatisticsRequest,
+        )
+
+        cases = [
+            (TableFunctionCardinalityRequest, {}),
+            (TableFunctionStatisticsRequest, {}),
+            (TableFunctionDynamicToStringRequest, {"global_execution_id": b"exec"}),
+        ]
+        for cls, extra in cases:
+            obj = cls(bind_call=self._make_bind(), **extra)
+            assert self._bind_call_arrow_type(obj) == "binary", cls.__name__
+            restored = cls.deserialize_from_bytes(obj.serialize_to_bytes())
+            assert restored.bind_call.function_name == "f", cls.__name__
