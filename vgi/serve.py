@@ -32,7 +32,7 @@ import os
 import sys
 from collections.abc import Callable
 from types import ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from vgi.logging_config import LogFormat, LogLevel
 
@@ -429,6 +429,10 @@ def _resolve_authenticate() -> Callable[..., Any] | None:
     - ``VGI_JWT_ISSUER`` + ``VGI_JWT_AUDIENCE``: JWT/JWKS auth
       (requires ``vgi[oauth]`` extra). Optional ``VGI_JWT_JWKS_URI``.
     - When both bearer and JWT are set, they are chained (JWT first).
+    - ``VGI_PROXY_PROOF_MODE``: ``allow`` or ``require`` gates every request
+      on proof that it arrived through a trusted proxy. This is a
+      precondition ANDed with whichever credential above is configured, not
+      an alternative to one.
 
     Returns:
         An authenticate callback, or None if no auth env vars are set.
@@ -438,14 +442,84 @@ def _resolve_authenticate() -> Callable[..., Any] | None:
             JWT issuer without audience).
 
     """
-    bearer_auth = _resolve_bearer_authenticate()
-    jwt_auth = _resolve_jwt_authenticate()
+    # Ordered by cost: JWT resolves a signature, bearer does a constant-time
+    # scan over the token set, so the cheaper one goes last.
+    candidates = [fn for fn in (_resolve_jwt_authenticate(), _resolve_bearer_authenticate()) if fn is not None]
 
-    if bearer_auth is not None and jwt_auth is not None:
+    inner: Callable[..., Any] | None
+    if len(candidates) > 1:
         from vgi_rpc.http import chain_authenticate
 
-        return chain_authenticate(jwt_auth, bearer_auth)
-    return jwt_auth or bearer_auth
+        inner = chain_authenticate(*candidates)
+    else:
+        inner = candidates[0] if candidates else None
+
+    gate = _resolve_proxy_proof_gate()
+    if gate is None:
+        return inner
+
+    # AND, not OR: chaining the gate would let any later credential satisfy
+    # the request on its own, which is exactly the bypass the gate exists to
+    # close. `inner` may be None — proof alone means "only my proxy may call
+    # this worker", with user identity handled upstream.
+    from vgi_rpc.http import require_all
+
+    return require_all(gate, inner)
+
+
+def _resolve_proxy_proof_gate() -> Any | None:
+    """Build a proxy-proof gate from ``VGI_PROXY_PROOF_*`` environment variables.
+
+    Env vars:
+
+    - ``VGI_PROXY_PROOF_MODE``: ``off`` (default), ``allow`` or ``require``.
+    - ``VGI_PROXY_PROOF_ORIGIN_ID``: this worker's identifier. Folded into
+      every MAC but never transmitted, so it must match what the proxy is
+      configured to prove to.
+    - ``VGI_PROXY_PROOF_SECRETS``: ``kid:hex`` pairs, comma-separated. The
+      ``kid`` doubles as the proxy's label in the audit trail.
+    - ``VGI_PROXY_PROOF_SKEW``: acceptance half-window in seconds (default 30).
+
+    Returns:
+        A gate for ``require_all``, or None when the feature is off.
+
+    Raises:
+        SystemExit: On any malformed value. Deliberately fail-closed: the
+            secret is shared with an independently-deployed proxy, so a typo
+            would otherwise silently reject every request with no diagnostic.
+
+    """
+    raw_mode = (os.environ.get("VGI_PROXY_PROOF_MODE") or "off").strip().lower()
+    if raw_mode == "off":
+        return None
+    if raw_mode not in ("allow", "require"):
+        sys.stderr.write(
+            f"Error: VGI_PROXY_PROOF_MODE must be 'off', 'allow' or 'require', got {raw_mode!r}\n",
+        )
+        sys.exit(1)
+    mode: Literal["allow", "require"] = "allow" if raw_mode == "allow" else "require"
+
+    from vgi_rpc.http import ProxyProofConfig, parse_secrets, proxy_proof_gate
+
+    raw_secrets = os.environ.get("VGI_PROXY_PROOF_SECRETS") or ""
+    skew_raw = os.environ.get("VGI_PROXY_PROOF_SKEW") or "30"
+    try:
+        secrets = parse_secrets(raw_secrets)
+        config = ProxyProofConfig(
+            mode=mode,
+            origin_id=os.environ.get("VGI_PROXY_PROOF_ORIGIN_ID") or "",
+            secrets=secrets,
+            skew_seconds=int(skew_raw),
+        )
+    except ValueError as exc:
+        sys.stderr.write(
+            f"Error: invalid proxy-proof configuration: {exc}\n"
+            "Set VGI_PROXY_PROOF_MODE=off to disable, or fix "
+            "VGI_PROXY_PROOF_ORIGIN_ID / VGI_PROXY_PROOF_SECRETS "
+            "(kid:hex pairs, 64 hex chars each; generate with 'openssl rand -hex 32').\n",
+        )
+        sys.exit(1)
+    return proxy_proof_gate(config)
 
 
 def _resolve_bearer_authenticate() -> Callable[..., Any] | None:
