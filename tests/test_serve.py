@@ -206,6 +206,57 @@ class TestCreateApp:
 
         assert isinstance(app, falcon.App)
 
+    @staticmethod
+    def _health_proof_header(**env: str) -> str | None:
+        """Serve an app under ``env`` and read the proof capability header.
+
+        Args:
+            **env: ``VGI_PROXY_PROOF_*`` values to set for the duration.
+
+        Returns:
+            The ``VGI-Proxy-Proof-Required`` value, or ``None`` when absent.
+
+        """
+        import falcon.testing
+
+        with pytest.MonkeyPatch.context() as mp:
+            for key in ("VGI_PROXY_PROOF_MODE", "VGI_PROXY_PROOF_ORIGIN_ID", "VGI_PROXY_PROOF_SECRETS"):
+                mp.delenv(key, raising=False)
+            for key, value in env.items():
+                mp.setenv(key, value)
+            app = create_app(_SingleWorker, prefix="/vgi", describe=False)
+            resp = falcon.testing.TestClient(app).simulate_get("/vgi/health")
+        assert resp.status_code == 200
+        return {k.lower(): v for k, v in resp.headers.items()}.get("vgi-proxy-proof-required")
+
+    def test_advertises_proof_required_in_require_mode(self) -> None:
+        """A ``require``-mode worker tells proxies it actually enforces.
+
+        Derived from ``VGI_PROXY_PROOF_MODE`` rather than passed separately,
+        because that env var is also where the gate itself comes from — so the
+        advertisement cannot drift from the posture it describes.
+        """
+        value = self._health_proof_header(
+            VGI_PROXY_PROOF_MODE="require",
+            VGI_PROXY_PROOF_ORIGIN_ID="worker-a",
+            VGI_PROXY_PROOF_SECRETS="k:" + "11" * 32,
+        )
+        assert value == "true"
+
+    @pytest.mark.parametrize("mode", ["off", "allow"])
+    def test_does_not_advertise_below_require(self, mode: str) -> None:
+        """Only ``require`` advertises — ``allow`` never denies, so it must not.
+
+        A proxy reads this to confirm a rollout landed; an ``allow``-mode worker
+        that claimed to require would report the rollout complete while every
+        unproofed direct caller still sailed through.
+        """
+        env = {"VGI_PROXY_PROOF_MODE": mode}
+        if mode != "off":
+            env["VGI_PROXY_PROOF_ORIGIN_ID"] = "worker-a"
+            env["VGI_PROXY_PROOF_SECRETS"] = "k:" + "11" * 32
+        assert self._health_proof_header(**env) is None
+
     def test_signing_key_passed(self) -> None:
         """Explicit signing_key is accepted without warning."""
         import warnings

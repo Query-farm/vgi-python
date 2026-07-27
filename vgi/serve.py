@@ -202,6 +202,7 @@ def create_app(
     signing_key: bytes | None = None,
     log_level: int = logging.INFO,
     authenticate: Callable[[falcon.Request], AuthContext] | None = None,
+    proxy_proof_required: bool | None = None,
     oauth_resource_metadata: Any = None,
     otel_config: OtelConfig | None = None,
     max_stream_response_bytes: int | None = None,
@@ -224,6 +225,12 @@ def create_app(
         authenticate: Optional callback that validates each HTTP request
             and returns an `AuthContext`. When ``None``, all requests are
             anonymous.
+        proxy_proof_required: Whether to advertise ``VGI-Proxy-Proof-Required``
+            so a proxy can confirm this worker actually enforces the proof it
+            mints. ``None`` (the default) derives it from
+            ``VGI_PROXY_PROOF_MODE``, which is also where the gate itself comes
+            from — so the advertisement cannot drift from the posture. Pass a
+            bool only when supplying a hand-built gate via ``authenticate``.
         oauth_resource_metadata: Optional `OAuthResourceMetadata` for
             RFC 9728 discovery endpoint.
         otel_config: Optional OpenTelemetry configuration.  When provided,
@@ -259,6 +266,9 @@ def create_app(
     if signing_key is None:
         signing_key = os.urandom(32)
 
+    if proxy_proof_required is None:
+        proxy_proof_required = (os.environ.get("VGI_PROXY_PROOF_MODE") or "").strip().lower() == "require"
+
     worker = worker_cls(quiet=True, log_level=log_level)
     worker._vgi_tracer = VgiTracer.create(otel_config)
     worker._signing_key = signing_key
@@ -271,6 +281,7 @@ def create_app(
         cors_origins=cors_origins,
         token_key=signing_key,
         authenticate=authenticate,
+        proxy_proof_required=proxy_proof_required,
         oauth_resource_metadata=oauth_resource_metadata,
         otel_config=otel_config,
         max_stream_response_bytes=max_stream_response_bytes,
