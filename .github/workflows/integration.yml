@@ -33,6 +33,13 @@ env:
   # The Haybarn release providing the prebuilt haybarn-unittest binary. Must be
   # ABI-compatible with the community-published vgi extension.
   HAYBARN_RELEASE: haybarn-v1.5.4-rc3
+  # CI is not a user: its ATTACHes should not land in Query.Farm's adoption data.
+  # The vgi extension fires a telemetry event per successful ATTACH, and this
+  # suite performs several hundred of them per lane, so opting out keeps the
+  # numbers honest. It also removes telemetry as a variable in lane timings —
+  # the per-ATTACH event was added in Query-farm/vgi 71e2d51 (2026-07-12), and
+  # the stdio lane total stepped from ~690s to ~870s across that window.
+  QUERY_FARM_TELEMETRY_OPT_OUT: "1"
 
 jobs:
   integration:
