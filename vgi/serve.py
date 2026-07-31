@@ -35,6 +35,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any, Literal
 
 from vgi.logging_config import LogFormat, LogLevel
+from vgi.profiling import maybe_start_profile
 
 if TYPE_CHECKING:
     import falcon
@@ -364,12 +365,17 @@ def main() -> None:
     ) -> None:
         env_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
         effective_debug = debug or env_debug
+        # VGI_WORKER_LOG_* overrides are applied inside configure_worker_logging,
+        # so every worker entry point honours them identically.
         effective_level = configure_worker_logging(
             debug=effective_debug,
             log_level=log_level,
             log_loggers=log_logger,
             log_format=log_format,
         )
+        # Before the worker class is imported, so module-import cost lands in
+        # the profile too — for many workers that is the bulk of startup.
+        maybe_start_profile()
 
         # Resolve env var overrides
         describe = _resolve_describe(describe)

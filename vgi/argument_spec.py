@@ -18,6 +18,7 @@ import json
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import cache
 from typing import Annotated, Any, get_args, get_origin, get_type_hints
 
 import pyarrow as pa
@@ -519,6 +520,10 @@ def extract_argument_specs(
     2. Type annotation with `PYTHON_TO_ARROW` mapping
     3. Default to pa.null() with warning for unknown types
 
+    Memoized per class — see :func:`_extract_argument_specs_cached`. A fresh
+    list is returned each call so a caller that mutates it cannot corrupt the
+    cache; the `ArgumentSpec`s inside are frozen dataclasses and safe to share.
+
     Args:
         cls: Function class with `Arg` descriptors.
 
@@ -526,6 +531,52 @@ def extract_argument_specs(
         List of `ArgumentSpec` objects, sorted by position (positional first,
         then named).
 
+    """
+    return list(_extract_argument_specs_cached(cls))
+
+
+@cache
+def _extract_argument_specs_cached(cls: type) -> tuple[ArgumentSpec, ...]:
+    """Memoized :func:`_extract_argument_specs`, keyed on the class.
+
+    A function class's argument specs are fixed once the class exists — they are
+    derived from its annotations, its ``FunctionArguments``, and the `Arg`
+    descriptors on its MRO, none of which change at runtime. Deriving them was
+    nonetheless repeated on **every** catalog listing and every overload match:
+    profiling one run of the upstream integration suite through the proxy showed
+    58,058 calls costing 15.8s, which drove 131,653 ``typing.get_type_hints``
+    calls, 2.4M ``_eval_type`` calls and 648k ``compile`` calls — roughly a
+    quarter of the worker's CPU. ``catalog_schema_contents_functions`` was 38ms
+    per call against 0.1-2ms for every other catalog method, entirely because of
+    this.
+
+    Unbounded (``functools.cache``) is the right size: the keys are function
+    classes, which the catalog already holds for the process's lifetime, so the
+    cache adds no retention that did not already exist. It is also thread safe,
+    which matters because workers serve requests on a pool.
+
+    Returns a tuple so the cached value cannot be mutated through a caller's
+    reference.
+
+    Args:
+        cls: Function class with `Arg` descriptors.
+
+    Returns:
+        The class's argument specs, sorted.
+    """
+    return tuple(_extract_argument_specs(cls))
+
+
+def _extract_argument_specs(
+    cls: type,
+) -> list[ArgumentSpec]:
+    """Derive a class's argument specs, without caching.
+
+    Args:
+        cls: Function class with `Arg` descriptors.
+
+    Returns:
+        List of `ArgumentSpec` objects, sorted by position.
     """
     specs: list[ArgumentSpec] = []
     seen_names: set[str] = set()

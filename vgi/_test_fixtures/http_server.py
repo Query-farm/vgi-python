@@ -27,6 +27,7 @@ from vgi._test_fixtures.schema_reconcile.worker import SchemaReconcileWorker
 from vgi._test_fixtures.worker import ExampleWorker
 from vgi.logging_config import LogFormat, LogLevel, configure_worker_logging
 from vgi.meta_worker import MetaWorker
+from vgi.profiling import maybe_start_profile
 
 if TYPE_CHECKING:
     from vgi_rpc.external import UploadUrl
@@ -209,12 +210,15 @@ def main() -> None:
 
         env_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
         effective_debug = debug or env_debug
+        # VGI_WORKER_LOG_* overrides are applied inside configure_worker_logging,
+        # so this server and `vgi-serve` are configurable the same way.
         effective_level = configure_worker_logging(
             debug=effective_debug,
             log_level=log_level,
             log_loggers=log_logger,
             log_format=log_format,
         )
+        maybe_start_profile()
 
         bucket = s3_bucket or os.environ.get("VGI_HTTP_S3_BUCKET")
         external_location = None
