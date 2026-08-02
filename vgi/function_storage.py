@@ -22,9 +22,10 @@ import functools
 import logging
 import os
 import sqlite3
+import contextlib
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any, Protocol, TypeVar
 
 import pyarrow as pa
@@ -943,6 +944,11 @@ class FunctionStorageSqlite:
             self._memory_uri = None
             self._anchor_conn = None
             self.db_path = db_path if db_path is not None else _get_default_db_path()
+        # Shared-cache in-memory DBs need a process-local write lock; file DBs
+        # do not. See `_write_guard`.
+        self._write_lock: threading.Lock | None = (
+            threading.Lock() if self._memory_uri is not None else None
+        )
         self._tls = threading.local()
         self._ensure_tables()
 
@@ -980,6 +986,36 @@ class FunctionStorageSqlite:
             conn.execute("PRAGMA cache_size=-65536")
         self._tls.conn = conn
         return conn
+
+    @contextlib.contextmanager
+    def _write_guard(self) -> Iterator[None]:
+        """Serialize writers on a shared-cache in-memory DB; no-op for a file DB.
+
+        `_conn` gives each thread its own connection so SQLite's own locking
+        serializes writers "without a Python-level lock and without forfeiting
+        WAL's reader-writer concurrency". That reasoning holds for a file DB and
+        is **false for `:memory:`** — an in-memory database cannot use WAL (it
+        is MEMORY journal mode implicitly), so there is no reader-writer
+        concurrency to forfeit, and `cache=shared` adds table-level locking on
+        top.
+
+        The consequence is not merely slow, it is an error: concurrent
+        `queue_pop` raises ``sqlite3.OperationalError: database table is
+        locked``. That is `SQLITE_LOCKED`, which — unlike `SQLITE_BUSY` — the
+        busy handler does **not** retry, so `timeout=30.0` never applies. There
+        is no retry layer beneath these methods either, so it surfaces straight
+        into a scan; on the harbor multi-day path a failed pop is exactly how a
+        query quietly returns only some business days.
+
+        Serializing writes costs nothing here. Measured: pops are 0.007 ms and
+        concurrency already made them *slower* (128k/s at 1 thread → 79k/s at
+        16), so there was never any write parallelism to lose — only the error.
+        """
+        if self._write_lock is None:
+            yield
+            return
+        with self._write_lock:
+            yield
 
     def close(self) -> None:
         """Close the calling thread's persistent connection, if any."""
@@ -1441,6 +1477,35 @@ class FunctionStorageSqlite:
             (scope_id, ns, key),
         )
         conn.commit()
+
+
+def _guard_sqlite_writes() -> None:
+    """Route every FunctionStorageSqlite writer through `_write_guard`.
+
+    Applied here rather than by editing each method so no writer can be added
+    later and silently miss the guard — a partial fix would be worse than none,
+    since one unguarded writer is enough to re-introduce `SQLITE_LOCKED` for
+    every other one sharing the cache.
+    """
+
+    def guarded(fn: Any) -> Any:
+        @functools.wraps(fn)
+        def wrapper(self: "FunctionStorageSqlite", *a: Any, **k: Any) -> Any:
+            with self._write_guard():
+                return fn(self, *a, **k)
+
+        return wrapper
+
+    for name in (
+        "queue_push", "queue_pop", "queue_clear",
+        "state_put_many", "state_drain", "state_delete", "state_append",
+        "execution_clear", "state_counter_add", "state_counter_set",
+        "state_counter_delete",
+    ):
+        setattr(FunctionStorageSqlite, name, guarded(getattr(FunctionStorageSqlite, name)))
+
+
+_guard_sqlite_writes()
 
 
 class ShardedSqliteStorage:
