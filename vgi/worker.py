@@ -138,6 +138,7 @@ from vgi.protocol import (
     TableProducerState,
     TablesResponse,
     TransactionBeginResponse,
+    VgiCallState,
     VgiProtocol,
     ViewsResponse,
 )
@@ -3661,13 +3662,20 @@ class Worker:
         state: ProcessState
         input_schema: pa.Schema | None
 
+        # The stream's call state: everything about this invocation that is
+        # settled by the time init returns. The transport seals it once and
+        # replays it; nothing below may mutate it afterwards.
+        call_state = VgiCallState(
+            init_call=request,
+            init_response=init_response,
+            plaintext_attach=attach_plaintext,
+        )
+
         if isinstance(instance, ScalarFunctionGenerator) and not isinstance(instance, TableInOutGenerator):
             # Scalar function: exchange state with per-batch process()
             state = ScalarExchangeState(
+                _call=call_state,
                 _func_cls=type(instance),
-                _init_call=request,
-                _init_response=init_response,
-                _plaintext_attach=attach_plaintext,
                 _vgi_tracer=self._vgi_tracer,
             )
             input_schema = request.bind_call.input_schema
@@ -3780,9 +3788,7 @@ class Worker:
             if request.phase == TableInOutFunctionInitPhase.INPUT:
                 user_state = type(instance).initial_state(params)
                 state = TableInOutExchangeState(
-                    _init_call=request,
-                    _init_response=init_response,
-                    _plaintext_attach=attach_plaintext,
+                    _call=call_state,
                     _func_cls=type(instance),
                     _params=params,
                     _user_state=user_state,
@@ -3840,9 +3846,7 @@ class Worker:
             )
             user_state = type(instance).initial_state(params)
             state = TableProducerState(
-                _init_call=request,
-                _init_response=init_response,
-                _plaintext_attach=attach_plaintext,
+                _call=call_state,
                 _func_cls=type(instance),
                 _params=params,
                 _user_state=user_state,
@@ -3858,6 +3862,7 @@ class Worker:
             state=state,
             input_schema=input_schema or pa.schema([]),
             header=init_response,
+            call_state=call_state,
         )
 
     # ---------------------------------------------------------------------------
