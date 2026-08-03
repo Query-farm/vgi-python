@@ -29,6 +29,7 @@ import importlib
 import importlib.util
 import logging
 import os
+import secrets
 import sys
 from collections.abc import Callable
 from types import ModuleType
@@ -262,10 +263,11 @@ def create_app(
     # Resolve the signing key once, here, so the worker (which seals catalog
     # opaque-data envelopes) and the HTTP state-token machinery share the same
     # key. When the operator did not configure VGI_SIGNING_KEY, generate an
-    # ephemeral per-process key: sealed values are then valid for the life of
-    # this process and clients re-ATTACH after a restart.
+    # key. See resolve_shared_signing_key for why every process serving this
+    # deployment has to agree on it.
     if signing_key is None:
-        signing_key = os.urandom(32)
+        signing_key, is_ephemeral = resolve_shared_signing_key(propagate_to_children=False)
+        _warn_if_ephemeral_signing_key(is_ephemeral=is_ephemeral, multiprocess=False)
 
     if proxy_proof_required is None:
         proxy_proof_required = (os.environ.get("VGI_PROXY_PROOF_MODE") or "").strip().lower() == "require"
@@ -412,12 +414,87 @@ def main() -> None:
     app()
 
 
+SIGNING_KEY_ENV = "VGI_SIGNING_KEY"
+
+
 def _resolve_signing_key() -> bytes | None:
     """Read ``VGI_SIGNING_KEY`` from the environment."""
-    raw = os.environ.get("VGI_SIGNING_KEY")
+    raw = os.environ.get(SIGNING_KEY_ENV)
     if raw:
         return raw.encode()
     return None
+
+
+def resolve_shared_signing_key(*, propagate_to_children: bool) -> tuple[bytes, bool]:
+    """Resolve the signing key every process in this deployment must agree on.
+
+    The key seals HTTP state tokens and catalog opaque data. Every process
+    that might serve a continuation for a stream has to hold the *same* one:
+    a token sealed by one key fails the AEAD check under another, and the
+    failure is load-dependent rather than deterministic. A client whose
+    connection stays pinned to one process never notices; one that reconnects
+    mid-stream -- ``seek_to_token``, a load balancer, a respawned worker --
+    hits an intermittent 400 that looks like flakiness.
+
+    Resolution:
+
+    - ``VGI_SIGNING_KEY`` set: use it. Tokens survive restarts and are valid
+      across every process configured with the same value. This is the only
+      correct setting for a load-balanced or multi-instance deployment,
+      because nothing here can reach a peer we did not start.
+    - Unset: mint a random key for this deployment. Tokens are then valid for
+      the life of these processes and clients re-ATTACH after a restart.
+
+    Args:
+        propagate_to_children: True when this process will start worker
+            processes that import the app themselves (a pre-fork server).
+            A minted key is then exported to the environment so those
+            children inherit it instead of each minting its own -- which is
+            the bug this function exists to prevent.
+
+    Returns:
+        ``(key, is_ephemeral)``. ``is_ephemeral`` is True when the key was
+        minted here rather than configured, so callers can say so out loud.
+
+    """
+    configured = _resolve_signing_key()
+    if configured is not None:
+        return configured, False
+
+    minted = secrets.token_urlsafe(32)
+    if propagate_to_children:
+        # Children inherit os.environ, so exporting before we start them is
+        # what makes them agree. Same channel the operator would use, so this
+        # adds no exposure they did not already have by setting it.
+        os.environ[SIGNING_KEY_ENV] = minted
+    return minted.encode(), True
+
+
+def _warn_if_ephemeral_signing_key(*, is_ephemeral: bool, multiprocess: bool) -> None:
+    """Say plainly when state tokens will not be portable.
+
+    Silence here is what makes the failure mode expensive: an operator who
+    scales to two instances gets a server that works until a request lands
+    on the wrong one.
+    """
+    if not is_ephemeral:
+        return
+    if multiprocess:
+        _logger.info(
+            "No %s configured; minted one for this deployment and exported it to worker processes. "
+            "State tokens are valid until restart. Set %s to keep them valid across restarts.",
+            SIGNING_KEY_ENV,
+            SIGNING_KEY_ENV,
+        )
+        return
+    _logger.warning(
+        "No %s configured; using a per-process key. State tokens and catalog handles are valid only "
+        "for this process. If you run more than one instance behind a load balancer, set %s to the "
+        "same value in every one -- otherwise a client that reconnects mid-stream gets an "
+        "intermittent 400.",
+        SIGNING_KEY_ENV,
+        SIGNING_KEY_ENV,
+    )
 
 
 def _resolve_describe(cli_value: bool) -> bool:
