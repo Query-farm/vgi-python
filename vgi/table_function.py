@@ -13,11 +13,13 @@ from abc import abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, is_dataclass
 from enum import Enum, auto
+from functools import cache
 from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
     ClassVar,
+    NamedTuple,
     TypeVar,
     final,
     get_args,
@@ -80,6 +82,99 @@ __all__ = [
     "_struct_scalar_to_dict",
     "_extract_setting_secret_params",
 ]
+
+
+class _ArgFieldPlan(NamedTuple):
+    """One ``FunctionArguments`` field, resolved once per class.
+
+    Everything here is derived purely from the field's ``Annotated`` type
+    hint, so it is fixed for the life of the class — see
+    :func:`_arg_field_plans` for why that matters.
+
+    Attributes:
+        name: The dataclass field name.
+        arg: The field's `Arg` descriptor, or ``None`` for a ``TableInput``
+            sentinel field (which carries no wire value).
+        is_table_input: True for a ``TableInput`` sentinel field.
+        accepts_none: Whether the declared type admits ``None`` — i.e.
+            whether SQL NULL is legal for this argument.
+        varargs_is_union: Whether a varargs field's declared Arrow type is a
+            union, which selects the tagged-scalar decode path.
+
+    """
+
+    name: str
+    arg: Arg[Any] | None
+    is_table_input: bool
+    accepts_none: bool
+    varargs_is_union: bool
+
+
+@cache
+def _arg_field_plans(args_class: type) -> tuple[_ArgFieldPlan, ...]:
+    """Resolve a ``FunctionArguments`` class into its per-field parse plan.
+
+    ``_parse_arguments`` runs on every HTTP stream turn — the state token
+    carries no transient state, so a rehydrated worker rebuilds the typed
+    arguments from scratch each time. Deriving the plan meant a
+    ``typing.get_type_hints(include_extras=True)`` per turn, which measured
+    at 58 ms per 400 turns: essentially the entire cost of
+    ``_parse_arguments``, and the largest single item left in a turn once
+    the state token was split.
+
+    None of it can change: the plan is a function of the class's
+    annotations. So it is memoized on the class, exactly as
+    ``_extract_argument_specs_cached`` memoizes argument specs for the same
+    reason.
+
+    Unbounded (``functools.cache``) is the right size — the keys are
+    ``FunctionArguments`` classes, which the worker's function registry
+    already holds for the process's lifetime, so this adds no retention that
+    did not already exist. It is also thread safe, which matters because
+    workers serve requests on a pool.
+
+    Fields whose annotation carries no `Arg` are omitted, matching the
+    original behaviour: they are left to the dataclass's own default.
+
+    Args:
+        args_class: The ``FunctionArguments`` dataclass type.
+
+    Returns:
+        The per-field plans, in declaration order.
+
+    """
+    plans: list[_ArgFieldPlan] = []
+    for attr_name, hint in get_type_hints(args_class, include_extras=True).items():
+        if get_origin(hint) is not Annotated:
+            continue
+        type_args = get_args(hint)
+        base_type = type_args[0]
+        if base_type is TableInput:
+            plans.append(
+                _ArgFieldPlan(
+                    name=attr_name,
+                    arg=None,
+                    is_table_input=True,
+                    accepts_none=False,
+                    varargs_is_union=False,
+                )
+            )
+            continue
+        for meta in type_args[1:]:
+            if isinstance(meta, Arg):
+                plans.append(
+                    _ArgFieldPlan(
+                        name=attr_name,
+                        arg=meta,
+                        is_table_input=False,
+                        accepts_none=_accepts_none(base_type),
+                        varargs_is_union=(
+                            meta.varargs and meta.arrow_type is not None and pa.types.is_union(meta.arrow_type)
+                        ),
+                    )
+                )
+                break
+    return tuple(plans)
 
 
 @dataclass(frozen=True, slots=True)
@@ -782,59 +877,55 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             An instance of ``args_class`` populated from ``arguments``.
 
         """
-        hints = get_type_hints(args_class, include_extras=True)
         kwargs: dict[str, Any] = {}
 
-        for attr_name, hint in hints.items():
-            if get_origin(hint) is not Annotated:
+        # Widened to a bare ``type`` for typeshed's benefit: ``functools.cache``
+        # types every argument as ``Hashable``, which ``type[TArgs]`` does not
+        # statically satisfy even though every class object is hashable.
+        plan_key: type = args_class
+        for plan in _arg_field_plans(plan_key):
+            if plan.is_table_input:
+                kwargs[plan.name] = TableInput()
                 continue
-            # Check if this is a TableInput parameter (sentinel, no real data)
-            base_type = get_args(hint)[0]
-            if base_type is TableInput:
-                kwargs[attr_name] = TableInput()
+            meta = plan.arg
+            assert meta is not None  # only a TableInput field has no Arg
+            # Blended: skip positional/varargs Args — they are the input
+            # columns (read from batch), absent from the wire args. Set the
+            # field to None so construction succeeds; the worker reads the
+            # value from ``batch``, never from ``params.args.<name>``.
+            if blended and isinstance(meta.position, int):
+                kwargs[plan.name] = None
                 continue
-            for meta in get_args(hint)[1:]:
-                if isinstance(meta, Arg):
-                    # Blended: skip positional/varargs Args — they are the input
-                    # columns (read from batch), absent from the wire args. Set the
-                    # field to None so construction succeeds; the worker reads the
-                    # value from ``batch``, never from ``params.args.<name>``.
-                    if blended and isinstance(meta.position, int):
-                        kwargs[attr_name] = None
-                        break
-                    if meta.varargs:
-                        # Varargs: collect remaining positional args as raw pa.Scalar
-                        # objects (e.g. constant_columns reads .type / pa.repeat off
-                        # them). Union-typed varargs are the exception: decode each
-                        # scalar to a TaggedUnion so the active member discriminator
-                        # is preserved — matching how non-vararg union args resolve
-                        # via Arguments.get()/_scalar_to_py(). Keyed on the declared
-                        # arrow_type so the raw-scalar contract is untouched otherwise.
-                        assert isinstance(meta.position, int)
-                        varargs_scalars = arguments.positional[meta.position :]
-                        if meta.arrow_type is not None and pa.types.is_union(meta.arrow_type):
-                            kwargs[attr_name] = tuple(
-                                _scalar_to_py(s) if s is not None else None for s in varargs_scalars
-                            )
-                        else:
-                            kwargs[attr_name] = tuple(varargs_scalars)
-                    else:
-                        value = arguments.get(meta.position, default=meta.default)
-                        # Reject SQL NULL for non-Optional Args. Without this,
-                        # None silently propagated through validation and
-                        # crashed deep in the user's process()/update() with
-                        # an opaque Python ``TypeError`` (e.g. ``'<=' not
-                        # supported between instances of NoneType and int``)
-                        # that surfaced in the C++ extension as a worker
-                        # exception with no hint at the cause.
-                        if value is None and not _accepts_none(base_type):
-                            raise meta._reject_none()
-                        # Run Arg constraint validation (ge/le/gt/lt/choices/pattern).
-                        # Skip for None — accepted via Optional[T].
-                        if value is not None:
-                            meta._validate(value)
-                        kwargs[attr_name] = value
-                    break
+            if meta.varargs:
+                # Varargs: collect remaining positional args as raw pa.Scalar
+                # objects (e.g. constant_columns reads .type / pa.repeat off
+                # them). Union-typed varargs are the exception: decode each
+                # scalar to a TaggedUnion so the active member discriminator
+                # is preserved — matching how non-vararg union args resolve
+                # via Arguments.get()/_scalar_to_py(). Keyed on the declared
+                # arrow_type so the raw-scalar contract is untouched otherwise.
+                assert isinstance(meta.position, int)
+                varargs_scalars = arguments.positional[meta.position :]
+                if plan.varargs_is_union:
+                    kwargs[plan.name] = tuple(_scalar_to_py(s) if s is not None else None for s in varargs_scalars)
+                else:
+                    kwargs[plan.name] = tuple(varargs_scalars)
+            else:
+                value = arguments.get(meta.position, default=meta.default)
+                # Reject SQL NULL for non-Optional Args. Without this,
+                # None silently propagated through validation and
+                # crashed deep in the user's process()/update() with
+                # an opaque Python ``TypeError`` (e.g. ``'<=' not
+                # supported between instances of NoneType and int``)
+                # that surfaced in the C++ extension as a worker
+                # exception with no hint at the cause.
+                if value is None and not plan.accepts_none:
+                    raise meta._reject_none()
+                # Run Arg constraint validation (ge/le/gt/lt/choices/pattern).
+                # Skip for None — accepted via Optional[T].
+                if value is not None:
+                    meta._validate(value)
+                kwargs[plan.name] = value
 
         return args_class(**kwargs)
 
