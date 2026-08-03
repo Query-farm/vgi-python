@@ -12,6 +12,7 @@ This module provides classes for declaratively defining catalog structure:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Union
@@ -62,6 +63,11 @@ DefaultValue = str | int | float | bool | None
 # A stat value is either a plain Python value (auto-converted using the column's
 # Arrow type) or an explicit PyArrow scalar (used as-is).
 StatValue = Union[None, bool, int, float, str, bytes, "pa.Scalar"]  # type: ignore[type-arg]
+
+# ``Catalog.global_function_prefix`` is concatenated into a SQL identifier as
+# ``<prefix>_<name>``, so it must itself be identifier-safe and lowercase (the
+# client lowercases registered names for case-insensitive lookup).
+_GLOBAL_PREFIX_RE = re.compile(r"[a-z_][a-z0-9_]*")
 
 __all__ = [
     "Catalog",
@@ -927,6 +933,27 @@ class Catalog:
             homepage. ``None`` (the default) when the worker doesn't advertise
             a source location. Surfaced via the ``catalog_catalogs()`` discovery
             record (``CatalogInfo.source_url``).
+        global_functions: Functions to *additionally* publish into the client's
+            global function namespace (DuckDB's ``system.main``), so they can be
+            called unqualified without naming this catalog — the way
+            ``ducklake_table_info`` is reachable after ``LOAD ducklake``. Use
+            this for utility functions that aren't *about* a particular attached
+            catalog (diagnostics, converters, helpers).
+
+            Every entry must also appear in exactly one ``Schema.functions``:
+            bind dispatch is keyed on ``(schema_name, name)``, so a function
+            that exists only here would be registered but never dispatchable.
+            The schema-qualified name keeps working and is the unambiguous
+            fallback when a global name is claimed by another worker.
+
+            Registration is first-attach-wins and best-effort — a name already
+            owned by a different worker is skipped, and the client may disable
+            the whole mechanism per-ATTACH. Never rely on a global name
+            resolving; treat it as an ergonomic alias.
+        global_function_prefix: Prefix applied to each ``global_functions``
+            entry to form its globally visible name (``<prefix>_<name>``).
+            ``None`` publishes bare names, which is more collision-prone —
+            prefer a prefix that identifies this worker.
 
     """
 
@@ -936,6 +963,8 @@ class Catalog:
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
     source_url: str | None = None
+    global_functions: Sequence[type[Function]] = ()
+    global_function_prefix: str | None = None
 
     def __post_init__(self) -> None:
         """Validate catalog configuration."""
@@ -956,3 +985,53 @@ class Catalog:
             if key in seen:
                 raise ValueError(f"Catalog '{self.name}': duplicate schema name '{schema.name}'")
             seen.add(key)
+
+        self._validate_global_functions()
+
+    def _validate_global_functions(self) -> None:
+        """Validate ``global_functions`` / ``global_function_prefix``.
+
+        The prefix is concatenated into a SQL identifier, and every listed class
+        must be schema-resident or it would be published globally yet never be
+        dispatchable (bind is keyed on ``(schema_name, name)``).
+        """
+        if self.global_function_prefix is not None and not _GLOBAL_PREFIX_RE.fullmatch(self.global_function_prefix):
+            raise ValueError(
+                f"Catalog '{self.name}': global_function_prefix "
+                f"'{self.global_function_prefix}' is not a valid SQL identifier prefix. "
+                f"Expected {_GLOBAL_PREFIX_RE.pattern} (it is concatenated as '<prefix>_<name>')."
+            )
+
+        if not self.global_functions:
+            return
+
+        # Duplicate classes would publish the same name twice.
+        seen_classes: set[type[Function]] = set()
+        for func_cls in self.global_functions:
+            if func_cls in seen_classes:
+                raise ValueError(f"Catalog '{self.name}': duplicate entry {func_cls.__name__} in global_functions")
+            seen_classes.add(func_cls)
+
+        # Map each schema-resident function class to the schemas holding it.
+        placement: dict[type[Function], list[str]] = {}
+        for schema in self.schemas:
+            for func_cls in schema.functions:
+                placement.setdefault(func_cls, []).append(schema.name)
+
+        for func_cls in self.global_functions:
+            schemas_holding = placement.get(func_cls, [])
+            if not schemas_holding:
+                available = sorted(s.name for s in self.schemas) or ["(none)"]
+                raise ValueError(
+                    f"Catalog '{self.name}': {func_cls.__name__} is listed in global_functions "
+                    f"but does not appear in any Schema.functions. A global function must also be "
+                    f"schema-resident — bind dispatch is keyed on (schema_name, name), so it would "
+                    f"be published globally yet never dispatchable. Add it to one of: {available}"
+                )
+            if len(schemas_holding) > 1:
+                raise ValueError(
+                    f"Catalog '{self.name}': {func_cls.__name__} is listed in global_functions "
+                    f"but appears in multiple schemas ({sorted(schemas_holding)}). The global "
+                    f"registration would be ambiguous about which one it dispatches to — list it "
+                    f"in exactly one schema, or drop it from global_functions."
+                )

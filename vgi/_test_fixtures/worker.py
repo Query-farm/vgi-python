@@ -70,6 +70,12 @@ from vgi._test_fixtures.copy_to import (
     ExampleLinesOrderedCopyToFunction,
     SecretLinesCopyToFunction,
 )
+from vgi._test_fixtures.global_functions import (
+    GlobalAggFunction,
+    GlobalBufferedFunction,
+    GlobalScalarFunction,
+    GlobalTableFunction,
+)
 from vgi._test_fixtures.nest_tensor import NestTensorFunction, UnnestTensorFunction, UnnestTensorRowsFunction
 from vgi._test_fixtures.scalar import (
     AddValuesFunction,
@@ -380,6 +386,20 @@ _EXAMPLE_CATALOG = Catalog(
     comment="Example VGI catalog for testing",
     tags={"source": "vgi-fixture-worker", "version": "1"},
     source_url="https://github.com/query-farm/vgi-python",
+    # Global-function registration probes, one per function type, so the C++
+    # extension's system.main path is exercised for all four. Dedicated classes
+    # (see _test_fixtures/global_functions.py) rather than existing fixtures:
+    # this catalog is a cross-language contract, so reusing e.g. `double` would
+    # force every other implementation to make the same semantic change to a
+    # function it already ships. Published as vgi_example_global_scalar,
+    # vgi_example_global_table, vgi_example_global_agg, vgi_example_global_buffered.
+    global_function_prefix="vgi_example",
+    global_functions=[
+        GlobalScalarFunction,
+        GlobalTableFunction,
+        GlobalAggFunction,
+        GlobalBufferedFunction,
+    ],
     schemas=[
         Schema(
             name="main",
@@ -423,6 +443,13 @@ _EXAMPLE_CATALOG = Catalog(
                 EchoBufferingFunction,
                 BufferEmitWideFunction,
                 SlowCancellableBufferingFunction,
+                # Global-registration probes — also listed in the catalog's
+                # global_functions (a global function must be schema-resident,
+                # since bind dispatch is keyed on (schema_name, name)).
+                GlobalScalarFunction,
+                GlobalTableFunction,
+                GlobalAggFunction,
+                GlobalBufferedFunction,
                 # CopyFromFunction - custom COPY ... FROM format reader
                 ExampleLinesCopyFromFunction,
                 SecretLinesCopyFromFunction,

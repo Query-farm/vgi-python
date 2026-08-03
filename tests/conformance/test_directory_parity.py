@@ -42,6 +42,19 @@ _EXEMPTIONS: dict[str, str] = {
         "path, ProcessParams.if_none_match threading, and the revalidatable "
         "fixture's 304 behavior)."
     ),
+    "global_functions": (
+        "Publishing worker-declared functions into DuckDB's system.main is "
+        "entirely a C++-extension concern: the registry, prefix application, "
+        "first-attach-wins collision policy, post-DETACH liveness, and the "
+        "vgi_global_functions() introspection surface all live in the "
+        "extension. The Python worker's only role is advertising "
+        "global_functions/global_function_prefix on the attach response, which "
+        "tests/catalog/test_declarative.py covers directly (descriptor "
+        "validation + the serialized FunctionInfo payload). The observable "
+        "behaviour is cross-language by construction and is covered by "
+        "vgi/test/sql/integration/global_functions/, which any worker "
+        "implementation runs via VGI_TEST_WORKER."
+    ),
     "filter_pushdown": (
         "Per-type filter-pushdown coverage is mirrored by tests/test_filter_pushdown.py "
         "and tests/test_filter_pushdown_extension.py, which drive the same predicate "

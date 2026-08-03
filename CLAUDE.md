@@ -508,4 +508,5 @@ The table schema is automatically derived from the function's `output_schema`:
 - **Function lifecycle**: `docs/lifecycle.md`
 - **Generator API (advanced)**: `docs/generator-api.md`
 - **Catalog interface**: `docs/catalog-interface.md`
+- **Global functions (system.main)**: `docs/global-functions.md`
 - **Shared storage backends**: `docs/shared-storage.md`

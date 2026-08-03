@@ -26,6 +26,7 @@ from vgi.catalog import (
     Catalog,
     CatalogAttachResult,
     ForeignKeyDef,
+    FunctionInfo,
     Macro,
     MacroInfo,
     MacroType,
@@ -41,6 +42,7 @@ from vgi.catalog import (
     View,
     ViewInfo,
 )
+from vgi.catalog.catalog_interface import FunctionType as CatalogInterfaceFunctionType
 from vgi.invocation import BindResponse
 from vgi.schema_utils import schema
 from vgi.table_function import (
@@ -1392,6 +1394,152 @@ class TestCatalogValidation:
         s2 = Schema(name="Main")  # Case-insensitive duplicate
         with pytest.raises(ValueError, match="duplicate schema name"):
             Catalog(name="myapp", schemas=[s1, s2])
+
+
+class TestGlobalFunctionsValidation:
+    """Validation for ``Catalog.global_functions`` / ``global_function_prefix``."""
+
+    def test_defaults_are_empty(self) -> None:
+        """A catalog publishes nothing globally unless it asks to."""
+        catalog = Catalog(name="myapp", schemas=[Schema(name="main")])
+        assert catalog.global_functions == ()
+        assert catalog.global_function_prefix is None
+
+    def test_accepts_schema_resident_function(self) -> None:
+        """The happy path: listed once globally, resident in exactly one schema."""
+        catalog = Catalog(
+            name="myapp",
+            schemas=[Schema(name="main", functions=[UsersFunction])],
+            global_functions=[UsersFunction],
+            global_function_prefix="myapp",
+        )
+        assert list(catalog.global_functions) == [UsersFunction]
+        assert catalog.global_function_prefix == "myapp"
+
+    def test_rejects_function_absent_from_every_schema(self) -> None:
+        """A global function that isn't schema-resident would never dispatch."""
+        with pytest.raises(ValueError, match="does not appear in any Schema.functions"):
+            Catalog(
+                name="myapp",
+                schemas=[Schema(name="main")],
+                global_functions=[UsersFunction],
+            )
+
+    def test_rejects_function_resident_in_multiple_schemas(self) -> None:
+        """Two homes make the global registration ambiguous about dispatch."""
+        with pytest.raises(ValueError, match="appears in multiple schemas"):
+            Catalog(
+                name="myapp",
+                schemas=[
+                    Schema(name="main", functions=[UsersFunction]),
+                    Schema(name="other", functions=[UsersFunction]),
+                ],
+                global_functions=[UsersFunction],
+            )
+
+    def test_rejects_duplicate_global_entries(self) -> None:
+        """Listing a class twice would publish the same name twice."""
+        with pytest.raises(ValueError, match="duplicate entry UsersFunction"):
+            Catalog(
+                name="myapp",
+                schemas=[Schema(name="main", functions=[UsersFunction])],
+                global_functions=[UsersFunction, UsersFunction],
+            )
+
+    @pytest.mark.parametrize("prefix", ["9bad", "Bad", "has-dash", "has space", "", "trailing;"])
+    def test_rejects_non_identifier_prefix(self, prefix: str) -> None:
+        """The prefix is concatenated into a SQL identifier, so it must be safe."""
+        with pytest.raises(ValueError, match="not a valid SQL identifier prefix"):
+            Catalog(
+                name="myapp",
+                schemas=[Schema(name="main", functions=[UsersFunction])],
+                global_functions=[UsersFunction],
+                global_function_prefix=prefix,
+            )
+
+    def test_prefix_validated_even_without_global_functions(self) -> None:
+        """A bad prefix is a bug worth reporting even if nothing uses it yet."""
+        with pytest.raises(ValueError, match="not a valid SQL identifier prefix"):
+            Catalog(name="myapp", schemas=[Schema(name="main")], global_function_prefix="Bad")
+
+
+class TestGlobalFunctionsAttachResult:
+    """``catalog_attach`` advertises globals so the client can publish them."""
+
+    @staticmethod
+    def _attach(catalog_obj: Catalog) -> CatalogAttachResult:
+        class _TestCatalog(ReadOnlyCatalogInterface):
+            catalog = catalog_obj
+
+        return _TestCatalog().catalog_attach(
+            name=catalog_obj.name,
+            options={},
+            data_version_spec=None,
+            implementation_version=None,
+        )
+
+    def test_absent_when_not_declared(self) -> None:
+        """Catalogs that declare nothing advertise an empty list and no prefix."""
+        result = self._attach(Catalog(name="myapp", schemas=[Schema(name="main", functions=[UsersFunction])]))
+        assert result.global_functions == []
+        assert result.global_function_prefix == ""
+
+    def test_carries_serialized_function_info(self) -> None:
+        """Each global arrives as a FunctionInfo with real dispatch coordinates.
+
+        ``name``/``schema_name`` must stay the values bind dispatches on — the
+        prefix is applied client-side, not baked into the name here.
+        """
+        result = self._attach(
+            Catalog(
+                name="myapp",
+                schemas=[Schema(name="analytics", functions=[UsersFunction])],
+                default_schema="analytics",
+                global_functions=[UsersFunction],
+                global_function_prefix="myapp",
+            )
+        )
+        assert result.global_function_prefix == "myapp"
+        assert len(result.global_functions) == 1
+
+        info = FunctionInfo.deserialize_from_bytes(result.global_functions[0])
+        assert info.name == "users"
+        assert info.schema_name == "analytics"
+        assert info.function_type == CatalogInterfaceFunctionType.TABLE
+
+    def test_prefix_empty_string_when_unset(self) -> None:
+        """``None`` prefix serializes as empty string — the wire type is str."""
+        result = self._attach(
+            Catalog(
+                name="myapp",
+                schemas=[Schema(name="main", functions=[UsersFunction])],
+                global_functions=[UsersFunction],
+            )
+        )
+        assert result.global_function_prefix == ""
+        assert len(result.global_functions) == 1
+
+    def test_example_fixture_publishes_one_of_each_function_type(self) -> None:
+        """The shipped fixture covers all four types for the C++ integration suite."""
+        from vgi._test_fixtures.worker import ExampleCatalog
+
+        result = ExampleCatalog().catalog_attach(
+            name="example",
+            options={},
+            data_version_spec=None,
+            implementation_version=None,
+        )
+        assert result.global_function_prefix == "vgi_example"
+        infos = [FunctionInfo.deserialize_from_bytes(b) for b in result.global_functions]
+        assert {i.function_type for i in infos} == {
+            CatalogInterfaceFunctionType.SCALAR,
+            CatalogInterfaceFunctionType.TABLE,
+            CatalogInterfaceFunctionType.AGGREGATE,
+            CatalogInterfaceFunctionType.TABLE_BUFFERING,
+        }
+        # Every advertised global must be schema-resident, or it could never
+        # be dispatched after the client registers it.
+        assert all(i.schema_name == "main" for i in infos)
 
 
 # =============================================================================

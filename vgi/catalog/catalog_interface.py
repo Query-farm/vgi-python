@@ -258,6 +258,20 @@ class CatalogAttachResult(ArrowSerializableDataclass):
         supports_column_statistics: Whether any tables in this catalog can
             provide column statistics. Global gate — if False, GetStatistics()
             returns nullptr for all tables.
+        global_functions: Functions this catalog asks the client to publish into
+            the *global* function namespace (DuckDB's ``system.main``), in
+            addition to their normal schema-qualified registration. Each
+            :class:`FunctionInfo` is serialized as bytes for Arrow
+            compatibility. ``name``/``schema_name`` stay the real dispatch
+            coordinates — the client derives the globally visible name by
+            applying ``global_function_prefix``. Registration is
+            first-attach-wins: a name already owned by a different worker is
+            skipped (logged), and the ATTACH still succeeds. Empty list = this
+            catalog publishes nothing globally. See ``docs/global-functions.md``.
+        global_function_prefix: Prefix applied to every ``global_functions``
+            entry to form its globally visible name (``<prefix>_<name>``).
+            Empty string = publish bare names, which is more collision-prone;
+            prefer a prefix that identifies the worker.
         resolved_data_version: Concrete data version the worker resolved for
             this attach. ``None`` = worker has no opinion or the request omitted
             data_version_spec.
@@ -279,6 +293,8 @@ class CatalogAttachResult(ArrowSerializableDataclass):
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
     supports_column_statistics: bool = False
+    global_functions: list[bytes] = field(default_factory=list)
+    global_function_prefix: str = ""
     resolved_data_version: str | None = field(kw_only=True)
     resolved_implementation_version: str | None = field(kw_only=True)
 
@@ -2591,6 +2607,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         has_time_travel = any(t.supports_time_travel for t in self._table_registry.values())
         has_column_statistics = any(bool(t.statistics) for t in self._table_registry.values())
 
+        serialized_global_functions = [info.serialize_to_bytes() for info in self._global_function_infos()]
+
         return CatalogAttachResult(
             attach_opaque_data=self._FIXED_ATTACH_ID,
             supports_transactions=getattr(self, "supports_transactions", False),
@@ -2605,9 +2623,30 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             comment=self.catalog.comment if self.catalog is not None else None,
             tags=dict(self.catalog.tags) if self.catalog is not None else {},
             supports_column_statistics=has_column_statistics,
+            global_functions=serialized_global_functions,
+            global_function_prefix=((self.catalog.global_function_prefix or "") if self.catalog is not None else ""),
             resolved_data_version=None,
             resolved_implementation_version=None,
         )
+
+    def _global_function_infos(self) -> list[FunctionInfo]:
+        """Build [`FunctionInfo`][] records for ``Catalog.global_functions``.
+
+        ``schema_name`` is the schema the function actually lives in, not a
+        sentinel: it is the bind-dispatch key, and ``Catalog.__post_init__``
+        has already guaranteed each entry resolves to exactly one schema. The
+        globally visible name is derived client-side from
+        ``global_function_prefix``, so ``name`` stays untouched here too.
+        """
+        if self.catalog is None or not self.catalog.global_functions:
+            return []
+
+        schema_of: dict[type, str] = {}
+        for schema in self.catalog.schemas:
+            for func_cls in schema.functions:
+                schema_of.setdefault(func_cls, schema.name)
+
+        return [self._function_to_info(func_cls, schema_of[func_cls]) for func_cls in self.catalog.global_functions]
 
     def schemas(
         self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None

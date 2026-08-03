@@ -1207,3 +1207,44 @@ class TestBindCallWireFormat:
             assert self._bind_call_arrow_type(obj) == "binary", cls.__name__
             restored = cls.deserialize_from_bytes(obj.serialize_to_bytes())
             assert restored.bind_call.function_name == "f", cls.__name__
+
+
+class TestBufferedFinalizeStateNamespace:
+    """``BufferedFinalizeState.ns`` must survive a serialization round trip."""
+
+    def test_namespace_is_declared_as_the_enum(self) -> None:
+        """``ns`` is annotated ``FrameworkNS``, not ``bytes``.
+
+        The annotation is what the codecs serialize against, and under
+        ``bytes`` an ``Enum`` is written as its ``.name`` and read back as raw
+        bytes. Flattening to plain bytes instead is not an option: it defeats
+        the reserved-prefix guard in ``_coerce_ns``, which accepts the
+        ``_vgi/`` prefix only from a ``FrameworkNS`` member.
+        """
+        from typing import get_type_hints
+
+        from vgi.function_storage import FrameworkNS
+
+        assert get_type_hints(BufferedFinalizeState)["ns"] is FrameworkNS
+
+    def test_namespace_survives_a_round_trip(self) -> None:
+        """The scan namespace comes back intact, so finalize reads real rows.
+
+        ``ns`` keys the state-log scan in ``produce()``. A namespace that
+        changed across an HTTP round trip would scan a namespace nothing was
+        written to — no rows, an early finish, and a finalize that silently
+        emits short rather than erroring.
+        """
+        from vgi.function_storage import FrameworkNS, _coerce_ns
+
+        state = BufferedFinalizeState(
+            execution_id=b"exec",
+            ns=FrameworkNS.STREAMING_FINALIZE,
+            key=b"k",
+        )
+        restored = BufferedFinalizeState.deserialize_from_bytes(state.serialize_to_bytes())
+        assert restored.ns is FrameworkNS.STREAMING_FINALIZE
+        assert restored.ns == b"_vgi/streaming_finalize"
+        # The scan itself must accept what came back: _coerce_ns takes the
+        # reserved b"_vgi/" prefix only from a genuine enum member.
+        assert _coerce_ns(restored.ns) == b"_vgi/streaming_finalize"

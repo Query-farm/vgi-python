@@ -63,7 +63,7 @@ from vgi.catalog.catalog_interface import (
     ViewInfo,
 )
 from vgi.function import StreamStateCodec, _is_state_codec
-from vgi.function_storage import BoundStorage, attach_catalog_bytes
+from vgi.function_storage import BoundStorage, FrameworkNS, attach_catalog_bytes
 from vgi.invocation import BindResponse, FunctionType, GlobalInitResponse
 from vgi.otel import VgiTracer, _batch_bytes, _timed_exchange, get_noop_tracer
 from vgi.scalar_function import ScalarFunctionGenerator
@@ -1720,7 +1720,18 @@ class BufferedFinalizeState(ProducerState):
     """
 
     execution_id: bytes = b""
-    ns: bytes = b""
+    # Declared as the enum, not as ``bytes``, even though FrameworkNS *is* a
+    # bytes subclass and both callers pass a member. The annotation is what
+    # the codecs serialize against: under ``bytes`` an Enum is written as its
+    # ``.name`` and read back as raw bytes, so FrameworkNS.STREAMING_FINALIZE
+    # returned from an HTTP round trip as b"STREAMING_FINALIZE" instead of its
+    # real value b"_vgi/streaming_finalize". Since ``ns`` keys the state-log
+    # scan in produce(), that silently scanned a namespace nothing was written
+    # to — no rows, an early finish, a finalize that emits short rather than
+    # erroring. Declaring the enum makes both codecs round-trip the member
+    # itself, and keeps the reserved-prefix guard in _coerce_ns working, which
+    # accepts the b"_vgi/" prefix ONLY from a FrameworkNS member.
+    ns: FrameworkNS = FrameworkNS.STREAMING_FINALIZE
     key: bytes = b""
     cursor: bytes = b""  # opaque, b"" = before-first
     attach_opaque_data: bytes | None = None
@@ -2554,7 +2565,7 @@ class VgiProtocol(Protocol):
             canonical semver (MAJOR.MINOR.PATCH) of the method-and-schema contract.
     """
 
-    protocol_version: ClassVar[str] = "1.2.0"
+    protocol_version: ClassVar[str] = "1.3.0"
 
     def bind(self, request: BindRequest) -> BindResponse:
         """Resolve output schema and validate arguments."""
