@@ -1659,6 +1659,13 @@ class Worker:
         }
         if http_threads is not None:
             serve_kwargs["threads"] = http_threads
+        # Same reasoning as vgi_rpc.http.server.serve_http: waitress warns per
+        # request whenever its queue is non-empty, which for VGI-length
+        # requests is the steady state rather than an exception, and costs
+        # ~5.7% of a loaded server's GIL-held time building log records.
+        from vgi_rpc.http.server._serve import _tame_queue_depth_logger
+
+        _tame_queue_depth_logger()
         waitress.serve(wsgi_app, **serve_kwargs)
 
     @staticmethod

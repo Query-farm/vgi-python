@@ -52,6 +52,10 @@ dependencies = [
 haybarn = ["haybarn>=1.5.3rc10"]
 duckdb = ["duckdb>=1.5.3"]
 http = ["vgi-rpc[http]"]
+# Alternative HTTP server: granian moves socket I/O and HTTP parsing into Rust,
+# off the GIL. Optional because it is a compiled extension where waitress is
+# pure Python; select it with `vgi-serve --http --server granian`.
+granian = ["vgi-rpc[http]", "granian>=2.7"]
 oauth = ["vgi-rpc[oauth]"]
 otel = ["vgi-rpc[otel]"]
 sentry = ["vgi-rpc[sentry]"]
@@ -185,6 +189,12 @@ warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
 module = "typer.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# granian ships no stubs, and is an optional extra used only behind
+# `--server granian`.
+module = "granian.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

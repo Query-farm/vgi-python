@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import json
 import logging
 import os
 import secrets
@@ -262,7 +263,6 @@ def create_app(
 
     # Resolve the signing key once, here, so the worker (which seals catalog
     # opaque-data envelopes) and the HTTP state-token machinery share the same
-    # key. When the operator did not configure VGI_SIGNING_KEY, generate an
     # key. See resolve_shared_signing_key for why every process serving this
     # deployment has to agree on it.
     if signing_key is None:
@@ -337,6 +337,32 @@ def main() -> None:
         worker_ref: str = typer.Argument(help="Worker reference: module:Class, module, or ./file.py"),
         # Transport
         http: bool = typer.Option(False, "--http", help="Serve over HTTP instead of stdin/stdout"),
+        server: str = typer.Option(
+            "waitress",
+            "--server",
+            help=(
+                "HTTP server: 'waitress' (default, pure Python) or 'granian' "
+                "(Rust I/O off the GIL; needs the [granian] extra)."
+            ),
+        ),
+        http_threads: int | None = typer.Option(
+            None,
+            "--http-threads",
+            help=(
+                "Waitress worker threads. The request path is CPU-bound Python, so more "
+                "threads contend for the GIL rather than adding throughput; raise this only "
+                "for functions that block on external I/O."
+            ),
+        ),
+        http_workers: int | None = typer.Option(
+            None,
+            "--http-workers",
+            help=(
+                "Worker processes (granian only). Each is a separate interpreter, so "
+                "memory scales with it. Requires VGI_SIGNING_KEY when >1 unless vgi-serve "
+                "mints one for them."
+            ),
+        ),
         quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress startup banner (stdio mode)"),
         # Logging
         debug: bool = typer.Option(False, "--debug", help="Enable DEBUG on all vgi + vgi_rpc loggers"),
@@ -393,6 +419,10 @@ def main() -> None:
             authenticate = _resolve_authenticate()
             oauth_metadata = _resolve_oauth_resource_metadata()
             otel_config = _resolve_otel_config()
+            if server not in ("waitress", "granian"):
+                sys.exit(f"--server must be 'waitress' or 'granian', got {server!r}")
+            if http_workers is not None and server != "granian":
+                sys.exit("--http-workers only applies to --server granian")
             _serve_http(
                 worker_cls,
                 effective_level=effective_level,
@@ -406,6 +436,10 @@ def main() -> None:
                 oauth_resource_metadata=oauth_metadata,
                 otel_config=otel_config,
                 max_stream_response_bytes=max_stream_response_bytes,
+                server=server,
+                worker_ref=worker_ref,
+                http_workers=http_workers,
+                http_threads=http_threads,
             )
         else:
             otel_config = _resolve_otel_config()
@@ -879,6 +913,223 @@ def _resolve_otel_config() -> Any:
     )
 
 
+# ---------------------------------------------------------------------------
+# Pre-fork support: rebuilding the app in a worker process
+#
+# waitress takes the app *object* we hand it. A pre-fork server (granian) takes
+# an import path and builds the app inside each forked worker, which means the
+# configuration cannot travel as Python objects -- only whatever the child
+# inherits. The environment is that channel.
+#
+# This is a private contract between ``vgi-serve`` and its own workers, not a
+# user-facing knob, so it is one opaque blob rather than a family of documented
+# env vars. Secrets stay out of it: the signing key travels in VGI_SIGNING_KEY
+# (see resolve_shared_signing_key), and auth/OAuth/OTel settings are already
+# resolved from the environment by their own helpers, so a child reconstructs
+# them exactly as the parent did.
+# ---------------------------------------------------------------------------
+
+SERVE_CONFIG_ENV = "VGI_SERVE_CONFIG"
+
+
+def export_serve_config(
+    *,
+    worker_ref: str,
+    prefix: str,
+    cors_origins: str,
+    describe: bool,
+    log_level: int,
+    max_stream_response_bytes: int | None,
+) -> None:
+    """Publish the parent's serve configuration for worker processes to read.
+
+    Args:
+        worker_ref: The worker reference string the parent was given
+            (``module:Class``, ``module``, or ``./file.py``). Passed rather
+            than the resolved class because a child has to import it itself.
+        prefix: URL prefix for RPC endpoints.
+        cors_origins: Allowed CORS origins.
+        describe: Whether to enable the worker + API description pages.
+        log_level: Logging level for the worker instance.
+        max_stream_response_bytes: Producer-stream response budget, or None.
+
+    """
+    os.environ[SERVE_CONFIG_ENV] = json.dumps(
+        {
+            "worker_ref": worker_ref,
+            "prefix": prefix,
+            "cors_origins": cors_origins,
+            "describe": describe,
+            "log_level": log_level,
+            "max_stream_response_bytes": max_stream_response_bytes,
+        }
+    )
+
+
+def wsgi_app_factory() -> Any:
+    """Build the WSGI app from the environment — the pre-fork worker entry point.
+
+    Granian is pointed at ``vgi.serve:wsgi_app_factory`` and calls this once
+    per worker process. Everything it needs was published by
+    :func:`export_serve_config` in the parent, plus ``VGI_SIGNING_KEY``, which
+    the parent minted and exported so every worker seals state tokens with the
+    same key.
+
+    Returns:
+        The Falcon WSGI application.
+
+    Raises:
+        RuntimeError: Called without a parent having exported the config,
+            which means this was invoked directly rather than by ``vgi-serve``.
+
+    """
+    raw = os.environ.get(SERVE_CONFIG_ENV)
+    if not raw:
+        msg = (
+            f"{SERVE_CONFIG_ENV} is not set. vgi.serve:wsgi_app_factory is the worker entry point "
+            f"for `vgi-serve --http --server granian`; it cannot be started on its own."
+        )
+        raise RuntimeError(msg)
+    config = json.loads(raw)
+
+    # Resolved here, not inherited as objects: each worker re-reads the same
+    # environment the parent did and arrives at the same answer.
+    return create_app(
+        load_worker_class(config["worker_ref"]),
+        prefix=config["prefix"],
+        cors_origins=config["cors_origins"],
+        describe=config["describe"],
+        signing_key=None,  # picked up from VGI_SIGNING_KEY
+        log_level=config["log_level"],
+        authenticate=_resolve_authenticate(),
+        oauth_resource_metadata=_resolve_oauth_resource_metadata(),
+        otel_config=_resolve_otel_config(),
+        max_stream_response_bytes=config["max_stream_response_bytes"],
+    )
+
+
+def _resolve_http_port(host: str, port: int | None) -> int:
+    """Resolve the listen port: explicit ``--port`` > ``$PORT`` > 8080.
+
+    ``--port 0`` binds a throwaway socket to let the OS pick, then reports the
+    concrete number — process managers and test harnesses read it off stdout.
+    """
+    import socket
+
+    if port is None:
+        env_port = os.environ.get("PORT")
+        port = int(env_port) if env_port else 8080
+    if port == 0:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((host, 0))
+            port = int(sock.getsockname()[1])
+    return port
+
+
+def _serve_http_granian(
+    worker_cls: type[Worker],
+    *,
+    host: str,
+    port: int,
+    prefix: str,
+    cors_origins: str,
+    describe: bool,
+    effective_level: int,
+    max_stream_response_bytes: int | None,
+    worker_ref: str | None,
+    http_workers: int | None,
+    http_threads: int | None,
+) -> None:
+    """Serve via granian, which forks workers that import the app themselves.
+
+    Granian moves HTTP parsing and socket I/O into Rust, off the GIL. On this
+    workload that measured 1.45x over waitress at a single worker -- the win
+    comes from the I/O leaving the interpreter, not from process fan-out, so
+    it does not require paying for extra interpreters.
+
+    Two things follow from granian building the app per worker rather than
+    accepting ours:
+
+    - The configuration has to travel through the environment. See
+      :func:`export_serve_config`.
+    - Every worker must seal state tokens with the *same* key, or a client
+      that reconnects mid-stream gets an intermittent 400. The parent mints
+      and exports one here; :func:`resolve_shared_signing_key` explains why.
+
+    Args:
+        worker_cls: The resolved worker class -- used only for the startup
+            banner; each granian worker imports its own from ``worker_ref``.
+        host: Bind address.
+        port: Bind port, already resolved.
+        prefix: URL prefix for RPC endpoints.
+        cors_origins: Allowed CORS origins.
+        describe: Whether to enable the description pages.
+        effective_level: Logging level for the worker instance.
+        max_stream_response_bytes: Producer-stream response budget, or None.
+        worker_ref: The worker reference string, required here because the
+            children import it rather than inheriting a class object.
+        http_workers: Number of worker processes; ``None`` means 1. These are
+            separate interpreters, so memory scales with the count.
+        http_threads: Python threads per worker; ``None`` means 1.
+
+    """
+    try:
+        from granian import Granian
+        from granian.constants import Interfaces
+    except ImportError:
+        sys.stderr.write(
+            "Error: granian not installed.\nInstall with: pip install 'vgi[granian]'  (or: uv sync --extra granian)\n"
+        )
+        sys.exit(1)
+
+    if not worker_ref:
+        msg = "granian requires the worker reference string so each worker process can import it"
+        raise RuntimeError(msg)
+
+    workers = http_workers or 1
+    # Mint before starting children so they inherit one key rather than each
+    # generating its own. Only meaningful when we actually fork.
+    _key, is_ephemeral = resolve_shared_signing_key(propagate_to_children=workers > 1)
+    _warn_if_ephemeral_signing_key(is_ephemeral=is_ephemeral, multiprocess=workers > 1)
+
+    export_serve_config(
+        worker_ref=worker_ref,
+        prefix=prefix,
+        cors_origins=cors_origins,
+        describe=describe,
+        log_level=effective_level,
+        max_stream_response_bytes=max_stream_response_bytes,
+    )
+
+    print(f"PORT:{port}", flush=True)
+    _logger.info(
+        "http_server_starting server=granian host=%s port=%d prefix=%s workers=%d",
+        host,
+        port,
+        prefix,
+        workers,
+    )
+    sys.stderr.write(f"Serving {worker_cls.__name__} on http://{host}:{port}{prefix} (granian, {workers} worker(s))\n")
+    sys.stderr.flush()
+
+    Granian(
+        "vgi.serve:wsgi_app_factory",
+        address=host,
+        port=port,
+        interface=Interfaces.WSGI,
+        workers=workers,
+        # Python threads inside each worker, sharing that worker's GIL --
+        # distinct from `workers`, which are separate interpreters. Defaults
+        # to 1 because granian already runs socket I/O in Rust, so the only
+        # thing these threads overlap is app code, and for a CPU-bound
+        # request path that is pure contention: measured 1387 turns/s at one
+        # thread against 851 at two and 362 at eight. Functions that block on
+        # external I/O want more; --http-threads raises it.
+        blocking_threads=http_threads or 1,
+        factory=True,
+    ).serve()
+
+
 def _serve_http(
     worker_cls: type[Worker],
     *,
@@ -893,9 +1144,29 @@ def _serve_http(
     oauth_resource_metadata: Any = None,
     otel_config: Any = None,
     max_stream_response_bytes: int | None = None,
+    server: str = "waitress",
+    worker_ref: str | None = None,
+    http_workers: int | None = None,
+    http_threads: int | None = None,
 ) -> None:
     """Start the worker as an HTTP server."""
-    import socket
+    port = _resolve_http_port(host, port)
+
+    if server == "granian":
+        _serve_http_granian(
+            worker_cls,
+            host=host,
+            port=port,
+            prefix=prefix,
+            cors_origins=cors_origins,
+            describe=describe,
+            effective_level=effective_level,
+            max_stream_response_bytes=max_stream_response_bytes,
+            worker_ref=worker_ref,
+            http_workers=http_workers,
+            http_threads=http_threads,
+        )
+        return
 
     try:
         import waitress  # type: ignore[import-untyped]
@@ -904,16 +1175,6 @@ def _serve_http(
             "Error: waitress not installed.\nInstall with: pip install vgi[http]  (or: uv sync --extra http)\n"
         )
         sys.exit(1)
-
-    # Port resolution: explicit --port > $PORT env var > 8080
-    if port is None:
-        env_port = os.environ.get("PORT")
-        port = int(env_port) if env_port else 8080
-
-    if port == 0:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind((host, 0))
-            port = int(s.getsockname()[1])
 
     wsgi_app = create_app(
         worker_cls,
@@ -934,7 +1195,17 @@ def _serve_http(
     sys.stderr.write(f"Serving {worker_cls.__name__} on http://{host}:{port}{prefix}\n")
     sys.stderr.flush()
 
-    waitress.serve(wsgi_app, host=host, port=port, _quiet=True)
+    # Same Arrow-sized buffers the other two serve paths use. Without them
+    # waitress spools multi-MiB bodies through temp files and reads sockets in
+    # 8 KiB chunks; measured on this path, tuning is worth ~2x.
+    from vgi_rpc.http.server._serve import _tame_queue_depth_logger, waitress_arrow_tuning
+
+    _tame_queue_depth_logger()
+    serve_kwargs: dict[str, Any] = {"host": host, "port": port, "_quiet": True}
+    serve_kwargs.update(waitress_arrow_tuning())
+    if http_threads is not None:
+        serve_kwargs["threads"] = http_threads
+    waitress.serve(wsgi_app, **serve_kwargs)
 
 
 if __name__ == "__main__":
