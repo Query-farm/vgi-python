@@ -10,6 +10,7 @@ countdown-style generators.
 
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar
 
@@ -43,12 +44,48 @@ def _cardinality_from_count[T: TableFunctionGenerator[Any, Any]](cls: type[T]) -
     return cls
 
 
-@dataclass(kw_only=True)
-class CountdownState(ArrowSerializableDataclass):
-    """Mutable state tracking remaining rows and current position."""
+@dataclass(kw_only=True, slots=True)
+class CountdownState:
+    """Mutable state tracking remaining rows and current position.
+
+    Deliberately NOT an ``ArrowSerializableDataclass``: this is the worked
+    example of a function owning its own state encoding. The state is two
+    integers, and Arrow IPC is a columnar container -- a one-row stream pays
+    for a schema message, a batch message, an end-of-stream marker and
+    alignment padding whatever the payload. Measured here: 416 bytes and 36us
+    per encode, against 16 bytes and 0.21us for the same two integers packed
+    directly.
+
+    The framework asks only for [`StreamStateCodec`][] -- ``serialize_to_bytes``
+    and ``deserialize_from_bytes`` -- and treats the result as opaque bytes
+    inside the state token. That is also what lets a Python worker match the
+    state encoding of a sibling VGI implementation in another language rather
+    than being forced through Arrow.
+    """
 
     remaining: int
     current_index: int = 0
+
+    _STRUCT: ClassVar[struct.Struct] = struct.Struct("<qq")
+
+    def serialize_to_bytes(self) -> bytes:
+        """Pack both counters as little-endian int64."""
+        return self._STRUCT.pack(self.remaining, self.current_index)
+
+    @classmethod
+    def deserialize_from_bytes(cls, data: bytes) -> CountdownState:
+        """Unpack a payload written by :meth:`serialize_to_bytes`.
+
+        Raises:
+            ValueError: The payload is not the expected width, which means it
+                was not written by this codec.
+
+        """
+        if len(data) != cls._STRUCT.size:
+            msg = f"CountdownState expects {cls._STRUCT.size} bytes, got {len(data)}"
+            raise ValueError(msg)
+        remaining, current_index = cls._STRUCT.unpack(data)
+        return cls(remaining=remaining, current_index=current_index)
 
 
 @dataclass(frozen=True)

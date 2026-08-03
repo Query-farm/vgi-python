@@ -26,8 +26,10 @@ from typing import (
     Annotated,
     Any,
     ClassVar,
+    Protocol,
     get_args,
     get_origin,
+    runtime_checkable,
 )
 
 from vgi.function_storage import FunctionStorage, FunctionStorageSqlite
@@ -219,3 +221,55 @@ class Function(ABC, MetadataMixin):
 
         """
         self.logger = logger
+
+
+@runtime_checkable
+class StreamStateCodec(Protocol):
+    """What the framework actually requires of a function's ``TState``.
+
+    A streaming function's state has to survive a round trip through the HTTP
+    state token, and for that the framework needs exactly two things: turn the
+    state into bytes, and turn those bytes back into state. Nothing more.
+
+    ``ArrowSerializableDataclass`` satisfies this and stays the default --
+    declare a dataclass and the encoding is written for you. But it is not the
+    only reasonable answer, and for small states it is an expensive one: a
+    two-integer state measured 416 bytes and 36us through Arrow IPC against 16
+    bytes and 0.21us packed directly, because a one-row Arrow stream pays for
+    a schema message, a batch message and an end-of-stream marker regardless
+    of payload.
+
+    So the requirement is stated as a protocol rather than a base class. A
+    worker that knows its own state -- a counter, a cursor, a protobuf, a
+    language-native encoding matching a sibling VGI implementation -- can
+    implement these two methods and own its bytes. The framework never
+    inspects the contents; the bytes are opaque to it, sealed inside the
+    state token.
+
+    Implementations must round-trip exactly: ``T.deserialize_from_bytes(
+    s.serialize_to_bytes())`` has to equal ``s`` for every state the function
+    can produce, including the initial one. The framework has no way to check
+    that, and a lossy codec surfaces as a stream that silently restarts or
+    skips rather than as an error.
+    """
+
+    def serialize_to_bytes(self) -> bytes:
+        """Encode this state as bytes the framework will carry opaquely."""
+        ...
+
+    @classmethod
+    def deserialize_from_bytes(cls, data: bytes) -> Any:
+        """Rebuild state from bytes produced by :meth:`serialize_to_bytes`."""
+        ...
+
+
+def _is_state_codec(candidate: object) -> bool:
+    """Whether ``candidate`` (a class) can serve as a stream state type.
+
+    Checked structurally rather than with ``issubclass`` against the Protocol:
+    ``runtime_checkable`` only verifies method *presence* on instances, and we
+    are handed a class. Presence is exactly what we want here anyway.
+    """
+    return callable(getattr(candidate, "serialize_to_bytes", None)) and callable(
+        getattr(candidate, "deserialize_from_bytes", None)
+    )

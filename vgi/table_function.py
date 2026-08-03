@@ -42,6 +42,7 @@ from vgi.arguments import (
     _extract_setting_secret_params,
     _scalar_to_py,
 )
+from vgi.function import _is_state_codec
 from vgi.function_storage import BoundStorage, TransactionBoundStorage, attach_catalog_bytes
 from vgi.invocation import (
     BaseInitResponse,
@@ -771,12 +772,14 @@ class TableFunctionBase[TArgs](vgi.function.Function):
                         and state_type is not type(None)
                         and not isinstance(state_type, TypeVar)
                         and isinstance(state_type, type)
-                        and not issubclass(state_type, ArrowSerializableDataclass)
+                        and not _is_state_codec(state_type)
                     ):
                         raise TypeError(
-                            f"{cls.__name__}: TState type {state_type.__name__} must extend "
-                            f"ArrowSerializableDataclass for HTTP state serialization. "
-                            f"Use @dataclass(kw_only=True) and inherit from ArrowSerializableDataclass."
+                            f"{cls.__name__}: TState type {state_type.__name__} cannot be carried "
+                            f"through the HTTP state token. It needs serialize_to_bytes() and "
+                            f"deserialize_from_bytes() -- either inherit from "
+                            f"ArrowSerializableDataclass, which writes them for you, or implement "
+                            f"them yourself to choose your own encoding (see StreamStateCodec)."
                         )
                 break
 

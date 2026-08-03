@@ -487,14 +487,20 @@ class TestTStateValidation:
     """Verify __init_subclass__ rejects non-serializable TState types."""
 
     def test_non_serializable_state_raises(self) -> None:
-        """TState that doesn't extend ArrowSerializableDataclass raises TypeError."""
+        """TState that cannot carry itself through the state token raises TypeError.
+
+        The requirement is the two codec methods, not a particular base class
+        -- see ``StreamStateCodec``. A plain dataclass has neither, so it is
+        still rejected, and rejected at class-definition time rather than
+        silently falling back to initial_state() on every HTTP exchange.
+        """
         import pytest
 
         @dataclass
         class BadState:
             x: int = 0
 
-        with pytest.raises(TypeError, match="must extend ArrowSerializableDataclass"):
+        with pytest.raises(TypeError, match="needs serialize_to_bytes"):
 
             class _BadFunc(TableFunctionGenerator[None, BadState]):
                 @classmethod
@@ -503,3 +509,42 @@ class TestTStateValidation:
 
                 @classmethod
                 def process(cls, params: Any, state: Any, out: Any) -> None: ...
+
+    def test_state_with_its_own_codec_is_accepted(self) -> None:
+        """A TState that implements the two codec methods needs no base class.
+
+        This is the escape hatch that lets a worker choose its own encoding --
+        a packed struct, a protobuf, whatever a sibling VGI implementation in
+        another language already uses -- instead of being forced through Arrow
+        IPC, which for a small state costs far more in framing than the state
+        itself.
+        """
+        import struct as _struct
+
+        from vgi.protocol import _resolve_state_type
+
+        @dataclass
+        class PackedState:
+            n: int = 0
+
+            def serialize_to_bytes(self) -> bytes:
+                return _struct.pack("<q", self.n)
+
+            @classmethod
+            def deserialize_from_bytes(cls, data: bytes) -> PackedState:
+                return cls(n=_struct.unpack("<q", data)[0])
+
+        class _GoodFunc(TableFunctionGenerator[None, PackedState]):
+            @classmethod
+            def on_bind(cls, params: Any) -> BindResponse:
+                return BindResponse(output_schema=pa.schema([("n", pa.int64())]))
+
+            @classmethod
+            def initial_state(cls, params: Any) -> PackedState:
+                return PackedState()
+
+            @classmethod
+            def process(cls, params: Any, state: Any, out: Any) -> None: ...
+
+        assert _resolve_state_type(_GoodFunc) is PackedState
+        assert PackedState.deserialize_from_bytes(PackedState(n=7).serialize_to_bytes()) == PackedState(n=7)

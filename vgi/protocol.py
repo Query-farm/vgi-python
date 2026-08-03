@@ -29,6 +29,7 @@ import dataclasses
 import logging
 import struct
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Protocol, cast, get_args, get_origin
 
 import pyarrow as pa
@@ -61,6 +62,7 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
+from vgi.function import StreamStateCodec, _is_state_codec
 from vgi.function_storage import BoundStorage, attach_catalog_bytes
 from vgi.invocation import BindResponse, FunctionType, GlobalInitResponse
 from vgi.otel import VgiTracer, _batch_bytes, _timed_exchange, get_noop_tracer
@@ -862,16 +864,19 @@ class ScalarExchangeState(_VgiCallStateHolder, ExchangeState):
 _log = logging.getLogger(__name__)
 
 
-def _resolve_state_type(func_cls: type) -> type[ArrowSerializableDataclass] | None:
+def _resolve_state_type(func_cls: type) -> type[StreamStateCodec] | None:
     """Extract the TState type parameter from a [`TableFunctionGenerator`][] or [`TableInOutGenerator`][].
 
     Walks the MRO looking for ``TableFunctionGenerator[TArgs, TState]`` or
-    ``TableInOutGenerator[TArgs, TState]`` and returns ``TState`` if it is a
-    concrete ``ArrowSerializableDataclass`` subclass.
+    ``TableInOutGenerator[TArgs, TState]`` and returns ``TState`` if it can
+    carry itself through the state token — i.e. if it satisfies
+    [`StreamStateCodec`][]. ``ArrowSerializableDataclass`` does; so does any
+    class that implements the two methods itself.
 
-    Raises `TypeError` if the state type is a concrete class that does not
-    extend `ArrowSerializableDataclass` — this catches the problem early
-    rather than silently falling back to initial_state() on each HTTP exchange.
+    Raises `TypeError` if the state type is a concrete class that cannot —
+    this catches the problem early rather than silently falling back to
+    initial_state() on each HTTP exchange, which looks like a stream that
+    keeps restarting.
     """
     for klass in func_cls.__mro__:
         for base in getattr(klass, "__orig_bases__", ()):
@@ -882,16 +887,13 @@ def _resolve_state_type(func_cls: type) -> type[ArrowSerializableDataclass] | No
                 args = get_args(base)
                 if len(args) >= 2:
                     state_type = args[1]
-                    if isinstance(state_type, type) and issubclass(state_type, ArrowSerializableDataclass):
+                    if isinstance(state_type, type) and _is_state_codec(state_type):
                         return state_type
-                    if (
-                        isinstance(state_type, type)
-                        and state_type is not type(None)
-                        and not issubclass(state_type, ArrowSerializableDataclass)
-                    ):
+                    if isinstance(state_type, type) and state_type is not type(None):
                         raise TypeError(
-                            f"{func_cls.__name__}: TState type {state_type.__name__} must extend "
-                            f"ArrowSerializableDataclass for HTTP state serialization."
+                            f"{func_cls.__name__}: TState type {state_type.__name__} cannot be "
+                            f"carried through the HTTP state token; it needs serialize_to_bytes() "
+                            f"and deserialize_from_bytes()."
                         )
     return None
 
@@ -905,14 +907,29 @@ def _partition_fields_from_schema(bind_schema: pa.Schema) -> list[pa.Field[Any]]
     once at wrapper construction, so per-emit validation only does an
     O(P) walk where P is the partition column count.
     """
+    return list(_partition_fields_cached(bind_schema))
+
+
+@lru_cache(maxsize=512)
+def _partition_fields_cached(bind_schema: pa.Schema) -> tuple[pa.Field[Any], ...]:
+    """Memoized partition-field scan, keyed on the schema.
+
+    Which columns are partition columns is a pure function of the schema's
+    field metadata, and the schema is fixed for a stream -- but this ran on
+    every turn, walking every field. Cost scales with width: 0.9us for one
+    column, 6.5us for twelve.
+
+    Returns a tuple so a caller cannot mutate the cached value; the public
+    wrapper copies it into a list to keep its existing signature.
+
+    Bounded because projection pushdown derives fresh schemas per query
+    shape, so the key space is not closed the way a class-keyed cache is.
+    """
     from vgi.schema_utils import VGI_PARTITION_COLUMN_KEY
 
-    result: list[pa.Field[Any]] = []
-    for f in bind_schema:
-        md = f.metadata
-        if md is not None and md.get(VGI_PARTITION_COLUMN_KEY) == b"true":
-            result.append(f)
-    return result
+    return tuple(
+        f for f in bind_schema if f.metadata is not None and f.metadata.get(VGI_PARTITION_COLUMN_KEY) == b"true"
+    )
 
 
 def _resolve_partition_min_max(
@@ -1397,7 +1414,7 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
 
     def _to_row_dict(self) -> dict[str, object]:
         """Serialize _user_state into _user_state_bytes before standard serialization."""
-        if self._user_state is not None and isinstance(self._user_state, ArrowSerializableDataclass):
+        if self._user_state is not None and _is_state_codec(type(self._user_state)):
             self._user_state_bytes = self._user_state.serialize_to_bytes()
         return super()._to_row_dict()
 
@@ -1569,7 +1586,7 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
 
     def _to_row_dict(self) -> dict[str, object]:
         """Serialize _user_state into _user_state_bytes before standard serialization."""
-        if self._user_state is not None and isinstance(self._user_state, ArrowSerializableDataclass):
+        if self._user_state is not None and _is_state_codec(type(self._user_state)):
             self._user_state_bytes = self._user_state.serialize_to_bytes()
         return super()._to_row_dict()
 
