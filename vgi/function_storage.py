@@ -17,12 +17,12 @@ Implementations:
 
 """
 
+import contextlib
 import enum
 import functools
 import logging
 import os
 import sqlite3
-import contextlib
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
@@ -946,9 +946,7 @@ class FunctionStorageSqlite:
             self.db_path = db_path if db_path is not None else _get_default_db_path()
         # Shared-cache in-memory DBs need a process-local write lock; file DBs
         # do not. See `_write_guard`.
-        self._write_lock: threading.Lock | None = (
-            threading.Lock() if self._memory_uri is not None else None
-        )
+        self._write_lock: threading.Lock | None = threading.Lock() if self._memory_uri is not None else None
         self._tls = threading.local()
         self._ensure_tables()
 
@@ -1497,9 +1495,16 @@ def _guard_sqlite_writes() -> None:
         return wrapper
 
     for name in (
-        "queue_push", "queue_pop", "queue_clear",
-        "state_put_many", "state_drain", "state_delete", "state_append",
-        "execution_clear", "state_counter_add", "state_counter_set",
+        "queue_push",
+        "queue_pop",
+        "queue_clear",
+        "state_put_many",
+        "state_drain",
+        "state_delete",
+        "state_append",
+        "execution_clear",
+        "state_counter_add",
+        "state_counter_set",
         "state_counter_delete",
     ):
         setattr(FunctionStorageSqlite, name, guarded(getattr(FunctionStorageSqlite, name)))
