@@ -76,6 +76,12 @@ class CountdownState:
     def deserialize_from_bytes(cls, data: bytes) -> CountdownState:
         """Unpack a payload written by :meth:`serialize_to_bytes`.
 
+        Args:
+            data: The packed bytes, exactly two little-endian int64s.
+
+        Returns:
+            The restored counter pair.
+
         Raises:
             ValueError: The payload is not the expected width, which means it
                 was not written by this codec.
