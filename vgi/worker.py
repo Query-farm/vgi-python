@@ -1623,11 +1623,38 @@ class Worker:
         # Symptom: waitress logs ``Task queue depth is N`` at INFO when the
         # accept queue grows past 0. Pass ``--http-threads`` to size for
         # the workload's expected concurrency.
+        # Waitress's buffer defaults are tuned for small web payloads and are
+        # actively hostile to Arrow bodies:
+        #
+        #   inbuf_overflow  512 KiB -- a larger REQUEST body is spooled to a
+        #     temp file on disk and read back before the app sees it.
+        #   outbuf_overflow   1 MiB -- likewise for a larger RESPONSE body.
+        #   recv_bytes        8 KiB -- a 6 MiB body assembled from ~800 recv()
+        #     calls plus that many buffer appends.
+        #
+        # A single emitted batch is routinely megabytes, so every one of those
+        # thresholds is crossed on the hot path. Measured on this worker with a
+        # 6 MiB batch per tick: 0.81s per scan compressed, but 119.9s with
+        # compression disabled -- a 147x cliff, because the compressed body
+        # happens to land under `outbuf_overflow` and the uncompressed one does
+        # not. Compression was masking an untuned transport; a batch large
+        # enough to exceed the threshold *after* compression falls off the same
+        # cliff with no warning.
+        #
+        # These are the values `vgi_rpc.http.server.serve_http` already uses for
+        # exactly this reason; the worker serves waitress directly and so never
+        # inherited them.
+        _io_chunk = 1 << 20  # 1 MiB socket read/write chunks
+        _body_buffer = 64 << 20  # keep multi-MiB Arrow bodies in RAM
         serve_kwargs: dict[str, Any] = {
             "host": host,
             "port": port,
             "_quiet": True,
             "asyncore_use_poll": True,
+            "inbuf_overflow": _body_buffer,
+            "outbuf_overflow": _body_buffer,
+            "recv_bytes": _io_chunk,
+            "send_bytes": _io_chunk,
         }
         if http_threads is not None:
             serve_kwargs["threads"] = http_threads
