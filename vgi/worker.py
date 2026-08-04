@@ -1035,6 +1035,51 @@ def _attach_aad(auth: AuthContext | None) -> bytes:
     return _ATTACH_AAD_PREFIX + _identity_tail(auth)
 
 
+_ATTACH_UNWRAP_CACHE_MAX = 256
+"""Distinct ``(attach envelope, principal)`` pairs a worker keeps unwrapped.
+
+One entry per live ATTACH per principal, so this is generously above what a
+process actually sees; the bound exists so a long-lived worker cycling through
+many attachments cannot grow the map without limit.
+"""
+
+
+class _AttachUnwrapCache:
+    """Bounded LRU of opened attach envelopes, keyed by envelope *and* identity.
+
+    Holds decrypted attach plaintext, which is the thing the surrounding code
+    goes to lengths to keep out of serialized state and logs. In memory is
+    where it has to exist regardless — the worker cannot shard storage without
+    it — so this widens no exposure that opening the envelope did not already
+    create. What it must never do is answer for the wrong caller, hence the
+    identity in the key; see :meth:`Worker._unwrap_attach_full_with_auth`.
+    """
+
+    __slots__ = ("_entries", "_lock", "_max_size")
+
+    def __init__(self, max_size: int = _ATTACH_UNWRAP_CACHE_MAX) -> None:
+        """Create an empty cache bounded to *max_size* entries."""
+        self._entries: OrderedDict[tuple[bytes, bytes], bytes] = OrderedDict()
+        self._lock = Lock()
+        self._max_size = max_size
+
+    def get(self, key: tuple[bytes, bytes]) -> bytes | None:
+        """Return the opened plaintext for *key*, or ``None`` on a miss."""
+        with self._lock:
+            value = self._entries.get(key)
+            if value is not None:
+                self._entries.move_to_end(key)
+            return value
+
+    def put(self, key: tuple[bytes, bytes], value: bytes) -> None:
+        """Record *value* for *key*, evicting the least-recently used entry."""
+        with self._lock:
+            self._entries[key] = value
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._max_size:
+                self._entries.popitem(last=False)
+
+
 def _transaction_aad(auth: AuthContext | None, attach_envelope: bytes) -> bytes:
     """AAD for a ``transaction_opaque_data`` envelope.
 
@@ -1110,6 +1155,23 @@ class Worker:
     # pass opaque values through unchanged. See the module-level
     # "Catalog opaque-data AEAD envelopes" section.
     _signing_key: bytes | None = None
+
+    @property
+    def _attach_unwrap_cache(self) -> _AttachUnwrapCache:
+        """This worker's memo of opened attach envelopes, created on first use.
+
+        Built lazily rather than in ``__init__`` so it cannot depend on a
+        subclass remembering to call ``super().__init__()`` — getting that
+        wrong would otherwise turn every catalog call into an
+        ``AttributeError``. Two threads racing the first access may each build
+        one and one is discarded; the loser's entries are simply never seen,
+        which costs a re-open and nothing else.
+        """
+        cache: _AttachUnwrapCache | None = self.__dict__.get("_attach_unwrap_cache_impl")
+        if cache is None:
+            cache = _AttachUnwrapCache()
+            self.__dict__["_attach_unwrap_cache_impl"] = cache
+        return cache
 
     @final
     @staticmethod
@@ -2226,6 +2288,21 @@ class Worker:
         The full framework plaintext is ``uuid(16) || catalog_bytes``. Pass-through
         when there is no signing key. Raises the uniform
         :meth:`_opaque_data_rejected` error on any open failure.
+
+        Memoized per ``(envelope, caller identity)``. The open is a pure
+        function of those plus the signing key, so a repeat is guaranteed to
+        produce the same bytes — which matters because catalog streams re-open
+        the same envelope on every turn, and that open measured ~35us against
+        a per-turn budget in the low hundreds.
+
+        **The identity half of the key is load-bearing, not incidental.** An
+        envelope's AAD is the only thing binding it to a principal, so a hit
+        skips the check that rejects a principal replaying someone else's
+        envelope. Keyed on the envelope alone, presenting a stolen envelope
+        would return its plaintext to anybody; keyed on both, a mismatched
+        caller misses the cache and takes the open, which fails as it should.
+        Only successes are stored, so a rejection is never cached into a
+        subsequent hit.
         """
         if envelope is None:
             return None
@@ -2234,6 +2311,15 @@ class Worker:
             # No key: the "envelope" is the plaintext (subprocess / unix
             # transports). MetaWorker still encapsulates, so still strip.
             return attach_header.split(bytes(envelope))[1]
+
+        # The envelope bytes go in the key verbatim rather than hashed: we
+        # already hold them, CPython caches a bytes object's hash, and an
+        # exact key has no collision to reason about.
+        cache_key = (bytes(envelope), _identity_tail(auth))
+        cached = self._attach_unwrap_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         from vgi_rpc import crypto
 
         try:
@@ -2243,7 +2329,10 @@ class Worker:
         # Strip MetaWorker's routing header so every consumer below sees the
         # framework plaintext (``uuid(16) || catalog_bytes``) it expects. The
         # header is only present when a MetaWorker minted this attach.
-        return attach_header.split(opened)[1]
+        plaintext = attach_header.split(opened)[1]
+        if plaintext is not None:
+            self._attach_unwrap_cache.put(cache_key, plaintext)
+        return plaintext
 
     def _attach_catalog_name(self, envelope: bytes | None) -> str | None:
         """Read the catalog name MetaWorker sealed into an attach envelope.
@@ -3625,11 +3714,12 @@ class Worker:
         #
         # Unwrap once to the full framework plaintext ``uuid(16) || catalog_bytes``.
         # Storage shards on the leading UUID; function bodies get the catalog
-        # bytes (uuid stripped) via params.attach_opaque_data. The streaming /
-        # buffering states below persist this **full** plaintext into their
-        # serialized tokens (the auth-scoped seal can't be reopened on a later,
-        # possibly different-auth, produce/finalize turn — so we can't re-unwrap
-        # then), and shard their cold-built storage on its UUID.
+        # bytes (uuid stripped) via params.attach_opaque_data. The states below
+        # shard their cold-built storage on its UUID. It is threaded in memory
+        # only (a Transient field): a later HTTP turn re-opens the sealed
+        # envelope under its own auth instead of reading a decrypted copy back
+        # off the wire, because serialized state reaches the access log in
+        # plaintext — see VgiCallState in vgi/protocol.py.
         attach_plaintext = self._unwrap_attach_full(getattr(request.bind_call, "attach_opaque_data", None))
         func_cls = self._resolve_function(request.bind_call)
         instance = func_cls(logger=_logger)
@@ -3675,13 +3765,13 @@ class Worker:
         call_state = VgiCallState(
             init_call=request,
             init_response=init_response,
-            plaintext_attach=attach_plaintext,
         )
 
         if isinstance(instance, ScalarFunctionGenerator) and not isinstance(instance, TableInOutGenerator):
             # Scalar function: exchange state with per-batch process()
             state = ScalarExchangeState(
                 _call=call_state,
+                _attach_pt=attach_plaintext,
                 _func_cls=type(instance),
                 _vgi_tracer=self._vgi_tracer,
             )
@@ -3796,6 +3886,7 @@ class Worker:
                 user_state = type(instance).initial_state(params)
                 state = TableInOutExchangeState(
                     _call=call_state,
+                    _attach_pt=attach_plaintext,
                     _func_cls=type(instance),
                     _params=params,
                     _user_state=user_state,
@@ -3854,6 +3945,7 @@ class Worker:
             user_state = type(instance).initial_state(params)
             state = TableProducerState(
                 _call=call_state,
+                _attach_pt=attach_plaintext,
                 _func_cls=type(instance),
                 _params=params,
                 _user_state=user_state,

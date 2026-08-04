@@ -748,19 +748,27 @@ class VgiCallState(ArrowSerializableDataclass):
     hands one instance to every concurrent turn of the stream — the
     contract :meth:`StreamState.bind_call_state` sets out.
 
+    The attach is deliberately **not** carried here in unwrapped form. The
+    sealed envelope is already reachable at
+    ``init_call.bind_call.attach_opaque_data``, so a decrypted copy would be
+    redundant — and worse than redundant, because these bytes do not stay
+    sealed at rest: the access log records the *plaintext* state at DEBUG
+    (``vgi_rpc.rpc._server``, deliberately, as an audit artifact), and on the
+    init turn the response state is ``call_state || cursor``. A decrypted
+    attach here therefore base64s catalog credentials into the log, which is
+    exactly what ``loggable_attach_options`` exists to prevent elsewhere. It
+    would also sit decrypted in the transport's call-state cache.
+    :meth:`_VgiCallStateHolder._attach_plaintext` re-opens the envelope per
+    turn instead, which additionally restores the per-turn identity check.
+
     Attributes:
         init_call: The [`InitRequest`][] that opened this stream.
         init_response: The worker's [`GlobalInitResponse`][] for that init.
-        plaintext_attach: Full framework attach plaintext
-            (``uuid || catalog_bytes``), carried unwrapped so each turn can
-            shard storage on its UUID without re-opening the auth-scoped
-            seal; ``None`` outside a catalog context.
 
     """
 
     init_call: Annotated[InitRequest, ArrowType(pa.binary())]
     init_response: Annotated[GlobalInitResponse, ArrowType(pa.binary())]
-    plaintext_attach: bytes | None = None
 
 
 @dataclass
@@ -778,9 +786,45 @@ class _VgiCallStateHolder:
 
     _call: Annotated[VgiCallState, Transient()] = field(default=None, repr=False)  # type: ignore[assignment]
 
+    _attach_pt: Annotated[bytes | None, Transient()] = field(default=None, repr=False)
+    """This call's attach plaintext (``uuid || catalog_bytes``), in memory only.
+
+    ``Transient`` is the whole point: the worker needs the decrypted attach to
+    shard storage, but these bytes must never reach the wire or the access log
+    (see :class:`VgiCallState`). Populated at construction under pipe — where
+    the worker already unwrapped it and there is no seal to reopen — and
+    re-derived from the sealed envelope on each HTTP turn by
+    :meth:`_attach_plaintext`.
+    """
+
     def bind_call_state(self, call_state: ArrowSerializableDataclass | None) -> None:
         """Attach the stream's call state (framework hook)."""
         self._call = cast("VgiCallState", call_state)
+
+    def _attach_plaintext(self, worker: Any) -> bytes | None:
+        """Open this call's attach envelope, returning ``uuid || catalog_bytes``.
+
+        Re-opened per turn from the sealed envelope rather than carried
+        decrypted in :class:`VgiCallState` — see that class for why the
+        decrypted form must not be serialized.
+
+        Costs one AEAD open, and only for a stream that actually has an
+        attach: outside a catalog context the envelope is ``None`` and this
+        returns immediately, so the non-catalog path pays nothing.
+
+        Args:
+            worker: The :class:`~vgi.worker.Worker` serving this turn, whose
+                signing key opens the envelope.
+
+        Returns:
+            The full framework plaintext, or ``None`` outside a catalog
+            context.
+
+        """
+        sealed = self._call.init_call.bind_call.attach_opaque_data
+        if sealed is None:
+            return None
+        return cast("bytes | None", worker._unwrap_attach_full(sealed))
 
 
 @dataclass
@@ -806,6 +850,9 @@ class ScalarExchangeState(_VgiCallStateHolder, ExchangeState):
         from vgi.worker import Worker
 
         worker: Worker = implementation  # type: ignore[assignment]
+        # HTTP turn: re-open the sealed attach rather than read a decrypted
+        # copy off the wire (see VgiCallState). No-op without a catalog.
+        self._attach_pt = self._attach_plaintext(worker)
         self._func_cls = worker._resolve_function(self._call.init_call.bind_call)  # type: ignore[assignment]
         self._vgi_tracer = worker._vgi_tracer
 
@@ -840,7 +887,7 @@ class ScalarExchangeState(_VgiCallStateHolder, ExchangeState):
                 storage=BoundStorage(
                     cls.storage,
                     self._call.init_response.execution_id,
-                    attach_plaintext=self._call.plaintext_attach,
+                    attach_plaintext=self._attach_pt,
                 ),
                 auth_context=ctx.auth,
             )
@@ -1423,6 +1470,9 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
         from vgi.worker import Worker
 
         worker: Worker = implementation  # type: ignore[assignment]
+        # HTTP turn: re-open the sealed attach rather than read a decrypted
+        # copy off the wire (see VgiCallState). No-op without a catalog.
+        self._attach_pt = self._attach_plaintext(worker)
         func_cls = worker._resolve_function(self._call.init_call.bind_call)
         assert issubclass(func_cls, TableFunctionGenerator)
         self._func_cls = func_cls
@@ -1438,15 +1488,15 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
             output_schema=output_schema,
             settings=_batch_to_scalar_dict(self._call.init_call.bind_call.settings),
             secrets=SecretsAccessor(self._call.init_call.bind_call.secrets).to_dict(),
-            # Rehydrated tick: the auth-scoped seal can't be reopened here, so we
-            # shard storage on the full plaintext (uuid||catalog_bytes) the init
-            # state persisted; the body sees only the stripped catalog bytes.
+            # Storage shards on the full plaintext (uuid||catalog_bytes); the
+            # body sees only the stripped catalog bytes. Re-opened from the
+            # sealed envelope rather than carried decrypted -- see VgiCallState.
             storage=BoundStorage(
                 func_cls.storage,
                 self._call.init_response.execution_id,
-                attach_plaintext=self._call.plaintext_attach,
+                attach_plaintext=self._attach_pt,
             ),
-            attach_opaque_data=attach_catalog_bytes(self._call.plaintext_attach),
+            attach_opaque_data=attach_catalog_bytes(self._attach_pt),
         )
         # Restore _user_state from serialized bytes if available
         if self._user_state_bytes is not None:
@@ -1595,6 +1645,9 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
         from vgi.worker import Worker
 
         worker: Worker = implementation  # type: ignore[assignment]
+        # HTTP turn: re-open the sealed attach rather than read a decrypted
+        # copy off the wire (see VgiCallState). No-op without a catalog.
+        self._attach_pt = self._attach_plaintext(worker)
         func_cls = worker._resolve_function(self._call.init_call.bind_call)
         assert issubclass(func_cls, TableInOutGenerator)
         self._func_cls = func_cls
@@ -1610,15 +1663,15 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
             output_schema=output_schema,
             settings=_batch_to_scalar_dict(self._call.init_call.bind_call.settings),
             secrets=SecretsAccessor(self._call.init_call.bind_call.secrets).to_dict(),
-            # Rehydrated tick: shard storage on the full plaintext the init state
-            # persisted (the auth-scoped seal can't be reopened here); the body
-            # sees only the stripped catalog bytes.
+            # Storage shards on the full plaintext (uuid||catalog_bytes); the
+            # body sees only the stripped catalog bytes. Re-opened from the
+            # sealed envelope rather than carried decrypted -- see VgiCallState.
             storage=BoundStorage(
                 func_cls.storage,
                 self._call.init_response.execution_id,
-                attach_plaintext=self._call.plaintext_attach,
+                attach_plaintext=self._attach_pt,
             ),
-            attach_opaque_data=attach_catalog_bytes(self._call.plaintext_attach),
+            attach_opaque_data=attach_catalog_bytes(self._attach_pt),
         )
         # Restore _user_state from serialized bytes if available
         if self._user_state_bytes is not None:
