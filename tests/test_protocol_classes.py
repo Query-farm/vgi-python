@@ -1248,3 +1248,52 @@ class TestBufferedFinalizeStateNamespace:
         # The scan itself must accept what came back: _coerce_ns takes the
         # reserved b"_vgi/" prefix only from a genuine enum member.
         assert _coerce_ns(restored.ns) == b"_vgi/streaming_finalize"
+
+
+class TestPartitionFieldsCacheKeyIsMetadataAware:
+    """Partition-field lookup must not conflate schemas that differ only in metadata.
+
+    ``pa.Schema.__eq__``/``__hash__`` ignore field metadata, so an annotated
+    schema is equal to and hashes the same as an unannotated one of the same
+    names and types. A cache keyed straight on the schema therefore answers
+    whichever was scanned first for both — which made a function with no
+    partition annotations inherit an annotated neighbour's fields, so the
+    ``partition_values`` contract check passed where it had to raise.
+    """
+
+    @staticmethod
+    def _pair() -> tuple[pa.Schema, pa.Schema]:
+        from vgi.schema_utils import VGI_PARTITION_COLUMN_KEY
+
+        plain = pa.schema([("country", pa.string()), ("sales", pa.int64())])
+        annotated = pa.schema(
+            [
+                pa.field("country", pa.string(), metadata={VGI_PARTITION_COLUMN_KEY: b"true"}),
+                ("sales", pa.int64()),
+            ]
+        )
+        return plain, annotated
+
+    def test_arrow_equality_still_ignores_metadata(self) -> None:
+        """The premise: this is why keying on the schema alone is unsafe."""
+        plain, annotated = self._pair()
+        assert plain == annotated
+        assert hash(plain) == hash(annotated)
+        assert not plain.equals(annotated, check_metadata=True)
+
+    @pytest.mark.parametrize("annotated_first", [True, False])
+    def test_lookup_is_correct_in_either_cache_order(self, annotated_first: bool) -> None:
+        """Whichever schema populates the cache first, both answers stay right."""
+        from vgi.protocol import _partition_fields_cached, _partition_fields_from_schema
+
+        plain, annotated = self._pair()
+        _partition_fields_cached.cache_clear()
+        try:
+            first, second = (annotated, plain) if annotated_first else (plain, annotated)
+            _partition_fields_from_schema(first)
+            _partition_fields_from_schema(second)
+
+            assert [f.name for f in _partition_fields_from_schema(annotated)] == ["country"]
+            assert _partition_fields_from_schema(plain) == []
+        finally:
+            _partition_fields_cached.cache_clear()

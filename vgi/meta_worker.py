@@ -247,6 +247,37 @@ class MetaWorker:
             raise ValueError(msg)
         return candidates[0]
 
+    def _unwrap_attach_full(self, envelope: bytes | None) -> bytes | None:
+        """Open an attach envelope on the sub-worker that owns its catalog.
+
+        A stream's state no longer carries the attach decrypted, so the
+        rehydrate path re-opens the sealed envelope on whatever object the
+        transport hands it as the implementation — which under a MetaWorker is
+        *this* object, not a `[`Worker`][]`. Without this the HTTP continuation
+        of any catalog-backed stream dies on ``'MetaWorker' object has no
+        attribute '_unwrap_attach_full'``.
+
+        Routes the same way :meth:`_resolve_function` does, so the plaintext is
+        produced by the sub-worker that owns the catalog. Every sub-worker in a
+        process shares one signing key (``_maybe_worker_for_attach`` itself
+        opens the envelope through ``_workers[0]`` to read the catalog name),
+        so an attach naming no catalog this process knows can still be opened —
+        fall back to the first worker rather than failing, and let the sub-worker
+        raise if the seal genuinely does not verify.
+
+        Args:
+            envelope: The sealed ``attach_opaque_data``, or ``None``.
+
+        Returns:
+            The full framework plaintext (``uuid || catalog_bytes``), or
+            ``None`` when there is no attach.
+
+        """
+        if envelope is None:
+            return None
+        worker = self._maybe_worker_for_attach(envelope) or self._workers[0]
+        return worker._unwrap_attach_full(envelope)
+
     def _resolve_function(self, request: BindRequest) -> Any:
         """Dispatch function-class resolution to the worker that hosts it.
 

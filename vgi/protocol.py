@@ -954,12 +954,44 @@ def _partition_fields_from_schema(bind_schema: pa.Schema) -> list[pa.Field[Any]]
     once at wrapper construction, so per-emit validation only does an
     O(P) walk where P is the partition column count.
     """
-    return list(_partition_fields_cached(bind_schema))
+    return list(_partition_fields_cached(_SchemaKey(bind_schema)))
+
+
+class _SchemaKey:
+    """Cache key for a schema whose *field metadata* is significant.
+
+    ``pa.Schema.__eq__`` and ``__hash__`` ignore field metadata, so a schema
+    annotated with partition columns is equal to — and hashes the same as — an
+    unannotated schema of the same names and types. Keying a cache directly on
+    a schema therefore conflates the two, and whichever was scanned first wins
+    for both. That is not hypothetical: it made a function with no annotations
+    inherit an annotated neighbour's partition fields, so the
+    ``partition_values`` contract check silently passed where it had to raise,
+    and it reproduced only on whichever transport happened to populate the
+    cache in the losing order.
+
+    The metadata-blind hash is kept deliberately — a hash may collide, it just
+    may not lie — and equality does the discriminating via
+    ``equals(check_metadata=True)``, measured at 0.042us.
+    """
+
+    __slots__ = ("schema",)
+
+    def __init__(self, schema: pa.Schema) -> None:
+        self.schema = schema
+
+    def __hash__(self) -> int:
+        return hash(self.schema)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, _SchemaKey):
+            return NotImplemented
+        return bool(self.schema.equals(other.schema, check_metadata=True))
 
 
 @lru_cache(maxsize=512)
-def _partition_fields_cached(bind_schema: pa.Schema) -> tuple[pa.Field[Any], ...]:
-    """Memoized partition-field scan, keyed on the schema.
+def _partition_fields_cached(key: _SchemaKey) -> tuple[pa.Field[Any], ...]:
+    """Memoized partition-field scan, keyed on the schema *including* metadata.
 
     Which columns are partition columns is a pure function of the schema's
     field metadata, and the schema is fixed for a stream -- but this ran on
@@ -975,7 +1007,7 @@ def _partition_fields_cached(bind_schema: pa.Schema) -> tuple[pa.Field[Any], ...
     from vgi.schema_utils import VGI_PARTITION_COLUMN_KEY
 
     return tuple(
-        f for f in bind_schema if f.metadata is not None and f.metadata.get(VGI_PARTITION_COLUMN_KEY) == b"true"
+        f for f in key.schema if f.metadata is not None and f.metadata.get(VGI_PARTITION_COLUMN_KEY) == b"true"
     )
 
 

@@ -303,3 +303,44 @@ class TestAttachUnwrapCache:
         # Least-recently-used entries evicted; the newest survive.
         assert cache.get((bytes([19]), b"id")) == bytes([19])
         assert cache.get((bytes([0]), b"id")) is None
+
+
+class TestMetaWorkerCanOpenTheAttach:
+    """A MetaWorker must satisfy the same rehydrate contract a Worker does.
+
+    Since the stream state stopped carrying the attach decrypted, the rehydrate
+    path re-opens the sealed envelope on whatever the transport hands it as the
+    implementation. Under a MetaWorker that object is *not* a ``Worker`` —
+    MetaWorker does not subclass it, it proxies — so the method has to exist
+    there too. It did not, and every HTTP continuation of a catalog-backed
+    stream died on ``'MetaWorker' object has no attribute
+    '_unwrap_attach_full'``. Unit coverage missed it because nothing here drove
+    a MetaWorker over HTTP; the integration suite caught it.
+    """
+
+    @staticmethod
+    def _meta_and_worker() -> tuple[Any, Any]:
+        from vgi._test_fixtures.worker import ExampleWorker
+        from vgi.meta_worker import MetaWorker
+
+        worker = ExampleWorker(quiet=True)
+        worker._signing_key = _KEY
+        return MetaWorker([worker]), worker
+
+    def test_meta_worker_exposes_the_rehydrate_hook(self) -> None:
+        """The attribute the rehydrate path calls must exist on a MetaWorker."""
+        meta, _ = self._meta_and_worker()
+        assert hasattr(meta, "_unwrap_attach_full")
+
+    def test_meta_worker_unwraps_identically_to_its_sub_worker(self) -> None:
+        """Routing through the MetaWorker yields the sub-worker's plaintext."""
+        meta, worker = self._meta_and_worker()
+        with _as_principal(_DOMAIN, _PRINCIPAL):
+            envelope = bytes(worker._seal_attach(_UUID + _SECRET))
+            assert meta._unwrap_attach_full(envelope) == _UUID + _SECRET
+            assert meta._unwrap_attach_full(envelope) == worker._unwrap_attach_full(envelope)
+
+    def test_no_attach_passes_through(self) -> None:
+        """No catalog context means nothing to open."""
+        meta, _ = self._meta_and_worker()
+        assert meta._unwrap_attach_full(None) is None
