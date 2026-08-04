@@ -32,7 +32,7 @@ env:
   VGI_REF: main
   # The Haybarn release providing the prebuilt haybarn-unittest binary. Must be
   # ABI-compatible with the community-published vgi extension.
-  HAYBARN_RELEASE: haybarn-v1.5.4-rc3
+  HAYBARN_RELEASE: haybarn-v1.5.5-rc1
   # CI is not a user: its ATTACHes should not land in Query.Farm's adoption data.
   # The vgi extension fires a telemetry event per successful ATTACH, and this
   # suite performs several hundred of them per lane, so opting out keeps the
