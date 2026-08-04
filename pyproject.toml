@@ -49,7 +49,7 @@ dependencies = [
 # evaluation, the transactor, and the statistics fixtures. It is resolved
 # lazily in vgi/_duckdb.py: haybarn is preferred, stock duckdb is the
 # fallback. Neither is a hard dependency — install one via these extras.
-haybarn = ["haybarn>=1.5.3rc10"]
+haybarn = ["haybarn>=1.5.5rc1"]
 duckdb = ["duckdb>=1.5.3"]
 http = ["vgi-rpc[http]"]
 # Alternative HTTP server: granian moves socket I/O and HTTP parsing into Rust,
