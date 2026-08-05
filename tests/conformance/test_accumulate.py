@@ -18,16 +18,23 @@ transport is covered by the sqllogictest suite in the C++ repo.
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Callable, Iterator
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
+from vgi_rpc.rpc import OutputCollector
 
 from vgi._test_fixtures.accumulate import worker as m
 from vgi.function_storage import BoundStorage, FunctionStorage, FunctionStorageSqlite
+from vgi.table_buffering_function import TableBufferingParams
+from vgi.table_function import BindParams
 
-INPUT_SCHEMA = pa.schema([pa.field("x", pa.int64()), pa.field("label", pa.string())])
+_INPUT_FIELDS: list[pa.Field[Any]] = [pa.field("x", pa.int64()), pa.field("label", pa.string())]
+INPUT_SCHEMA = pa.schema(_INPUT_FIELDS)
 OUTPUT_SCHEMA = m._output_schema(INPUT_SCHEMA)
 
 SCOPE_A = b"session-a"
@@ -43,7 +50,7 @@ def _set_storage(fs: FunctionStorage) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _storage(tmp_path):
+def _storage(tmp_path: Path) -> Iterator[SimpleNamespace]:
     """Inject a throwaway file-backed FunctionStorage for the persistent collection."""
     path = str(tmp_path / "fs.db")
     _set_storage(FunctionStorageSqlite(db_path=path))
@@ -69,51 +76,85 @@ class FakeOut:
         """Mark the stream finished."""
         self.finished = True
 
+    @property
+    def collector(self) -> OutputCollector:
+        """This fake viewed as the ``OutputCollector`` the fixture's API declares.
 
-def _exec_storage():
+        ``OutputCollector`` is a concrete class, not a protocol, so the
+        duck-typed stand-in needs one cast to reach the real signatures.
+        """
+        return cast("OutputCollector", self)
+
+
+def _exec_storage() -> tuple[bytes, BoundStorage]:
     """Build a fresh execution-scoped BoundStorage (mimics a distinct query)."""
     _exec_counter[0] += 1
     eid = f"exec-{_exec_counter[0]}".encode()
     return eid, BoundStorage(m.AccumulateFunction.storage, eid)
 
 
-def _bind_params(name, input_schema=INPUT_SCHEMA, opaque=SCOPE_A):
-    return SimpleNamespace(
-        args=SimpleNamespace(name=name, data=None, ttl=None, max_row_size=0, result="all"),
-        bind_call=SimpleNamespace(input_schema=input_schema),
-        attach_opaque_data=opaque,
+# The two param builders return duck-typed SimpleNamespaces — the fixture only
+# reads a handful of fields off them — cast to the declared param types so the
+# call sites below type-check against the real fixture signatures.
+def _bind_params(name: str, input_schema: pa.Schema = INPUT_SCHEMA, opaque: bytes = SCOPE_A) -> BindParams[Any]:
+    return cast(
+        "BindParams[Any]",
+        SimpleNamespace(
+            args=SimpleNamespace(name=name, data=None, ttl=None, max_row_size=0, result="all"),
+            bind_call=SimpleNamespace(input_schema=input_schema),
+            attach_opaque_data=opaque,
+        ),
     )
 
 
-def _buf_params(name, *, ttl=None, max_row_size=0, result="all", output_schema=OUTPUT_SCHEMA, opaque=SCOPE_A):
+def _buf_params(
+    name: str,
+    *,
+    ttl: Any = None,
+    max_row_size: int = 0,
+    result: str = "all",
+    output_schema: pa.Schema = OUTPUT_SCHEMA,
+    opaque: bytes = SCOPE_A,
+) -> TableBufferingParams[Any]:
     eid, storage = _exec_storage()
-    return SimpleNamespace(
-        args=SimpleNamespace(name=name, data=None, ttl=ttl, max_row_size=max_row_size, result=result),
-        output_schema=output_schema,
-        attach_opaque_data=opaque,
-        storage=storage,
-        execution_id=eid,
+    return cast(
+        "TableBufferingParams[Any]",
+        SimpleNamespace(
+            args=SimpleNamespace(name=name, data=None, ttl=ttl, max_row_size=max_row_size, result=result),
+            output_schema=output_schema,
+            attach_opaque_data=opaque,
+            storage=storage,
+            execution_id=eid,
+        ),
     )
 
 
-def _input_batch(xs):
+def _input_batch(xs: list[int]) -> pa.RecordBatch:
     return pa.RecordBatch.from_arrays(
         [pa.array(xs, pa.int64()), pa.array([f"r{x}" for x in xs], pa.string())],
         schema=INPUT_SCHEMA,
     )
 
 
-def _drain(fn) -> FakeOut:
+def _drain(fn: Callable[[OutputCollector], None]) -> FakeOut:
     out = FakeOut()
     guard = 0
     while not out.finished:
-        fn(out)
+        fn(out.collector)
         guard += 1
         assert guard < 1_000_000, "stream did not terminate"
     return out
 
 
-def _run(name, *, batches, ttl=None, max_row_size=0, result="all", opaque=SCOPE_A) -> pa.Table:
+def _run(
+    name: str,
+    *,
+    batches: list[pa.RecordBatch],
+    ttl: Any = None,
+    max_row_size: int = 0,
+    result: str = "all",
+    opaque: bytes = SCOPE_A,
+) -> pa.Table:
     resp = m.AccumulateFunction.on_bind(_bind_params(name, opaque=opaque))
     pp = _buf_params(
         name, ttl=ttl, max_row_size=max_row_size, result=result, output_schema=resp.output_schema, opaque=opaque
@@ -131,38 +172,47 @@ def _run(name, *, batches, ttl=None, max_row_size=0, result="all", opaque=SCOPE_
     )
 
 
-def _call(name, xs, *, ttl=None, max_row_size=0, result="all", opaque=SCOPE_A) -> pa.Table:
+def _call(
+    name: str,
+    xs: list[int],
+    *,
+    ttl: Any = None,
+    max_row_size: int = 0,
+    result: str = "all",
+    opaque: bytes = SCOPE_A,
+) -> pa.Table:
     return _run(name, batches=[_input_batch(xs)], ttl=ttl, max_row_size=max_row_size, result=result, opaque=opaque)
 
 
-def _read_batches(name, *, opaque=SCOPE_A) -> list[pa.RecordBatch]:
+def _read_batches(name: str, *, opaque: bytes = SCOPE_A) -> list[pa.RecordBatch]:
     resp = m.AccumulateReadFunction.on_bind(_bind_params(name, opaque=opaque))
     pp = _buf_params(name, output_schema=resp.output_schema, opaque=opaque)
     state = m.AccumulateReadFunction.initial_state(pp)
     return _drain(lambda o: m.AccumulateReadFunction.process(pp, state, o)).batches
 
 
-def _read(name, *, opaque=SCOPE_A) -> pa.Table:
+def _read(name: str, *, opaque: bytes = SCOPE_A) -> pa.Table:
     resp = m.AccumulateReadFunction.on_bind(_bind_params(name, opaque=opaque))
     batches = _read_batches(name, opaque=opaque)
     return pa.Table.from_batches(batches, schema=resp.output_schema) if batches else resp.output_schema.empty_table()
 
 
-def _clear(name, *, opaque=SCOPE_A) -> pa.RecordBatch:
+def _clear(name: str, *, opaque: bytes = SCOPE_A) -> pa.RecordBatch:
     pp = _buf_params(name, output_schema=m.CLEAR_SCHEMA, opaque=opaque)
     state = m.AccumulateClearFunction.initial_state(pp)
     out = FakeOut()
-    m.AccumulateClearFunction.process(pp, state, out)
-    m.AccumulateClearFunction.process(pp, state, out)  # second tick -> finish
+    m.AccumulateClearFunction.process(pp, state, out.collector)
+    m.AccumulateClearFunction.process(pp, state, out.collector)  # second tick -> finish
     assert out.finished and len(out.batches) == 1
     return out.batches[0]
 
 
-def _xs(table) -> list[int]:
-    return sorted(table.column("x").to_pylist())
+def _xs(table: pa.Table) -> list[int]:
+    # `x` is declared non-null int64; to_pylist() types every element optional.
+    return sorted(cast("list[int]", table.column("x").to_pylist()))
 
 
-def _total(name, opaque=SCOPE_A) -> int:
+def _total(name: str, opaque: bytes = SCOPE_A) -> int:
     ps = m._store(m.AccumulateFunction.storage, opaque)
     sch = m._get_schema(ps, name.encode())
     return 0 if sch is None else m._read_collection(ps, name.encode(), sch).num_rows
@@ -209,7 +259,7 @@ def test_on_bind_rejects_schema_mismatch_for_same_name() -> None:
 
 
 @pytest.mark.parametrize("name", ["", "   "])
-def test_on_bind_rejects_blank_name(name) -> None:
+def test_on_bind_rejects_blank_name(name: str) -> None:
     """Empty or blank collection names are rejected by all three functions."""
     with pytest.raises(ValueError, match="non-empty"):
         m.AccumulateFunction.on_bind(_bind_params(name))
@@ -310,7 +360,7 @@ def test_read_is_scoped_to_attach_session() -> None:
 # --- persistence & scoping -------------------------------------------------
 
 
-def test_persists_across_reconnect(tmp_path) -> None:
+def test_persists_across_reconnect(tmp_path: Path) -> None:
     """Collections survive a worker restart (fresh handle on the same DB file)."""
     _call("a", [1, 2])
     # Simulate a worker restart: a fresh storage handle on the same DB file.
@@ -372,7 +422,7 @@ def test_large_input_round_trips_all_rows() -> None:
     assert len(set(t.column("_timestamp").to_pylist())) == 1
 
 
-def test_output_returned_in_bounded_batches(monkeypatch) -> None:
+def test_output_returned_in_bounded_batches(monkeypatch: pytest.MonkeyPatch) -> None:
     """Output is staged and drained in batches bounded by OUT_BATCH_ROWS."""
     monkeypatch.setattr(m, "OUT_BATCH_ROWS", 100)
     _call("big", list(range(1000)), result="none")

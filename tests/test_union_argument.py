@@ -9,6 +9,8 @@ decodes such scalars to ``TaggedUnion`` so the active member name is preserved.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pyarrow as pa
 
 from vgi.arguments import Arguments, TaggedUnion
@@ -17,7 +19,7 @@ _RF = pa.struct([pa.field("n_estimators", pa.list_(pa.int64())), pa.field("max_d
 _SVC = pa.struct([pa.field("C", pa.list_(pa.float64())), pa.field("kernel", pa.list_(pa.string()))])
 
 
-def _union_scalar(code: int, members: dict) -> pa.UnionScalar:
+def _union_scalar(code: int, members: dict[str, Any]) -> pa.UnionScalar:
     """Build a one-element sparse-union scalar with named members, active = ``code``."""
     arr = pa.UnionArray.from_sparse(
         pa.array([code], type=pa.int8()),
@@ -26,7 +28,9 @@ def _union_scalar(code: int, members: dict) -> pa.UnionScalar:
             pa.array([members.get("svc")], type=_SVC),
         ],
         field_names=["random_forest_classifier", "svc"],
-        type_codes=[0, 1],
+        # pyarrow-stubs declares type_codes as Int8Array, but the C extension
+        # signature is `list type_codes=None` and rejects an Array at runtime.
+        type_codes=[0, 1],  # type: ignore[arg-type]
     )
     return arr[0]
 
@@ -77,7 +81,7 @@ def test_union_arg_non_contiguous_type_codes() -> None:
             pa.array([{"C": [1.0], "kernel": ["rbf"]}], type=_SVC),
         ],
         field_names=["random_forest_classifier", "svc"],
-        type_codes=[5, 9],
+        type_codes=[5, 9],  # type: ignore[arg-type]  # see _union_scalar: stubs disagree with the C signature
     )
     got = Arguments(named={"config": arr[0]}).get("config")
     assert isinstance(got, TaggedUnion)
@@ -95,7 +99,7 @@ def test_union_arg_dense_union() -> None:
             pa.array([{"C": [2.0], "kernel": ["linear"]}], type=_SVC),
         ],
         field_names=["random_forest_classifier", "svc"],
-        type_codes=[0, 1],
+        type_codes=[0, 1],  # type: ignore[arg-type]  # see _union_scalar: stubs disagree with the C signature
     )
     got = Arguments(named={"config": arr[0]}).get("config")
     assert isinstance(got, TaggedUnion)

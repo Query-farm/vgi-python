@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pyarrow as pa
 import pytest
 
@@ -22,6 +24,9 @@ from vgi.cache_control import (
     CacheControl,
 )
 from vgi.protocol import _TrackingOutputCollector
+
+if TYPE_CHECKING:
+    from vgi._test_fixtures.table.cache import _CacheNonceState
 
 
 class _RecordingCollector:
@@ -176,7 +181,7 @@ class TestRevalidatableFixture:
     """CacheRevalidatableFunction answers 304 when if_none_match matches (M6)."""
 
     @staticmethod
-    def _run(if_none_match: str | None):
+    def _run(if_none_match: str | None) -> tuple[_RecordingCollector, _CacheNonceState, str]:
         """Drive the fixture's process() with a duck-typed params stub."""
         import types
 

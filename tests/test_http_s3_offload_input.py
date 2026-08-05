@@ -12,7 +12,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-import httpx
+import httpx2
 import pyarrow as pa
 import pytest
 
@@ -155,7 +155,7 @@ def test_http_input_upload_url_then_external_location_scalar_exchange(compressio
             payload = zstandard.ZstdCompressor(level=3).compress(payload)
             headers["Content-Encoding"] = "zstd"
 
-        put_resp = httpx.put(upload.upload_url, content=payload, headers=headers, timeout=30.0)
+        put_resp = httpx2.put(upload.upload_url, content=payload, headers=headers, timeout=30.0)
         assert put_resp.status_code in (200, 201)
 
         with http_connect(

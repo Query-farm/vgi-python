@@ -21,7 +21,7 @@ from vgi.arguments import (
     Returns,
     validate_const_arg_constraints,
 )
-from vgi.table_function import ProcessParams
+from vgi.table_function import ProcessParams, ResolvedSecrets
 
 # ---------------------------------------------------------------------------
 # Shared state classes for test functions
@@ -681,7 +681,7 @@ def _make_dummy_params(output_type: pa.DataType) -> ProcessParams[None]:
         init_response=None,
         output_schema=pa.schema([("result", output_type)]),
         settings={},
-        secrets={},
+        secrets=ResolvedSecrets(),
         storage=BoundStorage(storage, b"dummy"),
     )
 
@@ -700,7 +700,9 @@ def _make_window_partition(values: list[int | None]) -> Any:
     return WindowPartition(
         inputs=batch,
         row_count=len(values),
-        filter_mask=None,
+        # No FILTER (WHERE ...) clause: the worker decodes an empty mask
+        # payload into an all-true BooleanArray, so mirror that here.
+        filter_mask=pa.array([True] * len(values), type=pa.bool_()),
         frame_stats=((0, 0), (0, 0)),
         all_valid=[True],
     )

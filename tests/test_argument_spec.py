@@ -751,7 +751,8 @@ class TestArgumentConstraints:
             range_notation="[0, 100]",
             pattern="^[A-Z]{2}$",
         )
-        meta = argument_specs_to_schema([spec])[0].metadata
+        meta = argument_specs_to_schema([spec]).field(0).metadata
+        assert meta is not None
         assert meta[VGI_DEFAULT_KEY] == b'"mm"'
         assert meta[VGI_CHOICES_KEY] == b'["mm", "cm", "m"]'
         assert meta[VGI_RANGE_KEY] == b"[0, 100]"
@@ -759,7 +760,7 @@ class TestArgumentConstraints:
 
     def test_unconstrained_arg_omits_keys(self) -> None:
         """An arg without constraints yields none of the constraint keys."""
-        meta = argument_specs_to_schema([ArgumentSpec(name="v", position=0, arrow_type=pa.int64())])[0].metadata
+        meta = argument_specs_to_schema([ArgumentSpec(name="v", position=0, arrow_type=pa.int64())]).field(0).metadata
         for key in (VGI_DEFAULT_KEY, VGI_CHOICES_KEY, VGI_RANGE_KEY, VGI_PATTERN_KEY):
             assert meta is None or key not in meta
 
@@ -814,7 +815,7 @@ class TestArgumentConstraints:
                 code: Annotated[str, ConstParam("Label code", pattern="^[A-Z]{2}$")],
                 value: Annotated[pa.DoubleArray, Param(doc="Value")],
             ) -> Annotated[pa.StringArray, Returns()]:
-                return value  # never executed — the test only reads arg specs
+                raise AssertionError("never executed — the test only reads arg specs")
 
         specs = {s.name: s for s in extract_argument_specs(ConstrainedScalar)}
         assert specs["unit"].choices_json == '["mm", "cm", "m"]'

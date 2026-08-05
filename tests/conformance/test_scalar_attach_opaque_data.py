@@ -15,13 +15,12 @@ from typing import Annotated, Any
 
 import pyarrow as pa
 
-from vgi.arguments import Arguments
-from vgi.protocol import BindRequest, FunctionType
+from vgi.arguments import Arguments, Param, Returns
+from vgi.invocation import FunctionType
+from vgi.protocol import BindRequest
 from vgi.scalar_function import (
     BindParameters,
     BindResult,
-    Param,
-    Returns,
     ScalarFunction,
 )
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 import io
 import os
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -44,20 +45,20 @@ def _generated_path(filename: str, override_var: str) -> Path:
     return Path(__file__).resolve().parents[2] / "vgi" / "src" / "generated" / filename
 
 
-def _emit(module) -> str:  # noqa: ANN001
+def _emit(module: ModuleType) -> str:
     buf = io.StringIO()
     module.emit(buf)
     return buf.getvalue()
 
 
 @pytest.mark.parametrize("module,filename,override_var", _CASES, ids=[c[1] for c in _CASES])
-def test_generator_is_deterministic(module, filename: str, override_var: str) -> None:  # noqa: ANN001, ARG001
+def test_generator_is_deterministic(module: ModuleType, filename: str, override_var: str) -> None:  # noqa: ARG001
     """Running each generator twice produces byte-identical output."""
     assert _emit(module) == _emit(module), f"{module.__name__} is non-deterministic — collection order is unstable"
 
 
 @pytest.mark.parametrize("module,filename,override_var", _CASES, ids=[c[1] for c in _CASES])
-def test_checked_in_header_matches_generator(module, filename: str, override_var: str) -> None:  # noqa: ANN001
+def test_checked_in_header_matches_generator(module: ModuleType, filename: str, override_var: str) -> None:
     """Each checked-in secret header must match current generator output exactly."""
     path = _generated_path(filename, override_var)
     if not path.exists():

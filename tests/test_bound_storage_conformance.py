@@ -127,7 +127,16 @@ def test_state_scan_range_reverse_limit_through_facade(harness: _Harness) -> Non
     """The facade threads start/end/reverse/limit into the scan."""
     bs = harness.bound()
     bs.state_put_many(NS, [(b"a", b"A"), (b"b", b"B"), (b"c", b"C"), (b"d", b"D")])
-    keys = lambda **kw: [k for k, _ in bs.state_scan(NS, **kw)]  # noqa: E731
+
+    def keys(
+        *,
+        start: bytes | None = None,
+        end: bytes | None = None,
+        reverse: bool = False,
+        limit: int | None = None,
+    ) -> list[bytes]:
+        return [k for k, _ in bs.state_scan(NS, start=start, end=end, reverse=reverse, limit=limit)]
+
     assert keys() == [b"a", b"b", b"c", b"d"]
     assert keys(reverse=True) == [b"d", b"c", b"b", b"a"]
     assert keys(start=b"b", end=b"d") == [b"b", b"c"]

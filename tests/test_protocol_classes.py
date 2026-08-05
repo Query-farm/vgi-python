@@ -7,13 +7,13 @@ Tests cover Invocation, Arguments, InitResult, and table_function classes.
 
 from __future__ import annotations
 
-from typing import get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Any, get_args, get_origin, get_type_hints
 
 import pyarrow as pa
 import pytest
 from vgi_rpc.log import Level, Message
 from vgi_rpc.rpc import Stream
-from vgi_rpc.utils import deserialize_record_batch
+from vgi_rpc.utils import ArrowSerializableDataclass, deserialize_record_batch
 
 from tests.conftest import make_schema
 from vgi.arguments import Arg, Arguments, ArgumentValidationError
@@ -27,6 +27,9 @@ from vgi.protocol import (
     VgiProtocol,
 )
 from vgi.table_function import TableCardinality
+
+if TYPE_CHECKING:
+    from vgi.protocol import BindRequest
 
 
 def ipc_round_trip[T](obj: T, cls: type[T]) -> T:
@@ -1165,17 +1168,18 @@ class TestBindCallWireFormat:
     """
 
     @staticmethod
-    def _bind_call_arrow_type(obj: object) -> str:
-        batch = pa.ipc.open_stream(obj.serialize_to_bytes()).read_next_batch()  # type: ignore[attr-defined]
+    def _bind_call_arrow_type(obj: ArrowSerializableDataclass) -> str:
+        batch = pa.ipc.open_stream(obj.serialize_to_bytes()).read_next_batch()
         return str(dict((f.name, f.type) for f in batch.schema)["bind_call"])
 
-    def _make_bind(self) -> object:
+    def _make_bind(self) -> BindRequest:
         """Build a minimal ``BindRequest`` to embed as ``bind_call``."""
-        from vgi.protocol import BindRequest, FunctionType
+        from vgi.invocation import FunctionType
+        from vgi.protocol import BindRequest
 
         return BindRequest(
             function_name="f",
-            arguments=Arguments(positional=[], named=None),
+            arguments=Arguments(positional=(), named=None),
             function_type=FunctionType.TABLE,
         )
 
@@ -1197,11 +1201,14 @@ class TestBindCallWireFormat:
             TableFunctionStatisticsRequest,
         )
 
-        cases = [
+        cases: list[tuple[Any, dict[str, bytes]]] = [
             (TableFunctionCardinalityRequest, {}),
             (TableFunctionStatisticsRequest, {}),
             (TableFunctionDynamicToStringRequest, {"global_execution_id": b"exec"}),
         ]
+        # The three request classes share no common constructor signature, so
+        # the list is heterogeneous by construction; each element is exercised
+        # against its own real fields below.
         for cls, extra in cases:
             obj = cls(bind_call=self._make_bind(), **extra)
             assert self._bind_call_arrow_type(obj) == "binary", cls.__name__
@@ -1244,7 +1251,9 @@ class TestBufferedFinalizeStateNamespace:
         )
         restored = BufferedFinalizeState.deserialize_from_bytes(state.serialize_to_bytes())
         assert restored.ns is FrameworkNS.STREAMING_FINALIZE
-        assert restored.ns == b"_vgi/streaming_finalize"
+        # FrameworkNS is a bytes-enum, so this equality holds at runtime; mypy
+        # sees an enum literal vs a bytes literal and calls it non-overlapping.
+        assert restored.ns == b"_vgi/streaming_finalize"  # type: ignore[comparison-overlap]
         # The scan itself must accept what came back: _coerce_ns takes the
         # reserved b"_vgi/" prefix only from a genuine enum member.
         assert _coerce_ns(restored.ns) == b"_vgi/streaming_finalize"
@@ -1265,13 +1274,13 @@ class TestPartitionFieldsCacheKeyIsMetadataAware:
     def _pair() -> tuple[pa.Schema, pa.Schema]:
         from vgi.schema_utils import VGI_PARTITION_COLUMN_KEY
 
-        plain = pa.schema([("country", pa.string()), ("sales", pa.int64())])
-        annotated = pa.schema(
-            [
-                pa.field("country", pa.string(), metadata={VGI_PARTITION_COLUMN_KEY: b"true"}),
-                ("sales", pa.int64()),
-            ]
-        )
+        plain_fields: list[tuple[str, pa.DataType]] = [("country", pa.string()), ("sales", pa.int64())]
+        plain = pa.schema(plain_fields)
+        annotated_fields: list[pa.Field[Any]] = [
+            pa.field("country", pa.string(), metadata={VGI_PARTITION_COLUMN_KEY: b"true"}),
+            pa.field("sales", pa.int64()),
+        ]
+        annotated = pa.schema(annotated_fields)
         return plain, annotated
 
     def test_arrow_equality_still_ignores_metadata(self) -> None:

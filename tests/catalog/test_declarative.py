@@ -1279,9 +1279,11 @@ class TestSchemaDescriptor:
         """
         schema = Schema(name="main", functions=[UsersFunction])  # only table fn
         info = schema.to_schema_info(AttachOpaqueData(b"x"))
-        assert info.estimated_object_count["scalar_function"] == 0
-        assert info.estimated_object_count["aggregate_function"] == 0
-        assert info.estimated_object_count["table_function"] == 1
+        counts = info.estimated_object_count
+        assert counts is not None
+        assert counts["scalar_function"] == 0
+        assert counts["aggregate_function"] == 0
+        assert counts["table_function"] == 1
 
 
 class TestLegacyFunctionsListSchemaInfo:
@@ -1320,6 +1322,7 @@ class TestLegacyFunctionsListSchemaInfo:
         schemas = ci.schemas(attach_opaque_data=AttachOpaqueData(b"x"), transaction_opaque_data=None)
         assert len(schemas) == 1
         counts = schemas[0].estimated_object_count
+        assert counts is not None
         assert counts["scalar_function"] == 1
         assert counts["table_function"] == 1
 

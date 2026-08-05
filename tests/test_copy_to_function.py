@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import tempfile
 import types
+from typing import Any, cast
 
 import pyarrow as pa
 
@@ -16,9 +17,12 @@ from vgi._test_fixtures.copy_to import (
     SecretLinesCopyToFunction,
 )
 from vgi._test_fixtures.worker import ExampleCatalog
-from vgi.table_function import ResolvedSecrets, SecretsAccessor
+from vgi.catalog.catalog_interface import AttachOpaqueData
+from vgi.table_buffering_function import TableBufferingParams
+from vgi.table_function import BindParams, ResolvedSecrets, SecretsAccessor
 
-SCHEMA = pa.schema([("a", pa.int64()), ("b", pa.string())])
+_SCHEMA_FIELDS: list[tuple[str, pa.DataType]] = [("a", pa.int64()), ("b", pa.string())]
+SCHEMA = pa.schema(_SCHEMA_FIELDS)
 
 
 class _Store:
@@ -30,7 +34,9 @@ class _Store:
     def state_append(self, ns: bytes, key: bytes, val: bytes) -> None:
         self.log.append((len(self.log), val))
 
-    def state_log_scan(self, ns: bytes, key: bytes, after_id: int = -1, limit: int | None = None) -> list:
+    def state_log_scan(
+        self, ns: bytes, key: bytes, after_id: int = -1, limit: int | None = None
+    ) -> list[tuple[int, bytes]]:
         rows = [(i, v) for (i, v) in self.log if i > after_id]
         return rows if limit is None else rows[:limit]
 
@@ -45,10 +51,15 @@ def _read(path: str) -> str:
         return fh.read()
 
 
-def _params(store: _Store) -> types.SimpleNamespace:
+def _params(store: _Store) -> TableBufferingParams[Any]:
+    # A duck-typed stand-in: write()/close() only reach for storage,
+    # init_call.bind_call.input_schema and execution_id.
     bind_call = types.SimpleNamespace(input_schema=SCHEMA)
     init_call = types.SimpleNamespace(bind_call=bind_call)
-    return types.SimpleNamespace(storage=store, init_call=init_call, execution_id=b"x", args=None)
+    return cast(
+        "TableBufferingParams[Any]",
+        types.SimpleNamespace(storage=store, init_call=init_call, execution_id=b"x", args=None),
+    )
 
 
 def test_write_then_close_round_trips_with_null_string() -> None:
@@ -111,20 +122,26 @@ def test_close_empty_input_with_header_writes_header_only() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _secret_params(store: _Store, secrets: ResolvedSecrets) -> types.SimpleNamespace:
+def _secret_params(store: _Store, secrets: ResolvedSecrets) -> TableBufferingParams[Any]:
     """A TableBufferingParams-shaped stub carrying resolved secrets for write/close."""
     bind_call = types.SimpleNamespace(input_schema=SCHEMA)
     init_call = types.SimpleNamespace(bind_call=bind_call)
-    return types.SimpleNamespace(storage=store, init_call=init_call, execution_id=b"x", secrets=secrets)
+    return cast(
+        "TableBufferingParams[Any]",
+        types.SimpleNamespace(storage=store, init_call=init_call, execution_id=b"x", secrets=secrets),
+    )
 
 
 def test_on_secrets_requests_destination_scoped_secret() -> None:
     """on_secrets() registers a pending lookup scoped to the COPY destination path."""
     accessor = SecretsAccessor(None)  # nothing resolved yet → first-call behavior
-    params = types.SimpleNamespace(
-        args=SecretLinesCopyToArgs(),  # default secret_type='vgi_example'
-        bind_call=types.SimpleNamespace(copy_to=types.SimpleNamespace(file_path="s3://bucket/out.bin")),
-        secrets=accessor,
+    params = cast(
+        "BindParams[SecretLinesCopyToArgs]",
+        types.SimpleNamespace(
+            args=SecretLinesCopyToArgs(),  # default secret_type='vgi_example'
+            bind_call=types.SimpleNamespace(copy_to=types.SimpleNamespace(file_path="s3://bucket/out.bin")),
+            secrets=accessor,
+        ),
     )
     SecretLinesCopyToFunction.on_secrets(params)
     # The hook must have asked the framework for a scoped two-phase resolution.
@@ -175,7 +192,7 @@ def test_close_writes_none_when_secret_absent() -> None:
 
 def test_catalog_advertises_secret_lines_out_format() -> None:
     """The secret-forwarding writer is advertised like any other COPY TO format."""
-    formats = ExampleCatalog().copy_from_formats(attach_opaque_data=b"", transaction_opaque_data=None)
+    formats = ExampleCatalog().copy_from_formats(attach_opaque_data=AttachOpaqueData(b""), transaction_opaque_data=None)
     by = {(f.direction, f.format_name): f for f in formats}
     assert ("to", "secret_lines_out") in by
     assert by[("to", "secret_lines_out")].handler == "secret_lines_writer"
@@ -183,7 +200,7 @@ def test_catalog_advertises_secret_lines_out_format() -> None:
 
 def test_catalog_advertises_copy_to_format() -> None:
     """The example catalog advertises example_lines_out with direction='to'."""
-    formats = ExampleCatalog().copy_from_formats(attach_opaque_data=b"", transaction_opaque_data=None)
+    formats = ExampleCatalog().copy_from_formats(attach_opaque_data=AttachOpaqueData(b""), transaction_opaque_data=None)
     by = {(f.direction, f.format_name): f for f in formats}
     assert ("to", "example_lines_out") in by
     fmt = by[("to", "example_lines_out")]

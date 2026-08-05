@@ -62,15 +62,18 @@ jobs:
       # Docstring consistency (pydoclint) runs inside the pytest suite via
       # tests/test_docstrings.py, so it's not a separate CI lint step.
 
+      # ty was removed here in 0.25.2. It was already non-blocking, and at
+      # 0.0.66 it stopped terminating on this tree at all -- `ty check vgi/`
+      # ran past ten minutes and had to be killed. A signal nothing gates on,
+      # that also burns a CI job's wall clock, is worse than no signal.
       - name: Type check (mypy)
         run: uv run mypy vgi/
 
-      # ty is pre-1.0 and its inference drifts release-to-release; keep it
-      # visible as a signal but don't gate CI on it (mypy is the blocking
-      # type gate).
-      - name: Type check (ty, non-blocking)
-        run: uv run ty check vgi/
-        continue-on-error: true
+      # tests/ became clean in 0.26.0 and is gated from here on. It was
+      # unchecked for long enough to accumulate 174 errors; the point of the
+      # gate is that it never gets to accumulate a second batch.
+      - name: Type check tests (mypy)
+        run: uv run mypy tests/
 
   docs:
     name: Docs (build + examples + prose)

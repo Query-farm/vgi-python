@@ -662,7 +662,7 @@ class Client(CatalogClientMixin):
 
         This is the canonical path non-DuckDB clients implement; subprocess
         is a Python convenience. Multiple ``worker_index`` values map to
-        independent RPC proxies against the same shared ``httpx.Client``
+        independent RPC proxies against the same shared ``httpx2.Client``
         (and therefore the same base URL + auth config).
         """
         from vgi_rpc.http import http_connect
@@ -684,7 +684,7 @@ class Client(CatalogClientMixin):
         )
 
     def _get_or_create_httpx_client(self) -> Any:
-        """Return the shared httpx.Client for this Client's HTTP transport.
+        """Return the shared httpx2.Client for this Client's HTTP transport.
 
         Lazily constructs one bound to ``self._base_url`` (so RPC requests
         resolve against the remote worker) with an ``Authorization: Bearer
@@ -695,18 +695,18 @@ class Client(CatalogClientMixin):
         if self._httpx_client is not None:
             return self._httpx_client
 
-        import httpx
+        import httpx2
 
         headers: dict[str, str] = {}
         if self._bearer_token is not None:
             headers["Authorization"] = f"Bearer {self._bearer_token}"
-        self._httpx_client = httpx.Client(
+        self._httpx_client = httpx2.Client(
             base_url=self._base_url or "",
             follow_redirects=True,
             headers=headers,
-            # httpx's 5s default read timeout is too aggressive for RPC
+            # httpx2's 5s default read timeout is too aggressive for RPC
             # calls that do real server-side work (scans, cold workers).
-            timeout=httpx.Timeout(60.0, connect=10.0),
+            timeout=httpx2.Timeout(60.0, connect=10.0),
         )
         self._httpx_client_owned = True
         return self._httpx_client
@@ -796,7 +796,7 @@ class Client(CatalogClientMixin):
             worker.stream = None
 
         if worker._http_ctx is not None:
-            # HTTP transport — close the RPC proxy. The underlying httpx
+            # HTTP transport — close the RPC proxy. The underlying httpx2
             # client is shared across workers and closed in Client.stop().
             worker._http_ctx.__exit__(None, None, None)
             _logger.debug("http_connection_closed worker_index=%s", worker.worker_index)
@@ -934,7 +934,7 @@ class Client(CatalogClientMixin):
                 _logger.warning("stderr_thread_did_not_terminate")
         self._stderr_threads = []
 
-        # Close the shared httpx.Client if we created it ourselves.
+        # Close the shared httpx2.Client if we created it ourselves.
         if self._httpx_client_owned and self._httpx_client is not None:
             try:
                 self._httpx_client.close()

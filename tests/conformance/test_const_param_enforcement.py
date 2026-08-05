@@ -17,7 +17,8 @@ import pyarrow as pa
 import pytest
 
 from vgi.arguments import Arguments, ArgumentValidationError, ConstParam, Param, Returns
-from vgi.protocol import BindRequest, FunctionType
+from vgi.invocation import FunctionType
+from vgi.protocol import BindRequest
 from vgi.scalar_function import BindResult, ScalarFunction
 
 

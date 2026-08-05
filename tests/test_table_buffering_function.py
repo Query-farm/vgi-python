@@ -9,13 +9,17 @@ TFinalizeState resolution under non-trivial generic inheritance chains.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
+from vgi_rpc.rpc import AuthContext, CallContext, OutputCollector
 
 from vgi._test_fixtures.table_in_out import SingleTableArguments
+from vgi.protocol import TableBufferingFinalizeState
 from vgi.table_buffering_function import (
     TableBufferingFunction,
+    TableBufferingParams,
 )
 
 
@@ -47,22 +51,35 @@ class _StateB(ArrowSerializableDataclass):
 # doing real work — these tests are purely about class-time resolution.
 
 
-def _stub_process(cls, batch, params):  # noqa: ARG001 - test stub
+def _stub_process(  # noqa: ARG001 - test stub
+    cls: type, batch: pa.RecordBatch, params: TableBufferingParams[Any]
+) -> bytes:
     return b""
 
 
-def _stub_combine(cls, state_ids, params):  # noqa: ARG001 - test stub
+def _stub_combine(  # noqa: ARG001 - test stub
+    cls: type, state_ids: list[bytes], params: TableBufferingParams[Any]
+) -> list[bytes]:
     return state_ids
 
 
-def _stub_finalize(cls, params, finalize_state_id, state, out):  # noqa: ARG001 - test stub
+def _stub_finalize(  # noqa: ARG001 - test stub
+    cls: type,
+    params: TableBufferingParams[Any],
+    finalize_state_id: bytes,
+    state: Any,
+    out: OutputCollector,
+) -> None:
     out.finish()
 
 
-def _attach_stub_methods(cls: type) -> type:
-    cls.process = classmethod(_stub_process)
-    cls.combine = classmethod(_stub_combine)
-    cls.finalize = classmethod(_stub_finalize)
+def _attach_stub_methods[T: type](cls: T) -> T:
+    # The abstractmethods are bolted on after the fact, so mypy can't see the
+    # assignment as an override; go through an untyped alias for the writes.
+    target: Any = cls
+    target.process = classmethod(_stub_process)
+    target.combine = classmethod(_stub_combine)
+    target.finalize = classmethod(_stub_finalize)
     return cls
 
 
@@ -246,7 +263,13 @@ class _OnCancelProbeState(ArrowSerializableDataclass):
 _on_cancel_invocations: list[tuple[bytes, int]] = []
 
 
-def _stub_finalize_emit_then_finish(cls, params, finalize_state_id, state, out):  # noqa: ARG001
+def _stub_finalize_emit_then_finish(  # noqa: ARG001
+    cls: type,
+    params: TableBufferingParams[Any],
+    finalize_state_id: bytes,
+    state: Any,
+    out: OutputCollector,
+) -> None:
     """Fixture-stand-in finalize — irrelevant for the cancel tests."""
     out.finish()
 
@@ -267,9 +290,9 @@ class _OnCancelProbe(TableBufferingFunction[SingleTableArguments, _OnCancelProbe
     @classmethod
     def on_cancel(
         cls,
-        params,  # noqa: ARG003 — protocol layer wires this; we don't inspect it
+        params: TableBufferingParams[SingleTableArguments],  # noqa: ARG003 — wired by the protocol layer
         finalize_state_id: bytes,
-        state,
+        state: _OnCancelProbeState | None,
     ) -> None:
         """Append (finalize_state_id, state.emitted) so tests can assert."""
         emitted = state.emitted if state is not None else -1
@@ -291,20 +314,24 @@ class _StubWorker:
 
     def _load_table_buffering_params(  # noqa: ARG002 - signature mirrored
         self,
-        request,
-        ctx,
+        request: Any,
+        ctx: CallContext,
         *,
         attach_already_unwrapped: bool = False,
-    ):
+    ) -> tuple[type, object]:
         return self._func_cls, self._params
 
 
-class _StubCallContext:
-    """Minimal CallContext stand-in: just ``implementation`` and ``auth``."""
+def _call_context(implementation: object) -> CallContext:
+    """Build a CallContext carrying only what ``on_cancel`` actually reads.
 
-    def __init__(self, implementation: object) -> None:
-        self.implementation = implementation
-        self.auth = None
+    ``on_cancel`` touches ``ctx.implementation`` and threads ``ctx`` into
+    ``_load_table_buffering_params`` (stubbed above, which ignores it);
+    nothing else on the context is consulted.
+    """
+    return CallContext(
+        auth=AuthContext.anonymous(), emit_client_log=lambda _message: None, implementation=implementation
+    )
 
 
 def _build_finalize_state(
@@ -312,10 +339,8 @@ def _build_finalize_state(
     state_initialized: bool,
     state: _OnCancelProbeState | None,
     finalize_state_id: bytes = b"fid-test",
-) -> object:
+) -> TableBufferingFinalizeState:
     """Construct a TableBufferingFinalizeState wired for on_cancel testing."""
-    from vgi.protocol import TableBufferingFinalizeState
-
     blob = state.serialize_to_bytes() if state is not None else b""
     return TableBufferingFinalizeState(
         function_name="on_cancel_probe",
@@ -336,7 +361,7 @@ def test_on_cancel_invokes_user_classmethod_with_deserialized_state() -> None:
         state_initialized=True,
         state=_OnCancelProbeState(emitted=42),
     )
-    ctx = _StubCallContext(implementation=_StubWorker(_OnCancelProbe, params=object()))
+    ctx = _call_context(implementation=_StubWorker(_OnCancelProbe, params=object()))
 
     fstate.on_cancel(ctx)
 
@@ -353,7 +378,7 @@ def test_on_cancel_skips_when_state_uninitialized() -> None:
     _on_cancel_invocations.clear()
 
     fstate = _build_finalize_state(state_initialized=False, state=None)
-    ctx = _StubCallContext(implementation=_StubWorker(_OnCancelProbe, params=object()))
+    ctx = _call_context(implementation=_StubWorker(_OnCancelProbe, params=object()))
 
     fstate.on_cancel(ctx)
 
@@ -370,7 +395,7 @@ def test_on_cancel_passes_none_state_when_blob_empty() -> None:
     _on_cancel_invocations.clear()
 
     fstate = _build_finalize_state(state_initialized=True, state=None)
-    ctx = _StubCallContext(implementation=_StubWorker(_OnCancelProbe, params=object()))
+    ctx = _call_context(implementation=_StubWorker(_OnCancelProbe, params=object()))
 
     fstate.on_cancel(ctx)
 
@@ -396,7 +421,7 @@ def test_on_cancel_swallows_implementation_lookup_failures() -> None:
     # diagnostic path: produce() raises with a clear message, but
     # on_cancel must silently skip so we don't double-fault during
     # teardown.
-    ctx = _StubCallContext(implementation=None)
+    ctx = _call_context(implementation=None)
 
     fstate.on_cancel(ctx)  # must not raise
 
@@ -421,13 +446,18 @@ def test_on_cancel_swallows_user_exceptions() -> None:
             name = "raising_probe"
 
         @classmethod
-        def on_cancel(cls, params, finalize_state_id, state):  # noqa: ARG003
+        def on_cancel(
+            cls,
+            params: TableBufferingParams[SingleTableArguments],  # noqa: ARG003
+            finalize_state_id: bytes,
+            state: _OnCancelProbeState | None,
+        ) -> None:
             raise RuntimeError("user fixture error during teardown")
 
     fstate = _build_finalize_state(
         state_initialized=True,
         state=_OnCancelProbeState(emitted=1),
     )
-    ctx = _StubCallContext(implementation=_StubWorker(_RaisingProbe, params=object()))
+    ctx = _call_context(implementation=_StubWorker(_RaisingProbe, params=object()))
 
     fstate.on_cancel(ctx)  # must not raise

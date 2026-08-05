@@ -32,11 +32,9 @@ from vgi_rpc.rpc._common import _current_transport, _TransportContext
 from vgi_rpc.utils import ArrowSerializableDataclass
 
 from vgi.arguments import Arg, Arguments
-from vgi.invocation import BindResponse
+from vgi.invocation import BindResponse, FunctionType, GlobalInitResponse
 from vgi.protocol import (
     BindRequest,
-    FunctionType,
-    GlobalInitResponse,
     InitRequest,
     VgiCallState,
     VgiProtocol,

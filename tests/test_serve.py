@@ -10,10 +10,12 @@ import subprocess
 import sys
 import textwrap
 import time
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 import pytest
 
+from vgi.auth import TokenIdentity
 from vgi.scalar_function import ScalarFunction
 from vgi.serve import (
     _resolve_describe,
@@ -23,6 +25,9 @@ from vgi.serve import (
     load_worker_class,
 )
 from vgi.worker import Worker
+
+if TYPE_CHECKING:
+    import falcon
 
 # ---------------------------------------------------------------------------
 # Fixture workers for testing
@@ -270,7 +275,7 @@ class TestCreateApp:
         assert isinstance(app, falcon.App)
 
 
-def _capability_headers(app: object) -> dict[str, str]:
+def _capability_headers(app: falcon.App) -> dict[str, str]:
     """Read the capability headers a served app advertises on ``/health``.
 
     Args:
@@ -311,9 +316,7 @@ class _IntrospectingWorker(Worker):
     functions = [_DoubleFunc]
 
     @classmethod
-    def resolve_token(cls, token: str) -> object | None:
-        from vgi.auth import TokenIdentity
-
+    def resolve_token(cls, token: str) -> TokenIdentity | None:
         if token == "good-token":
             return TokenIdentity(principal="alice", token_name="deploy-key-1")
         return None

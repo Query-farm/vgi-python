@@ -17,8 +17,9 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 
 from vgi.arguments import Arguments
-from vgi.protocol import BindRequest, FunctionType, InitRequest
-from vgi.table_function import BindParams, ProcessParams
+from vgi.invocation import FunctionType
+from vgi.protocol import BindRequest, InitRequest
+from vgi.table_function import BindParams, ProcessParams, ResolvedSecrets
 
 
 def _bind_request(at_unit: str | None = None, at_value: str | None = None) -> BindRequest:
@@ -87,7 +88,7 @@ def test_process_params_accessor_reads_through_init_call() -> None:
         init_response=None,
         output_schema=pa.schema([pa.field("x", pa.int64())]),
         settings={},
-        secrets={},
+        secrets=ResolvedSecrets(),
         storage=None,  # type: ignore[arg-type]
     )
     assert params.at_unit == "TIMESTAMP"
@@ -102,7 +103,7 @@ def test_process_params_accessor_none_when_no_init_call() -> None:
         init_response=None,
         output_schema=pa.schema([]),
         settings={},
-        secrets={},
+        secrets=ResolvedSecrets(),
         storage=None,  # type: ignore[arg-type]
     )
     assert params.at_unit is None

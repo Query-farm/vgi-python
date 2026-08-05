@@ -21,8 +21,9 @@ from vgi._test_fixtures.twin_catalogs import TwinAFunction, TwinAWorker, TwinBFu
 from vgi._test_fixtures.worker import ExampleWorker
 from vgi.arguments import Arguments, Param, Returns
 from vgi.catalog.descriptors import Catalog, Schema
+from vgi.invocation import FunctionType
 from vgi.meta_worker import MetaWorker
-from vgi.protocol import BindRequest, FunctionType
+from vgi.protocol import BindRequest
 from vgi.scalar_function import ScalarFunction
 from vgi.worker import Worker
 

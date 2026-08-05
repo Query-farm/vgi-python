@@ -18,6 +18,8 @@ canonical extension type that wraps a comparable storage type.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pyarrow as pa
 import pytest
 
@@ -229,7 +231,7 @@ def test_pyarrow_kernel_gap_still_present() -> None:
 # =============================================================================
 
 
-def _uuid_array(uuids_hex: list[str | None]) -> pa.Array:
+def _uuid_array(uuids_hex: list[str | None]) -> pa.Array[Any]:
     """Build an arrow.uuid extension array from a list of 32-char hex strings."""
     storage = pa.array(
         [None if u is None else bytes.fromhex(u) for u in uuids_hex],
@@ -238,7 +240,7 @@ def _uuid_array(uuids_hex: list[str | None]) -> pa.Array:
     return pa.ExtensionArray.from_storage(pa.uuid(), storage)
 
 
-def _uuid_scalar(uuid_hex: str) -> pa.Scalar:
+def _uuid_scalar(uuid_hex: str) -> pa.Scalar[Any]:
     """Build an arrow.uuid extension scalar from a 32-char hex string."""
     storage = pa.scalar(bytes.fromhex(uuid_hex), type=pa.binary(16))
     return storage.cast(pa.uuid())

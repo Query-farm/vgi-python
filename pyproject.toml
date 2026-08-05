@@ -1,6 +1,6 @@
 [project]
 name = "vgi-python"
-version = "0.25.1"
+version = "0.26.0"
 description = "Vector Gateway Interface - Connect DuckDB to external programs via Apache Arrow"
 readme = "README.md"
 keywords = [
@@ -40,8 +40,8 @@ dependencies = [
     "pyarrow",
     "typer>=0.9",
     "platformdirs",
-    "vgi-rpc>=0.39.1",
-    "httpx>=0.24",
+    "vgi-rpc>=0.40.0",
+    "httpx2>=2.9.1",
 ]
 
 [project.optional-dependencies]
@@ -186,6 +186,10 @@ python_version = "3.13"
 strict = true
 warn_return_any = true
 warn_unused_ignores = true
+# tests/test_examples_workers.py puts examples/ on sys.path and imports the
+# doc example workers by bare module name; mirror that for mypy so the imports
+# resolve (and the examples themselves get checked).
+mypy_path = "examples"
 
 [[tool.mypy.overrides]]
 module = "typer.*"
@@ -195,6 +199,13 @@ ignore_missing_imports = true
 # granian ships no stubs, and is an optional extra used only behind
 # `--server granian`.
 module = "granian.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# jsonschema ships no py.typed marker and its stubs live in the separate
+# types-jsonschema distribution, which we don't depend on. Used only by the
+# landing-page conformance checker in tests/.
+module = "jsonschema.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -250,7 +261,7 @@ members = ["packages/vgi-fixtures"]
 vgi-fixtures = { workspace = true }
 
 [dependency-groups]
-dev = ["lxml>=6.0.2", "pytest-timeout>=2.4.0", "ty>=0.0.8", "vgi-fixtures"]
+dev = ["lxml>=6.0.2", "pytest-timeout>=2.4.0", "vgi-fixtures"]
 docs = [
     "mkdocs>=1.6",
     "mkdocs-material>=9.5",

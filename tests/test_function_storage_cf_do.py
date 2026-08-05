@@ -10,24 +10,24 @@ import os
 from typing import Any
 from unittest.mock import patch
 
-import httpx
+import httpx2
 import pytest
 
 from vgi.function_storage_cf_do import FunctionStorageCfDo
 
 
 class _MockTransport:
-    """httpx-compatible transport that records requests and returns canned responses.
+    """httpx2-compatible transport that records requests and returns canned responses.
 
-    Drop-in for ``httpx.MockTransport`` with a richer ergonomic surface:
+    Drop-in for ``httpx2.MockTransport`` with a richer ergonomic surface:
     callers ``queue_response(status, body)`` and inspect ``requests``
-    (list of ``httpx.Request``) afterwards. Each enqueued response is
+    (list of ``httpx2.Request``) afterwards. Each enqueued response is
     consumed in FIFO order.
 
     """
 
     def __init__(self) -> None:
-        self.requests: list[httpx.Request] = []
+        self.requests: list[httpx2.Request] = []
         self._responses: list[tuple[int, dict[str, object] | str | bytes | None]] = []
         # Optional per-request hook — set in tests that want to inject errors.
         self.on_request: Any = None
@@ -35,7 +35,7 @@ class _MockTransport:
     def queue_response(self, status: int, body: dict[str, object] | str | bytes | None) -> None:
         self._responses.append((status, body))
 
-    def _handler(self, request: httpx.Request) -> httpx.Response:
+    def _handler(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
         if self.on_request is not None:
             self.on_request(request)
@@ -43,13 +43,13 @@ class _MockTransport:
             raise AssertionError(f"Unexpected request {request.method} {request.url.path} — no response queued")
         status, body = self._responses.pop(0)
         if body is None:
-            return httpx.Response(status, content=b"")
+            return httpx2.Response(status, content=b"")
         if isinstance(body, (str, bytes)):
-            return httpx.Response(status, content=body)
-        return httpx.Response(status, json=body)
+            return httpx2.Response(status, content=body)
+        return httpx2.Response(status, json=body)
 
-    def as_httpx_transport(self) -> httpx.MockTransport:
-        return httpx.MockTransport(self._handler)
+    def as_httpx_transport(self) -> httpx2.MockTransport:
+        return httpx2.MockTransport(self._handler)
 
 
 @pytest.fixture
@@ -59,13 +59,13 @@ def mock_transport() -> _MockTransport:
 
 
 def _wrap_with_mock(s: FunctionStorageCfDo, transport: _MockTransport) -> None:
-    """Replace the storage's httpx client with one backed by the mock transport.
+    """Replace the storage's httpx2 client with one backed by the mock transport.
 
     Preserves base_url and headers so request inspection still sees the
     Authorization header etc.
     """
     old = s._client
-    s._client = httpx.Client(
+    s._client = httpx2.Client(
         base_url=str(old.base_url),
         headers=old.headers,
         timeout=old.timeout,
@@ -86,8 +86,9 @@ def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode()
 
 
-def _body(req: httpx.Request) -> dict[str, Any]:
-    return json.loads(req.content)
+def _body(req: httpx2.Request) -> dict[str, Any]:
+    parsed: dict[str, Any] = json.loads(req.content)
+    return parsed
 
 
 class TestFunctionStorageCfDo:
@@ -150,7 +151,7 @@ class TestFunctionStorageCfDo:
         assert cleared == 0
 
     def test_close_releases_client(self) -> None:
-        """close() closes the underlying httpx.Client."""
+        """close() closes the underlying httpx2.Client."""
         s = FunctionStorageCfDo(url="https://vgi-storage.example.workers.dev")
         s.close()
         # Subsequent post on a closed client should raise.

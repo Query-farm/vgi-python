@@ -5,15 +5,19 @@
 from __future__ import annotations
 
 import tempfile
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
+from vgi_rpc.rpc import OutputCollector
 
 from vgi._test_fixtures.copy_from import ExampleLinesCopyFromArgs, ExampleLinesCopyFromFunction
 from vgi._test_fixtures.worker import ExampleCatalog
 from vgi.arguments import Arguments
+from vgi.catalog.catalog_interface import AttachOpaqueData
 from vgi.invocation import FunctionType
 from vgi.protocol import BindRequest, CopyFromContext
+from vgi.table_function import ProcessParams
 
 
 class _CollectOut:
@@ -28,6 +32,15 @@ class _CollectOut:
     def finish(self) -> None:  # pragma: no cover - read() never calls finish itself
         pass
 
+    @property
+    def collector(self) -> OutputCollector:
+        """This fake viewed as the ``OutputCollector`` ``read()`` declares.
+
+        ``OutputCollector`` is a concrete class rather than a protocol, so
+        the duck-typed stand-in needs one cast to reach the real signature.
+        """
+        return cast("OutputCollector", self)
+
 
 def _write(text: str) -> str:
     """Write ``text`` to a throwaway file and return its path."""
@@ -36,7 +49,12 @@ def _write(text: str) -> str:
         return fp.name
 
 
-EXPECTED = pa.schema([("a", pa.int64()), ("b", pa.string())])
+_EXPECTED_FIELDS: list[tuple[str, pa.DataType]] = [("a", pa.int64()), ("b", pa.string())]
+EXPECTED = pa.schema(_EXPECTED_FIELDS)
+
+# This fixture's read() never touches ``params``; the real one receives the
+# ProcessParams the worker built for the scan.
+_NO_PARAMS = cast("ProcessParams[Any]", None)
 
 
 def test_on_bind_binds_to_expected_schema() -> None:
@@ -71,8 +89,8 @@ def test_read_parses_and_coerces_with_null_string() -> None:
         path=path,
         options=ExampleLinesCopyFromArgs(null_string="NA"),
         expected_schema=EXPECTED,
-        params=None,
-        out=out,
+        params=_NO_PARAMS,
+        out=out.collector,
     )
     table = pa.Table.from_batches(out.batches)
     assert table.schema.equals(EXPECTED)
@@ -87,8 +105,8 @@ def test_read_custom_delimiter_and_skip_rows() -> None:
         path=path,
         options=ExampleLinesCopyFromArgs(null_string="NA", delimiter="|", skip_rows=1),
         expected_schema=EXPECTED,
-        params=None,
-        out=out,
+        params=_NO_PARAMS,
+        out=out.collector,
     )
     assert pa.Table.from_batches(out.batches).to_pydict() == {"a": [1, 2], "b": ["a", "b"]}
 
@@ -101,8 +119,8 @@ def test_read_on_error_fail_vs_skip() -> None:
             path=path,
             options=ExampleLinesCopyFromArgs(null_string="NA"),  # on_error defaults to "fail"
             expected_schema=EXPECTED,
-            params=None,
-            out=_CollectOut(),
+            params=_NO_PARAMS,
+            out=_CollectOut().collector,
         )
 
     out = _CollectOut()
@@ -110,15 +128,15 @@ def test_read_on_error_fail_vs_skip() -> None:
         path=path,
         options=ExampleLinesCopyFromArgs(null_string="NA", on_error="skip"),
         expected_schema=EXPECTED,
-        params=None,
-        out=out,
+        params=_NO_PARAMS,
+        out=out.collector,
     )
     assert pa.Table.from_batches(out.batches).num_rows == 2
 
 
 def test_catalog_advertises_copy_format() -> None:
     """The example catalog advertises the example_lines format."""
-    formats = ExampleCatalog().copy_from_formats(attach_opaque_data=b"", transaction_opaque_data=None)
+    formats = ExampleCatalog().copy_from_formats(attach_opaque_data=AttachOpaqueData(b""), transaction_opaque_data=None)
     by_name = {f.format_name: f for f in formats}
     assert "example_lines" in by_name
     fmt = by_name["example_lines"]
@@ -128,7 +146,9 @@ def test_catalog_advertises_copy_format() -> None:
     assert fmt.tags.get("category") == "copy_from"
     opt_schema = pa.ipc.read_schema(pa.py_buffer(fmt.options))
     assert set(opt_schema.names) == {"delimiter", "null_string", "skip_rows", "on_error"}
-    assert opt_schema.field("null_string").metadata[b"vgi_doc"] == b"Token parsed as SQL NULL"
+    null_string_meta = opt_schema.field("null_string").metadata
+    assert null_string_meta is not None
+    assert null_string_meta[b"vgi_doc"] == b"Token parsed as SQL NULL"
 
 
 def test_bind_request_copy_from_wire_roundtrip() -> None:

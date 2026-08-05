@@ -3,7 +3,7 @@
 """Tests for vgi.worker module, including function overloading and cardinality."""
 
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Any
 
 import pyarrow as pa
 import pytest
@@ -14,9 +14,11 @@ from vgi_rpc.utils import deserialize_record_batch
 from vgi import Arg, TableInOutFunction, TableInput
 from vgi.arguments import Arguments, ConstParam, Param, Returns
 from vgi.catalog.catalog_interface import ColumnStatistics
-from vgi.invocation import FunctionType
+from vgi.function_storage import BoundStorage
+from vgi.invocation import BaseInitResponse, FunctionType
 from vgi.protocol import (
     BindRequest,
+    InitRequest,
     TableFunctionCardinalityRequest,
     TableFunctionStatisticsRequest,
 )
@@ -1550,10 +1552,10 @@ class _OpaqueDataFunc(ScalarFunctionGenerator):
     class Meta:
         name = "opaque_probe"
 
-    _compute_params: dict[str, Arg] = {
+    _compute_params: dict[str, Arg[Any]] = {
         "value": Arg(0, arrow_type=pa.int64(), doc="dummy column"),
     }
-    _const_params: dict[str, Arg] = {}
+    _const_params: dict[str, Arg[Any]] = {}
 
     @classmethod
     def output_type(cls, params: BindParameters) -> pa.DataType:
@@ -1571,7 +1573,15 @@ class _OpaqueDataFunc(ScalarFunctionGenerator):
         )
 
     @classmethod
-    def process(cls, *, batch, init_call, init_response, storage, auth_context):
+    def process(
+        cls,
+        *,
+        batch: pa.RecordBatch,
+        init_call: InitRequest,
+        init_response: BaseInitResponse,
+        storage: BoundStorage,
+        auth_context: AuthContext,
+    ) -> pa.RecordBatch:
         # Not exercised by this test, but required to be defined since
         # ScalarFunctionGenerator declares it abstract.
         return batch

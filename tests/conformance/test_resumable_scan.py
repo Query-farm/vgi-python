@@ -11,6 +11,7 @@ dropped rows. Also checks the capability gate on the non-resumable transport.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import cast
 
 import pyarrow as pa
 import pytest
@@ -45,13 +46,22 @@ def http_base_url() -> Iterator[str]:
         stack.close()
 
 
+def _ns(batch: pa.RecordBatch) -> list[int]:
+    """The batch's ``n`` column as ints.
+
+    ``sequence`` declares ``n`` non-null; ``to_pylist()`` types every element
+    optional regardless, so narrow once here instead of at each call site.
+    """
+    return cast("list[int]", batch.column("n").to_pylist())
+
+
 def _reference_rows(base_url: str) -> list[int]:
     """Read the full, ordered ``sequence`` result the normal way."""
     with Client.from_http(base_url) as client:
         return [
             v
             for b in client.table_function(function_name="sequence", schema_name="main", arguments=_ARGS)
-            for v in b.column("n").to_pylist()
+            for v in _ns(b)
         ]
 
 
@@ -67,7 +77,7 @@ def test_resumable_scan_matches_table_function(http_base_url: str) -> None:
             batch, _token = cur.next()
             if batch is None:
                 break
-            rows.extend(batch.column("n").to_pylist())
+            rows.extend(_ns(batch))
         cur.close()
 
     assert rows == expected
@@ -85,7 +95,7 @@ def test_resume_on_fresh_client_after_node_hop(http_base_url: str) -> None:
         for _ in range(3):
             batch, token = cur.next()
             assert batch is not None
-            rows.extend(batch.column("n").to_pylist())
+            rows.extend(_ns(batch))
         assert token is not None  # per-batch tokens are the default
         cur.close()
 
@@ -98,7 +108,7 @@ def test_resume_on_fresh_client_after_node_hop(http_base_url: str) -> None:
             batch, token = cur2.next()
             if batch is None:
                 break
-            rows.extend(batch.column("n").to_pylist())
+            rows.extend(_ns(batch))
         cur2.close()
 
     assert rows == expected  # contiguous, complete, no duplicates
@@ -122,7 +132,7 @@ def test_continue_on_fresh_client_skips_rebind(http_base_url: str) -> None:
         for _ in range(3):
             batch, token = cur.next()
             assert batch is not None
-            rows.extend(batch.column("n").to_pylist())
+            rows.extend(_ns(batch))
         assert token is not None
         cur.close()
 
@@ -133,7 +143,7 @@ def test_continue_on_fresh_client_skips_rebind(http_base_url: str) -> None:
             batch, token = cur2.next()
             if batch is None:
                 break
-            rows.extend(batch.column("n").to_pylist())
+            rows.extend(_ns(batch))
         cur2.close()
 
     assert rows == expected

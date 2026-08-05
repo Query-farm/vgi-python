@@ -21,7 +21,7 @@ from vgi.aggregate_function import AggregateBindParams
 from vgi.arguments import Arguments
 from vgi.function_storage import BoundStorage, FunctionStorageSqlite
 from vgi.scalar_function import BindParameters
-from vgi.table_function import ProcessParams, SecretsAccessor
+from vgi.table_function import ProcessParams, ResolvedSecrets, SecretsAccessor
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -48,7 +48,7 @@ def _process_params(value_type: pa.DataType, axes_type: pa.StructType) -> Proces
         init_response=None,
         output_schema=output_schema,
         settings={},
-        secrets={},
+        secrets=ResolvedSecrets(),
         storage=BoundStorage(storage, b"nest_tensor_test"),
     )
 

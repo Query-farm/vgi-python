@@ -90,7 +90,7 @@ class CatalogClientMixin:
     Catalog methods spawn ephemeral connections under the hood — for
     subprocess transport a pooled subprocess worker; for HTTP transport a
     short-lived ``http_connect`` session reusing the ``Client``'s shared
-    ``httpx.Client`` (bearer token, headers); for TCP transport a short-lived
+    ``httpx2.Client`` (bearer token, headers); for TCP transport a short-lived
     ``tcp_connect`` session. Browsing catalogs over HTTP is the canonical
     non-DuckDB use case this mixin supports.
 
@@ -122,7 +122,7 @@ class CatalogClientMixin:
         command, so repeated catalog calls reuse a warm worker.
 
         HTTP: opens a short-lived ``http_connect`` session per call. The
-        underlying ``httpx.Client`` is shared across calls via
+        underlying ``httpx2.Client`` is shared across calls via
         ``Client._get_or_create_httpx_client`` so auth headers and
         connection pooling are consistent.
 

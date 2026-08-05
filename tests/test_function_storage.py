@@ -3,6 +3,7 @@
 """Tests for vgi.function_storage module."""
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -522,25 +523,28 @@ class TestShardKeyDerivation:
     def test_cfdo_backend_without_attach_refuses(self) -> None:
         """A remote-sharding backend must refuse to build without an attach."""
         # (requires_shard_key) must not silently collapse onto one DO.
-        from vgi.function_storage import BoundStorage
+        from vgi.function_storage import BoundStorage, FunctionStorage
 
         class _FakeCfDo:
             requires_shard_key = True
 
+        # Only `requires_shard_key` is read before the raise, so a stand-in
+        # that implements just that flag is enough to reach the branch.
         with pytest.raises(ValueError, match="16-byte attach uuid"):
-            BoundStorage(_FakeCfDo(), b"exec1")
+            BoundStorage(cast(FunctionStorage, _FakeCfDo()), b"exec1")
 
     def test_cfdo_backend_shards_on_uuid_prefix(self) -> None:
         """With a full plaintext (uuid||catalog_bytes), the cfdo shard key is the uuid."""
         import uuid
 
-        from vgi.function_storage import BoundStorage
+        from vgi.function_storage import BoundStorage, FunctionStorage
 
         class _FakeCfDo:
             requires_shard_key = True
 
         u = uuid.uuid4().bytes
-        bs = BoundStorage(_FakeCfDo(), b"exec1", attach_plaintext=u + b"catalog-bytes")
+        # Same stand-in as above: shard-key derivation reads only the flag.
+        bs = BoundStorage(cast(FunctionStorage, _FakeCfDo()), b"exec1", attach_plaintext=u + b"catalog-bytes")
         assert bs._shard_key == "att-" + u.hex()
 
     def test_non_sharding_backend_without_attach_gets_empty_key(self) -> None:

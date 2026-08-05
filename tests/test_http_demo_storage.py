@@ -12,7 +12,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-import httpx
+import httpx2
 import pyarrow as pa
 import pytest
 
@@ -347,7 +347,7 @@ def test_demo_input_upload_url_then_exchange(compression: str) -> None:
             payload = co.compress(payload) + co.flush(zlib.Z_FINISH)
             headers["Content-Encoding"] = "gzip"
 
-        put_resp = httpx.put(upload.upload_url, content=payload, headers=headers, timeout=30.0)
+        put_resp = httpx2.put(upload.upload_url, content=payload, headers=headers, timeout=30.0)
         assert put_resp.status_code == 201
 
         with http_connect(
@@ -408,5 +408,5 @@ def test_demo_blob_404() -> None:
     with _run_demo_http_server(port=port, threshold_bytes=4096):
         _wait_for_http_server(base_url)
 
-        resp = httpx.get(f"{base_url}/__blobs__/nonexistent.arrow", timeout=10.0)
+        resp = httpx2.get(f"{base_url}/__blobs__/nonexistent.arrow", timeout=10.0)
         assert resp.status_code == 404

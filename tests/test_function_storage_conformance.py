@@ -55,9 +55,9 @@ def _put(backend: object, *pairs: tuple[bytes, bytes]) -> None:
     backend.state_put_many(SCOPE, NS, list(pairs))  # type: ignore[attr-defined]
 
 
-def _keys(rows: object) -> list[bytes]:
+def _keys(rows: list[tuple[bytes, bytes]]) -> list[bytes]:
     """Project the keys out of a list of (key, value) rows."""
-    return [k for k, _ in rows]  # type: ignore[union-attr]
+    return [k for k, _ in rows]
 
 
 # --- scan: order, range, reverse, limit ---

@@ -20,7 +20,7 @@ from vgi.metadata import (
     resolve_metadata,
 )
 from vgi.schema_utils import schema
-from vgi.table_function import BindParams
+from vgi.table_function import BindParams, ProcessParams
 from vgi.table_in_out_function import RowTransformFunction
 
 
@@ -81,7 +81,7 @@ class TestBlendedFootguns:
                 name = "blended_finalize"
 
             @classmethod
-            def finish(cls, params, states):  # noqa: ANN001, ANN206, D102
+            def finish(cls, params: ProcessParams[_XYArgs], states: list[None]) -> list[pa.RecordBatch]:  # noqa: D102
                 return []
 
         with pytest.raises(TypeError, match="cannot override finalize"):

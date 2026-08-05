@@ -46,7 +46,7 @@ _ALL_INDICES = list(range(12))
 _SINGLE_COL_PROJECTIONS = [[i] for i in range(12)]
 # Empty projection — represents ``SELECT count(*)`` where DuckDB needs
 # zero data columns.
-_EMPTY_PROJECTION = []
+_EMPTY_PROJECTION: list[int] = []
 
 
 # ---------------------------------------------------------------------------

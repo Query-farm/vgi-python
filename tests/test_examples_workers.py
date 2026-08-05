@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pytest
 
 from vgi.client import Client
+from vgi.table_function import ProcessParams
 
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 
@@ -125,13 +127,17 @@ def test_sum_worker_aggregate_phases() -> None:
     """
     import sum_worker as m
 
-    states: dict[int, object] = {0: m.SumState(), 1: m.SumState()}
-    m.Sum.update(states, pa.array([0, 0, 1, 1, 1], type=pa.int64()), pa.array([10, 5, 1, 2, 3], type=pa.int64()))
-    assert states[0].total == 15  # type: ignore[attr-defined]
-    assert states[1].total == 6  # type: ignore[attr-defined]
+    # combine()/finalize() in this example never read params; the real ones
+    # receive the ProcessParams the worker built for the aggregate.
+    no_params = cast("ProcessParams[None]", None)
 
-    merged = m.Sum.combine(m.SumState(total=15), m.SumState(total=100), params=None)
+    states: dict[int, m.SumState] = {0: m.SumState(), 1: m.SumState()}
+    m.Sum.update(states, pa.array([0, 0, 1, 1, 1], type=pa.int64()), pa.array([10, 5, 1, 2, 3], type=pa.int64()))
+    assert states[0].total == 15
+    assert states[1].total == 6
+
+    merged = m.Sum.combine(m.SumState(total=15), m.SumState(total=100), params=no_params)
     assert merged.total == 115
 
-    out = m.Sum.finalize(pa.array([0, 1], type=pa.int64()), states, params=None)
+    out = m.Sum.finalize(pa.array([0, 1], type=pa.int64()), states, params=no_params)
     assert out.column("result").to_pylist() == [15, 6]

@@ -57,7 +57,7 @@ VGI_WORKER_SHARED_STORAGE=cloudflare-do vgi-serve my_worker.py --http
 |---|---|---|---|
 | SQLite | `sqlite` (default) | local / subprocess | none (stdlib) |
 | Azure SQL | `azure-sql` | Azure deployments | `vgi-python[azure]` |
-| Cloudflare DO | `cloudflare-do` | edge / multi-cloud | none extra — uses `httpx`, which ships with `vgi-python`; needs a Worker endpoint + token |
+| Cloudflare DO | `cloudflare-do` | edge / multi-cloud | none extra — uses `httpx2`, which ships with `vgi-python`; needs a Worker endpoint + token |
 
 The per-backend setup (connection strings, credentials, table provisioning) is documented in the
 [Shared Storage reference](../shared-storage.md).

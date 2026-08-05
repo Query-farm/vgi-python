@@ -165,7 +165,7 @@ class TestTableFunctionAuth:
 
     def test_process_params_default_anonymous(self) -> None:
         """ProcessParams defaults to anonymous auth."""
-        from vgi.table_function import ProcessParams
+        from vgi.table_function import ProcessParams, ResolvedSecrets
 
         params = ProcessParams(
             args=None,
@@ -173,7 +173,7 @@ class TestTableFunctionAuth:
             init_response=None,
             output_schema=pa.schema([]),
             settings={},
-            secrets={},
+            secrets=ResolvedSecrets(),
             storage=None,  # type: ignore[arg-type]
         )
         assert params.auth_context.authenticated is False
@@ -181,7 +181,7 @@ class TestTableFunctionAuth:
 
     def test_process_params_with_auth(self) -> None:
         """ProcessParams accepts explicit auth context."""
-        from vgi.table_function import ProcessParams
+        from vgi.table_function import ProcessParams, ResolvedSecrets
 
         auth = AuthContext(principal="bob", authenticated=True, domain="jwt")
         params = ProcessParams(
@@ -190,7 +190,7 @@ class TestTableFunctionAuth:
             init_response=None,
             output_schema=pa.schema([]),
             settings={},
-            secrets={},
+            secrets=ResolvedSecrets(),
             storage=None,  # type: ignore[arg-type]
             auth_context=auth,
         )
@@ -225,7 +225,7 @@ class TestTableFunctionAuth:
 
     def test_init_params_default_anonymous(self) -> None:
         """InitParams defaults to anonymous auth."""
-        from vgi.table_function import InitParams
+        from vgi.table_function import InitParams, ResolvedSecrets
 
         params = InitParams(
             args=None,
@@ -233,7 +233,7 @@ class TestTableFunctionAuth:
             execution_id=b"\x00" * 16,
             output_schema=pa.schema([]),
             settings={},
-            secrets={},
+            secrets=ResolvedSecrets(),
             storage=None,  # type: ignore[arg-type]
         )
         assert params.auth_context.authenticated is False

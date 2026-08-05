@@ -23,23 +23,22 @@ class TestRequiredFiltersField:
 
     def _bbox_columns(self) -> pa.Schema:
         """Return a small schema with a ``bbox`` STRUCT plus flat id/ticker."""
-        return pa.schema(
-            [
-                ("id", pa.int64()),
-                ("ticker", pa.string()),
-                (
-                    "bbox",
-                    pa.struct(
-                        [
-                            ("xmin", pa.float64()),
-                            ("ymin", pa.float64()),
-                            ("xmax", pa.float64()),
-                            ("ymax", pa.float64()),
-                        ]
-                    ),
+        fields: list[tuple[str, pa.DataType]] = [
+            ("id", pa.int64()),
+            ("ticker", pa.string()),
+            (
+                "bbox",
+                pa.struct(
+                    [
+                        ("xmin", pa.float64()),
+                        ("ymin", pa.float64()),
+                        ("xmax", pa.float64()),
+                        ("ymax", pa.float64()),
+                    ]
                 ),
-            ]
-        )
+            ),
+        ]
+        return pa.schema(fields)
 
     def test_default_is_empty_tuple(self) -> None:
         """Default is an empty tuple; TableInfo wire field is an empty list."""

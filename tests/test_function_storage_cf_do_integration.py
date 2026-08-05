@@ -20,8 +20,9 @@ from __future__ import annotations
 import os
 import secrets
 import uuid
+from collections.abc import Iterator
 
-import httpx
+import httpx2
 import pytest
 
 from vgi.function_storage_cf_do import FunctionStorageCfDo
@@ -40,7 +41,7 @@ def _eid() -> bytes:
 
 
 @pytest.fixture
-def storage() -> FunctionStorageCfDo:
+def storage() -> Iterator[FunctionStorageCfDo]:
     """Build a real client pointed at the running DO."""
     s = FunctionStorageCfDo(url=_URL or "", token=os.environ.get("VGI_CF_DO_TOKEN"))
     yield s
@@ -73,7 +74,7 @@ def test_queue_push_replay_does_not_duplicate(storage: FunctionStorageCfDo) -> N
 
     eid = _eid()
     attempt = uuid.uuid4().hex
-    body = {
+    body: dict[str, object] = {
         "execution_id": base64.b64encode(eid).decode(),
         "items": [base64.b64encode(b"a").decode(), base64.b64encode(b"b").decode()],
     }
@@ -99,7 +100,7 @@ def test_queue_pop_replay_returns_same_item(storage: FunctionStorageCfDo) -> Non
     storage.queue_push(eid, [b"a", b"b", b"c"])
 
     attempt = uuid.uuid4().hex
-    body = {"execution_id": base64.b64encode(eid).decode()}
+    body: dict[str, object] = {"execution_id": base64.b64encode(eid).decode()}
     r1 = storage._post("queue_pop", body, attempt_id=attempt)
     r2 = storage._post("queue_pop", body, attempt_id=attempt)
 
@@ -139,7 +140,7 @@ def test_missing_attempt_id_returns_400(storage: FunctionStorageCfDo) -> None:
     import base64
 
     eid = _eid()
-    body = {"execution_id": base64.b64encode(eid).decode()}
+    body: dict[str, object] = {"execution_id": base64.b64encode(eid).decode()}
     with pytest.raises(ValueError, match="attempt_id"):
         # Bypass the public method (which always generates one).
         storage._post("queue_pop", body, attempt_id=None)
@@ -157,7 +158,7 @@ def test_invalid_attempt_id_format_returns_400(storage: FunctionStorageCfDo) -> 
         # the attempt_id validation downstream is what we actually exercise.
         "shard_key": "loc-anon",
     }
-    # Drive raw httpx so we can ship an arbitrary attempt_id string.
+    # Drive raw httpx2 so we can ship an arbitrary attempt_id string.
     resp = storage._client.post("/queue_pop", json=body)
     assert resp.status_code == 400
     assert "attempt_id" in resp.text
@@ -200,5 +201,5 @@ def test_health_check_get_is_rejected(storage: FunctionStorageCfDo) -> None:
     Accept either 405 (when no auth token is configured) or 401 (when one
     is — the router validates the bearer token before method).
     """
-    resp = httpx.get(_URL or "")
+    resp = httpx2.get(_URL or "")
     assert resp.status_code in (401, 405)

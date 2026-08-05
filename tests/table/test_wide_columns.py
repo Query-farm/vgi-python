@@ -15,7 +15,8 @@ from vgi_rpc.rpc import RpcServer
 
 from vgi._test_fixtures.table.wide import DEFAULT_COLUMNS, WideFunction
 from vgi.arguments import Arguments
-from vgi.protocol import BindRequest, FunctionType, InitRequest, VgiProtocol
+from vgi.invocation import FunctionType
+from vgi.protocol import BindRequest, InitRequest, VgiProtocol
 from vgi.worker import Worker
 
 

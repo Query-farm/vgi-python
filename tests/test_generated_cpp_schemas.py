@@ -16,7 +16,7 @@ import io
 import os
 import re
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pyarrow as pa
 import pytest
@@ -128,7 +128,7 @@ def _parse_type(expr: str) -> pa.DataType:
         # arrow::timestamp(arrow::TimeUnit::UNIT) or arrow::timestamp(unit, "tz").
         inside = expr[len("arrow::timestamp(") : -1]
         parts = _split_top_level_comma(inside)
-        unit_map = {
+        unit_map: dict[str, Literal["s", "ms", "us", "ns"]] = {
             "arrow::TimeUnit::SECOND": "s",
             "arrow::TimeUnit::MILLI": "ms",
             "arrow::TimeUnit::MICRO": "us",

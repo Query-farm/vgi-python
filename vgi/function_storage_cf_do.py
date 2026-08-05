@@ -47,7 +47,7 @@ import uuid
 from collections.abc import Iterator
 from typing import Any
 
-import httpx
+import httpx2
 
 __all__ = [
     "FunctionStorageCfDo",
@@ -84,7 +84,7 @@ class FunctionStorageCfDo:
     Durable Object running SQLite. The DO is single-threaded, so all
     operations are inherently atomic — no locking needed.
 
-    Uses a single ``httpx.Client`` shared across threads. ``httpx.Client`` is
+    Uses a single ``httpx2.Client`` shared across threads. ``httpx2.Client`` is
     thread-safe by design (its connection pool serialises access per-conn),
     so callers from concurrent producer turns can hit this storage instance
     without coordination.
@@ -126,16 +126,16 @@ class FunctionStorageCfDo:
         # geographic RTT + DO instantiation, not TLS handshake overhead, so
         # HTTP/2 multiplexing brings little upside and Cloudflare's h2 frontend
         # appears to add latency to cold-path calls.
-        self._client = httpx.Client(
+        self._client = httpx2.Client(
             base_url=self._url,
             headers=headers,
-            timeout=httpx.Timeout(30.0),
-            limits=httpx.Limits(
+            timeout=httpx2.Timeout(30.0),
+            limits=httpx2.Limits(
                 max_keepalive_connections=20,
                 max_connections=100,
                 keepalive_expiry=30.0,
             ),
-            transport=httpx.HTTPTransport(retries=self._CONNECT_RETRIES),
+            transport=httpx2.HTTPTransport(retries=self._CONNECT_RETRIES),
         )
 
     def close(self) -> None:
@@ -192,7 +192,7 @@ class FunctionStorageCfDo:
             t0 = time.monotonic()
             try:
                 resp = self._client.post(path, json=body)
-            except httpx.RequestError as exc:
+            except httpx2.RequestError as exc:
                 # Connection error, read error, timeout, etc. Narrowed to
                 # ``RequestError`` (not the broader ``HTTPError``) so we
                 # don't accidentally swallow programmer errors like

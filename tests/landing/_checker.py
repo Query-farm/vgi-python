@@ -24,7 +24,9 @@ import argparse
 import json
 import pathlib
 import sys
+import urllib.error
 import urllib.request
+from typing import Any
 
 import jsonschema
 
@@ -41,16 +43,16 @@ def _get(url: str, accept: str = "application/json") -> tuple[int, bytes, str]:
     try:
         with urllib.request.urlopen(req) as resp:  # noqa: S310 — trusted local URL
             return resp.status, resp.read(), resp.headers.get("Content-Type", "")
-    except urllib.error.HTTPError as exc:  # type: ignore[attr-defined]
+    except urllib.error.HTTPError as exc:
         return exc.code, exc.read(), exc.headers.get("Content-Type", "")
 
 
-def normalize(doc: dict) -> dict:
+def normalize(doc: dict[str, Any]) -> dict[str, Any]:
     """Strip volatile/language-specific fields so goldens compare across languages."""
     return {k: v for k, v in doc.items() if k not in _VOLATILE_TOP}
 
 
-def _canonical(doc: dict) -> str:
+def _canonical(doc: dict[str, Any]) -> str:
     return json.dumps(doc, indent=2, sort_keys=True, ensure_ascii=False)
 
 

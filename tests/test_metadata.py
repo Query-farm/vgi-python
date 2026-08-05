@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pyarrow as pa
+from vgi_rpc.rpc import OutputCollector
 
 from vgi import (
     AnyArrow,
@@ -252,8 +255,6 @@ class TestHasFinalizeDetection:
 
     def test_finish_override_detected(self) -> None:
         """Overriding finish() on TableInOutFunction sets has_finalize=True."""
-        from typing import Any
-
         from vgi.table_in_out_function import TableInOutFunction as TIOF
 
         class WithFinish(TIOF):  # type: ignore[type-arg]
@@ -270,8 +271,6 @@ class TestHasFinalizeDetection:
 
     def test_generator_finalize_override_detected(self) -> None:
         """Overriding finalize() on TableInOutGenerator is detected."""
-        from typing import Any
-
         from vgi.table_in_out_function import TableInOutGenerator
 
         class GenWithFinalize(TableInOutGenerator):  # type: ignore[type-arg]
@@ -321,8 +320,6 @@ class TestHasFinalizeDetection:
 
     def test_meta_override_forces_false(self) -> None:
         """Meta.has_finalize = False wins over a real finish() override."""
-        from typing import Any
-
         from vgi.table_in_out_function import TableInOutFunction as TIOF
 
         class ForcedOff(TIOF):  # type: ignore[type-arg]
@@ -353,7 +350,7 @@ class TestHasFinalizeDetection:
 
     def test_non_tableinout_class(self) -> None:
         """Non-TableInOut function types always report has_finalize=False."""
-        from typing import Annotated, Any
+        from typing import Annotated
 
         from vgi.arguments import Param, Returns
         from vgi.scalar_function import ScalarFunction
@@ -698,7 +695,7 @@ class TestFunctionTags:
             FunctionInfo,
             ReadOnlyCatalogInterface,
         )
-        from vgi.table_function import TableFunctionGenerator
+        from vgi.table_function import ProcessParams, TableFunctionGenerator
 
         class DynamicTable(TableFunctionGenerator):  # type: ignore[type-arg]
             class Meta:
@@ -712,8 +709,10 @@ class TestFunctionTags:
 
             FIXED_SCHEMA = pa.schema([pa.field("id", pa.int64())])
 
-            def process(self, params):  # type: ignore[no-untyped-def]
-                yield pa.record_batch({"id": [1]})
+            @classmethod
+            def process(cls, params: ProcessParams[Any], state: None, out: OutputCollector) -> None:
+                out.emit(pa.record_batch({"id": [1]}))
+                out.finish()
 
         class Cat(ReadOnlyCatalogInterface):
             catalog_name = "functions"

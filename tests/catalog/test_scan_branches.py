@@ -63,7 +63,7 @@ class _LegacyOnlyCatalog(_StubCatalogBase):
 
     # Only the legacy method is overridden; table_scan_branches_get falls back
     # to the CatalogInterface default-impl shim.
-    def table_scan_function_get(  # type: ignore[override]
+    def table_scan_function_get(
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
@@ -89,7 +89,7 @@ class _MultiBranchCatalog(_StubCatalogBase):
     keep them non-overlapping at scan time.
     """
 
-    def table_scan_function_get(  # type: ignore[override]
+    def table_scan_function_get(
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
@@ -108,7 +108,7 @@ class _MultiBranchCatalog(_StubCatalogBase):
             required_extensions=[],
         )
 
-    def table_scan_branches_get(  # type: ignore[override]
+    def table_scan_branches_get(
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
@@ -184,7 +184,7 @@ class TestDefaultImplShim:
                 super().__init__()
                 self.last_at: tuple[str | None, str | None] | None = None
 
-            def table_scan_function_get(  # type: ignore[override]
+            def table_scan_function_get(
                 self,
                 *,
                 attach_opaque_data: AttachOpaqueData,
