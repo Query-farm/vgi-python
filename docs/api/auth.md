@@ -12,6 +12,12 @@ require `pip install vgi-python[http]`; JWT authentication additionally requires
 
 ::: vgi.auth
 
+## Token introspection
+
+`TokenIdentity` is what [`Worker.resolve_token`][vgi.worker.Worker.resolve_token] returns: a
+`principal` plus an optional `token_name`. It lives in a private `vgi-rpc` module, so `vgi.auth`
+re-exports it — a worker that implements `resolve_token` never has to name a private import path.
+
 ## Secret protocol
 
 ::: vgi.secret_protocol

@@ -1433,7 +1433,7 @@ class Worker:
                 asker may itself have rejected.
 
         Returns:
-            A [`TokenIdentity`][] whose ``principal`` is in the exact form
+            A ``TokenIdentity`` whose ``principal`` is in the exact form
             this worker would derive itself, or ``None`` when the credential
             does not resolve. Never claims: a pass-through claims field would
             let a worker choose its caller's tenant routing and policy branch.

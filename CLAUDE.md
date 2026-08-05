@@ -437,7 +437,7 @@ class MyWorker(Worker):
         try:
             row = api_keys.lookup(token)          # your own store
         except ConnectionError as exc:
-            # "I could not find out" — 503 + Retry-After, not 401.
+            # "I could not find out" -- 503 + Retry-After, not 401.
             raise AuthUnavailableError(str(exc)) from exc
         if row is None:
             return None                           # "the credential is unknown"
