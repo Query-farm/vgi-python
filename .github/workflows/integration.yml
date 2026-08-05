@@ -78,11 +78,11 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
 
-      - name: Set up Python 3.13
-        run: uv python install 3.13
+      - name: Set up Python 3.14
+        run: uv python install 3.14
 
       - name: Install dependencies (vgi + fixtures + all extras)
-        run: uv sync --all-extras --python 3.13
+        run: uv sync --all-extras --python 3.14
 
       - name: Download haybarn-unittest
         run: |

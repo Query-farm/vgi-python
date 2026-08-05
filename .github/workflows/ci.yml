@@ -83,8 +83,8 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
 
-      - name: Set up Python 3.13
-        run: uv python install 3.13
+      - name: Set up Python 3.14
+        run: uv python install 3.14
 
       - name: Install dependencies
         run: uv sync --all-extras --group docs
@@ -141,8 +141,8 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
 
-      - name: Set up Python 3.13
-        run: uv python install 3.13
+      - name: Set up Python 3.14
+        run: uv python install 3.14
 
       - name: Install test dependencies
         run: |
@@ -150,7 +150,7 @@ jobs:
           # local vgi-rpc checkout with the s3/external extras plus boto3.
           # Subsequent uv run calls must pass --no-sync or uv re-syncs the
           # env to the lockfile and drops the overlay.
-          uv sync --all-extras --python 3.13
+          uv sync --all-extras --python 3.14
           uv pip install './vgi-rpc[http,s3,external]' boto3
 
       - name: Create test bucket in LocalStack
