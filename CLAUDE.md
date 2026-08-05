@@ -297,6 +297,11 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-fixture-
 | `VGI_OAUTH_DEVICE_CODE_CLIENT_ID` | Client ID for device-code flow (optional, URL-safe chars only) |
 | `VGI_OAUTH_DEVICE_CODE_CLIENT_SECRET` | Client secret for device-code flow (optional, URL-safe chars only) |
 | `VGI_OAUTH_USE_ID_TOKEN` | When `1`/`true`/`yes`, clients use OIDC `id_token` as Bearer instead of `access_token` |
+| `VGI_INTROSPECT_PRINCIPALS` | Comma-separated principals permitted to call `__introspect_token__`. Required — no permissive default — whenever the worker implements `resolve_token()` (see below) |
+| `VGI_INTROSPECT_RATE_LIMIT` | Introspection requests allowed per caller per second (default 20) |
+| `VGI_WORKER_ACCESS_LOG_SAMPLE` | Fraction of *successful* calls to keep in the access log, `0.0`–`1.0`. Errors are always kept; the decision is per call, so every record of one stream shares a fate |
+| `VGI_WORKER_ACCESS_LOG_ASYNC` | When `1`/`true`/`yes`, emit access-log records from a listener thread. Bounded queue; full means drop, and a crash loses whatever is queued |
+| `VGI_WORKER_ACCESS_LOG_QUEUE_SIZE` | Bound on the async access-log queue (default 10000) |
 | `VGI_OTEL_ENABLED` | Enable OpenTelemetry instrumentation (`1`/`true`/`yes`) |
 | `VGI_OTEL_CUSTOM_ATTRIBUTES` | Comma-separated `key=value` pairs for custom span/metric attributes |
 | `VGI_OTEL_CLAIM_ATTRIBUTES` | Comma-separated `claim_key=span_attr_name` pairs for claim extraction |
@@ -391,6 +396,96 @@ Set `SENTRY_DSN` (and install `vgi[sentry]`) to forward unhandled exceptions to 
 **Releases.** `vgi-serve` populates `release` from `SENTRY_RELEASE` if set, otherwise from `importlib.metadata.version("vgi-python")`. Production deploys should set `SENTRY_RELEASE=$(git rev-parse HEAD)` (or a tagged release identifier) so Sentry's commit-tracking and regression-detection features can correlate events to specific commits. Publishing GitHub releases makes the release-comparison UI more useful.
 
 The same enrichment applies to OTel spans when `VGI_OTEL_ENABLED=1` — both backends read from the same `VgiTracer.set_current_span_attributes()` call sites in `vgi/otel.py`. Either, neither, or both can be active in a process.
+
+### Serving Behind a Load Balancer
+
+`--max-externalized-response-bytes` caps a single *externalized* response — the
+payload uploaded to blob storage and replaced on the wire by a pointer. Set it
+to whatever the load balancer, API gateway, or object-store policy in front of
+the worker will actually carry.
+
+```bash
+vgi-serve my.worker:MyWorker --http --max-externalized-response-bytes 67108864
+```
+
+Unlike `--max-stream-response-bytes`, which governs the wire and is *soft* for
+producer streams (a continuation token carries the overshoot to the next turn),
+this cap is **hard on every method type with no continuation escape** — bytes
+already uploaded cannot be un-uploaded. Default is no cap. When set, the value
+is advertised as `VGI-Max-Externalized-Response-Bytes` so clients can size their
+own expectations.
+
+Also available on `Worker.main --http` and the fixture server. Under
+`--server granian` it travels to worker processes through `export_serve_config`.
+
+### Token Introspection (`resolve_token`)
+
+A worker may optionally expose `POST {prefix}/__introspect_token__`, which
+resolves an opaque bearer credential to a principal — for a reverse proxy that
+terminates the only public listener and must know the caller's identity before
+it can authorize anything.
+
+```python
+from vgi.auth import AuthUnavailableError, TokenIdentity
+from vgi.worker import Worker
+
+class MyWorker(Worker):
+    functions = [...]
+
+    @classmethod
+    def resolve_token(cls, token: str) -> TokenIdentity | None:
+        try:
+            row = api_keys.lookup(token)          # your own store
+        except ConnectionError as exc:
+            # "I could not find out" — 503 + Retry-After, not 401.
+            raise AuthUnavailableError(str(exc)) from exc
+        if row is None:
+            return None                           # "the credential is unknown"
+        return TokenIdentity(principal=row.principal, token_name=row.label)
+```
+
+**The route does not exist until `resolve_token` is overridden** — absent, not
+routed-and-refusing. That is what keeps a dependency upgrade from growing a
+credential-to-identity oracle on every existing worker.
+
+Enabling it also requires an allowlist of principals permitted to ask, via
+`--introspect-principals` or `VGI_INTROSPECT_PRINCIPALS`. There is no permissive
+default and a worker that overrides the hook without one **refuses to start**:
+authenticating and introspecting are different capabilities, and "any
+authenticated caller" lets any user resolve any other user's credential to its
+owner. `--introspect-rate-limit` (default 20/caller/second) bounds, rather than
+closes, the oracle an allowlisted-but-compromised caller still has.
+
+Return `None` for "the store answered and this credential is unknown"; raise
+`AuthUnavailableError` for "the answer is not knowable". A caller that
+negative-caches the first must not cache the second. Never return claims — a
+pass-through claims field would let a worker choose its caller's tenant routing
+and policy branch.
+
+`AuthUnavailableError` is worth reaching for in any custom `authenticate`
+callback too, not just here: it is deliberately **not** a `ValueError`, because
+`chain_authenticate` advances to the next authenticator on `ValueError` — so a
+sidecar outage raised as one is read as "not my credential, try the next" and
+ends up a 401 from the end of the chain, restarting every session in the fleet
+over a thirty-second blip.
+
+### Access Log Sampling and Async Emission
+
+`--access-log-sample 0.05` keeps 5% of *successful* calls. Errors are always
+kept, and the decision is made per call so every record belonging to one stream
+shares a fate. `--access-log-async` moves formatting and writing to a listener
+thread so disk latency stays off the request path; the queue is bounded
+(`--access-log-queue-size`, default 10000), full means drop, and the next record
+through carries `dropped_records` so a gap is never silent. A crash loses
+whatever is still queued — that is the trade.
+
+Both apply only to `vgi_rpc.access`, which gets its own handler for the purpose.
+They are deliberately not applied to the diagnostic loggers: dropping half of a
+traceback is not a saving.
+
+**Trace correlation needs no configuration.** vgi-rpc reads whatever span is
+current when it emits a record, so `trace_id` / `span_id` appear on every access
+record as soon as `VGI_OTEL_ENABLED=1`.
 
 ### Key Constraints for Scalar Functions:
 - **1:1 row mapping**: Output must have exactly the same number of rows as input

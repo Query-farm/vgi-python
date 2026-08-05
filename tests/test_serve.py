@@ -270,6 +270,203 @@ class TestCreateApp:
         assert isinstance(app, falcon.App)
 
 
+def _capability_headers(app: object) -> dict[str, str]:
+    """Read the capability headers a served app advertises on ``/health``.
+
+    Args:
+        app: The Falcon app under test.
+
+    Returns:
+        Response headers, lowercased.
+
+    """
+    import falcon.testing
+
+    resp = falcon.testing.TestClient(app).simulate_get("/vgi/health")
+    assert resp.status_code == 200
+    return {k.lower(): v for k, v in resp.headers.items()}
+
+
+class TestMaxExternalizedResponseBytes:
+    """The externalized-response cap, for workers behind a size-limited proxy."""
+
+    def test_advertised_when_set(self) -> None:
+        """The cap reaches the wire, so a client can size its own expectations."""
+        app = create_app(_SingleWorker, prefix="/vgi", describe=False, max_externalized_response_bytes=65536)
+        assert _capability_headers(app)["vgi-max-externalized-response-bytes"] == "65536"
+
+    def test_absent_by_default(self) -> None:
+        """No cap unless one is configured.
+
+        The header's absence is what tells a client there is no ceiling; a
+        default value here would be a ceiling nobody chose.
+        """
+        app = create_app(_SingleWorker, prefix="/vgi", describe=False)
+        assert "vgi-max-externalized-response-bytes" not in _capability_headers(app)
+
+
+class _IntrospectingWorker(Worker):
+    """Worker that implements the optional token-introspection hook."""
+
+    functions = [_DoubleFunc]
+
+    @classmethod
+    def resolve_token(cls, token: str) -> object | None:
+        from vgi.auth import TokenIdentity
+
+        if token == "good-token":
+            return TokenIdentity(principal="alice", token_name="deploy-key-1")
+        return None
+
+
+class TestIntrospectResolverDetection:
+    """``resolve_token`` presence is detected by override, not by a flag."""
+
+    def test_base_worker_has_no_resolver(self) -> None:
+        """A worker that never wrote the lookup gets no endpoint."""
+        assert _SingleWorker._introspect_resolver() is None
+
+    def test_override_is_detected(self) -> None:
+        """Implementing the hook is what enables it."""
+        resolver = _IntrospectingWorker._introspect_resolver()
+        assert resolver is not None
+        assert resolver("good-token") is not None
+        assert resolver("nope") is None
+
+
+class TestTokenIntrospection:
+    """``POST /__introspect_token__`` — absent unless a worker implements it."""
+
+    @staticmethod
+    def _client(worker_cls: type[Worker], **env: str) -> object:
+        import falcon.testing
+
+        from vgi.serve import _resolve_authenticate
+
+        with pytest.MonkeyPatch.context() as mp:
+            for key in ("VGI_INTROSPECT_PRINCIPALS", "VGI_INTROSPECT_RATE_LIMIT", "VGI_BEARER_TOKENS"):
+                mp.delenv(key, raising=False)
+            for key, value in env.items():
+                mp.setenv(key, value)
+            app = create_app(
+                worker_cls,
+                prefix="/vgi",
+                describe=False,
+                authenticate=_resolve_authenticate(),
+            )
+        return falcon.testing.TestClient(app)
+
+    def test_route_absent_without_hook(self) -> None:
+        """Not "routed and refusing" — absent.
+
+        This is the property that keeps a dependency upgrade from silently
+        growing a credential-to-identity oracle on every existing worker.
+        """
+        client = self._client(_SingleWorker)
+        resp = client.simulate_post("/vgi/__introspect_token__", json={"token": "x"})  # type: ignore[attr-defined]
+        assert resp.status_code == 404
+
+    def test_capability_not_advertised_without_hook(self) -> None:
+        """A proxy preflighting at boot learns this worker cannot answer."""
+        app = create_app(_SingleWorker, prefix="/vgi", describe=False)
+        assert "vgi-token-introspection" not in _capability_headers(app)
+
+    def test_capability_advertised_with_hook(self) -> None:
+        """A proxy can discover support at boot rather than at first login."""
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("VGI_INTROSPECT_PRINCIPALS", "proxy-a")
+            app = create_app(_IntrospectingWorker, prefix="/vgi", describe=False)
+        assert _capability_headers(app)["vgi-token-introspection"] == "true"
+
+    def test_allowlisted_caller_resolves(self) -> None:
+        """The endpoint answers with a principal and never with claims."""
+        client = self._client(
+            _IntrospectingWorker,
+            VGI_INTROSPECT_PRINCIPALS="proxy-a",
+            VGI_BEARER_TOKENS="ptok=proxy-a",
+        )
+        resp = client.simulate_post(  # type: ignore[attr-defined]
+            "/vgi/__introspect_token__",
+            json={"token": "good-token"},
+            headers={"Authorization": "Bearer ptok"},
+        )
+        assert resp.status_code == 200
+        assert resp.json == {"principal": "alice", "token_name": "deploy-key-1", "ttl_seconds": 300}
+        assert "claims" not in resp.json
+
+    def test_unresolvable_token_is_404(self) -> None:
+        """Unknown credential and unknown route answer alike, on purpose."""
+        client = self._client(
+            _IntrospectingWorker,
+            VGI_INTROSPECT_PRINCIPALS="proxy-a",
+            VGI_BEARER_TOKENS="ptok=proxy-a",
+        )
+        resp = client.simulate_post(  # type: ignore[attr-defined]
+            "/vgi/__introspect_token__",
+            json={"token": "nope"},
+            headers={"Authorization": "Bearer ptok"},
+        )
+        assert resp.status_code == 404
+
+    def test_non_allowlisted_caller_refused(self) -> None:
+        """Authenticating is not the same capability as introspecting.
+
+        Without this, any user holding a valid credential could resolve any
+        other user's credential to its owner.
+        """
+        client = self._client(
+            _IntrospectingWorker,
+            VGI_INTROSPECT_PRINCIPALS="proxy-a",
+            VGI_BEARER_TOKENS="ptok=proxy-a,utok=user-b",
+        )
+        resp = client.simulate_post(  # type: ignore[attr-defined]
+            "/vgi/__introspect_token__",
+            json={"token": "good-token"},
+            headers={"Authorization": "Bearer utok"},
+        )
+        assert resp.status_code == 403
+
+    def test_hook_without_allowlist_refuses_to_start(self) -> None:
+        """Fail closed and loud, rather than defaulting to an open oracle."""
+        with pytest.MonkeyPatch.context() as mp:
+            mp.delenv("VGI_INTROSPECT_PRINCIPALS", raising=False)
+            with pytest.raises(SystemExit) as exc:
+                create_app(_IntrospectingWorker, prefix="/vgi", describe=False)
+        assert exc.value.code == 1
+
+    @pytest.mark.parametrize("bad", ["nonsense", "0", "-5"])
+    def test_bad_rate_limit_refuses_to_start(self, bad: str) -> None:
+        """A typo must not silently become "refuse everything" or "no bound"."""
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("VGI_INTROSPECT_PRINCIPALS", "proxy-a")
+            mp.setenv("VGI_INTROSPECT_RATE_LIMIT", bad)
+            with pytest.raises(SystemExit):
+                create_app(_IntrospectingWorker, prefix="/vgi", describe=False)
+
+
+class TestAuthUnavailableReExport:
+    """``AuthUnavailableError`` is reachable without naming a vgi_rpc module."""
+
+    def test_importable_from_vgi_auth(self) -> None:
+        """Worker authors reach it from ``vgi.auth`` like every other auth type."""
+        from vgi_rpc.http import AuthUnavailableError as Upstream
+
+        from vgi.auth import AuthUnavailableError
+
+        assert AuthUnavailableError is Upstream
+
+    def test_is_not_a_value_error(self) -> None:
+        """The whole point: ``chain_authenticate`` must not swallow it.
+
+        The chain advances to the next authenticator on ``ValueError``, so an
+        outage raised as one is read as "not my credential, try the next" and
+        ends up a 401 — restarting every session in the fleet over a blip.
+        """
+        from vgi.auth import AuthUnavailableError
+
+        assert not issubclass(AuthUnavailableError, ValueError)
+
+
 # ---------------------------------------------------------------------------
 # Tests: env var helpers
 # ---------------------------------------------------------------------------

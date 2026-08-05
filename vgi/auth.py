@@ -7,7 +7,10 @@ Core types (always available):
 
 HTTP auth factories (require ``vgi[http]``):
     bearer_authenticate, bearer_authenticate_static, chain_authenticate,
-    OAuthResourceMetadata
+    OAuthResourceMetadata, AuthUnavailableError
+
+Token introspection (requires ``vgi[http]``):
+    TokenIdentity, TokenResolver
 
 JWT auth (requires ``vgi[oauth]``):
     jwt_authenticate
@@ -27,6 +30,7 @@ __all__ = [
 # HTTP auth helpers — available when vgi[http] is installed.
 with contextlib.suppress(ImportError):
     from vgi_rpc.http import (  # noqa: F401
+        AuthUnavailableError,
         OAuthResourceMetadata,
         bearer_authenticate,
         bearer_authenticate_static,
@@ -37,8 +41,16 @@ with contextlib.suppress(ImportError):
         parse_device_code_client_secret,
     )
 
+    # Not re-exported by ``vgi_rpc.http`` itself, so the private module is the
+    # only import path.  Re-exported here so a worker that implements
+    # ``resolve_token`` never has to name a private module.
+    from vgi_rpc.http.server._introspect import TokenIdentity, TokenResolver  # noqa: F401
+
     __all__ += [
+        "AuthUnavailableError",
         "OAuthResourceMetadata",
+        "TokenIdentity",
+        "TokenResolver",
         "bearer_authenticate",
         "bearer_authenticate_static",
         "chain_authenticate",

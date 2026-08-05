@@ -179,6 +179,14 @@ def main() -> None:
             "--demo-storage",
             help="Enable in-process blob storage for externalized payloads (no S3 required)",
         ),
+        max_externalized_response_bytes: int | None = typer.Option(  # noqa: B008
+            None,
+            "--max-externalized-response-bytes",
+            help=(
+                "Cap on a single externalized response. Hard on every method type, "
+                "with no continuation escape. Default: no cap."
+            ),
+        ),
         port_file: str | None = typer.Option(
             None,
             "--port-file",
@@ -379,6 +387,7 @@ def main() -> None:
             upload_url_provider=upload_url_provider,
             max_upload_bytes=max_upload_bytes if upload_url_provider is not None else None,
             max_request_bytes=max_request_bytes,
+            max_externalized_response_bytes=max_externalized_response_bytes,
             authenticate=authenticate,
             oauth_resource_metadata=oauth_metadata,
             enable_landing_page=False,

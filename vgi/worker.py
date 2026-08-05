@@ -164,6 +164,10 @@ from vgi.table_in_out_function import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from vgi_rpc.http.server._introspect import TokenIdentity
+
     from vgi.catalog.descriptors import Catalog
     from vgi.protocol import (
         AggregateBindRequest,
@@ -1398,6 +1402,64 @@ class Worker:
 
         return cls._default_catalog_interface
 
+    @classmethod
+    def resolve_token(cls, token: str) -> TokenIdentity | None:
+        """Resolve an opaque bearer credential to the identity it authenticates as.
+
+        Override to enable ``POST {prefix}/__introspect_token__``, which a
+        reverse proxy calls when it terminates the only public listener and
+        must know *which principal* a credential is before it can authorize
+        anything. Until it is overridden the route does not exist at all —
+        not "exists and refuses", absent — so no worker grows a
+        credential-to-identity oracle by upgrading a dependency.
+
+        Enabling it also requires an allowlist of principals permitted to ask
+        (``--introspect-principals`` / ``VGI_INTROSPECT_PRINCIPALS``). There is
+        no permissive default: authenticating and introspecting are different
+        capabilities, and a deployment where any valid credential may
+        introspect lets any user resolve any other user's credential to its
+        owner. Overriding this without setting the allowlist is a startup
+        error rather than a silently-open endpoint.
+
+        This is deliberately *not* "run the credential back through the
+        worker's own authenticate chain" — see
+        ``vgi_rpc.http.server._introspect`` for the four ways that breaks.
+        Write a narrow lookup against whatever store issued the credential.
+
+        Args:
+            token: The opaque credential. Never a JWS — three-segment
+                credentials are refused before they reach here, because
+                routing one onward would hand a third party a token the
+                asker may itself have rejected.
+
+        Returns:
+            A [`TokenIdentity`][] whose ``principal`` is in the exact form
+            this worker would derive itself, or ``None`` when the credential
+            does not resolve. Never claims: a pass-through claims field would
+            let a worker choose its caller's tenant routing and policy branch.
+
+        Raises:
+            AuthUnavailableError: When the answer is not *knowable* — the
+                backing store is down, a timeout, a 5xx from a remote
+                authority. Distinct from ``None``, which means the store
+                answered and the credential is unknown. A caller that
+                negative-caches the second must not cache the first.
+
+        """
+        return None
+
+    @classmethod
+    def _introspect_resolver(cls) -> Callable[[str], TokenIdentity | None] | None:
+        """Return this worker's token resolver, or ``None`` when it has none.
+
+        Identity comparison against the base implementation rather than a
+        "supports introspection" flag: the route must be absent unless a
+        worker actually wrote the lookup, and a flag can be set without one.
+        """
+        if cls.resolve_token.__func__ is Worker.resolve_token.__func__:  # type: ignore[attr-defined]
+            return None
+        return cls.resolve_token
+
     @final
     @classmethod
     def main(cls) -> None:
@@ -1488,6 +1550,16 @@ class Worker:
                     "process() ticks would otherwise queue on the WSGI threadpool."
                 ),
             ),
+            max_externalized_response_bytes: int | None = typer.Option(  # noqa: B008
+                None,
+                "--max-externalized-response-bytes",
+                help=(
+                    "HTTP-only. Cap on a single externalized response — the payload "
+                    "uploaded to blob storage and replaced on the wire by a pointer. "
+                    "Size it to what the load balancer or gateway in front of this "
+                    "worker will carry. Default: no cap."
+                ),
+            ),
         ) -> None:
             env_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
             effective_debug = debug or env_debug
@@ -1525,6 +1597,7 @@ class Worker:
                     otel_config=otel_config,
                     port_file=port_file,
                     http_threads=http_threads,
+                    max_externalized_response_bytes=max_externalized_response_bytes,
                 )
             elif unix is not None:
                 # AF_UNIX launcher path.  Bind to the requested socket,
@@ -1621,6 +1694,7 @@ class Worker:
         otel_config: Any = None,
         port_file: str | None = None,
         http_threads: int | None = None,
+        max_externalized_response_bytes: int | None = None,
     ) -> None:
         """Start the worker as an HTTP server (shared by ``main`` and ``main_http``)."""
         import socket
@@ -1653,6 +1727,7 @@ class Worker:
             authenticate=authenticate,
             oauth_resource_metadata=oauth_resource_metadata,
             otel_config=otel_config,
+            max_externalized_response_bytes=max_externalized_response_bytes,
         )
 
         # Side-channel port publication for test harnesses: write the port

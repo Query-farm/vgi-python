@@ -32,7 +32,7 @@ import logging
 import os
 import secrets
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -209,6 +209,9 @@ def create_app(
     oauth_resource_metadata: Any = None,
     otel_config: OtelConfig | None = None,
     max_stream_response_bytes: int | None = None,
+    max_externalized_response_bytes: int | None = None,
+    introspect_principals: Iterable[str] | None = None,
+    introspect_rate_limit: int | None = None,
 ) -> falcon.App[Any, Any]:
     """Create a WSGI app for a VGI worker.
 
@@ -243,6 +246,21 @@ def create_app(
             response up to this byte budget before emitting a continuation
             token.  Default ``None`` keeps the current one-batch-per-response
             behaviour.
+        max_externalized_response_bytes: HTTP-only.  Cap on a single
+            *externalized* response — the payload uploaded to blob storage and
+            replaced on the wire by a pointer.  Set it to whatever a load
+            balancer, API gateway or object-store policy in front of this
+            worker will actually carry.  Unlike ``max_stream_response_bytes``
+            this is a hard cap on every method type with no continuation
+            escape, because bytes already uploaded cannot be un-uploaded.
+            ``None`` (the default) means no cap.
+        introspect_principals: Principals permitted to call
+            ``__introspect_token__``.  Only consulted when the worker class
+            overrides ``resolve_token``.  ``None`` reads
+            ``VGI_INTROSPECT_PRINCIPALS``.
+        introspect_rate_limit: Introspection requests allowed per caller per
+            second.  ``None`` reads ``VGI_INTROSPECT_RATE_LIMIT``, defaulting
+            to 20.
 
     Returns:
         A Falcon WSGI application.
@@ -278,6 +296,19 @@ def create_app(
     from vgi.worker import _get_vgi_version
 
     server = RpcServer(VgiProtocol, worker, enable_describe=describe, server_version=_get_vgi_version())
+
+    # Absent unless the worker class actually implements the lookup. Passing
+    # ``None`` leaves the route unrouted rather than routed-and-refusing, which
+    # is what keeps a dependency upgrade from growing a credential oracle.
+    introspect_resolver = worker_cls._introspect_resolver()
+    introspect_kwargs: dict[str, Any] = {}
+    if introspect_resolver is not None:
+        introspect_kwargs = {
+            "introspect_resolver": introspect_resolver,
+            "introspect_principals": _resolve_introspect_principals(introspect_principals),
+            "introspect_rate_limit": _resolve_introspect_rate_limit(introspect_rate_limit),
+        }
+
     wsgi_app = make_wsgi_app(
         server,
         prefix=prefix,
@@ -288,7 +319,9 @@ def create_app(
         oauth_resource_metadata=oauth_resource_metadata,
         otel_config=otel_config,
         max_stream_response_bytes=max_stream_response_bytes,
+        max_externalized_response_bytes=max_externalized_response_bytes,
         enable_landing_page=False,
+        **introspect_kwargs,
     )
 
     # Frontend: either redirect to external CDN or serve pre-rendered worker page
@@ -390,6 +423,61 @@ def main() -> None:
                 "before emitting a continuation token. Default: one batch per response."
             ),
         ),
+        max_externalized_response_bytes: int | None = typer.Option(  # noqa: B008
+            None,
+            "--max-externalized-response-bytes",
+            help=(
+                "HTTP-only. Cap on a single externalized response — the payload "
+                "uploaded to blob storage and replaced on the wire by a pointer. "
+                "Size it to what the load balancer or gateway in front of this "
+                "worker will carry. Hard on every method type, with no continuation "
+                "escape, because uploaded bytes cannot be un-uploaded. Default: no cap."
+            ),
+        ),
+        introspect_principals: str | None = typer.Option(  # noqa: B008
+            None,
+            "--introspect-principals",
+            help=(
+                "Comma-separated principals permitted to call __introspect_token__. "
+                "Only used when the worker implements resolve_token(); required in "
+                "that case, with no permissive default. Env: VGI_INTROSPECT_PRINCIPALS."
+            ),
+        ),
+        introspect_rate_limit: int | None = typer.Option(  # noqa: B008
+            None,
+            "--introspect-rate-limit",
+            help=(
+                "Introspection requests allowed per caller per second (default 20). "
+                "Bounds, rather than closes, the oracle an allowlisted-but-compromised "
+                "caller has. Env: VGI_INTROSPECT_RATE_LIMIT."
+            ),
+        ),
+        access_log_sample: float | None = typer.Option(  # noqa: B008
+            None,
+            "--access-log-sample",
+            help=(
+                "Fraction of successful calls to keep in the access log (0.0-1.0). "
+                "Errors are always kept, and the decision is made per call so every "
+                "record of one stream shares a fate. Env: VGI_WORKER_ACCESS_LOG_SAMPLE."
+            ),
+        ),
+        access_log_async: bool = typer.Option(
+            False,
+            "--access-log-async",
+            help=(
+                "Write access-log records from a background thread so disk latency "
+                "stays out of the request path. The queue is bounded and full means "
+                "drop; a crash loses whatever is queued. Env: VGI_WORKER_ACCESS_LOG_ASYNC."
+            ),
+        ),
+        access_log_queue_size: int | None = typer.Option(  # noqa: B008
+            None,
+            "--access-log-queue-size",
+            help=(
+                "Bound on the async access-log queue (default 10000). Ignored unless "
+                "--access-log-async. Env: VGI_WORKER_ACCESS_LOG_QUEUE_SIZE."
+            ),
+        ),
     ) -> None:
         env_debug = os.environ.get("VGI_WORKER_DEBUG", "").lower() in ("1", "true", "yes")
         effective_debug = debug or env_debug
@@ -400,6 +488,9 @@ def main() -> None:
             log_level=log_level,
             log_loggers=log_logger,
             log_format=log_format,
+            access_log_sample=access_log_sample,
+            access_log_async=access_log_async,
+            access_log_queue_size=access_log_queue_size,
         )
         # Before the worker class is imported, so module-import cost lands in
         # the profile too — for many workers that is the bulk of startup.
@@ -436,6 +527,9 @@ def main() -> None:
                 oauth_resource_metadata=oauth_metadata,
                 otel_config=otel_config,
                 max_stream_response_bytes=max_stream_response_bytes,
+                max_externalized_response_bytes=max_externalized_response_bytes,
+                introspect_principals=introspect_principals,
+                introspect_rate_limit=introspect_rate_limit,
                 server=server,
                 worker_ref=worker_ref,
                 http_workers=http_workers,
@@ -593,6 +687,87 @@ def _resolve_authenticate() -> Callable[..., Any] | None:
     from vgi_rpc.http import require_all
 
     return require_all(gate, inner)
+
+
+def _resolve_introspect_principals(explicit: Iterable[str] | None) -> list[str]:
+    """Resolve the introspector allowlist, or exit with an actionable message.
+
+    Env var: ``VGI_INTROSPECT_PRINCIPALS``, comma-separated.
+
+    Fail-closed and loud rather than defaulting to "any authenticated caller":
+    authenticating and introspecting are different capabilities, and a
+    permissive default lets any user resolve any other user's credential to
+    its owner. A worker that implements ``resolve_token`` and forgets the
+    allowlist must not start.
+
+    Args:
+        explicit: Principals passed to :func:`create_app`, or None to read
+            the environment.
+
+    Returns:
+        The allowlist, guaranteed non-empty.
+
+    Raises:
+        SystemExit: When neither source names a principal.
+
+    """
+    if explicit is not None:
+        principals = [p.strip() for p in explicit if p.strip()]
+    else:
+        raw = os.environ.get("VGI_INTROSPECT_PRINCIPALS") or ""
+        principals = [p.strip() for p in raw.split(",") if p.strip()]
+
+    if not principals:
+        sys.stderr.write(
+            "Error: this worker implements resolve_token(), which enables the\n"
+            "  POST /__introspect_token__ endpoint, but no introspector allowlist\n"
+            "  was configured. Set VGI_INTROSPECT_PRINCIPALS (comma-separated) or\n"
+            "  pass --introspect-principals.\n"
+            "\n"
+            "  There is no permissive default on purpose: introspection is a\n"
+            "  separate capability from authentication, and allowing every\n"
+            "  authenticated caller lets any user resolve any other user's\n"
+            "  credential to its owner. Remove resolve_token() to disable the\n"
+            "  endpoint entirely.\n"
+        )
+        sys.exit(1)
+    return principals
+
+
+def _resolve_introspect_rate_limit(explicit: int | None) -> int:
+    """Resolve introspection requests allowed per caller per second.
+
+    Env var: ``VGI_INTROSPECT_RATE_LIMIT``; defaults to 20.
+
+    Args:
+        explicit: Value passed to :func:`create_app`, or None to read the
+            environment.
+
+    Returns:
+        A positive per-caller, per-second request ceiling.
+
+    Raises:
+        SystemExit: When the environment value is not a positive integer. A
+            typo that silently became 0 would refuse every introspection with
+            no diagnostic; one that became huge would remove the bound on an
+            allowlisted-but-compromised caller's guessing rate.
+
+    """
+    if explicit is not None:
+        value = explicit
+    else:
+        raw = os.environ.get("VGI_INTROSPECT_RATE_LIMIT")
+        if not raw:
+            return 20
+        try:
+            value = int(raw)
+        except ValueError:
+            sys.stderr.write(f"Error: VGI_INTROSPECT_RATE_LIMIT must be an integer, got {raw!r}\n")
+            sys.exit(1)
+    if value <= 0:
+        sys.stderr.write(f"Error: introspection rate limit must be positive, got {value}\n")
+        sys.exit(1)
+    return value
 
 
 def _resolve_proxy_proof_gate() -> Any | None:
@@ -940,6 +1115,7 @@ def export_serve_config(
     describe: bool,
     log_level: int,
     max_stream_response_bytes: int | None,
+    max_externalized_response_bytes: int | None,
 ) -> None:
     """Publish the parent's serve configuration for worker processes to read.
 
@@ -952,6 +1128,7 @@ def export_serve_config(
         describe: Whether to enable the worker + API description pages.
         log_level: Logging level for the worker instance.
         max_stream_response_bytes: Producer-stream response budget, or None.
+        max_externalized_response_bytes: Externalized-response cap, or None.
 
     """
     os.environ[SERVE_CONFIG_ENV] = json.dumps(
@@ -962,6 +1139,7 @@ def export_serve_config(
             "describe": describe,
             "log_level": log_level,
             "max_stream_response_bytes": max_stream_response_bytes,
+            "max_externalized_response_bytes": max_externalized_response_bytes,
         }
     )
 
@@ -1005,6 +1183,7 @@ def wsgi_app_factory() -> Any:
         oauth_resource_metadata=_resolve_oauth_resource_metadata(),
         otel_config=_resolve_otel_config(),
         max_stream_response_bytes=config["max_stream_response_bytes"],
+        max_externalized_response_bytes=config["max_externalized_response_bytes"],
     )
 
 
@@ -1036,6 +1215,7 @@ def _serve_http_granian(
     describe: bool,
     effective_level: int,
     max_stream_response_bytes: int | None,
+    max_externalized_response_bytes: int | None,
     worker_ref: str | None,
     http_workers: int | None,
     http_threads: int | None,
@@ -1066,6 +1246,7 @@ def _serve_http_granian(
         describe: Whether to enable the description pages.
         effective_level: Logging level for the worker instance.
         max_stream_response_bytes: Producer-stream response budget, or None.
+        max_externalized_response_bytes: Externalized-response cap, or None.
         worker_ref: The worker reference string, required here because the
             children import it rather than inheriting a class object.
         http_workers: Number of worker processes; ``None`` means 1. These are
@@ -1099,6 +1280,7 @@ def _serve_http_granian(
         describe=describe,
         log_level=effective_level,
         max_stream_response_bytes=max_stream_response_bytes,
+        max_externalized_response_bytes=max_externalized_response_bytes,
     )
 
     print(f"PORT:{port}", flush=True)
@@ -1144,6 +1326,9 @@ def _serve_http(
     oauth_resource_metadata: Any = None,
     otel_config: Any = None,
     max_stream_response_bytes: int | None = None,
+    max_externalized_response_bytes: int | None = None,
+    introspect_principals: str | None = None,
+    introspect_rate_limit: int | None = None,
     server: str = "waitress",
     worker_ref: str | None = None,
     http_workers: int | None = None,
@@ -1151,6 +1336,15 @@ def _serve_http(
 ) -> None:
     """Start the worker as an HTTP server."""
     port = _resolve_http_port(host, port)
+
+    # Republished as environment rather than threaded through as arguments, so
+    # a granian child — which rebuilds the app itself and inherits only the
+    # environment — resolves the same allowlist the parent was given. See
+    # export_serve_config for why the environment is the channel.
+    if introspect_principals is not None:
+        os.environ["VGI_INTROSPECT_PRINCIPALS"] = introspect_principals
+    if introspect_rate_limit is not None:
+        os.environ["VGI_INTROSPECT_RATE_LIMIT"] = str(introspect_rate_limit)
 
     if server == "granian":
         _serve_http_granian(
@@ -1162,6 +1356,7 @@ def _serve_http(
             describe=describe,
             effective_level=effective_level,
             max_stream_response_bytes=max_stream_response_bytes,
+            max_externalized_response_bytes=max_externalized_response_bytes,
             worker_ref=worker_ref,
             http_workers=http_workers,
             http_threads=http_threads,
@@ -1187,6 +1382,7 @@ def _serve_http(
         oauth_resource_metadata=oauth_resource_metadata,
         otel_config=otel_config,
         max_stream_response_bytes=max_stream_response_bytes,
+        max_externalized_response_bytes=max_externalized_response_bytes,
     )
 
     # Machine-readable port for process managers and test harnesses
