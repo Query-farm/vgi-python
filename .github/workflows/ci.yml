@@ -107,7 +107,7 @@ jobs:
       # fail_on_error to true (and drop continue-on-error) once the vocab in
       # .github/styles/config/vocabularies/VGI/accept.txt is settled.
       - name: Prose lint (Vale)
-        uses: errata-ai/vale-action@v2
+        uses: errata-ai/vale-action@v3
         continue-on-error: true
         with:
           files: docs
