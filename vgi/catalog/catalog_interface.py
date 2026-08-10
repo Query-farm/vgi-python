@@ -2591,10 +2591,13 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         ctx: "CallContext | None" = None,
     ) -> CatalogAttachResult:
         """Attach to the catalog. Version constraints are ignored by default."""
+        from vgi.catalog.attach_option import validate_required_attach_options
+
         del data_version_spec, implementation_version, ctx
         effective_name = self._effective_catalog_name
         if name != effective_name:
             raise ValueError(f"Unknown catalog: {name!r}. Available: {effective_name}")
+        validate_required_attach_options(effective_name, self.attach_option_specs, options)
 
         # Serialize settings and secret types for the attach result
         serialized_settings = [s.serialize() for s in self.settings]

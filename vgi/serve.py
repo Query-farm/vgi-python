@@ -335,21 +335,14 @@ def create_app(
         # contract. The page (identical across all language workers) reads the
         # ``_vgi_identity`` cookie itself, so no server-side HTML injection is
         # needed.
-        from vgi.http.landing_page import (
-            ColumnsResource,
-            DescribeJsonResource,
-            LandingPageResource,
-        )
+        from vgi.http.landing_page import ClientBundleResource, LandingPageResource
 
         oauth_active = (
             oauth_resource_metadata is not None and getattr(oauth_resource_metadata, "client_id", None) is not None
         )
         server_id = getattr(server, "server_id", "")
-        wsgi_app.add_route(prefix or "/", LandingPageResource(server_id=server_id))
-        wsgi_app.add_route(
-            f"{prefix}/describe.json", DescribeJsonResource(worker_cls, oauth=oauth_active, server_id=server_id)
-        )
-        wsgi_app.add_route(f"{prefix}/describe/{{catalog}}/{{schema}}/{{table}}.json", ColumnsResource(worker_cls))
+        wsgi_app.add_route(prefix or "/", LandingPageResource(worker_cls, server_id=server_id, oauth=oauth_active))
+        wsgi_app.add_route(f"{prefix}/vgi-client.js", ClientBundleResource())
 
     return wsgi_app
 

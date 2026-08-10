@@ -5,9 +5,16 @@
 [`Setting`][vgi.catalog.setting.Setting] (session-level, resent every call) and
 [`AttachOption`][vgi.catalog.attach_option.AttachOption] (delivered once at
 ``catalog_attach``) are declared the same way — an `Annotated`-hint descriptor
-plus a serializable spec with an identical Arrow IPC wire format. This module
+plus a serializable spec sharing the same four Arrow IPC columns. This module
 holds the machinery both share; the two public modules subclass it so their
-names, wire format, and behaviour are unchanged.
+names and behaviour are unchanged.
+
+A subclass may widen its wire format with additional columns — `AttachOption`
+adds ``required`` — via :meth:`_SpecBase._extra_row` /
+:meth:`_SpecBase._extra_kwargs` and :meth:`_DescriptorBase.extra_spec_kwargs`.
+Because both directions read by column name, the widening is compatible in both
+directions: a reader ignores columns it doesn't know, and a reader whose peer
+never wrote the column falls back to the field default.
 """
 
 from __future__ import annotations
@@ -97,6 +104,24 @@ class _SpecBase:
         ]  # type: ignore[arg-type]
     )
 
+    def _extra_row(self) -> dict[str, Any]:
+        """Extra wire columns this spec contributes beyond the shared four.
+
+        Subclasses that widen :data:`ARROW_SCHEMA` return the matching values
+        here. Keys must exist in the subclass's schema.
+        """
+        return {}
+
+    @classmethod
+    def _extra_kwargs(cls, row: dict[str, object]) -> dict[str, Any]:
+        """Constructor kwargs read from the extra wire columns.
+
+        ``row`` is built from the *batch's* schema, so a column a peer never
+        wrote is simply absent — read with ``.get()`` and supply the default.
+        """
+        del row
+        return {}
+
     def serialize(self) -> bytes:
         """Serialize to Arrow IPC bytes."""
         # Serialize type as a single-field schema
@@ -116,6 +141,7 @@ class _SpecBase:
                     "description": self.desc,
                     "type": type_bytes,
                     "default_value": default_bytes,
+                    **self._extra_row(),
                 }
             ],
             schema=self.ARROW_SCHEMA,
@@ -147,6 +173,7 @@ class _SpecBase:
             desc=cast(str, row["description"]),
             type=data_type,
             default=default,
+            **cls._extra_kwargs(row),
         )
 
 
@@ -178,6 +205,15 @@ class _DescriptorBase:
         if obj is None:
             return self
         return getattr(type(obj), self._name, None)
+
+    def extra_spec_kwargs(self) -> dict[str, Any]:
+        """Extra keyword arguments this descriptor passes to its spec factory.
+
+        The base declaration carries only ``name``/``desc``/``type``/``default``;
+        a subclass adding a field returns it here so ``_extract_specs`` stays
+        shared.
+        """
+        return {}
 
 
 def _extract_specs[D: _DescriptorBase, S: _SpecBase](
@@ -240,6 +276,7 @@ def _extract_specs[D: _DescriptorBase, S: _SpecBase](
                 desc=descriptor.desc,
                 type=arrow_type,
                 default=default,
+                **descriptor.extra_spec_kwargs(),
             )
         )
 

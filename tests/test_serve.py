@@ -698,8 +698,9 @@ class TestCLI:
             # Give server a moment to start
             time.sleep(0.5)
 
-            # The landing surface: GET / serves the shared static page (which
-            # fetches its data via JS), and the worker name lives in describe.json.
+            # The landing surface: GET / serves the shared static page, which
+            # reads the catalog over the protocol using the client bundle the
+            # worker serves beside it. Worker identity rides on the status doc.
             import json as _json
             import urllib.request
 
@@ -709,10 +710,14 @@ class TestCLI:
                 assert resp.status == 200
                 assert b"vgi-landing-asset" in body
 
-            with urllib.request.urlopen(f"{url}describe.json", timeout=5) as resp:
+            with urllib.request.urlopen(f"{url}?format=json", timeout=5) as resp:
                 doc = _json.loads(resp.read())
-                assert doc["worker"]["name"] == "ExampleWorker"
-                assert doc["landing_schema_version"] >= 1
+                assert doc["worker"] == "ExampleWorker"
+                assert doc["lang"] == "python"
+
+            with urllib.request.urlopen(f"{url}vgi-client.js", timeout=5) as resp:
+                assert resp.status == 200
+                assert resp.headers["Content-Type"].startswith("text/javascript")
         finally:
             proc.terminate()
             proc.wait(timeout=5)

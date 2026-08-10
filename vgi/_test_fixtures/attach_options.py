@@ -31,7 +31,12 @@ from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import CallContext, OutputCollector
 from vgi_rpc.utils import deserialize_record_batch, serialize_record_batch_bytes
 
-from vgi.catalog.attach_option import AttachOption, AttachOptionSpec, extract_attach_option_specs
+from vgi.catalog.attach_option import (
+    AttachOption,
+    AttachOptionSpec,
+    extract_attach_option_specs,
+    validate_required_attach_options,
+)
 from vgi.catalog.catalog_interface import (
     AttachOpaqueData,
     CatalogAttachResult,
@@ -53,6 +58,10 @@ __all__ = [
 
 
 CATALOG_NAME = "attach_options"
+# A second catalog from the same worker, declaring one option the caller must
+# supply. Kept separate from CATALOG_NAME so the defaults-and-round-trip
+# coverage above can keep attaching with no options at all.
+REQUIRED_CATALOG_NAME = "attach_options_required"
 _ATTACH_ID_SEP = b"\x00"
 _UUID_BYTES = 16
 
@@ -109,9 +118,19 @@ class AttachOptions:
     ] = {"a": 1, "b": "x"}
 
 
+class RequiredAttachOptions:
+    """Attach-time options for the catalog that refuses an anonymous ATTACH."""
+
+    # No class-level assignment: there is no default to fall back on, so the
+    # caller has to supply it.
+    api_key: Annotated[str, AttachOption(desc="API key", required=True)]
+    region: Annotated[str, AttachOption(desc="Region")] = "us-east-1"
+
+
 # Resolve once at import time; used both to build the echo function's output schema
 # and to backfill defaults in catalog_attach.
 _ATTACH_OPTION_SPECS: list[AttachOptionSpec] = extract_attach_option_specs(AttachOptions)
+_REQUIRED_OPTION_SPECS: list[AttachOptionSpec] = extract_attach_option_specs(RequiredAttachOptions)
 
 _ECHO_SCHEMA: pa.Schema = schema({spec.name: spec.type for spec in _ATTACH_OPTION_SPECS})
 
@@ -244,8 +263,14 @@ class AttachOptionsCatalog(ReadOnlyCatalogInterface):
         ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
         del data_version_spec, implementation_version, ctx
-        if name != CATALOG_NAME:
-            raise ValueError(f"Unknown catalog: {name!r}. Available: {CATALOG_NAME}")
+        if name not in (CATALOG_NAME, REQUIRED_CATALOG_NAME):
+            raise ValueError(f"Unknown catalog: {name!r}. Available: {CATALOG_NAME}, {REQUIRED_CATALOG_NAME}")
+
+        if name == REQUIRED_CATALOG_NAME:
+            # This interface overrides catalog_attach, so the base class's check
+            # never runs — an overrider that declares required options calls the
+            # shared validator itself.
+            validate_required_attach_options(name, _REQUIRED_OPTION_SPECS, options)
 
         attach_opaque_data = _encode_attach_opaque_data(options)
 
@@ -269,6 +294,12 @@ class AttachOptionsCatalog(ReadOnlyCatalogInterface):
                 implementation_version=None,
                 data_version_spec=None,
                 attach_option_specs=[spec.serialize() for spec in _ATTACH_OPTION_SPECS],
+            ),
+            CatalogInfo(
+                name=REQUIRED_CATALOG_NAME,
+                implementation_version=None,
+                data_version_spec=None,
+                attach_option_specs=[spec.serialize() for spec in _REQUIRED_OPTION_SPECS],
             ),
         ]
 
