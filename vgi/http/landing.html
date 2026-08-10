@@ -954,7 +954,10 @@ async function boot(){
     if (!res.ok) throw new Error('HTTP '+res.status);
     const status = await res.json();
 
-    client = new VgiClient(httpConnect(serviceUrl));
+    // Trailing slash stripped: the client joins `base + "/" + method`, and a
+    // base that already ends in "/" yields "//method" — tolerated by Python's
+    // and Go's routers, a 404 from axum.
+    client = new VgiClient(httpConnect(serviceUrl.replace(/\/$/, '')));
     const infos = await client.catalogsInfo();
     const catalogs = await Promise.all(infos.map(buildCatalog));
 
