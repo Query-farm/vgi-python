@@ -9,7 +9,6 @@ input or producing output).
 
 from __future__ import annotations
 
-import shlex
 import sys
 
 import pyarrow as pa
@@ -20,13 +19,14 @@ from vgi.client.catalog_mixin import CatalogClientError
 from vgi.client.client import Client, ClientError
 
 
-def _exits_with(code: int) -> str:
-    """A worker command that exits immediately with ``code``, reading no input.
+def _exits_with(code: int) -> list[str]:
+    """Argv for a worker that exits immediately with ``code``, reading no input.
 
-    Spelled as a real process rather than the shell's ``exit`` builtin: workers are
-    spawned without a shell, so a builtin would not resolve.
+    A real process rather than the shell's ``exit`` builtin: workers are spawned
+    without a shell, so a builtin would not resolve. Returned as argv because no
+    one string quoting convention survives both POSIX and Windows.
     """
-    return f"{shlex.quote(sys.executable)} -c {shlex.quote(f'raise SystemExit({code})')}"
+    return [sys.executable, "-c", f"raise SystemExit({code})"]
 
 
 def _make_test_batch() -> pa.RecordBatch:
