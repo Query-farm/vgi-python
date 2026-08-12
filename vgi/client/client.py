@@ -71,11 +71,9 @@ import io
 import itertools
 import logging
 import os
-import shlex
 import subprocess
-import sys
 import threading
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator, Iterator, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from queue import Queue
@@ -378,7 +376,7 @@ class Client(CatalogClientMixin):
 
     def __init__(
         self,
-        server_path: str | None = None,
+        server_path: str | Sequence[str] | None = None,
         passthrough_stderr: bool = False,
         worker_limit: int | None = None,
         attach_opaque_data: bytes | None = None,
@@ -405,8 +403,12 @@ class Client(CatalogClientMixin):
         other-language clients mirror.
 
         Args:
-            server_path: Subprocess-only. Shell command or path to the VGI
-                worker executable. Executed via shell=True.
+            server_path: Subprocess-only. The VGI worker command. A string is
+                split with ``shlex.split``; pass a sequence to give
+                the argv exactly, which is what you want for arguments carrying
+                spaces or quotes (``[sys.executable, "-c", script]``). No shell
+                is involved either way, so shell syntax — pipes, redirection,
+                ``VAR=value`` prefixes, ``~`` expansion — is not interpreted.
             passthrough_stderr: Subprocess-only. If True, worker stderr is
                 passed through to the parent process's stderr in real-time.
             worker_limit: Maximum number of parallel worker processes.
@@ -466,7 +468,7 @@ class Client(CatalogClientMixin):
         else:
             raise ValueError(f"unknown transport {transport!r}")
 
-        self.server_path = server_path or ""
+        self.server_path: str | Sequence[str] = server_path if server_path is not None else ""
         self._transport = transport
         self._base_url = base_url
         self._tcp_host = tcp_host
@@ -723,7 +725,7 @@ class Client(CatalogClientMixin):
         """
         if self._pool is not None:
             _logger.debug("borrowing_worker worker_index=%s", worker_index)
-            cmd = shlex.split(self.server_path, posix=sys.platform != "win32")
+            cmd = self._worker_argv()
             ctx = self._pool.connect(
                 VgiProtocol,  # type: ignore[type-abstract]
                 cmd,
@@ -745,7 +747,7 @@ class Client(CatalogClientMixin):
         # on every platform, and matches how the pooled and catalog paths have
         # always spawned it.
         proc = subprocess.Popen(
-            shlex.split(self.server_path, posix=sys.platform != "win32"),
+            self._worker_argv(),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=None if self.passthrough_stderr else subprocess.PIPE,

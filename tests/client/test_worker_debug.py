@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from unittest.mock import patch
 
 import pyarrow as pa
@@ -12,6 +13,16 @@ import pytest
 
 from vgi.arguments import Arguments
 from vgi.client.client import Client, ClientError
+
+
+def _stderr_worker(*lines: str) -> list[str]:
+    """Argv for a worker that writes ``lines`` to stderr and exits non-zero.
+
+    An argv list rather than a command string: the ``-c`` body carries spaces and
+    quotes, which no single quoting convention survives on both POSIX and Windows.
+    """
+    body = "import sys; " + "".join(f"sys.stderr.write({line!r} + chr(10)); " for line in lines)
+    return [sys.executable, "-c", body + "sys.stderr.flush(); sys.exit(1)"]
 
 
 class TestWorkerDebugEnvVar:
@@ -53,14 +64,7 @@ class TestStderrInErrorMessages:
 
     def test_error_includes_stderr_on_worker_failure(self) -> None:
         """Error messages should include stderr when worker fails (non-pooled)."""
-        worker_script = (
-            'python -c "'
-            "import sys; "
-            "sys.stderr.write('Debug: bind starting\\n'); "
-            "sys.stderr.write('Error: function not found\\n'); "
-            "sys.stderr.flush(); "
-            'sys.exit(1)"'
-        )
+        worker_script = _stderr_worker("Debug: bind starting", "Error: function not found")
 
         client = Client(worker_script, pool=None)
         with pytest.raises(ClientError) as exc_info:
@@ -80,7 +84,7 @@ class TestStderrInErrorMessages:
 
     def test_error_no_stderr_section_when_passthrough(self) -> None:
         """Error messages should NOT include 'Worker stderr:' when passthrough is enabled."""
-        worker_script = "python -c \"import sys; sys.stderr.write('Debug info\\n'); sys.stderr.flush(); sys.exit(1)\""
+        worker_script = _stderr_worker("Debug info")
 
         client = Client(worker_script, passthrough_stderr=True, pool=None)
         with pytest.raises(ClientError) as exc_info:
@@ -99,9 +103,7 @@ class TestStderrInErrorMessages:
 
     def test_stderr_enrichment_on_table_in_out_function(self) -> None:
         """table_in_out_function errors should include stderr."""
-        worker_script = (
-            "python -c \"import sys; sys.stderr.write('worker log line\\n'); sys.stderr.flush(); sys.exit(1)\""
-        )
+        worker_script = _stderr_worker("worker log line")
 
         batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
         client = Client(worker_script, pool=None)
@@ -120,7 +122,7 @@ class TestStderrInErrorMessages:
 
     def test_stderr_enrichment_on_scalar_function(self) -> None:
         """scalar_function errors should include stderr."""
-        worker_script = "python -c \"import sys; sys.stderr.write('scalar debug\\n'); sys.stderr.flush(); sys.exit(1)\""
+        worker_script = _stderr_worker("scalar debug")
 
         batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
         client = Client(worker_script, pool=None)

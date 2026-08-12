@@ -102,16 +102,29 @@ class CatalogClientMixin:
     factory).
 
     Attributes:
-        server_path: Worker shell command used for subprocess transport.
+        server_path: Worker command used for subprocess transport — a string to
+            be split, or an argv sequence taken as-is.
     """
 
     # Type hints for attributes expected from Client
-    server_path: str
+    server_path: str | Sequence[str]
     _transport: Literal["subprocess", "http", "tcp"]
     _base_url: str | None
     _tcp_host: str | None
     _tcp_port: int | None
     _external_location: Any | None
+
+    def _worker_argv(self) -> list[str]:
+        """The worker command as an argv list, however ``server_path`` was given.
+
+        A sequence is taken verbatim; a string is split. ``posix=False`` on Windows
+        keeps backslashes in paths from being read as escapes — at the cost of
+        leaving quotes attached to the token, which is why an argument carrying
+        spaces or quotes should be passed as a sequence element instead.
+        """
+        if isinstance(self.server_path, str):
+            return shlex.split(self.server_path, posix=sys.platform != "win32")
+        return list(self.server_path)
 
     def _get_or_create_httpx_client(self) -> Any:  # implemented by Client
         raise NotImplementedError
@@ -158,7 +171,7 @@ class CatalogClientMixin:
                 ) as proxy:
                     yield proxy
             else:
-                cmd = shlex.split(self.server_path, posix=sys.platform != "win32")
+                cmd = self._worker_argv()
                 with _catalog_pool.connect(VgiProtocol, cmd) as proxy:  # type: ignore[type-abstract]
                     yield proxy
         except RpcError as e:
