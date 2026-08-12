@@ -111,8 +111,8 @@ def test_batch_index_worker_reports_input_order() -> None:
         out = list(
             client.table_buffering_function(function_name="batch_indexes", schema_name="main", input=iter(batches))
         )
-    indexes = [v for b in out for v in b.column("batch_index").to_pylist()]
-    rows = [v for b in out for v in b.column("rows").to_pylist()]
+    indexes = cast("list[int]", [v for b in out for v in b.column("batch_index").to_pylist()])
+    rows = cast("list[int]", [v for b in out for v in b.column("rows").to_pylist()])
     # One report row per input batch, ordered by index, and none defaulted to -1.
     assert indexes == sorted(indexes)
     assert len(set(indexes)) == 3
