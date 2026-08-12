@@ -66,6 +66,7 @@ See Also:
 
 from __future__ import annotations
 
+import contextlib
 import io
 import itertools
 import logging
@@ -776,7 +777,7 @@ class Client(CatalogClientMixin):
             connection=connection,
         )
 
-    def _stop_worker(self, worker: WorkerConnection) -> int:
+    def _stop_worker(self, worker: WorkerConnection, *, force: bool = False) -> int:
         """Stop a worker subprocess or return it to the pool.
 
         Closes the worker's stream session (if open), then either returns the
@@ -785,14 +786,30 @@ class Client(CatalogClientMixin):
 
         Args:
             worker: The worker connection to stop.
+            force: SIGKILL a direct subprocess before the graceful teardown, so a
+                worker blocked inside a handler cannot stall the caller. Only direct
+                (non-pooled) subprocess workers own a ``proc``; every other transport
+                is already prompt to close and ignores this.
 
         Returns:
             The subprocess exit code. Returns 0 for pooled workers (returned
-            to pool) or normal termination, non-zero for errors.
+            to pool) or normal termination, non-zero for errors. A killed worker
+            reports its signal exit code (``-9`` on POSIX).
 
         """
+        if force and worker.proc is not None:
+            # Kill BEFORE closing the stream/connection: both block on a worker that is
+            # stuck in a handler, which is the case force exists to escape.
+            _logger.debug("killing_worker worker_index=%s pid=%s", worker.worker_index, worker.proc.pid)
+            worker.proc.kill()
+
         if worker.stream is not None:
-            worker.stream.close()
+            if force:
+                # The pipe is already dead; a close that raises must not mask the kill.
+                with contextlib.suppress(Exception):
+                    worker.stream.close()
+            else:
+                worker.stream.close()
             worker.stream = None
 
         if worker._http_ctx is not None:
@@ -817,10 +834,23 @@ class Client(CatalogClientMixin):
         # Direct subprocess management
         assert worker.connection is not None
         assert worker.proc is not None
-        worker.connection.__exit__(None, None, None)
+        if force:
+            # Shutting down the RPC connection writes to the worker we just killed.
+            with contextlib.suppress(Exception):
+                worker.connection.__exit__(None, None, None)
+        else:
+            worker.connection.__exit__(None, None, None)
         worker.proc.wait(timeout=self.PROCESS_WAIT_TIMEOUT)
         returncode = worker.proc.returncode
-        if returncode != 0:
+        if force:
+            # A signal exit code is the expected outcome here, not an error.
+            _logger.debug(
+                "worker_killed worker_index=%s pid=%s returncode=%s",
+                worker.worker_index,
+                worker.proc.pid,
+                returncode,
+            )
+        elif returncode != 0:
             _logger.error(
                 "worker_exited_with_error worker_index=%s pid=%s returncode=%s",
                 worker.worker_index,
@@ -836,10 +866,15 @@ class Client(CatalogClientMixin):
             )
         return returncode
 
-    def _close_secondary_workers(self) -> None:
-        """Close and stop all secondary (additional) workers."""
+    def _close_secondary_workers(self, *, force: bool = False) -> None:
+        """Close and stop all secondary (additional) workers.
+
+        Args:
+            force: Kill direct subprocess workers rather than closing them gracefully
+                (see ``_stop_worker``).
+        """
         for worker in self._additional_workers:
-            self._stop_worker(worker)
+            self._stop_worker(worker, force=force)
         self._additional_workers = []
 
     def _join_threads(self, threads: list[threading.Thread]) -> None:
@@ -895,7 +930,7 @@ class Client(CatalogClientMixin):
             id_repr = "pooled"
         _logger.debug("server_started id=%s", id_repr)
 
-    def stop(self) -> int:
+    def stop(self, *, force: bool = False) -> int:
         """Stop all worker subprocesses and clean up resources.
 
         Terminates all workers in the following order:
@@ -908,10 +943,25 @@ class Client(CatalogClientMixin):
         When using the context manager protocol (with statement), this method
         is called automatically on exit.
 
+        Cancelling an in-flight call
+        ---------------------------
+        A graceful stop waits for a worker that is blocked inside a handler, so it
+        cannot be used to abandon a scan that has overrun its budget. Pass
+        ``force=True`` to SIGKILL direct subprocess workers first, which unblocks any
+        thread waiting on their output immediately. Note this only applies to *direct*
+        subprocess workers: a pooled worker is returned to its pool rather than owned
+        by this client, so construct the client with ``pool=None`` when you need to be
+        able to cancel it. HTTP and TCP workers are already prompt to close.
+
+        Args:
+            force: Kill direct subprocess workers instead of shutting them down
+                gracefully — see "Cancelling an in-flight call" above.
+
         Returns:
             The exit code of the primary worker process. Returns 0 for normal
-            termination, non-zero values indicate errors. Exit codes from
-            additional workers are logged but not returned.
+            termination, non-zero values indicate errors (a forced stop reports the
+            signal exit code, ``-9`` on POSIX). Exit codes from additional workers
+            are logged but not returned.
 
         Raises:
             [`ClientError`][]: If the client was not started (call start() first).
@@ -921,10 +971,10 @@ class Client(CatalogClientMixin):
             raise ClientError("Client not started")
 
         # Stop additional workers first
-        self._close_secondary_workers()
+        self._close_secondary_workers(force=force)
 
         # Stop primary worker
-        returncode = self._stop_worker(self._primary)
+        returncode = self._stop_worker(self._primary, force=force)
         self._primary = None
 
         # Wait for stderr threads to finish draining
