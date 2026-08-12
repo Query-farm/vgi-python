@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 
 import pyarrow as pa
@@ -249,14 +250,17 @@ class TestWorkerStderrCapture:
     def test_stderr_available_on_error(self) -> None:
         """Should be able to access stderr after an error occurs."""
         # Use a worker script that writes to stderr then fails
-        worker_script = (
-            'python -c "'
+        # Argv, not a command string: the -c body carries spaces and quotes, which
+        # no single quoting convention survives on both POSIX and Windows.
+        worker_script = [
+            sys.executable,
+            "-c",
             "import sys; "
-            "sys.stderr.write('Debug: worker starting\\n'); "
-            "sys.stderr.write('Error: something went wrong\\n'); "
+            "sys.stderr.write('Debug: worker starting' + chr(10)); "
+            "sys.stderr.write('Error: something went wrong' + chr(10)); "
             "sys.stderr.flush(); "
-            'sys.exit(1)"'
-        )
+            "sys.exit(1)",
+        ]
 
         client = Client(worker_script, pool=None)
         client.start()
