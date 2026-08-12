@@ -1414,6 +1414,70 @@ def serialize_column_statistics(
     return serialize_record_batch_bytes(batch, custom_metadata=custom_metadata)
 
 
+def _union_child_scalar(scalar: pa.Scalar | None) -> pa.Scalar | None:  # type: ignore[type-arg]
+    """Unwrap the typed child scalar from a sparse-union ``min``/``max`` cell.
+
+    A union cell is valid but wraps a null child whenever that row's statistic was
+    unknown, so both levels have to be checked.
+
+    Args:
+        scalar: The union cell to unwrap, or None.
+
+    Returns:
+        The typed child scalar, or None when the cell or its child is null.
+    """
+    if scalar is None or not scalar.is_valid:
+        return None
+    value = getattr(scalar, "value", None)
+    if value is None or not value.is_valid:
+        return None
+    return value  # type: ignore[no-any-return]
+
+
+def deserialize_column_statistics(data: bytes) -> list[ColumnStatistics]:
+    """Deserialize column statistics — the inverse of [`serialize_column_statistics`][].
+
+    Reads the sparse-union wire batch back into typed [`ColumnStatistics`][], so a client
+    can consume the bytes returned by ``catalog_table_column_statistics_get`` without
+    re-implementing the union layout. See [`Client.table_column_statistics`][] for the
+    wrapper that fetches and decodes in one call.
+
+    The optional ``cache_max_age_seconds`` travels in the IPC batch's custom metadata
+    rather than in the statistics themselves; read it with ``deserialize_record_batch``
+    if you need it.
+
+    Args:
+        data: IPC-serialized bytes of a statistics RecordBatch.
+
+    Returns:
+        Per-column statistics, in the order the worker serialized them. An empty list
+        when the batch carries no rows.
+    """
+    batch, _ = deserialize_record_batch(data)
+    names = batch.column("column_name")
+    mins = batch.column("min")
+    maxs = batch.column("max")
+    has_null = batch.column("has_null")
+    has_not_null = batch.column("has_not_null")
+    distinct = batch.column("distinct_count")
+    unicode_col = batch.column("contains_unicode")
+    max_len = batch.column("max_string_length")
+
+    return [
+        ColumnStatistics(
+            column_name=names[i].as_py(),
+            min=_union_child_scalar(mins[i]),
+            max=_union_child_scalar(maxs[i]),
+            has_null=bool(has_null[i].as_py()),
+            has_not_null=bool(has_not_null[i].as_py()),
+            distinct_count=distinct[i].as_py(),
+            contains_unicode=unicode_col[i].as_py(),
+            max_string_length=max_len[i].as_py(),
+        )
+        for i in range(batch.num_rows)
+    ]
+
+
 class CatalogInterface(ABC):
     """Provides an interface to manage catalogs, schemas, tables, and views for VGI.
 

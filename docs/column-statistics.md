@@ -180,6 +180,30 @@ Statistics are transmitted via the `catalog_table_column_statistics_get` RPC met
 
 Cache TTL is carried as IPC batch `custom_metadata` with key `cache_max_age_seconds`.
 
+## Reading Statistics From a Client
+
+DuckDB is not the only caller. A pure-Python [`Client`][] reads the same statistics with
+`table_column_statistics`, which issues the RPC and decodes the sparse-union batch for you:
+
+```python test="skip"
+stats = client.table_column_statistics(
+    attach_opaque_data=attach.attach_opaque_data,
+    schema_name="main",
+    name="events",
+)
+for column in stats:
+    print(column.column_name, column.min, column.max, column.distinct_count)
+```
+
+Workers may also inline statistics on `TableInfo.column_statistics` rather than serving them
+lazily; `TableInfo.supports_column_statistics` advertises which. Prefer the inlined copy when
+it is present and fall back to the call above.
+
+To decode bytes you already hold, use `deserialize_column_statistics` — the inverse of
+`serialize_column_statistics`. The `cache_max_age_seconds` TTL travels in the batch's custom
+metadata rather than in the statistics, so read it with `deserialize_record_batch` if you
+need it.
+
 ## Capability Flags
 
 Statistics are opt-in at two levels:

@@ -53,6 +53,7 @@ from vgi.catalog import (
     AttachOpaqueData,
     CatalogAttachResult,
     CatalogInfo,
+    ColumnStatistics,
     FunctionInfo,
     MacroInfo,
     MacroType,
@@ -66,6 +67,7 @@ from vgi.catalog import (
     TransactionOpaqueData,
     ViewInfo,
 )
+from vgi.catalog.catalog_interface import deserialize_column_statistics
 from vgi.protocol import (
     CatalogAttachRequest,
     CatalogCreateRequest,
@@ -571,6 +573,41 @@ class CatalogClientMixin:
                 name=name,
                 transaction_opaque_data=transaction_opaque_data,
             ).to_optional()
+
+    def table_column_statistics(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+        schema_name: str,
+        name: str,
+    ) -> list[ColumnStatistics]:
+        """Fetch a table's column statistics, decoded.
+
+        Workers may inline statistics on [`TableInfo`][] (see
+        ``TableInfo.column_statistics``) or serve them lazily through this per-table
+        call, which is what ``TableInfo.supports_column_statistics`` advertises. Prefer
+        the inlined copy when present and fall back to this.
+
+        Args:
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID for transactional reads.
+            schema_name: The schema containing the table.
+            name: The table name.
+
+        Returns:
+            Per-column statistics, or an empty list when the worker has none for
+            this table.
+
+        """
+        with self._catalog_connect() as proxy:
+            data = proxy.catalog_table_column_statistics_get(
+                attach_opaque_data=attach_opaque_data,
+                schema_name=schema_name,
+                name=name,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+        return deserialize_column_statistics(data) if data else []
 
     def table_create(
         self,

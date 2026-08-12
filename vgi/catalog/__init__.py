@@ -16,6 +16,7 @@ from vgi.catalog.catalog_interface import (
     CatalogInterface,
     CatalogObject,
     CatalogSchemaObject,
+    ColumnStatistics,
     CopyFromFormatInfo,
     FunctionInfo,
     FunctionType,
@@ -35,6 +36,8 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     TransactionOpaqueData,
     ViewInfo,
+    deserialize_column_statistics,
+    serialize_column_statistics,
 )
 from vgi.catalog.descriptors import Catalog, ForeignKeyDef, Index, Macro, Schema, Sql, Table, View
 from vgi.catalog.secret_type import SecretTypeSpec
@@ -60,6 +63,7 @@ __all__ = [
     "CatalogInfo",
     "CatalogObject",
     "CatalogSchemaObject",
+    "ColumnStatistics",
     "IndexInfo",
     "MacroInfo",
     "SchemaInfo",
@@ -89,4 +93,7 @@ __all__ = [
     # Storage
     "CatalogStorage",
     "CatalogStorageSqlite",
+    # Column statistics wire format
+    "serialize_column_statistics",
+    "deserialize_column_statistics",
 ]

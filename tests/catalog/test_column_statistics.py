@@ -12,6 +12,7 @@ from vgi_rpc.utils import deserialize_record_batch
 from vgi.catalog.catalog_interface import (
     ColumnStatistics,
     TableColumnStatisticsResult,
+    deserialize_column_statistics,
     serialize_column_statistics,
 )
 from vgi.catalog.descriptors import ColumnStatisticsInput, Table
@@ -197,6 +198,91 @@ class TestSerializeColumnStatistics:
         min_type = batch.schema.field("min").type
         assert pa.types.is_union(min_type)
         assert min_type.num_fields == 1
+
+
+# ============================================================================
+# deserialize_column_statistics
+# ============================================================================
+
+
+def _roundtrip(stats: list[ColumnStatistics]) -> list[ColumnStatistics]:
+    return deserialize_column_statistics(serialize_column_statistics(stats))
+
+
+class TestDeserializeColumnStatistics:
+    """Tests that deserialization is a faithful inverse of serialization."""
+
+    def test_empty_batch(self) -> None:
+        assert _roundtrip([]) == []
+
+    def test_int_column_roundtrips(self) -> None:
+        stats = [
+            ColumnStatistics(
+                column_name="id",
+                min=pa.scalar(1, pa.int64()),
+                max=pa.scalar(100, pa.int64()),
+                has_null=False,
+                has_not_null=True,
+                distinct_count=100,
+            )
+        ]
+        (got,) = _roundtrip(stats)
+        assert got.column_name == "id"
+        assert got.min.as_py() == 1  # type: ignore[union-attr]
+        assert got.max.as_py() == 100  # type: ignore[union-attr]
+        assert got.has_null is False
+        assert got.has_not_null is True
+        assert got.distinct_count == 100
+
+    def test_string_column_roundtrips_with_string_fields(self) -> None:
+        stats = [
+            ColumnStatistics(
+                column_name="name",
+                min=pa.scalar("Alice"),
+                max=pa.scalar("Zoe"),
+                contains_unicode=True,
+                max_string_length=5,
+            )
+        ]
+        (got,) = _roundtrip(stats)
+        assert got.min.as_py() == "Alice"  # type: ignore[union-attr]
+        assert got.max.as_py() == "Zoe"  # type: ignore[union-attr]
+        assert got.contains_unicode is True
+        assert got.max_string_length == 5
+
+    def test_unknown_min_max_stays_none(self) -> None:
+        """A column with no min/max must come back as None, not a null scalar."""
+        (got,) = _roundtrip([ColumnStatistics(column_name="opaque")])
+        assert got.min is None
+        assert got.max is None
+        assert got.distinct_count is None
+        assert got.contains_unicode is None
+        assert got.max_string_length is None
+
+    def test_mixed_types_keep_their_own_union_arm(self) -> None:
+        """Several column types share one sparse union; each must decode to its own type."""
+        stats = [
+            ColumnStatistics(column_name="i", min=pa.scalar(1, pa.int64()), max=pa.scalar(9, pa.int64())),
+            ColumnStatistics(column_name="s", min=pa.scalar("a"), max=pa.scalar("z")),
+            ColumnStatistics(column_name="f", min=pa.scalar(0.5, pa.float64()), max=pa.scalar(9.5, pa.float64())),
+        ]
+        got = _roundtrip(stats)
+        assert [s.column_name for s in got] == ["i", "s", "f"]
+        assert got[0].min.as_py() == 1  # type: ignore[union-attr]
+        assert got[1].min.as_py() == "a"  # type: ignore[union-attr]
+        assert got[2].max.as_py() == 9.5  # type: ignore[union-attr]
+
+    def test_order_is_preserved(self) -> None:
+        stats = [ColumnStatistics(column_name=f"c{i}", min=pa.scalar(i, pa.int64())) for i in range(6)]
+        assert [s.column_name for s in _roundtrip(stats)] == [f"c{i}" for i in range(6)]
+
+    def test_cache_ttl_rides_in_batch_metadata_not_the_stats(self) -> None:
+        """The TTL is out-of-band; deserialization returns only the statistics."""
+        data = serialize_column_statistics([ColumnStatistics(column_name="a")], cache_max_age_seconds=60)
+        _, metadata = deserialize_record_batch(data)
+        assert metadata is not None
+        assert metadata[b"cache_max_age_seconds"] == b"60"
+        assert len(deserialize_column_statistics(data)) == 1
 
 
 # ============================================================================
