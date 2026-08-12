@@ -182,7 +182,7 @@ Cache TTL is carried as IPC batch `custom_metadata` with key `cache_max_age_seco
 
 ## Reading Statistics From a Client
 
-DuckDB is not the only caller. A pure-Python [`Client`][] reads the same statistics with
+DuckDB is not the only caller. A pure-Python [`Client`][vgi.client.Client] reads the same statistics with
 `table_column_statistics`, which issues the RPC and decodes the sparse-union batch for you:
 
 ```python test="skip"

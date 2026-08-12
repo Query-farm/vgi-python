@@ -718,9 +718,8 @@ class Client(CatalogClientMixin):
         When a pool is configured, borrows an idle worker (or spawns a new
         one) from the pool. Otherwise creates a subprocess directly.
 
-        Python-specific: subprocess management relies on ``shell=True``
-        semantics and the ``WorkerPool`` abstraction that other languages
-        don't need to mirror.
+        Python-specific: subprocess management relies on the ``WorkerPool``
+        abstraction that other languages don't need to mirror.
         """
         if self._pool is not None:
             _logger.debug("borrowing_worker worker_index=%s", worker_index)
@@ -739,14 +738,19 @@ class Client(CatalogClientMixin):
             )
 
         _logger.debug("spawning_worker worker_index=%s", worker_index)
+        # Not shell=True: under a shell, proc is the *shell*, so proc.kill()
+        # (stop(force=True)) kills the shell and leaves the worker holding the
+        # pipe -- on Windows it kills cmd.exe and reports exit code 1 while the
+        # worker runs on. Splitting the command ourselves makes proc the worker
+        # on every platform, and matches how the pooled and catalog paths have
+        # always spawned it.
         proc = subprocess.Popen(
-            self.server_path,
+            shlex.split(self.server_path, posix=sys.platform != "win32"),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=None if self.passthrough_stderr else subprocess.PIPE,
             text=False,
             bufsize=0,
-            shell=True,
         )
         _logger.debug("worker_spawned worker_index=%s pid=%s", worker_index, proc.pid)
 

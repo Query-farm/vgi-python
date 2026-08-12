@@ -15,6 +15,7 @@ without changing behaviour.
 
 from __future__ import annotations
 
+import sys
 import time
 from typing import Any
 
@@ -44,7 +45,11 @@ def test_force_kills_a_direct_subprocess(tmp_path: Any) -> None:
 
     returncode = client.stop(force=True)
     assert returncode is not None
-    assert returncode < 0, "a killed process reports a negative (signal) exit code"
+    if sys.platform == "win32":
+        # Windows has no signals: TerminateProcess sets an ordinary non-zero code.
+        assert returncode != 0, "a killed process should not report a clean exit"
+    else:
+        assert returncode < 0, "a killed process reports a negative (signal) exit code"
     assert proc.poll() is not None, "worker process should be reaped"
 
 

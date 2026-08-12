@@ -9,12 +9,24 @@ input or producing output).
 
 from __future__ import annotations
 
+import shlex
+import sys
+
 import pyarrow as pa
 import pytest
 
 from vgi.arguments import Arguments
 from vgi.client.catalog_mixin import CatalogClientError
 from vgi.client.client import Client, ClientError
+
+
+def _exits_with(code: int) -> str:
+    """A worker command that exits immediately with ``code``, reading no input.
+
+    Spelled as a real process rather than the shell's ``exit`` builtin: workers are
+    spawned without a shell, so a builtin would not resolve.
+    """
+    return f"{shlex.quote(sys.executable)} -c {shlex.quote(f'raise SystemExit({code})')}"
 
 
 def _make_test_batch() -> pa.RecordBatch:
@@ -27,9 +39,9 @@ class TestClientWorkerExitHandling:
 
     def test_client_raises_error_when_worker_exits_immediately(self) -> None:
         """Client raises ClientError when worker exits before accepting input."""
-        # Use 'exit 1' which immediately terminates without reading stdin
-        # pool=None required because 'exit 1' is a shell command, not a binary
-        client = Client("exit 1", pool=None)
+        # A worker that terminates without ever reading stdin.
+        # pool=None: the pool is for real, reusable workers.
+        client = Client(_exits_with(1), pool=None)
 
         # Worker exits before sending any output - detected either via BrokenPipeError
         # or via early exit check when reading fails
@@ -48,9 +60,8 @@ class TestClientWorkerExitHandling:
 
     def test_client_raises_error_with_useful_message(self) -> None:
         """Client error message includes useful debugging information."""
-        # Use a specific exit code
-        # pool=None required because 'exit 42' is a shell command, not a binary
-        client = Client("exit 42", pool=None)
+        # Use a specific exit code so the message can be checked for it.
+        client = Client(_exits_with(42), pool=None)
 
         try:
             client.start()
@@ -84,8 +95,8 @@ class TestCatalogMixinWorkerExitHandling:
 
     def test_catalog_invoke_raises_error_when_worker_exits(self) -> None:
         """Catalog invoke raises CatalogClientError when worker exits."""
-        # Use 'exit 1' which immediately terminates without reading stdin
-        client = Client("exit 1")
+        # A worker that terminates without ever reading stdin.
+        client = Client(_exits_with(1))
 
         # Worker exits - detected either via BrokenPipeError (shows "terminated
         # unexpectedly") or via read failure (shows "Failed to read catalog result")
@@ -94,7 +105,7 @@ class TestCatalogMixinWorkerExitHandling:
 
     def test_catalog_invoke_error_includes_useful_info(self) -> None:
         """Catalog error message includes useful debugging information."""
-        client = Client("exit 42")
+        client = Client(_exits_with(42))
 
         try:
             list(client.catalogs())

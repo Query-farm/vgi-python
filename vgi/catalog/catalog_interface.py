@@ -1439,7 +1439,8 @@ def deserialize_column_statistics(data: bytes) -> list[ColumnStatistics]:
 
     Reads the sparse-union wire batch back into typed [`ColumnStatistics`][], so a client
     can consume the bytes returned by ``catalog_table_column_statistics_get`` without
-    re-implementing the union layout. See [`Client.table_column_statistics`][] for the
+    re-implementing the union layout. See
+    [`Client.table_column_statistics`][vgi.client.CatalogClientMixin.table_column_statistics] for the
     wrapper that fetches and decodes in one call.
 
     The optional ``cache_max_age_seconds`` travels in the IPC batch's custom metadata
