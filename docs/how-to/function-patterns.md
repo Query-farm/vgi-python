@@ -213,6 +213,31 @@ ATTACH 'buffers' (TYPE vgi, LOCATION 'uv run row_count_worker.py');
 SELECT * FROM buffers.row_count((SELECT * FROM big_table));
 ```
 
+### Getting the input in order
+
+The sink runs in parallel across DuckDB threads, so `process` sees batches in no particular order.
+When output depends on input *order* — a running total, a row pattern match — set
+`Meta.requires_input_batch_index = True` and each `process` call receives `params.batch_index`, a
+monotonic ordinal you can sort the buffered batches by in `finalize`.
+
+Not every source can supply one (a base table scan can; `range()` and `VALUES` cannot). When it
+cannot, the extension serializes the sink and numbers the batches itself, so a worker always gets a
+valid index and callers never have to wrap their input. This example reports the indices it saw, one
+row per buffered batch:
+
+```python
+--8<-- "examples/batch_index_worker.py"
+```
+
+```sql
+ATTACH 'bi' (TYPE vgi, LOCATION 'uv run batch_index_worker.py');
+SELECT * FROM bi.batch_indexes((SELECT * FROM range(5000))) ORDER BY batch_index;
+```
+
+The alternative, `Meta.sink_order_dependent = True`, delivers ordered input by forcing a
+single-threaded sink. It works with any source but gives up parallel ingest, which is usually the
+bulk of a buffering query's wall time. The two flags are mutually exclusive.
+
 ??? info "Buffering vs. table-in-out"
     Both consume a relation, but a **table-in-out** function emits *per input batch* and never
     holds the whole input — use it for streaming transforms (filter, enrich, reshape). Reach for

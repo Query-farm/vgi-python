@@ -100,6 +100,26 @@ def test_row_count_worker_buffering() -> None:
     assert [v for b in out for v in b.column("count").to_pylist()] == [5]
 
 
+def test_batch_index_worker_reports_input_order() -> None:
+    """The batch-index example sees a distinct index for every sunk batch."""
+    with _spawn("batch_index_worker.py") as client:
+        batches = [
+            pa.record_batch({"x": pa.array([1, 2, 3], type=pa.int64())}),
+            pa.record_batch({"x": pa.array([4, 5], type=pa.int64())}),
+            pa.record_batch({"x": pa.array([6], type=pa.int64())}),
+        ]
+        out = list(
+            client.table_buffering_function(function_name="batch_indexes", schema_name="main", input=iter(batches))
+        )
+    indexes = [v for b in out for v in b.column("batch_index").to_pylist()]
+    rows = [v for b in out for v in b.column("rows").to_pylist()]
+    # One report row per input batch, ordered by index, and none defaulted to -1.
+    assert indexes == sorted(indexes)
+    assert len(set(indexes)) == 3
+    assert min(indexes) >= 0
+    assert sum(rows) == 6
+
+
 def test_greeting_scalar_worker_string_example() -> None:
     """The string-scalar example (used in the function-patterns guide) still serves."""
     with _spawn("greeting_scalar_worker.py") as client:
