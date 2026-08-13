@@ -214,7 +214,20 @@
   .row-icon { width: 16px; height: 16px; flex: none; color: var(--kc); }
   .t-name, .fn-name { font-family: var(--mono); font-size: 12.5px; font-weight: 550; }
   .t-meta { color: var(--muted); font-size: 11.5px; font-family: var(--mono); font-variant-numeric: tabular-nums; flex: none; }
-  .fn-sig { color: var(--muted); font-size: 12px; font-family: var(--mono); flex: none; }
+  /* The signature is the one item here that has no bounded length: a function
+     with a dozen named arguments runs many times the card's width. It must be
+     the item that gives, so it shrinks (`1 1 auto`) rather than refusing to
+     (`flex: none`, which overflowed the container), and `min-width: 0` is what
+     actually lets a flex item shrink below its content. `anywhere` breaks
+     inside a long type or identifier as a last resort, since the text is a
+     single unbroken run of mono with few spaces to wrap at. */
+  .fn-sig { color: var(--muted); font-size: 12px; font-family: var(--mono); flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .fn-name { flex: none; }
+  /* Once the signature wraps to several lines, centring pushes the caret and
+     the icon to the middle of that block; top-align keeps them on the first
+     line, next to the name. */
+  details.fn > summary { align-items: flex-start; }
+  .fn-sig .sig-type { color: color-mix(in srgb, var(--kc) 55%, var(--muted)); }
 
   /* level 4: body inset */
   .t-body, .fn-body { padding: 9px 13px 12px; background: color-mix(in srgb, var(--kc) 4%, var(--bg)); border-radius: 0 0 var(--row-radius) var(--row-radius); }
@@ -833,7 +846,15 @@ function argCard(a){
 }
 function fnRow(f, iconName){
   const pos = f.args.filter(a=>!a.named), named = f.args.filter(a=>a.named);
-  const sig = '('+ pos.map(a=>a.name).concat(named.map(a=>a.name+' :=')).join(', ') +')';
+  // The type is the useful half of a signature — `flood_daily(latitude,
+  // longitude, forecast_days :=, past_days :=)` says nothing about what to
+  // pass. `fnArgs` has resolved it all along; only this line dropped it, so
+  // reading a type meant expanding the row to reach the argument cards.
+  // Built as HTML rather than a string because the type carries its own span,
+  // so each part is escaped individually instead of the whole line at render.
+  const sigPart = a => esc(a.name) + (a.named ? ' :=' : '') +
+    (a.type ? ' <span class="sig-type">' + esc(duckdbType(a.type)) + '</span>' : '');
+  const sigHtml = '(' + pos.concat(named).map(sigPart).join(', ') + ')';
   let argsGrid;
   if (!f.args.length) argsGrid = '<div class="fn-noargs">No arguments</div>';
   else if (!named.length) argsGrid = '<div class="args-label">Arguments</div><div class="cols">'+pos.map(argCard).join('')+'</div>';
@@ -841,7 +862,7 @@ function fnRow(f, iconName){
                   '<div class="args-label" style="margin-top:12px">Named arguments</div><div class="cols">'+named.map(argCard).join('')+'</div>';
   const ret = f.returns ? '<div class="fn-returns"><b>Returns</b><span class="rtype">'+esc(f.returns)+'</span></div>' : '';
   return '<details class="fn" data-name="'+esc(f.name.toLowerCase())+'">'+
-    '<summary>'+icon('caret','tri')+icon(iconName,'row-icon')+'<span class="fn-name">'+esc(f.name)+'</span><span class="fn-sig">'+esc(sig)+'</span></summary>'+
+    '<summary>'+icon('caret','tri')+icon(iconName,'row-icon')+'<span class="fn-name">'+esc(f.name)+'</span><span class="fn-sig">'+sigHtml+'</span></summary>'+
     '<div class="fn-body">'+(f.doc? '<div class="t-desc">'+mdToHtml(f.doc)+'</div>':'')+argsGrid+ret+'</div></details>';
 }
 function fnGroups(fns){
