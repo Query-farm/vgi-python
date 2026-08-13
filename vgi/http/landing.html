@@ -14,7 +14,7 @@
     --accent-2: #a52121; --on-accent: #fdf6ef; --ai: #256b3c; --ai-soft: #d6e7db; --on-ai: #f2faf4;
     --cup-soft: #e6f1ea; --cup: #2f8f4e; --cup-2: #27713f; --on-cup: #f2faf4;
     --code-bg: #1f1e18; --code-ink: #f3efe2; --ok: #3f9142; --hit: #fff4c2;
-    --k-table:#0e7c86; --k-view:#7a4fd0; --k-scalar:#2f8f4e; --k-tablefn:#9a6500; --k-agg:#c05a2a; --k-tio:#b03a6e; --type-color:#0e7c86;
+    --k-table:#0e7c86; --k-view:#7a4fd0; --k-scalar:#2f8f4e; --k-tablefn:#9a6500; --k-agg:#c05a2a; --k-tio:#b03a6e; --k-macro:#2b6cb0; --type-color:#0e7c86;
     --tint:6%; --tint-hover:11%; --tint-open:15%; --edge:24%; --edge-hover:46%; --edge-open:56%;
     --radius: 14px; --row-radius: 9px;
     --mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -28,7 +28,7 @@
       --accent-2: #ee9a94; --on-accent: #1a120f; --ai: #5cba74; --ai-soft: #16231a; --on-ai: #0f1a10;
       --cup-soft: #1b271e; --cup: #6fce87; --cup-2: #82d897; --on-cup: #10200f;
       --code-bg: #100f0a; --code-ink: #ece7d6; --hit: #4a4222;
-      --k-table:#4fc7d0; --k-view:#b39ae8; --k-scalar:#6fce87; --k-tablefn:#e0b055; --k-agg:#e69264; --k-tio:#e084ad; --type-color:#5bbfc7;
+      --k-table:#4fc7d0; --k-view:#b39ae8; --k-scalar:#6fce87; --k-tablefn:#e0b055; --k-agg:#e69264; --k-tio:#e084ad; --k-macro:#7fb3e8; --type-color:#5bbfc7;
       --tint:12%; --tint-hover:20%; --tint-open:26%; --edge:32%; --edge-hover:56%; --edge-open:68%;
     }
   }
@@ -199,6 +199,7 @@
   .grp .tri { color: var(--muted); }
   .k-table { --kc: var(--k-table); } .k-view { --kc: var(--k-view); } .k-scalar { --kc: var(--k-scalar); }
   .k-tablefn { --kc: var(--k-tablefn); } .k-agg { --kc: var(--k-agg); } .k-tio { --kc: var(--k-tio); }
+  .k-macro { --kc: var(--k-macro); }
 
   /* level 3: object rows as tinted cards */
   details.tbl, details.fn {
@@ -504,9 +505,21 @@ async function schemaEntry(aod, si){
     const r = fnReturns(f);
     if (r) out.returns = r;
     return out;
+  // Macros get their own buckets rather than folding into scalar/table. They
+  // are a different thing to call: DuckDB expands them inline as SQL, so they
+  // cost no RPC round-trip and run identically on every transport. Merging
+  // them also misreported the catalog — vgi-open-meteo has six scalar macros
+  // and zero scalar functions, and the page listed all six under "Scalar
+  // functions".
+  //
+  // Their parameters carry names only. A DuckDB macro is untyped, so the
+  // protocol has no type to send and this used to invent `ANY` for each one —
+  // which reads as "accepts any type" when it means "no type exists". Leaving
+  // it unset lets the signature and the argument card omit it, and keeps ANY
+  // meaning what it says on a genuinely polymorphic function argument.
   }).concat((macrosRaw||[]).map(m=>({
-    name: m.name, type: String(m.macro_type).startsWith('TABLE') ? 'table' : 'scalar',
-    doc: m.comment || '', args: (m.parameters||[]).map(p=>({name:p, type:'ANY'}))
+    name: m.name, type: String(m.macro_type).startsWith('TABLE') ? 'table_macro' : 'scalar_macro',
+    doc: m.comment || '', args: (m.parameters||[]).map(p=>({name:p}))
   })));
   functions.sort((a,b)=> a.type===b.type ? byName(a,b) : (a.type<b.type?-1:1));
   const entry = {name: si.name, tables, views, functions};
@@ -522,7 +535,7 @@ async function buildCatalog(info){
     data_versions: (info.releases||[]).map(r=>Object.assign({spec:r.version}, r.summary?{label:r.summary}:{})),
     attach_options: [],
     tags: {},
-    counts: {schemas:0,tables:0,views:0,functions:0},
+    counts: {schemas:0,tables:0,views:0,functions:0,macros:0},
     schemas: [],
     _aod: null
   };
@@ -552,11 +565,16 @@ async function buildCatalog(info){
   const schemaInfos = (await client.schemas(cat._aod)).slice()
     .sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
   cat.schemas = await Promise.all(schemaInfos.map(si=>schemaEntry(cat._aod, si)));
+  // `s.functions` holds both, so macros are counted apart rather than inflating
+  // the function count — vgi-open-meteo reads "13 functions · 6 macros", not
+  // "19 functions" when it has no scalar functions at all.
+  const isMacro = f => f.type === 'scalar_macro' || f.type === 'table_macro';
   cat.counts = {
     schemas: cat.schemas.length,
     tables: cat.schemas.reduce((n,s)=>n+s.tables.length,0),
     views: cat.schemas.reduce((n,s)=>n+s.views.length,0),
-    functions: cat.schemas.reduce((n,s)=>n+s.functions.length,0)
+    functions: cat.schemas.reduce((n,s)=>n+s.functions.filter(f=>!isMacro(f)).length,0),
+    macros: cat.schemas.reduce((n,s)=>n+s.functions.filter(isMacro).length,0)
   };
   return cat;
 }
@@ -837,12 +855,17 @@ function tableRow(catName, s, t, kind){       // kind: 'table' | 'view'
 const FN_TYPES = [['scalar','Scalar functions','function','k-scalar'],
                   ['table','Table functions','function','k-tablefn'],
                   ['aggregate','Aggregate functions','aggregate','k-agg'],
-                  ['table_in_out','Table in-out functions','tio','k-tio']];
+                  ['table_in_out','Table in-out functions','tio','k-tio'],
+                  ['scalar_macro','Scalar macros','function','k-macro'],
+                  ['table_macro','Table macros','function','k-macro']];
 function argCard(a){
   const def = (a.default!==undefined && a.default!==null) ? '<span class="arg-def">default '+esc(a.default)+'</span>' : '';
   const desc = a.desc ? esc(a.desc) : '';
   const meta = (desc||def) ? '<div class="col-comment">'+desc+(desc&&def?' · ':'')+def+'</div>' : '';
-  return '<div class="col-item"><div class="col"><span class="col-name">'+esc(a.name)+(a.named?'<span class="arg-kind"> :=</span>':'')+'</span><span class="col-type">'+esc(duckdbType(a.type))+'</span></div>'+meta+'</div>';
+  // A macro parameter has no type at all, and `duckdbType(undefined)` returns
+  // undefined — printed, that renders the literal string "undefined".
+  const type = a.type ? '<span class="col-type">'+esc(duckdbType(a.type))+'</span>' : '';
+  return '<div class="col-item"><div class="col"><span class="col-name">'+esc(a.name)+(a.named?'<span class="arg-kind"> :=</span>':'')+'</span>'+type+'</div>'+meta+'</div>';
 }
 function fnRow(f, iconName){
   const pos = f.args.filter(a=>!a.named), named = f.args.filter(a=>a.named);
@@ -885,7 +908,8 @@ function renderContents(){
   const asof = (c.data_versions && c.data_versions.length)
     ? ' · <span class="asof">as of '+esc(currentSpec(c) || 'latest ('+latestSpec(c)+')')+'</span>' : '';
   document.getElementById('cat-sub').innerHTML =
-    cc.schemas+' schemas · '+cc.tables+' tables · '+cc.views+' views · '+cc.functions+' functions'+asof;
+    cc.schemas+' schemas · '+cc.tables+' tables · '+cc.views+' views · '+cc.functions+' functions'+
+    (cc.macros?' · '+cc.macros+' macro'+(cc.macros!==1?'s':''):'')+asof;
 
   if (c.attach_error){
     // Say why the catalog could not be listed. An empty tree here would read
@@ -896,9 +920,12 @@ function renderContents(){
 
   const single = c.schemas.length===1;
   root.innerHTML = c.schemas.map(s=>{
+    const sMacros = s.functions.filter(f=>f.type==='scalar_macro'||f.type==='table_macro').length;
+    const sFns = s.functions.length - sMacros;
     const sub = [ s.tables.length+' table'+(s.tables.length!==1?'s':''),
                   s.views.length? s.views.length+' view'+(s.views.length!==1?'s':''):null,
-                  s.functions.length? s.functions.length+' function'+(s.functions.length!==1?'s':''):null
+                  sFns? sFns+' function'+(sFns!==1?'s':''):null,
+                  sMacros? sMacros+' macro'+(sMacros!==1?'s':''):null
                 ].filter(Boolean).join(' · ');
     const openAttr = (single && s.tables.length<=8) ? ' open' : '';
     const tblGrp = s.tables.length ? '<div class="grp k-table"><div class="glabel">'+icon('table')+'Tables</div>'+
