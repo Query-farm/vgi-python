@@ -23,7 +23,7 @@ import pyarrow as pa
 import pytest
 
 from vgi.client import Client
-from vgi.table_function import ProcessParams
+from vgi.table_function import OutputCollector, ProcessParams
 
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 
@@ -161,3 +161,82 @@ def test_sum_worker_aggregate_phases() -> None:
 
     out = m.Sum.finalize(pa.array([0, 1], type=pa.int64()), states, params=no_params)
     assert out.column("result").to_pylist() == [15, 6]
+
+
+def test_cache_worker_advertises_and_revalidates() -> None:
+    """The caching worker serves rows, and answers a conditional request with 0 rows.
+
+    The ``vgi.cache.*`` metadata itself is consumed by the C++ extension, not by
+    the Python Client, so what is asserted here is the worker-side contract: the
+    normal path emits the table, and a matching ``if_none_match`` produces the
+    304-equivalent empty batch instead of re-streaming it.
+    """
+    import cache_worker as m
+
+    from vgi.arguments import Arguments
+
+    with _spawn("cache_worker.py") as client:
+        rows = list(
+            client.table_function(function_name="rates", schema_name="main", arguments=Arguments(positional=[]))
+        )
+    assert [v for b in rows for v in b.column("currency").to_pylist()] == ["EUR", "GBP", "JPY"]
+
+    # The advertised metadata renders to the keys the extension reads by string.
+    advertised = m.CacheControl(ttl=300, etag=m._DATA_VERSION, revalidatable=True).to_metadata()
+    assert advertised["vgi.cache.ttl"] == "300"
+    assert advertised["vgi.cache.etag"] == m._DATA_VERSION
+    assert advertised["vgi.cache.revalidatable"] == "1"
+    assert advertised["vgi.cache.scope"] == "catalog"
+
+    # not_modified is what makes the 0-row reply mean "keep what you have".
+    assert m.CacheControl(not_modified=True).to_metadata()["vgi.cache.not_modified"] == "1"
+
+
+def test_copy_format_worker_advertises_both_directions() -> None:
+    """The COPY worker's catalog advertises a reader AND a writer for ``tsvlite``."""
+    import copy_format_worker as m
+
+    interface = m.TsvWorker()._get_catalog_interface()()
+    formats = interface.copy_from_formats(attach_opaque_data=b"", transaction_opaque_data=None)
+    by_direction = {f.direction: f for f in formats}
+
+    assert by_direction["from"].format_name == "tsvlite"
+    assert by_direction["from"].handler == "read_tsv_lite"
+    # Deliberately NOT "tsvlite": the extension registers COPY functions by name
+    # alone, so a reader and a writer sharing one name silently loses the writer.
+    assert by_direction["to"].format_name == "tsvlite_out"
+    assert by_direction["to"].handler == "write_tsv_lite"
+
+
+def test_copy_format_worker_round_trips_a_file(tmp_path: Path) -> None:
+    """The reader parses TSV into the target schema; the writer writes it back.
+
+    Driven directly rather than through ``COPY``, so the test covers the worker
+    halves without needing an engine whose extension registers both directions.
+    """
+    import copy_format_worker as m
+
+    source = tmp_path / "people.tsv"
+    source.write_text("skipme\nalice\t30\nbob\t41\ncarol\t\n", encoding="utf-8")
+    schema = pa.schema([("name", pa.string()), ("age", pa.int64())])
+
+    emitted: list[pa.RecordBatch] = []
+
+    class _Out:
+        def emit(self, batch: pa.RecordBatch) -> None:
+            emitted.append(batch)
+
+        def finish(self) -> None:
+            pass
+
+    m.ReadTsvLite.read(
+        path=str(source),
+        options=m.ReadOptions(skip_rows=1),
+        expected_schema=schema,
+        params=cast("ProcessParams[m.ReadOptions]", None),
+        out=cast("OutputCollector", _Out()),
+    )
+
+    assert len(emitted) == 1
+    assert emitted[0].schema == schema
+    assert emitted[0].to_pydict() == {"name": ["alice", "bob", "carol"], "age": [30, 41, None]}

@@ -3179,8 +3179,23 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                     is_to = True
                 else:
                     continue
-                # Key by (format, direction): a from-format and a to-format may
-                # legitimately share a name; the extension scopes by alias anyway.
+                # Key by (format, direction) so a duplicate registration within one
+                # direction collapses.
+                #
+                # This does NOT make it safe for a reader and a writer to share a
+                # format name. The extension's registry is keyed by
+                # ``<attach-alias>.<format>`` with no direction component, and on a
+                # hit it *silently* skips the entry (it reads a hit as an idempotent
+                # re-ATTACH). So advertising ``from:x`` and ``to:x`` registers the
+                # reader and drops the writer without a word, and ``COPY ... TO``
+                # then fails with "COPY TO is not supported for FORMAT". Give each
+                # direction its own name -- the fixtures use ``example_lines`` /
+                # ``example_lines_out``.
+                #
+                # The extension *does* support one name serving both directions, but
+                # only via a single entry carrying ``direction="both"``; nothing here
+                # emits that today, because COPY_FROM_DIRECTION / COPY_TO_DIRECTION
+                # are fixed per base class.
                 dedup_key = f"{direction}:{fmt}"
                 if not fmt or dedup_key in seen:
                     continue
