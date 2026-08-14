@@ -88,16 +88,63 @@ class SumFunction(AggregateFunction[SumState]):
 
 ## State Class
 
-The state class must be a `dataclass` extending `ArrowSerializableDataclass`. Each field needs an `ArrowType` annotation for serialization:
+States are serialized to bytes and stored in `FunctionStorage` between RPC calls. The
+framework requires exactly two things of a state type — `serialize_to_bytes()` and
+`deserialize_from_bytes()`, the [`StreamStateCodec`][vgi.function.StreamStateCodec]
+protocol — and treats the bytes as opaque.
+
+The usual answer is a `dataclass` extending `ArrowSerializableDataclass`, which writes
+both methods for you. Each field needs an `ArrowType` annotation for serialization:
 
 ```python
+from dataclasses import dataclass
+from typing import Annotated
+
+import pyarrow as pa
+from vgi_rpc import ArrowSerializableDataclass, ArrowType
+
+
 @dataclass(kw_only=True)
 class AvgState(ArrowSerializableDataclass):
     total: Annotated[float, ArrowType(pa.float64())] = 0.0
     count: Annotated[int, ArrowType(pa.int64())] = 0
 ```
 
-States are serialized to bytes and stored in `FunctionStorage` between RPC calls. Use simple scalar types (int, float, str, bytes) for efficient serialization.
+Use simple scalar types (int, float, str, bytes) for efficient serialization.
+
+You are not required to go through Arrow. A state that is a couple of integers pays for
+a schema message, a batch message and an end-of-stream marker on every group, every
+batch — packing it yourself is both smaller and faster, and it lets a Python worker match
+the state encoding of a sibling VGI implementation in another language:
+
+```python
+import struct
+from dataclasses import dataclass
+from typing import ClassVar
+
+
+@dataclass(kw_only=True)
+class SumState:
+    """Same two counters, packed as little-endian int64s."""
+
+    total: int = 0
+    count: int = 0
+
+    _STRUCT: ClassVar[struct.Struct] = struct.Struct("<qq")
+
+    def serialize_to_bytes(self) -> bytes:
+        return self._STRUCT.pack(self.total, self.count)
+
+    @classmethod
+    def deserialize_from_bytes(cls, data: bytes) -> "SumState":
+        total, count = cls._STRUCT.unpack(data)
+        return cls(total=total, count=count)
+```
+
+The codec must round-trip exactly: `T.deserialize_from_bytes(s.serialize_to_bytes())` has
+to equal `s` for every state the aggregate can produce, including `initial_state()`. The
+framework cannot check that, and a lossy codec surfaces as wrong aggregate results rather
+than as an error. A `TState` that has neither method is rejected at class-definition time.
 
 ## Method Reference
 

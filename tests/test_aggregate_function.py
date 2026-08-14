@@ -5,8 +5,9 @@
 
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated, Any, ClassVar
 
 import pyarrow as pa
 import pytest
@@ -21,6 +22,8 @@ from vgi.arguments import (
     Returns,
     validate_const_arg_constraints,
 )
+from vgi.function import StreamStateCodec
+from vgi.function_storage import FunctionStorageSqlite
 from vgi.table_function import ProcessParams, ResolvedSecrets
 
 # ---------------------------------------------------------------------------
@@ -835,3 +838,290 @@ class TestBuildBatchResult:
         schema = pa.schema([("result", pa.int64())])
         with pytest.raises(ValueError, match="expected 5"):
             _build_batch_result([1, 2, 3], schema, expected_count=5)
+
+
+# =========================================================================
+# Test Group: TState only has to be a StreamStateCodec
+# =========================================================================
+
+
+@dataclass(kw_only=True)
+class PackedState:
+    """A state that owns its encoding instead of going through Arrow IPC.
+
+    One int64 packed little-endian: 8 bytes, against the schema message +
+    batch message + end-of-stream marker a one-row Arrow stream costs.
+    """
+
+    total: int = 0
+
+    _STRUCT: ClassVar[struct.Struct] = struct.Struct("<q")
+
+    def serialize_to_bytes(self) -> bytes:
+        return self._STRUCT.pack(self.total)
+
+    @classmethod
+    def deserialize_from_bytes(cls, data: bytes) -> PackedState:
+        if len(data) != cls._STRUCT.size:
+            raise ValueError(f"PackedState expects {cls._STRUCT.size} bytes, got {len(data)}")
+        (total,) = cls._STRUCT.unpack(data)
+        return cls(total=total)
+
+
+class PackedSumAgg(AggregateFunction[PackedState]):
+    """Sum aggregate whose per-group state is hand-packed, not Arrow IPC."""
+
+    # Process-local store: the default sqlite backend is a file that outlives
+    # the test run, so a fixed execution_id would accumulate across runs.
+    storage = FunctionStorageSqlite(db_path=":memory:")
+
+    class Meta:
+        name = "packed_sum"
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[Any]) -> PackedState:
+        return PackedState()
+
+    @classmethod
+    def update(
+        cls,
+        states: dict[int, PackedState],
+        group_ids: pa.Int64Array,
+        value: Annotated[pa.Int64Array, Param(doc="Column to sum")],
+    ) -> None:
+        for gid, val in zip(group_ids.to_pylist(), value.to_pylist(), strict=True):
+            if val is not None:
+                states[gid] = PackedState(total=states[gid].total + val)
+
+    @classmethod
+    def combine(cls, source: PackedState, target: PackedState, params: ProcessParams[Any]) -> PackedState:
+        return PackedState(total=source.total + target.total)
+
+    @classmethod
+    def finalize(
+        cls,
+        group_ids: pa.Int64Array,
+        states: dict[int, PackedState],
+        params: ProcessParams[Any],
+    ) -> Annotated[pa.RecordBatch, Returns(pa.int64())]:
+        results = [s.total if (s := states[gid.as_py()]) is not None else None for gid in group_ids]
+        return pa.record_batch({"result": pa.array(results, type=pa.int64())})
+
+
+class TestStateCodecBound:
+    """TState needs ``StreamStateCodec``, not ``ArrowSerializableDataclass``."""
+
+    def test_hand_rolled_codec_resolves_state_class(self) -> None:
+        """A state with the two codec methods is accepted as TState."""
+        assert PackedSumAgg.state_class is PackedState
+
+    def test_state_without_codec_is_rejected(self) -> None:
+        """A TState with neither method fails at class-definition time.
+
+        Left to runtime it would surface as an AttributeError from deep inside
+        the worker's persistence path, on the first group of the first batch.
+        """
+
+        @dataclass(kw_only=True)
+        class NotAState:
+            total: int = 0
+
+        with pytest.raises(TypeError, match="cannot be persisted as per-group aggregate state"):
+
+            class BadAgg(AggregateFunction[NotAState]):  # type: ignore[type-var]
+                class Meta:
+                    name = "bad_state"
+
+                @classmethod
+                def initial_state(cls, params: ProcessParams[Any]) -> NotAState:
+                    return NotAState()
+
+                @classmethod
+                def update(cls, states: dict[int, NotAState], group_ids: pa.Int64Array) -> None:
+                    pass
+
+                @classmethod
+                def combine(cls, source: NotAState, target: NotAState, params: ProcessParams[Any]) -> NotAState:
+                    return target
+
+                @classmethod
+                def finalize(
+                    cls,
+                    group_ids: pa.Int64Array,
+                    states: dict[int, NotAState],
+                    params: ProcessParams[Any],
+                ) -> Annotated[pa.RecordBatch, Returns(pa.int64())]:
+                    return pa.record_batch({"result": pa.array([], type=pa.int64())})
+
+    def test_generic_intermediate_base_is_not_validated(self) -> None:
+        """An unparameterized TState (still a TypeVar) defers the check to the leaf."""
+
+        class GenericMid[TS: StreamStateCodec](AggregateFunction[TS]):
+            class Meta:
+                name = "generic_mid"
+
+            @classmethod
+            def initial_state(cls, params: ProcessParams[Any]) -> Any:
+                return SimpleState()
+
+            @classmethod
+            def update(cls, states: dict[int, Any], group_ids: pa.Int64Array) -> None:
+                pass
+
+            @classmethod
+            def combine(cls, source: Any, target: Any, params: ProcessParams[Any]) -> Any:
+                return target
+
+            @classmethod
+            def finalize(
+                cls,
+                group_ids: pa.Int64Array,
+                states: dict[int, Any],
+                params: ProcessParams[Any],
+            ) -> Annotated[pa.RecordBatch, Returns(pa.int64())]:
+                return pa.record_batch({"result": pa.array([], type=pa.int64())})
+
+        assert GenericMid.state_class is None
+
+    def test_arrow_serializable_state_still_accepted(self) -> None:
+        """The default path is untouched — an ArrowSerializableDataclass still binds."""
+
+        class ArrowStateAgg(AggregateFunction[SimpleState]):
+            class Meta:
+                name = "arrow_state_agg"
+
+            @classmethod
+            def initial_state(cls, params: ProcessParams[Any]) -> SimpleState:
+                return SimpleState()
+
+            @classmethod
+            def update(cls, states: dict[int, SimpleState], group_ids: pa.Int64Array) -> None:
+                pass
+
+            @classmethod
+            def combine(cls, source: SimpleState, target: SimpleState, params: ProcessParams[Any]) -> SimpleState:
+                return target
+
+            @classmethod
+            def finalize(
+                cls,
+                group_ids: pa.Int64Array,
+                states: dict[int, SimpleState],
+                params: ProcessParams[Any],
+            ) -> Annotated[pa.RecordBatch, Returns(pa.int64())]:
+                return pa.record_batch({"result": pa.array([], type=pa.int64())})
+
+        assert ArrowStateAgg.state_class is SimpleState
+
+
+class TestStateCodecThroughWorker:
+    """The worker's UPDATE/COMBINE/FINALIZE path persists hand-packed state."""
+
+    @staticmethod
+    def _ipc(batch: pa.RecordBatch) -> bytes:
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, batch.schema) as writer:
+            writer.write_batch(batch)
+        return sink.getvalue().to_pybytes()
+
+    def _worker(self) -> Any:
+        from vgi.worker import Worker
+
+        class PackedWorker(Worker):
+            functions = [PackedSumAgg]
+
+        return PackedWorker()
+
+    def test_update_combine_finalize_round_trip(self) -> None:
+        """Two update batches, a combine, then finalize — all through the codec."""
+        from vgi_rpc.rpc import AuthContext, CallContext
+
+        from vgi.protocol import (
+            AggregateCombineRequest,
+            AggregateFinalizeRequest,
+            AggregateUpdateRequest,
+        )
+
+        worker = self._worker()
+        ctx = CallContext(auth=AuthContext.anonymous(), emit_client_log=lambda *a, **kw: None)
+        execution_id = b"packed-exec-1"
+
+        def _update(gids: list[int], values: list[int]) -> None:
+            batch = pa.record_batch(
+                {
+                    "__vgi_group_id": pa.array(gids, type=pa.int64()),
+                    "value": pa.array(values, type=pa.int64()),
+                }
+            )
+            worker.aggregate_update(
+                AggregateUpdateRequest(
+                    function_name="packed_sum",
+                    execution_id=execution_id,
+                    input_batch=self._ipc(batch),
+                ),
+                ctx,
+            )
+
+        # Two batches so the second one has to read group 0's state back out
+        # of storage — i.e. through deserialize_from_bytes.
+        _update([0, 0, 1], [10, 5, 7])
+        _update([0, 1], [1, 2])
+
+        # Group 1 merged into group 0: 16 + 9.
+        merge = pa.record_batch(
+            {
+                "source_group_id": pa.array([1], type=pa.int64()),
+                "target_group_id": pa.array([0], type=pa.int64()),
+            }
+        )
+        worker.aggregate_combine(
+            AggregateCombineRequest(
+                function_name="packed_sum",
+                execution_id=execution_id,
+                merge_batch=self._ipc(merge),
+            ),
+            ctx,
+        )
+
+        group_ids = pa.record_batch({"group_id": pa.array([0], type=pa.int64())})
+        response = worker.aggregate_finalize(
+            AggregateFinalizeRequest(
+                function_name="packed_sum",
+                execution_id=execution_id,
+                group_ids_batch=self._ipc(group_ids),
+                output_schema=pa.schema([("result", pa.int64())]),
+            ),
+            ctx,
+        )
+        result = pa.ipc.open_stream(response.result_batch).read_next_batch()
+        assert result.column("result").to_pylist() == [25]
+
+    def test_stored_state_is_the_packed_encoding(self) -> None:
+        """What lands in FunctionStorage is the function's own 8 bytes."""
+        from vgi_rpc.rpc import AuthContext, CallContext
+
+        from vgi.function_storage import BoundStorage, FrameworkNS
+        from vgi.protocol import AggregateUpdateRequest
+
+        worker = self._worker()
+        ctx = CallContext(auth=AuthContext.anonymous(), emit_client_log=lambda *a, **kw: None)
+        execution_id = b"packed-exec-2"
+
+        batch = pa.record_batch(
+            {
+                "__vgi_group_id": pa.array([0], type=pa.int64()),
+                "value": pa.array([42], type=pa.int64()),
+            }
+        )
+        worker.aggregate_update(
+            AggregateUpdateRequest(
+                function_name="packed_sum",
+                execution_id=execution_id,
+                input_batch=self._ipc(batch),
+            ),
+            ctx,
+        )
+
+        storage = BoundStorage(PackedSumAgg.storage, execution_id)
+        stored = storage.state_get(FrameworkNS.AGGREGATE_STATE, BoundStorage.pack_int_key(0))
+        assert stored == struct.pack("<q", 42)

@@ -22,11 +22,11 @@ from dataclasses import dataclass
 from typing import Any, Final, TypeVar, final, get_args, get_origin
 
 import pyarrow as pa
-from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import AuthContext
 
 import vgi.function
 from vgi.arguments import Arguments
+from vgi.function import StreamStateCodec, _is_state_codec
 from vgi.invocation import (
     BindResponse,
 )
@@ -95,10 +95,8 @@ class WindowPartition:
 GROUP_COLUMN_NAME: Final[str] = "__vgi_group_id"
 """Reserved column name prepended by C++ to UPDATE exchange batches."""
 
-TState = TypeVar("TState", bound=ArrowSerializableDataclass)
 
-
-class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Function):
+class AggregateFunction[TState: StreamStateCodec](vgi.function.Function):
     """Base class for aggregate functions.
 
     Aggregate functions accumulate input rows into per-group state during
@@ -110,7 +108,13 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
     ``ScalarFunction.compute()``.
 
     Type Parameters:
-        TState: ``ArrowSerializableDataclass`` for per-group accumulation state.
+        TState: Per-group accumulation state. The framework only requires
+            [`StreamStateCodec`][] — ``serialize_to_bytes()`` and
+            ``deserialize_from_bytes()`` — and treats the result as opaque
+            bytes in ``FunctionStorage``. ``ArrowSerializableDataclass``
+            satisfies that and remains the default, but a state that is a
+            couple of integers is cheaper to pack itself; see
+            [`StreamStateCodec`][] for the trade-off.
 
     Example::
 
@@ -145,7 +149,7 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
                 ...
 
     Attributes:
-        state_class: The resolved ``TState`` dataclass used for per-group
+        state_class: The resolved ``TState`` type used for per-group
             accumulation state, inferred from the generic parameter; ``None``
             until resolved by ``__init_subclass__``.
 
@@ -184,6 +188,14 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
             if type_args:
                 state_type = type_args[0]
                 if not isinstance(state_type, TypeVar):
+                    if isinstance(state_type, type) and not _is_state_codec(state_type):
+                        raise TypeError(
+                            f"{cls.__name__}: TState type {state_type.__name__} cannot be persisted "
+                            f"as per-group aggregate state. It needs serialize_to_bytes() and "
+                            f"deserialize_from_bytes() -- either inherit from "
+                            f"ArrowSerializableDataclass, which writes them for you, or implement "
+                            f"them yourself to choose your own encoding (see StreamStateCodec)."
+                        )
                     cls.state_class = state_type
             break
 
@@ -441,9 +453,11 @@ class AggregateFunction[TState: ArrowSerializableDataclass](vgi.function.Functio
         """Derive optional per-partition state from the raw partition.
 
         Called once per partition before any ``window()`` call. Return any
-        ``ArrowSerializableDataclass`` (so it can round-trip through storage),
-        or ``None`` if no derived state is required. The return value is
-        passed back to ``window()`` as ``window_state``.
+        [`StreamStateCodec`][] — anything with ``serialize_to_bytes()`` and
+        ``deserialize_from_bytes()``, which ``ArrowSerializableDataclass``
+        provides — so it can round-trip through storage, or ``None`` if no
+        derived state is required. The return value is passed back to
+        ``window()`` as ``window_state``.
 
         Default implementation returns ``None``.
         """

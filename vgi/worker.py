@@ -3270,8 +3270,9 @@ class Worker:
         if window_state is not None:
             if not hasattr(window_state, "serialize_to_bytes"):
                 raise TypeError(
-                    f"{func_cls.__name__}.window_init() must return an ArrowSerializableDataclass "
-                    f"or None, got {type(window_state).__name__}"
+                    f"{func_cls.__name__}.window_init() must return a state with "
+                    f"serialize_to_bytes() (an ArrowSerializableDataclass, or any "
+                    f"StreamStateCodec) or None, got {type(window_state).__name__}"
                 )
             window_state_bytes = window_state.serialize_to_bytes()
 
