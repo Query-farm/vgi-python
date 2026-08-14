@@ -1163,7 +1163,7 @@ class TestBindCallWireFormat:
     inline Arrow *struct* instead, those workers reject the request with
     "expected Binary array". This regression-anchors the ``bind_call`` field
     being ``Annotated[BindRequest, ArrowType(pa.binary())]`` on every request
-    that carries one, so the Cedar proxy's re-serialized bind stays wire-
+    that carries one, so Rowfence's re-serialized bind stays wire-
     compatible with a non-Python backend.
     """
 

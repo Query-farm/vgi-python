@@ -1283,7 +1283,7 @@ class TestScanBranchSerialization:
         Lenient producers (the Rust/Go/Java SDKs, tolerated by the DuckDB C++
         client) omit the IPC stream for an empty nested list, so a strict
         consumer must accept a zero-branch result rather than raising — otherwise
-        the Cedar proxy (the only strict Python consumer in the path) fails
+        Rowfence (the only strict Python consumer in the path) fails
         closed on a legitimate response.
         """
         from vgi.catalog import ScanBranchesResult
