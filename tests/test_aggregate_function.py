@@ -890,7 +890,7 @@ class PackedSumAgg(AggregateFunction[PackedState]):
         value: Annotated[pa.Int64Array, Param(doc="Column to sum")],
     ) -> None:
         for gid, val in zip(group_ids.to_pylist(), value.to_pylist(), strict=True):
-            if val is not None:
+            if gid is not None and val is not None:
                 states[gid] = PackedState(total=states[gid].total + val)
 
     @classmethod
@@ -913,7 +913,7 @@ class TestStateCodecBound:
 
     def test_hand_rolled_codec_resolves_state_class(self) -> None:
         """A state with the two codec methods is accepted as TState."""
-        assert PackedSumAgg.state_class is PackedState
+        assert PackedSumAgg.state_class is PackedState  # type: ignore[misc]
 
     def test_state_without_codec_is_rejected(self) -> None:
         """A TState with neither method fails at class-definition time.
@@ -981,7 +981,7 @@ class TestStateCodecBound:
             ) -> Annotated[pa.RecordBatch, Returns(pa.int64())]:
                 return pa.record_batch({"result": pa.array([], type=pa.int64())})
 
-        assert GenericMid.state_class is None
+        assert GenericMid.state_class is None  # type: ignore[misc]
 
     def test_arrow_serializable_state_still_accepted(self) -> None:
         """The default path is untouched — an ArrowSerializableDataclass still binds."""
@@ -1011,7 +1011,7 @@ class TestStateCodecBound:
             ) -> Annotated[pa.RecordBatch, Returns(pa.int64())]:
                 return pa.record_batch({"result": pa.array([], type=pa.int64())})
 
-        assert ArrowStateAgg.state_class is SimpleState
+        assert ArrowStateAgg.state_class is SimpleState  # type: ignore[misc]
 
 
 class TestStateCodecThroughWorker:

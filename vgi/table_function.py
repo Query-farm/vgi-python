@@ -73,6 +73,7 @@ __all__ = [
     "TableCardinality",
     "BindParams",
     "InitParams",
+    "OutputCollector",
     "ProcessParams",
     "SecretsAccessor",
     "TableFunctionBase",

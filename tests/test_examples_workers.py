@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -174,30 +174,35 @@ def test_cache_worker_advertises_and_revalidates() -> None:
     import cache_worker as m
 
     from vgi.arguments import Arguments
+    from vgi.cache_control import CacheControl
 
     with _spawn("cache_worker.py") as client:
         rows = list(
-            client.table_function(function_name="rates", schema_name="main", arguments=Arguments(positional=[]))
+            client.table_function(function_name="rates", schema_name="main", arguments=Arguments(positional=()))
         )
     assert [v for b in rows for v in b.column("currency").to_pylist()] == ["EUR", "GBP", "JPY"]
 
     # The advertised metadata renders to the keys the extension reads by string.
-    advertised = m.CacheControl(ttl=300, etag=m._DATA_VERSION, revalidatable=True).to_metadata()
+    advertised = CacheControl(ttl=300, etag=m._DATA_VERSION, revalidatable=True).to_metadata()
     assert advertised["vgi.cache.ttl"] == "300"
     assert advertised["vgi.cache.etag"] == m._DATA_VERSION
     assert advertised["vgi.cache.revalidatable"] == "1"
     assert advertised["vgi.cache.scope"] == "catalog"
 
     # not_modified is what makes the 0-row reply mean "keep what you have".
-    assert m.CacheControl(not_modified=True).to_metadata()["vgi.cache.not_modified"] == "1"
+    assert CacheControl(not_modified=True).to_metadata()["vgi.cache.not_modified"] == "1"
 
 
 def test_copy_format_worker_advertises_both_directions() -> None:
     """The COPY worker's catalog advertises a reader AND a writer for ``tsvlite``."""
     import copy_format_worker as m
 
-    interface = m.TsvWorker()._get_catalog_interface()()
-    formats = interface.copy_from_formats(attach_opaque_data=b"", transaction_opaque_data=None)
+    from vgi.catalog.catalog_interface import AttachOpaqueData
+
+    interface_class = m.TsvWorker()._get_catalog_interface()
+    assert interface_class is not None
+    interface = interface_class()
+    formats = interface.copy_from_formats(attach_opaque_data=AttachOpaqueData(b""), transaction_opaque_data=None)
     by_direction = {f.direction: f for f in formats}
 
     assert by_direction["from"].format_name == "tsvlite"
@@ -218,7 +223,8 @@ def test_copy_format_worker_round_trips_a_file(tmp_path: Path) -> None:
 
     source = tmp_path / "people.tsv"
     source.write_text("skipme\nalice\t30\nbob\t41\ncarol\t\n", encoding="utf-8")
-    schema = pa.schema([("name", pa.string()), ("age", pa.int64())])
+    fields: list[pa.Field[Any]] = [pa.field("name", pa.string()), pa.field("age", pa.int64())]
+    schema = pa.schema(fields)
 
     emitted: list[pa.RecordBatch] = []
 
