@@ -15,6 +15,7 @@ without changing behaviour.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import time
 from typing import Any
@@ -99,3 +100,36 @@ def test_client_can_restart_after_a_forced_stop() -> None:
         assert client._primary is not None  # noqa: SLF001 - restart sanity check
     finally:
         client.stop()
+
+
+def test_graceful_stop_kills_a_worker_that_overruns_the_wait() -> None:
+    """A worker that outlives the exit wait is killed, not raised out of ``stop()``.
+
+    ``proc.wait(timeout=...)`` raises ``TimeoutExpired``, and letting that escape
+    would leak the process *and* mask whatever exception was already unwinding
+    through ``__exit__``. Forcing the timed wait to raise is deterministic;
+    shrinking ``PROCESS_WAIT_TIMEOUT`` instead would race a worker that happens
+    to exit promptly.
+    """
+    client = _started_client(pool=None)
+    assert client._primary is not None  # noqa: SLF001 - a started client always has one
+    proc = client._primary.proc  # noqa: SLF001 - asserting the process really died
+    assert proc is not None
+
+    real_wait = proc.wait
+    timed_waits: list[float | None] = []
+
+    def wait_that_times_out(timeout: float | None = None) -> int:
+        if timeout is None:  # the untimed reap after the kill
+            return real_wait()
+        timed_waits.append(timeout)
+        raise subprocess.TimeoutExpired(proc.args, timeout)
+
+    proc.wait = wait_that_times_out  # type: ignore[method-assign]
+
+    returncode = client.stop()
+
+    assert timed_waits, "stop() should have waited on the worker with a timeout"
+    assert proc.poll() is not None, "worker process should be reaped, not left running"
+    if sys.platform != "win32":
+        assert returncode < 0, "the timeout path kills, so the exit code is a signal"

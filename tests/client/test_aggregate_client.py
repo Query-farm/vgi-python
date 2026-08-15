@@ -19,6 +19,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 
+from vgi import schema
 from vgi.arguments import Arguments
 from vgi.client.client import Client, ClientError
 
@@ -34,10 +35,10 @@ def client(client_transport: Any) -> Any:
 
 def _grouped_batches() -> list[pa.RecordBatch]:
     """Two batches whose groups straddle the batch boundary."""
-    schema = pa.schema([pa.field("cat", pa.string()), pa.field("value", pa.int64())])
+    s = schema(cat=pa.string(), value=pa.int64())
     return [
-        pa.RecordBatch.from_pydict({"cat": ["a", "b", "a"], "value": [1, 10, 2]}, schema=schema),
-        pa.RecordBatch.from_pydict({"cat": ["b", "a"], "value": [20, 3]}, schema=schema),
+        pa.RecordBatch.from_pydict({"cat": ["a", "b", "a"], "value": [1, 10, 2]}, schema=s),
+        pa.RecordBatch.from_pydict({"cat": ["b", "a"], "value": [20, 3]}, schema=s),
     ]
 
 
@@ -90,15 +91,15 @@ class TestAggregateFunction:
             schema_name=MAIN,
             input=[],
             group_by=["cat"],
-            input_schema=pa.schema([pa.field("value", pa.int64())]),
+            input_schema=schema(value=pa.int64()),
         )
         assert out.num_rows == 0
         assert out.schema.names == ["cat", "result"]
 
     def test_empty_batches_are_skipped(self, client: Client) -> None:
         """A zero-row batch contributes nothing but must not break the drive loop."""
-        schema = pa.schema([pa.field("value", pa.int64())])
-        empty = pa.RecordBatch.from_pydict({"value": pa.array([], type=pa.int64())}, schema=schema)
+        s = schema(value=pa.int64())
+        empty = pa.RecordBatch.from_pydict({"value": pa.array([], type=pa.int64())}, schema=s)
         out = client.aggregate_function(function_name="vgi_sum", schema_name=MAIN, input=[empty, _values(5), empty])
         assert out.column("result").to_pylist() == [5]
 
@@ -214,7 +215,7 @@ class TestAggregateSession:
         with client.aggregate_session(
             function_name="vgi_sum",
             schema_name=MAIN,
-            input_schema=pa.schema([pa.field("value", pa.int64())]),
+            input_schema=schema(value=pa.int64()),
         ) as session:
             assert session.execution_id
             assert session.output_schema.names == ["result"]
@@ -224,7 +225,7 @@ class TestAggregateSession:
         with client.aggregate_session(
             function_name="vgi_sum",
             schema_name=MAIN,
-            input_schema=pa.schema([pa.field("value", pa.int64())]),
+            input_schema=schema(value=pa.int64()),
         ) as session:
             session.update(group_ids=[0, 1, 0], batch=_values(1, 100, 2))
             session.update(group_ids=[1], batch=_values(200))
@@ -234,7 +235,7 @@ class TestAggregateSession:
         with client.aggregate_session(
             function_name="vgi_sum",
             schema_name=MAIN,
-            input_schema=pa.schema([pa.field("value", pa.int64())]),
+            input_schema=schema(value=pa.int64()),
         ) as session:
             session.update(group_ids=[0, 1], batch=_values(7, 9))
             assert session.finalize([1, 0]).column("result").to_pylist() == [9, 7]
@@ -244,7 +245,7 @@ class TestAggregateSession:
         with client.aggregate_session(
             function_name="vgi_sum",
             schema_name=MAIN,
-            input_schema=pa.schema([pa.field("value", pa.int64())]),
+            input_schema=schema(value=pa.int64()),
         ) as session:
             assert session.finalize([42]).column("result").to_pylist() == [None]
 
@@ -253,7 +254,7 @@ class TestAggregateSession:
         with client.aggregate_session(
             function_name="vgi_sum",
             schema_name=MAIN,
-            input_schema=pa.schema([pa.field("value", pa.int64())]),
+            input_schema=schema(value=pa.int64()),
         ) as session:
             session.update(group_ids=[0, 0, 1], batch=_values(1, 2, 100))
             session.combine(source_group_ids=[1], target_group_ids=[0])
@@ -264,7 +265,7 @@ class TestAggregateSession:
             client.aggregate_session(
                 function_name="vgi_sum",
                 schema_name=MAIN,
-                input_schema=pa.schema([pa.field("value", pa.int64())]),
+                input_schema=schema(value=pa.int64()),
             ) as session,
             pytest.raises(ValueError, match="group_ids has 2 entries but batch has 3 rows"),
         ):
@@ -275,7 +276,7 @@ class TestAggregateSession:
             client.aggregate_session(
                 function_name="vgi_sum",
                 schema_name=MAIN,
-                input_schema=pa.schema([pa.field("value", pa.int64())]),
+                input_schema=schema(value=pa.int64()),
             ) as session,
             pytest.raises(ValueError, match="source_group_ids has 2 entries"),
         ):
@@ -285,7 +286,7 @@ class TestAggregateSession:
         with client.aggregate_session(
             function_name="vgi_sum",
             schema_name=MAIN,
-            input_schema=pa.schema([pa.field("value", pa.int64())]),
+            input_schema=schema(value=pa.int64()),
         ) as session:
             session.update(group_ids=pa.array([5, 5], type=pa.int32()), batch=_values(4, 6))
             assert session.finalize(pa.array([5], type=pa.int64())).column("result").to_pylist() == [10]
@@ -295,7 +296,7 @@ class TestAggregateSession:
         session = client.aggregate_bind(
             function_name="vgi_sum",
             schema_name=MAIN,
-            input_schema=pa.schema([pa.field("value", pa.int64())]),
+            input_schema=schema(value=pa.int64()),
         )
         session.destroy()
         session.destroy()
@@ -312,7 +313,7 @@ class TestAggregateWindow:
         with client.aggregate_session(
             function_name="vgi_window_sum",
             schema_name=MAIN,
-            input_schema=pa.schema([pa.field("value", pa.int64())]),
+            input_schema=schema(value=pa.int64()),
         ) as session:
             session.window_init(partition_id=0, partition=_values(1, 2, 3, 4))
             assert session.window(partition_id=0, rid=0, frames=[(0, 1)]).column("result").to_pylist() == [1]
@@ -324,7 +325,7 @@ class TestAggregateWindow:
         with client.aggregate_session(
             function_name="vgi_window_sum_batch",
             schema_name=MAIN,
-            input_schema=pa.schema([pa.field("value", pa.int64())]),
+            input_schema=schema(value=pa.int64()),
         ) as session:
             session.window_init(partition_id=0, partition=_values(1, 2, 3, 4))
             running = session.window_batch(partition_id=0, row_idx=0, frames=[[(0, end + 1)] for end in range(4)])
@@ -336,7 +337,7 @@ class TestAggregateWindow:
         with client.aggregate_session(
             function_name="vgi_window_sum",
             schema_name=MAIN,
-            input_schema=pa.schema([pa.field("value", pa.int64())]),
+            input_schema=schema(value=pa.int64()),
         ) as session:
             session.window_init(
                 partition_id=0,
@@ -352,7 +353,7 @@ class TestAggregateWindow:
         with client.aggregate_session(
             function_name="vgi_window_sum",
             schema_name=MAIN,
-            input_schema=pa.schema([pa.field("value", pa.int64())]),
+            input_schema=schema(value=pa.int64()),
         ) as session:
             session.window_init(partition_id=0, partition=_values(1, 1))
             session.window_init(partition_id=1, partition=_values(100, 100))
@@ -366,7 +367,7 @@ class TestAggregateWindow:
             client.aggregate_session(
                 function_name="vgi_window_sum",
                 schema_name=MAIN,
-                input_schema=pa.schema([pa.field("value", pa.int64())]),
+                input_schema=schema(value=pa.int64()),
             ) as session,
             pytest.raises(ClientError),
         ):
@@ -381,34 +382,34 @@ class TestAggregateWindow:
 class TestAggregateStreaming:
     @staticmethod
     def _schema() -> pa.Schema:
-        return pa.schema([pa.field("k", pa.string()), pa.field("ts", pa.int64()), pa.field("v", pa.int64())])
+        return schema(k=pa.string(), ts=pa.int64(), v=pa.int64())
 
     def test_running_value_per_row(self, client: Client) -> None:
         """One output row per input row: the partition's value at that position."""
-        schema = self._schema()
+        s = self._schema()
         with client.aggregate_streaming(
             function_name="vgi_streaming_sum",
             schema_name=MAIN,
-            input_schema=schema,
+            input_schema=s,
             partition_key_count=1,
             order_key_count=1,
         ) as session:
             chunk = pa.RecordBatch.from_pydict(
-                {"k": ["a", "b", "a", "b"], "ts": [1, 1, 2, 2], "v": [1, 10, 2, 20]}, schema=schema
+                {"k": ["a", "b", "a", "b"], "ts": [1, 1, 2, 2], "v": [1, 10, 2, 20]}, schema=s
             )
             assert session.chunk(chunk).column(0).to_pylist() == [1, 10, 3, 30]
 
     def test_state_carries_across_chunks(self, client: Client) -> None:
-        schema = self._schema()
+        s = self._schema()
         with client.aggregate_streaming(
             function_name="vgi_streaming_sum",
             schema_name=MAIN,
-            input_schema=schema,
+            input_schema=s,
             partition_key_count=1,
             order_key_count=1,
         ) as session:
-            first = pa.RecordBatch.from_pydict({"k": ["a"], "ts": [1], "v": [5]}, schema=schema)
-            second = pa.RecordBatch.from_pydict({"k": ["a"], "ts": [2], "v": [7]}, schema=schema)
+            first = pa.RecordBatch.from_pydict({"k": ["a"], "ts": [1], "v": [5]}, schema=s)
+            second = pa.RecordBatch.from_pydict({"k": ["a"], "ts": [2], "v": [7]}, schema=s)
             assert session.chunk(first).column(0).to_pylist() == [5]
             assert session.chunk(second).column(0).to_pylist() == [12]
 

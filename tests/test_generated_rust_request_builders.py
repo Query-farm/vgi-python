@@ -18,6 +18,7 @@ import os
 import re
 from pathlib import Path
 
+import pyarrow as pa
 import pytest
 
 from vgi.codegen._common import collect_schemas, sanitize_name
@@ -28,14 +29,7 @@ def _vgi_rust_generated_path() -> Path:
     override = os.environ.get("VGI_RUST_GENERATED_PARAMS_RS")
     if override:
         return Path(override)
-    return (
-        Path(__file__).resolve().parents[2]
-        / "vgi-rust"
-        / "vgi-protocol"
-        / "src"
-        / "generated"
-        / "request_params.rs"
-    )
+    return Path(__file__).resolve().parents[2] / "vgi-rust" / "vgi-protocol" / "src" / "generated" / "request_params.rs"
 
 
 _REGEN_HINT = (
@@ -57,8 +51,8 @@ def test_generator_is_deterministic() -> None:
     assert _emitted() == _emitted(), "rust_request_builders generator is non-deterministic"
 
 
-def _params_by_method() -> dict[str, object]:
-    out = {}
+def _params_by_method() -> dict[str, pa.Schema]:
+    out: dict[str, pa.Schema] = {}
     for es in collect_schemas():
         if es.name.endswith("Params"):
             out[es.origin.split("'")[1]] = es.schema
@@ -106,9 +100,7 @@ def test_every_emitted_struct_derives_vgi_arrow() -> None:
     structs = re.findall(r"pub struct (\w+Params) \{", src)
     assert structs, "no structs emitted"
     derives = re.findall(r"#\[derive\(Debug, Clone, VgiArrow\)\]\npub struct (\w+Params) \{", src)
-    assert set(structs) == set(derives), (
-        f"structs missing the VgiArrow derive: {sorted(set(structs) - set(derives))}"
-    )
+    assert set(structs) == set(derives), f"structs missing the VgiArrow derive: {sorted(set(structs) - set(derives))}"
 
 
 def test_parity_test_module_covers_every_struct() -> None:
@@ -116,9 +108,7 @@ def test_parity_test_module_covers_every_struct() -> None:
     src = _emitted()
     structs = set(re.findall(r"pub struct (\w+Params) \{", src))
     asserted = set(re.findall(r"flat_schema::<(\w+Params)>\(\)", src))
-    assert structs == asserted, (
-        f"schema_parity module does not cover: {sorted(structs - asserted)}"
-    )
+    assert structs == asserted, f"schema_parity module does not cover: {sorted(structs - asserted)}"
 
 
 def test_checked_in_rust_matches_generator() -> None:

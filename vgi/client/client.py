@@ -245,11 +245,18 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         THREAD_JOIN_TIMEOUT: Seconds to wait for a worker thread to join during
             shutdown.
         PROCESS_WAIT_TIMEOUT: Seconds to wait for a worker process to exit during
-            shutdown.
+            shutdown before killing it. A hang guard — teardown never blocks past
+            this, and never raises ``TimeoutExpired`` at the caller.
     """
 
     THREAD_JOIN_TIMEOUT: float = 5.0
-    PROCESS_WAIT_TIMEOUT: float = 5.0
+    # A hang guard, not a latency budget: a healthy worker exits in milliseconds,
+    # but a saturated machine (the whole test suite under `pytest -n auto`, each
+    # fixture worker booting its own sub-workers) can push a clean exit past
+    # several seconds. Overrunning this kills the worker, so the value has to be
+    # far enough above normal shutdown that only a genuinely wedged process
+    # reaches it.
+    PROCESS_WAIT_TIMEOUT: float = 30.0
 
     @staticmethod
     def _combine_batches(batches: list[pa.RecordBatch]) -> pa.RecordBatch | None:
@@ -836,7 +843,22 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 worker.connection.__exit__(None, None, None)
         else:
             worker.connection.__exit__(None, None, None)
-        worker.proc.wait(timeout=self.PROCESS_WAIT_TIMEOUT)
+        try:
+            worker.proc.wait(timeout=self.PROCESS_WAIT_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            # A worker that outlives the graceful close gets killed rather than
+            # propagating out of ``stop()`` / ``__exit__``, where it would both
+            # leak the process and mask whatever exception was already unwinding.
+            # The signal returncode still travels back to the caller, and the
+            # warning keeps a genuinely wedged worker visible.
+            _logger.warning(
+                "worker_exit_timed_out worker_index=%s pid=%s timeout=%s killing",
+                worker.worker_index,
+                worker.proc.pid,
+                self.PROCESS_WAIT_TIMEOUT,
+            )
+            worker.proc.kill()
+            worker.proc.wait()
         returncode = worker.proc.returncode
         if force:
             # A signal exit code is the expected outcome here, not an error.

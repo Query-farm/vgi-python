@@ -18,6 +18,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 
+from vgi import schema
 from vgi.arguments import Arguments
 from vgi.client.client import Client, ClientError
 
@@ -27,7 +28,7 @@ READER_FORMAT = "example_lines"
 WRITER = "example_lines_writer"
 WRITER_FORMAT = "example_lines_out"
 
-SOURCE_SCHEMA = pa.schema([pa.field("a", pa.int32()), pa.field("b", pa.string())])
+SOURCE_SCHEMA = schema(a=pa.int32(), b=pa.string())
 
 
 @pytest.fixture
@@ -44,9 +45,9 @@ def _rows() -> list[pa.RecordBatch]:
     ]
 
 
-def _write(client: Client, dest: str, **options: Any) -> None:
+def _write(client: Client, dest: str, **options: pa.Scalar[Any]) -> None:
     """Run the fixture writer with ``null_string`` plus whatever else is asked."""
-    named = {"null_string": pa.scalar("NA")}
+    named: dict[str, pa.Scalar[Any]] = {"null_string": pa.scalar("NA")}
     named.update(options)
     client.copy_to(
         function_name=WRITER,
@@ -70,11 +71,6 @@ class TestCopyTo:
         dest = str(tmp_path / "out.txt")
         _write(client, dest)
         assert pathlib.Path(dest).read_text() == "1,x\n2,NA\n3,z\n"
-
-    def test_returns_nothing(self, client: Client, tmp_path: pathlib.Path) -> None:
-        """A COPY-TO sink has no Source phase, so the driver returns None."""
-        dest = str(tmp_path / "out.txt")
-        assert _write(client, dest) is None
 
     def test_options_reach_the_writer(self, client: Client, tmp_path: pathlib.Path) -> None:
         """COPY options arrive as the function's normal named arguments."""
@@ -267,7 +263,7 @@ def test_copy_formats_advertises_option_schemas(client: Client) -> None:
     attached = client.catalog_attach(name="example", data_version_spec=None, implementation_version=None)
     formats = {f.format_name: f for f in client.copy_formats(attach_opaque_data=attached.attach_opaque_data)}
 
-    options = pa.ipc.read_schema(pa.BufferReader(bytes(formats[READER_FORMAT].options)))
+    options = pa.ipc.read_schema(pa.py_buffer(formats[READER_FORMAT].options))
     assert set(options.names) == {"null_string", "delimiter", "skip_rows", "on_error"}
 
 

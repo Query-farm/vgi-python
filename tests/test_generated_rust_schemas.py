@@ -38,12 +38,7 @@ def _vgi_rust_generated_path() -> Path:
     if override:
         return Path(override)
     return (
-        Path(__file__).resolve().parents[2]
-        / "vgi-rust"
-        / "vgi-protocol"
-        / "src"
-        / "generated"
-        / "protocol_schemas.rs"
+        Path(__file__).resolve().parents[2] / "vgi-rust" / "vgi-protocol" / "src" / "generated" / "protocol_schemas.rs"
     )
 
 
@@ -209,7 +204,9 @@ def _parse_type(expr: str) -> pa.DataType:
         keys_sorted = parts[1].strip() == "true"
         return cast(
             pa.DataType,
-            pa.map_(struct_type.field(0).type, struct_type.field(1), keys_sorted=keys_sorted),
+            # pyarrow-stubs names this parameter ``key_sorted`` and types it as a
+            # literal; the runtime keyword is ``keys_sorted`` and takes a plain bool.
+            pa.map_(struct_type.field(0).type, struct_type.field(1), keys_sorted=keys_sorted),  # type: ignore[call-overload]
         )
 
     inner = _strip_wrapper(expr, "DataType::Timestamp(")
@@ -275,15 +272,13 @@ def test_emitted_schemas_round_trip_to_pyarrow() -> None:
 
     for stem, es in expected.items():
         assert parsed[stem].equals(es.schema), (
-            f"schema '{es.name}' ({es.origin}) does not round-trip.\n"
-            f"  python: {es.schema}\n"
-            f"  rust:   {parsed[stem]}"
+            f"schema '{es.name}' ({es.origin}) does not round-trip.\n  python: {es.schema}\n  rust:   {parsed[stem]}"
         )
 
 
 def test_every_rpc_method_has_a_params_entry() -> None:
     """The generated `params_schema_for` dispatch names every method exactly once."""
-    from vgi_rpc.rpc._types import rpc_methods  # type: ignore[attr-defined]
+    from vgi_rpc.rpc._types import rpc_methods
 
     from vgi.protocol import VgiProtocol
 

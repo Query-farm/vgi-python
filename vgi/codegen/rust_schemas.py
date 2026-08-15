@@ -57,7 +57,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
-from vgi_rpc.rpc._types import rpc_methods  # type: ignore[attr-defined]
+from vgi_rpc.rpc._types import rpc_methods
 
 from vgi.codegen._common import (
     EmittedSchema,

@@ -52,7 +52,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
-from vgi_rpc.rpc._types import rpc_methods  # type: ignore[attr-defined]
+from vgi_rpc.rpc._types import rpc_methods
 
 from vgi.codegen._common import (
     GeneratorError,
@@ -72,11 +72,55 @@ if TYPE_CHECKING:
 # breaking the build.
 _RUST_KEYWORDS = frozenset(
     [
-    "as", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false", "fn",
-    "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
-    "return", "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe",
-    "use", "where", "while", "async", "await", "box", "do", "final", "macro", "override", "priv",
-    "try", "typeof", "unsized", "virtual", "yield"
+        "as",
+        "break",
+        "const",
+        "continue",
+        "crate",
+        "dyn",
+        "else",
+        "enum",
+        "extern",
+        "false",
+        "fn",
+        "for",
+        "if",
+        "impl",
+        "in",
+        "let",
+        "loop",
+        "match",
+        "mod",
+        "move",
+        "mut",
+        "pub",
+        "ref",
+        "return",
+        "self",
+        "Self",
+        "static",
+        "struct",
+        "super",
+        "trait",
+        "true",
+        "type",
+        "unsafe",
+        "use",
+        "where",
+        "while",
+        "async",
+        "await",
+        "box",
+        "do",
+        "final",
+        "macro",
+        "override",
+        "priv",
+        "try",
+        "typeof",
+        "unsized",
+        "virtual",
+        "yield",
     ]
 )
 
