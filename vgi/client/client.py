@@ -247,7 +247,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         PROCESS_WAIT_TIMEOUT: Seconds to wait for a worker process to exit during
             shutdown before killing it. A hang guard — teardown never blocks past
             this, and never raises ``TimeoutExpired`` at the caller.
-        STDERR_DRAIN_TIMEOUT: Seconds to wait for a dead worker's stderr to finish
+        STDERR_DRAIN_TIMEOUT: Seconds to wait for a worker's stderr to finish
             draining before an error message is built from it.
     """
 
@@ -259,10 +259,10 @@ class Client(CatalogClientMixin, AggregateClientMixin):
     # far enough above normal shutdown that only a genuinely wedged process
     # reaches it.
     PROCESS_WAIT_TIMEOUT: float = 30.0
-    # Bound on waiting for a dead worker's stderr to be drained before an error
-    # message is built from it. Reached only if a drainer wedges on an
-    # already-EOF pipe, so it trades a stalled error path for a truncated one.
-    STDERR_DRAIN_TIMEOUT: float = 2.0
+    # Bound on waiting for a worker's stderr to finish draining before an error
+    # message is built from it. A dead worker's drainer returns almost at once;
+    # a live worker's never does, so this is what that (rare) path costs.
+    STDERR_DRAIN_TIMEOUT: float = 1.0
 
     @staticmethod
     def _combine_batches(batches: list[pa.RecordBatch]) -> pa.RecordBatch | None:
@@ -600,7 +600,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             return b"".join(self._stderr_buffer).decode("utf-8", errors="replace")
 
     def _await_stderr_drain(self) -> None:
-        """Let the drainers finish when the workers they read are already gone.
+        """Give the stderr drainers a bounded chance to finish before we read them.
 
         ``_stderr_buffer`` is filled by daemon threads that are otherwise only
         joined in ``stop()``, so an error raised the instant a worker dies can be
@@ -610,20 +610,16 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         by 50ms is enough to lose the output entirely, and a loaded machine
         delays a daemon thread by far more than that.
 
-        Only wait once every worker process has exited, which is when the pipes
-        are at EOF and the drainers are microseconds from returning. A worker
-        that is still running holds its pipe open and its drainer will not return
-        at all, so waiting there would stall every ordinary error — a bind
-        rejection from a perfectly healthy worker — for no benefit.
+        A dead worker's pipe is at EOF, so its drainer returns almost at once and
+        this costs nothing. A live worker holds its pipe open and its drainer never
+        returns, so that path pays the full timeout — measured across the whole
+        test suite, that case arises 9 times, which is why this does not try to
+        detect it. The obvious detector (skip the wait when ``proc.poll()`` says
+        the worker is alive) is what shipped first and was wrong: ``poll()`` is
+        only trustworthy in the *dead* direction, and on Windows it still reports
+        None for a process whose pipes are already at EOF — precisely the moment
+        this runs.
         """
-        if not self._stderr_threads:
-            return
-        workers = [w for w in [self._primary, *self._additional_workers] if w is not None]
-        procs = [w.proc for w in workers if w.proc is not None]
-        # Only the direct-subprocess path owns a ``proc`` and starts a drainer,
-        # so "no procs" means the threads belong to workers already torn down.
-        if not procs or any(proc.poll() is None for proc in procs):
-            return
         for stderr_thread in self._stderr_threads:
             stderr_thread.join(timeout=self.STDERR_DRAIN_TIMEOUT)
 

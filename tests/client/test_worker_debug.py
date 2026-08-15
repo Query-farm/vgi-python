@@ -97,7 +97,8 @@ class TestStderrInErrorMessages:
         real_drain = Client._drain_stderr
 
         def late_drain(self: Client, stderr: Any) -> None:
-            time.sleep(0.25)
+            # Well past the ~50ms that loses the output, well inside the wait budget.
+            time.sleep(0.1)
             real_drain(self, stderr)
 
         monkeypatch.setattr(Client, "_drain_stderr", late_drain)
@@ -110,12 +111,12 @@ class TestStderrInErrorMessages:
 
         assert "Error: function not found" in str(exc_info.value)
 
-    def test_a_live_worker_does_not_stall_the_error_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Only a *dead* worker's drainer is waited on.
+    def test_a_live_worker_bounds_the_error_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A drainer that never returns must not hang the error path.
 
-        A running worker holds its stderr pipe open, so its drainer never
-        returns; waiting on that would stall every ordinary error — a bind
-        rejection from a perfectly healthy worker — until the timeout.
+        A running worker holds its stderr pipe open, so its drainer blocks
+        forever; the wait has to be bounded or an ordinary error — a bind
+        rejection from a perfectly healthy worker — would never come back.
         """
         elapsed: list[float] = []
         real_enrich = Client._client_error_with_stderr
@@ -139,8 +140,8 @@ class TestStderrInErrorMessages:
             assert client._stderr_threads[0].is_alive(), "the drainer should still be blocked on the open pipe"  # noqa: SLF001
 
         assert elapsed, "the error should have gone through stderr enrichment"
-        assert max(elapsed) < Client.STDERR_DRAIN_TIMEOUT / 4, (
-            f"enrichment waited {max(elapsed):.3f}s on a worker that is still running"
+        assert max(elapsed) < Client.STDERR_DRAIN_TIMEOUT * 2, (
+            f"enrichment waited {max(elapsed):.3f}s, past its {Client.STDERR_DRAIN_TIMEOUT}s bound"
         )
 
     def test_error_no_stderr_section_when_passthrough(self) -> None:
