@@ -54,6 +54,7 @@ from vgi.catalog import (
     CatalogAttachResult,
     CatalogInfo,
     ColumnStatistics,
+    CopyFromFormatInfo,
     FunctionInfo,
     MacroInfo,
     MacroType,
@@ -556,6 +557,42 @@ class CatalogClientMixin:
                     type=type,
                     transaction_opaque_data=transaction_opaque_data,
                 ).to_infos()
+
+    def copy_formats(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> Sequence[CopyFromFormatInfo]:
+        """List the custom ``COPY`` formats this catalog advertises.
+
+        Catalog-level rather than schema-scoped, matching the C++ extension,
+        which registers one DuckDB ``CopyFunction`` per entry at ATTACH. Each
+        entry's ``handler`` is the worker function name to pass to
+        ``Client.copy_from`` / ``Client.copy_to``, and ``direction`` says which
+        of the two it serves (``"from"``, ``"to"``, or ``"both"``).
+
+        Args:
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID for transactional reads.
+
+        Returns:
+            List of [`CopyFromFormatInfo`][]. Empty for a catalog with no custom
+            formats, and also for a worker that predates the RPC — the method is
+            additive, so ``MethodNotImplementedError`` is read as "advertises
+            none", exactly as the extension reads it during ATTACH.
+
+        """
+        with self._catalog_connect() as proxy:
+            try:
+                return proxy.catalog_copy_from_formats(
+                    attach_opaque_data=attach_opaque_data,
+                    transaction_opaque_data=transaction_opaque_data,
+                ).to_infos()
+            except RpcError as e:
+                if "MethodNotImplemented" in type(e).__name__ or "not implemented" in str(e).lower():
+                    return []
+                raise
 
     # ========== Table Methods ==========
 

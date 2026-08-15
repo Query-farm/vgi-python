@@ -2,9 +2,15 @@
 
 """Conformance stub for ``vgi/test/sql/integration/aggregate/``.
 
-Python ``Client`` does not currently expose aggregate invocation — aggregates
-are driven by the C++ extension via the all-unary RPC protocol. Once a probe
-entry point is added, fill this in.
+``Client`` now drives the all-unary aggregate protocol
+(``Client.aggregate_function`` / ``aggregate_session`` / ``aggregate_streaming``),
+and ``tests/client/test_aggregate_client.py`` exercises that surface end to end
+against the fixture worker — grouped and global aggregation, ``combine``, the
+window RPCs, and the streaming-partitioned protocol.
+
+What is still owed here is the per-``.test`` parity sweep below: driving the
+same cases the C++ sqllogictests drive, so a new C++ aggregate capability
+cannot land without a Python counterpart.
 """
 
 from __future__ import annotations

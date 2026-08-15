@@ -53,6 +53,12 @@ Key methods
     client.scalar_function(...)   — invoke a scalar
     client.table_function(...)    — invoke a table function
     client.table_in_out_function(...) — invoke a table-in-out function
+    client.aggregate_function(...) — run a grouped/global aggregate
+    client.aggregate_session(...) — raw aggregate RPCs (update/combine/window)
+    client.aggregate_streaming(...) — streaming-partitioned aggregates
+    client.copy_formats(...)      — discover custom COPY formats
+    client.copy_from(...)         — read a custom ``COPY ... FROM`` format
+    client.copy_to(...)           — write a custom ``COPY ... TO`` format
     client.server_capabilities()  — HTTP only; upload-URL caps
 
 See Also:
@@ -91,7 +97,9 @@ from vgi_rpc.rpc import (
 )
 
 from vgi.arguments import Arguments
+from vgi.client.aggregate import AggregateClientMixin
 from vgi.client.catalog_mixin import CatalogClientMixin
+from vgi.client.errors import ClientError as ClientError  # re-exported for callers
 from vgi.invocation import (
     BindResponse,
     FunctionType,
@@ -99,6 +107,8 @@ from vgi.invocation import (
 )
 from vgi.protocol import (
     BindRequest,
+    CopyFromContext,
+    CopyToContext,
     InitRequest,
     TableBufferingCombineRequest,
     TableBufferingDestructorRequest,
@@ -109,32 +119,6 @@ from vgi.table_function import TableInOutFunctionInitPhase
 
 _logger = logging.getLogger("vgi.client")
 _worker_logger = logging.getLogger("vgi.client.worker")
-
-
-class ClientError(Exception):
-    """Error raised by Client operations.
-
-    The first line of ``str(ClientError)`` is the remote exception as the
-    worker raised it (``{error_type}: {error_message}``), so that whatever
-    a user typed into their `raise ValueError(...)` shows up at the top of
-    their traceback instead of being buried under VGI framing. Remote
-    traceback and worker-stderr excerpts, when present, follow after an
-    empty line.
-    """
-
-    @classmethod
-    def from_rpc_error(cls, e: RpcError) -> ClientError:
-        """Create a [`ClientError`][] from an `RpcError`, including remote traceback.
-
-        Lead with the user's exception (``error_type: error_message``) so
-        the most actionable line is first. The ``Remote traceback`` section
-        trails and is only included when the worker produced one.
-        """
-        # str(e) is already "error_type: error_message" from RpcError.__init__.
-        parts: list[str] = [str(e)]
-        if getattr(e, "remote_traceback", ""):
-            parts.append(f"Remote traceback:\n{e.remote_traceback}")
-        return cls("\n\n".join(parts))
 
 
 class ResumeUnsupported(ClientError):
@@ -223,7 +207,7 @@ class WorkerConnection:
     _tcp_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
 
 
-class Client(CatalogClientMixin):
+class Client(CatalogClientMixin, AggregateClientMixin):
     """Canonical VGI client — HTTP is the path other-language ports mirror.
 
     Two transports:
@@ -243,9 +227,15 @@ class Client(CatalogClientMixin):
     open a short-lived connection per call (HTTP) or borrow a pooled
     subprocess worker.
 
+    Aggregate invocation (``aggregate_function``, ``aggregate_session``,
+    ``aggregate_streaming``) comes from `[`AggregateClientMixin`][]`. Custom
+    ``COPY`` formats reuse the table-function and buffered drivers with a COPY
+    context attached — see ``copy_from`` / ``copy_to``, and ``copy_formats()``
+    for discovery.
+
     Function invocation (``scalar_function``, ``table_function``,
-    ``table_in_out_function``) requires ``start()`` — typically via the
-    context-manager protocol::
+    ``table_in_out_function``, ``aggregate_function``) requires ``start()`` —
+    typically via the context-manager protocol::
 
         with Client.from_http("http://host:port", bearer_token="...") as c:
             for batch in c.table_function(function_name="sequence", ...):
@@ -1040,6 +1030,8 @@ class Client(CatalogClientMixin):
         settings: dict[str, Any] | None = None,
         secrets: dict[str, Any] | None = None,
         transaction_opaque_data: bytes | None = None,
+        copy_from: CopyFromContext | None = None,
+        copy_to: CopyToContext | None = None,
     ) -> BindRequest:
         """Create a BindRequest for the given function parameters."""
         return BindRequest(
@@ -1052,6 +1044,8 @@ class Client(CatalogClientMixin):
             secrets=self._secrets_to_batch(secrets),
             attach_opaque_data=self._attach_opaque_data,
             transaction_opaque_data=transaction_opaque_data,
+            copy_from=copy_from,
+            copy_to=copy_to,
         )
 
     @staticmethod
@@ -1153,6 +1147,7 @@ class Client(CatalogClientMixin):
         pushdown_filters_batch: pa.RecordBatch | None,
         phase: TableInOutFunctionInitPhase | None,
         bind_result_callback: Callable[[BindResponse], None] | None,
+        copy_from: CopyFromContext | None = None,
     ) -> tuple[BindRequest, BindResponse, GlobalInitResponse]:
         """Run the canonical bind → init → fan-out-workers sequence.
 
@@ -1183,6 +1178,7 @@ class Client(CatalogClientMixin):
             settings=settings,
             secrets=secrets,
             transaction_opaque_data=transaction_opaque_data,
+            copy_from=copy_from,
         )
         bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
 
@@ -1726,6 +1722,8 @@ class Client(CatalogClientMixin):
         pushdown_filters: bytes | None = None,
         settings: dict[str, Any] | None = None,
         transaction_opaque_data: bytes | None = None,
+        copy_to: CopyToContext | None = None,
+        input_schema: pa.Schema | None = None,
     ) -> Generator[pa.RecordBatch]:
         """Invoke a ``TableBufferingFunction`` (Sink+Source) and stream results.
 
@@ -1766,6 +1764,14 @@ class Client(CatalogClientMixin):
             pushdown_filters: Optional serialized filter predicates.
             settings: Optional settings/pragmas to pass to the function.
             transaction_opaque_data: Optional DuckDB transaction identifier.
+            copy_to: Optional [`CopyToContext`][] marking this sink as a
+                ``COPY ... TO`` write. A ``CopyToFunction`` returns no finalize
+                keys, so the generator yields nothing. Prefer :meth:`copy_to`,
+                which builds the context and drains for you.
+            input_schema: Schema to bind with instead of the first input
+                batch's. Needed when ``input`` may be empty and the function
+                still depends on the source schema (a ``CopyToFunction``
+                writing a header row for an empty COPY).
 
         Yields:
             Output `RecordBatch`es produced by the finalize (source) phase.
@@ -1793,7 +1799,8 @@ class Client(CatalogClientMixin):
                 first_batch = batch
                 break
 
-            input_schema = first_batch.schema if first_batch is not None else None
+            if input_schema is None and first_batch is not None:
+                input_schema = first_batch.schema
 
             bind_request = self._make_bind_request(
                 function_name=function_name,
@@ -1804,6 +1811,7 @@ class Client(CatalogClientMixin):
                 settings=settings,
                 secrets=None,
                 transaction_opaque_data=transaction_opaque_data,
+                copy_to=copy_to,
             )
             bind_response = self._do_bind(proxy, bind_request, bind_result_callback)
 
@@ -1964,6 +1972,7 @@ class Client(CatalogClientMixin):
         pushdown_filters: bytes | None = None,
         settings: dict[str, Any] | None = None,
         transaction_opaque_data: bytes | None = None,
+        copy_from: CopyFromContext | None = None,
     ) -> Generator[pa.RecordBatch]:
         """Invoke a table function (source function) and stream output batches.
 
@@ -1990,6 +1999,9 @@ class Client(CatalogClientMixin):
             settings: Optional dictionary of settings/pragmas to
                 pass to the function.
             transaction_opaque_data: Optional unique identifier for the DuckDB transaction.
+            copy_from: Optional [`CopyFromContext`][] marking this scan as a
+                ``COPY ... FROM`` read. Prefer :meth:`copy_from`, which builds
+                the context for you.
 
         Yields:
             Output `RecordBatch`es from the function. In parallel mode
@@ -2022,6 +2034,7 @@ class Client(CatalogClientMixin):
                 pushdown_filters_batch=pushdown_filters_batch,
                 phase=None,
                 bind_result_callback=bind_result_callback,
+                copy_from=copy_from,
             )
 
             # Read output from all workers in parallel
@@ -2270,6 +2283,143 @@ class Client(CatalogClientMixin):
                 worker.stream = None
         self._close_secondary_workers()
         _logger.debug("parallel_table_function_complete")
+
+    # ==================================================================
+    # Custom COPY formats
+    # ==================================================================
+
+    def copy_from(
+        self,
+        *,
+        function_name: str,
+        schema_name: str,
+        format: str,
+        file_path: str,
+        expected_schema: pa.Schema,
+        arguments: Arguments | None = None,
+        bind_result_callback: Callable[[BindResponse], None] | None = None,
+        projection_ids: list[int] | None = None,
+        pushdown_filters: bytes | None = None,
+        settings: dict[str, Any] | None = None,
+        transaction_opaque_data: bytes | None = None,
+    ) -> Generator[pa.RecordBatch]:
+        """Read a custom ``COPY ... FROM`` format and stream the parsed rows.
+
+        A ``CopyFromFunction`` is an ordinary producer-mode table function that
+        additionally receives a [`CopyFromContext`][], so this is
+        :meth:`table_function` with that context attached — the same shape the
+        C++ extension's ``copy_from_bind`` produces.
+
+        Discover the ``(format, handler)`` pairs a catalog advertises with
+        ``client.copy_formats(attach_opaque_data=...)``; ``handler`` is the
+        ``function_name`` to pass here.
+
+        Args:
+            function_name: The reader function (a ``CopyFromFunction``) — the
+                ``handler`` field of the advertised format.
+            schema_name: Catalog schema that declares the function.
+            format: The SQL ``FORMAT`` identifier the read is running under.
+            file_path: Source path from the ``COPY ... FROM 'path'`` statement.
+            expected_schema: Schema of the COPY target's columns, in target
+                order. The reader must emit batches matching it exactly —
+                DuckDB inserts no cast between the scan and the INSERT.
+            arguments: The COPY options, as named [`Arguments`][]. Defaults to
+                empty, which is valid only when every option has a default.
+            bind_result_callback: Optional callback invoked with the
+                [`BindResponse`][] before reading begins.
+            projection_ids: Optional column indices for projection.
+            pushdown_filters: Optional serialized filter predicates.
+            settings: Optional settings/pragmas to pass to the function.
+            transaction_opaque_data: Optional DuckDB transaction identifier.
+
+        Yields:
+            Parsed `RecordBatch`es, each matching ``expected_schema``.
+
+        Raises:
+            [`ClientError`][]: If the client is not started or an RPC fails.
+
+        """
+        yield from self.table_function(
+            function_name=function_name,
+            schema_name=schema_name,
+            arguments=arguments,
+            bind_result_callback=bind_result_callback,
+            projection_ids=projection_ids,
+            pushdown_filters=pushdown_filters,
+            settings=settings,
+            transaction_opaque_data=transaction_opaque_data,
+            copy_from=CopyFromContext(
+                format=format,
+                file_path=file_path,
+                expected_schema=expected_schema,
+            ),
+        )
+
+    def copy_to(
+        self,
+        *,
+        function_name: str,
+        schema_name: str,
+        format: str,
+        file_path: str,
+        input: Iterator[pa.RecordBatch],
+        input_schema: pa.Schema | None = None,
+        arguments: Arguments | None = None,
+        bind_result_callback: Callable[[BindResponse], None] | None = None,
+        settings: dict[str, Any] | None = None,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Write ``input`` to a custom ``COPY ... TO`` format and close it.
+
+        A ``CopyToFunction`` is a buffered Sink+Combine function with no Source
+        phase, so this is :meth:`table_buffering_function` with a
+        [`CopyToContext`][] attached: every batch is sunk via
+        ``table_buffering_process`` and the terminal write happens once inside
+        ``table_buffering_combine``. Returns when the destination is closed.
+
+        Unlike the C++ path this drives a single worker connection, so ordered
+        writers (``Meta.sink_order_dependent``) see source order for free.
+
+        Args:
+            function_name: The writer function (a ``CopyToFunction``) — the
+                ``handler`` field of the advertised format.
+            schema_name: Catalog schema that declares the function.
+            format: The SQL ``FORMAT`` identifier the write is running under.
+            file_path: Destination path from the ``COPY ... TO 'path'``
+                statement.
+            input: Iterator of source batches. May be empty — the writer's
+                ``close()`` still runs and must produce an empty destination.
+            input_schema: Source schema to bind with. Required when ``input``
+                may be empty and the writer needs the source column names.
+            arguments: The COPY options, as named [`Arguments`][]. Defaults to
+                empty, which is valid only when every option has a default.
+            bind_result_callback: Optional callback invoked with the
+                [`BindResponse`][] before writing begins.
+            settings: Optional settings/pragmas to pass to the function.
+            transaction_opaque_data: Optional DuckDB transaction identifier.
+
+        Raises:
+            [`ClientError`][]: If the client is not started or an RPC fails.
+
+        """
+        for batch in self.table_buffering_function(
+            function_name=function_name,
+            schema_name=schema_name,
+            input=input,
+            arguments=arguments,
+            bind_result_callback=bind_result_callback,
+            settings=settings,
+            transaction_opaque_data=transaction_opaque_data,
+            input_schema=input_schema,
+            copy_to=CopyToContext(format=format, file_path=file_path),
+        ):
+            # A CopyToFunction's combine() returns no finalize keys, so the
+            # buffered driver has nothing to drain. Anything arriving here means
+            # the named function is not a COPY-TO writer.
+            raise ClientError(
+                f"COPY TO handler '{function_name}' produced {batch.num_rows} output rows; "
+                f"a CopyToFunction has no Source phase."
+            )
 
     def scalar_function(
         self,

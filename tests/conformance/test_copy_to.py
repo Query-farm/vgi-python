@@ -1,6 +1,11 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""Conformance stub for ``vgi/test/sql/integration/copy_to/``."""
+"""Conformance stub for ``vgi/test/sql/integration/copy_to/``.
+
+``Client.copy_to`` drives the writer path and
+``tests/client/test_copy_client.py`` covers it against the fixture worker; the
+per-``.test`` parity sweep below is what remains.
+"""
 
 from __future__ import annotations
 

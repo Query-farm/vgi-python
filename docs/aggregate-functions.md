@@ -333,6 +333,50 @@ worker = Worker(
 
 The framework automatically detects `AggregateFunction` subclasses and registers them with the correct function type in the catalog.
 
+## Invoking From Python
+
+Real users reach aggregates through DuckDB, which drives the all-unary aggregate RPCs from its hash-aggregate operator. Non-DuckDB callers drive the same protocol through `Client`.
+
+`aggregate_function()` is the convenience shape — it keys the groups client-side, pumps every batch through `update`, and finalizes in chunks:
+
+```python test="skip"
+import pyarrow as pa
+
+from vgi.client import Client
+
+batch = pa.RecordBatch.from_pydict({"cat": ["a", "b", "a"], "value": [1, 10, 2]})
+
+with Client("vgi-fixture-worker") as client:
+    result = client.aggregate_function(
+        function_name="vgi_sum",
+        schema_name="main",
+        input=[batch],
+        group_by=["cat"],
+    )
+    # {'cat': ['a', 'b'], 'result': [3, 10]}
+```
+
+Every input column not named in `group_by` is passed to the aggregate as a value column, in batch order — so order the columns to match the declared `Param`s. Omitting `group_by` gives the global-aggregate shape (`SELECT vgi_sum(x) FROM t`), which returns one row even for empty input.
+
+For the raw protocol — caller-allocated group ids, `combine`, and the optional window RPCs — use `aggregate_session()`:
+
+```python test="skip"
+with Client("vgi-fixture-worker") as client:
+    with client.aggregate_session(
+        function_name="vgi_sum",
+        schema_name="main",
+        input_schema=pa.schema([pa.field("value", pa.int64())]),
+    ) as session:
+        session.update(
+            group_ids=[0, 0, 1],
+            batch=pa.RecordBatch.from_pydict({"value": [1, 2, 100]}),
+        )
+        session.combine(source_group_ids=[1], target_group_ids=[0])
+        session.finalize([0, 1])  # -> {'result': [103, 100]}
+```
+
+The session is destroyed on exit, so worker-side group state never outlives the `with` block. Window-capable aggregates add `window_init()` / `window()` / `window_batch()` / `window_destroy()` on the same session; streaming-partitioned aggregates use `client.aggregate_streaming(...)` instead (see below).
+
 ## Streaming-Partitioned Variant
 
 For `OVER (PARTITION BY ... ORDER BY ...)` queries against unbounded inputs (e.g. running aggregates across years of trade history), the standard windowed path materializes each partition in DuckDB memory before the aggregate sees it — fine for bounded data, OOMs at scale.
@@ -385,6 +429,28 @@ class MyRunningAgg(AggregateFunction[MyState]):
 - The worker function declares no const-arg parameters (v1 limitation).
 
 Queries that don't satisfy all of these fall back to the standard windowed path automatically. The streaming path is opt-in and additive — it does not replace `update`/`combine`/`finalize`, which still service `GROUP BY` queries normally.
+
+From Python, `Client.aggregate_streaming()` opens the session and closes it on exit. The chunk schema is positional: partition keys first, then order keys, then value columns.
+
+```python test="skip"
+schema = pa.schema(
+    [pa.field("k", pa.string()), pa.field("ts", pa.int64()), pa.field("v", pa.int64())]
+)
+
+with Client("vgi-fixture-worker") as client:
+    with client.aggregate_streaming(
+        function_name="vgi_streaming_sum",
+        schema_name="main",
+        input_schema=schema,
+        partition_key_count=1,
+        order_key_count=1,
+    ) as session:
+        chunk = pa.RecordBatch.from_pydict(
+            {"k": ["a", "b", "a", "b"], "ts": [1, 1, 2, 2], "v": [1, 10, 2, 20]},
+            schema=schema,
+        )
+        session.chunk(chunk)  # -> {'result': [1, 10, 3, 30]}
+```
 
 **When pre-aggregation is the better answer.** For most analytics shapes — "EOD positions per book per day, carrying forward across days" — pre-aggregating the input is the cleanest pattern in plain SQL:
 

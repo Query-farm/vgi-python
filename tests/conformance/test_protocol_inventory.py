@@ -6,7 +6,8 @@
 DuckDB via the C++ extension. The Python client is a **protocol conformance
 probe**: it gives Python tests a way to drive every RPC the worker implements.
 That's what this test guards — when a new ``VgiProtocol`` method lands, the
-developer must either wrap it in ``Client`` / ``CatalogClientMixin`` so the
+developer must either wrap it in ``Client`` / ``CatalogClientMixin`` /
+``AggregateClientMixin`` (or one of the aggregate session handles) so the
 Python test suite can reach it, or explicitly acknowledge via ``NotExposed``
 that the RPC is tested elsewhere (C++ sqllogictests, vgi_rpc tests).
 
@@ -26,6 +27,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from vgi.client.aggregate import (
+    AggregateClientMixin,
+    AggregateSession,
+    AggregateStreamingSession,
+)
 from vgi.client.catalog_mixin import CatalogClientMixin
 from vgi.client.client import Client
 from vgi.protocol import VgiProtocol
@@ -49,8 +55,8 @@ class NotExposed:
 # section for reviewability.
 _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
     # ---------- Function invocation ----------
-    "bind": ("scalar_function", "table_function", "table_in_out_function"),
-    "init": ("scalar_function", "table_function", "table_in_out_function"),
+    "bind": ("scalar_function", "table_function", "table_in_out_function", "copy_from", "copy_to"),
+    "init": ("scalar_function", "table_function", "table_in_out_function", "copy_from", "copy_to"),
     "table_function_cardinality": NotExposed(
         reason=(
             "DuckDB-only planner hint. Non-DuckDB clients invoke table functions "
@@ -73,94 +79,25 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
         )
     ),
     # ---------- Aggregate (all unary) ----------
-    "aggregate_bind": NotExposed(
-        reason=(
-            "DuckDB-only. Canonical client doesn't expose aggregate invocation — "
-            "aggregates ship through the C++ extension. Covered by C++ "
-            "integration/aggregate/* and tests/test_aggregate_function.py."
-        ),
-    ),
-    "aggregate_update": NotExposed(
-        reason=(
-            "DuckDB-only. Canonical client doesn't expose aggregate invocation — "
-            "aggregates ship through the C++ extension. Covered by C++ "
-            "integration/aggregate/* and tests/test_aggregate_function.py."
-        ),
-    ),
-    "aggregate_combine": NotExposed(
-        reason=(
-            "DuckDB-only. Canonical client doesn't expose aggregate invocation — "
-            "aggregates ship through the C++ extension. Covered by C++ "
-            "integration/aggregate/* and tests/test_aggregate_function.py."
-        ),
-    ),
-    "aggregate_finalize": NotExposed(
-        reason=(
-            "DuckDB-only. Canonical client doesn't expose aggregate invocation — "
-            "aggregates ship through the C++ extension. Covered by C++ "
-            "integration/aggregate/* and tests/test_aggregate_function.py."
-        ),
-    ),
-    "aggregate_destructor": NotExposed(
-        reason=(
-            "DuckDB-only. Canonical client doesn't expose aggregate invocation — "
-            "aggregates ship through the C++ extension. Covered by C++ "
-            "integration/aggregate/* and tests/test_aggregate_function.py."
-        ),
-    ),
-    "aggregate_window_init": NotExposed(
-        reason=(
-            "DuckDB-only. Canonical client doesn't expose aggregate invocation — "
-            "aggregates ship through the C++ extension. Covered by C++ "
-            "integration/aggregate/* and tests/test_aggregate_function.py."
-        ),
-    ),
-    "aggregate_window": NotExposed(
-        reason=(
-            "DuckDB-only. Canonical client doesn't expose aggregate invocation — "
-            "aggregates ship through the C++ extension. Covered by C++ "
-            "integration/aggregate/* and tests/test_aggregate_function.py."
-        ),
-    ),
-    "aggregate_window_destructor": NotExposed(
-        reason=(
-            "DuckDB-only. Canonical client doesn't expose aggregate invocation — "
-            "aggregates ship through the C++ extension. Covered by C++ "
-            "integration/aggregate/* and tests/test_aggregate_function.py."
-        ),
-    ),
-    "aggregate_window_batch": NotExposed(
-        reason=(
-            "DuckDB-only. Canonical client doesn't expose aggregate invocation — "
-            "aggregates ship through the C++ extension. Covered by C++ "
-            "integration/aggregate/* and tests/test_aggregate_function.py."
-        ),
-    ),
-    "aggregate_streaming_open": NotExposed(
-        reason=(
-            "DuckDB-only. The C++ extension drives the streaming-aggregate "
-            "open/chunk/close handshake; non-DuckDB clients have no equivalent. "
-            "Covered by C++ integration/aggregate/streaming.test."
-        ),
-    ),
-    "aggregate_streaming_chunk": NotExposed(
-        reason=(
-            "DuckDB-only. The C++ extension drives the streaming-aggregate "
-            "open/chunk/close handshake; non-DuckDB clients have no equivalent. "
-            "Covered by C++ integration/aggregate/streaming.test."
-        ),
-    ),
-    "aggregate_streaming_close": NotExposed(
-        reason=(
-            "DuckDB-only. The C++ extension drives the streaming-aggregate "
-            "open/chunk/close handshake; non-DuckDB clients have no equivalent. "
-            "Covered by C++ integration/aggregate/streaming.test."
-        ),
-    ),
+    # ``aggregate_session()`` yields an ``AggregateSession`` whose methods carry
+    # each RPC; ``aggregate_function()`` is the convenience driver over
+    # bind/update/finalize/destructor.
+    "aggregate_bind": ("aggregate_bind", "aggregate_session", "aggregate_function"),
+    "aggregate_update": ("update", "aggregate_function"),
+    "aggregate_combine": ("combine",),
+    "aggregate_finalize": ("finalize", "aggregate_function"),
+    "aggregate_destructor": ("destroy", "aggregate_session"),
+    "aggregate_window_init": ("window_init",),
+    "aggregate_window": ("window",),
+    "aggregate_window_destructor": ("window_destroy",),
+    "aggregate_window_batch": ("window_batch",),
+    "aggregate_streaming_open": ("aggregate_streaming",),
+    "aggregate_streaming_chunk": ("chunk",),
+    "aggregate_streaming_close": ("close",),
     # ---------- Table buffering (Sink+Source) ----------
-    "table_buffering_process": ("table_buffering_function",),
-    "table_buffering_combine": ("table_buffering_function",),
-    "table_buffering_destructor": ("table_buffering_function",),
+    "table_buffering_process": ("table_buffering_function", "copy_to"),
+    "table_buffering_combine": ("table_buffering_function", "copy_to"),
+    "table_buffering_destructor": ("table_buffering_function", "copy_to"),
     # ---------- Catalog lifecycle / transactions ----------
     "catalog_catalogs": ("catalogs",),
     "catalog_attach": ("catalog_attach",),
@@ -180,15 +117,7 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
     "catalog_schema_contents_views": ("schema_contents",),
     "catalog_schema_contents_functions": ("schema_contents",),
     "catalog_schema_contents_macros": ("schema_contents",),
-    "catalog_copy_from_formats": NotExposed(
-        reason=(
-            "COPY ... FROM format discovery. Consumed today by the C++ extension, "
-            "which calls this at ATTACH to register a DuckDB CopyFunction per "
-            "advertised format; covered by C++ integration/copy_from/*.test. Client "
-            "wrappers for the other VGI languages are planned to follow the "
-            "Python/C++ implementation."
-        )
-    ),
+    "catalog_copy_from_formats": ("copy_formats",),
     "catalog_schema_contents_indexes": NotExposed(
         reason=(
             "DuckDB-only metadata path. Indexes are catalog-planner territory; "
@@ -283,8 +212,19 @@ def _protocol_rpc_names() -> list[str]:
 
 
 def _client_exposes(attr: str) -> bool:
-    """Return whether ``Client`` (or its mixin) defines ``attr`` as callable."""
-    for owner in (Client, CatalogClientMixin):
+    """Return whether the client surface defines ``attr`` as callable.
+
+    The aggregate family reaches the wire through session handles rather than
+    through ``Client`` methods, so those classes count as client surface too —
+    ``client.aggregate_session(...)`` is the only way to obtain one.
+    """
+    for owner in (
+        Client,
+        CatalogClientMixin,
+        AggregateClientMixin,
+        AggregateSession,
+        AggregateStreamingSession,
+    ):
         val = getattr(owner, attr, None)
         if callable(val):
             return True

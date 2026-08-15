@@ -7,6 +7,8 @@ This package provides:
   both function invocation and catalog operations
 - ClientError: Exception raised by Client function operations
 - CatalogClientMixin: Mixin class providing catalog operations
+- AggregateClientMixin: Mixin class providing aggregate invocation
+- AggregateSession / AggregateStreamingSession: Handles on a bound aggregate
 - OutputWriter: Helper for writing output in various formats
 - main: CLI entry point
 
@@ -38,6 +40,11 @@ Usage (CLI):
 
 from typing import TYPE_CHECKING, Any
 
+from vgi.client.aggregate import (
+    AggregateClientMixin,
+    AggregateSession,
+    AggregateStreamingSession,
+)
 from vgi.client.catalog_mixin import CatalogClientMixin
 from vgi.client.client import Client, ClientError, ResumableTableScan, ResumeUnsupported
 
@@ -45,6 +52,9 @@ if TYPE_CHECKING:
     from vgi.client.cli import OutputWriter, main
 
 __all__ = [
+    "AggregateClientMixin",
+    "AggregateSession",
+    "AggregateStreamingSession",
     "CatalogClientMixin",
     "Client",
     "ClientError",
