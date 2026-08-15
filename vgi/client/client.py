@@ -247,6 +247,8 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         PROCESS_WAIT_TIMEOUT: Seconds to wait for a worker process to exit during
             shutdown before killing it. A hang guard — teardown never blocks past
             this, and never raises ``TimeoutExpired`` at the caller.
+        STDERR_DRAIN_TIMEOUT: Seconds to wait for a dead worker's stderr to finish
+            draining before an error message is built from it.
     """
 
     THREAD_JOIN_TIMEOUT: float = 5.0
@@ -257,6 +259,10 @@ class Client(CatalogClientMixin, AggregateClientMixin):
     # far enough above normal shutdown that only a genuinely wedged process
     # reaches it.
     PROCESS_WAIT_TIMEOUT: float = 30.0
+    # Bound on waiting for a dead worker's stderr to be drained before an error
+    # message is built from it. Reached only if a drainer wedges on an
+    # already-EOF pipe, so it trades a stalled error path for a truncated one.
+    STDERR_DRAIN_TIMEOUT: float = 2.0
 
     @staticmethod
     def _combine_batches(batches: list[pa.RecordBatch]) -> pa.RecordBatch | None:
@@ -593,6 +599,34 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         with self._stderr_lock:
             return b"".join(self._stderr_buffer).decode("utf-8", errors="replace")
 
+    def _await_stderr_drain(self) -> None:
+        """Let the drainers finish when the workers they read are already gone.
+
+        ``_stderr_buffer`` is filled by daemon threads that are otherwise only
+        joined in ``stop()``, so an error raised the instant a worker dies can be
+        enriched *before* that worker's dying words have been read — the traceback
+        the enrichment exists to surface is exactly the one most likely to be
+        missing. It is a genuine race, not a theoretical one: delaying the drainer
+        by 50ms is enough to lose the output entirely, and a loaded machine
+        delays a daemon thread by far more than that.
+
+        Only wait once every worker process has exited, which is when the pipes
+        are at EOF and the drainers are microseconds from returning. A worker
+        that is still running holds its pipe open and its drainer will not return
+        at all, so waiting there would stall every ordinary error — a bind
+        rejection from a perfectly healthy worker — for no benefit.
+        """
+        if not self._stderr_threads:
+            return
+        workers = [w for w in [self._primary, *self._additional_workers] if w is not None]
+        procs = [w.proc for w in workers if w.proc is not None]
+        # Only the direct-subprocess path owns a ``proc`` and starts a drainer,
+        # so "no procs" means the threads belong to workers already torn down.
+        if not procs or any(proc.poll() is None for proc in procs):
+            return
+        for stderr_thread in self._stderr_threads:
+            stderr_thread.join(timeout=self.STDERR_DRAIN_TIMEOUT)
+
     def _client_error_with_stderr(self, error: ClientError) -> ClientError:
         """Enrich a [`ClientError`][] with captured worker stderr, if available.
 
@@ -604,6 +638,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         """
         if self.passthrough_stderr:
             return error
+        self._await_stderr_drain()
         stderr = self.get_worker_stderr()
         if not stderr.strip():
             return error

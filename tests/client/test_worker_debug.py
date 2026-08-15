@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import os
 import sys
+import time
+from typing import Any
 from unittest.mock import patch
 
 import pyarrow as pa
@@ -81,6 +83,65 @@ class TestStderrInErrorMessages:
         error_msg = str(exc_info.value)
         assert "Worker stderr" in error_msg
         assert "Error: function not found" in error_msg
+
+    def test_stderr_survives_a_late_drainer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Enrichment must not race the drainer thread that fills its buffer.
+
+        ``_stderr_buffer`` is filled by a daemon thread otherwise joined only in
+        ``stop()``, so before the fix an error raised the instant a worker died
+        could be built from an empty buffer — losing exactly the traceback the
+        enrichment exists to surface. Delaying the drainer reproduces under a
+        scheduler what a loaded machine produces on its own; 50ms was enough to
+        lose the output entirely.
+        """
+        real_drain = Client._drain_stderr
+
+        def late_drain(self: Client, stderr: Any) -> None:
+            time.sleep(0.25)
+            real_drain(self, stderr)
+
+        monkeypatch.setattr(Client, "_drain_stderr", late_drain)
+
+        client = Client(_stderr_worker("Error: function not found"), pool=None)
+        with pytest.raises(ClientError) as exc_info:
+            client.start()
+            list(client.table_function(function_name="nonexistent", schema_name="main", arguments=Arguments()))
+        client.stop()
+
+        assert "Error: function not found" in str(exc_info.value)
+
+    def test_a_live_worker_does_not_stall_the_error_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Only a *dead* worker's drainer is waited on.
+
+        A running worker holds its stderr pipe open, so its drainer never
+        returns; waiting on that would stall every ordinary error — a bind
+        rejection from a perfectly healthy worker — until the timeout.
+        """
+        elapsed: list[float] = []
+        real_enrich = Client._client_error_with_stderr
+
+        def timed_enrich(self: Client, error: ClientError) -> ClientError:
+            started = time.monotonic()
+            try:
+                return real_enrich(self, error)
+            finally:
+                elapsed.append(time.monotonic() - started)
+
+        monkeypatch.setattr(Client, "_client_error_with_stderr", timed_enrich)
+
+        with Client("vgi-fixture-worker", pool=None) as client:
+            with pytest.raises(ClientError):
+                list(client.table_function(function_name="no_such_function", schema_name="main", arguments=Arguments()))
+            assert client._primary is not None  # noqa: SLF001 - a started client always has one
+            proc = client._primary.proc  # noqa: SLF001 - the point is that it is still running
+            assert proc is not None
+            assert proc.poll() is None, "probe is only meaningful while the worker is alive"
+            assert client._stderr_threads[0].is_alive(), "the drainer should still be blocked on the open pipe"  # noqa: SLF001
+
+        assert elapsed, "the error should have gone through stderr enrichment"
+        assert max(elapsed) < Client.STDERR_DRAIN_TIMEOUT / 4, (
+            f"enrichment waited {max(elapsed):.3f}s on a worker that is still running"
+        )
 
     def test_error_no_stderr_section_when_passthrough(self) -> None:
         """Error messages should NOT include 'Worker stderr:' when passthrough is enabled."""
