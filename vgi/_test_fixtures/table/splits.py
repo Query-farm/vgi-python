@@ -37,6 +37,7 @@ from vgi.protocol import VgiOutputCollector
 
 from vgi.arguments import Arg
 from vgi.metadata import FunctionExample, PartitionKind
+from vgi.cache_control import CacheControl
 from vgi.protocol import PlanResponse, ScanSplit
 from vgi.schema_utils import partition_field, schema
 from vgi.table_function import (
@@ -1042,6 +1043,61 @@ class SplitDynamicFilterFunction(TableFunctionGenerator[SplitSequenceArgs, Split
                     {"n": values, "pushed_filters": [filter_str] * len(values)},
                     schema=_DYN_ROW,
                 )
+            )
+            state.cur = end
+            return
+
+
+@bind_fixed_schema
+class SplitCacheableFunction(_SplitBase):
+    """A split scan whose result is cacheable, so never-partial is assertable.
+
+    The result cache knows nothing about splits, deliberately: its key describes
+    the QUERY — identity, filters, projection, catalog version — while splits are
+    how the rows were produced. A split scan and a non-split scan of the same
+    query return the same rows and therefore share an entry, either able to serve
+    what the other populated.
+
+    What that makes testable is the never-partial gate. A scan abandoned partway
+    — by a LIMIT satisfied early, or by an error — leaves splits claimed but
+    unread, and committing what was captured would store a SUBSET under a key
+    that claims to be the whole answer. Every later identical query would then
+    return missing rows with no error at all, which is the failure this fixture
+    exists to catch: the cache is the one place where a partial result outlives
+    the query that produced it.
+
+    Cache control rides the FIRST batch, and under splits every reader sees a
+    first batch of its own — so all of them advertise the same freshness. A
+    result is one entry with one lifetime; a per-split TTL would be decided by
+    whichever reader happened to arrive first.
+    """
+
+    class Meta:
+        name = "split_cacheable"
+        supports_splits = True
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[SplitSequenceArgs],
+        state: SplitState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit like the base fixture, advertising cacheability on the first batch."""
+        while True:
+            if state.idx >= len(state.lo):
+                out.finish()
+                return
+            hi = state.hi[state.idx]
+            if state.cur >= hi:
+                state.idx += 1
+                state.cur = state.lo[state.idx] if state.idx < len(state.lo) else 0
+                continue
+            end = min(state.cur + 16, hi)
+            first = state.idx == 0 and state.cur == state.lo[0]
+            cast(VgiOutputCollector, out).emit(
+                pa.RecordBatch.from_pydict({"n": list(range(state.cur, end))}, schema=_ROW),
+                cache_control=CacheControl(ttl=300) if first else None,
             )
             state.cur = end
             return
