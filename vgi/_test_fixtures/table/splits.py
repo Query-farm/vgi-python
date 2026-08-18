@@ -761,3 +761,62 @@ class SplitBatchIndexFunction(_SplitBase):
             )
             state.cur = end
             return
+
+
+@bind_fixed_schema
+class SplitShortTtlFunction(_SplitBase):
+    """Declares a split-token lifetime far shorter than any client's horizon.
+
+    A token that expires is not a degradation, it is a failed query: nothing
+    re-plans when one does, because a distributed engine retries the serialized
+    task it was handed and has no path back to the planner. So the only useful
+    moment to notice a too-short lifetime is BEFORE the plan is issued, which is
+    what a client-side floor gives — a legible refusal naming the shortfall,
+    instead of a scan that dies partway through with the work already scheduled.
+
+    One second is unusable everywhere: even DuckDB, whose horizon is the shortest
+    of any engine (it plans at execution start), can take longer than that to
+    reach a split.
+    """
+
+    class Meta:
+        name = "split_short_ttl"
+        supports_splits = True
+        split_token_ttl_seconds = 1
+
+
+@bind_fixed_schema
+class SplitOverlapCursorFunction(_SplitBase):
+    """Paginates with OVERLAPPING pages: page 2 re-emits what page 1 already gave.
+
+    Returning several cursors lets a client enumerate a large plan in parallel,
+    and that is only sound if the cursors partition the remaining enumeration
+    disjointly — no split reachable from two of them. That is a worker obligation
+    with no enforcement, and violating it does not produce a tidy error: it
+    produces DUPLICATE ROWS, arriving through the very mechanism meant to make
+    enumeration faster.
+
+    So the client dedups by token regardless of the contract, and this fixture is
+    what proves it. It hands out the same two splits on every page for three
+    pages, then stops. A client honouring the contract naively would read six
+    splits and return each row three times; one that dedups returns each once and
+    can say how many duplicates it dropped.
+    """
+
+    _PAGES: ClassVar[int] = 3
+
+    class Meta:
+        name = "split_overlap_cursor"
+        supports_splits = True
+
+    @classmethod
+    def on_plan(cls, params: BindParams[SplitSequenceArgs], request: Any) -> PlanResponse:
+        """Emit the same splits on every page, so pages overlap completely."""
+        page = len(getattr(request, "cursor", b"") or b"")
+        ranges = _ranges(params.args.n, params.args.splits)
+        splits = [ScanSplit(payload=_encode(lo, hi)) for lo, hi in ranges]
+        if page + 1 >= cls._PAGES:
+            # Last page: stop paginating, so the client finishes rather than
+            # hitting its page cap — the property under test is dedup, not the cap.
+            return PlanResponse(splits=splits)
+        return PlanResponse(splits=splits, next_cursors=[b"x" * (page + 1)])
