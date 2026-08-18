@@ -153,7 +153,10 @@ from vgi._test_fixtures.table.settings import (
     StructSettingsFunction,
 )
 from vgi._test_fixtures.table.splits import (
+    SplitEchoFiltersFunction,
     SplitEmptyRangesFunction,
+    SplitEndlessCursorFunction,
+    SplitFailAtFunction,
     SplitManyFunction,
     SplitSequenceFunction,
     SplitSkewedFunction,
@@ -267,7 +270,10 @@ __all__ = [
     "SequenceFunction",
     "SettingsAwareFunction",
     "SpatialFilterExampleFunction",
+    "SplitEchoFiltersFunction",
     "SplitEmptyRangesFunction",
+    "SplitEndlessCursorFunction",
+    "SplitFailAtFunction",
     "SplitManyFunction",
     "SplitSequenceFunction",
     "SplitSkewedFunction",
