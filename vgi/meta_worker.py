@@ -137,6 +137,25 @@ class MetaWorker:
     ``attach_opaque_data``; see the module docstring.
     """
 
+    #: Backing store for :attr:`_signing_key`. The key is assigned to the
+    #: OUTERMOST worker at serve time, but every call that needs it runs on a
+    #: child — so the property below fans it out. A child that silently held
+    #: ``None`` would not fail loudly: it would refuse tokens this very process
+    #: had just sealed, and only over HTTP, where a key exists at all.
+    _signing_key_value: bytes | None = None
+
+    @property
+    def _signing_key(self) -> bytes | None:
+        """The AEAD key for sealed envelopes, or ``None`` off the HTTP path."""
+        return self._signing_key_value
+
+    @_signing_key.setter
+    def _signing_key(self, key: bytes | None) -> None:
+        """Set the key here and on every child, since children serve the calls."""
+        self._signing_key_value = key
+        for w in self._workers:
+            w._signing_key = key
+
     def __init__(self, workers: list[Worker]) -> None:
         """Initialize with a list of [`Worker`][] instances."""
         self._workers = workers
@@ -146,6 +165,7 @@ class MetaWorker:
         # first worker's tracer; all workers in one process share whatever
         # the otel config produced.
         self._vgi_tracer = workers[0]._vgi_tracer
+        self._signing_key_value = None
 
         for i, w in enumerate(workers):
             try:

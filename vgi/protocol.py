@@ -555,9 +555,14 @@ class PlanResponse(ArrowSerializableDataclass):
     """Result of the scan-planning phase: named splits plus plan-level facts.
 
     Attributes:
-        splits: One serialized [`ScanSplit`][] per unit of work, each carried as its
-            own IPC blob in a ``list<binary>`` column (the ``ScanBranchesResult``
-            shape).
+        splits: One [`ScanSplit`][] per unit of work. Return the OBJECTS from
+            ``on_plan``; the framework stamps each one's token and serializes it
+            once. Handing back pre-serialized blobs instead makes the framework
+            open and re-serialize each to carry its token — a full Arrow IPC
+            stream both ways, measured at roughly two thirds of the cost of
+            planning — so it is supported but never the right choice from Python.
+            On the wire each split is its own IPC blob in a ``list<binary>``
+            column (the ``ScanBranchesResult`` shape).
         next_cursors: Continuation cursors. Normally 0 or 1. More than one means
             parallel enumeration, which is only sound if the cursors partition the
             remaining enumeration **disjointly and exhaustively** — no split may be
@@ -595,7 +600,13 @@ class PlanResponse(ArrowSerializableDataclass):
     # ``binary`` not ``large_binary``: this is a generated RESPONSE schema, and the
     # codegen emitters map only the scalar set in _SCALAR_MAP. 2 GB per serialized
     # ScanSplit is ample — a split names work, it does not carry data.
-    splits: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
+    # Typed as either: a worker returns ScanSplit objects (the framework stamps
+    # and serializes them once), while the wire carries the serialized blobs.
+    # Both inhabit this field across its lifetime, so the annotation says so
+    # rather than making every author cast.
+    splits: Annotated[list[ScanSplit] | list[bytes], ArrowType(pa.list_(pa.binary()))] = field(
+        default_factory=list
+    )
     next_cursors: Annotated[list[bytes] | None, ArrowType(pa.list_(pa.binary()))] = None
 
     execution_id: bytes | None = None

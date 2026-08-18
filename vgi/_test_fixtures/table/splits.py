@@ -137,7 +137,7 @@ class _SplitBase(TableFunctionGenerator[SplitSequenceArgs, SplitState]):
                     estimated_rows=hi - lo,
                     rows_exact=True,
                     estimated_bytes=(hi - lo) * 8,
-                ).serialize_to_bytes()
+                )
                 for lo, hi in ranges
             ],
             estimated_total_splits=len(ranges),
@@ -418,7 +418,7 @@ class SplitFailAtFunction(TableFunctionGenerator[SplitFailArgs, FailState]):
                     payload=struct.pack("<qqq", i, lo, hi),
                     estimated_rows=hi - lo,
                     rows_exact=True,
-                ).serialize_to_bytes()
+                )
                 for i, (lo, hi) in enumerate(ranges)
             ],
             estimated_total_splits=len(ranges),
@@ -552,7 +552,7 @@ class SplitEchoFiltersFunction(TableFunctionGenerator[SplitEchoArgs, EchoState])
         projection = getattr(request, "projection_ids", None) or []
         return PlanResponse(
             splits=[
-                ScanSplit(payload=struct.pack("<qqq", i, int(saw_filters), len(projection))).serialize_to_bytes()
+                ScanSplit(payload=struct.pack("<qqq", i, int(saw_filters), len(projection)))
                 for i in range(params.args.splits)
             ],
             estimated_total_splits=params.args.splits,
@@ -621,6 +621,6 @@ class SplitEndlessCursorFunction(_SplitBase):
         """Always hand back one split and a fresh cursor."""
         page = len(getattr(request, "cursor", b"") or b"")
         return PlanResponse(
-            splits=[ScanSplit(payload=_encode(0, 1)).serialize_to_bytes()],
+            splits=[ScanSplit(payload=_encode(0, 1))],
             next_cursors=[b"x" * (page + 1)],
         )

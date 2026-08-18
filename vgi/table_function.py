@@ -668,6 +668,11 @@ class ProcessParams[TArgs]:
             otherwise.
         if_modified_since: Conditional-revalidation validator (client's stored
             Last-Modified). Companion to ``if_none_match``. None otherwise.
+        signing_key: The worker's AEAD key, used by ``split_payloads`` to open a
+            sealed split envelope. The key belongs to the WORKER — reading it off
+            the function class or these params' owner yields None, which off the
+            HTTP path is invisible (nothing is sealed there) and on it means
+            refusing every token this same process just sealed.
 
     """
 
@@ -697,6 +702,13 @@ class ProcessParams[TArgs]:
     if_none_match: str | None = None
     if_modified_since: str | None = None
 
+    #: The worker's signing key, threaded in so ``split_payloads`` can open a
+    #: sealed envelope. The key belongs to the WORKER, not to the function class
+    #: or to these params — reading it off anything else yields ``None``, which
+    #: off the HTTP path is invisible (nothing is sealed there) and on it means
+    #: refusing every token this same process just sealed.
+    signing_key: bytes | None = None
+
     @property
     def split_payloads(self) -> list[bytes] | None:
         """Verified split payloads, or ``None`` when this scan is not split-based.
@@ -720,7 +732,13 @@ class ProcessParams[TArgs]:
 
         expected = bind_fingerprint(self.init_call.bind_call)
         return [
-            open_split_token(token, auth=self.auth_context, expected_fingerprint=expected) for token in tokens
+            open_split_token(
+                token,
+                signing_key=self.signing_key,
+                auth=self.auth_context,
+                expected_fingerprint=expected,
+            )
+            for token in tokens
         ]
 
     @property
@@ -1207,6 +1225,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         *,
         ctx: CallContext | None = None,
         attach_plaintext: bytes | None = None,
+        signing_key: bytes | None = None,
     ) -> GlobalInitResponse:
         """Global init protocol entry point. Do not override; use ``on_init()``.
 
@@ -1214,6 +1233,8 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             input: The init request from the client.
             ctx: Call context carrying the caller's auth, if any.
             attach_plaintext: Full framework attach plaintext, or None.
+            signing_key: The worker's AEAD key, passed down so a split token can
+                be opened. Owned by the worker, not by this class.
 
         Returns:
             The GlobalInitResponse with worker count and execution id.
@@ -1236,7 +1257,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             storage=BoundStorage(cls.storage, execution_id, request=input, attach_plaintext=attach_plaintext),
             auth_context=auth,
             attach_opaque_data=attach_catalog_bytes(attach_plaintext),
-            split_payloads=cls._verify_split_tokens(input, auth),
+            split_payloads=cls._verify_split_tokens(input, auth, signing_key),
         )
 
         if params.split_payloads is not None:
@@ -1251,7 +1272,9 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         )
 
     @classmethod
-    def _verify_split_tokens(cls, init_call: Any, auth: AuthContext) -> list[bytes] | None:
+    def _verify_split_tokens(
+        cls, init_call: Any, auth: AuthContext, signing_key: bytes | None = None
+    ) -> list[bytes] | None:
         """Open and strip the token envelope, returning the worker's own payloads.
 
         Returns ``None`` when this is not a split init, so the ordinary scan path is
@@ -1265,8 +1288,12 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
         from vgi.split_token import bind_fingerprint, open_split_token
 
+        # The key is the WORKER's, not the function class's — the class never has
+        # one, and reading it off the class silently produced None. On the
+        # keyless path (subprocess/unix) that was invisible, because the stamping
+        # side had no key either; over HTTP it meant refusing every token this
+        # same worker had just sealed.
         expected = bind_fingerprint(init_call.bind_call)
-        signing_key = getattr(cls, "_signing_key", None)
         return [
             open_split_token(
                 token,

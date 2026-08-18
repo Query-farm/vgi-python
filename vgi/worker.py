@@ -2659,8 +2659,16 @@ class Worker:
         signing_key = self._signing_key
 
         stamped: list[bytes] = []
-        for blob in response.splits:
-            split = ScanSplit.deserialize_from_bytes(blob)
+        for entry in response.splits:
+            # A ``ScanSplit`` object is the fast path and the intended one. An
+            # already-serialized blob has to be opened and re-serialized to carry
+            # its token, and each round-trip is a full Arrow IPC stream — schema
+            # message, one-row batch, EOS — for a record whose payload is usually
+            # a few bytes. Measured, that round-trip is ~123us per split against
+            # ~58us to serialize once, so it was about two thirds of the cost of
+            # planning, and on a 1000-split plan it is ~0.1s of worker CPU spent
+            # unpacking and repacking bytes this same process just produced.
+            split = ScanSplit.deserialize_from_bytes(entry) if isinstance(entry, bytes) else entry
             token = build_split_token(
                 payload=split.payload,
                 fingerprint=fingerprint,
@@ -2695,7 +2703,7 @@ class Worker:
         on_plan = getattr(func_cls, "on_plan", None)
         if on_plan is None:
             # Not split-capable: one split standing for the whole scan.
-            return PlanResponse(splits=[ScanSplit(payload=b"").serialize_to_bytes()])
+            return PlanResponse(splits=[ScanSplit(payload=b"").serialize_to_bytes()])  # noqa: E501 - not stamped: no on_plan means no opt-in
 
         if not issubclass(func_cls, TableFunctionBase):
             msg = (
@@ -3895,7 +3903,12 @@ class Worker:
             )
         else:
             if isinstance(instance, TableFunctionBase):
-                init_response = instance.global_init(request, ctx=ctx, attach_plaintext=attach_plaintext)
+                init_response = instance.global_init(
+                    request,
+                    ctx=ctx,
+                    attach_plaintext=attach_plaintext,
+                    signing_key=self._signing_key,
+                )
             elif isinstance(instance, ScalarFunctionGenerator):
                 init_response = instance.global_init(request, attach_plaintext=attach_plaintext)
             else:
@@ -4103,6 +4116,9 @@ class Worker:
                 ),
                 auth_context=ctx.auth,
                 attach_opaque_data=attach_catalog_bytes(attach_plaintext),
+                # The key travels with the params because split_payloads is
+                # resolved lazily, per split, long after this frame.
+                signing_key=self._signing_key,
             )
             user_state = type(instance).initial_state(params)
             state = TableProducerState(
