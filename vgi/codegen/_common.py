@@ -59,6 +59,10 @@ EXTRA_RESPONSE_TYPES: tuple[type, ...] = (
     ScanFunctionResult,  # catalog_table_{scan,insert,update,delete}_function_get
     ScanBranchesResult,  # catalog_table_scan_branches_get (top-level wrapper)
     ScanBranch,  # one entry inside ScanBranchesResult.branches (binary blob)
+    # ScanSplit belongs here too — it is the same shape, one blob per entry of
+    # PlanResponse.splits — but the cpp/go/ts emitters have no large_binary case
+    # and ScanSplit uses it for four columns. Until they do, every SDK writes
+    # ScanSplit by hand, which is exactly how four of them drifted apart.
     AttachCatalogInfo,  # one entry inside CatalogAttachResult.attach_catalogs (binary blob)
 )
 

@@ -507,20 +507,28 @@ class EchoState:
     done: bool = False
 
     def serialize_to_bytes(self) -> bytes:
-        """Pack as: count, then (ordinal, saw_filters, n_projection) triples."""
+        """Pack as: count, done, then (ordinal, saw_filters, n_projection) triples.
+
+        ``done`` has to round-trip. Over HTTP the state is serialized between
+        every tick, so a field left out comes back at its default — and a `done`
+        that resets to False makes ``process`` emit forever instead of finishing.
+        That is a hang, not a failure, which is the worst way for a test fixture
+        to be wrong.
+        """
         return struct.pack(
-            f"<q{3 * len(self.rows)}q",
+            f"<qq{3 * len(self.rows)}q",
             len(self.rows),
+            int(self.done),
             *[v for r in self.rows for v in (r[0], int(r[1]), r[2])],
         )
 
     @classmethod
     def deserialize_from_bytes(cls, data: bytes) -> EchoState:
         """Inverse of :meth:`serialize_to_bytes`."""
-        (n,) = struct.unpack_from("<q", data, 0)
-        flat = struct.unpack_from(f"<{3 * n}q", data, struct.calcsize("<q"))
+        n, done = struct.unpack_from("<qq", data, 0)
+        flat = struct.unpack_from(f"<{3 * n}q", data, struct.calcsize("<qq"))
         rows = [(flat[i * 3], bool(flat[i * 3 + 1]), flat[i * 3 + 2]) for i in range(n)]
-        return cls(rows=rows)
+        return cls(rows=rows, done=bool(done))
 
 
 @bind_fixed_schema
@@ -672,7 +680,7 @@ class SplitStalePlanFunction(_SplitBase):
 
 
 @bind_fixed_schema
-class SplitBatchIndexFunction(_SplitBase):
+class SplitBatchIndexFunction(TableFunctionGenerator[SplitSequenceArgs, FailState]):
     """Split-capable and ``supports_batch_index``, which together are a contract.
 
     A batch index must be globally monotonic per reader, and greedy per-split
@@ -735,8 +743,10 @@ class SplitBatchIndexFunction(_SplitBase):
             cur=decoded[0][1] if decoded else 0,
         )
 
+    FIXED_SCHEMA: ClassVar[pa.Schema] = _ROW
+
     @classmethod
-    def process(  # type: ignore[override]  # narrower state: FailState carries the ordinals
+    def process(
         cls,
         params: ProcessParams[SplitSequenceArgs],
         state: FailState,
@@ -932,9 +942,14 @@ class SplitPartitionedFunction(TableFunctionGenerator[SplitPartitionArgs, PartSp
             # Every row in the batch carries the same country, which is what makes
             # it SINGLE_VALUE: the client reads the partition value off the batch
             # rather than being told separately.
+            # Offset each partition's values by its own index. With identical
+            # values everywhere, swapping two splits' country labels left every
+            # assertion unchanged — the file could not detect the exact failure
+            # it exists to detect.
+            base = _PART_COUNTRIES.index(country) * 100
             out.emit(
                 pa.RecordBatch.from_pydict(
-                    {"country": [country] * rows, "sales": [i + 1 for i in range(rows)]},
+                    {"country": [country] * rows, "sales": [base + i + 1 for i in range(rows)]},
                     schema=_PART_ROW,
                 )
             )
