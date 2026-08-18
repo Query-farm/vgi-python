@@ -42,6 +42,7 @@ from vgi.protocol import PlanResponse, ScanSplit
 from vgi.schema_utils import partition_field, schema
 from vgi.table_function import (
     BindParams,
+    TableCardinality,
     InitParams,
     ProcessParams,
     TableFunctionGenerator,
@@ -973,6 +974,7 @@ class SplitDynamicFilterFunction(TableFunctionGenerator[SplitSequenceArgs, Split
         supports_splits = True
         filter_pushdown = True
         auto_apply_filters = True
+        projection_pushdown = True
 
     @classmethod
     def on_plan(cls, params: BindParams[SplitSequenceArgs], request: Any) -> PlanResponse:
@@ -982,6 +984,23 @@ class SplitDynamicFilterFunction(TableFunctionGenerator[SplitSequenceArgs, Split
             splits=[ScanSplit(payload=_encode(lo, hi)) for lo, hi in ranges],
             estimated_total_splits=len(ranges),
         )
+
+    @classmethod
+    def cardinality(cls, params: BindParams[SplitSequenceArgs]) -> TableCardinality:
+        """Report the row count, which decides which side of a join this lands on.
+
+        Without it DuckDB assumes a default (large) cardinality and puts this scan
+        on the BUILD side of a hash join — where no join-key IN filter is pushed
+        into it, because the filter goes to the probe side. The scan then reads
+        everything and DuckDB filters above it: right answers, no pushdown, and
+        nothing in the result to say so.
+
+        Nothing about splits causes that. It is the ordinary consequence of a
+        table function declining to estimate itself, and it is worth stating here
+        because the symptom — join-key pushdown silently not arriving — looks like
+        a transport bug and is not one.
+        """
+        return TableCardinality(estimate=params.args.n, max=params.args.n)
 
     @classmethod
     def on_split(cls, params: InitParams[SplitSequenceArgs], request: Any, payloads: list[bytes]) -> None:
