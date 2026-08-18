@@ -263,3 +263,39 @@ def provenance_comment(
     for line in regen_command_lines:
         out.append(f"{cp}   {line}")
     return "\n".join(out) + "\n"
+
+
+# The C++ namespace the generated headers are emitted into.
+#
+# `duckdb` by default because the first consumer was the DuckDB extension,
+# which needs its symbols there. VGI is not a DuckDB-only protocol, though —
+# a standalone worker SDK has no `duckdb` namespace to put anything in and
+# should not invent one — so every C++ generator takes `--namespace`.
+DEFAULT_CPP_NAMESPACE = "duckdb::vgi::generated"
+
+
+def parse_cpp_namespace(spec: str) -> list[str]:
+    """Split a C++ namespace spec into its components.
+
+    Accepts `a::b::c` and tolerates a leading `::`. An empty spec means the
+    global namespace, which is a legitimate answer.
+    """
+    parts = [p.strip() for p in spec.replace(".", "::").split("::")]
+    parts = [p for p in parts if p]
+    for p in parts:
+        if not p.isidentifier():
+            raise GeneratorError(
+                f"invalid C++ namespace component {p!r} in {spec!r}: "
+                f"expected identifiers separated by '::'"
+            )
+    return parts
+
+
+def open_namespace(parts: list[str]) -> str:
+    """`namespace a {` lines, outermost first."""
+    return "".join(f"namespace {p} {{\n" for p in parts)
+
+
+def close_namespace(parts: list[str]) -> str:
+    """Matching `} // namespace a` lines, innermost first."""
+    return "".join(f"}} // namespace {p}\n" for p in reversed(parts))

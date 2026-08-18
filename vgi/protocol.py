@@ -45,7 +45,7 @@ from vgi_rpc.rpc import (
 )
 
 from vgi.arguments import Arguments
-from vgi.cache_control import CacheControl
+from vgi.cache_control import CACHE_SCOPE_CATALOG, CacheControl
 from vgi.catalog.catalog_interface import (
     CatalogAttachResult,
     CatalogInfo,
@@ -258,6 +258,11 @@ class InitRequest(ArrowSerializableDataclass):
             scan; ``None`` when no filters apply.
         join_keys: Serialized join-key batches pushed down for join filtering;
             ``None`` when not applicable.
+        split_tokens: Split tokens to redeem in this init, or None for an
+            ordinary whole-scan init. Usually one; a client that bin-packs sends a
+            whole group and expects them concatenated in the order given.
+        row_limit: Plain fetch limit, or None. NOT ``order_by_limit``, which is a
+            field of the Top-N hint. DuckDB cannot supply this; DataFusion can.
         phase: For table-in-out functions, which init phase (INPUT / FINALIZE /
             buffering) this request opens; ``None`` for other function types.
         finalize_state_id: For a buffered-table finalize stream, which state_id
@@ -300,6 +305,9 @@ class InitRequest(ArrowSerializableDataclass):
     join_keys: Annotated[list[pa.RecordBatch] | None, ArrowType(pa.list_(pa.large_binary()))] = None
 
     # Table-in-out extras
+    split_tokens: Annotated[list[bytes] | None, ArrowType(pa.list_(pa.large_binary()))] = None
+    row_limit: int | None = None
+
     phase: TableInOutFunctionInitPhase | None = None
     finalize_state_id: bytes | None = None
 
@@ -375,6 +383,244 @@ class TableFunctionStatisticsRequest(ArrowSerializableDataclass):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class PartitionTransform(ArrowSerializableDataclass):
+    """How a partition column is derived, for engines that do storage-partitioned joins.
+
+    Spark's ``KeyGroupedPartitioning`` needs the transform *expression*, not just the
+    partition values: ``country=US`` does not say whether partitions are
+    ``identity(country)`` or ``bucket(16, user_id)``. This is Iceberg's vocabulary,
+    which ``Expressions.bucket(n, col)`` maps onto directly.
+
+    Attributes:
+        column: Name of the partition column in the function's output schema.
+        transform: Transform kind — one of ``identity``, ``bucket``, ``truncate``,
+            ``year``, ``month``, ``day``, ``hour``.
+        param: Bucket count for ``bucket`` / width for ``truncate``; ``None`` for
+            the rest.
+
+    """
+
+    column: str
+    transform: str
+    param: int | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SortField(ArrowSerializableDataclass):
+    """Ordering guaranteed *within* each split.
+
+    Feeds DataFusion's ``EquivalenceProperties`` (SortExec elimination, streaming
+    GROUP BY, merge joins without shuffle). This is NOT a claim about global order
+    across splits — that is expressed by ``OrderPreservation.FIXED_ORDER`` plus the
+    requirement that a fixed-order worker return splits in output order.
+
+    Attributes:
+        column: Name of the sort column.
+        direction: Ascending or descending.
+        nulls: Null ordering.
+
+    """
+
+    column: str
+    direction: OrderByDirection
+    nulls: OrderByNullOrder
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ScanSplit(ArrowSerializableDataclass):
+    """One named, independently redeemable unit of scan work.
+
+    A split *names* work rather than describing it: "these three files at version 47"
+    is retry-safe, "rows 0-999 of whatever this returns now" is not. Splits are
+    redeemable by any worker instance (see the any-instance invariant) and may be
+    redeemed more than once, so a worker must make them replayable.
+
+    Workers populate ``payload`` only — the framework stamps and (when a signing key
+    exists) seals the surrounding envelope, so an author cannot forget the
+    consistency anchor or mis-bind the fingerprint.
+
+    Attributes:
+        payload: The worker's own opaque bytes naming this unit of work. Set this
+            and nothing else; the framework stamps ``token`` from it.
+        token: The framework-stamped (and, where a signing key exists, sealed)
+            envelope around ``payload``. Populated by the framework — a worker must
+            not set it, and the client sends THIS back, not the payload.
+        estimated_rows: Row estimate, or ``None`` if unknown.
+        rows_exact: True if ``estimated_rows`` is exact rather than an estimate.
+            Unlocks ``Precision::Exact`` / COUNT(*) from statistics.
+        estimated_bytes: Byte estimate. Load-bearing for engines that bin-pack
+            (DataFusion weight, Trino SplitWeight); ``None`` degrades them to
+            round-robin by count. DuckDB claims greedily and does not need it.
+        partition_bounds: 2-row (min, max) Arrow batch in the existing
+            ``vgi_partition_values`` encoding, one column per partition column.
+            For SINGLE_VALUE_PARTITIONS min == max, so row 0 is the exact key —
+            but only report partitioning when the split really is single-valued.
+        column_statistics: Per-column statistics blob (same encoding as
+            ``table_function_statistics``).
+        location_ids: Indices into ``PlanResponse.locations`` naming hosts where
+            this split is cheap to read.
+        start_position: Exclusive lower bound of this split's range in the data.
+        end_position: Inclusive upper bound; ``None`` means UNBOUNDED — a shard
+            read forever. A bounded engine (Spark micro-batch) must refuse those.
+
+    """
+
+    payload: Annotated[bytes, ArrowType(pa.large_binary())] = b""
+    token: Annotated[bytes, ArrowType(pa.large_binary())] = b""
+    estimated_rows: int | None = None
+    rows_exact: bool = False
+    estimated_bytes: int | None = None
+    partition_bounds: Annotated[pa.RecordBatch | None, ArrowType(pa.large_binary())] = None
+    column_statistics: Annotated[bytes | None, ArrowType(pa.large_binary())] = None
+    location_ids: list[int] | None = None
+    start_position: Annotated[bytes | None, ArrowType(pa.binary())] = None
+    end_position: Annotated[bytes | None, ArrowType(pa.binary())] = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TableFunctionPlanRequest(ArrowSerializableDataclass):
+    """Request for the scan-planning phase that precedes per-split ``init()``.
+
+    ``plan()`` runs once with the pushdown filters and returns named splits; each
+    split is then redeemed by ``init()`` from any process or host. This is what makes
+    the scan sound in a distributed engine, where a retried task must be able to
+    re-request exactly the work it was given.
+
+    Attributes:
+        bind_call: The originating [`BindRequest`][].
+        bind_opaque_data: Opaque per-bind state the worker returned from bind().
+        projection_ids: Column indices the client wants projected.
+        pushdown_filters: Serialized filter predicates.
+        join_keys: Serialized join-key batches pushed down for join filtering.
+        row_limit: Plain fetch limit. NOT ``order_by_limit`` (which is a field of
+            the Top-N hint). DuckDB cannot supply this — ``TableFunctionInitInput``
+            has no limit field — so it is always ``None`` from DuckDB; DataFusion
+            supplies it from ``TableProvider::scan(limit)``.
+        target_split_bytes: Requested split size. The primary sizing lever: a worker
+            should emit splits of comparable cost, because the client cannot see
+            per-split cost and will claim them as interchangeable units.
+        min_splits: Parallelism floor — a small but expensive table still needs
+            enough splits to occupy the client's readers.
+        max_splits_per_response: Pagination cap (Trino ``getNextBatch(maxSize)``),
+            NOT a sizing hint.
+        cursor: Resume point in the *enumeration of splits*. Distinct from
+            ``start_position``, which names a place in the *data*.
+        refined_filters: Conjunctive narrowing on a continuation. Narrows future
+            splits only; splits already emitted under a looser filter stay valid.
+        filters_complete: False means more refinement may arrive, so the worker may
+            hold back splits; True says stop waiting.
+        start_position: Exclusive lower bound in the data; ``None`` = from the start.
+        end_position: Inclusive upper bound; ``None`` = "as of now", and the worker
+            reports the frontier it resolved in ``PlanResponse.end_position``.
+        order_by_column_name: Column of the order-pushdown hint.
+        order_by_direction: Direction of the order-pushdown hint.
+        order_by_null_order: Null ordering of the order-pushdown hint.
+        order_by_limit: Row limit of the Top-N order-pushdown hint.
+        tablesample_percentage: TABLESAMPLE percentage hint.
+        tablesample_seed: TABLESAMPLE seed hint.
+
+    """
+
+    bind_call: Annotated[BindRequest, ArrowType(pa.binary())]
+    bind_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
+
+    projection_ids: list[int] | None = None
+    pushdown_filters: Annotated[pa.RecordBatch | None, ArrowType(pa.large_binary())] = None
+    join_keys: Annotated[list[pa.RecordBatch] | None, ArrowType(pa.list_(pa.large_binary()))] = None
+
+    row_limit: int | None = None
+
+    target_split_bytes: int | None = None
+    min_splits: int | None = None
+    max_splits_per_response: int | None = None
+
+    cursor: Annotated[bytes | None, ArrowType(pa.binary())] = None
+    refined_filters: Annotated[pa.RecordBatch | None, ArrowType(pa.large_binary())] = None
+    filters_complete: bool = True
+
+    start_position: Annotated[bytes | None, ArrowType(pa.binary())] = None
+    end_position: Annotated[bytes | None, ArrowType(pa.binary())] = None
+
+    order_by_column_name: str | None = None
+    order_by_direction: OrderByDirection | None = None
+    order_by_null_order: OrderByNullOrder | None = None
+    order_by_limit: int | None = None
+
+    tablesample_percentage: float | None = None
+    tablesample_seed: int | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PlanResponse(ArrowSerializableDataclass):
+    """Result of the scan-planning phase: named splits plus plan-level facts.
+
+    Attributes:
+        splits: One serialized [`ScanSplit`][] per unit of work, each carried as its
+            own IPC blob in a ``list<binary>`` column (the ``ScanBranchesResult``
+            shape).
+        next_cursors: Continuation cursors. Normally 0 or 1. More than one means
+            parallel enumeration, which is only sound if the cursors partition the
+            remaining enumeration **disjointly and exhaustively** — no split may be
+            reachable from two cursors. Clients dedup by split token regardless,
+            because a violation would otherwise produce duplicate rows.
+        execution_id: Identifier for this scan, echoed on every split init. Scopes
+            cross-process ``BoundStorage`` exactly as it does elsewhere.
+        init_opaque_data: Opaque per-init state threaded into each split's stream.
+        max_workers: Normative cap on how many splits may be in flight at once.
+        estimated_total_splits: Estimate of the total split count.
+        estimated_total_rows: Whole-scan row estimate, for CBO / estimateStatistics
+            without forcing full enumeration.
+        estimated_total_bytes: Whole-scan byte estimate.
+        catalog_version: The catalog counter this plan is pinned to — the one that
+            *moves* within an attach, unlike ``resolved_data_version`` which is fixed
+            at attach.
+        scope: Which consistency anchor the tokens bind — ``catalog`` or
+            ``transaction`` (reuses the CACHE_SCOPE_* vocabulary). Transaction-scoped
+            plans are not cacheable and are not redeemable after commit or rollback.
+        locations: Hoisted host list; splits index into it via ``location_ids``.
+        partitioning: Serialized [`PartitionTransform`][] records describing how
+            partition columns are derived. Report none unless every split really is
+            single-valued.
+        sort_order: Serialized [`SortField`][] records describing ordering *within*
+            each split.
+        cache_max_age_seconds: How long this plan may be reused. Ignored for
+            transaction-scoped plans.
+        start_position: What the worker actually started from.
+        end_position: The data frontier resolved at plan time — this is
+            ``latestOffset()``. Checkpoint it and pass it back as the next
+            ``start_position``.
+
+    """
+
+    # ``binary`` not ``large_binary``: this is a generated RESPONSE schema, and the
+    # codegen emitters map only the scalar set in _SCALAR_MAP. 2 GB per serialized
+    # ScanSplit is ample — a split names work, it does not carry data.
+    splits: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
+    next_cursors: Annotated[list[bytes] | None, ArrowType(pa.list_(pa.binary()))] = None
+
+    execution_id: bytes | None = None
+    init_opaque_data: Annotated[bytes | None, ArrowType(pa.binary())] = None
+
+    max_workers: int | None = None
+
+    estimated_total_splits: int | None = None
+    estimated_total_rows: int | None = None
+    estimated_total_bytes: int | None = None
+
+    catalog_version: int | None = None
+    scope: str = CACHE_SCOPE_CATALOG
+
+    locations: list[str] | None = None
+    partitioning: Annotated[list[bytes] | None, ArrowType(pa.list_(pa.binary()))] = None
+    sort_order: Annotated[list[bytes] | None, ArrowType(pa.list_(pa.binary()))] = None
+
+    cache_max_age_seconds: int | None = None
+
+    start_position: Annotated[bytes | None, ArrowType(pa.binary())] = None
+    end_position: Annotated[bytes | None, ArrowType(pa.binary())] = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class TableFunctionDynamicToStringRequest(ArrowSerializableDataclass):
     """Post-execution profile-info request, fired once per scan thread.
 
@@ -440,12 +686,22 @@ class CatalogAttachRequest(ArrowSerializableDataclass):
             unconstrained.
         implementation_version: Semver string (concrete or range) constraining the
             catalog implementation version; ``None`` = unconstrained.
+        client_capabilities: What the *client* can do, so the worker can tailor
+            what it advertises instead of guessing. A serialized 1-row record
+            carrying ``engine`` (duckdb / datafusion / spark / trino),
+            ``native_formats`` (formats the client can read directly, so a worker
+            may hand back a format branch instead of streaming rows),
+            ``catalogs`` (companion catalog types the client can attach),
+            ``can_stream``, and ``filter_encodings`` (so a future client can
+            negotiate a different filter encoding rather than a fourth one being
+            hand-written). ``None`` from a client that predates this field.
     """
 
     name: str
     options: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     data_version_spec: str | None
     implementation_version: str | None
+    client_capabilities: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2650,7 +2906,7 @@ class VgiProtocol(Protocol):
             canonical semver (MAJOR.MINOR.PATCH) of the method-and-schema contract.
     """
 
-    protocol_version: ClassVar[str] = "1.3.0"
+    protocol_version: ClassVar[str] = "1.4.0"
 
     def bind(self, request: BindRequest) -> BindResponse:
         """Resolve output schema and validate arguments."""
@@ -2658,6 +2914,15 @@ class VgiProtocol(Protocol):
 
     def init(self, request: InitRequest) -> Stream[ProcessState, GlobalInitResponse]:
         """Initialize a function execution and return a processing stream."""
+        ...
+
+    def table_function_plan(self, request: TableFunctionPlanRequest) -> PlanResponse:
+        """Plan a table-function scan into named, independently redeemable splits.
+
+        Runs once with the pushdown filters; each returned split is then redeemed
+        by ``init()`` from any process or host. Workers that do not opt in via
+        ``supports_splits`` inherit a framework default.
+        """
         ...
 
     def table_function_cardinality(self, request: TableFunctionCardinalityRequest) -> TableCardinality:

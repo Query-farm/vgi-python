@@ -24,13 +24,21 @@ file matches what the generator would emit right now.
 
 from __future__ import annotations
 
+import argparse
 import io
 import sys
 from typing import TYPE_CHECKING, NamedTuple
 
 from vgi_rpc import metadata as _rpc_metadata
 
-from vgi.codegen._common import provenance_comment
+from vgi.codegen._common import (
+    GeneratorError,
+    DEFAULT_CPP_NAMESPACE,
+    close_namespace,
+    open_namespace,
+    parse_cpp_namespace,
+    provenance_comment,
+)
 
 if TYPE_CHECKING:
     from typing import TextIO
@@ -100,14 +108,15 @@ def _as_escaped_cxx_string(value: bytes) -> str:
     return '"' + "".join(out) + '"'
 
 
-def emit(out: TextIO) -> None:
+def emit(out: TextIO, namespace: list[str] | None = None) -> None:
     """Emit the generated header to ``out``."""
+    if namespace is None:
+        namespace = parse_cpp_namespace(DEFAULT_CPP_NAMESPACE)
     body = io.StringIO()
     body.write("#pragma once\n\n")
     body.write("#include <string_view>\n\n")
-    body.write("namespace duckdb {\n")
-    body.write("namespace vgi {\n")
-    body.write("namespace generated {\n\n")
+    body.write(open_namespace(namespace))
+    body.write("\n")
 
     for entry in _CONSTANTS:
         value = getattr(_rpc_metadata, entry.python_name)
@@ -118,9 +127,7 @@ def emit(out: TextIO) -> None:
         body.write(f"// Sourced from vgi_rpc.metadata.{entry.python_name}.\n")
         body.write(f"inline constexpr std::string_view {entry.cpp_name} = {_as_escaped_cxx_string(value)};\n\n")
 
-    body.write("} // namespace generated\n")
-    body.write("} // namespace vgi\n")
-    body.write("} // namespace duckdb\n")
+    body.write(close_namespace(namespace))
 
     out.write("// ============================================================================\n")
     out.write(
@@ -142,7 +149,23 @@ def emit(out: TextIO) -> None:
 
 def main() -> None:
     """Console-script entry point."""
-    emit(sys.stdout)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--namespace",
+        default=DEFAULT_CPP_NAMESPACE,
+        help=(
+            "C++ namespace to emit into, `::`-separated "
+            f"(default: {DEFAULT_CPP_NAMESPACE}). VGI is not DuckDB-only: a "
+            "standalone worker SDK wants something like `vgi::generated`."
+        ),
+    )
+    args = parser.parse_args()
+    try:
+        namespace = parse_cpp_namespace(args.namespace)
+    except GeneratorError as e:
+        print(f"\nerror: {e}\n", file=sys.stderr)
+        sys.exit(2)
+    emit(sys.stdout, namespace)
 
 
 if __name__ == "__main__":

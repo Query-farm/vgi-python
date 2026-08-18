@@ -36,6 +36,7 @@ Same as ``cpp_schemas``: regenerate after a Protocol change::
 
 from __future__ import annotations
 
+import argparse
 import io
 import sys
 from typing import TYPE_CHECKING, Any
@@ -43,6 +44,10 @@ from typing import TYPE_CHECKING, Any
 import pyarrow as pa
 
 from vgi.codegen._common import (
+    DEFAULT_CPP_NAMESPACE,
+    close_namespace,
+    open_namespace,
+    parse_cpp_namespace,
     EmittedSchema,
     GeneratorError,
     collect_schemas,
@@ -339,6 +344,7 @@ def emit_builders(
     generator_command: str,
     regen_command_lines: list[str],
     schemas_include: str = "vgi_protocol_schemas.hpp",
+    namespace: list[str] | None = None,
 ) -> None:
     """Render request-builder functions for a set of params schemas as a C++ header.
 
@@ -346,6 +352,8 @@ def emit_builders(
     only the schema set, the schema-factory include, and the provenance banner
     differ.
     """
+    if namespace is None:
+        namespace = parse_cpp_namespace(DEFAULT_CPP_NAMESPACE)
     body = io.StringIO()
     body.write("#pragma once\n\n")
     body.write("// Generated builders depend on helpers + the schema factories.\n")
@@ -362,9 +370,8 @@ def emit_builders(
     body.write("#include <vector>\n\n")
     body.write("#include <arrow/api.h>\n\n")
     body.write('#include "duckdb/common/exception.hpp"\n\n')
-    body.write("namespace duckdb {\n")
-    body.write("namespace vgi {\n")
-    body.write("namespace generated {\n\n")
+    body.write(open_namespace(namespace))
+    body.write("\n")
 
     skipped: list[str] = []
     emitted: list[str] = []
@@ -388,9 +395,7 @@ def emit_builders(
         else:
             emitted.append(method_name)
 
-    body.write("} // namespace generated\n")
-    body.write("} // namespace vgi\n")
-    body.write("} // namespace duckdb\n")
+    body.write(close_namespace(namespace))
 
     out.write("// ============================================================================\n")
     out.write(
@@ -416,7 +421,7 @@ def emit_builders(
     out.write(body.getvalue())
 
 
-def emit(out: TextIO) -> None:
+def emit(out: TextIO, namespace: list[str] | None = None) -> None:
     """Emit the generated C++ request-builder header to *out*."""
     emit_builders(
         out,
@@ -428,13 +433,30 @@ def emit(out: TextIO) -> None:
             "  > ~/Development/vgi/src/generated/vgi_request_builders.hpp",
         ],
         schemas_include="vgi_protocol_schemas.hpp",
+        namespace=namespace,
     )
 
 
 def main() -> None:
     """Console-script entrypoint — write the generated header to stdout."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--namespace",
+        default=DEFAULT_CPP_NAMESPACE,
+        help=(
+            "C++ namespace to emit into, `::`-separated "
+            f"(default: {DEFAULT_CPP_NAMESPACE}). VGI is not DuckDB-only: a "
+            "standalone worker SDK wants something like `vgi::generated`."
+        ),
+    )
+    args = parser.parse_args()
     try:
-        emit(sys.stdout)
+        namespace = parse_cpp_namespace(args.namespace)
+    except GeneratorError as e:
+        print(f"\nerror: {e}\n", file=sys.stderr)
+        sys.exit(2)
+    try:
+        emit(sys.stdout, namespace)
     except GeneratorError as e:
         print(f"\nerror: {e}\n", file=sys.stderr)
         sys.exit(2)

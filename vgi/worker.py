@@ -64,6 +64,7 @@ vgi._test_fixtures.worker : Example worker with built-in functions
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import functools
 import hashlib
 import importlib.metadata
@@ -125,14 +126,17 @@ from vgi.protocol import (
     InitRequest,
     MacroCreateRequest,
     MacrosResponse,
+    PlanResponse,
     ProcessState,
     ScalarExchangeState,
+    ScanSplit,
     SchemasResponse,
     TableBufferingFinalizeState,
     TableCreateRequest,
     TableFunctionCardinalityRequest,
     TableFunctionDynamicToStringRequest,
     TableFunctionDynamicToStringResponse,
+    TableFunctionPlanRequest,
     TableFunctionStatisticsRequest,
     TableInOutExchangeState,
     TableProducerState,
@@ -2634,6 +2638,83 @@ class Worker:
             func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth, attach_plaintext=attach_plaintext)
         )
 
+    def _stamp_split_tokens(
+        self, response: PlanResponse, request: TableFunctionPlanRequest, ctx: CallContext
+    ) -> PlanResponse:
+        """Wrap each split's payload in the token envelope.
+
+        Done here, once, rather than in every worker: an author cannot forget the
+        consistency anchor (a silent staleness bug), cannot mis-bind the
+        fingerprint, and never writes crypto. It also keeps the envelope a private
+        implementation detail — its layout can change without touching worker code
+        in five languages.
+        """
+        from vgi.split_token import bind_fingerprint, build_split_token
+
+        fingerprint = bind_fingerprint(request.bind_call)
+        # The anchor is what a stale token is detected against. catalog_version is
+        # the counter that MOVES within an attach; resolved_data_version is fixed at
+        # attach and would say nothing.
+        anchor = int(response.catalog_version or 0).to_bytes(8, "little", signed=True)
+        signing_key = self._signing_key
+
+        stamped: list[bytes] = []
+        for blob in response.splits:
+            split = ScanSplit.deserialize_from_bytes(blob)
+            token = build_split_token(
+                payload=split.payload,
+                fingerprint=fingerprint,
+                anchor=anchor,
+                signing_key=signing_key,
+                auth=ctx.auth,
+            )
+            stamped.append(dataclasses.replace(split, token=token).serialize_to_bytes())
+
+        return dataclasses.replace(response, splits=stamped)
+
+    def table_function_plan(self, request: TableFunctionPlanRequest, ctx: CallContext) -> PlanResponse:
+        """Plan a table-function scan into named, redeemable splits.
+
+        Implements VgiProtocol.table_function_plan().
+
+        The framework default returns a **single empty-payload split**, which is
+        what a worker that has not opted into splits means: "the whole scan is one
+        unit of work." That keeps every existing worker starting and serving
+        unchanged under protocol 1.4.0 — the split path is opt-in via
+        ``Meta.supports_splits``, not something a worker must now implement.
+
+        A worker opts in by overriding ``on_plan`` on its function class. It
+        returns splits carrying only its own ``payload``; the framework stamps
+        (and, where a signing key exists, seals) the surrounding token envelope,
+        so an author cannot forget the consistency anchor or mis-bind the
+        fingerprint.
+        """
+        attach_plaintext = self._unwrap_attach_full(getattr(request.bind_call, "attach_opaque_data", None))
+        func_cls = self._resolve_function(request.bind_call)
+
+        on_plan = getattr(func_cls, "on_plan", None)
+        if on_plan is None:
+            # Not split-capable: one split standing for the whole scan.
+            return PlanResponse(splits=[ScanSplit(payload=b"").serialize_to_bytes()])
+
+        if not issubclass(func_cls, TableFunctionBase):
+            msg = (
+                f"'{func_cls.__name__}' defines on_plan but is not a table function; "
+                "scan planning only applies to table functions."
+            )
+            raise TypeError(msg)
+        params = func_cls._make_bind_params(
+            request.bind_call, auth_context=ctx.auth, attach_plaintext=attach_plaintext
+        )
+        response = on_plan(params, request)
+        if isinstance(response, PlanResponse):
+            response = self._stamp_split_tokens(response, request, ctx)
+        if not isinstance(response, PlanResponse):
+            raise TypeError(
+                f"{func_cls.__name__}.on_plan must return a PlanResponse, got {type(response).__name__}"
+            )
+        return response
+
     def table_function_statistics(self, request: TableFunctionStatisticsRequest, ctx: CallContext) -> bytes | None:
         """Return per-column statistics for a table function's output.
 
@@ -3800,8 +3881,13 @@ class Worker:
         func_cls = self._resolve_function(request.bind_call)
         instance = func_cls(logger=_logger)
 
-        # Determine if this is a secondary init
-        if request.is_secondary:
+        # A SPLIT init looks secondary — it joins an execution the planner already
+        # minted — but it MUST run user code, because a split *names* work and only
+        # the function class knows what its own payload means. The secondary branch
+        # runs none, so a split init takes the primary-shaped path instead, where
+        # global_init() verifies the token envelope and hands the payloads to
+        # on_split() with storage, secrets and projection already wired.
+        if request.is_secondary and not request.split_tokens:
             assert request.execution_id is not None
             init_response = GlobalInitResponse(
                 execution_id=request.execution_id,

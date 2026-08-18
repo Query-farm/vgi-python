@@ -1,0 +1,82 @@
+{
+  "format_version": 1,
+  "layout": "format_version:u8 | flags:u8 | anchor_len:u16le | bind_fingerprint:16 | anchor:anchor_len | payload:rest",
+  "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "fingerprint_hex": "000102030405060708090a0b0c0d0e0f",
+  "anchor_hex": "2f00000000000000",
+  "payload": "file=3;v=47",
+  "cases": [
+    {
+      "name": "valid_unsealed",
+      "verdict": "ok",
+      "note": "Keyless worker (subprocess/unix - DuckDB's primary path). Payload is plaintext.",
+      "reproducible": true,
+      "worker_keyed": false,
+      "size": 39
+    },
+    {
+      "name": "valid_sealed",
+      "verdict": "ok",
+      "note": "Keyed worker. Parse-only: the AEAD nonce is random, so bytes differ per run.",
+      "reproducible": false,
+      "worker_keyed": true,
+      "size": 80
+    },
+    {
+      "name": "bad_flags_unsealed_but_key_present",
+      "verdict": "SPLIT_TOKEN_INVALID",
+      "note": "THE alg:none CASE. Structurally a valid unsealed token. A worker that holds a signing key MUST refuse it - flags is attacker-controlled, so the key state decides whether to unseal, never the token.",
+      "reproducible": true,
+      "worker_keyed": true,
+      "size": 45
+    },
+    {
+      "name": "bad_fingerprint",
+      "verdict": "SPLIT_TOKEN_INVALID",
+      "note": "Minted for a different bind.",
+      "reproducible": true,
+      "worker_keyed": false,
+      "size": 39
+    },
+    {
+      "name": "stale_anchor",
+      "verdict": "SPLIT_SNAPSHOT_EXPIRED",
+      "note": "Anchor names a catalog version that is gone. Distinct kind from INVALID: only this one means 're-run the query'.",
+      "reproducible": true,
+      "worker_keyed": false,
+      "size": 39
+    },
+    {
+      "name": "truncated",
+      "verdict": "SPLIT_TOKEN_INVALID",
+      "note": "Shorter than the 20-byte fixed header.",
+      "reproducible": true,
+      "worker_keyed": false,
+      "size": 10
+    },
+    {
+      "name": "reserved_flag_bit",
+      "verdict": "SPLIT_TOKEN_INVALID",
+      "note": "bits 1-7 of flags are reserved and MUST be zero.",
+      "reproducible": true,
+      "worker_keyed": false,
+      "size": 39
+    },
+    {
+      "name": "bad_version",
+      "verdict": "SPLIT_TOKEN_INVALID",
+      "note": "format_version is checked unconditionally, before anything else.",
+      "reproducible": true,
+      "worker_keyed": false,
+      "size": 39
+    },
+    {
+      "name": "anchor_len_overrun",
+      "verdict": "SPLIT_TOKEN_INVALID",
+      "note": "anchor_len claims more bytes than the token holds.",
+      "reproducible": true,
+      "worker_keyed": false,
+      "size": 39
+    }
+  ]
+}

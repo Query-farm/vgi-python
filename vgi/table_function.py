@@ -601,6 +601,9 @@ class InitParams[TArgs]:
         attach_opaque_data: The catalog's attach bytes, unwrapped by the
             framework (uuid prefix stripped). None without an ATTACH.
 
+        split_payloads: Verified split payloads when this init redeems splits, or
+            None otherwise. The framework has already opened and stripped the token
+            envelope, so an unverified token never reaches user code.
     """
 
     args: TArgs
@@ -616,6 +619,7 @@ class InitParams[TArgs]:
     storage: BoundStorage
     auth_context: AuthContext = AuthContext.anonymous()
     attach_opaque_data: bytes | None = None
+    split_payloads: list[bytes] | None = None
 
     @property
     def at_unit(self) -> str | None:
@@ -692,6 +696,32 @@ class ProcessParams[TArgs]:
     # =True, ...)`` batch instead of re-streaming. Both None on a normal call.
     if_none_match: str | None = None
     if_modified_since: str | None = None
+
+    @property
+    def split_payloads(self) -> list[bytes] | None:
+        """Verified split payloads, or ``None`` when this scan is not split-based.
+
+        Computed on access rather than captured at construction: ``ProcessParams``
+        is built once per stream and reused, while a split scan re-initializes the
+        same connection for each split it claims. An eagerly-captured value would
+        freeze whatever the first init carried — which is nothing, because the first
+        claim has not been made yet.
+
+        The envelope is opened and stripped here, so these are exactly the bytes
+        ``on_plan()`` produced; an unverified token never reaches user code.
+        """
+        if self.init_call is None:
+            return None
+        tokens = getattr(self.init_call, "split_tokens", None)
+        if not tokens:
+            return None
+
+        from vgi.split_token import bind_fingerprint, open_split_token
+
+        expected = bind_fingerprint(self.init_call.bind_call)
+        return [
+            open_split_token(token, auth=self.auth_context, expected_fingerprint=expected) for token in tokens
+        ]
 
     @property
     def at_unit(self) -> str | None:
@@ -1206,7 +1236,11 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             storage=BoundStorage(cls.storage, execution_id, request=input, attach_plaintext=attach_plaintext),
             auth_context=auth,
             attach_opaque_data=attach_catalog_bytes(attach_plaintext),
+            split_payloads=cls._verify_split_tokens(input, auth),
         )
+
+        if params.split_payloads is not None:
+            cls.on_split(params, input, params.split_payloads)
 
         result = cls.on_init(params)
 
@@ -1215,6 +1249,104 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             execution_id=execution_id,
             opaque_data=result.opaque_data,
         )
+
+    @classmethod
+    def _verify_split_tokens(cls, init_call: Any, auth: AuthContext) -> list[bytes] | None:
+        """Open and strip the token envelope, returning the worker's own payloads.
+
+        Returns ``None`` when this is not a split init, so the ordinary scan path is
+        untouched. Verification lives here rather than in user code so an unverified
+        token can never be acted on, and so the envelope stays a private
+        implementation detail that can change without touching worker code.
+        """
+        tokens = getattr(init_call, "split_tokens", None)
+        if not tokens:
+            return None
+
+        from vgi.split_token import bind_fingerprint, open_split_token
+
+        expected = bind_fingerprint(init_call.bind_call)
+        signing_key = getattr(cls, "_signing_key", None)
+        return [
+            open_split_token(
+                token,
+                signing_key=signing_key,
+                auth=auth,
+                expected_fingerprint=expected,
+            )
+            for token in tokens
+        ]
+
+    @classmethod
+    def on_plan(cls, params: BindParams[TArgs], request: Any) -> Any:
+        """Divide this scan into named, independently redeemable splits.
+
+        Override together with :meth:`on_split` and ``Meta.supports_splits = True``.
+
+        A split *names* work rather than describing it. "These three files at
+        version 47" survives a retry; "rows 0-999 of whatever this returns now"
+        does not — and a distributed engine will retry, so the difference is
+        correctness, not tidiness. The same split may also be redeemed more than
+        once (recursive CTEs, re-collected DataFrames), so redemption must be
+        replayable.
+
+        Return only your own ``payload`` bytes on each
+        [`ScanSplit`][vgi.protocol.ScanSplit]; the framework stamps and, where a
+        signing key exists, seals the surrounding token envelope. You cannot
+        forget the consistency anchor, and you never write crypto.
+
+        Args:
+            params: Bind parameters — function args, settings, and secrets.
+            request: The [`TableFunctionPlanRequest`][vgi.protocol.TableFunctionPlanRequest],
+                carrying pushdown (filters, projection, join keys) and the sizing
+                request (``target_split_bytes``, ``min_splits``).
+
+        Returns:
+            A [`PlanResponse`][vgi.protocol.PlanResponse].
+
+        Note:
+            Size splits into *comparable units of work* and honour
+            ``target_split_bytes``. The client cannot see per-split cost, so it
+            claims them greedily as interchangeable units; wildly uneven splits
+            leave its makespan bounded by your largest one.
+
+        """
+        msg = (
+            f"{cls.__name__} advertises supports_splits but does not implement on_plan(). "
+            "Implement on_plan() to divide the scan, and on_split() to redeem a split."
+        )
+        raise NotImplementedError(msg)
+
+    @classmethod
+    def on_split(cls, params: InitParams[TArgs], request: Any, payloads: list[bytes]) -> Any:
+        """Redeem split payloads minted by :meth:`on_plan`.
+
+        The framework has already verified and stripped the token envelope, so
+        ``payloads`` are exactly the bytes you produced — an unverified token never
+        reaches here.
+
+        Args:
+            params: Bind parameters — function args, settings, and secrets.
+            request: The [`InitRequest`][vgi.protocol.InitRequest] for this scan.
+            payloads: One entry per token. Usually one; a client that bin-packs
+                (DataFusion must, because its partition count *is* its concurrency)
+                sends a whole group and expects them concatenated in order.
+
+        Returns:
+            A ``GlobalInitResponse``, or ``None`` for the default plumbing.
+
+        Warning:
+            Any state you carry from planning to reading must live in cross-process
+            ``BoundStorage`` keyed by ``execution_id``. State on ``self`` or in
+            module globals works in a local subprocess and breaks on a cluster,
+            where the process that plans is never the process that reads.
+
+        """
+        msg = (
+            f"{cls.__name__} was handed {len(payloads)} split payload(s) but does not "
+            "implement on_split()."
+        )
+        raise NotImplementedError(msg)
 
     @classmethod
     def cardinality(cls, params: BindParams[TArgs]) -> TableCardinality:

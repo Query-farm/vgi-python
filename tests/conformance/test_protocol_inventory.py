@@ -70,6 +70,18 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
             "Covered by C++ integration/table_function paths."
         )
     ),
+    "table_function_plan": NotExposed(
+        reason=(
+            "Engine-side scan planning: splits the scan into named, independently "
+            "redeemable units so a distributed engine can retry a task without "
+            "re-reading or skipping rows. Unlike the cardinality/statistics hints "
+            "this is NOT DuckDB-only — the consumers are the DuckDB extension and "
+            "the DataFusion provider (~/Development/vgi-datafusion), neither of "
+            "which is the Python Client. The Client's scan surface is "
+            "table_function(), which redeems no splits. Exposing a Client wrapper "
+            "is tracked by the splits plan, phase 11."
+        )
+    ),
     "table_function_dynamic_to_string": NotExposed(
         reason=(
             "DuckDB-only profiler hook. Surfaces user diagnostics under EXPLAIN "

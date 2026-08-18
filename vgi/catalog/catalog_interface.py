@@ -676,6 +676,21 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             parallel output in partition-id order. Opting in also skips the
             FIXED_ORDER MaxThreads=1 clamp; the source stays parallel and the
             sink does the ordering.
+        supports_splits: True if the function implements on_plan()/on_split(), i.e.
+            the scan can be divided into named, independently redeemable units.
+            A distributed engine needs this to retry a task without re-reading or
+            skipping rows.
+        filters_exactly_applied: True if the worker applies pushed-down filters
+            exactly, so the engine may drop its own filter above the scan rather
+            than re-applying it.
+        supports_positions: True if the function exposes addressable positions in
+            the data, enabling incremental and streaming reads. VGI supplies the
+            addressability; the engine owns the checkpoint.
+        split_token_ttl_seconds: How long a split token stays redeemable, or None
+            for unbounded. A client refuses a plan whose TTL is below its own
+            scheduling horizon (seconds for DuckDB, hours for a Spark driver),
+            because otherwise the failure lands at task start after the job has
+            already burned that time.
         partition_kind: Partition shape declared by the function over its
             ``vgi.partition_column``-annotated bind-schema fields. When
             non-``NOT_PARTITIONED``, the DuckDB extension installs
@@ -744,6 +759,14 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     order_preservation: OrderPreservation | None = None
     max_workers: Annotated[int | None, ArrowType(pa.int32())] = None
     supports_batch_index: bool = False
+    supports_splits: bool = False
+    filters_exactly_applied: bool = False
+    supports_positions: bool = False
+    # Genuinely NULLABLE on the wire, unlike the sibling flags. The explicit
+    # ArrowType annotation the other split fields use renders NOT NULL, which
+    # would leave the "null means unbounded" contract inexpressible in any SDK
+    # that honours the declaration — a plain `int | None` renders nullable.
+    split_token_ttl_seconds: int | None = None
     partition_kind: PartitionKind = PartitionKind.NOT_PARTITIONED
 
     order_dependent: OrderDependence = OrderDependence.NOT_ORDER_DEPENDENT
@@ -1039,6 +1062,15 @@ class ScanBranch:
         source_table: Catalog-table branch only — the base table name; its
             presence selects the catalog-table kind. ``None`` for function
             branches.
+        format_name: Format branch only — the format to read (``parquet``,
+            ``csv``, ``iceberg``, …). The client resolves it to that format's
+            reader, so a worker can say "these files, this format" without knowing
+            the reader's argument spelling.
+        format_locations: Format branch only — the paths/URIs to read. Required
+            when ``format_name`` is set; a format branch naming no locations is
+            rejected at catalog-load.
+        format_options: Format branch only — reader options, passed through as the
+            reader's named arguments.
         ARROW_SCHEMA: Arrow IPC schema used to (de)serialize this branch over the wire.
 
     """
@@ -1051,6 +1083,9 @@ class ScanBranch:
     source_catalog: str | None = None
     source_schema: str | None = None
     source_table: str | None = None
+    format_name: str | None = None
+    format_locations: list[str] = field(default_factory=list)
+    format_options: dict[str, pa.Scalar] = field(default_factory=dict)  # type: ignore[type-arg]
 
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
@@ -1061,6 +1096,8 @@ class ScanBranch:
             pa.field("source_catalog", pa.string(), nullable=True),
             pa.field("source_schema", pa.string(), nullable=True),
             pa.field("source_table", pa.string(), nullable=True),
+            pa.field("format_name", pa.string(), nullable=True),
+            pa.field("format_locations", pa.list_(pa.string()), nullable=True),
         ]  # type: ignore[arg-type]
     )
 
@@ -1087,6 +1124,8 @@ class ScanBranch:
             "arguments": serialize_record_batch_bytes(argument_batch),
             "branch_filter": self.branch_filter,
             "writable": self.writable,
+            "format_name": self.format_name,
+            "format_locations": list(self.format_locations),
             "source_catalog": self.source_catalog,
             "source_schema": self.source_schema,
             "source_table": self.source_table,
@@ -3288,6 +3327,10 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             order_preservation=None if is_scalar else meta.preserves_order,
             max_workers=None if is_scalar else meta.max_workers,
             supports_batch_index=False if is_scalar else meta.supports_batch_index,
+            supports_splits=False if is_scalar else meta.supports_splits,
+            filters_exactly_applied=False if is_scalar else meta.filters_exactly_applied,
+            supports_positions=False if is_scalar else meta.supports_positions,
+            split_token_ttl_seconds=None if is_scalar else meta.split_token_ttl_seconds,
             partition_kind=PartitionKind.NOT_PARTITIONED if is_scalar else meta.partition_kind,
             # Aggregate function fields
             order_dependent=meta.order_dependent,

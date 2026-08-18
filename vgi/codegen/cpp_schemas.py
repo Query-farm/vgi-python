@@ -19,6 +19,7 @@ checked-in `.hpp` matches what the generator would emit right now.
 
 from __future__ import annotations
 
+import argparse
 import io
 import sys
 from typing import TYPE_CHECKING, Any, cast
@@ -26,6 +27,10 @@ from typing import TYPE_CHECKING, Any, cast
 import pyarrow as pa
 
 from vgi.codegen._common import (
+    DEFAULT_CPP_NAMESPACE,
+    close_namespace,
+    open_namespace,
+    parse_cpp_namespace,
     EmittedSchema,
     GeneratorError,
     collect_schemas,
@@ -179,27 +184,27 @@ def emit_schemas(
     generator_module: str,
     generator_command: str,
     regen_command_lines: list[str],
+    namespace: list[str] | None = None,
 ) -> None:
     """Render a list of EmittedSchema records as a C++ schema-factory header.
 
     Shared by the main protocol generator and the secret protocol generator;
     only the schema set and the provenance banner differ.
     """
+    if namespace is None:
+        namespace = parse_cpp_namespace(DEFAULT_CPP_NAMESPACE)
     body = io.StringIO()
     body.write("#pragma once\n\n")
     body.write("#include <arrow/api.h>\n")
     body.write("#include <memory>\n\n")
-    body.write("namespace duckdb {\n")
-    body.write("namespace vgi {\n")
-    body.write("namespace generated {\n\n")
+    body.write(open_namespace(namespace))
+    body.write("\n")
 
     for es in schemas:
         body.write(_emit_factory(es))
         body.write("\n")
 
-    body.write("} // namespace generated\n")
-    body.write("} // namespace vgi\n")
-    body.write("} // namespace duckdb\n")
+    body.write(close_namespace(namespace))
 
     out.write("// ============================================================================\n")
     out.write(
@@ -216,7 +221,7 @@ def emit_schemas(
     out.write(body.getvalue())
 
 
-def emit(out: TextIO) -> None:
+def emit(out: TextIO, namespace: list[str] | None = None) -> None:
     """Emit the generated C++ schemas header to *out*."""
     emit_schemas(
         out,
@@ -227,13 +232,30 @@ def emit(out: TextIO) -> None:
             "uv run --project ~/Development/vgi-python vgi-gen-cpp-schemas \\",
             "  > ~/Development/vgi/src/generated/vgi_protocol_schemas.hpp",
         ],
+        namespace=namespace,
     )
 
 
 def main() -> None:
     """Console-script entrypoint — write the C++ schemas header to stdout."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--namespace",
+        default=DEFAULT_CPP_NAMESPACE,
+        help=(
+            "C++ namespace to emit into, `::`-separated "
+            f"(default: {DEFAULT_CPP_NAMESPACE}). VGI is not DuckDB-only: a "
+            "standalone worker SDK wants something like `vgi::generated`."
+        ),
+    )
+    args = parser.parse_args()
     try:
-        emit(sys.stdout)
+        namespace = parse_cpp_namespace(args.namespace)
+    except GeneratorError as e:
+        print(f"\nerror: {e}\n", file=sys.stderr)
+        sys.exit(2)
+    try:
+        emit(sys.stdout, namespace)
     except GeneratorError as e:
         print(f"\nerror: {e}\n", file=sys.stderr)
         sys.exit(2)

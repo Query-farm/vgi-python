@@ -32,14 +32,14 @@ CLIENT_PROTOCOL_VERSION = VgiProtocol.protocol_version
 
 def test_client_protocol_version_is_canonical() -> None:
     """Sanity-check the constants this test reasons about haven't drifted apart."""
-    assert CLIENT_PROTOCOL_VERSION == "1.3.0"
+    assert CLIENT_PROTOCOL_VERSION == "1.4.0"
     # The fixture must be a genuine mismatch in the major/minor that the
     # framework compares; a patch-only difference would (correctly) pass.
     assert BAD_PROTOCOL_VERSION.split(".")[:2] != CLIENT_PROTOCOL_VERSION.split(".")[:2]
 
 
 def test_mismatched_worker_protocol_version_raises() -> None:
-    """A worker enforcing 99.0.0 must reject the 1.3.0 client at dispatch."""
+    """A worker enforcing 99.0.0 must reject the 1.4.0 client at dispatch."""
     with Client("vgi-fixture-bad-protocol-worker") as client, pytest.raises(ClientError) as exc_info:
         list(
             client.table_function(

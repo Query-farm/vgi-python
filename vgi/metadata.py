@@ -386,6 +386,14 @@ class ResolvedMetadata:
         max_workers: Maximum parallel workers, or ``None`` for unbounded.
         supports_batch_index: Whether the function opts into per-batch
             ``vgi_batch_index`` tagging for ordered parallel output.
+        supports_splits: Whether the function implements on_plan()/on_split(), so
+            the scan can be divided into named, independently redeemable units.
+        filters_exactly_applied: Whether the worker applies pushed-down filters
+            exactly, letting the engine drop its own filter above the scan.
+        supports_positions: Whether the function exposes addressable positions in
+            the data, enabling incremental and streaming reads.
+        split_token_ttl_seconds: How long a split token stays redeemable, or None
+            for unbounded. A client refuses a TTL below its scheduling horizon.
         partition_kind: Partition shape the function declares over its
             partition-column bind fields.
         order_dependent: Whether the aggregate result depends on input order.
@@ -452,6 +460,10 @@ class ResolvedMetadata:
     preserves_order: OrderPreservation = OrderPreservation.PRESERVES_ORDER
     max_workers: int | None = None
     supports_batch_index: bool = False
+    supports_splits: bool = False
+    filters_exactly_applied: bool = False
+    supports_positions: bool = False
+    split_token_ttl_seconds: int | None = None
     partition_kind: PartitionKind = PartitionKind.NOT_PARTITIONED
 
     # Aggregate function specific
@@ -522,6 +534,10 @@ class ResolvedMetadata:
             "preserves_order": self.preserves_order.name,
             "max_workers": self.max_workers,
             "supports_batch_index": self.supports_batch_index,
+            "supports_splits": self.supports_splits,
+            "filters_exactly_applied": self.filters_exactly_applied,
+            "supports_positions": self.supports_positions,
+            "split_token_ttl_seconds": self.split_token_ttl_seconds,
             "partition_kind": self.partition_kind.name,
             "order_dependent": self.order_dependent.name,
             "distinct_dependent": self.distinct_dependent.name,
@@ -558,6 +574,10 @@ class ResolvedMetadata:
             preserves_order=OrderPreservation[d.get("preserves_order", "PRESERVES_ORDER")],
             max_workers=d.get("max_workers"),
             supports_batch_index=d.get("supports_batch_index", False),
+            supports_splits=d.get("supports_splits", False),
+            filters_exactly_applied=d.get("filters_exactly_applied", False),
+            supports_positions=d.get("supports_positions", False),
+            split_token_ttl_seconds=d.get("split_token_ttl_seconds"),
             partition_kind=PartitionKind[d.get("partition_kind", "NOT_PARTITIONED")],
             order_dependent=OrderDependence[d.get("order_dependent", "NOT_ORDER_DEPENDENT")],
             distinct_dependent=DistinctDependence[d.get("distinct_dependent", "NOT_DISTINCT_DEPENDENT")],
@@ -959,6 +979,10 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         "preserves_order",
         "max_workers",
         "supports_batch_index",  # opt-in to per-batch batch_index tagging (parallel + ordered sink)
+        "supports_splits",  # opt-in to plan()/on_split(): named, independently redeemable scan units
+        "filters_exactly_applied",  # worker applies pushed filters exactly (engine may drop its own filter)
+        "supports_positions",  # addressable positions in the data (incremental / streaming reads)
+        "split_token_ttl_seconds",  # None = unbounded; a client refuses a TTL below its scheduling horizon
         "partition_kind",  # opt-in to PartitionColumns mode for Hive-style partitioning
         # Table-in-out specific: explicit override for the has_finalize auto-detection.
         # Set to True or False to force the emitted ``in_out_function_final``
@@ -1215,6 +1239,10 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         preserves_order=attrs.get("preserves_order", OrderPreservation.PRESERVES_ORDER),
         max_workers=attrs.get("max_workers"),
         supports_batch_index=bool(attrs.get("supports_batch_index", False)),
+        supports_splits=bool(attrs.get("supports_splits", False)),
+        filters_exactly_applied=bool(attrs.get("filters_exactly_applied", False)),
+        supports_positions=bool(attrs.get("supports_positions", False)),
+        split_token_ttl_seconds=attrs.get("split_token_ttl_seconds"),
         partition_kind=_validate_partition_kind(cls, attrs.get("partition_kind", PartitionKind.NOT_PARTITIONED)),
         order_dependent=attrs.get("order_dependent", OrderDependence.NOT_ORDER_DEPENDENT),
         distinct_dependent=attrs.get("distinct_dependent", DistinctDependence.NOT_DISTINCT_DEPENDENT),
@@ -1387,6 +1415,10 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("preserves_order", pa.string()),
         pa.field("max_workers", pa.int32(), nullable=True),
         pa.field("supports_batch_index", pa.bool_()),
+        pa.field("supports_splits", pa.bool_()),
+        pa.field("filters_exactly_applied", pa.bool_()),
+        pa.field("supports_positions", pa.bool_()),
+        pa.field("split_token_ttl_seconds", pa.int64(), nullable=True),
         pa.field("partition_kind", pa.string()),
         pa.field("order_dependent", pa.string()),
         pa.field("distinct_dependent", pa.string()),

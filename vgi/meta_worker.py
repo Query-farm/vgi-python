@@ -489,6 +489,22 @@ class MetaWorker:
         msg = f"Unknown function '{fn_name}'"
         raise ValueError(msg)
 
+    def table_function_plan(self, request: Any, ctx: CallContext) -> Any:
+        """Dispatch scan planning to the right worker."""
+        patched, worker = self._unwrap_bind_call_attach_opaque_data(
+            request,
+            method_name="table_function_plan",
+        )
+        if worker is not None:
+            return worker.table_function_plan(patched, ctx=ctx)
+        fn_name = request.bind_call.function_name if request.bind_call else ""
+        for w in self._workers:
+            registry = type(w)._build_registry()
+            if fn_name in registry:
+                return w.table_function_plan(request, ctx=ctx)
+        msg = f"Unknown function '{fn_name}'"
+        raise ValueError(msg)
+
     def table_function_statistics(self, request: Any, ctx: CallContext) -> Any:
         """Dispatch per-column statistics lookup to the right worker."""
         patched, worker = self._unwrap_bind_call_attach_opaque_data(

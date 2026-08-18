@@ -16,9 +16,11 @@ header (``vgi_secret_protocol_schemas.hpp``) instead of the catalog one.
 
 from __future__ import annotations
 
+import argparse
 import sys
 from typing import TYPE_CHECKING
 
+from vgi.codegen._common import DEFAULT_CPP_NAMESPACE, parse_cpp_namespace
 from vgi.codegen._common import GeneratorError, collect_schemas
 from vgi.codegen.cpp_request_builders import emit_builders
 from vgi.secret_protocol import VgiSecretProtocol
@@ -27,7 +29,7 @@ if TYPE_CHECKING:
     from typing import TextIO
 
 
-def emit(out: TextIO) -> None:
+def emit(out: TextIO, namespace: list[str] | None = None) -> None:
     """Emit the generated C++ secret request-builder header to *out*."""
     schemas = collect_schemas(
         VgiSecretProtocol,
@@ -50,8 +52,24 @@ def emit(out: TextIO) -> None:
 
 def main() -> None:
     """Console-script entrypoint — write the generated header to stdout."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--namespace",
+        default=DEFAULT_CPP_NAMESPACE,
+        help=(
+            "C++ namespace to emit into, `::`-separated "
+            f"(default: {DEFAULT_CPP_NAMESPACE}). VGI is not DuckDB-only: a "
+            "standalone worker SDK wants something like `vgi::generated`."
+        ),
+    )
+    args = parser.parse_args()
     try:
-        emit(sys.stdout)
+        namespace = parse_cpp_namespace(args.namespace)
+    except GeneratorError as e:
+        print(f"\nerror: {e}\n", file=sys.stderr)
+        sys.exit(2)
+    try:
+        emit(sys.stdout, namespace)
     except GeneratorError as e:
         print(f"\nerror: {e}\n", file=sys.stderr)
         sys.exit(2)

@@ -19,9 +19,11 @@ Workflow:
 
 from __future__ import annotations
 
+import argparse
 import sys
 from typing import TYPE_CHECKING
 
+from vgi.codegen._common import GeneratorError, DEFAULT_CPP_NAMESPACE, parse_cpp_namespace
 from vgi.codegen.cpp_protocol_version import emit_version_header
 from vgi.secret_protocol import VgiSecretProtocol
 
@@ -43,7 +45,7 @@ def current_secret_protocol_version() -> str:
     return value
 
 
-def emit(out: TextIO) -> None:
+def emit(out: TextIO, namespace: list[str] | None = None) -> None:
     """Emit ``vgi_secret_protocol_version.hpp`` to *out*."""
     emit_version_header(
         out,
@@ -61,7 +63,23 @@ def emit(out: TextIO) -> None:
 
 def main() -> None:
     """Console-script entry point."""
-    emit(sys.stdout)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--namespace",
+        default=DEFAULT_CPP_NAMESPACE,
+        help=(
+            "C++ namespace to emit into, `::`-separated "
+            f"(default: {DEFAULT_CPP_NAMESPACE}). VGI is not DuckDB-only: a "
+            "standalone worker SDK wants something like `vgi::generated`."
+        ),
+    )
+    args = parser.parse_args()
+    try:
+        namespace = parse_cpp_namespace(args.namespace)
+    except GeneratorError as e:
+        print(f"\nerror: {e}\n", file=sys.stderr)
+        sys.exit(2)
+    emit(sys.stdout, namespace)
 
 
 if __name__ == "__main__":
