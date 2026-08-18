@@ -2638,6 +2638,35 @@ class Worker:
             func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth, attach_plaintext=attach_plaintext)
         )
 
+    def _current_split_anchor(self, request: Any, ctx: CallContext | None) -> bytes | None:
+        """The catalog version a split token must still name, or None if unknown.
+
+        Returns None — meaning "skip the staleness check" — rather than raising,
+        for a worker whose catalog has no version to report. A check that cannot
+        be made must not become a check that always fails: that would refuse every
+        split token on every unversioned catalog.
+        """
+        bind_call = getattr(request, "bind_call", None)
+        attach = getattr(bind_call, "attach_opaque_data", None)
+        if attach is None:
+            return None
+        try:
+            cat = self._get_catalog()
+            version = cat.catalog_version(
+                attach_opaque_data=self._unwrap_attach(attach),
+                transaction_opaque_data=self._unwrap_tx_opt(
+                    getattr(bind_call, "transaction_opaque_data", None), attach
+                ),
+                ctx=ctx,
+            )
+        except Exception:
+            # A catalog that cannot answer is the same situation as one with no
+            # version: unknown, so unchecked.
+            return None
+        if version is None:
+            return None
+        return int(version).to_bytes(8, "little", signed=True)
+
     def _stamp_split_tokens(
         self, response: PlanResponse, request: TableFunctionPlanRequest, ctx: CallContext
     ) -> PlanResponse:
@@ -3908,6 +3937,9 @@ class Worker:
                     ctx=ctx,
                     attach_plaintext=attach_plaintext,
                     signing_key=self._signing_key,
+                    current_anchor=(
+                        self._current_split_anchor(request, ctx) if request.split_tokens else None
+                    ),
                 )
             elif isinstance(instance, ScalarFunctionGenerator):
                 init_response = instance.global_init(request, attach_plaintext=attach_plaintext)

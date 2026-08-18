@@ -84,6 +84,17 @@ class SplitTokenError(Exception):
 
     error_kind: str = "SPLIT_TOKEN_INVALID"
 
+    def __str__(self) -> str:
+        """Prefix the stable kind, so it survives the trip to the client.
+
+        Only the message crosses the wire — the exception class does not — and the
+        kind is what a connector switches on to decide whether re-running the
+        query could possibly help. Without it in the text, every refusal looks
+        alike on the far side and the whole point of having distinct kinds is lost
+        at exactly the boundary where it matters.
+        """
+        return f"[{self.error_kind}] {super().__str__()}"
+
 
 class SplitTokenInvalid(SplitTokenError):
     """The token is malformed, bound to a different bind, or forged.

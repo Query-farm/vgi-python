@@ -1226,6 +1226,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         ctx: CallContext | None = None,
         attach_plaintext: bytes | None = None,
         signing_key: bytes | None = None,
+        current_anchor: bytes | None = None,
     ) -> GlobalInitResponse:
         """Global init protocol entry point. Do not override; use ``on_init()``.
 
@@ -1235,6 +1236,9 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             attach_plaintext: Full framework attach plaintext, or None.
             signing_key: The worker's AEAD key, passed down so a split token can
                 be opened. Owned by the worker, not by this class.
+            current_anchor: The catalog version a split token must still name, or
+                None when the worker cannot determine one (the check is then
+                skipped rather than failed).
 
         Returns:
             The GlobalInitResponse with worker count and execution id.
@@ -1257,7 +1261,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             storage=BoundStorage(cls.storage, execution_id, request=input, attach_plaintext=attach_plaintext),
             auth_context=auth,
             attach_opaque_data=attach_catalog_bytes(attach_plaintext),
-            split_payloads=cls._verify_split_tokens(input, auth, signing_key),
+            split_payloads=cls._verify_split_tokens(input, auth, signing_key, current_anchor),
         )
 
         if params.split_payloads is not None:
@@ -1273,7 +1277,11 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
     @classmethod
     def _verify_split_tokens(
-        cls, init_call: Any, auth: AuthContext, signing_key: bytes | None = None
+        cls,
+        init_call: Any,
+        auth: AuthContext,
+        signing_key: bytes | None = None,
+        current_anchor: bytes | None = None,
     ) -> list[bytes] | None:
         """Open and strip the token envelope, returning the worker's own payloads.
 
@@ -1293,6 +1301,13 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         # keyless path (subprocess/unix) that was invisible, because the stamping
         # side had no key either; over HTTP it meant refusing every token this
         # same worker had just sealed.
+        # The anchor is checked here or nowhere. Stamping it and never comparing
+        # it would make SPLIT_SNAPSHOT_EXPIRED unreachable — the token would name
+        # a version and no one would ever ask whether that version is still the
+        # one. ``current_anchor`` is None when the worker cannot determine its own
+        # catalog version, and a check that cannot be made is skipped rather than
+        # failed: refusing every token because the version is unknown would break
+        # every worker without a versioned catalog.
         expected = bind_fingerprint(init_call.bind_call)
         return [
             open_split_token(
@@ -1300,6 +1315,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
                 signing_key=signing_key,
                 auth=auth,
                 expected_fingerprint=expected,
+                current_anchor=current_anchor,
             )
             for token in tokens
         ]

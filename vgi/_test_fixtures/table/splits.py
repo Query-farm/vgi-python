@@ -28,10 +28,12 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
-from typing import Annotated, Any, ClassVar
+from typing import Annotated, Any, ClassVar, cast
 
 import pyarrow as pa
 from vgi_rpc.rpc import OutputCollector
+
+from vgi.protocol import VgiOutputCollector
 
 from vgi.arguments import Arg
 from vgi.metadata import FunctionExample
@@ -624,3 +626,138 @@ class SplitEndlessCursorFunction(_SplitBase):
             splits=[ScanSplit(payload=_encode(0, 1))],
             next_cursors=[b"x" * (page + 1)],
         )
+
+
+@bind_fixed_schema
+class SplitStalePlanFunction(_SplitBase):
+    """Plans against a catalog version that is not the live one.
+
+    This is the only way a bad split token is reachable through SQL, and that is
+    by design: the framework owns the envelope, so a worker cannot mint a token
+    with a wrong fingerprint or a cleared seal even deliberately. What it CAN do
+    is plan against a snapshot that has since moved — which is exactly the
+    real-world situation ``SPLIT_SNAPSHOT_EXPIRED`` exists for, a plan outliving
+    the version it was pinned to.
+
+    So ``on_plan`` reports a ``catalog_version`` the catalog will not agree with;
+    the framework stamps that as the anchor, and redemption compares it against
+    the live version and refuses. The refusal must be distinguishable from
+    ``SPLIT_TOKEN_INVALID``, because only this one means "re-run the query" —
+    re-running under a fresh plan produces a valid token, whereas re-running a
+    wrongly-bound token just reproduces it.
+
+    The forged-token cases (a cleared seal on a keyed worker, a mismatched bind
+    fingerprint) are NOT reachable this way and are not faked here: they are
+    covered byte-for-byte by the shared cross-SDK vectors in
+    ``tests/data/split_tokens/``, which every SDK parses and reproduces.
+    """
+
+    class Meta:
+        name = "split_stale_plan"
+        supports_splits = True
+
+    @classmethod
+    def on_plan(cls, params: BindParams[SplitSequenceArgs], request: Any) -> PlanResponse:
+        """Divide normally, but pin the plan to a version that has moved on."""
+        ranges = _ranges(params.args.n, params.args.splits)
+        return PlanResponse(
+            splits=[ScanSplit(payload=_encode(lo, hi)) for lo, hi in ranges],
+            # Any value the live catalog will not report. The fixture catalog's
+            # version is small, so a large constant is reliably "not current"
+            # without depending on what that version happens to be.
+            catalog_version=987_654_321,
+        )
+
+
+@bind_fixed_schema
+class SplitBatchIndexFunction(_SplitBase):
+    """Split-capable and ``supports_batch_index``, which together are a contract.
+
+    A batch index must be globally monotonic per reader, and greedy per-split
+    claiming re-initializes the same connection for each split — so every split
+    starts a fresh stream, and a worker that restarted its numbering per split
+    would hand the same reader a decreasing index. Nothing in the transport
+    prevents that; the client throws when it happens, which is the right
+    behaviour but only useful if the contract is written down and exercised.
+
+    What makes it work is that ``fetch_add`` hands each reader strictly ASCENDING
+    split indices, so a worker deriving its batch index from the split's position
+    in a globally-ordered index space is monotonic per reader by construction.
+    That is the whole reason claiming is greedy rather than grouped — and it is
+    NOT something multi-token init provides, since a group's tokens carry no
+    ordering of their own.
+
+    Each split here owns a slice of the index space (``ordinal * _STRIDE``), so
+    the emitted indices ascend across split boundaries as well as within them.
+    The stride bounds how many batches one split may emit before colliding with
+    the next; ``VGI_BATCH_INDEX_CAP`` bounds the product, so a worker choosing a
+    stride is really choosing ``cap / n_splits``.
+    """
+
+    _STRIDE: ClassVar[int] = 1_000
+
+    class Meta:
+        name = "split_batch_index"
+        supports_splits = True
+        supports_batch_index = True
+
+    @classmethod
+    def on_plan(cls, params: BindParams[SplitSequenceArgs], request: Any) -> PlanResponse:
+        """Give each split its ordinal, which is what its index space keys on."""
+        ranges = _ranges(params.args.n, params.args.splits)
+        return PlanResponse(
+            splits=[
+                ScanSplit(payload=struct.pack("<qqq", i, lo, hi), estimated_rows=hi - lo, rows_exact=True)
+                for i, (lo, hi) in enumerate(ranges)
+            ],
+            estimated_total_splits=len(ranges),
+        )
+
+    @classmethod
+    def on_split(cls, params: InitParams[SplitSequenceArgs], request: Any, payloads: list[bytes]) -> None:
+        """Declare the capability; the ordinals are read in initial_state."""
+        return None
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[SplitSequenceArgs]) -> FailState:
+        """Seed the cursor, keeping each range's split ordinal for its index base."""
+        if getattr(params.init_call, "split_tokens", None) is None:
+            msg = "split_batch_index is split-only but was initialized with no split tokens."
+            raise RuntimeError(msg)
+        decoded = [struct.unpack("<qqq", p) for p in (params.split_payloads or [])]
+        return FailState(
+            lo=[lo for _, lo, _ in decoded],
+            hi=[hi for _, _, hi in decoded],
+            ordinals=[o for o, _, _ in decoded],
+            idx=0,
+            cur=decoded[0][1] if decoded else 0,
+        )
+
+    @classmethod
+    def process(  # type: ignore[override]  # narrower state: FailState carries the ordinals
+        cls,
+        params: ProcessParams[SplitSequenceArgs],
+        state: FailState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit a batch tagged with an index drawn from this split's own space."""
+        while True:
+            if state.idx >= len(state.lo):
+                out.finish()
+                return
+            lo, hi = state.lo[state.idx], state.hi[state.idx]
+            if state.cur >= hi:
+                state.idx += 1
+                state.cur = state.lo[state.idx] if state.idx < len(state.lo) else 0
+                continue
+            end = min(state.cur + 8, hi)
+            # Base from the split's ordinal, offset by how far into this split we
+            # are — ascending within a split, and ascending across splits because
+            # the ordinals a reader claims ascend.
+            batch_index = state.ordinals[state.idx] * cls._STRIDE + (state.cur - lo) // 8
+            cast(VgiOutputCollector, out).emit(
+                pa.RecordBatch.from_pydict({"n": list(range(state.cur, end))}, schema=_ROW),
+                batch_index=batch_index,
+            )
+            state.cur = end
+            return

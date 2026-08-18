@@ -159,7 +159,9 @@ from vgi._test_fixtures.table.splits import (
     SplitFailAtFunction,
     SplitManyFunction,
     SplitSequenceFunction,
+    SplitBatchIndexFunction,
     SplitSkewedFunction,
+    SplitStalePlanFunction,
     SplitZeroFunction,
 )
 from vgi._test_fixtures.table.transaction_storage import TxCachedValueFunction
@@ -274,6 +276,8 @@ __all__ = [
     "SplitEmptyRangesFunction",
     "SplitEndlessCursorFunction",
     "SplitFailAtFunction",
+    "SplitBatchIndexFunction",
+    "SplitStalePlanFunction",
     "SplitManyFunction",
     "SplitSequenceFunction",
     "SplitSkewedFunction",

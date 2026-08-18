@@ -230,7 +230,9 @@ from vgi._test_fixtures.table import (
     SplitFailAtFunction,
     SplitManyFunction,
     SplitSequenceFunction,
+    SplitBatchIndexFunction,
     SplitSkewedFunction,
+    SplitStalePlanFunction,
     SplitZeroFunction,
     StructSettingsFunction,
     TenThousandFunction,
@@ -562,6 +564,8 @@ _EXAMPLE_CATALOG = Catalog(
                 SplitFailAtFunction,
                 SplitEchoFiltersFunction,
                 SplitEndlessCursorFunction,
+                SplitStalePlanFunction,
+                SplitBatchIndexFunction,
                 SettingsAwareFunction,
                 SpatialFilterExampleFunction,
                 StructSettingsFunction,
@@ -923,6 +927,16 @@ _EXAMPLE_CATALOG = Catalog(
                     name="multi_branch_numbers",
                     columns=schema(n=pa.int64()),
                     comment="Multi-branch: UNION of sequence(50) + sequence(50) — used by multi_branch_scan.test",
+                ),
+                # Multi-branch where one arm is SPLIT-capable and the other is
+                # not: the two parallelism axes composed. A branch divides a
+                # table across functions; splits divide one function's scan
+                # across readers — and each arm is planned independently, so a
+                # split arm must not impose its shape on its neighbour.
+                Table(
+                    name="multi_branch_split",
+                    columns=schema(n=pa.int64()),
+                    comment="Multi-branch: split_sequence(30, splits=6) + sequence(20) — used by splits/multi_branch.test",
                 ),
                 # Multi-branch with branch_filters that partition the value range.
                 # Branch A: sequence(100) with `n < 50`; branch B: sequence(100)
@@ -1492,7 +1506,11 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         # and throws BinderException before any scan-function-get RPC fires.
         # Returning TableInfo here lets the C++ binding flow proceed far enough
         # to hit that guard with the documented error message.
-        if schema_name.lower() == "data" and name.lower() in ("multi_branch_numbers", "multi_branch_filtered_numbers"):
+        if schema_name.lower() == "data" and name.lower() in (
+            "multi_branch_numbers",
+            "multi_branch_filtered_numbers",
+            "multi_branch_split",
+        ):
             return super().table_get(
                 attach_opaque_data=attach_opaque_data,
                 transaction_opaque_data=transaction_opaque_data,
@@ -1540,6 +1558,27 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                     ScanBranch(
                         function_name="sequence",
                         positional_arguments=[pa.scalar(50)],
+                        named_arguments={},
+                    ),
+                ],
+                required_extensions=[],
+            )
+
+        # multi_branch_split: one split-capable arm (30 rows over 6 splits) plus
+        # one ordinary arm (20 rows). Union size = 50. The split arm is planned
+        # and claimed exactly as a standalone split scan would be; the plain arm
+        # never sees a plan call at all.
+        if schema_name.lower() == "data" and name.lower() == "multi_branch_split":
+            return ScanBranchesResult(
+                branches=[
+                    ScanBranch(
+                        function_name="split_sequence",
+                        positional_arguments=[],
+                        named_arguments={"n": pa.scalar(30), "splits": pa.scalar(6)},
+                    ),
+                    ScanBranch(
+                        function_name="sequence",
+                        positional_arguments=[pa.scalar(20)],
                         named_arguments={},
                     ),
                 ],
