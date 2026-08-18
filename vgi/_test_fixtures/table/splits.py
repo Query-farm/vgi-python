@@ -36,9 +36,9 @@ from vgi_rpc.rpc import OutputCollector
 from vgi.protocol import VgiOutputCollector
 
 from vgi.arguments import Arg
-from vgi.metadata import FunctionExample
+from vgi.metadata import FunctionExample, PartitionKind
 from vgi.protocol import PlanResponse, ScanSplit
-from vgi.schema_utils import schema
+from vgi.schema_utils import partition_field, schema
 from vgi.table_function import (
     BindParams,
     InitParams,
@@ -820,3 +820,228 @@ class SplitOverlapCursorFunction(_SplitBase):
             # hitting its page cap — the property under test is dedup, not the cap.
             return PlanResponse(splits=splits)
         return PlanResponse(splits=splits, next_cursors=[b"x" * (page + 1)])
+
+
+_PART_ROW = schema({"country": pa.string(), "sales": pa.int64()})
+_PART_COUNTRIES: tuple[str, ...] = ("US", "DE", "JP", "BR")
+
+
+@dataclass
+class PartSplitState:
+    """The countries this reader claimed, and how far into the current one it is."""
+
+    countries: list[str]
+    idx: int = 0
+    emitted: int = 0
+
+    def serialize_to_bytes(self) -> bytes:
+        """Pack as: count, idx, emitted, then each 2-char country code."""
+        packed = b"".join(c.encode("ascii").ljust(2, b" ") for c in self.countries)
+        return struct.pack("<qqq", len(self.countries), self.idx, self.emitted) + packed
+
+    @classmethod
+    def deserialize_from_bytes(cls, data: bytes) -> PartSplitState:
+        """Inverse of :meth:`serialize_to_bytes`."""
+        n, idx, emitted = struct.unpack_from("<qqq", data, 0)
+        base = struct.calcsize("<qqq")
+        countries = [data[base + i * 2 : base + i * 2 + 2].decode("ascii").strip() for i in range(n)]
+        return cls(countries=countries, idx=idx, emitted=emitted)
+
+
+@dataclass(frozen=True)
+class SplitPartitionArgs:
+    """Arguments for the partitioned split fixture."""
+
+    rows_per_country: Annotated[int, Arg("rows_per_country", default=5, doc="Rows in each partition", ge=0)]
+
+
+@bind_fixed_schema
+class SplitPartitionedFunction(TableFunctionGenerator[SplitPartitionArgs, PartSplitState]):
+    """One split per partition — the shape a partitioned table naturally takes.
+
+    A partition and a split are different things that usually coincide: a
+    partition is a property of the DATA (all rows here share a value), while a
+    split is a unit of WORK. A worker that already stores data per partition has
+    the split boundaries handed to it, so this is the common case rather than a
+    contrived one.
+
+    What it exercises is that the two survive each other. Each split declares its
+    partition value on the batches it emits, and the client must keep that
+    association through greedy claiming — where splits are handed out in an order
+    nobody chose, to readers that each hold several. Losing it does not error: it
+    produces a GROUP BY that silently mixes partitions, which is why the
+    assertions are per-partition sums rather than a total.
+    """
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        [partition_field("country", pa.string()), pa.field("sales", pa.int64())]
+    )
+
+    class Meta:
+        name = "split_partitioned"
+        supports_splits = True
+        partition_kind = PartitionKind.SINGLE_VALUE_PARTITIONS
+
+    @classmethod
+    def on_plan(cls, params: BindParams[SplitPartitionArgs], request: Any) -> PlanResponse:
+        """One split per country, each naming its own partition."""
+        return PlanResponse(
+            splits=[
+                ScanSplit(
+                    payload=country.encode("ascii"),
+                    estimated_rows=params.args.rows_per_country,
+                    rows_exact=True,
+                )
+                for country in _PART_COUNTRIES
+            ],
+            estimated_total_splits=len(_PART_COUNTRIES),
+        )
+
+    @classmethod
+    def on_split(cls, params: InitParams[SplitPartitionArgs], request: Any, payloads: list[bytes]) -> None:
+        """Declare the capability; the countries are read in initial_state."""
+        return None
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[SplitPartitionArgs]) -> PartSplitState:
+        """Seed from the verified payloads — each one names a country."""
+        if getattr(params.init_call, "split_tokens", None) is None:
+            msg = "split_partitioned is split-only but was initialized with no split tokens."
+            raise RuntimeError(msg)
+        return PartSplitState(countries=[p.decode("ascii") for p in (params.split_payloads or [])])
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[SplitPartitionArgs],
+        state: PartSplitState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit one single-valued batch per claimed country."""
+        while True:
+            if state.idx >= len(state.countries):
+                out.finish()
+                return
+            country = state.countries[state.idx]
+            rows = params.args.rows_per_country
+            state.idx += 1
+            if rows <= 0:
+                continue
+            # Every row in the batch carries the same country, which is what makes
+            # it SINGLE_VALUE: the client reads the partition value off the batch
+            # rather than being told separately.
+            out.emit(
+                pa.RecordBatch.from_pydict(
+                    {"country": [country] * rows, "sales": [i + 1 for i in range(rows)]},
+                    schema=_PART_ROW,
+                )
+            )
+            return
+
+
+_DYN_ROW = schema({"n": pa.int64(), "pushed_filters": pa.utf8()})
+
+
+@bind_fixed_schema
+class SplitDynamicFilterFunction(TableFunctionGenerator[SplitSequenceArgs, SplitState]):
+    """Echoes the DYNAMIC filter each tick carried, per split.
+
+    A plan is built from STATIC filters only — join-key values are not known when
+    the plan RPC fires, so they cannot prune the split SET. They arrive later, per
+    tick, and prune WITHIN each split. Both halves of that have to keep working
+    once a reader re-initializes the same connection per split: the tick filter
+    state is a property of the connection, and a split that lost it would silently
+    stop pruning.
+
+    "Silently" is the operative word, and it is why this fixture reports the
+    filter as DATA rather than leaving the test to infer it from row counts. A
+    scan that stopped receiving dynamic filters returns exactly the same rows —
+    DuckDB re-checks the predicate above the scan — just after shipping more of
+    them. No assertion about the result set can tell the difference.
+
+    Note this fixture deliberately does NOT declare projection_pushdown. A live
+    bug had the client attach tick filter state only inside the
+    projection-pushdown branch, so a function with dynamic filters and no
+    projection pushdown got none at all — exactly this shape.
+    """
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = _DYN_ROW
+
+    class Meta:
+        name = "split_dynamic_filter"
+        supports_splits = True
+        filter_pushdown = True
+        auto_apply_filters = True
+
+    @classmethod
+    def on_plan(cls, params: BindParams[SplitSequenceArgs], request: Any) -> PlanResponse:
+        """Divide descending ranges, so a Top-N tightens its filter as it goes."""
+        ranges = _ranges(params.args.n, params.args.splits)
+        return PlanResponse(
+            splits=[ScanSplit(payload=_encode(lo, hi)) for lo, hi in ranges],
+            estimated_total_splits=len(ranges),
+        )
+
+    @classmethod
+    def on_split(cls, params: InitParams[SplitSequenceArgs], request: Any, payloads: list[bytes]) -> None:
+        """Declare the capability; the ranges are read in initial_state."""
+        return None
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[SplitSequenceArgs]) -> SplitState:
+        """Seed the cursor from the verified split payloads."""
+        if getattr(params.init_call, "split_tokens", None) is None:
+            msg = "split_dynamic_filter is split-only but was initialized with no split tokens."
+            raise RuntimeError(msg)
+        ranges = [_decode(p) for p in (params.split_payloads or [])]
+        return SplitState(
+            lo=[lo for lo, _ in ranges],
+            hi=[hi for _, hi in ranges],
+            idx=0,
+            cur=ranges[0][0] if ranges else 0,
+        )
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[SplitSequenceArgs],
+        state: SplitState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit a batch, stamping every row with the filter this tick carried."""
+        from vgi._test_fixtures.table.filters import _format_pushed_filters_safe
+
+        while True:
+            if state.idx >= len(state.lo):
+                out.finish()
+                return
+            hi = state.hi[state.idx]
+            if state.cur >= hi:
+                state.idx += 1
+                state.cur = state.lo[state.idx] if state.idx < len(state.lo) else 0
+                continue
+            end = min(state.cur + 4, hi)
+            # Read the same way the non-split filter fixtures do: join keys ride
+            # the INIT request, and merging them with the tick's own filters is
+            # what produces the IN filter a join pushes down.
+            # Read the same way the non-split filter fixtures do: the INIT request
+            # carries both the serialized filters and the join keys, and merging
+            # them is what produces the IN filter a join pushes down. Falling back
+            # to the per-tick filters covers a dynamic filter that tightened after
+            # this split's init.
+            init = params.init_call
+            merged = None
+            if init is not None and init.pushdown_filters is not None:
+                merged = cls.pushdown_filters(init.pushdown_filters, join_keys=init.join_keys)
+            if merged is None:
+                merged = params.current_pushdown_filters
+            filter_str = _format_pushed_filters_safe(merged)
+            values = list(range(state.cur, end))
+            out.emit(
+                pa.RecordBatch.from_pydict(
+                    {"n": values, "pushed_filters": [filter_str] * len(values)},
+                    schema=_DYN_ROW,
+                )
+            )
+            state.cur = end
+            return
